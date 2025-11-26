@@ -1,75 +1,195 @@
 import { useNavigate } from "react-router-dom";
 import { Check, X } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface Plan {
+  id: string;
+  name: string;
+  price: number;
+  features: string[];
+}
+
+interface PaymentLink {
+  plan_id: string;
+  payment_link: string;
+  is_active: boolean;
+}
 
 export const Pricing = () => {
   const navigate = useNavigate();
+  const [plans, setPlans] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const plans = [
-    {
-      name: "Essencial",
-      price: "Grátis",
-      description: "Para quem está começando a organizar as finanças",
-      features: [
-        "Dashboard Básico",
-        "Controle de Entradas e Saídas",
-        "Categorias Personalizáveis",
-        "Acesso Web",
-        "Suporte por Email"
-      ],
-      notIncluded: [
-        "Integração com WhatsApp",
-        "Relatórios Avançados",
-        "Metas Ilimitadas",
-        "Consultoria IA"
-      ],
-      buttonText: "Começar Grátis",
-      popular: false,
-      color: "gray",
-      link: "/login"
-    },
-    {
-      name: "Pro",
-      price: "R$ 29,90",
-      period: "/mês",
-      description: "A escolha ideal para automação total",
-      features: [
-        "Tudo do Plano Essencial",
-        "Integração com WhatsApp (Wallet IA)",
-        "Relatórios Ilimitados",
-        "Metas Ilimitadas",
-        "Exportação de Dados",
-        "Suporte Prioritário"
-      ],
-      notIncluded: [
-        "Consultoria IA Personalizada",
-        "Gestão de Investimentos"
-      ],
-      buttonText: "Assinar Pro",
-      popular: true,
-      color: "orange",
-      link: "https://go.pepperpay.com.br/nqguj"
-    },
-    {
-      name: "Black",
-      price: "R$ 59,90",
-      period: "/mês",
-      description: "Para quem busca excelência e inteligência financeira",
-      features: [
-        "Tudo do Plano Pro",
-        "Consultoria IA Personalizada",
-        "Análise de Investimentos",
-        "Gestão Multi-contas",
-        "Atendimento VIP",
-        "Acesso Antecipado a Novas Features"
-      ],
-      notIncluded: [],
-      buttonText: "Ser Black",
-      popular: false,
-      color: "slate",
-      link: "https://go.pepperpay.com.br/j7lgt"
+  useEffect(() => {
+    fetchPlansWithLinks();
+  }, []);
+
+  const fetchPlansWithLinks = async () => {
+    try {
+      // Buscar planos
+      const { data: plansData, error: plansError } = await supabase
+        .from('plans')
+        .select('*')
+        .order('price', { ascending: true });
+
+      if (plansError) throw plansError;
+
+      // Buscar links de pagamento ativos
+      const { data: linksData, error: linksError } = await supabase
+        .from('payment_links')
+        .select('plan_id, payment_link, is_active')
+        .eq('is_active', true);
+
+      if (linksError) throw linksError;
+
+      // Mapear links por plan_id
+      const linksMap = new Map<string, string>();
+      linksData?.forEach((link: PaymentLink) => {
+        linksMap.set(link.plan_id, link.payment_link);
+      });
+
+      // Configuração estática de features e descrições por plano
+      const planConfigs: Record<string, any> = {
+        'Essencial': {
+          description: "Para quem está começando a organizar as finanças",
+          notIncluded: [
+            "Integração com WhatsApp",
+            "Relatórios Avançados",
+            "Metas Ilimitadas",
+            "Consultoria IA"
+          ],
+          buttonText: "Começar Grátis",
+          popular: false,
+          color: "gray",
+          defaultLink: "/login"
+        },
+        'Pro': {
+          description: "A escolha ideal para automação total",
+          notIncluded: [
+            "Consultoria IA Personalizada",
+            "Gestão de Investimentos"
+          ],
+          buttonText: "Assinar Pro",
+          popular: true,
+          color: "orange",
+          defaultLink: "/login"
+        },
+        'Black': {
+          description: "Para quem busca excelência e inteligência financeira",
+          notIncluded: [],
+          buttonText: "Ser Black",
+          popular: false,
+          color: "slate",
+          defaultLink: "/login"
+        }
+      };
+
+      // Combinar dados
+      const combinedPlans = plansData?.map((plan: Plan) => {
+        const config = planConfigs[plan.name] || {};
+        const paymentLink = linksMap.get(plan.id) || config.defaultLink || "/login";
+
+        return {
+          name: plan.name,
+          price: plan.price === 0 ? "Grátis" : `R$ ${plan.price.toFixed(2).replace('.', ',')}`,
+          period: plan.price > 0 ? "/mês" : undefined,
+          description: config.description || "",
+          features: plan.features || [],
+          notIncluded: config.notIncluded || [],
+          buttonText: config.buttonText || "Assinar",
+          popular: config.popular || false,
+          color: config.color || "gray",
+          link: paymentLink
+        };
+      }) || [];
+
+      setPlans(combinedPlans);
+    } catch (error) {
+      console.error("Erro ao carregar planos:", error);
+      // Fallback para planos estáticos em caso de erro
+      setPlans([
+        {
+          name: "Essencial",
+          price: "Grátis",
+          description: "Para quem está começando a organizar as finanças",
+          features: [
+            "Dashboard Básico",
+            "Controle de Entradas e Saídas",
+            "Categorias Personalizáveis",
+            "Acesso Web",
+            "Suporte por Email"
+          ],
+          notIncluded: [
+            "Integração com WhatsApp",
+            "Relatórios Avançados",
+            "Metas Ilimitadas",
+            "Consultoria IA"
+          ],
+          buttonText: "Começar Grátis",
+          popular: false,
+          color: "gray",
+          link: "/login"
+        },
+        {
+          name: "Pro",
+          price: "R$ 29,90",
+          period: "/mês",
+          description: "A escolha ideal para automação total",
+          features: [
+            "Tudo do Plano Essencial",
+            "Integração com WhatsApp (Wallet IA)",
+            "Relatórios Ilimitados",
+            "Metas Ilimitadas",
+            "Exportação de Dados",
+            "Suporte Prioritário"
+          ],
+          notIncluded: [
+            "Consultoria IA Personalizada",
+            "Gestão de Investimentos"
+          ],
+          buttonText: "Assinar Pro",
+          popular: true,
+          color: "orange",
+          link: "/login"
+        },
+        {
+          name: "Black",
+          price: "R$ 59,90",
+          period: "/mês",
+          description: "Para quem busca excelência e inteligência financeira",
+          features: [
+            "Tudo do Plano Pro",
+            "Consultoria IA Personalizada",
+            "Análise de Investimentos",
+            "Gestão Multi-contas",
+            "Atendimento VIP",
+            "Acesso Antecipado a Novas Features"
+          ],
+          notIncluded: [],
+          buttonText: "Ser Black",
+          popular: false,
+          color: "slate",
+          link: "/login"
+        }
+      ]);
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
+
+  if (loading) {
+    return (
+      <section id="precos" className="py-20 bg-gray-50">
+        <div className="container mx-auto px-4">
+          <div className="text-center">
+            <p className="text-gray-600">Carregando planos...</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section id="precos" className="py-20 bg-gray-50">
