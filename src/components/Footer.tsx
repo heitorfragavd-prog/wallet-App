@@ -1,5 +1,28 @@
 import { MessageCircle, Mail, Phone, Wallet } from "lucide-react";
+import { useWhatsAppNumber } from "@/shared/hooks/useWhatsAppNumber";
+import { useContactSettings } from "@/shared/hooks/useContactSettings";
+
+const formatPhoneNumber = (phone: string): string => {
+  // Remove all non-digit characters
+  const digits = phone.replace(/\D/g, '');
+  
+  // Format: (11) 3333-3333
+  if (digits.length === 10) {
+    return `(${digits.substring(0, 2)}) ${digits.substring(2, 6)}-${digits.substring(6)}`;
+  }
+  
+  // Format: (11) 99999-9999
+  if (digits.length === 11) {
+    return `(${digits.substring(0, 2)}) ${digits.substring(2, 7)}-${digits.substring(7)}`;
+  }
+  
+  return phone;
+};
+
 export const Footer = () => {
+  const { whatsappNumber, formattedNumber } = useWhatsAppNumber();
+  const { email, phone } = useContactSettings();
+
   return <footer className="bg-gray-900 text-white py-12">
       <div className="container mx-auto px-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -36,18 +59,24 @@ export const Footer = () => {
           <div>
             <h4 className="font-bold text-lg mb-4">Contato</h4>
             <div className="space-y-4 text-gray-400">
-              <div className="flex items-center space-x-3">
-                <MessageCircle className="w-5 h-5" />
-                <span>WhatsApp: (11) 9999-9999</span>
-              </div>
-              <div className="flex items-center space-x-3">
-                <Mail className="w-5 h-5" />
-                <span>contato@wallet.cortexx.online</span>
-              </div>
-              <div className="flex items-center space-x-3">
-                <Phone className="w-5 h-5" />
-                <span>(11) 3333-3333</span>
-              </div>
+              {whatsappNumber && (
+                <div className="flex items-center space-x-3">
+                  <MessageCircle className="w-5 h-5" />
+                  <span>WhatsApp: {formattedNumber}</span>
+                </div>
+              )}
+              {email && (
+                <div className="flex items-center space-x-3">
+                  <Mail className="w-5 h-5" />
+                  <span>{email}</span>
+                </div>
+              )}
+              {phone && (
+                <div className="flex items-center space-x-3">
+                  <Phone className="w-5 h-5" />
+                  <span>{formatPhoneNumber(phone)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

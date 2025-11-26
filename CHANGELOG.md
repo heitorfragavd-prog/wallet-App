@@ -2,6 +2,34 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.7] - 2024-11-26
+
+### ✨ Adicionado
+- **Sistema de Configurações de Contato Dinâmicas**
+  - Migração para adicionar `contact_email` e `contact_phone` na tabela `system_settings`
+  - Hook `useContactSettings` para buscar configurações públicas
+  - Hook `useContactSettings` (admin) para gerenciar configurações
+  - Formatação automática de números de WhatsApp e telefone
+  - Card de configurações de contato no painel admin
+
+### 🎨 Interface
+- **Landing Page Premium**
+  - Footer agora busca email e telefone dinamicamente do banco
+  - Formatação automática de números de telefone
+  - Removidos valores hardcoded de contato
+
+### 🔧 Corrigido
+- **Dark Mode**
+  - FAQ agora segue corretamente as definições de dark mode
+  - Background, textos e cards adaptados para dark mode
+  - Melhor contraste em modo escuro
+
+### 📊 Banco de Dados
+- Tabela `system_settings` expandida com configurações de contato
+- Valores padrão configurados para email e telefone
+
+---
+
 ## [1.0.6] - 2024-11-26
 
 ### ✨ Adicionado

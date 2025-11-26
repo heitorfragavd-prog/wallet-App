@@ -90,12 +90,55 @@
     --sidebar-accent-foreground: 213 31% 91%;
     --sidebar-border: 216 34% 17%;
     --sidebar-ring: 24 95% 53%;
+
+    /* Premium Dark Mode Variables */
+    --glass-bg: rgba(15, 23, 42, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --particle-primary: #f97316;
+    --particle-secondary: #fbbf24;
+    --particle-accent: #8b5cf6;
+    --gradient-start: #f97316;
+    --gradient-end: #dc2626;
+  }
+
+  /* Premium Light Mode Variables */
+  :root {
+    --glass-bg: rgba(255, 255, 255, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.3);
+    --particle-primary: #f97316;
+    --particle-secondary: #ea580c;
+    --particle-accent: #fbbf24;
+    --gradient-start: #f97316;
+    --gradient-end: #ea580c;
+  }
+}
+
+/* Theme transition for smooth dark mode toggle */
+@layer utilities {
+  .theme-transition {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .theme-transition {
+      transition: none;
+    }
   }
 }
 
 @layer base {
   * {
     @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
   }
 
   body {

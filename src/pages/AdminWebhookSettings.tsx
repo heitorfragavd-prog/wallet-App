@@ -7,6 +7,7 @@ import { Label } from "@/shared/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { useWebhookSettings } from "@/domains/admin/hooks/useWebhookSettings";
 import { useWhatsAppSettings } from "@/domains/admin/hooks/useWhatsAppSettings";
+import { useContactSettings } from "@/domains/admin/hooks/useContactSettings";
 import { Loader2, TestTube, Save, AlertCircle, CheckCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/shared/components/ui/alert";
 
@@ -29,6 +30,15 @@ export default function AdminWebhookSettings() {
     isValidWhatsAppNumber,
   } = useWhatsAppSettings();
 
+  const {
+    email,
+    phone,
+    loading: contactLoading,
+    saving: contactSaving,
+    saveContactEmail,
+    saveContactPhone,
+  } = useContactSettings();
+
   const [urlInput, setUrlInput] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
@@ -36,6 +46,12 @@ export default function AdminWebhookSettings() {
   const [whatsappInput, setWhatsappInput] = useState("");
   const [whatsappValidationError, setWhatsappValidationError] = useState<string | null>(null);
   const [whatsappHasChanges, setWhatsappHasChanges] = useState(false);
+
+  const [emailInput, setEmailInput] = useState("");
+  const [emailHasChanges, setEmailHasChanges] = useState(false);
+
+  const [phoneInput, setPhoneInput] = useState("");
+  const [phoneHasChanges, setPhoneHasChanges] = useState(false);
 
   useEffect(() => {
     if (webhookUrl !== null) {
@@ -48,6 +64,18 @@ export default function AdminWebhookSettings() {
       setWhatsappInput(whatsappNumber || "");
     }
   }, [whatsappNumber]);
+
+  useEffect(() => {
+    if (email !== null) {
+      setEmailInput(email || "");
+    }
+  }, [email]);
+
+  useEffect(() => {
+    if (phone !== null) {
+      setPhoneInput(phone || "");
+    }
+  }, [phone]);
 
   const handleUrlChange = (value: string) => {
     setUrlInput(value);
@@ -98,6 +126,30 @@ export default function AdminWebhookSettings() {
     if (result.success) {
       setWhatsappHasChanges(false);
       setWhatsappValidationError(null);
+    }
+  };
+
+  const handleEmailChange = (value: string) => {
+    setEmailInput(value);
+    setEmailHasChanges(value !== (email || ""));
+  };
+
+  const handleEmailSave = async () => {
+    const result = await saveContactEmail(emailInput);
+    if (result.success) {
+      setEmailHasChanges(false);
+    }
+  };
+
+  const handlePhoneChange = (value: string) => {
+    setPhoneInput(value);
+    setPhoneHasChanges(value !== (phone || ""));
+  };
+
+  const handlePhoneSave = async () => {
+    const result = await saveContactPhone(phoneInput);
+    if (result.success) {
+      setPhoneHasChanges(false);
     }
   };
 
@@ -288,6 +340,92 @@ export default function AdminWebhookSettings() {
                         </AlertDescription>
                       </Alert>
                     )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Configurações de Contato</CardTitle>
+                <CardDescription>
+                  Configure o email e telefone exibidos na landing page
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {contactLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="contact-email">Email de Contato</Label>
+                        <Input
+                          id="contact-email"
+                          type="email"
+                          placeholder="contato@wallet.cortexx.online"
+                          value={emailInput}
+                          onChange={(e) => handleEmailChange(e.target.value)}
+                        />
+                        <p className="text-sm text-muted-foreground">
+                          Email exibido no rodapé da landing page
+                        </p>
+                      </div>
+
+                      <Button
+                        onClick={handleEmailSave}
+                        disabled={contactSaving || !emailHasChanges}
+                        className="w-full"
+                      >
+                        {contactSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Salvando...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Salvar Email
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    <div className="border-t pt-6 space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="contact-phone">Telefone de Contato</Label>
+                        <Input
+                          id="contact-phone"
+                          type="tel"
+                          placeholder="1133333333"
+                          value={phoneInput}
+                          onChange={(e) => handlePhoneChange(e.target.value)}
+                        />
+                        <p className="text-sm text-muted-foreground">
+                          Telefone exibido no rodapé da landing page (formato: 1133333333)
+                        </p>
+                      </div>
+
+                      <Button
+                        onClick={handlePhoneSave}
+                        disabled={contactSaving || !phoneHasChanges}
+                        className="w-full"
+                      >
+                        {contactSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Salvando...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Salvar Telefone
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </>
                 )}
               </CardContent>

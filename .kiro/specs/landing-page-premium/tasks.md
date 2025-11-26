@@ -1,0 +1,181 @@
+# Implementation Plan
+
+- [x] 1. Setup e Configuração Base
+  - [x] 1.1 Instalar dependências necessárias (framer-motion, fast-check)
+    - Adicionar framer-motion para animações declarativas
+    - Adicionar fast-check para property-based testing
+    - Verificar compatibilidade com React 18
+    - _Requirements: 1.1, 7.4_
+  - [x] 1.2 Criar hooks utilitários para animações
+    - Implementar useInView hook com Intersection Observer
+    - Implementar useMousePosition hook para parallax
+    - Implementar useReducedMotion hook para acessibilidade
+    - _Requirements: 6.2, 7.1_
+  - [ ]* 1.3 Write property test for viewport-triggered animations
+    - **Property 7: Viewport-triggered Animations**
+    - **Validates: Requirements 6.2, 2.1**
+
+- [x] 2. Implementar Sistema de Partículas
+  - [x] 2.1 Criar componente ParticleCanvas
+    - Implementar Canvas com requestAnimationFrame
+    - Criar sistema de partículas com física básica
+    - Adicionar interação com mouse (repulsão)
+    - Implementar adaptação para mobile (reduzir partículas)
+    - _Requirements: 1.3, 7.1_
+  - [ ]* 2.2 Write property test for mobile animation adaptation
+    - **Property 9: Mobile Animation Adaptation**
+    - **Validates: Requirements 7.1, 7.2**
+  - [ ]* 2.3 Write property test for GPU-accelerated animations
+    - **Property 10: GPU-accelerated Animations**
+    - **Validates: Requirements 7.4**
+
+- [x] 3. Implementar Componentes Base de UI
+  - [x] 3.1 Criar componente GlassmorphicCard
+    - Implementar estilos glassmorphism (backdrop-blur, transparência)
+    - Adicionar efeito 3D tilt no hover
+    - Suportar variantes de intensidade (subtle, medium, strong)
+    - Implementar suporte a dark mode
+    - _Requirements: 2.2, 2.4, 8.1_
+  - [ ]* 3.2 Write property test for glassmorphism consistency
+    - **Property 2: Glassmorphism Consistency**
+    - **Validates: Requirements 2.4, 4.3**
+  - [x] 3.3 Criar componente AnimatedCounter
+    - Implementar animação de contagem com easing
+    - Suportar prefixos e sufixos (R$, +, %)
+    - Adicionar callback onComplete para efeitos de celebração
+    - Integrar com Intersection Observer para trigger
+    - _Requirements: 3.1, 3.3_
+  - [ ]* 3.4 Write property test for animated counter behavior
+    - **Property 3: Animated Counter Behavior**
+    - **Validates: Requirements 3.1**
+
+- [x] 4. Checkpoint - Verificar componentes base
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 5. Implementar Hero Section Premium
+  - [x] 5.1 Criar componente HeroPremium
+    - Implementar mesh gradients animados como background
+    - Integrar ParticleCanvas como overlay
+    - Adicionar animação staggered para headline (word-by-word)
+    - Implementar CTAs com efeito pulsante e glow no hover
+    - Adicionar trust badges com fade-in animation
+    - _Requirements: 1.1, 1.2, 1.4, 1.5, 1.6_
+  - [ ]* 5.2 Write property test for hero load performance
+    - **Property 1: Hero Load Performance**
+    - **Validates: Requirements 1.1**
+
+- [x] 6. Implementar Features Showcase
+  - [x] 6.1 Criar componente FeatureShowcase
+    - Implementar grid responsivo de feature cards
+    - Usar GlassmorphicCard como base
+    - Adicionar ícones animados com motion contínuo
+    - Implementar staggered entrance animations
+    - _Requirements: 2.1, 2.3, 2.4, 2.5_
+
+- [x] 7. Implementar Stats Section
+  - [x] 7.1 Criar componente StatsPremium
+    - Implementar background com gradient animado
+    - Integrar AnimatedCounter para cada stat
+    - Adicionar ícones com efeito floating/pulsing
+    - Implementar particle burst no completion do counter
+    - _Requirements: 3.1, 3.2, 3.3, 3.4_
+
+- [x] 8. Implementar Pricing Section Premium
+  - [x] 8.1 Criar componente PricingPremium
+    - Usar GlassmorphicCard para pricing cards
+    - Implementar destaque visual para plano popular (glow border, badge)
+    - Adicionar hover effects (elevação, shadow, scale)
+    - Implementar staggered entrance animation
+    - _Requirements: 4.1, 4.2, 4.3, 4.4_
+  - [ ]* 8.2 Write property test for popular plan highlighting
+    - **Property 4: Popular Plan Highlighting**
+    - **Validates: Requirements 4.1**
+
+- [x] 9. Checkpoint - Verificar seções principais
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 10. Implementar Testimonials Carousel
+  - [x] 10.1 Criar componente TestimonialCarousel
+    - Implementar carrossel com auto-scroll
+    - Adicionar pause on hover
+    - Usar GlassmorphicCard para testimonial cards
+    - Garantir estrutura: avatar, nome, role, content, rating
+    - Implementar transições suaves entre slides
+    - _Requirements: 5.1, 5.2, 5.3, 5.4_
+  - [ ]* 10.2 Write property test for carousel auto-scroll with pause
+    - **Property 5: Carousel Auto-scroll with Pause**
+    - **Validates: Requirements 5.1, 5.4**
+  - [ ]* 10.3 Write property test for testimonial card structure
+    - **Property 6: Testimonial Card Structure**
+    - **Validates: Requirements 5.3**
+
+- [x] 11. Implementar Scroll Experience Premium
+  - [x] 11.1 Atualizar Header com sticky behavior
+    - Implementar transformação para versão compacta no scroll
+    - Adicionar backdrop blur quando sticky
+    - Manter transição suave entre estados
+    - _Requirements: 6.4_
+  - [ ]* 11.2 Write property test for sticky header transformation
+    - **Property 8: Sticky Header Transformation**
+    - **Validates: Requirements 6.4**
+  - [x] 11.3 Implementar smooth scroll e parallax
+    - Adicionar CSS scroll-behavior smooth
+    - Implementar parallax sutil em elementos de background
+    - _Requirements: 6.1, 6.3_
+
+- [x] 12. Implementar Dark Mode Premium
+  - [x] 12.1 Atualizar tema dark para componentes premium
+    - Adaptar cores de glassmorphism para dark mode
+    - Ajustar cores de partículas e gradients
+    - Implementar transição suave entre modos
+    - Garantir contraste WCAG AA
+    - _Requirements: 8.1, 8.2, 8.3, 8.4_
+  - [x] 12.2 Write property test for dark mode color adaptation
+    - **Property 11: Dark Mode Color Adaptation**
+    - **Validates: Requirements 8.1, 8.2**
+  - [x] 12.3 Write property test for dark mode accessibility contrast
+    - **Property 12: Dark Mode Accessibility Contrast**
+    - **Validates: Requirements 8.4**
+
+- [x] 13. Implementar CTA Final de Alta Conversão
+  - [x] 13.1 Criar componente FinalCTA
+    - Implementar full-width gradient background com mesh animado
+    - Criar CTA button com animação contínua (pulse, glow)
+    - Adicionar particle effects no hover
+    - Implementar dramatic entrance animation
+    - _Requirements: 9.1, 9.2, 9.3, 9.4_
+
+- [x] 14. Integrar Componentes na Landing Page
+  - [x] 14.1 Atualizar LandingPage.tsx
+    - Substituir componentes existentes pelos premium
+    - Garantir ordem correta das seções
+    - Verificar responsividade em todos os breakpoints
+    - _Requirements: 7.2_
+
+- [x] 15. Final Checkpoint - Verificar implementação completa
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 16. Implementar Sistema de Configurações de Contato
+  - [x] 16.1 Criar migração para configurações de contato
+    - Adicionar contact_email e contact_phone na tabela system_settings
+    - Definir valores padrão
+    - _Requirements: Landing page contact info_
+  - [x] 16.2 Criar hooks para buscar configurações de contato
+    - Implementar useContactSettings para usuários (shared/hooks)
+    - Implementar useContactSettings para admin (domains/admin/hooks)
+    - Adicionar cache com React Query
+    - _Requirements: Landing page contact info_
+  - [x] 16.3 Atualizar hook useWhatsAppNumber
+    - Adicionar formatação de número (formattedNumber)
+    - Manter compatibilidade com código existente
+    - _Requirements: Landing page contact info_
+  - [x] 16.4 Atualizar página AdminWebhookSettings
+    - Adicionar card de configurações de contato
+    - Implementar formulários para email e telefone
+    - Adicionar validação e feedback
+    - _Requirements: Landing page contact info_
+  - [x] 16.5 Atualizar componente Footer
+    - Buscar email e telefone dinamicamente
+    - Adicionar formatação de telefone
+    - Remover valores hardcoded
+    - _Requirements: Landing page contact info_
