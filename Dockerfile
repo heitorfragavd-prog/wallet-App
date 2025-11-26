@@ -1,0 +1,52 @@
+# Build Stage
+FROM node:20-alpine as build
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build args for environment variables
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_APP_NAME=Wallet
+ARG VITE_APP_URL=https://wallet.cortexx.online
+ARG VITE_APP_ENVIRONMENT=production
+ARG VITE_ENABLE_ANALYTICS=false
+ARG VITE_ENABLE_DEBUG_LOGS=false
+
+# Set environment variables for build
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+ENV VITE_APP_NAME=$VITE_APP_NAME
+ENV VITE_APP_URL=$VITE_APP_URL
+ENV VITE_APP_ENVIRONMENT=$VITE_APP_ENVIRONMENT
+ENV VITE_ENABLE_ANALYTICS=$VITE_ENABLE_ANALYTICS
+ENV VITE_ENABLE_DEBUG_LOGS=$VITE_ENABLE_DEBUG_LOGS
+
+# Build the application
+RUN npm run build
+
+# Production Stage
+FROM nginx:alpine
+
+# Copy built assets from build stage
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copy custom nginx config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Add labels for Docker Hub
+LABEL maintainer="Cortexx"
+LABEL description="Wallet - Consultoria Financeira Inteligente"
+LABEL version="1.0.1"
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
