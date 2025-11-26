@@ -33,6 +33,7 @@ MAGIC_LINK_CONTENT=$(cat magic_link.html | jq -Rs .)
 RECOVERY_CONTENT=$(cat recovery.html | jq -Rs .)
 INVITE_CONTENT=$(cat invite.html | jq -Rs .)
 EMAIL_CHANGE_CONTENT=$(cat email_change.html | jq -Rs .)
+REAUTHENTICATION_CONTENT=$(cat reauthentication.html | jq -Rs .)
 
 # Criar JSON payload
 PAYLOAD=$(cat <<EOF
@@ -46,7 +47,9 @@ PAYLOAD=$(cat <<EOF
   "mailer_subjects_invite": "Você foi convidado - Wallet",
   "mailer_templates_invite_content": $INVITE_CONTENT,
   "mailer_subjects_email_change": "Confirme a alteração de email - Wallet",
-  "mailer_templates_email_change_content": $EMAIL_CHANGE_CONTENT
+  "mailer_templates_email_change_content": $EMAIL_CHANGE_CONTENT,
+  "mailer_subjects_reauthentication": "Código de verificação - Wallet",
+  "mailer_templates_reauthentication_content": $REAUTHENTICATION_CONTENT
 }
 EOF
 )
@@ -71,6 +74,7 @@ if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 201 ]; then
     echo "  • Recuperação de senha"
     echo "  • Convite"
     echo "  • Alteração de email"
+    echo "  • Reautenticação (OTP)"
     echo ""
     echo -e "${YELLOW}Verifique os templates em:${NC}"
     echo "https://supabase.com/dashboard/project/$PROJECT_REF/auth/templates"

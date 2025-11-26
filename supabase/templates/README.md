@@ -34,6 +34,12 @@ Este diretório contém os templates HTML personalizados para os emails de auten
 **Propósito:** Verificação para alterações de endereço de email  
 **Variáveis:** `{{ .ConfirmationURL }}`, `{{ .NewEmail }}`
 
+### 6. reauthentication.html
+**Assunto:** Código de verificação - Wallet  
+**Quando é enviado:** Quando um usuário precisa reautenticar para operações sensíveis  
+**Propósito:** Verificação adicional para ações sensíveis (alterar senha, deletar conta)  
+**Variáveis:** `{{ .Token }}`
+
 ## Variáveis Disponíveis
 
 Todas as variáveis do sistema de templates do Supabase Auth:
@@ -69,6 +75,7 @@ Você precisa copiar o conteúdo HTML de cada template para o Dashboard do Supab
 - Recovery: "Recuperação de senha - Wallet"
 - Invite: "Você foi convidado - Wallet"
 - Email Change: "Confirme a alteração de email - Wallet"
+- Reauthentication: "Código de verificação - Wallet"
 
 ## Design
 

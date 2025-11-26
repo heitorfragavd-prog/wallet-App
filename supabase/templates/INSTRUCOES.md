@@ -37,6 +37,12 @@
 - Altere o assunto para: **Confirme a alteração de email - Wallet**
 - Clique em "Save"
 
+### Reauthentication (Reautenticação)
+- Clique em "Reauthentication"
+- Cole o conteúdo de `reauthentication.html`
+- Altere o assunto para: **Código de verificação - Wallet**
+- Clique em "Save"
+
 ## Opção 2: Via Management API (Script Automatizado)
 
 ### Pré-requisitos
@@ -102,6 +108,10 @@ Após aplicar os templates, teste enviando emails:
 3. **Teste de Recuperação:**
    - Use "Esqueci minha senha"
    - Verifique o email recebido
+
+4. **Teste de Reautenticação:**
+   - Tente realizar uma operação sensível (ex: alterar senha)
+   - Verifique o código OTP recebido
 
 ## Notas Importantes
 
