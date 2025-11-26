@@ -27,10 +27,10 @@ export const useCategoriasMetas = () => {
 
       if (error) throw error;
       setCategoriasMetas((data || []) as CategoriaMeta[]);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar categorias de metas",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -58,10 +58,10 @@ export const useCategoriasMetas = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -86,10 +86,10 @@ export const useCategoriasMetas = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -112,10 +112,10 @@ export const useCategoriasMetas = () => {
       });
       
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

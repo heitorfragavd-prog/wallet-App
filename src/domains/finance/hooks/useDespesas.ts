@@ -58,10 +58,10 @@ export const useDespesas = () => {
       );
 
       setDespesas(sortedDespesas);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar despesas",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -92,10 +92,10 @@ export const useDespesas = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar despesa",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -123,10 +123,10 @@ export const useDespesas = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar despesa",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -149,10 +149,10 @@ export const useDespesas = () => {
       });
       
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover despesa",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

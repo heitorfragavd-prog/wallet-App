@@ -52,7 +52,8 @@ import {
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useMetas } from "@/domains/finance/hooks/useMetas";
-import { useCategoriasMetas } from "@/domains/finance/hooks/useCategoriasMetas";
+import { useCategoriasMetas, CategoriaMeta } from "@/domains/finance/hooks/useCategoriasMetas";
+import { Meta } from "@/domains/finance/hooks/useMetas";
 
 // Interface para compatibilidade com componentes existentes
 interface MetaForm {
@@ -90,7 +91,7 @@ const Metas = () => {
   const [filtroStatus, setFiltroStatus] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [busca, setBusca] = useState("");
-  const [metaParaEditar, setMetaParaEditar] = useState<any>(null);
+  const [metaParaEditar, setMetaParaEditar] = useState<Meta | null>(null);
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
   const [abaAtiva, setAbaAtiva] = useState("lista");
 
@@ -99,11 +100,11 @@ const Metas = () => {
   const [novaCategoriaCor, setNovaCategoriaCor] = useState("#10B981");
   const [novaCategoriaDescricao, setNovaCategoriaDescricao] = useState("");
 
-  const adicionarMeta = async (novaMeta: any) => {
+  const adicionarMeta = async (novaMeta: MetaForm) => {
     await createMeta(novaMeta);
   };
 
-  const editarMeta = async (metaEditada: any) => {
+  const editarMeta = async (metaEditada: Meta) => {
     await updateMeta(metaEditada.id, metaEditada);
   };
 
@@ -111,7 +112,7 @@ const Metas = () => {
     await deleteMeta(id);
   };
 
-  const abrirModalEdicao = (meta: any) => {
+  const abrirModalEdicao = (meta: Meta) => {
     setMetaParaEditar(meta);
     setModalEditarAberto(true);
   };
@@ -295,7 +296,7 @@ const Metas = () => {
           </div>
           <NovaMetaModal
             onAdicionarMeta={adicionarMeta}
-            categoriasMetas={categoriasMetas.filter((c) => c.ativa) as any}
+            categoriasMetas={categoriasMetas.filter((c) => c.ativa) as CategoriaMeta[]}
           />
         </div>
 

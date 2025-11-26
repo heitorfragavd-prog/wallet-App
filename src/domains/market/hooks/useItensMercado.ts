@@ -38,10 +38,10 @@ export const useItensMercado = () => {
 
       if (error) throw error;
       setItensMercado((data || []) as ItemMercado[]);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar itens de mercado",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -71,10 +71,10 @@ export const useItensMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar item",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -101,10 +101,10 @@ export const useItensMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar item",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -127,10 +127,10 @@ export const useItensMercado = () => {
       });
       
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover item",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

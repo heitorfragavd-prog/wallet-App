@@ -109,7 +109,7 @@ const Despesas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarDespesa = (despesa: any) => {
+  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string } }) => {
     const despesaFormatada = {
       id: despesa.id,
       descricao: despesa.descricao,

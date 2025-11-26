@@ -147,7 +147,7 @@ export default function AdminReports() {
             .eq('status', 'active');
 
         const planFrequency: Record<string, number> = {};
-        planCounts?.forEach((sub: any) => {
+        planCounts?.forEach((sub: { plans: { name: string } | null }) => {
             const planName = sub.plans?.name || 'Desconhecido';
             planFrequency[planName] = (planFrequency[planName] || 0) + 1;
         });

@@ -31,11 +31,30 @@ import {
     SelectValue,
 } from "@/shared/components/ui/select";
 
+interface User {
+    id: string;
+    name: string;
+    email: string;
+    phone: string;
+    role: string;
+    created_at: string;
+    subscription?: {
+        status: string;
+        plans?: { name: string };
+    };
+}
+
+interface Plan {
+    id: string;
+    name: string;
+    price: number;
+}
+
 export default function AdminUsers() {
-    const [users, setUsers] = useState<any[]>([]);
+    const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
-    const [plans, setPlans] = useState<any[]>([]);
+    const [plans, setPlans] = useState<Plan[]>([]);
 
     useEffect(() => {
         fetchUsers();

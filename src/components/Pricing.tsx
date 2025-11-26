@@ -17,9 +17,31 @@ interface PaymentLink {
   is_active: boolean;
 }
 
+interface PlanConfig {
+  description: string;
+  notIncluded: string[];
+  buttonText: string;
+  popular: boolean;
+  color: string;
+  defaultLink: string;
+}
+
+interface PlanDisplay {
+  name: string;
+  price: string;
+  period?: string;
+  description: string;
+  features: string[];
+  notIncluded: string[];
+  buttonText: string;
+  popular: boolean;
+  color: string;
+  link: string;
+}
+
 export const Pricing = () => {
   const navigate = useNavigate();
-  const [plans, setPlans] = useState<any[]>([]);
+  const [plans, setPlans] = useState<PlanDisplay[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,7 +73,7 @@ export const Pricing = () => {
       });
 
       // Configuração estática de features e descrições por plano
-      const planConfigs: Record<string, any> = {
+      const planConfigs: Record<string, PlanConfig> = {
         'Essencial': {
           description: "Para quem está começando a organizar as finanças",
           notIncluded: [

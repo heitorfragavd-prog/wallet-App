@@ -62,12 +62,12 @@ export const ResetPasswordForm = ({
 
       onSwitchToLogin();
       navigate("/login");
-    } catch (error: any) {
+    } catch (error) {
       console.error("Erro ao redefinir senha:", error);
       toast({
         title: "Erro",
         description:
-          error.message || "Erro ao redefinir senha. Tente novamente.",
+          error instanceof Error ? error.message : "Erro ao redefinir senha. Tente novamente.",
         variant: "destructive",
       });
     } finally {

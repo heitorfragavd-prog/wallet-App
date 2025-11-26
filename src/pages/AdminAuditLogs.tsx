@@ -28,7 +28,7 @@ interface AuditLog {
     action: string;
     entity_type: string;
     entity_id: string | null;
-    details: any;
+    details: Record<string, unknown>;
     created_at: string;
     profiles: {
         name: string;
@@ -92,7 +92,7 @@ export default function AdminAuditLogs() {
     };
 
     const getEntityIcon = (entityType: string) => {
-        const icons: Record<string, any> = {
+        const icons: Record<string, React.ComponentType<{ className?: string }>> = {
             user: User,
             subscription: CreditCard,
             plan: Settings,
@@ -114,7 +114,7 @@ export default function AdminAuditLogs() {
         });
     };
 
-    const formatDetails = (details: any) => {
+    const formatDetails = (details: Record<string, unknown>) => {
         if (!details || Object.keys(details).length === 0) return '-';
         
         return Object.entries(details)

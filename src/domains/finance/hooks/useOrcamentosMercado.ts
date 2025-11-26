@@ -29,10 +29,10 @@ export const useOrcamentosMercado = () => {
 
       if (error) throw error;
       setOrcamentosMercado((data || []) as OrcamentoMercado[]);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar orçamentos de mercado",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -60,10 +60,10 @@ export const useOrcamentosMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar orçamento",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -88,10 +88,10 @@ export const useOrcamentosMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar orçamento",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -114,10 +114,10 @@ export const useOrcamentosMercado = () => {
       });
       
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover orçamento",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

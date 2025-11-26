@@ -27,10 +27,10 @@ export const useCategoriasMercado = () => {
 
       if (error) throw error;
       setCategoriasMercado((data || []) as CategoriaMercado[]);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar categorias de mercado",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -58,10 +58,10 @@ export const useCategoriasMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -86,10 +86,10 @@ export const useCategoriasMercado = () => {
       });
       
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -112,10 +112,10 @@ export const useCategoriasMercado = () => {
       });
       
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover categoria",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

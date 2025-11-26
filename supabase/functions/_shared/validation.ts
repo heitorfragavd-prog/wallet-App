@@ -57,7 +57,7 @@ const MALICIOUS_PATTERNS = {
   sqlInjection: [
     /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b)/gi,
     /(UNION\s+SELECT)/gi,
-    /(--|\#|\/\*|\*\/)/g,
+    /(--|#|\/\*|\*\/)/g,
     /(\bOR\b\s+\d+\s*=\s*\d+)/gi,
     /(\bAND\b\s+\d+\s*=\s*\d+)/gi,
   ],
@@ -74,7 +74,7 @@ const MALICIOUS_PATTERNS = {
   // Path traversal
   pathTraversal: [
     /\.\.\//g,
-    /\.\.\\\/g,
+    /\.\.\\/g,
   ],
 };
 

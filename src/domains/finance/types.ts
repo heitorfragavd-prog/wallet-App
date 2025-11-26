@@ -75,3 +75,50 @@ export interface Orcamento {
   ano: number;
   created_at: string;
 }
+
+export interface DebtReminder {
+  id: string;
+  divida_id: string;
+  user_id: string;
+  reminder_hours: number;
+  trigger_at: string;
+  status: 'pending' | 'sent' | 'failed';
+  sent_at?: string;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+  dividas?: {
+    descricao: string;
+    credor: string;
+    valor_total: number;
+    valor_restante: number;
+    data_vencimento: string;
+    parcelas: number;
+    parcelas_pagas: number;
+  };
+}
+
+export interface WebhookPayload {
+  event: 'debt_reminder';
+  timestamp: string;
+  user: {
+    name: string;
+    phone: string;
+    email: string;
+  };
+  debt: {
+    id: string;
+    description: string;
+    creditor: string;
+    total_amount: number;
+    remaining_amount: number;
+    due_date: string;
+    installments: number;
+    installments_paid: number;
+  };
+  reminder: {
+    id: string;
+    hours_before: number;
+    trigger_time: string;
+  };
+}

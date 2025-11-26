@@ -2,7 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
 
 interface LogDetails {
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export const useAuditLog = () => {

@@ -84,7 +84,7 @@ interface WebhookPayload {
   transaction_id?: string
   customer_name?: string
   customer_phone?: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 
 serve(async (req) => {

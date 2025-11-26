@@ -109,7 +109,7 @@ const Receitas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarReceita = (receita: any) => {
+  const handleEditarReceita = (receita: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string } }) => {
     const receitaFormatada = {
       id: receita.id,
       descricao: receita.descricao,

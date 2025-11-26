@@ -49,7 +49,7 @@ export default function AdminPlanLimits() {
 
             const limitsWithPlanName = data?.map(limit => ({
                 ...limit,
-                plan_name: (limit.plans as any)?.name
+                plan_name: (limit.plans as { name: string } | null)?.name
             })) || [];
 
             setLimits(limitsWithPlanName);

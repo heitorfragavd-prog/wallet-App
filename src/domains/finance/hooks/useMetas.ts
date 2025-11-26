@@ -42,10 +42,10 @@ export const useMetas = () => {
 
       if (error) throw error;
       setMetas((data || []) as Meta[]);
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao carregar metas",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
     } finally {
@@ -85,10 +85,10 @@ export const useMetas = () => {
       });
 
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao criar meta",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -129,10 +129,10 @@ export const useMetas = () => {
       });
 
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao atualizar meta",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { data: null, error };
@@ -152,10 +152,10 @@ export const useMetas = () => {
       });
 
       return { error: null };
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Erro ao remover meta",
-        description: error.message,
+        description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
       return { error };

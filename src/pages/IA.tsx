@@ -278,7 +278,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
         if (uploadedFile.type === 'image') {
           try {
             await analyzeWithOpenAI(uploadedFile.file);
-            results.push({} as any); // Placeholder para contagem
+            results.push({} as Record<string, unknown>); // Placeholder para contagem
           } catch (error) {
             console.error('Erro na análise de arquivo:', error);
           }

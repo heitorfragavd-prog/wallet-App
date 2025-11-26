@@ -17,9 +17,18 @@ export interface ManutencaoPendente {
   tipoManutencao?: TipoManutencao;
 }
 
+interface ManutencaoRealizada {
+  id: string;
+  veiculo_id: string;
+  tipo_manutencao_id: string;
+  data_realizada: string;
+  quilometragem: number;
+  status: string;
+}
+
 export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: TipoManutencao[]) => {
   const [manutencoesPendentes, setManutencoesPendentes] = useState<ManutencaoPendente[]>([]);
-  const [manutencaoRealizada, setManutencaoRealizada] = useState<any[]>([]);
+  const [manutencaoRealizada, setManutencaoRealizada] = useState<ManutencaoRealizada[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 

@@ -49,8 +49,8 @@ import { EditarCategoriaModal } from "@/domains/finance/components/EditarCategor
 import { EditarOrcamentoModal } from "@/domains/finance/components/EditarOrcamentoModal";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
-import { useCategoriasMercado } from "@/domains/market/hooks/useCategoriasMercado";
-import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
+import { useCategoriasMercado, CategoriaMercado } from "@/domains/market/hooks/useCategoriasMercado";
+import { useItensMercado, ItemMercado } from "@/domains/market/hooks/useItensMercado";
 import { useOrcamentosMercado } from "@/domains/finance/hooks/useOrcamentosMercado";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 
@@ -151,9 +151,9 @@ const Mercado = () => {
 
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [filtroDescricao, setFiltroDescricao] = useState("");
-  const [itemParaEditar, setItemParaEditar] = useState<any>(null);
+  const [itemParaEditar, setItemParaEditar] = useState<ItemMercado | null>(null);
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
-  const [categoriaParaEditar, setCategoriaParaEditar] = useState<any>(null);
+  const [categoriaParaEditar, setCategoriaParaEditar] = useState<CategoriaMercado | null>(null);
   const [modalEditarCategoriaAberto, setModalEditarCategoriaAberto] =
     useState(false);
   const [orcamentoMensal, setOrcamentoMensal] = useState(0);
@@ -251,7 +251,7 @@ const Mercado = () => {
     await createItemMercado(novoItem);
   };
 
-  const handleEditarItem = async (itemEditado: any) => {
+  const handleEditarItem = async (itemEditado: ItemMercado) => {
     console.log("Item recebido para editar:", itemEditado);
     await updateItemMercado(itemEditado.id, itemEditado);
   };
@@ -266,7 +266,7 @@ const Mercado = () => {
     await createCategoriaMercado(novaCategoria);
   };
 
-  const handleEditarCategoria = async (categoriaEditada: any) => {
+  const handleEditarCategoria = async (categoriaEditada: CategoriaMercado) => {
     await updateCategoriaMercado(categoriaEditada.id, categoriaEditada);
   };
 
@@ -274,12 +274,12 @@ const Mercado = () => {
     await deleteCategoriaMercado(id);
   };
 
-  const abrirModalEdicao = (item: any) => {
+  const abrirModalEdicao = (item: ItemMercado) => {
     setItemParaEditar(item);
     setModalEditarAberto(true);
   };
 
-  const abrirModalEdicaoCategoria = (categoria: any) => {
+  const abrirModalEdicaoCategoria = (categoria: CategoriaMercado) => {
     setCategoriaParaEditar(categoria);
     setModalEditarCategoriaAberto(true);
   };

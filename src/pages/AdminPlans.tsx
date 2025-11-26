@@ -26,11 +26,18 @@ import {
 } from "@/shared/components/ui/dialog";
 import { Label } from "@/shared/components/ui/label";
 
+interface Plan {
+    id: string;
+    name: string;
+    price: number;
+    features: string[];
+}
+
 export default function AdminPlans() {
-    const [plans, setPlans] = useState<any[]>([]);
+    const [plans, setPlans] = useState<Plan[]>([]);
     const [loading, setLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
-    const [editingPlan, setEditingPlan] = useState<any>(null);
+    const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
     const [formData, setFormData] = useState({
         name: "",
         price: "",
@@ -72,7 +79,7 @@ export default function AdminPlans() {
             const planData = {
                 name: formData.name,
                 price: Number(formData.price),
-                features: featuresArray as any // Cast to any to avoid type issues with jsonb
+                features: featuresArray
             };
 
             if (editingPlan) {
@@ -93,8 +100,9 @@ export default function AdminPlans() {
             setIsDialogOpen(false);
             fetchPlans();
             resetForm();
-        } catch (error: any) {
-            toast.error(error.message || "Erro ao salvar plano");
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Erro ao salvar plano";
+            toast.error(errorMessage);
             console.error(error);
         }
     };
@@ -121,7 +129,7 @@ export default function AdminPlans() {
         setFormData({ name: "", price: "", features: "" });
     };
 
-    const handleEdit = (plan: any) => {
+    const handleEdit = (plan: Plan) => {
         setEditingPlan(plan);
         setFormData({
             name: plan.name,
