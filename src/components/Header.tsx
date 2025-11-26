@@ -3,6 +3,7 @@ import { Button } from "@/shared/components/ui/button";
 import { MessageCircle, Menu } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { ThemeToggle } from "@/shared/components/ThemeToggle";
 
 export const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -34,6 +35,7 @@ export const Header = () => {
           </nav>
 
           <div className="hidden md:flex items-center space-x-4">
+            <ThemeToggle />
             <Link to="/login">
               <Button variant="outline">
                 Fazer Login
@@ -70,6 +72,9 @@ export const Header = () => {
                 Contato
               </a>
               <div className="flex flex-col space-y-2 pt-4 border-t border-gray-100">
+                <div className="flex justify-center pb-2">
+                  <ThemeToggle />
+                </div>
                 <Link to="/login">
                   <Button variant="outline" className="w-full">
                     Fazer Login

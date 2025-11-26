@@ -167,10 +167,10 @@ const Receitas = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Receitas
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Gerencie suas fontes de renda
             </p>
           </div>
@@ -191,10 +191,10 @@ const Receitas = () => {
                 <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total de Receitas
                 </p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   R${" "}
                   {totalReceitas.toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
@@ -210,8 +210,8 @@ const Receitas = () => {
                 <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Receitas</p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-xs md:text-sm text-muted-foreground">Receitas</p>
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {receitas.length}
                 </p>
               </div>
@@ -224,8 +224,8 @@ const Receitas = () => {
                 <Calendar className="w-5 h-5 md:w-6 md:h-6 text-orange-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Categorias</p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-xs md:text-sm text-muted-foreground">Categorias</p>
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {categoriasReceita.length}
                 </p>
               </div>
@@ -251,12 +251,12 @@ const Receitas = () => {
           <TabsContent value="lista" className="space-y-4 md:space-y-6">
             {/* Filtros */}
             <Card className="p-4 md:p-6">
-              <h2 className="text-base md:text-lg font-bold text-gray-900 mb-4">
+              <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
                 Filtros
               </h2>
               <div className="flex flex-col space-y-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
                     placeholder="Buscar receitas..."
                     value={filtro}
@@ -270,7 +270,7 @@ const Receitas = () => {
                     title="Filtrar por categoria"
                     value={categoriaFiltro}
                     onChange={(e) => setCategoriaFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     <option value="">Todas as categorias</option>
                     {categorias.map((categoria) => (
@@ -315,7 +315,7 @@ const Receitas = () => {
                           {receita.categorias?.nome || "Sem categoria"}
                         </TableCell>
                         <TableCell>
-                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400">
                             Receita
                           </span>
                         </TableCell>
@@ -336,7 +336,7 @@ const Receitas = () => {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleEditarReceita(receita)}
-                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -345,7 +345,7 @@ const Receitas = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
@@ -388,7 +388,7 @@ const Receitas = () => {
             <div className="md:hidden space-y-4">
               {receitasFiltradas.length === 0 ? (
                 <Card className="p-4">
-                  <p className="text-center text-gray-500">
+                  <p className="text-center text-muted-foreground">
                     Nenhuma receita encontrada.
                   </p>
                 </Card>
@@ -397,23 +397,23 @@ const Receitas = () => {
                   <Card key={receita.id} className="p-4">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                        <h3 className="font-medium text-gray-900">
+                        <h3 className="font-medium text-foreground">
                           {receita.descricao}
                         </h3>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400">
                           Receita
                         </span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 text-sm">
                         <div>
-                          <p className="text-gray-500">Categoria</p>
+                          <p className="text-muted-foreground">Categoria</p>
                           <p className="font-medium">
                             {receita.categorias?.nome || "Sem categoria"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Data</p>
+                          <p className="text-muted-foreground">Data</p>
                           <p className="font-medium">
                             {new Date(
                               receita.data + "T00:00:00"
@@ -422,7 +422,7 @@ const Receitas = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-between pt-2 border-t border-border">
                         <span className="font-bold text-green-600">
                           R${" "}
                           {receita.valor.toLocaleString("pt-BR", {
@@ -434,7 +434,7 @@ const Receitas = () => {
                             variant="ghost"
                             size="sm"
                             onClick={() => handleEditarReceita(receita)}
-                            className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                            className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                           >
                             <Edit className="w-4 h-4" />
                           </Button>
@@ -443,7 +443,7 @@ const Receitas = () => {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </Button>
@@ -528,7 +528,7 @@ const Receitas = () => {
                           categoria: e.target.value,
                         })
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
                       <option value="">Selecione uma categoria</option>
                       {categoriasReceita.map((categoria) => (

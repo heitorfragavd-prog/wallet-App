@@ -220,7 +220,7 @@ const Mercado = () => {
       description: "(Menos de 30% do ideal)",
     },
     {
-      color: "bg-gray-500",
+      color: "bg-background0",
       label: "SEM ESTOQUE",
       description: "(Sem itens ou item não foi adicionado na lista de compras)",
     },
@@ -293,9 +293,9 @@ const Mercado = () => {
       case "estoque_baixo":
         return "text-red-600";
       case "sem_estoque":
-        return "text-gray-600";
+        return "text-muted-foreground";
       default:
-        return "text-gray-600";
+        return "text-muted-foreground";
     }
   };
 
@@ -337,20 +337,20 @@ const Mercado = () => {
       <div className="p-4 md:p-6 space-y-6">
         {/* Header */}
         <div className="flex flex-col space-y-2">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+          <h1 className="text-2xl md:text-3xl font-bold text-foreground">
             Mercado
           </h1>
-          <p className="text-sm md:text-base text-gray-600">
+          <p className="text-sm md:text-base text-muted-foreground">
             Gerencie seu estoque e lista de compras
           </p>
         </div>
 
         {/* Alerta de Orçamento Excedido */}
         {dadosOrcamento.orcamentoExcedido && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
             <div className="flex items-center space-x-2">
               <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-              <h3 className="text-sm md:text-base text-red-800 font-semibold">
+              <h3 className="text-sm md:text-base text-red-600 dark:text-red-400 font-semibold">
                 ⚠️ Orçamento Excedido!
               </h3>
             </div>
@@ -368,18 +368,18 @@ const Mercado = () => {
         <Card
           className={`p-4 md:p-6 border-l-4 ${
             dadosOrcamento.orcamentoExcedido
-              ? "border-l-red-500 bg-red-50"
+              ? "border-l-red-500 bg-red-500/10"
               : dadosOrcamento.percentualGasto > 80
-              ? "border-l-yellow-500 bg-yellow-50"
+              ? "border-l-yellow-500 bg-yellow-500/10"
               : "border-l-orange-500"
           }`}
         >
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
             <div>
-              <h2 className="text-lg md:text-xl font-bold text-gray-900">
+              <h2 className="text-lg md:text-xl font-bold text-foreground">
                 Orçamento Mensal
               </h2>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-muted-foreground">
                 Categoria: {categoriaOrcamento}
               </p>
             </div>
@@ -399,7 +399,7 @@ const Mercado = () => {
               className={`text-2xl md:text-3xl font-bold ${
                 dadosOrcamento.orcamentoExcedido
                   ? "text-red-600"
-                  : "text-gray-900"
+                  : "text-foreground"
               }`}
             >
               R${" "}
@@ -410,7 +410,7 @@ const Mercado = () => {
 
             <div className="space-y-3">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-gray-600">
+                <span className="text-sm md:text-base text-muted-foreground">
                   Gastos Reais (Lista de Mercado):
                 </span>
                 <span className="font-bold text-purple-600">
@@ -422,7 +422,7 @@ const Mercado = () => {
               </div>
 
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-gray-600">
+                <span className="text-sm md:text-base text-muted-foreground">
                   Estimativa de Gastos:
                 </span>
                 <div className="flex items-center space-x-2">
@@ -447,7 +447,7 @@ const Mercado = () => {
                     className={`font-bold ${
                       dadosOrcamento.orcamentoExcedido
                         ? "text-red-600"
-                        : "text-gray-900"
+                        : "text-foreground"
                     }`}
                   >
                     R${" "}
@@ -459,7 +459,7 @@ const Mercado = () => {
               </div>
 
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-gray-600">
+                <span className="text-sm md:text-base text-muted-foreground">
                   Saldo Disponível:
                 </span>
                 <div className="flex items-center space-x-2">
@@ -503,10 +503,10 @@ const Mercado = () => {
                       className={`w-3 h-3 rounded-full ${level.color}`}
                     ></div>
                     <div className="flex flex-col md:flex-row md:items-center">
-                      <span className="text-sm font-medium text-gray-900">
+                      <span className="text-sm font-medium text-foreground">
                         {level.label}
                       </span>
-                      <span className="text-xs text-gray-600 md:ml-1">
+                      <span className="text-xs text-muted-foreground md:ml-1">
                         {level.description}
                       </span>
                     </div>
@@ -517,10 +517,10 @@ const Mercado = () => {
 
             {/* Filtros */}
             <Card className="p-4 md:p-6">
-              <h2 className="text-lg font-bold text-gray-900 mb-4">Filtros</h2>
+              <h2 className="text-lg font-bold text-foreground mb-4">Filtros</h2>
               <div className="flex flex-col space-y-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
                     placeholder="Buscar itens..."
                     value={filtroDescricao}
@@ -560,7 +560,7 @@ const Mercado = () => {
             {/* Items Table/Cards */}
             <Card className="p-4 md:p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                <h2 className="text-lg font-bold text-gray-900">
+                <h2 className="text-lg font-bold text-foreground">
                   Lista de Itens
                 </h2>
                 <NovoItemMercadoModal
@@ -677,10 +677,10 @@ const Mercado = () => {
                   <Card key={item.id} className="p-4">
                     <div className="flex items-start justify-between">
                       <div>
-                        <h3 className="font-medium text-gray-900">
+                        <h3 className="font-medium text-foreground">
                           {item.descricao}
                         </h3>
-                        <p className="text-sm text-gray-600">
+                        <p className="text-sm text-muted-foreground">
                           {item.categorias_mercado?.nome || "Sem categoria"}
                         </p>
                       </div>
@@ -725,17 +725,17 @@ const Mercado = () => {
                     </div>
                     <div className="mt-4 space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Unidade:</span>
+                        <span className="text-muted-foreground">Unidade:</span>
                         <span>{item.unidade_medida}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Quantidade:</span>
+                        <span className="text-muted-foreground">Quantidade:</span>
                         <span>
                           {item.quantidade_atual} / {item.quantidade_ideal}
                         </span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Status:</span>
+                        <span className="text-muted-foreground">Status:</span>
                         <span
                           className={`font-medium ${getStatusColor(
                             item.status
@@ -745,7 +745,7 @@ const Mercado = () => {
                         </span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Preço Estimado:</span>
+                        <span className="text-muted-foreground">Preço Estimado:</span>
                         <span className="font-medium">
                           R$ {item.preco_atual.toFixed(2)}
                         </span>
@@ -760,7 +760,7 @@ const Mercado = () => {
           <TabsContent value="categorias" className="space-y-6">
             <Card className="p-4 md:p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                <h2 className="text-lg font-bold text-gray-900">Categorias</h2>
+                <h2 className="text-lg font-bold text-foreground">Categorias</h2>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Button
                     onClick={handleImportarCategoriasPadrao}
@@ -806,7 +806,7 @@ const Mercado = () => {
                               className="w-4 h-4 rounded-full"
                               style={{ backgroundColor: categoria.cor }}
                             ></div>
-                            <span className="text-sm text-gray-600">
+                            <span className="text-sm text-muted-foreground">
                               {categoria.cor}
                             </span>
                           </div>
@@ -815,8 +815,8 @@ const Mercado = () => {
                           <span
                             className={`px-2 py-1 text-xs rounded-full ${
                               categoria.ativa
-                                ? "bg-green-100 text-green-800"
-                                : "bg-gray-100 text-gray-800"
+                                ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                : "bg-muted text-foreground"
                             }`}
                           >
                             {categoria.ativa ? "Ativa" : "Inativa"}
@@ -882,10 +882,10 @@ const Mercado = () => {
                   <Card key={categoria.id} className="p-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <h3 className="font-medium text-gray-900">
+                        <h3 className="font-medium text-foreground">
                           {categoria.nome}
                         </h3>
-                        <p className="text-sm text-gray-600">
+                        <p className="text-sm text-muted-foreground">
                           {categoria.descricao}
                         </p>
                       </div>
@@ -938,7 +938,7 @@ const Mercado = () => {
                           className="w-4 h-4 rounded-full"
                           style={{ backgroundColor: categoria.cor }}
                         ></div>
-                        <span className="text-sm text-gray-600">
+                        <span className="text-sm text-muted-foreground">
                           {categoria.cor}
                         </span>
                       </div>
@@ -946,8 +946,8 @@ const Mercado = () => {
                         <span
                           className={`inline-block px-2 py-1 text-xs rounded-full ${
                             categoria.ativa
-                              ? "bg-green-100 text-green-800"
-                              : "bg-gray-100 text-gray-800"
+                              ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                              : "bg-muted text-foreground"
                           }`}
                         >
                           {categoria.ativa ? "Ativa" : "Inativa"}

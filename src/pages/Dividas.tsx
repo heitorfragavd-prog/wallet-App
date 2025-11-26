@@ -203,13 +203,13 @@ const Dividas = () => {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "pendente":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400";
       case "vencida":
-        return "bg-red-100 text-red-800";
+        return "bg-red-500/10 text-red-600 dark:text-red-400";
       case "quitada":
-        return "bg-green-100 text-green-800";
+        return "bg-green-500/10 text-green-600 dark:text-green-400";
       default:
-        return "bg-gray-100 text-gray-800";
+        return "bg-muted text-foreground";
     }
   };
 
@@ -232,10 +232,10 @@ const Dividas = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Dívidas
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Controle e gerenciamento de dívidas
             </p>
           </div>
@@ -256,7 +256,7 @@ const Dividas = () => {
                 <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total a Pagar
                 </p>
                 <p className="text-lg md:text-2xl font-bold text-red-600">
@@ -275,7 +275,7 @@ const Dividas = () => {
                 <AlertTriangle className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Vencidas</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Vencidas</p>
                 <p className="text-lg md:text-2xl font-bold text-red-600">
                   {dividasVencidas}
                 </p>
@@ -289,7 +289,7 @@ const Dividas = () => {
                 <Calendar className="w-5 h-5 md:w-6 md:h-6 text-yellow-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Pendentes</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Pendentes</p>
                 <p className="text-lg md:text-2xl font-bold text-yellow-600">
                   {dividasPendentes}
                 </p>
@@ -303,7 +303,7 @@ const Dividas = () => {
                 <CreditCard className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Quitadas</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Quitadas</p>
                 <p className="text-lg md:text-2xl font-bold text-green-600">
                   {dividasQuitadas}
                 </p>
@@ -330,12 +330,12 @@ const Dividas = () => {
           <TabsContent value="lista" className="space-y-4 md:space-y-6">
             {/* Filtros */}
             <Card className="p-4 md:p-6">
-              <h2 className="text-base md:text-lg font-bold text-gray-900 mb-4">
+              <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
                 Filtros
               </h2>
               <div className="flex flex-col space-y-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
                     placeholder="Buscar dívidas..."
                     value={filtro}
@@ -349,7 +349,7 @@ const Dividas = () => {
                     title="Filtrar por status"
                     value={statusFiltro}
                     onChange={(e) => setStatusFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     <option value="">Todos os status</option>
                     <option value="pendente">Pendentes</option>
@@ -361,7 +361,7 @@ const Dividas = () => {
                     title="Filtrar por categoria"
                     value={categoriaFiltro}
                     onChange={(e) => setCategoriaFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     <option value="">Todas as categorias</option>
                     {categorias.map((categoria) => (
@@ -439,7 +439,7 @@ const Dividas = () => {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleEditarDivida(divida.id)}
-                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -448,7 +448,7 @@ const Dividas = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
@@ -492,7 +492,7 @@ const Dividas = () => {
             <div className="md:hidden space-y-4">
               {dividasFiltradas.length === 0 ? (
                 <Card className="p-4">
-                  <p className="text-center text-gray-500">
+                  <p className="text-center text-muted-foreground">
                     Nenhuma dívida encontrada.
                   </p>
                 </Card>
@@ -502,10 +502,10 @@ const Dividas = () => {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <h3 className="font-medium text-gray-900">
+                          <h3 className="font-medium text-foreground">
                             {divida.descricao}
                           </h3>
-                          <p className="text-sm text-gray-500">
+                          <p className="text-sm text-muted-foreground">
                             {divida.credor}
                           </p>
                         </div>
@@ -520,19 +520,19 @@ const Dividas = () => {
 
                       <div className="grid grid-cols-2 gap-2 text-sm">
                         <div>
-                          <p className="text-gray-500">Categoria</p>
+                          <p className="text-muted-foreground">Categoria</p>
                           <p className="font-medium">
                             {divida.categorias?.nome || "Sem categoria"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Parcelas</p>
+                          <p className="text-muted-foreground">Parcelas</p>
                           <p className="font-medium">
                             {divida.parcelas_pagas}/{divida.parcelas}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Vencimento</p>
+                          <p className="text-muted-foreground">Vencimento</p>
                           <p className="font-medium">
                             {new Date(
                               divida.data_vencimento + "T00:00:00"
@@ -540,7 +540,7 @@ const Dividas = () => {
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Valor Restante</p>
+                          <p className="text-muted-foreground">Valor Restante</p>
                           <p className="font-medium text-red-600">
                             R${" "}
                             {divida.valor_restante.toLocaleString("pt-BR", {
@@ -550,12 +550,12 @@ const Dividas = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEditarDivida(divida.id)}
-                          className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                          className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
@@ -564,7 +564,7 @@ const Dividas = () => {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
@@ -658,7 +658,7 @@ const Dividas = () => {
                       title="Selecionar categoria"
                       value={novaCategoria}
                       onChange={(e) => setNovaCategoria(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
                       <option value="">Selecione uma categoria</option>
                       {categoriasDespesa.map((categoria) => (

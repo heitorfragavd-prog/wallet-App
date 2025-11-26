@@ -140,10 +140,10 @@ export default function AdminPaymentSettings() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 
@@ -176,7 +176,7 @@ export default function AdminPaymentSettings() {
                                 </div>
                                 <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                                     <h4 className="font-semibold text-blue-900 mb-2">Formato do Payload:</h4>
-                                    <pre className="text-xs bg-white p-3 rounded border overflow-x-auto">
+                                    <pre className="text-xs bg-card p-3 rounded border overflow-x-auto">
 {`// Formato Pepper (automático)
 {
   "platform": "Pepper",
@@ -308,7 +308,7 @@ export default function AdminPaymentSettings() {
                                                                 variant="ghost"
                                                                 onClick={() => handleEdit(link)}
                                                             >
-                                                                <Pencil className="h-4 w-4 text-gray-500" />
+                                                                <Pencil className="h-4 w-4 text-muted-foreground" />
                                                             </Button>
                                                         )}
                                                     </TableCell>
@@ -332,7 +332,7 @@ export default function AdminPaymentSettings() {
                                     </div>
                                     <div>
                                         <h4 className="font-semibold mb-1">Configure os Links de Pagamento</h4>
-                                        <p className="text-sm text-gray-600">
+                                        <p className="text-sm text-muted-foreground">
                                             Edite os links acima com as URLs de checkout do seu gateway de pagamento para cada plano.
                                         </p>
                                     </div>
@@ -343,7 +343,7 @@ export default function AdminPaymentSettings() {
                                     </div>
                                     <div>
                                         <h4 className="font-semibold mb-1">Configure o Webhook no Gateway</h4>
-                                        <p className="text-sm text-gray-600">
+                                        <p className="text-sm text-muted-foreground">
                                             Copie a URL do webhook acima e configure no seu gateway de pagamento para receber notificações.
                                         </p>
                                     </div>
@@ -354,10 +354,10 @@ export default function AdminPaymentSettings() {
                                     </div>
                                     <div>
                                         <h4 className="font-semibold mb-1">Processamento Automático</h4>
-                                        <p className="text-sm text-gray-600">
+                                        <p className="text-sm text-muted-foreground">
                                             Quando um pagamento for confirmado, o sistema automaticamente:
                                         </p>
-                                        <ul className="list-disc list-inside text-sm text-gray-600 mt-2 ml-4">
+                                        <ul className="list-disc list-inside text-sm text-muted-foreground mt-2 ml-4">
                                             <li>Cria ou atualiza a assinatura do usuário</li>
                                             <li>Envia um magic link por email para novos usuários</li>
                                             <li>Registra o pagamento no sistema</li>

@@ -112,16 +112,16 @@ export default function AdminUsers() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Gerenciar Usuários</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Usuários</h2>
                         <div className="relative w-72">
-                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
+                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                             <Input
                                 placeholder="Buscar por nome ou email..."
                                 className="pl-8"
@@ -131,7 +131,7 @@ export default function AdminUsers() {
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -166,7 +166,7 @@ export default function AdminUsers() {
                                                 </Badge>
                                             </TableCell>
                                             <TableCell>
-                                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                                                <Badge variant="outline" className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20">
                                                     {planName}
                                                 </Badge>
                                             </TableCell>

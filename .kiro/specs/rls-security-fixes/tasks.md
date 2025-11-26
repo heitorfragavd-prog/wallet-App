@@ -1,0 +1,71 @@
+# Implementation Plan
+
+- [ ] 1. Create helper function for admin role check
+  - Create `is_admin()` function with SECURITY DEFINER and fixed search_path
+  - Function returns boolean based on profiles.role check
+  - _Requirements: 1.1, 2.3_
+
+- [ ] 2. Enable RLS and create policies for admin_logs table
+  - [ ] 2.1 Create migration to enable RLS on admin_logs
+    - Enable row level security on admin_logs table
+    - Create SELECT policy restricting to admin role only
+    - Create INSERT policy denying direct inserts (trigger-only)
+    - _Requirements: 1.1, 1.2, 1.3, 1.4_
+  - [ ]* 2.2 Write property test for admin_logs access control
+    - **Property 1: Admin-only access to admin_logs**
+    - **Validates: Requirements 1.1, 1.2, 1.3**
+
+- [ ] 3. Enable RLS and create policies for plan_limits table
+  - [ ] 3.1 Create migration to enable RLS on plan_limits
+    - Enable row level security on plan_limits table
+    - Create SELECT policy allowing all authenticated users
+    - Create ALL policy for admin-only modifications
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [ ]* 3.2 Write property test for plan_limits access control
+    - **Property 2: Authenticated read access to plan_limits**
+    - **Property 3: Admin-only write access to plan_limits**
+    - **Validates: Requirements 2.1, 2.2, 2.3, 2.4**
+
+- [ ] 4. Fix function search_path vulnerabilities
+  - [ ] 4.1 Create migration to fix log_admin_action function
+    - Recreate function with SET search_path = public
+    - Maintain existing SECURITY DEFINER
+    - _Requirements: 3.1_
+  - [ ] 4.2 Create migration to fix cleanup_expired_tokens function
+    - Recreate function with SET search_path = public
+    - Maintain existing SECURITY DEFINER
+    - _Requirements: 3.2_
+  - [ ] 4.3 Create migration to fix update_payment_links_updated_at function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.3_
+  - [ ] 4.4 Create migration to fix update_updated_at_column function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.4_
+  - [ ] 4.5 Create migration to fix update_valor_restante function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.5_
+  - [ ] 4.6 Create migration to fix update_meta_status function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.6_
+  - [ ] 4.7 Create migration to fix update_item_status function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.7_
+  - [ ] 4.8 Create migration to fix calcular_proxima_manutencao function
+    - Recreate function with SET search_path = public
+    - _Requirements: 3.8_
+  - [ ] 4.9 Create migration to fix delete_user_account function
+    - Recreate function with SET search_path = public
+    - Maintain existing SECURITY DEFINER
+    - _Requirements: 3.9_
+  - [ ]* 4.10 Write verification test for function search_path
+    - **Property 4: Function search_path immutability**
+    - **Validates: Requirements 3.1-3.9**
+
+- [ ] 5. Checkpoint - Verify all security fixes
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 6. Document leaked password protection configuration
+  - [ ] 6.1 Create documentation for enabling leaked password protection
+    - Document steps to enable in Supabase Dashboard
+    - Note: This is a dashboard configuration, not a code change
+    - _Requirements: 4.1, 4.2_

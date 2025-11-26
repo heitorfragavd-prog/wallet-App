@@ -167,10 +167,10 @@ const Despesas = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Despesas
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Gerencie seus gastos e despesas
             </p>
           </div>
@@ -191,10 +191,10 @@ const Despesas = () => {
                 <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total de Despesas
                 </p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   R${" "}
                   {totalDespesas.toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
@@ -210,8 +210,8 @@ const Despesas = () => {
                 <TrendingDown className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Despesas</p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-xs md:text-sm text-muted-foreground">Despesas</p>
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {despesas.length}
                 </p>
               </div>
@@ -224,8 +224,8 @@ const Despesas = () => {
                 <Calendar className="w-5 h-5 md:w-6 md:h-6 text-orange-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Categorias</p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-xs md:text-sm text-muted-foreground">Categorias</p>
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {categoriasDespesa.length}
                 </p>
               </div>
@@ -251,12 +251,12 @@ const Despesas = () => {
           <TabsContent value="lista" className="space-y-4 md:space-y-6">
             {/* Filtros */}
             <Card className="p-4 md:p-6">
-              <h2 className="text-base md:text-lg font-bold text-gray-900 mb-4">
+              <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
                 Filtros
               </h2>
               <div className="flex flex-col space-y-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
                     placeholder="Buscar despesas..."
                     value={filtro}
@@ -270,7 +270,7 @@ const Despesas = () => {
                     title="Filtrar por categoria"
                     value={categoriaFiltro}
                     onChange={(e) => setCategoriaFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     <option value="">Todas as categorias</option>
                     {categorias.map((categoria) => (
@@ -315,7 +315,7 @@ const Despesas = () => {
                           {despesa.categorias?.nome || "Sem categoria"}
                         </TableCell>
                         <TableCell>
-                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400">
                             Despesa
                           </span>
                         </TableCell>
@@ -336,7 +336,7 @@ const Despesas = () => {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleEditarDespesa(despesa)}
-                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -345,7 +345,7 @@ const Despesas = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
@@ -388,7 +388,7 @@ const Despesas = () => {
             <div className="md:hidden space-y-4">
               {despesasFiltradas.length === 0 ? (
                 <Card className="p-4">
-                  <p className="text-center text-gray-500">
+                  <p className="text-center text-muted-foreground">
                     Nenhuma despesa encontrada.
                   </p>
                 </Card>
@@ -398,21 +398,21 @@ const Despesas = () => {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <h3 className="font-medium text-gray-900">
+                          <h3 className="font-medium text-foreground">
                             {despesa.descricao}
                           </h3>
-                          <p className="text-sm text-gray-500">
+                          <p className="text-sm text-muted-foreground">
                             {despesa.categorias?.nome || "Sem categoria"}
                           </p>
                         </div>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400">
                           Despesa
                         </span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 text-sm">
                         <div>
-                          <p className="text-gray-500">Data</p>
+                          <p className="text-muted-foreground">Data</p>
                           <p className="font-medium">
                             {new Date(
                               despesa.data + "T00:00:00"
@@ -420,7 +420,7 @@ const Despesas = () => {
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Valor</p>
+                          <p className="text-muted-foreground">Valor</p>
                           <p className="font-medium text-red-600">
                             R${" "}
                             {despesa.valor.toLocaleString("pt-BR", {
@@ -430,12 +430,12 @@ const Despesas = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEditarDespesa(despesa)}
-                          className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                          className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
@@ -444,7 +444,7 @@ const Despesas = () => {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
@@ -526,7 +526,7 @@ const Despesas = () => {
                           categoria: e.target.value,
                         })
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
                       <option value="">Selecione uma categoria</option>
                       {categoriasDespesa.map((categoria) => (

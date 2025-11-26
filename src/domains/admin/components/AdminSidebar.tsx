@@ -4,6 +4,7 @@ import { Button } from "@/shared/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { ThemeToggle } from "@/shared/components/ThemeToggle";
 
 export function AdminSidebar() {
     const location = useLocation();
@@ -38,9 +39,9 @@ export function AdminSidebar() {
     ];
 
     return (
-        <div className="h-screen w-64 bg-white border-r border-gray-200 flex flex-col">
-            <div className="p-6 border-b border-gray-100">
-                <h1 className="text-xl font-bold text-gray-900">Wallet Admin</h1>
+        <div className="h-screen w-64 bg-background border-r border-border flex flex-col">
+            <div className="p-6 border-b border-border">
+                <h1 className="text-xl font-bold text-foreground">Wallet Admin</h1>
             </div>
 
             <nav className="flex-1 p-4 space-y-2">
@@ -50,7 +51,7 @@ export function AdminSidebar() {
                         <Link key={item.path} to={item.path}>
                             <Button
                                 variant={isActive ? "secondary" : "ghost"}
-                                className={`w-full justify-start gap-3 ${isActive ? "bg-gray-100 text-gray-900" : "text-gray-600"
+                                className={`w-full justify-start gap-3 ${isActive ? "bg-muted text-foreground" : "text-muted-foreground"
                                     }`}
                             >
                                 <item.icon className="h-5 w-5" />
@@ -61,10 +62,13 @@ export function AdminSidebar() {
                 })}
             </nav>
 
-            <div className="p-4 border-t border-gray-100">
+            <div className="p-4 border-t border-border space-y-2">
+                <div className="flex justify-center pb-2">
+                    <ThemeToggle />
+                </div>
                 <Button
                     variant="ghost"
-                    className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50"
+                    className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
                     onClick={handleLogout}
                 >
                     <LogOut className="h-5 w-5" />

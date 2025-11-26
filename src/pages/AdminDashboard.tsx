@@ -66,10 +66,10 @@ export default function AdminDashboard() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 

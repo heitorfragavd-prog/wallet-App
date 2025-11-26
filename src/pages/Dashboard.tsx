@@ -327,10 +327,10 @@ const Dashboard = () => {
               </span>
             </div>
             <div>
-              <h1 className="text-xl md:text-2xl font-bold text-gray-900">
+              <h1 className="text-xl md:text-2xl font-bold text-foreground">
                 Olá, {user.name}
               </h1>
-              <p className="text-sm md:text-base text-gray-600">
+              <p className="text-sm md:text-base text-muted-foreground">
                 {user.getCurrentPeriod()}
               </p>
             </div>
@@ -365,26 +365,26 @@ const Dashboard = () => {
             <Card key={index} className="p-4 md:p-6">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs md:text-sm text-gray-600">
+                  <p className="text-xs md:text-sm text-muted-foreground">
                     {stat.title}
                   </p>
                   {stat.icon && (
                     <stat.icon
                       className={`w-4 h-4 ${
                         stat.changeType === "positive"
-                          ? "text-green-600"
+                          ? "text-green-500"
                           : stat.changeType === "negative"
-                          ? "text-red-600"
-                          : "text-gray-600"
+                          ? "text-red-500"
+                          : "text-muted-foreground"
                       }`}
                     />
                   )}
                 </div>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {stat.value}
                 </p>
                 {stat.subtitle && (
-                  <p className="text-xs md:text-sm text-orange-600">
+                  <p className="text-xs md:text-sm text-orange-500">
                     {stat.subtitle}
                   </p>
                 )}
@@ -392,10 +392,10 @@ const Dashboard = () => {
                   <p
                     className={`text-xs md:text-sm ${
                       stat.changeType === "positive"
-                        ? "text-green-600"
+                        ? "text-green-500"
                         : stat.changeType === "negative"
-                        ? "text-red-600"
-                        : "text-gray-600"
+                        ? "text-red-500"
+                        : "text-muted-foreground"
                     }`}
                   >
                     {stat.change}
@@ -403,16 +403,16 @@ const Dashboard = () => {
                 )}
                 {stat.badge && (
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-600 dark:text-blue-400">
                       {stat.badge}
                     </span>
                     <span
                       className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                         stat.badgeType === "good"
-                          ? "bg-green-100 text-green-800"
+                          ? "bg-green-500/20 text-green-600 dark:text-green-400"
                           : stat.badgeType === "warning"
-                          ? "bg-orange-100 text-orange-800"
-                          : "bg-red-100 text-red-800"
+                          ? "bg-orange-500/20 text-orange-600 dark:text-orange-400"
+                          : "bg-red-500/20 text-red-600 dark:text-red-400"
                       }`}
                     >
                       <div
@@ -436,12 +436,12 @@ const Dashboard = () => {
         {/* Recent Transactions */}
         <Card className="p-4 md:p-6 mb-6 md:mb-8">
           <div className="flex items-center justify-between mb-4 md:mb-6">
-            <h2 className="text-lg md:text-xl font-bold text-gray-900">
+            <h2 className="text-lg md:text-xl font-bold text-foreground">
               Últimas Transações - {selectedPeriod}
             </h2>
             <Button
               variant="ghost"
-              className="text-orange-600 hover:text-orange-700 text-sm"
+              className="text-orange-500 hover:text-orange-600 text-sm"
               onClick={() => navigate("/transacoes")}
             >
               Ver todas
@@ -452,17 +452,17 @@ const Dashboard = () => {
               transacoesParaExibicao.map((transaction) => (
                 <div
                   key={transaction.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 rounded-lg border border-gray-100 hover:bg-gray-50 gap-2 sm:gap-4"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 rounded-lg border border-border hover:bg-muted/50 gap-2 sm:gap-4"
                 >
                   <div className="flex items-center space-x-3 md:space-x-4">
                     <div className="p-2 rounded-lg bg-primary/20">
                       <transaction.icon className="w-4 h-4 md:w-5 md:h-5 text-primary" />
                     </div>
                     <div>
-                      <p className="text-sm md:text-base font-medium text-gray-900">
+                      <p className="text-sm md:text-base font-medium text-foreground">
                         {transaction.description}
                       </p>
-                      <p className="text-xs md:text-sm text-gray-600">
+                      <p className="text-xs md:text-sm text-muted-foreground">
                         {transaction.date}
                       </p>
                     </div>
@@ -474,8 +474,8 @@ const Dashboard = () => {
                     <span
                       className={`text-sm md:text-base font-bold ${
                         transaction.type === "income"
-                          ? "text-green-600"
-                          : "text-red-600"
+                          ? "text-green-500"
+                          : "text-red-500"
                       }`}
                     >
                       {transaction.amount}
@@ -484,7 +484,7 @@ const Dashboard = () => {
                 </div>
               ))
             ) : (
-              <div className="text-center py-6 md:py-8 text-sm md:text-base text-gray-500">
+              <div className="text-center py-6 md:py-8 text-sm md:text-base text-muted-foreground">
                 Nenhuma transação encontrada para o período selecionado.
               </div>
             )}
@@ -497,14 +497,14 @@ const Dashboard = () => {
           <Card className="p-4 md:p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-3">
-                <div className="bg-red-100 rounded-full p-2 md:p-3">
-                  <Package className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
+                <div className="bg-red-500/20 rounded-full p-2 md:p-3">
+                  <Package className="w-5 h-5 md:w-6 md:h-6 text-red-500" />
                 </div>
                 <div>
-                  <h3 className="text-base md:text-lg font-bold text-gray-900">
+                  <h3 className="text-base md:text-lg font-bold text-foreground">
                     Estoque Baixo
                   </h3>
-                  <p className="text-xs md:text-sm text-gray-600">
+                  <p className="text-xs md:text-sm text-muted-foreground">
                     {itensEstoqueBaixo.length} item
                     {itensEstoqueBaixo.length !== 1 ? "s" : ""} precisa
                     {itensEstoqueBaixo.length === 1 ? "" : "m"} de atenção
@@ -513,7 +513,7 @@ const Dashboard = () => {
               </div>
               <Button
                 variant="ghost"
-                className="text-orange-600 hover:text-orange-700 text-sm"
+                className="text-orange-500 hover:text-orange-600 text-sm"
                 onClick={() => navigate("/mercado")}
               >
                 Ver todos
@@ -523,21 +523,21 @@ const Dashboard = () => {
               {itensEstoqueBaixo.slice(0, 3).map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-100"
+                  className="flex items-center justify-between p-3 rounded-lg bg-red-500/10 border border-red-500/20"
                 >
                   <div className="flex items-center space-x-3">
                     <div
                       className={`w-2 h-2 rounded-full ${
                         item.status === "sem_estoque"
-                          ? "bg-red-600"
+                          ? "bg-red-500"
                           : "bg-yellow-500"
                       }`}
                     ></div>
                     <div>
-                      <p className="text-xs md:text-sm font-medium text-gray-900">
+                      <p className="text-xs md:text-sm font-medium text-foreground">
                         {item.descricao}
                       </p>
-                      <p className="text-xs text-gray-600">
+                      <p className="text-xs text-muted-foreground">
                         {item.quantidade_atual}/{item.quantidade_ideal}{" "}
                         {item.unidade_medida}
                       </p>
@@ -546,8 +546,8 @@ const Dashboard = () => {
                   <span
                     className={`px-2 py-1 rounded text-xs font-medium ${
                       item.status === "sem_estoque"
-                        ? "bg-red-100 text-red-800"
-                        : "bg-yellow-100 text-yellow-800"
+                        ? "bg-red-500/20 text-red-500"
+                        : "bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
                     }`}
                   >
                     {item.status === "sem_estoque"
@@ -563,14 +563,14 @@ const Dashboard = () => {
           <Card className="p-4 md:p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-3">
-                <div className="bg-red-100 rounded-full p-2 md:p-3">
-                  <CreditCard className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
+                <div className="bg-red-500/20 rounded-full p-2 md:p-3">
+                  <CreditCard className="w-5 h-5 md:w-6 md:h-6 text-red-500" />
                 </div>
                 <div>
-                  <h3 className="text-base md:text-lg font-bold text-gray-900">
+                  <h3 className="text-base md:text-lg font-bold text-foreground">
                     Dívidas Vencidas
                   </h3>
-                  <p className="text-xs md:text-sm text-gray-600">
+                  <p className="text-xs md:text-sm text-muted-foreground">
                     R${" "}
                     {totalDividasVencidas.toLocaleString("pt-BR", {
                       minimumFractionDigits: 2,
@@ -582,7 +582,7 @@ const Dashboard = () => {
               </div>
               <Button
                 variant="ghost"
-                className="text-orange-600 hover:text-orange-700 text-sm"
+                className="text-orange-500 hover:text-orange-600 text-sm"
                 onClick={() => navigate("/dividas")}
               >
                 Ver todas
@@ -592,20 +592,20 @@ const Dashboard = () => {
               {dividasVencidas.slice(0, 3).map((divida) => (
                 <div
                   key={divida.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-100"
+                  className="flex items-center justify-between p-3 rounded-lg bg-red-500/10 border border-red-500/20"
                 >
                   <div className="flex items-center space-x-3">
-                    <div className="w-2 h-2 bg-red-600 rounded-full"></div>
+                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
                     <div>
-                      <p className="text-xs md:text-sm font-medium text-gray-900">
+                      <p className="text-xs md:text-sm font-medium text-foreground">
                         {divida.descricao}
                       </p>
-                      <p className="text-xs text-gray-600">
+                      <p className="text-xs text-muted-foreground">
                         Venc: {formatarData(divida.data_vencimento)}
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs md:text-sm font-bold text-red-600">
+                  <span className="text-xs md:text-sm font-bold text-red-500">
                     R${" "}
                     {divida.valor_restante.toLocaleString("pt-BR", {
                       minimumFractionDigits: 2,
@@ -620,13 +620,13 @@ const Dashboard = () => {
         {/* Veículos Card */}
         <Card className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-4 md:mb-6">
-            <h2 className="text-lg md:text-xl font-bold text-gray-900 flex items-center">
+            <h2 className="text-lg md:text-xl font-bold text-foreground flex items-center">
               <Car className="w-4 h-4 md:w-5 md:h-5 mr-2 text-orange-500" />
               Meus Veículos
             </h2>
             <Button
               variant="ghost"
-              className="text-orange-600 hover:text-orange-700 text-sm"
+              className="text-orange-500 hover:text-orange-600 text-sm"
               onClick={() => navigate("/veiculos")}
             >
               Ver todos
@@ -634,24 +634,24 @@ const Dashboard = () => {
           </div>
           <div className="space-y-3 md:space-y-4">
             {loadingVeiculos ? (
-              <div className="text-center py-4 text-sm md:text-base text-gray-500">
+              <div className="text-center py-4 text-sm md:text-base text-muted-foreground">
                 Carregando veículos...
               </div>
             ) : veiculos.length > 0 ? (
               veiculos.map((veiculo) => (
                 <div
                   key={veiculo.id}
-                  className="flex items-center justify-between p-3 md:p-4 rounded-lg border border-gray-100 hover:bg-gray-50"
+                  className="flex items-center justify-between p-3 md:p-4 rounded-lg border border-border hover:bg-muted/50"
                 >
                   <div className="flex items-center space-x-3 md:space-x-4">
-                    <div className="p-2 rounded-lg bg-orange-500 bg-opacity-20">
+                    <div className="p-2 rounded-lg bg-orange-500/20">
                       <Car className="w-4 h-4 md:w-5 md:h-5 text-orange-500" />
                     </div>
                     <div>
-                      <p className="text-sm md:text-base font-medium text-gray-900">
+                      <p className="text-sm md:text-base font-medium text-foreground">
                         {veiculo.marca} {veiculo.modelo}
                       </p>
-                      <p className="text-xs md:text-sm text-gray-600">
+                      <p className="text-xs md:text-sm text-muted-foreground">
                         {veiculo.ano} • {veiculo.quilometragem.toLocaleString()}{" "}
                         km
                       </p>
@@ -660,7 +660,7 @@ const Dashboard = () => {
                 </div>
               ))
             ) : (
-              <div className="text-center py-6 md:py-8 text-sm md:text-base text-gray-500">
+              <div className="text-center py-6 md:py-8 text-sm md:text-base text-muted-foreground">
                 Nenhum veículo cadastrado ainda.
               </div>
             )}

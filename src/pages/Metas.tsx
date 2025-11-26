@@ -219,7 +219,7 @@ const Metas = () => {
       case "vencida":
         return "bg-red-500";
       default:
-        return "bg-gray-500";
+        return "bg-background0";
     }
   };
 
@@ -241,15 +241,15 @@ const Metas = () => {
   const getTipoColor = (tipo: string) => {
     switch (tipo) {
       case "economia":
-        return "bg-green-100 text-green-800";
+        return "bg-green-500/10 text-green-600 dark:text-green-400";
       case "receita":
-        return "bg-blue-100 text-blue-800";
+        return "bg-blue-500/10 text-blue-600 dark:text-blue-400";
       case "despesa":
-        return "bg-red-100 text-red-800";
+        return "bg-red-500/10 text-red-600 dark:text-red-400";
       case "investimento":
         return "bg-purple-100 text-purple-800";
       default:
-        return "bg-gray-100 text-gray-800";
+        return "bg-muted text-foreground";
     }
   };
 
@@ -286,10 +286,10 @@ const Metas = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Metas Financeiras
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Defina e acompanhe seus objetivos financeiros
             </p>
           </div>
@@ -362,7 +362,7 @@ const Metas = () => {
           <CardContent>
             <div className="flex flex-col space-y-4">
               <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Buscar metas..."
                   value={busca}
@@ -376,7 +376,7 @@ const Metas = () => {
                   title="Filtrar por status"
                   value={filtroStatus}
                   onChange={(e) => setFiltroStatus(e.target.value)}
-                  className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                 >
                   <option value="todas">Todos os Status</option>
                   <option value="ativa">Ativas</option>
@@ -389,7 +389,7 @@ const Metas = () => {
                   title="Filtrar por tipo"
                   value={filtroTipo}
                   onChange={(e) => setFiltroTipo(e.target.value)}
-                  className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                 >
                   <option value="todos">Todos os Tipos</option>
                   <option value="economia">Economia</option>
@@ -461,7 +461,7 @@ const Metas = () => {
                           <TableCell>
                             <div>
                               <div className="font-medium">{meta.titulo}</div>
-                              <div className="text-sm text-gray-500">
+                              <div className="text-sm text-muted-foreground">
                                 {meta.categorias_metas?.nome || "Sem categoria"}
                               </div>
                             </div>
@@ -487,7 +487,7 @@ const Metas = () => {
                                   meta.valor_alvo
                                 )}
                               />
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-muted-foreground">
                                 {calcularProgresso(
                                   meta.valor_atual,
                                   meta.valor_alvo
@@ -515,7 +515,7 @@ const Metas = () => {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => abrirModalEdicao(meta)}
-                                className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                                className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                               >
                                 <Edit className="w-4 h-4" />
                               </Button>
@@ -524,7 +524,7 @@ const Metas = () => {
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                    className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </Button>
@@ -568,10 +568,10 @@ const Metas = () => {
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <h3 className="font-medium text-gray-900">
+                            <h3 className="font-medium text-foreground">
                               {meta.titulo}
                             </h3>
-                            <p className="text-sm text-gray-500">
+                            <p className="text-sm text-muted-foreground">
                               {meta.categorias_metas?.nome || "Sem categoria"}
                             </p>
                           </div>
@@ -591,7 +591,7 @@ const Metas = () => {
                               meta.valor_alvo
                             )}
                           />
-                          <div className="text-xs text-gray-500 text-center">
+                          <div className="text-xs text-muted-foreground text-center">
                             {calcularProgresso(
                               meta.valor_atual,
                               meta.valor_alvo
@@ -600,7 +600,7 @@ const Metas = () => {
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                        <div className="flex items-center justify-between pt-2 border-t border-border">
                           <div className="space-y-1">
                             <Badge
                               className={`${getStatusColor(
@@ -610,7 +610,7 @@ const Metas = () => {
                               {getStatusIcon(meta.status)}
                               <span className="ml-1">{meta.status}</span>
                             </Badge>
-                            <div className="text-xs text-gray-500">
+                            <div className="text-xs text-muted-foreground">
                               Prazo: {formatDateForDisplay(meta.data_limite)}
                             </div>
                           </div>
@@ -619,7 +619,7 @@ const Metas = () => {
                               variant="ghost"
                               size="sm"
                               onClick={() => abrirModalEdicao(meta)}
-                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
+                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -628,7 +628,7 @@ const Metas = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
@@ -690,7 +690,7 @@ const Metas = () => {
                     <div className="space-y-4">
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-medium">Progresso</span>
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-muted-foreground">
                           {calcularProgresso(
                             meta.valor_atual,
                             meta.valor_alvo
@@ -710,7 +710,7 @@ const Metas = () => {
                         </span>
                         <span>Meta: R$ {meta.valor_alvo.toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-sm text-gray-500">
+                      <div className="flex justify-between text-sm text-muted-foreground">
                         <span>
                           Prazo: {formatDateForDisplay(meta.data_limite)}
                         </span>
@@ -723,7 +723,7 @@ const Metas = () => {
                         </Badge>
                       </div>
                       {meta.descricao && (
-                        <p className="text-sm text-gray-600 mt-2">
+                        <p className="text-sm text-muted-foreground mt-2">
                           {meta.descricao}
                         </p>
                       )}
@@ -767,7 +767,7 @@ const Metas = () => {
                           title="Selecionar cor personalizada"
                           value={novaCategoriaCor}
                           onChange={(e) => setNovaCategoriaCor(e.target.value)}
-                          className="w-12 h-10 border border-gray-300 rounded-md"
+                          className="w-12 h-10 border border-border rounded-md"
                         />
                         <div className="flex flex-wrap gap-1 max-w-xs">
                           {cores.map((cor) => (
@@ -776,7 +776,7 @@ const Metas = () => {
                               type="button"
                               title={`Selecionar cor ${cor}`}
                               onClick={() => setNovaCategoriaCor(cor)}
-                              className="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-gray-400 transition-colors"
+                              className="w-6 h-6 rounded-full border-2 border-border hover:border-gray-400 transition-colors"
                               style={{ backgroundColor: cor }}
                             />
                           ))}
@@ -863,15 +863,15 @@ const Metas = () => {
                                 <span>{categoria.nome}</span>
                               </div>
                             </TableCell>
-                            <TableCell className="text-gray-600">
+                            <TableCell className="text-muted-foreground">
                               {categoria.descricao || "Sem descrição"}
                             </TableCell>
                             <TableCell>
                               <span
                                 className={`px-2 py-1 rounded-full text-xs font-medium ${
                                   categoria.ativa
-                                    ? "bg-green-100 text-green-800"
-                                    : "bg-gray-100 text-gray-800"
+                                    ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                    : "bg-muted text-foreground"
                                 }`}
                               >
                                 {categoria.ativa ? "Ativa" : "Inativa"}
@@ -893,7 +893,7 @@ const Metas = () => {
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                      className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                     >
                                       <Trash2 className="w-4 h-4" />
                                     </Button>
@@ -950,19 +950,19 @@ const Metas = () => {
                             <span
                               className={`px-2 py-1 rounded-full text-xs font-medium ${
                                 categoria.ativa
-                                  ? "bg-green-100 text-green-800"
-                                  : "bg-gray-100 text-gray-800"
+                                  ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                  : "bg-muted text-foreground"
                               }`}
                             >
                               {categoria.ativa ? "Ativa" : "Inativa"}
                             </span>
                           </div>
 
-                          <p className="text-sm text-gray-600">
+                          <p className="text-sm text-muted-foreground">
                             {categoria.descricao || "Sem descrição"}
                           </p>
 
-                          <div className="flex items-center justify-end space-x-2 pt-2 border-t border-gray-100">
+                          <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
                             <Button
                               variant="ghost"
                               size="sm"
@@ -976,7 +976,7 @@ const Metas = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>

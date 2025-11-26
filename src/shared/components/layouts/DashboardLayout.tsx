@@ -23,6 +23,7 @@ import {
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
+import { ThemeToggle } from "@/shared/components/ThemeToggle";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -77,14 +78,14 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex relative">
+    <div className="min-h-screen bg-background flex relative">
       {/* Mobile Menu Button - Only show when menu is closed */}
       {!isMobileMenuOpen && (
         <div className="lg:hidden fixed top-4 left-4 z-50">
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10 bg-white shadow-md rounded-full hover:bg-gray-100 transition-colors"
+            className="h-10 w-10 bg-background shadow-md rounded-full hover:bg-muted transition-colors"
             onClick={() => setIsMobileMenuOpen(true)}
           >
             <Menu className="h-6 w-6" />
@@ -110,20 +111,20 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               : "-translate-x-full lg:translate-x-0"
           }
           transition-all duration-300
-          bg-white border-r border-gray-200 flex flex-col
+          bg-card border-r border-border flex flex-col
           z-40
           ${isCollapsed ? "w-20" : "w-64"}
         `}
       >
         {/* Logo */}
-        <div className="p-6 border-b border-gray-200 flex-shrink-0">
+        <div className="p-6 border-b border-border flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="bg-orange-500 rounded-lg p-2">
                 <span className="text-white font-bold text-xl">M</span>
               </div>
               {!isCollapsed && (
-                <span className="text-xl font-bold text-gray-800">Wallet</span>
+                <span className="text-xl font-bold text-foreground">Wallet</span>
               )}
             </div>
 
@@ -131,10 +132,10 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
             <Button
               variant="ghost"
               size="icon"
-              className="lg:hidden h-8 w-8 hover:bg-gray-100 transition-colors"
+              className="lg:hidden h-8 w-8 hover:bg-muted transition-colors"
               onClick={closeMobileMenu}
             >
-              <X className="h-5 w-5 text-gray-600" />
+              <X className="h-5 w-5 text-muted-foreground" />
             </Button>
           </div>
         </div>
@@ -145,17 +146,17 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           size="icon"
           className={`
             hidden lg:flex absolute top-6 -right-3
-            h-6 w-6 rounded-full bg-white border border-gray-300
-            hover:bg-gray-100 hover:border-gray-400
+            h-6 w-6 rounded-full bg-background border border-border
+            hover:bg-muted hover:border-muted-foreground
             transition-all duration-200 shadow-sm
             items-center justify-center
           `}
           onClick={() => setIsCollapsed(!isCollapsed)}
         >
           {isCollapsed ? (
-            <ChevronRight className="h-3 w-3 text-gray-600" />
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
           ) : (
-            <ChevronLeft className="h-3 w-3 text-gray-600" />
+            <ChevronLeft className="h-3 w-3 text-muted-foreground" />
           )}
         </Button>
 
@@ -169,8 +170,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                 onClick={closeMobileMenu}
                 className={`flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   location.pathname === item.path
-                    ? "bg-orange-100 text-orange-600"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                    ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 } ${isCollapsed ? "justify-center" : "space-x-3"}`}
                 title={isCollapsed ? item.label : undefined}
               >
@@ -181,11 +182,14 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </div>
         </nav>
 
-        {/* Logout */}
-        <div className="p-4 border-t border-gray-200 flex-shrink-0">
+        {/* Theme Toggle and Logout */}
+        <div className="p-4 border-t border-border flex-shrink-0 space-y-2">
+          <div className={`flex ${isCollapsed ? "justify-center" : "justify-start px-3"}`}>
+            <ThemeToggle />
+          </div>
           <Button
             variant="ghost"
-            className={`w-full text-gray-600 hover:text-gray-900 ${
+            className={`w-full text-muted-foreground hover:text-foreground ${
               isCollapsed ? "justify-center px-0" : "justify-start"
             }`}
             onClick={() => {

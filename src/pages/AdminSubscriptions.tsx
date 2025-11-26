@@ -166,13 +166,13 @@ export default function AdminSubscriptions() {
             if (daysUntilExpiry < 0) {
                 return <Badge variant="destructive">Expirada</Badge>;
             } else if (daysUntilExpiry <= 7) {
-                return <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+                return <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/20">
                     Expira em {daysUntilExpiry} dias
                 </Badge>;
             }
         }
 
-        return <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+        return <Badge variant="outline" className="bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20">
             Ativa
         </Badge>;
     };
@@ -202,17 +202,17 @@ export default function AdminSubscriptions() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 
                     {/* Alertas */}
                     <div className="grid gap-4 md:grid-cols-2 mb-8">
                         {getExpiringCount() > 0 && (
-                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
+                            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 flex items-start gap-3">
                                 <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
                                 <div>
                                     <h3 className="font-semibold text-yellow-900">Assinaturas Expirando</h3>
@@ -223,7 +223,7 @@ export default function AdminSubscriptions() {
                             </div>
                         )}
                         {getExpiredCount() > 0 && (
-                            <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+                            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 flex items-start gap-3">
                                 <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
                                 <div>
                                     <h3 className="font-semibold text-red-900">Assinaturas Expiradas</h3>
@@ -236,10 +236,10 @@ export default function AdminSubscriptions() {
                     </div>
 
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Gerenciar Assinaturas</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Assinaturas</h2>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -266,13 +266,13 @@ export default function AdminSubscriptions() {
                                             <TableCell>
                                                 <div>
                                                     <div className="font-medium">{sub.profiles?.name || 'Sem nome'}</div>
-                                                    <div className="text-sm text-gray-500">{sub.profiles?.email}</div>
+                                                    <div className="text-sm text-muted-foreground">{sub.profiles?.email}</div>
                                                 </div>
                                             </TableCell>
                                             <TableCell>
                                                 <div>
                                                     <div className="font-medium">{sub.plans?.name}</div>
-                                                    <div className="text-sm text-gray-500">
+                                                    <div className="text-sm text-muted-foreground">
                                                         R$ {sub.plans?.price?.toFixed(2)}
                                                     </div>
                                                 </div>

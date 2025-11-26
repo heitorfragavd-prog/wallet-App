@@ -80,10 +80,10 @@ const Transacoes = () => {
       <div className="p-4 md:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Transações
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Visualização completa de receitas e despesas
             </p>
           </div>
@@ -96,7 +96,7 @@ const Transacoes = () => {
                 <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total Receitas
                 </p>
                 <p className="text-lg md:text-2xl font-bold text-green-600">
@@ -115,7 +115,7 @@ const Transacoes = () => {
                 <TrendingDown className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total Despesas
                 </p>
                 <p className="text-lg md:text-2xl font-bold text-red-600">
@@ -142,7 +142,7 @@ const Transacoes = () => {
                 />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Saldo Total</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Saldo Total</p>
                 <p
                   className={`text-lg md:text-2xl font-bold ${
                     saldoTotal >= 0 ? "text-blue-600" : "text-orange-600"
@@ -163,8 +163,8 @@ const Transacoes = () => {
                 <Calendar className="w-5 h-5 md:w-6 md:h-6 text-purple-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Transações</p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-xs md:text-sm text-muted-foreground">Transações</p>
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {transacoes.length}
                 </p>
               </div>
@@ -173,12 +173,12 @@ const Transacoes = () => {
         </div>
 
         <Card className="p-4 md:p-6 mb-6">
-          <h2 className="text-base md:text-lg font-bold text-gray-900 mb-4">
+          <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
             Filtros
           </h2>
           <div className="flex flex-col space-y-4">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
               <Input
                 placeholder="Buscar transações..."
                 value={filtro}
@@ -192,7 +192,7 @@ const Transacoes = () => {
                 title="Filtrar por tipo"
                 value={tipoFiltro}
                 onChange={(e) => setTipoFiltro(e.target.value)}
-                className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option value="">Todos os tipos</option>
                 <option value="receita">Receitas</option>
@@ -203,7 +203,7 @@ const Transacoes = () => {
                 title="Filtrar por categoria"
                 value={categoriaFiltro}
                 onChange={(e) => setCategoriaFiltro(e.target.value)}
-                className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option value="">Todas as categorias</option>
                 {categorias.map((categoria) => (
@@ -250,8 +250,8 @@ const Transacoes = () => {
                       <span
                         className={`px-2 py-1 rounded-full text-xs font-medium ${
                           transacao.tipo === "receita"
-                            ? "bg-green-100 text-green-800"
-                            : "bg-red-100 text-red-800"
+                            ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                            : "bg-red-500/10 text-red-600 dark:text-red-400"
                         }`}
                       >
                         {transacao.tipo === "receita" ? "Receita" : "Despesa"}
@@ -285,7 +285,7 @@ const Transacoes = () => {
         <div className="md:hidden space-y-4">
           {transacoesFiltradas.length === 0 ? (
             <Card className="p-4">
-              <p className="text-center text-gray-500">
+              <p className="text-center text-muted-foreground">
                 Nenhuma transação encontrada.
               </p>
             </Card>
@@ -295,18 +295,18 @@ const Transacoes = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-medium text-gray-900">
+                      <h3 className="font-medium text-foreground">
                         {transacao.descricao}
                       </h3>
-                      <p className="text-sm text-gray-500">
+                      <p className="text-sm text-muted-foreground">
                         {transacao.categorias?.nome || "Sem categoria"}
                       </p>
                     </div>
                     <span
                       className={`px-2 py-1 rounded-full text-xs font-medium ${
                         transacao.tipo === "receita"
-                          ? "bg-green-100 text-green-800"
-                          : "bg-red-100 text-red-800"
+                          ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                          : "bg-red-500/10 text-red-600 dark:text-red-400"
                       }`}
                     >
                       {transacao.tipo === "receita" ? "Receita" : "Despesa"}
@@ -315,7 +315,7 @@ const Transacoes = () => {
 
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <p className="text-gray-500">Data</p>
+                      <p className="text-muted-foreground">Data</p>
                       <p className="font-medium">
                         {new Date(
                           transacao.data + "T00:00:00"
@@ -323,7 +323,7 @@ const Transacoes = () => {
                       </p>
                     </div>
                     <div>
-                      <p className="text-gray-500">Valor</p>
+                      <p className="text-muted-foreground">Valor</p>
                       <p
                         className={`font-medium ${
                           transacao.tipo === "receita"

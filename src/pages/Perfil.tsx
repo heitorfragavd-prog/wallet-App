@@ -13,6 +13,7 @@ import { useAuth } from "@/domains/auth/hooks/useAuth";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
 import { ChangePasswordModal } from "@/domains/auth/components/auth/ChangePasswordModal";
 import { DeleteAccountModal } from "@/domains/auth/components/auth/DeleteAccountModal";
+import { PlanInfoCard, UsageLimitsCard } from "@/domains/auth/components/profile";
 
 const Perfil = () => {
   const { toast } = useToast();
@@ -224,7 +225,7 @@ const Perfil = () => {
               </Button>
               <Button 
                 variant="outline" 
-                className="w-full justify-start h-12 text-red-600 hover:text-red-700 hover:bg-red-50"
+                className="w-full justify-start h-12 text-red-600 hover:text-red-700 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                 onClick={() => setShowDeleteAccountModal(true)}
               >
                 <Trash2 className="w-4 h-4 mr-3" />
@@ -232,6 +233,12 @@ const Perfil = () => {
               </Button>
             </CardContent>
           </Card>
+        </div>
+
+        {/* Plano e Uso */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <PlanInfoCard />
+          <UsageLimitsCard />
         </div>
 
         {/* Informações Pessoais */}

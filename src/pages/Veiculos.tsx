@@ -59,13 +59,13 @@ export default function Veiculos() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "Atrasada":
-        return "bg-red-100 text-red-800 border-red-200";
+        return "bg-red-500/10 text-red-600 dark:text-red-400 border-red-200";
       case "Em dia":
-        return "bg-green-100 text-green-800 border-green-200";
+        return "bg-green-500/10 text-green-600 dark:text-green-400 border-green-200";
       case "Pendente":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+        return "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-200";
       default:
-        return "bg-gray-100 text-gray-800 border-gray-200";
+        return "bg-muted text-foreground border-border";
     }
   };
 
@@ -83,10 +83,10 @@ export default function Veiculos() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Veículos
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Gerencie seus veículos e manutenções
             </p>
           </div>
@@ -141,14 +141,14 @@ export default function Veiculos() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2 mb-4">
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-muted-foreground">
                       <strong>Ano:</strong> {veiculo.ano}
                     </p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-muted-foreground">
                       <strong>Quilometragem:</strong>{" "}
                       {veiculo.quilometragem.toLocaleString()} km
                     </p>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-muted-foreground">
                       <strong>Combustível:</strong>{" "}
                       {veiculo.combustivel || "Não informado"}
                     </p>
@@ -199,13 +199,13 @@ export default function Veiculos() {
                     manutencoesPendentes.map((manutencao) => (
                       <div
                         key={manutencao.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-gray-50 rounded-lg gap-3"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-background rounded-lg gap-3"
                       >
                         <div className="flex-1">
                           <h4 className="font-medium text-sm md:text-base">
                             {manutencao.tipo}
                           </h4>
-                          <p className="text-xs md:text-sm text-gray-600">
+                          <p className="text-xs md:text-sm text-muted-foreground">
                             Sistema: {manutencao.sistema} •{" "}
                             {manutencao.veiculo?.marca}{" "}
                             {manutencao.veiculo?.modelo}
@@ -219,7 +219,7 @@ export default function Veiculos() {
                           >
                             {manutencao.status}
                           </Badge>
-                          <span className="text-xs md:text-sm text-gray-600">
+                          <span className="text-xs md:text-sm text-muted-foreground">
                             {manutencao.proximaEm}
                           </span>
                           <Button
@@ -227,7 +227,7 @@ export default function Veiculos() {
                             variant="outline"
                             onClick={() => realizarManutencao(manutencao)}
                             disabled={manutencao.realizada}
-                            className="text-green-600 border-green-300 hover:bg-green-50 w-full sm:w-auto"
+                            className="text-green-600 border-green-300 hover:bg-green-500/10 dark:hover:bg-green-500/20 w-full sm:w-auto"
                           >
                             {manutencao.realizada ? "Realizada" : "Realizar"}
                           </Button>
@@ -235,7 +235,7 @@ export default function Veiculos() {
                       </div>
                     ))
                   ) : (
-                    <p className="text-center text-sm md:text-base text-gray-500 py-4">
+                    <p className="text-center text-sm md:text-base text-muted-foreground py-4">
                       Nenhuma manutenção pendente encontrada.
                     </p>
                   )}

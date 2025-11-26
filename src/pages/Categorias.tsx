@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Categoria {
   id: string;
@@ -49,7 +50,7 @@ interface Categoria {
 
 const Categorias = () => {
   const { toast } = useToast();
-  const { categorias, createCategoria, updateCategoria, deleteCategoria } =
+  const { categorias, createCategoria, updateCategoria, deleteCategoria, refetch } =
     useCategorias();
   const [activeTab, setActiveTab] = useState("lista");
 
@@ -125,31 +126,20 @@ const Categorias = () => {
   };
 
   const handleImportarCategoriasPadrao = async () => {
-    type CategoriaPadrao = { nome: string; tipo: "receita" | "despesa"; cor: string; icone: string; };
-    const categoriasPadrao: CategoriaPadrao[] = [
-      // Receitas
-      { nome: 'Salário', tipo: 'receita', cor: '#10B981', icone: 'DollarSign' },
-      { nome: 'Freelance', tipo: 'receita', cor: '#3B82F6', icone: 'Briefcase' },
-      { nome: 'Investimentos', tipo: 'receita', cor: '#8B5CF6', icone: 'TrendingUp' },
-      { nome: 'Vendas', tipo: 'receita', cor: '#F59E0B', icone: 'ShoppingBag' },
-      { nome: 'Aluguel Recebido', tipo: 'receita', cor: '#059669', icone: 'Home' },
-      // Despesas
-      { nome: 'Alimentação', tipo: 'despesa', cor: '#EF4444', icone: 'Utensils' },
-      { nome: 'Transporte', tipo: 'despesa', cor: '#F97316', icone: 'Car' },
-      { nome: 'Moradia', tipo: 'despesa', cor: '#6366F1', icone: 'Home' },
-      { nome: 'Saúde', tipo: 'despesa', cor: '#EC4899', icone: 'Heart' },
-      { nome: 'Educação', tipo: 'despesa', cor: '#14B8A6', icone: 'BookOpen' },
-      { nome: 'Lazer', tipo: 'despesa', cor: '#8B5CF6', icone: 'Gamepad2' },
-      { nome: 'Roupas', tipo: 'despesa', cor: '#F59E0B', icone: 'Shirt' },
-      { nome: 'Tecnologia', tipo: 'despesa', cor: '#6B7280', icone: 'Smartphone' },
-      { nome: 'Serviços', tipo: 'despesa', cor: '#84CC16', icone: 'Settings' },
-    ];
-
     try {
-      // O hook useCategorias já lida com o user_id
-      for (const categoria of categoriasPadrao) {
-        await createCategoria(categoria);
-      }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado");
+
+      // Chama a função do banco que já tem proteção contra duplicação
+      const { error } = await supabase.rpc('create_default_categories', {
+        p_user_id: user.id
+      });
+
+      if (error) throw error;
+
+      // Recarrega as categorias
+      await refetch();
+
       toast({
         title: "Sucesso!",
         description: "Categorias padrão importadas com sucesso.",
@@ -183,10 +173,10 @@ const Categorias = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
               Categorias
             </h1>
-            <p className="text-sm md:text-base text-gray-600">
+            <p className="text-sm md:text-base text-muted-foreground">
               Gerencie suas categorias de receitas e despesas
             </p>
           </div>
@@ -217,10 +207,10 @@ const Categorias = () => {
                 <Tag className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">
+                <p className="text-xs md:text-sm text-muted-foreground">
                   Total de Categorias
                 </p>
-                <p className="text-lg md:text-2xl font-bold text-gray-900">
+                <p className="text-lg md:text-2xl font-bold text-foreground">
                   {categorias.length}
                 </p>
               </div>
@@ -233,7 +223,7 @@ const Categorias = () => {
                 <TrendingUp className="w-5 h-5 md:w-6 md:h-6 text-green-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Receitas</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Receitas</p>
                 <p className="text-lg md:text-2xl font-bold text-green-600">
                   {categoriasReceita.length}
                 </p>
@@ -247,7 +237,7 @@ const Categorias = () => {
                 <TrendingDown className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
               </div>
               <div>
-                <p className="text-xs md:text-sm text-gray-600">Despesas</p>
+                <p className="text-xs md:text-sm text-muted-foreground">Despesas</p>
                 <p className="text-lg md:text-2xl font-bold text-red-600">
                   {categoriasDespesa.length}
                 </p>
@@ -274,12 +264,12 @@ const Categorias = () => {
           <TabsContent value="lista" className="space-y-4 md:space-y-6">
             {/* Filtros */}
             <Card className="p-4 md:p-6">
-              <h2 className="text-base md:text-lg font-bold text-gray-900 mb-4">
+              <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
                 Filtros
               </h2>
               <div className="flex flex-col space-y-4">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
                     placeholder="Buscar categorias..."
                     value={filtro}
@@ -293,7 +283,7 @@ const Categorias = () => {
                     title="Filtrar por tipo"
                     value={tipoFiltro}
                     onChange={(e) => setTipoFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     <option value="">Todos os tipos</option>
                     <option value="receita">Receitas</option>
@@ -340,8 +330,8 @@ const Categorias = () => {
                           <span
                             className={`px-2 py-1 rounded-full text-xs font-medium ${
                               categoria.tipo === "receita"
-                                ? "bg-green-100 text-green-800"
-                                : "bg-red-100 text-red-800"
+                                ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                : "bg-red-500/10 text-red-600 dark:text-red-400"
                             }`}
                           >
                             {categoria.tipo === "receita"
@@ -349,11 +339,11 @@ const Categorias = () => {
                               : "Despesa"}
                           </span>
                         </TableCell>
-                        <TableCell className="text-gray-600">
+                        <TableCell className="text-muted-foreground">
                           Sem descrição
                         </TableCell>
                         <TableCell>
-                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400">
                             Ativa
                           </span>
                         </TableCell>
@@ -364,7 +354,7 @@ const Categorias = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
@@ -408,7 +398,7 @@ const Categorias = () => {
             <div className="md:hidden space-y-4">
               {categoriasFiltradas.length === 0 ? (
                 <Card className="p-4">
-                  <p className="text-center text-gray-500">
+                  <p className="text-center text-muted-foreground">
                     Nenhuma categoria encontrada.
                   </p>
                 </Card>
@@ -423,10 +413,10 @@ const Categorias = () => {
                             style={{ backgroundColor: categoria.cor }}
                           />
                           <div>
-                            <h3 className="font-medium text-gray-900">
+                            <h3 className="font-medium text-foreground">
                               {categoria.nome}
                             </h3>
-                            <p className="text-sm text-gray-500">
+                            <p className="text-sm text-muted-foreground">
                               Sem descrição
                             </p>
                           </div>
@@ -434,16 +424,16 @@ const Categorias = () => {
                         <span
                           className={`px-2 py-1 rounded-full text-xs font-medium ${
                             categoria.tipo === "receita"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
+                              ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                              : "bg-red-500/10 text-red-600 dark:text-red-400"
                           }`}
                         >
                           {categoria.tipo === "receita" ? "Receita" : "Despesa"}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      <div className="flex items-center justify-between pt-2 border-t border-border">
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400">
                           Ativa
                         </span>
                         <div className="flex space-x-2">
@@ -452,7 +442,7 @@ const Categorias = () => {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50"
+                                className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </Button>
@@ -519,7 +509,7 @@ const Categorias = () => {
                       onChange={(e) =>
                         setNovoTipo(e.target.value as "receita" | "despesa")
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
                       <option value="receita">Receita</option>
                       <option value="despesa">Despesa</option>
@@ -535,7 +525,7 @@ const Categorias = () => {
                         title="Selecionar cor personalizada"
                         value={novaCor}
                         onChange={(e) => setNovaCor(e.target.value)}
-                        className="w-12 h-10 border border-gray-300 rounded-md"
+                        className="w-12 h-10 border border-border rounded-md"
                       />
                       <div className="flex flex-wrap gap-2">
                         {cores.map((cor) => (
@@ -544,7 +534,7 @@ const Categorias = () => {
                             type="button"
                             title={`Selecionar cor ${cor}`}
                             onClick={() => setNovaCor(cor)}
-                            className="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-gray-400"
+                            className="w-6 h-6 rounded-full border-2 border-border hover:border-gray-400"
                             style={{ backgroundColor: cor }}
                           />
                         ))}

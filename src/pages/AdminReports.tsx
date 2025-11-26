@@ -186,15 +186,15 @@ export default function AdminReports() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Relatórios e Análises</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Relatórios e Análises</h2>
                         <Select value={period} onValueChange={setPeriod}>
                             <SelectTrigger className="w-48">
                                 <SelectValue />
@@ -285,7 +285,7 @@ export default function AdminReports() {
                                                         {data.users} usuários
                                                     </div>
                                                 </div>
-                                                <span className="text-xs text-gray-600">{data.month}</span>
+                                                <span className="text-xs text-muted-foreground">{data.month}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -307,7 +307,7 @@ export default function AdminReports() {
                                                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(data.revenue)}
                                                     </div>
                                                 </div>
-                                                <span className="text-xs text-gray-600">{data.month}</span>
+                                                <span className="text-xs text-muted-foreground">{data.month}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -322,7 +322,7 @@ export default function AdminReports() {
                                     </CardHeader>
                                     <CardContent>
                                         <div className="text-3xl font-bold text-orange-600">{stats.mostPopularPlan}</div>
-                                        <p className="text-sm text-gray-600 mt-2">
+                                        <p className="text-sm text-muted-foreground mt-2">
                                             Plano com mais assinaturas ativas
                                         </p>
                                     </CardContent>
@@ -334,7 +334,7 @@ export default function AdminReports() {
                                     </CardHeader>
                                     <CardContent>
                                         <div className="text-3xl font-bold text-green-600">{stats.activeSubscriptions}</div>
-                                        <p className="text-sm text-gray-600 mt-2">
+                                        <p className="text-sm text-muted-foreground mt-2">
                                             Total de assinaturas pagas ativas
                                         </p>
                                     </CardContent>

@@ -133,14 +133,14 @@ export default function AdminPlans() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Gerenciar Planos</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Planos</h2>
                     <Dialog open={isDialogOpen} onOpenChange={(open) => {
                         setIsDialogOpen(open);
                         if (!open) resetForm();
@@ -191,7 +191,7 @@ export default function AdminPlans() {
                         </Dialog>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -218,12 +218,12 @@ export default function AdminPlans() {
                                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(plan.price)}
                                         </TableCell>
                                         <TableCell>
-                                            <ul className="list-disc list-inside text-sm text-gray-600">
+                                            <ul className="list-disc list-inside text-sm text-muted-foreground">
                                                 {plan.features?.slice(0, 3).map((feature: string, i: number) => (
                                                     <li key={i}>{feature}</li>
                                                 ))}
                                                 {plan.features?.length > 3 && (
-                                                    <li className="list-none text-gray-400 text-xs mt-1">
+                                                    <li className="list-none text-muted-foreground text-xs mt-1">
                                                         +{plan.features.length - 3} mais...
                                                     </li>
                                                 )}
@@ -232,7 +232,7 @@ export default function AdminPlans() {
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">
                                                 <Button size="icon" variant="ghost" onClick={() => handleEdit(plan)}>
-                                                    <Pencil className="h-4 w-4 text-gray-500" />
+                                                    <Pencil className="h-4 w-4 text-muted-foreground" />
                                                 </Button>
                                                 <Button size="icon" variant="ghost" onClick={() => handleDelete(plan.id)}>
                                                     <Trash2 className="h-4 w-4 text-red-500" />

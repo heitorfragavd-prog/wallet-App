@@ -39,13 +39,13 @@ export const DetalhesVeiculoModal = ({
   const getStatusColor = (status: string) => {
     switch (status) {
       case "Atrasada":
-        return "bg-red-100 text-red-800 border-red-200";
+        return "bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30";
       case "Em dia":
-        return "bg-green-100 text-green-800 border-green-200";
+        return "bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30";
       case "Pendente":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+        return "bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 border-yellow-500/30";
       default:
-        return "bg-gray-100 text-gray-800 border-gray-200";
+        return "bg-muted text-muted-foreground border-border";
     }
   };
 
@@ -81,14 +81,14 @@ export const DetalhesVeiculoModal = ({
                   variant="outline"
                   size="sm"
                   onClick={handleExcluir}
-                  className="text-red-600 border-red-300 hover:bg-red-50"
+                  className="text-red-600 dark:text-red-400 border-red-500/50 hover:bg-red-500/10"
                 >
                   <Trash2 className="w-4 h-4 mr-1" />
                   Excluir
                 </Button>
               </div>
             </div>
-            <p className="text-gray-600">Gerenciamento de manutenções e histórico do veículo</p>
+            <p className="text-muted-foreground">Gerenciamento de manutenções e histórico do veículo</p>
           </DialogHeader>
           
           <div className="space-y-6">
@@ -103,44 +103,44 @@ export const DetalhesVeiculoModal = ({
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
-                    <p className="text-sm text-gray-600">Marca:</p>
+                    <p className="text-sm text-muted-foreground">Marca:</p>
                     <p className="font-medium">{veiculo.marca}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Modelo:</p>
+                    <p className="text-sm text-muted-foreground">Modelo:</p>
                     <p className="font-medium">{veiculo.modelo}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Ano:</p>
+                    <p className="text-sm text-muted-foreground">Ano:</p>
                     <p className="font-medium">{veiculo.ano}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Placa:</p>
+                    <p className="text-sm text-muted-foreground">Placa:</p>
                     <p className="font-medium">{veiculo.placa}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Cor:</p>
+                    <p className="text-sm text-muted-foreground">Cor:</p>
                     <p className="font-medium">{veiculo.cor}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Combustível:</p>
+                    <p className="text-sm text-muted-foreground">Combustível:</p>
                     <p className="font-medium">{veiculo.combustivel}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Data de aquisição:</p>
+                    <p className="text-sm text-muted-foreground">Data de aquisição:</p>
                     <p className="font-medium">{veiculo.data_aquisicao || "Não informada"}</p>
                   </div>
                   <div className="md:col-span-2">
-                    <p className="text-sm text-gray-600">Quilometragem:</p>
+                    <p className="text-sm text-muted-foreground">Quilometragem:</p>
                     <div className="flex items-center space-x-2">
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-200">
+                      <Badge className="bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30">
                         {veiculo.quilometragem.toLocaleString()} km
                       </Badge>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => setQuilometragemModalOpen(true)}
-                        className="text-green-600 border-green-300 hover:bg-green-50"
+                        className="text-green-600 dark:text-green-400 border-green-500/50 hover:bg-green-500/10"
                       >
                         Atualizar Quilometragem
                       </Button>
@@ -162,20 +162,20 @@ export const DetalhesVeiculoModal = ({
                 {manutencoes.length > 0 ? (
                   <div className="space-y-3">
                     {manutencoes.map((manutencao) => (
-                      <div key={manutencao.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div key={manutencao.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border border-border">
                         <div>
-                          <h4 className="font-medium">{manutencao.tipo}</h4>
-                          <p className="text-sm text-gray-600">Sistema: {manutencao.sistema}</p>
+                          <h4 className="font-medium text-foreground">{manutencao.tipo}</h4>
+                          <p className="text-sm text-muted-foreground">Sistema: {manutencao.sistema}</p>
                         </div>
                         <div className="flex items-center space-x-3">
                           <Badge className={getStatusColor(manutencao.status)}>
                             {manutencao.status}
                           </Badge>
-                          <span className="text-sm text-gray-600">{manutencao.proximaEm}</span>
+                          <span className="text-sm text-muted-foreground">{manutencao.proximaEm}</span>
                           <Button
                             size="sm"
                             variant="outline"
-                            className="text-green-600 border-green-300 hover:bg-green-50"
+                            className="text-green-600 dark:text-green-400 border-green-500/50 hover:bg-green-500/10"
                           >
                             Realizar
                           </Button>
@@ -184,8 +184,8 @@ export const DetalhesVeiculoModal = ({
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <Settings className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Settings className="w-12 h-12 mx-auto mb-3 text-muted-foreground/50" />
                     <p>Nenhuma manutenção pendente</p>
                   </div>
                 )}

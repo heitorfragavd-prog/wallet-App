@@ -102,7 +102,7 @@ const DashboardEmpresarial = () => {
                   <div className="flex items-center space-x-2">
                     <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                     <span className="text-sm text-green-600 font-medium">{stat.badge}</span>
-                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded">
+                    <span className="bg-green-500/10 text-green-600 dark:text-green-400 text-xs px-2 py-1 rounded">
                       {stat.badgeType === 'excellent' ? 'Excelente' : 'Bom'}
                     </span>
                   </div>

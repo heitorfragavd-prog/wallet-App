@@ -372,8 +372,8 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
             <Brain className="w-6 h-6 text-blue-600" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Inteligência Artificial</h1>
-            <p className="text-gray-600">Analise automaticamente seus comprovantes e cupons fiscais</p>
+            <h1 className="text-2xl font-bold text-foreground">Inteligência Artificial</h1>
+            <p className="text-muted-foreground">Analise automaticamente seus comprovantes e cupons fiscais</p>
           </div>
         </div>
 
@@ -387,8 +387,8 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
           <TabsContent value="config" className="space-y-6">
             <Card className="p-6">
               <div className="flex items-center space-x-3 mb-6">
-                <Settings className="w-5 h-5 text-gray-600" />
-                <h2 className="text-xl font-bold text-gray-900">Configurações OpenAI</h2>
+                <Settings className="w-5 h-5 text-muted-foreground" />
+                <h2 className="text-xl font-bold text-foreground">Configurações OpenAI</h2>
               </div>
 
               <div className="space-y-4">
@@ -406,7 +406,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                     className="mt-2"
                     disabled={configLoading}
                   />
-                   <p className="text-sm text-gray-500 mt-1">
+                   <p className="text-sm text-muted-foreground mt-1">
                      Sua chave API será armazenada com segurança no banco de dados
                    </p>
                 </div>
@@ -444,15 +444,15 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
           <TabsContent value="upload" className="space-y-6">
             <Card className="p-6">
               <div className="flex items-center space-x-3 mb-6">
-                <FileUp className="w-5 h-5 text-gray-600" />
-                <h2 className="text-xl font-bold text-gray-900">Upload de Comprovantes</h2>
+                <FileUp className="w-5 h-5 text-muted-foreground" />
+                <h2 className="text-xl font-bold text-foreground">Upload de Comprovantes</h2>
               </div>
 
               {!isConfigured && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 mb-6">
                   <div className="flex items-center space-x-2">
                     <AlertCircle className="w-5 h-5 text-yellow-600" />
-                    <p className="text-yellow-800">
+                    <p className="text-yellow-600 dark:text-yellow-400">
                       Configure sua chave API OpenAI na aba Configurações antes de fazer upload.
                     </p>
                   </div>
@@ -463,7 +463,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                 className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                   dragOver 
                     ? 'border-blue-400 bg-blue-50' 
-                    : 'border-gray-300 hover:border-gray-400'
+                    : 'border-border hover:border-gray-400'
                 }`}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -479,11 +479,11 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                   disabled={isAnalyzing}
                 />
                 <label htmlFor="file-upload" className="cursor-pointer">
-                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-lg font-medium text-gray-700 mb-2">
+                  <Upload className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-lg font-medium text-foreground mb-2">
                     Clique ou arraste arquivos aqui
                   </p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-muted-foreground">
                     Aceita imagens (PNG, JPG, GIF) e arquivos PDF até 10MB
                   </p>
                 </label>
@@ -509,15 +509,15 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                             className="w-full h-32 object-cover rounded mb-2"
                           />
                         ) : (
-                          <div className="w-full h-32 bg-gray-100 rounded mb-2 flex items-center justify-center">
-                            <FileText className="w-8 h-8 text-gray-400" />
+                          <div className="w-full h-32 bg-muted rounded mb-2 flex items-center justify-center">
+                            <FileText className="w-8 h-8 text-muted-foreground" />
                           </div>
                         )}
                         
                         <p className="text-sm font-medium truncate" title={file.file.name}>
                           {file.file.name}
                         </p>
-                        <p className="text-xs text-gray-500">{file.size}</p>
+                        <p className="text-xs text-muted-foreground">{file.size}</p>
                       </div>
                     ))}
                   </div>
@@ -535,38 +535,38 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
 
             {analysisResults.length > 0 && (
               <Card className="p-6">
-                <h3 className="text-lg font-bold text-gray-900 mb-4">Resultados da Análise OpenAI</h3>
+                <h3 className="text-lg font-bold text-foreground mb-4">Resultados da Análise OpenAI</h3>
                 <div className="space-y-4">
                   {analysisResults.map((result) => (
                     <div key={result.id} className="border rounded-lg p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center space-x-3">
-                          <FileText className="w-5 h-5 text-gray-500" />
-                          <span className="font-medium text-gray-900">{result.file_name}</span>
+                          <FileText className="w-5 h-5 text-muted-foreground" />
+                          <span className="font-medium text-foreground">{result.file_name}</span>
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             result.tipo === 'receita' 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-red-100 text-red-800'
+                              ? 'bg-green-500/10 text-green-600 dark:text-green-400' 
+                              : 'bg-red-500/10 text-red-600 dark:text-red-400'
                           }`}>
                             {result.tipo}
                           </span>
                         </div>
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-muted-foreground">
                           Confiança: {result.confianca}%
                         </span>
                       </div>
                       
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
                         <div>
-                          <span className="text-gray-500">Descrição:</span>
+                          <span className="text-muted-foreground">Descrição:</span>
                           <p className="font-medium">{result.descricao}</p>
                         </div>
                         <div>
-                          <span className="text-gray-500">Valor:</span>
+                          <span className="text-muted-foreground">Valor:</span>
                           <p className="font-medium">R$ {result.valor.toFixed(2)}</p>
                         </div>
                          <div>
-                           <span className="text-gray-500">Categoria:</span>
+                           <span className="text-muted-foreground">Categoria:</span>
                            {result.status === 'pending' ? (
                              <Select 
                                value={result.categoria_id || ''} 
@@ -588,7 +588,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                            )}
                          </div>
                         <div>
-                          <span className="text-gray-500">Data:</span>
+                          <span className="text-muted-foreground">Data:</span>
                           <p className="font-medium">{new Date(result.data).toLocaleDateString('pt-BR')}</p>
                         </div>
                       </div>
@@ -664,29 +664,29 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
 
           <TabsContent value="history" className="space-y-6">
             <Card className="p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Histórico de Análises</h2>
+              <h2 className="text-xl font-bold text-foreground mb-6">Histórico de Análises</h2>
               {analysisResults.length === 0 ? (
                 <div className="text-center py-8">
-                  <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">Nenhuma análise realizada ainda</p>
+                  <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">Nenhuma análise realizada ainda</p>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {analysisResults.map((result) => (
-                    <div key={result.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100">
+                    <div key={result.id} className="flex items-center justify-between p-3 rounded-lg border border-border">
                       <div className="flex items-center space-x-3">
-                        <FileText className="w-4 h-4 text-gray-500" />
+                        <FileText className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm font-medium">{result.file_name}</span>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          result.status === 'approved' ? 'bg-green-100 text-green-800' :
-                          result.status === 'rejected' ? 'bg-red-100 text-red-800' :
-                          'bg-yellow-100 text-yellow-800'
+                          result.status === 'approved' ? 'bg-green-500/10 text-green-600 dark:text-green-400' :
+                          result.status === 'rejected' ? 'bg-red-500/10 text-red-600 dark:text-red-400' :
+                          'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
                         }`}>
                           {result.status === 'approved' ? 'Aprovado' : 
                            result.status === 'rejected' ? 'Rejeitado' : 'Pendente'}
                         </span>
                       </div>
-                      <span className="text-sm text-gray-500">
+                      <span className="text-sm text-muted-foreground">
                         R$ {result.valor.toFixed(2)}
                       </span>
                     </div>

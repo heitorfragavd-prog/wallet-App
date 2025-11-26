@@ -115,15 +115,15 @@ export default function AdminPlanLimits() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Gerenciar Limites de Recursos</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Limites de Recursos</h2>
                     </div>
 
                     {loading ? (
@@ -131,9 +131,9 @@ export default function AdminPlanLimits() {
                     ) : (
                         <div className="space-y-8">
                             {Object.entries(groupedLimits).map(([planName, planLimits]) => (
-                                <div key={planName} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                                    <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-                                        <h3 className="text-lg font-semibold text-gray-900">Plano {planName}</h3>
+                                <div key={planName} className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+                                    <div className="px-6 py-4 bg-background border-b border-border">
+                                        <h3 className="text-lg font-semibold text-foreground">Plano {planName}</h3>
                                     </div>
                                     <Table>
                                         <TableHeader>
@@ -188,7 +188,7 @@ export default function AdminPlanLimits() {
                                                                 variant="ghost"
                                                                 onClick={() => handleEdit(limit)}
                                                             >
-                                                                <Pencil className="h-4 w-4 text-gray-500" />
+                                                                <Pencil className="h-4 w-4 text-muted-foreground" />
                                                             </Button>
                                                         )}
                                                     </TableCell>

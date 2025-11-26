@@ -2,7 +2,71 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
-## [1.0.2] - 2025-11-21
+## [1.0.4] - 2024-11-26
+
+### 🔧 Corrigido
+- **Dark Mode - Modal Detalhes do Veículo**
+  - Corrigido labels e textos usando text-muted-foreground
+  - Badges de status com cores adaptativas (opacity-based)
+  - Cards de manutenção com bg-muted/50 e border-border
+  - Botões de ação com cores dark mode (Excluir, Atualizar, Realizar)
+  - Área vazia com cores do tema
+
+---
+
+## [1.0.3] - 2024-11-26
+
+### 🔧 Corrigido
+- **Dark Mode - Selects Nativos**
+  - Corrigido dropdown de categoria em modais de edição
+  - Selects nativos agora usam cores do tema (bg-background, text-foreground)
+  - Opções de select visíveis em dark mode
+  - Afetados: EditarDespesaModal, EditarReceitaModal, EditarTransacaoModal, EditarDividaModal, NovaMetaModal
+
+---
+
+## [1.0.2] - 2024-11-26
+
+### ✨ Adicionado
+- **Dark Mode Completo**
+  - ThemeProvider com gerenciamento de estado
+  - useTheme hook para acesso ao contexto
+  - ThemeToggle component com ícones Sun/Moon
+  - Detecção automática de preferência do sistema
+  - Persistência da preferência em localStorage
+  - Suporte a 3 modos: light, dark, system
+
+### 🎨 Interface
+- **Melhorias Visuais no Dark Mode**
+  - Variáveis CSS otimizadas para melhor contraste
+  - Sidebar com fundo diferenciado (`bg-card`)
+  - Scrollbar customizada para dark mode
+  - Todas as 25 páginas atualizadas
+  - Botões e badges com opacidade adequada
+  - Selects nativos com cores corretas
+  - Tabelas admin com fundo apropriado
+
+### 🔧 Componentes Atualizados
+- **Layout**
+  - DashboardLayout com suporte a dark mode
+  - AdminSidebar com ThemeToggle
+  - Header da landing page com ThemeToggle
+
+- **Páginas**
+  - Dashboard, Receitas, Despesas, Transações
+  - Categorias, Metas, Dívidas, Mercado
+  - Veículos, Perfil, Relatórios, IA
+  - Todas as páginas Admin
+
+### 📊 Cores e Temas
+- Background: `224 71% 4%` (dark) / `0 0% 100%` (light)
+- Card: `224 71% 6%` (dark) / `0 0% 100%` (light)
+- Foreground: `213 31% 91%` (dark) / `222.2 84% 4.9%` (light)
+- Border: `216 34% 17%` (dark) / `214.3 31.8% 91.4%` (light)
+
+---
+
+## [1.0.1] - 2025-11-21
 
 ### ✨ Adicionado
 - **Sistema de Pagamento Completo**

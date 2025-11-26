@@ -74,15 +74,15 @@ export default function AdminAuditLogs() {
 
     const getActionBadge = (action: string) => {
         const colors: Record<string, string> = {
-            create: "bg-green-100 text-green-800",
-            update: "bg-blue-100 text-blue-800",
-            delete: "bg-red-100 text-red-800",
+            create: "bg-green-500/10 text-green-600 dark:text-green-400",
+            update: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+            delete: "bg-red-500/10 text-red-600 dark:text-red-400",
             renew: "bg-purple-100 text-purple-800",
             cancel: "bg-orange-100 text-orange-800",
         };
 
         const actionType = action.split('_')[0].toLowerCase();
-        const colorClass = colors[actionType] || "bg-gray-100 text-gray-800";
+        const colorClass = colors[actionType] || "bg-muted text-foreground";
 
         return (
             <Badge variant="outline" className={colorClass}>
@@ -124,15 +124,15 @@ export default function AdminAuditLogs() {
 
     return (
         <DashboardLayout>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-background">
                 <div className="container mx-auto py-10 px-4">
                     <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-gray-900">Painel Administrativo</h1>
+                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
                         <AdminTabs />
                     </div>
 
                     <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-gray-900">Logs de Auditoria</h2>
+                        <h2 className="text-2xl font-semibold text-foreground">Logs de Auditoria</h2>
                         <Select value={filter} onValueChange={setFilter}>
                             <SelectTrigger className="w-48">
                                 <SelectValue />
@@ -147,7 +147,7 @@ export default function AdminAuditLogs() {
                         </Select>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -178,7 +178,7 @@ export default function AdminAuditLogs() {
                                             <TableCell>
                                                 <div>
                                                     <div className="font-medium">{log.profiles?.name || 'Admin'}</div>
-                                                    <div className="text-sm text-gray-500">{log.profiles?.email}</div>
+                                                    <div className="text-sm text-muted-foreground">{log.profiles?.email}</div>
                                                 </div>
                                             </TableCell>
                                             <TableCell>
@@ -190,7 +190,7 @@ export default function AdminAuditLogs() {
                                                     <span className="capitalize">{log.entity_type}</span>
                                                 </div>
                                             </TableCell>
-                                            <TableCell className="max-w-md truncate text-sm text-gray-600">
+                                            <TableCell className="max-w-md truncate text-sm text-muted-foreground">
                                                 {formatDetails(log.details)}
                                             </TableCell>
                                         </TableRow>
@@ -201,7 +201,7 @@ export default function AdminAuditLogs() {
                     </div>
 
                     {logs.length > 0 && (
-                        <div className="mt-4 text-sm text-gray-600 text-center">
+                        <div className="mt-4 text-sm text-muted-foreground text-center">
                             Mostrando os últimos 100 registros
                         </div>
                     )}
