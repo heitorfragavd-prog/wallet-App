@@ -122,12 +122,12 @@ export const LoginForm = ({ onSwitchToRegister, onSwitchToForgot }: LoginFormPro
       </Button>
 
       <div className="text-center">
-        <span className="text-sm text-gray-600">
+        <span className="text-sm text-gray-600 dark:text-gray-300">
           Não tem uma conta?{" "}
           <button
             type="button"
             onClick={onSwitchToRegister}
-            className="text-orange-600 hover:text-orange-500 font-medium"
+            className="text-orange-600 dark:text-orange-400 hover:text-orange-500 dark:hover:text-orange-300 font-medium"
           >
             Cadastre-se
           </button>

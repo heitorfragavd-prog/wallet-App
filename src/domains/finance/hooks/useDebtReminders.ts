@@ -40,9 +40,22 @@ export const useDebtReminders = () => {
         `)
         .order('trigger_at', { ascending: true });
 
+      // If table doesn't exist (42P01, PGRST116, PGRST205) or relationship error, just return empty array
+      if (error && (error.code === '42P01' || error.code === 'PGRST116' || error.code === 'PGRST205')) {
+        setReminders([]);
+        return;
+      }
+
       if (error) throw error;
       setReminders((data || []) as DebtReminder[]);
     } catch (error) {
+      // Silently handle table not found errors - the migration may not have been applied yet
+      const errorCode = (error as { code?: string })?.code;
+      if (errorCode === '42P01' || errorCode === 'PGRST116' || errorCode === 'PGRST205') {
+        setReminders([]);
+        return;
+      }
+      
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
       toast({
         title: "Erro ao carregar lembretes",
@@ -74,9 +87,20 @@ export const useDebtReminders = () => {
         .eq('divida_id', dividaId)
         .maybeSingle();
 
+      // If table doesn't exist, return null silently
+      if (error && (error.code === '42P01' || error.code === 'PGRST116' || error.code === 'PGRST205')) {
+        return null;
+      }
+
       if (error) throw error;
       return data as DebtReminder | null;
     } catch (error) {
+      // Silently handle table not found errors
+      const errorCode = (error as { code?: string })?.code;
+      if (errorCode === '42P01' || errorCode === 'PGRST116' || errorCode === 'PGRST205') {
+        return null;
+      }
+      
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
       toast({
         title: "Erro ao buscar lembrete",

@@ -19,6 +19,8 @@ import {
   Menu,
   X,
   Shield,
+  Bell,
+  Wallet,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -43,6 +45,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: TrendingDown, label: "Despesas", path: "/despesas" },
     { icon: FileText, label: "Transações", path: "/transacoes" },
     { icon: PieChart, label: "Dívidas", path: "/dividas" },
+    { icon: Bell, label: "Lembretes", path: "/lembretes" },
     { icon: Tag, label: "Categorias", path: "/categorias" },
     { icon: BarChart3, label: "Relatórios", path: "/relatorios" },
     { icon: Target, label: "Metas", path: "/metas" },
@@ -121,7 +124,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="bg-orange-500 rounded-lg p-2">
-                <span className="text-white font-bold text-xl">M</span>
+                <Wallet className="h-6 w-6 text-white" />
               </div>
               {!isCollapsed && (
                 <span className="text-xl font-bold text-foreground">Wallet</span>
@@ -183,24 +186,27 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         </nav>
 
         {/* Theme Toggle and Logout */}
-        <div className="p-4 border-t border-border flex-shrink-0 space-y-2">
-          <div className={`flex ${isCollapsed ? "justify-center" : "justify-start px-3"}`}>
-            <ThemeToggle />
+        <div className="p-4 border-t border-border flex-shrink-0">
+          <div className={`flex gap-2 ${
+            isCollapsed ? "flex-col items-center" : "flex-row items-center justify-between"
+          }`}>
+            <Button
+              variant="ghost"
+              className={`text-muted-foreground hover:text-foreground min-h-[44px] ${
+                isCollapsed ? "justify-center px-0 min-w-[44px]" : "justify-start"
+              }`}
+              onClick={() => {
+                handleLogout();
+                closeMobileMenu();
+              }}
+              title={isCollapsed ? "Sair" : undefined}
+              aria-label="Sair da conta"
+            >
+              <LogOut className="w-5 h-5 flex-shrink-0" />
+              {!isCollapsed && <span className="ml-3">Sair</span>}
+            </Button>
+            <ThemeToggle className="min-h-[44px] min-w-[44px]" />
           </div>
-          <Button
-            variant="ghost"
-            className={`w-full text-muted-foreground hover:text-foreground ${
-              isCollapsed ? "justify-center px-0" : "justify-start"
-            }`}
-            onClick={() => {
-              handleLogout();
-              closeMobileMenu();
-            }}
-            title={isCollapsed ? "Sair" : undefined}
-          >
-            <LogOut className="w-5 h-5 flex-shrink-0" />
-            {!isCollapsed && <span className="ml-3">Sair</span>}
-          </Button>
         </div>
       </div>
 

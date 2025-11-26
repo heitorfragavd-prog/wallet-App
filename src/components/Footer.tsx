@@ -1,4 +1,4 @@
-import { MessageCircle, Mail, Phone } from "lucide-react";
+import { MessageCircle, Mail, Phone, Wallet } from "lucide-react";
 export const Footer = () => {
   return <footer className="bg-gray-900 text-white py-12">
       <div className="container mx-auto px-4">
@@ -6,7 +6,7 @@ export const Footer = () => {
           <div>
             <div className="flex items-center space-x-2 mb-6">
               <div className="bg-orange-500 rounded-lg p-2">
-                <span className="text-white font-bold text-xl">W</span>
+                <Wallet className="h-6 w-6 text-white" />
               </div>
               <span className="text-2xl font-bold">Wallet</span>
             </div>

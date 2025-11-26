@@ -10,6 +10,7 @@ export const AdminTabs = () => {
     { path: "/admin/limits", label: "Limites" },
     { path: "/admin/subscriptions", label: "Assinaturas" },
     { path: "/admin/payment-settings", label: "Pagamentos" },
+    { path: "/admin/webhook-settings", label: "Webhook" },
     { path: "/admin/reports", label: "Relatórios" },
     { path: "/admin/audit", label: "Auditoria" },
   ];

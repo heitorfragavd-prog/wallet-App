@@ -1,6 +1,6 @@
 
 import { Button } from "@/shared/components/ui/button";
-import { MessageCircle, Menu } from "lucide-react";
+import { MessageCircle, Menu, Wallet } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ThemeToggle } from "@/shared/components/ThemeToggle";
@@ -14,7 +14,7 @@ export const Header = () => {
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center space-x-2">
             <div className="bg-orange-500 rounded-lg p-2">
-              <span className="text-white font-bold text-xl">W</span>
+              <Wallet className="h-6 w-6 text-white" />
             </div>
             <span className="text-2xl font-bold text-gray-800">Wallet</span>
           </Link>

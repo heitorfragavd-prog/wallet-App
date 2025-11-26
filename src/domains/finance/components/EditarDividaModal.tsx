@@ -6,6 +6,8 @@ import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
+import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
+import { ReminderSelector } from "./ReminderSelector";
 
 interface Divida {
   id: string;
@@ -36,6 +38,7 @@ interface EditarDividaModalProps {
 export const EditarDividaModal = ({ isOpen, onClose, divida, onSave }: EditarDividaModalProps) => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
+  const { getReminderByDebtId, createReminder, updateReminder, deleteReminder } = useDebtReminders();
   
   const [descricao, setDescricao] = useState('');
   const [valorTotal, setValorTotal] = useState('');
@@ -45,6 +48,8 @@ export const EditarDividaModal = ({ isOpen, onClose, divida, onSave }: EditarDiv
   const [parcelasPagas, setParcelasPagas] = useState('');
   const [categoria, setCategoria] = useState('');
   const [credor, setCredor] = useState('');
+  const [reminderHours, setReminderHours] = useState<number | null>(null);
+  const [existingReminderId, setExistingReminderId] = useState<string | null>(null);
 
   useEffect(() => {
     if (divida) {
@@ -56,10 +61,23 @@ export const EditarDividaModal = ({ isOpen, onClose, divida, onSave }: EditarDiv
       setParcelasPagas(divida.parcelas_pagas?.toString() || '0');
       setCategoria(divida.categorias?.nome || divida.categoria || '');
       setCredor(divida.credor || '');
+      
+      // Load existing reminder for this debt
+      const loadReminder = async () => {
+        const reminder = await getReminderByDebtId(divida.id);
+        if (reminder) {
+          setReminderHours(reminder.reminder_hours);
+          setExistingReminderId(reminder.id);
+        } else {
+          setReminderHours(null);
+          setExistingReminderId(null);
+        }
+      };
+      loadReminder();
     }
   }, [divida]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!descricao || !valorTotal || !dataVencimento || !parcelas || !categoria || !credor) {
       toast({
         title: "Erro",
@@ -90,6 +108,20 @@ export const EditarDividaModal = ({ isOpen, onClose, divida, onSave }: EditarDiv
       status: parcelasPagasNum >= parcelasNum ? 'quitada' : 
                new Date(dataVencimento) < new Date() ? 'vencida' : 'pendente'
     };
+
+    // Handle reminder creation/update/deletion
+    if (reminderHours !== null && reminderHours > 0) {
+      if (existingReminderId) {
+        // Update existing reminder
+        await updateReminder(existingReminderId, reminderHours, dataVencimento);
+      } else {
+        // Create new reminder
+        await createReminder(divida.id, reminderHours, dataVencimento);
+      }
+    } else if (existingReminderId && reminderHours === null) {
+      // Delete reminder if user selected "none"
+      await deleteReminder(existingReminderId);
+    }
 
     onSave(dividaEditada);
     onClose();
@@ -205,6 +237,11 @@ export const EditarDividaModal = ({ isOpen, onClose, divida, onSave }: EditarDiv
               onChange={(e) => setDataVencimento(e.target.value)}
             />
           </div>
+          
+          <ReminderSelector
+            value={reminderHours}
+            onChange={setReminderHours}
+          />
         </div>
         
         <DialogFooter>

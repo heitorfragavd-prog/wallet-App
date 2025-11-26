@@ -39,6 +39,17 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { EditarDividaModal } from "@/domains/finance/components/EditarDividaModal";
+import { ReminderStatusBadge } from "@/domains/finance/components/ReminderStatusBadge";
+import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
+import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
+
+interface DebtReminderInfo {
+  id: string;
+  reminder_hours: number;
+  trigger_at: string;
+  status: 'pending' | 'sent' | 'failed';
+  sent_at?: string;
+}
 
 interface Divida {
   id: string;
@@ -56,12 +67,14 @@ interface Divida {
     id: string;
     nome: string;
   };
+  debt_reminders?: DebtReminderInfo[];
 }
 
 const Dividas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
   const { dividas, createDivida, updateDivida, deleteDivida } = useDividas();
+  const { createReminder } = useDebtReminders();
   const [activeTab, setActiveTab] = useState("lista");
   const [dividaEditando, setDividaEditando] = useState<Divida | null>(null);
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
@@ -77,6 +90,7 @@ const Dividas = () => {
   const [novasParcelas, setNovasParcelas] = useState("");
   const [novaCategoria, setNovaCategoria] = useState("");
   const [novoCredor, setNovoCredor] = useState("");
+  const [novoReminderHours, setNovoReminderHours] = useState<number | null>(null);
 
   const dividasFiltradas = dividas
     .filter((divida) => {
@@ -133,7 +147,7 @@ const Dividas = () => {
 
     const categoria = categoriasDespesa.find((c) => c.nome === novaCategoria);
 
-    await createDivida({
+    const result = await createDivida({
       descricao: novaDescricao,
       valor_total: parseFloat(novoValorTotal),
       valor_pago: 0,
@@ -147,6 +161,11 @@ const Dividas = () => {
       credor: novoCredor,
     });
 
+    // Criar lembrete se configurado
+    if (result?.data?.id && novoReminderHours !== null && novoReminderHours > 0) {
+      await createReminder(result.data.id, novoReminderHours, novaDataVencimento);
+    }
+
     // Limpar formulário
     setNovaDescricao("");
     setNovoValorTotal("");
@@ -154,6 +173,7 @@ const Dividas = () => {
     setNovasParcelas("");
     setNovaCategoria("");
     setNovoCredor("");
+    setNovoReminderHours(null);
 
     setActiveTab("lista");
   };
@@ -165,6 +185,7 @@ const Dividas = () => {
     setNovasParcelas("");
     setNovaCategoria("");
     setNovoCredor("");
+    setNovoReminderHours(null);
     setActiveTab("lista");
   };
 
@@ -394,6 +415,7 @@ const Dividas = () => {
                       <TableHead>Parcelas</TableHead>
                       <TableHead>Vencimento</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Lembrete</TableHead>
                       <TableHead className="text-right">
                         Valor Restante
                       </TableHead>
@@ -426,6 +448,15 @@ const Dividas = () => {
                           >
                             {getStatusText(divida.status)}
                           </span>
+                        </TableCell>
+                        <TableCell>
+                          {divida.debt_reminders && divida.debt_reminders.length > 0 && (
+                            <ReminderStatusBadge
+                              status={divida.debt_reminders[0].status}
+                              triggerAt={divida.debt_reminders[0].trigger_at}
+                              sentAt={divida.debt_reminders[0].sent_at}
+                            />
+                          )}
                         </TableCell>
                         <TableCell className="text-right font-bold text-red-600">
                           R${" "}
@@ -548,6 +579,16 @@ const Dividas = () => {
                             })}
                           </p>
                         </div>
+                        {divida.debt_reminders && divida.debt_reminders.length > 0 && (
+                          <div className="col-span-2">
+                            <p className="text-muted-foreground mb-1">Lembrete</p>
+                            <ReminderStatusBadge
+                              status={divida.debt_reminders[0].status}
+                              triggerAt={divida.debt_reminders[0].trigger_at}
+                              sentAt={divida.debt_reminders[0].sent_at}
+                            />
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
@@ -677,6 +718,17 @@ const Dividas = () => {
                       value={novaDataVencimento}
                       onChange={(e) => setNovaDataVencimento(e.target.value)}
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="reminder">Lembrete</Label>
+                    <ReminderSelector
+                      value={novoReminderHours}
+                      onChange={setNovoReminderHours}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Configure um lembrete para ser notificado antes do vencimento
+                    </p>
                   </div>
                 </div>
 

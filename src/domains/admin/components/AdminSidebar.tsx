@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, CreditCard, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, Webhook, LogOut } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
@@ -36,6 +36,11 @@ export function AdminSidebar() {
             icon: CreditCard,
             path: "/admin/plans",
         },
+        {
+            title: "Webhook",
+            icon: Webhook,
+            path: "/admin/webhook-settings",
+        },
     ];
 
     return (
@@ -62,18 +67,19 @@ export function AdminSidebar() {
                 })}
             </nav>
 
-            <div className="p-4 border-t border-border space-y-2">
-                <div className="flex justify-center pb-2">
-                    <ThemeToggle />
+            <div className="p-4 border-t border-border">
+                <div className="flex items-center justify-between gap-2">
+                    <Button
+                        variant="ghost"
+                        className="justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950 min-h-[44px]"
+                        onClick={handleLogout}
+                        aria-label="Sair da conta"
+                    >
+                        <LogOut className="h-5 w-5" />
+                        Sair
+                    </Button>
+                    <ThemeToggle className="min-h-[44px] min-w-[44px]" />
                 </div>
-                <Button
-                    variant="ghost"
-                    className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                    onClick={handleLogout}
-                >
-                    <LogOut className="h-5 w-5" />
-                    Sair
-                </Button>
             </div>
         </div>
     );

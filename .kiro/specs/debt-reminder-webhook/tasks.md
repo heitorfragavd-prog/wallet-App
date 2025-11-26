@@ -58,66 +58,66 @@
 - [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement frontend components for debt reminder
-  - [ ] 5.1 Create ReminderSelector component
+- [x] 5. Implement frontend components for debt reminder
+  - [x] 5.1 Create ReminderSelector component
     - Dropdown with options: None, 24h, 48h, 72h, 1 week (168h)
     - Props: value, onChange, disabled
     - Portuguese labels
     - _Requirements: 1.1, 1.2_
-  - [ ] 5.2 Create ReminderStatusBadge component
+  - [x] 5.2 Create ReminderStatusBadge component
     - Display colored badge based on status
     - Show trigger time for pending reminders
     - Show sent time for sent reminders
     - _Requirements: 6.1, 6.2, 6.3_
-  - [ ] 5.3 Integrate ReminderSelector into debt forms
+  - [x] 5.3 Integrate ReminderSelector into debt forms
     - Add to EditarDividaModal component
     - Add reminder creation/update logic when saving debt
     - _Requirements: 1.1, 1.3_
-  - [ ] 5.4 Display reminder status in debt list
+  - [x] 5.4 Display reminder status in debt list
     - Add ReminderStatusBadge to debt cards/rows
     - Show only for debts with configured reminders
     - _Requirements: 1.4, 6.1_
 
-- [ ] 6. Implement Lembretes (Reminders) page
-  - [ ] 6.1 Create Lembretes page component
+- [x] 6. Implement Lembretes (Reminders) page
+  - [x] 6.1 Create Lembretes page component
     - Table/list view with all user reminders
     - Columns: debt description, creditor, due date, reminder time, status, sent date
     - Link to associated debt
     - _Requirements: 5.2, 5.3, 5.4_
-  - [ ] 6.2 Implement status filter functionality
+  - [x] 6.2 Implement status filter functionality
     - Filter dropdown: All, Pending, Sent, Failed
     - Filter reminders based on selection
     - _Requirements: 5.5_
   - [ ]* 6.3 Write property test for status filter
     - **Property 9: Reminders List Filter by Status**
     - **Validates: Requirements 5.5**
-  - [ ] 6.4 Add Lembretes route and navigation
+  - [x] 6.4 Add Lembretes route and navigation
     - Add route to App.tsx
     - Add menu item to sidebar navigation
     - _Requirements: 5.1, 5.2_
 
-- [ ] 7. Implement Admin Webhook Settings page
-  - [ ] 7.1 Create AdminWebhookSettings page component
+- [x] 7. Implement Admin Webhook Settings page
+  - [x] 7.1 Create AdminWebhookSettings page component
     - Form with webhook URL input
     - URL validation feedback
     - Save button with loading state
     - Test webhook button
     - _Requirements: 2.1, 2.2, 2.3, 2.4_
-  - [ ] 7.2 Add AdminWebhookSettings route and navigation
+  - [x] 7.2 Add AdminWebhookSettings route and navigation
     - Add route to App.tsx with admin protection
     - Add menu item to admin sidebar
     - _Requirements: 2.1_
 
-- [ ] 8. Checkpoint - Ensure all tests pass
+- [x] 8. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 9. Implement Edge Function for processing reminders
-  - [ ] 9.1 Create process-reminders Edge Function
+- [x] 9. Implement Edge Function for processing reminders
+  - [x] 9.1 Create process-reminders Edge Function
     - Query pending reminders where trigger_at <= now()
     - Fetch associated debt and user data for each reminder
     - Build webhook payload with all required fields
     - _Requirements: 3.1, 3.2, 4.2_
-  - [ ] 9.2 Implement webhook POST logic
+  - [x] 9.2 Implement webhook POST logic
     - POST payload to configured webhook URL
     - Handle timeout (10s max)
     - Update reminder status based on response
@@ -131,13 +131,13 @@
   - [ ]* 9.5 Write property test for pending reminders filter
     - **Property 7: Pending Reminders Filter**
     - **Validates: Requirements 4.2**
-  - [ ] 9.6 Create pg_cron job for scheduled execution
+  - [x] 9.6 Create pg_cron job for scheduled execution
     - Schedule Edge Function to run every 15 minutes
     - Add migration for cron job setup
     - _Requirements: 3.1_
 
-- [ ] 10. Implement reminder reset on update
-  - [ ] 10.1 Add reset logic to useDebtReminders hook
+- [x] 10. Implement reminder reset on update
+  - [x] 10.1 Add reset logic to useDebtReminders hook
     - When reminder_hours is updated, reset status to 'pending'
     - Recalculate trigger_at based on new hours
     - _Requirements: 4.3_
@@ -145,6 +145,6 @@
     - **Property 8: Reminder Reset on Update**
     - **Validates: Requirements 4.3**
 
-- [ ] 11. Final Checkpoint - Ensure all tests pass
+- [x] 11. Final Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 

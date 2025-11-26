@@ -2,6 +2,14 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 
+export interface DebtReminderInfo {
+  id: string;
+  reminder_hours: number;
+  trigger_at: string;
+  status: 'pending' | 'sent' | 'failed';
+  sent_at?: string;
+}
+
 export interface Divida {
   id: string;
   user_id: string;
@@ -22,6 +30,7 @@ export interface Divida {
     cor: string;
     icone: string;
   };
+  debt_reminders?: DebtReminderInfo[];
 }
 
 export const useDividas = () => {
@@ -31,13 +40,30 @@ export const useDividas = () => {
 
   const fetchDividas = async () => {
     try {
+      // Try to fetch with debt_reminders join first
       const { data, error } = await supabase
         .from('dividas')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias (nome, cor, icone),
+          debt_reminders (id, reminder_hours, trigger_at, status, sent_at)
         `)
         .order('data_vencimento', { ascending: true });
+
+      // If the debt_reminders table doesn't exist (PGRST200, PGRST205 error), fallback to query without it
+      if (error && (error.code === 'PGRST200' || error.code === 'PGRST205')) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('dividas')
+          .select(`
+            *,
+            categorias (nome, cor, icone)
+          `)
+          .order('data_vencimento', { ascending: true });
+
+        if (fallbackError) throw fallbackError;
+        setDividas((fallbackData || []) as Divida[]);
+        return;
+      }
 
       if (error) throw error;
       setDividas((data || []) as Divida[]);
