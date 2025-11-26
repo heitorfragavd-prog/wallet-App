@@ -101,24 +101,21 @@ export const useWebhookSettings = () => {
     setSettings(prev => ({ ...prev, testing: true }));
 
     try {
-      // Send a test payload to the webhook
-      const testPayload = {
-        event: 'webhook_test',
-        timestamp: new Date().toISOString(),
-        message: 'Teste de conectividade do webhook Wallet'
-      };
-
-      const response = await fetch(settings.webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testPayload),
-      });
+      // Chamar Edge Function para testar o webhook (evita CORS)
+      const { data, error } = await supabase.functions.invoke('test-webhook');
 
       setSettings(prev => ({ ...prev, testing: false }));
 
-      if (response.ok) {
+      if (error) {
+        toast({
+          title: "Erro no teste",
+          description: error.message,
+          variant: "destructive",
+        });
+        return { success: false, error: error.message };
+      }
+
+      if (data?.success) {
         toast({
           title: "Teste bem-sucedido",
           description: "O webhook respondeu corretamente!",
@@ -127,10 +124,10 @@ export const useWebhookSettings = () => {
       } else {
         toast({
           title: "Falha no teste",
-          description: `O webhook retornou status ${response.status}`,
+          description: data?.error || "Erro desconhecido",
           variant: "destructive",
         });
-        return { success: false, error: `Status ${response.status}` };
+        return { success: false, error: data?.error };
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Não foi possível conectar ao webhook';

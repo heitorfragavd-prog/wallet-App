@@ -6,6 +6,7 @@ import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { useWebhookSettings } from "@/domains/admin/hooks/useWebhookSettings";
+import { useWhatsAppSettings } from "@/domains/admin/hooks/useWhatsAppSettings";
 import { Loader2, TestTube, Save, AlertCircle, CheckCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/shared/components/ui/alert";
 
@@ -20,15 +21,33 @@ export default function AdminWebhookSettings() {
     isValidWebhookUrl,
   } = useWebhookSettings();
 
+  const {
+    whatsappNumber,
+    loading: whatsappLoading,
+    saving: whatsappSaving,
+    saveWhatsAppNumber,
+    isValidWhatsAppNumber,
+  } = useWhatsAppSettings();
+
   const [urlInput, setUrlInput] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+
+  const [whatsappInput, setWhatsappInput] = useState("");
+  const [whatsappValidationError, setWhatsappValidationError] = useState<string | null>(null);
+  const [whatsappHasChanges, setWhatsappHasChanges] = useState(false);
 
   useEffect(() => {
     if (webhookUrl !== null) {
       setUrlInput(webhookUrl || "");
     }
   }, [webhookUrl]);
+
+  useEffect(() => {
+    if (whatsappNumber !== null) {
+      setWhatsappInput(whatsappNumber || "");
+    }
+  }, [whatsappNumber]);
 
   const handleUrlChange = (value: string) => {
     setUrlInput(value);
@@ -58,7 +77,32 @@ export default function AdminWebhookSettings() {
     await testWebhook();
   };
 
+  const handleWhatsappChange = (value: string) => {
+    setWhatsappInput(value);
+    setWhatsappHasChanges(value !== (whatsappNumber || ""));
+    
+    // Clear validation error when user starts typing
+    if (whatsappValidationError) {
+      setWhatsappValidationError(null);
+    }
+  };
+
+  const handleWhatsappSave = async () => {
+    // Validate number before saving
+    if (whatsappInput && !isValidWhatsAppNumber(whatsappInput)) {
+      setWhatsappValidationError("Por favor, insira um número válido com 10-15 dígitos");
+      return;
+    }
+
+    const result = await saveWhatsAppNumber(whatsappInput);
+    if (result.success) {
+      setWhatsappHasChanges(false);
+      setWhatsappValidationError(null);
+    }
+  };
+
   const isUrlValid = !urlInput || isValidWebhookUrl(urlInput);
+  const isWhatsappValid = !whatsappInput || isValidWhatsAppNumber(whatsappInput);
 
   return (
     <DashboardLayout>
@@ -69,7 +113,7 @@ export default function AdminWebhookSettings() {
             <AdminTabs />
           </div>
 
-          <div className="max-w-3xl">
+          <div className="max-w-3xl space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle>Configurações de Webhook</CardTitle>
@@ -161,6 +205,86 @@ export default function AdminWebhookSettings() {
                       <Alert>
                         <AlertDescription>
                           Você tem alterações não salvas. Salve antes de testar o webhook.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Configurações do WhatsApp</CardTitle>
+                <CardDescription>
+                  Configure o número do WhatsApp para o botão "Wallet AI" no menu dos usuários
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {whatsappLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="whatsapp-number">Número do WhatsApp</Label>
+                      <Input
+                        id="whatsapp-number"
+                        type="tel"
+                        placeholder="5511999999999"
+                        value={whatsappInput}
+                        onChange={(e) => handleWhatsappChange(e.target.value)}
+                        className={whatsappValidationError || !isWhatsappValid ? "border-red-500" : ""}
+                      />
+                      {whatsappValidationError && (
+                        <p className="text-sm text-red-500 flex items-center gap-1">
+                          <AlertCircle className="h-4 w-4" />
+                          {whatsappValidationError}
+                        </p>
+                      )}
+                      {!whatsappValidationError && whatsappInput && isWhatsappValid && (
+                        <p className="text-sm text-green-600 flex items-center gap-1">
+                          <CheckCircle className="h-4 w-4" />
+                          Número válido
+                        </p>
+                      )}
+                      <p className="text-sm text-muted-foreground">
+                        Insira apenas números (ex: 5511999999999). O número deve ter entre 10 e 15 dígitos.
+                      </p>
+                    </div>
+
+                    <Alert>
+                      <AlertDescription>
+                        <strong>Formato:</strong> Use o formato internacional sem símbolos (código do país + DDD + número).
+                        Exemplo: 5511999999999 para um número brasileiro.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="flex gap-3">
+                      <Button
+                        onClick={handleWhatsappSave}
+                        disabled={whatsappSaving || !whatsappHasChanges || !isWhatsappValid}
+                        className="flex-1"
+                      >
+                        {whatsappSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Salvando...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Salvar Número
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {whatsappHasChanges && (
+                      <Alert>
+                        <AlertDescription>
+                          Você tem alterações não salvas.
                         </AlertDescription>
                       </Alert>
                     )}

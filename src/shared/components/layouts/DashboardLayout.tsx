@@ -26,6 +26,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
 import { ThemeToggle } from "@/shared/components/ThemeToggle";
+import { WhatsAppButton } from "@/shared/components/WhatsAppButton";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -185,8 +186,10 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </div>
         </nav>
 
-        {/* Theme Toggle and Logout */}
-        <div className="p-4 border-t border-border flex-shrink-0">
+        {/* WhatsApp Button, Theme Toggle and Logout */}
+        <div className="p-4 border-t border-border flex-shrink-0 space-y-2">
+          <WhatsAppButton isCollapsed={isCollapsed} onClick={closeMobileMenu} />
+          
           <div className={`flex gap-2 ${
             isCollapsed ? "flex-col items-center" : "flex-row items-center justify-between"
           }`}>

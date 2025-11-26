@@ -1,0 +1,63 @@
+# Implementation Plan
+
+- [x] 1. Database setup and validation utilities
+  - [x] 1.1 Create migration to add whatsapp_number setting and public read policy
+    - Add INSERT for `whatsapp_number` key in `system_settings`
+    - Create RLS policy allowing public SELECT for `whatsapp_number` key
+    - _Requirements: 2.2_
+  - [x] 1.2 Add WhatsApp number validation functions to validation.ts
+    - Implement `isValidWhatsAppNumber(number: string): boolean`
+    - Implement `sanitizeWhatsAppNumber(number: string): string`
+    - Validate: only digits after sanitization, 10-15 digits length
+    - _Requirements: 3.1, 3.2, 3.3_
+  - [ ]* 1.3 Write property tests for validation functions
+    - **Property 2: Invalid Number Rejection**
+    - **Property 3: Number Sanitization Idempotence**
+    - **Validates: Requirements 2.3, 3.1, 3.2**
+
+- [x] 2. Admin configuration interface
+  - [x] 2.1 Create useWhatsAppSettings hook
+    - Fetch `whatsapp_number` from `system_settings`
+    - Implement `saveWhatsAppNumber` with validation
+    - Handle loading/saving states and error feedback
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [x] 2.2 Add WhatsApp configuration section to AdminWebhookSettings page
+    - Add Card with input field for WhatsApp number
+    - Display validation feedback (valid/invalid)
+    - Save button with loading state
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [ ]* 2.3 Write unit tests for useWhatsAppSettings hook
+    - Test save success/failure scenarios
+    - Test validation integration
+    - _Requirements: 2.1, 2.2, 2.3_
+
+- [x] 3. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 4. User-facing WhatsApp button
+  - [x] 4.1 Create useWhatsAppNumber hook for users
+    - Fetch `whatsapp_number` from `system_settings` (public read)
+    - Build formatted URL `https://wa.me/{number}`
+    - Cache with React Query
+    - _Requirements: 1.2, 1.3_
+  - [ ]* 4.2 Write property test for URL generation
+    - **Property 1: WhatsApp URL Format Consistency**
+    - **Validates: Requirements 1.2**
+  - [x] 4.3 Create WhatsAppButton component
+    - Green background (#25D366) with WhatsApp icon
+    - Text "Wallet AI"
+    - Opens wa.me link in new tab
+    - Adapts to collapsed sidebar state
+    - Hidden when number not configured
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [x] 4.4 Integrate WhatsAppButton into DashboardLayout
+    - Add button above logout section in sidebar
+    - Pass isCollapsed prop for responsive behavior
+    - _Requirements: 1.1_
+  - [ ]* 4.5 Write unit tests for WhatsAppButton component
+    - Test rendering with/without configured number
+    - Test collapsed state behavior
+    - _Requirements: 1.1, 1.3_
+
+- [ ] 5. Final Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.

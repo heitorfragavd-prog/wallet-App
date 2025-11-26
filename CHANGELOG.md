@@ -2,6 +2,78 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.6] - 2024-11-26
+
+### ✨ Adicionado
+- **Sistema de Lembretes de Dívidas via Webhook**
+  - Edge Function `process-reminders` para processar lembretes pendentes
+  - Edge Function `test-webhook` para testar conectividade
+  - Página de configuração de webhook no painel admin (`/admin/webhook-settings`)
+  - Payload de teste com estrutura idêntica ao evento real
+  - Campo `is_test: true` para identificar testes
+
+### 🔧 Corrigido
+- **Teste de Webhook**
+  - Corrigido erro "Failed to fetch" causado por CORS
+  - Teste agora é feito via Edge Function (server-side)
+  - Payload de teste inclui dados de exemplo realistas
+
+---
+
+## [1.0.5] - 2024-11-26
+
+### ✨ Adicionado
+- **Theme Toggle no Layout**
+  - Theme toggle e botão de logout agora na mesma linha horizontal
+  - Layout adaptativo: vertical quando collapsed, horizontal quando expanded
+  - Touch targets de 44x44px para melhor acessibilidade
+  - ARIA labels adicionados para screen readers
+
+- **Ícone de Carteira**
+  - Substituído "M" e "W" por ícone de carteira (Wallet) do Lucide React
+  - Aplicado em: DashboardLayout, Header, Footer, Login
+  - Novo favicon.svg com ícone de carteira
+
+### 🎨 Interface
+- **Dark Mode Melhorado**
+  - Página de login com suporte completo ao dark mode
+  - Inputs com cores mais claras e melhor contraste
+  - Gradientes adaptados para dark mode
+  - Theme toggle fixo no canto superior direito da página de login
+  - Links e textos com cores otimizadas para dark mode
+
+### 🔧 Componentes Atualizados
+- **AdminSidebar**
+  - Layout horizontal no footer
+  - Espaçamento otimizado (gap-2)
+  - Touch targets adequados
+
+- **DashboardLayout**
+  - Layout inteligente baseado no estado do sidebar
+  - Collapsed: ícones empilhados verticalmente
+  - Expanded: ícones lado a lado horizontalmente
+  - Mobile: sempre horizontal
+
+- **Login Page**
+  - Suporte completo ao dark mode
+  - Card com fundo adaptativo
+  - Theme toggle acessível
+  - Ícone de carteira no logo
+
+### 🎨 Cores e Temas
+- Input background (dark): Aumentado de 17% para 24% de luminosidade
+- Border (dark): Aumentado de 17% para 24% de luminosidade
+- Ring (dark): Mudado para laranja (#f97316) para melhor feedback visual
+
+### ♿ Acessibilidade
+- Touch targets mínimos de 44x44px em todos os botões
+- Tab order correto (logout primeiro, theme toggle depois)
+- ARIA labels em botões de ação
+- Tooltips preservados
+- Navegação por teclado otimizada
+
+---
+
 ## [1.0.4] - 2024-11-26
 
 ### 🔧 Corrigido
