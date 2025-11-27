@@ -34,14 +34,14 @@ import {
 interface User {
     id: string;
     name: string;
-    email: string;
-    phone: string;
+    email: string | null;
+    telefone: string | null;
     role: string;
     created_at: string;
-    subscription?: {
+    subscriptions?: Array<{
         status: string;
-        plans?: { name: string };
-    };
+        plans?: { name: string } | null;
+    }>;
 }
 
 interface Plan {
@@ -124,10 +124,15 @@ export default function AdminUsers() {
         }
     };
 
-    const filteredUsers = users.filter(user =>
-        user.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.email?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // Filter users by name, email, or phone (Requirement 3.3)
+    const filteredUsers = users.filter(user => {
+        const search = searchTerm.toLowerCase();
+        return (
+            user.name?.toLowerCase().includes(search) ||
+            user.email?.toLowerCase().includes(search) ||
+            user.telefone?.toLowerCase().includes(search)
+        );
+    });
 
     return (
         <AdminLayoutModern>
@@ -177,12 +182,15 @@ export default function AdminUsers() {
                             ) : (
                                 filteredUsers.map((user) => {
                                     const sub = user.subscriptions?.[0];
+                                    // Show "Gratuito" for users without subscription (Requirement 3.2)
                                     const planName = sub?.plans?.name || 'Gratuito';
+                                    // Display email with fallback for missing data (Requirement 3.1)
+                                    const displayEmail = user.email || 'Email não informado';
 
                                     return (
                                         <TableRow key={user.id}>
                                             <TableCell className="font-medium">{user.name || 'Sem nome'}</TableCell>
-                                            <TableCell>{user.email}</TableCell>
+                                            <TableCell className={!user.email ? 'text-muted-foreground italic' : ''}>{displayEmail}</TableCell>
                                             <TableCell>
                                                 <Badge variant={user.role === 'admin' ? 'destructive' : 'secondary'}>
                                                     {user.role === 'admin' ? 'Administrador' : 'Usuário'}

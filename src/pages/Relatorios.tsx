@@ -293,23 +293,23 @@ const Relatorios = () => {
 
 
         {/* Cards Principais */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
           <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted-foreground">Receitas</p>
-                <div className="p-2 rounded-xl bg-green-500/20">
-                  <ArrowUpRight className="w-4 h-4 text-green-500" />
+            <CardContent className="p-3 sm:p-5">
+              <div className="flex items-center justify-between mb-2 sm:mb-3">
+                <p className="text-xs sm:text-sm text-muted-foreground">Receitas</p>
+                <div className="p-1.5 sm:p-2 rounded-xl bg-green-500/20">
+                  <ArrowUpRight className="w-3 h-3 sm:w-4 sm:h-4 text-green-500" />
                 </div>
               </div>
-              {loading ? <Skeleton className="h-8 w-32" /> : (
+              {loading ? <Skeleton className="h-6 sm:h-8 w-24 sm:w-32" /> : (
                 <>
-                  <p className="text-2xl font-bold text-green-500">R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                  <p className="text-base sm:text-2xl font-bold text-green-500 truncate">R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
                   {variacaoReceitas !== 0 && (
-                    <div className="flex items-center gap-1 mt-2">
-                      {variacaoReceitas > 0 ? <TrendingUp className="w-3 h-3 text-green-500" /> : <TrendingDown className="w-3 h-3 text-red-500" />}
-                      <span className={`text-xs ${variacaoReceitas > 0 ? "text-green-500" : "text-red-500"}`}>
-                        {variacaoReceitas > 0 ? "+" : ""}{variacaoReceitas.toFixed(1)}% vs mês anterior
+                    <div className="flex items-center gap-1 mt-1 sm:mt-2">
+                      {variacaoReceitas > 0 ? <TrendingUp className="w-3 h-3 text-green-500 flex-shrink-0" /> : <TrendingDown className="w-3 h-3 text-red-500 flex-shrink-0" />}
+                      <span className={`text-[10px] sm:text-xs ${variacaoReceitas > 0 ? "text-green-500" : "text-red-500"} truncate`}>
+                        {variacaoReceitas > 0 ? "+" : ""}{variacaoReceitas.toFixed(1)}% <span className="hidden sm:inline">vs mês anterior</span>
                       </span>
                     </div>
                   )}
@@ -319,21 +319,21 @@ const Relatorios = () => {
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted-foreground">Despesas</p>
-                <div className="p-2 rounded-xl bg-red-500/20">
-                  <ArrowDownRight className="w-4 h-4 text-red-500" />
+            <CardContent className="p-3 sm:p-5">
+              <div className="flex items-center justify-between mb-2 sm:mb-3">
+                <p className="text-xs sm:text-sm text-muted-foreground">Despesas</p>
+                <div className="p-1.5 sm:p-2 rounded-xl bg-red-500/20">
+                  <ArrowDownRight className="w-3 h-3 sm:w-4 sm:h-4 text-red-500" />
                 </div>
               </div>
-              {loading ? <Skeleton className="h-8 w-32" /> : (
+              {loading ? <Skeleton className="h-6 sm:h-8 w-24 sm:w-32" /> : (
                 <>
-                  <p className="text-2xl font-bold text-red-500">R$ {totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                  <p className="text-base sm:text-2xl font-bold text-red-500 truncate">R$ {totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
                   {variacaoDespesas !== 0 && (
-                    <div className="flex items-center gap-1 mt-2">
-                      {variacaoDespesas < 0 ? <TrendingDown className="w-3 h-3 text-green-500" /> : <TrendingUp className="w-3 h-3 text-red-500" />}
-                      <span className={`text-xs ${variacaoDespesas < 0 ? "text-green-500" : "text-red-500"}`}>
-                        {variacaoDespesas > 0 ? "+" : ""}{variacaoDespesas.toFixed(1)}% vs mês anterior
+                    <div className="flex items-center gap-1 mt-1 sm:mt-2">
+                      {variacaoDespesas < 0 ? <TrendingDown className="w-3 h-3 text-green-500 flex-shrink-0" /> : <TrendingUp className="w-3 h-3 text-red-500 flex-shrink-0" />}
+                      <span className={`text-[10px] sm:text-xs ${variacaoDespesas < 0 ? "text-green-500" : "text-red-500"} truncate`}>
+                        {variacaoDespesas > 0 ? "+" : ""}{variacaoDespesas.toFixed(1)}% <span className="hidden sm:inline">vs mês anterior</span>
                       </span>
                     </div>
                   )}
@@ -343,36 +343,36 @@ const Relatorios = () => {
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted-foreground">Saldo</p>
-                <div className={`p-2 rounded-xl ${saldoTotal >= 0 ? "bg-blue-500/20" : "bg-orange-500/20"}`}>
-                  <Wallet className={`w-4 h-4 ${saldoTotal >= 0 ? "text-blue-500" : "text-orange-500"}`} />
+            <CardContent className="p-3 sm:p-5">
+              <div className="flex items-center justify-between mb-2 sm:mb-3">
+                <p className="text-xs sm:text-sm text-muted-foreground">Saldo</p>
+                <div className={`p-1.5 sm:p-2 rounded-xl ${saldoTotal >= 0 ? "bg-blue-500/20" : "bg-orange-500/20"}`}>
+                  <Wallet className={`w-3 h-3 sm:w-4 sm:h-4 ${saldoTotal >= 0 ? "text-blue-500" : "text-orange-500"}`} />
                 </div>
               </div>
-              {loading ? <Skeleton className="h-8 w-32" /> : (
-                <p className={`text-2xl font-bold ${saldoTotal >= 0 ? "text-blue-500" : "text-orange-500"}`}>
+              {loading ? <Skeleton className="h-6 sm:h-8 w-24 sm:w-32" /> : (
+                <p className={`text-base sm:text-2xl font-bold ${saldoTotal >= 0 ? "text-blue-500" : "text-orange-500"} truncate`}>
                   R$ {saldoTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground mt-2">{getPeriodoLabel()}</p>
+              <p className="text-[10px] sm:text-xs text-muted-foreground mt-1 sm:mt-2">{getPeriodoLabel()}</p>
             </CardContent>
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted-foreground">Taxa de Economia</p>
-                <div className="p-2 rounded-xl bg-purple-500/20">
-                  <Percent className="w-4 h-4 text-purple-500" />
+            <CardContent className="p-3 sm:p-5">
+              <div className="flex items-center justify-between mb-2 sm:mb-3">
+                <p className="text-xs sm:text-sm text-muted-foreground truncate">Taxa Economia</p>
+                <div className="p-1.5 sm:p-2 rounded-xl bg-purple-500/20">
+                  <Percent className="w-3 h-3 sm:w-4 sm:h-4 text-purple-500" />
                 </div>
               </div>
-              {loading ? <Skeleton className="h-8 w-20" /> : (
+              {loading ? <Skeleton className="h-6 sm:h-8 w-16 sm:w-20" /> : (
                 <>
-                  <p className={`text-2xl font-bold ${taxaEconomia >= 0 ? "text-purple-500" : "text-red-500"}`}>
+                  <p className={`text-base sm:text-2xl font-bold ${taxaEconomia >= 0 ? "text-purple-500" : "text-red-500"}`}>
                     {taxaEconomia.toFixed(1)}%
                   </p>
-                  <Progress value={Math.max(0, Math.min(100, taxaEconomia))} className="h-1.5 mt-2" />
+                  <Progress value={Math.max(0, Math.min(100, taxaEconomia))} className="h-1 sm:h-1.5 mt-1 sm:mt-2" />
                 </>
               )}
             </CardContent>
@@ -381,33 +381,39 @@ const Relatorios = () => {
 
         {/* Tabs */}
         <Tabs defaultValue="overview" className="space-y-4">
-          <TabsList className="bg-muted/50">
-            <TabsTrigger value="overview" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white">
-              <Activity className="w-4 h-4 mr-2" />Visão Geral
-            </TabsTrigger>
-            <TabsTrigger value="categories" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white">
-              <PieChartIcon className="w-4 h-4 mr-2" />Categorias
-            </TabsTrigger>
-            <TabsTrigger value="transactions" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white">
-              <FileText className="w-4 h-4 mr-2" />Transações
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white">
-              <Target className="w-4 h-4 mr-2" />Insights
-            </TabsTrigger>
-          </TabsList>
+          <ScrollArea className="w-full">
+            <TabsList className="bg-muted/50 w-full sm:w-auto inline-flex">
+              <TabsTrigger value="overview" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white text-xs sm:text-sm px-2 sm:px-3">
+                <Activity className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Visão Geral</span>
+              </TabsTrigger>
+              <TabsTrigger value="categories" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white text-xs sm:text-sm px-2 sm:px-3">
+                <PieChartIcon className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Categorias</span>
+              </TabsTrigger>
+              <TabsTrigger value="transactions" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white text-xs sm:text-sm px-2 sm:px-3">
+                <FileText className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Transações</span>
+              </TabsTrigger>
+              <TabsTrigger value="insights" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-white text-xs sm:text-sm px-2 sm:px-3">
+                <Target className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Insights</span>
+              </TabsTrigger>
+            </TabsList>
+          </ScrollArea>
 
           <TabsContent value="overview" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Gráfico de Área - Receitas vs Despesas */}
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <BarChart3 className="w-5 h-5 text-cyan-500" />
-                    Receitas vs Despesas - {getPeriodoLabel()}
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
+                    <span className="truncate">Receitas vs Despesas - {getPeriodoLabel()}</span>
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="h-[280px]">
+                <CardContent className="px-2 sm:px-6">
+                  <div className="h-[220px] sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={chartData}>
                         <defs>
@@ -465,14 +471,14 @@ const Relatorios = () => {
 
               {/* Gráfico de Linha - Evolução do Saldo */}
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-cyan-500" />
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
                     Evolução do Saldo
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="h-[280px]">
+                <CardContent className="px-2 sm:px-6">
+                  <div className="h-[220px] sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -509,22 +515,22 @@ const Relatorios = () => {
             </div>
 
             {/* Cards de Estatísticas Rápidas */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card className="p-4">
-                <p className="text-xs text-muted-foreground mb-1">Média Diária Receitas</p>
-                <p className="text-lg font-bold text-green-500">R$ {mediaReceitaDiaria.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
+              <Card className="p-3 sm:p-4">
+                <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Média Diária Receitas</p>
+                <p className="text-sm sm:text-lg font-bold text-green-500 truncate">R$ {mediaReceitaDiaria.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
               </Card>
-              <Card className="p-4">
-                <p className="text-xs text-muted-foreground mb-1">Média Diária Despesas</p>
-                <p className="text-lg font-bold text-red-500">R$ {mediaDespesaDiaria.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+              <Card className="p-3 sm:p-4">
+                <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Média Diária Despesas</p>
+                <p className="text-sm sm:text-lg font-bold text-red-500 truncate">R$ {mediaDespesaDiaria.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
               </Card>
-              <Card className="p-4">
-                <p className="text-xs text-muted-foreground mb-1">Dias com Transações</p>
-                <p className="text-lg font-bold text-foreground">{diasComTransacoes}</p>
+              <Card className="p-3 sm:p-4">
+                <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Dias com Transações</p>
+                <p className="text-sm sm:text-lg font-bold text-foreground">{diasComTransacoes}</p>
               </Card>
-              <Card className="p-4">
-                <p className="text-xs text-muted-foreground mb-1">Total Transações</p>
-                <p className="text-lg font-bold text-foreground">{filteredTransactions.length}</p>
+              <Card className="p-3 sm:p-4">
+                <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Total Transações</p>
+                <p className="text-sm sm:text-lg font-bold text-foreground">{filteredTransactions.length}</p>
               </Card>
             </div>
           </TabsContent>
@@ -533,14 +539,14 @@ const Relatorios = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Gráfico de Pizza */}
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <PieChartIcon className="w-5 h-5 text-cyan-500" />
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <PieChartIcon className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
                     Despesas por Categoria
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="h-[300px]">
+                <CardContent className="px-2 sm:px-6">
+                  <div className="h-[250px] sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie 
@@ -603,10 +609,10 @@ const Relatorios = () => {
               {/* Top Categorias */}
               <div className="space-y-4">
                 <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base text-red-500">Top 5 Despesas</CardTitle>
+                  <CardHeader className="pb-2 px-3 sm:px-6">
+                    <CardTitle className="text-sm sm:text-base text-red-500">Top 5 Despesas</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardContent className="space-y-3 px-3 sm:px-6">
                     {topCategoriasDespesa.map((cat, i) => (
                       <div key={i} className="flex items-center gap-3">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.cor }} />
@@ -623,10 +629,10 @@ const Relatorios = () => {
                 </Card>
 
                 <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base text-green-500">Top 5 Receitas</CardTitle>
+                  <CardHeader className="pb-2 px-3 sm:px-6">
+                    <CardTitle className="text-sm sm:text-base text-green-500">Top 5 Receitas</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardContent className="space-y-3 px-3 sm:px-6">
                     {topCategoriasReceita.map((cat, i) => (
                       <div key={i} className="flex items-center gap-3">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.cor }} />
@@ -648,10 +654,10 @@ const Relatorios = () => {
 
           <TabsContent value="transactions" className="space-y-4">
             <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2">
                 <CardTitle className="text-base">Transações - {getPeriodoLabel()}</CardTitle>
                 <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-                  <SelectTrigger className="w-32">
+                  <SelectTrigger className="w-full sm:w-32">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -661,8 +667,38 @@ const Relatorios = () => {
                   </SelectContent>
                 </Select>
               </CardHeader>
-              <CardContent>
-                <ScrollArea className="h-[400px]">
+              <CardContent className="px-2 sm:px-6">
+                {/* Mobile: Card layout */}
+                <div className="block sm:hidden space-y-3 max-h-[400px] overflow-y-auto">
+                  {loading ? (
+                    [...Array(5)].map((_, i) => (
+                      <div key={i} className="p-3 rounded-lg border border-border">
+                        <Skeleton className="h-4 w-24 mb-2" />
+                        <Skeleton className="h-4 w-full mb-2" />
+                        <Skeleton className="h-4 w-20" />
+                      </div>
+                    ))
+                  ) : filteredTransactions.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      Nenhuma transação encontrada
+                    </div>
+                  ) : (
+                    filteredTransactions.map((t) => (
+                      <div key={t.id} className="p-3 rounded-lg border border-border">
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="text-xs text-muted-foreground">{formatarData(t.data)}</span>
+                          <span className={`text-sm font-semibold ${t.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
+                            {t.tipo === "receita" ? "+" : "-"}R$ {t.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <p className="font-medium text-sm mb-1 truncate">{t.descricao}</p>
+                        <Badge variant="secondary" className="font-normal text-xs">{t.categoria}</Badge>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {/* Desktop: Table layout */}
+                <ScrollArea className="h-[400px] hidden sm:block">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -713,13 +749,13 @@ const Relatorios = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Destaques */}
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Activity className="w-5 h-5 text-cyan-500" />
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <Activity className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
                     Destaques do Período
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-4 px-3 sm:px-6">
                   {maiorReceita && (
                     <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20">
                       <p className="text-xs text-muted-foreground mb-1">Maior Receita</p>
@@ -745,13 +781,13 @@ const Relatorios = () => {
 
               {/* Metas */}
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Target className="w-5 h-5 text-cyan-500" />
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <Target className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
                     Progresso das Metas
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="px-3 sm:px-6">
                   {metasAtivas.length > 0 ? (
                     <div className="space-y-4">
                       {metasAtivas.map((meta) => {
@@ -786,11 +822,11 @@ const Relatorios = () => {
 
             {/* Dicas Financeiras */}
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">💡 Análise Automática</CardTitle>
+              <CardHeader className="pb-2 px-3 sm:px-6">
+                <CardTitle className="text-sm sm:text-base">💡 Análise Automática</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <CardContent className="px-3 sm:px-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
                   <div className={`p-4 rounded-xl ${taxaEconomia >= 20 ? "bg-green-500/10 border-green-500/20" : taxaEconomia >= 0 ? "bg-yellow-500/10 border-yellow-500/20" : "bg-red-500/10 border-red-500/20"} border`}>
                     <p className="text-sm font-medium mb-1">Taxa de Economia</p>
                     <p className="text-xs text-muted-foreground">

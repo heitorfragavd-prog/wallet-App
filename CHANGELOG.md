@@ -2,6 +2,19 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.10] - 2024-11-27
+
+### 🎨 Interface
+- **Responsividade da Página de Relatórios**
+  - Tabs com ícones no mobile, texto completo em desktop
+  - Cards principais em grid 2x2 no mobile
+  - Gráficos com altura adaptativa (220px mobile / 280px desktop)
+  - Tabela de transações convertida para cards no mobile
+  - Fontes e espaçamentos otimizados para telas pequenas
+  - Padding e margens ajustados em todos os cards
+
+---
+
 ## [1.0.9] - 2024-11-27
 
 ### ✨ Adicionado
