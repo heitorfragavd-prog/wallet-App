@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { Veiculo } from "./useVeiculos";
 import { TipoManutencao } from "./useTiposManutencao";
+import { ManutencaoService } from "../services/ManutencaoService";
 
 export interface ManutencaoPendente {
   id: string;
@@ -51,66 +52,116 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
     }
   };
 
-  const calcularManutencoesPendentes = () => {
+  const calcularManutencoesPendentes = async () => {
     const pendentes: ManutencaoPendente[] = [];
 
-    veiculos.forEach(veiculo => {
-      tiposManutencao.forEach(tipo => {
-        // Buscar a última manutenção realizada deste tipo para este veículo
-        const ultimaManutencao = manutencaoRealizada.find(m => 
-          m.veiculo_id === veiculo.id && m.tipo_manutencao_id === tipo.id
-        );
+    // Processar cada veículo
+    for (const veiculo of veiculos) {
+      // 1. Buscar planos de manutenção configurados para este veículo
+      const { data: planos } = await supabase
+        .from('planos_manutencao_veiculo')
+        .select(`
+          *,
+          tipo_manutencao:tipos_manutencao(*)
+        `)
+        .eq('veiculo_id', veiculo.id)
+        .eq('ativo', true);
 
-        let status: "Atrasada" | "Em dia" | "Pendente";
-        let proximaEm: string;
-        let quilometragemUltimaManutencao = 0;
+      // 2. Buscar manutenções customizadas para este veículo
+      const { data: customizadas } = await supabase
+        .from('manutencoes_customizadas')
+        .select('*')
+        .eq('veiculo_id', veiculo.id)
+        .eq('ativo', true);
 
-        if (ultimaManutencao) {
-          // Se já foi feita manutenção, calcular baseado na última
-          quilometragemUltimaManutencao = ultimaManutencao.quilometragem_realizada;
-          const proximaQuilometragem = quilometragemUltimaManutencao + tipo.intervalo_km;
-          const kmRestantes = proximaQuilometragem - veiculo.quilometragem;
+      // 3. Processar planos de manutenção
+      if (planos) {
+        for (const plano of planos) {
+          const resultado = await ManutencaoService.calcularProximaManutencao(
+            veiculo.id,
+            plano.tipo_manutencao_id,
+            plano.intervalo_km
+          );
 
-          if (kmRestantes <= 0) {
-            status = "Atrasada";
-            proximaEm = `Atrasada em ${Math.abs(kmRestantes).toLocaleString()} km`;
-          } else if (kmRestantes <= tipo.intervalo_km * 0.1) {
-            status = "Pendente";
-            proximaEm = `Em ${kmRestantes.toLocaleString()} km`;
-          } else {
-            status = "Em dia";
-            proximaEm = `Em ${kmRestantes.toLocaleString()} km`;
-          }
-        } else {
-          // Se nunca foi feita, calcular baseado na quilometragem atual
-          const kmExcedentes = veiculo.quilometragem % tipo.intervalo_km;
-          const kmParaProxima = tipo.intervalo_km - kmExcedentes;
+          if (resultado) {
+            let status: "Atrasada" | "Em dia" | "Pendente";
+            let proximaEm: string;
 
-          if (veiculo.quilometragem >= tipo.intervalo_km) {
-            status = "Atrasada";
-            proximaEm = `Atrasada em ${kmExcedentes.toLocaleString()} km`;
-          } else if (kmParaProxima <= tipo.intervalo_km * 0.1) {
-            status = "Pendente";
-            proximaEm = `Em ${kmParaProxima.toLocaleString()} km`;
-          } else {
-            status = "Em dia";
-            proximaEm = `Em ${kmParaProxima.toLocaleString()} km`;
+            if (resultado.status === 'atrasada') {
+              status = "Atrasada";
+              proximaEm = `Atrasada em ${Math.abs(resultado.kmRestante).toLocaleString()} km`;
+            } else if (resultado.status === 'pendente') {
+              status = "Pendente";
+              proximaEm = `Em ${resultado.kmRestante.toLocaleString()} km`;
+            } else {
+              status = "Em dia";
+              proximaEm = `Em ${resultado.kmRestante.toLocaleString()} km`;
+            }
+
+            pendentes.push({
+              id: `plano-${plano.id}`,
+              veiculo_id: veiculo.id,
+              tipo_manutencao_id: plano.tipo_manutencao_id,
+              tipo: plano.tipo_manutencao?.nome || 'Desconhecido',
+              sistema: plano.tipo_manutencao?.sistema || 'N/A',
+              status,
+              proximaEm,
+              veiculo,
+              tipoManutencao: plano.tipo_manutencao
+            });
           }
         }
+      }
 
-        pendentes.push({
-          id: `${veiculo.id}-${tipo.id}`,
-          veiculo_id: veiculo.id,
-          tipo_manutencao_id: tipo.id,
-          tipo: tipo.nome,
-          sistema: tipo.sistema,
-          status,
-          proximaEm,
-          veiculo,
-          tipoManutencao: tipo
-        });
-      });
-    });
+      // 4. Processar manutenções customizadas (apenas as que têm intervalo_km)
+      if (customizadas) {
+        for (const customizada of customizadas) {
+          if (customizada.intervalo_km) {
+            // Buscar última manutenção realizada desta customizada
+            const ultimaManutencao = manutencaoRealizada.find(m => 
+              m.veiculo_id === veiculo.id && 
+              m.tipo_manutencao_id === customizada.id
+            );
+
+            let kmRestante: number;
+            let kmProxima: number;
+
+            if (ultimaManutencao) {
+              kmProxima = ultimaManutencao.quilometragem_realizada + customizada.intervalo_km;
+              kmRestante = kmProxima - veiculo.quilometragem;
+            } else {
+              kmProxima = Math.ceil(veiculo.quilometragem / customizada.intervalo_km) * customizada.intervalo_km;
+              kmRestante = kmProxima - veiculo.quilometragem;
+            }
+
+            let status: "Atrasada" | "Em dia" | "Pendente";
+            let proximaEm: string;
+
+            if (kmRestante <= 0) {
+              status = "Atrasada";
+              proximaEm = `Atrasada em ${Math.abs(kmRestante).toLocaleString()} km`;
+            } else if (kmRestante <= customizada.intervalo_km * 0.1) {
+              status = "Pendente";
+              proximaEm = `Em ${kmRestante.toLocaleString()} km`;
+            } else {
+              status = "Em dia";
+              proximaEm = `Em ${kmRestante.toLocaleString()} km`;
+            }
+
+            pendentes.push({
+              id: `custom-${customizada.id}`,
+              veiculo_id: veiculo.id,
+              tipo_manutencao_id: customizada.id,
+              tipo: customizada.nome,
+              sistema: customizada.sistema || 'Customizada',
+              status,
+              proximaEm,
+              veiculo
+            });
+          }
+        }
+      }
+    }
 
     // Ordenar por prioridade: Atrasada -> Pendente -> Em dia
     pendentes.sort((a, b) => {
@@ -178,7 +229,7 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
 
   useEffect(() => {
     const loadData = async () => {
-      if (veiculos.length > 0 && tiposManutencao.length > 0) {
+      if (veiculos.length > 0) {
         await fetchManutencaoRealizada();
       } else {
         setLoading(false);
@@ -186,14 +237,14 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
     };
     
     loadData();
-  }, [veiculos, tiposManutencao]);
+  }, [veiculos]);
 
   // Recalcular quando as manutenções realizadas mudarem
   useEffect(() => {
-    if (veiculos.length > 0 && tiposManutencao.length > 0) {
+    if (veiculos.length > 0) {
       calcularManutencoesPendentes();
     }
-  }, [manutencaoRealizada]);
+  }, [veiculos, manutencaoRealizada]);
 
   return {
     manutencoesPendentes,

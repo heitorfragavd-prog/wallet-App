@@ -42,3 +42,43 @@ export interface ManutencaoPendente {
   kmRestante?: number;
   diasRestantes?: number;
 }
+
+export interface PlanoManutencaoVeiculo {
+  id: string;
+  user_id: string;
+  veiculo_id: string;
+  tipo_manutencao_id: string;
+  intervalo_km: number;
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+  tipo_manutencao?: TipoManutencao;
+}
+
+export interface ManutencaoCustomizada {
+  id: string;
+  user_id: string;
+  veiculo_id: string;
+  nome: string;
+  sistema?: string;
+  intervalo_km?: number;
+  data_prevista?: string;
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LembreteManutencao {
+  id: string;
+  user_id: string;
+  veiculo_id: string;
+  manutencao_id: string;
+  tipo_manutencao: 'plano' | 'customizada';
+  data_prevista: string;
+  dias_antecedencia: number;
+  status: 'pendente' | 'enviado' | 'cancelado';
+  webhook_enviado_em?: string;
+  webhook_response?: string;
+  created_at: string;
+  updated_at: string;
+}

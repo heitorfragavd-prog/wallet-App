@@ -1,0 +1,124 @@
+# Implementation Plan
+
+- [x] 1. Create core admin layout components
+  - [x] 1.1 Create AdminStatsCard component with gradient support
+    - Create `src/domains/admin/components/AdminStatsCard.tsx`
+    - Implement gradient mapping for green, blue, purple, orange, red variants
+    - Add loading skeleton state
+    - Support trend indicator (positive/negative)
+    - _Requirements: 2.1, 2.2, 2.3_
+  - [ ]* 1.2 Write property test for gradient mapping
+    - **Property 3: Stats card gradient mapping**
+    - **Validates: Requirements 2.1, 2.2**
+  - [x] 1.3 Create AdminPageHeader component
+    - Create `src/domains/admin/components/AdminPageHeader.tsx`
+    - Implement breadcrumb navigation
+    - Add icon with colored background
+    - Support optional subtitle and action buttons
+    - _Requirements: 3.1, 3.2_
+  - [ ]* 1.4 Write property test for breadcrumb rendering
+    - **Property 6: Page header breadcrumb rendering**
+    - **Validates: Requirements 3.1**
+
+- [x] 2. Implement modern sidebar navigation
+  - [x] 2.1 Create AdminSidebarModern component with collapsible menu groups
+    - Create `src/domains/admin/components/AdminSidebarModern.tsx`
+    - Implement menu group data structure with icons
+    - Add expand/collapse animation for groups
+    - Implement active state highlighting with orange accent
+    - Add mobile responsive behavior
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+  - [ ]* 2.2 Write property test for menu toggle state
+    - **Property 1: Menu group expansion state consistency**
+    - **Validates: Requirements 1.2**
+  - [ ]* 2.3 Write property test for active menu item uniqueness
+    - **Property 2: Active menu item highlighting**
+    - **Validates: Requirements 1.3**
+
+- [x] 3. Create AdminLayoutModern wrapper
+  - [x] 3.1 Create AdminLayoutModern component
+    - Create `src/domains/admin/components/AdminLayoutModern.tsx`
+    - Integrate AdminSidebarModern
+    - Add collapse toggle button
+    - Implement responsive layout with proper spacing
+    - _Requirements: 7.1, 7.2_
+  - [ ]* 3.2 Write property test for dark mode class application
+    - **Property 5: Dark mode class application**
+    - **Validates: Requirements 4.1, 4.2**
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 5. Modernize AdminDashboard page
+  - [x] 5.1 Update AdminDashboard with new layout and stats cards
+    - Replace AdminTabs with AdminLayoutModern
+    - Implement gradient stats cards for revenue, users, subscriptions, conversion
+    - Add AdminPageHeader with dashboard icon
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 3.1_
+  - [ ]* 5.2 Write property test for currency formatting
+    - **Property 4: Currency formatting consistency**
+    - **Validates: Requirements 2.4**
+  - [x] 5.3 Add RecentActivityCard component
+    - Create `src/domains/admin/components/RecentActivityCard.tsx`
+    - Fetch last 5 audit log entries
+    - Display timestamp, user, action, resource with icons
+    - Add empty state handling
+    - _Requirements: 6.1, 6.2, 6.3_
+  - [x] 5.4 Add quick action buttons section
+    - Implement "Novo Usuário", "Novo Plano", "Ver Relatórios" buttons
+    - Add navigation handlers
+    - _Requirements: 5.1, 5.2, 5.3_
+
+- [x] 6. Migrate existing admin pages to new layout
+  - [x] 6.1 Update AdminUsers page
+    - Replace DashboardLayout and AdminTabs with AdminLayoutModern
+    - Add AdminPageHeader with users icon
+    - Apply consistent card and table styling
+    - _Requirements: 7.1, 7.2, 7.3_
+  - [x] 6.2 Update AdminPlans page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with plans icon
+    - _Requirements: 7.1, 7.2_
+  - [x] 6.3 Update AdminPlanLimits page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with limits icon
+    - _Requirements: 7.1, 7.2_
+  - [x] 6.4 Update AdminSubscriptions page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with subscriptions icon
+    - _Requirements: 7.1, 7.2_
+  - [x] 6.5 Update AdminPaymentSettings page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with payments icon
+    - _Requirements: 7.1, 7.2_
+
+- [x] 7. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 8. Complete remaining admin pages migration
+  - [x] 8.1 Update AdminWebhooksManutencao page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with webhook icon
+    - _Requirements: 7.1, 7.2_
+  - [x] 8.2 Update AdminReports page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with reports icon
+    - _Requirements: 7.1, 7.2_
+  - [x] 8.3 Update AdminAuditLogs page
+    - Replace layout with AdminLayoutModern
+    - Add AdminPageHeader with audit icon
+    - _Requirements: 7.1, 7.2_
+
+- [x] 9. Cleanup and finalization
+  - [x] 9.1 Remove deprecated AdminTabs component
+    - Delete `src/domains/admin/components/AdminTabs.tsx`
+    - Remove all imports of AdminTabs from pages
+    - _Requirements: 7.1_
+  - [x] 9.2 Update AdminSidebar to use new menu structure (or remove if fully replaced)
+    - Evaluate if old AdminSidebar is still needed
+    - Update or remove based on usage
+    - _Requirements: 7.1_
+
+- [x] 10. Final Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+

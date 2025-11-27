@@ -11,11 +11,11 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { Card } from "@/shared/components/ui/card";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
-import { Search, Shield, ShieldAlert, UserCheck } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Search, Users, UserCheck } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -130,28 +130,32 @@ export default function AdminUsers() {
     );
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Usuários"
+                subtitle="Gerenciar usuários do sistema"
+                icon={Users}
+                iconColor="bg-blue-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Usuários & Planos' },
+                    { label: 'Usuários' }
+                ]}
+                actions={
+                    <div className="relative w-72">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            placeholder="Buscar por nome ou email..."
+                            className="pl-8"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
                     </div>
-                    <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Usuários</h2>
-                        <div className="relative w-72">
-                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Buscar por nome ou email..."
-                                className="pl-8"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                        </div>
-                    </div>
+                }
+            />
 
-                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-                    <Table>
+            <Card className="overflow-hidden">
+                <Table>
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Nome</TableHead>
@@ -247,11 +251,9 @@ export default function AdminUsers() {
                                     );
                                 })
                             )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-            </div>
-        </DashboardLayout>
+                        </TableBody>
+                    </Table>
+                </Card>
+        </AdminLayoutModern>
     );
 }

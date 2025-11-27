@@ -9,12 +9,12 @@ import {
     TableRow,
 } from "@/shared/components/ui/table";
 import { Button } from "@/shared/components/ui/button";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { Card } from "@/shared/components/ui/card";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
-import { Link } from "react-router-dom";
 import { Badge } from "@/shared/components/ui/badge";
-import { Calendar, RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
+import { RefreshCw, AlertCircle, Receipt } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -24,7 +24,6 @@ import {
     DialogFooter,
 } from "@/shared/components/ui/dialog";
 import { Label } from "@/shared/components/ui/label";
-import { Input } from "@/shared/components/ui/input";
 import {
     Select,
     SelectContent,
@@ -201,46 +200,51 @@ export default function AdminSubscriptions() {
     };
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
-                    </div>
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Assinaturas"
+                subtitle="Gerenciar assinaturas de usuários"
+                icon={Receipt}
+                iconColor="bg-green-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Financeiro' },
+                    { label: 'Assinaturas' }
+                ]}
+            />
 
-                    {/* Alertas */}
-                    <div className="grid gap-4 md:grid-cols-2 mb-8">
-                        {getExpiringCount() > 0 && (
-                            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 flex items-start gap-3">
-                                <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
-                                <div>
-                                    <h3 className="font-semibold text-yellow-900">Assinaturas Expirando</h3>
-                                    <p className="text-sm text-yellow-700">
-                                        {getExpiringCount()} assinatura(s) expirando nos próximos 7 dias
-                                    </p>
-                                </div>
+            {/* Alertas */}
+            <div className="grid gap-4 md:grid-cols-2 mb-6">
+                {getExpiringCount() > 0 && (
+                    <Card className="bg-yellow-500/10 border-yellow-500/20 p-4">
+                        <div className="flex items-start gap-3">
+                            <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
+                            <div>
+                                <h3 className="font-semibold text-yellow-900 dark:text-yellow-100">Assinaturas Expirando</h3>
+                                <p className="text-sm text-yellow-700 dark:text-yellow-200">
+                                    {getExpiringCount()} assinatura(s) expirando nos próximos 7 dias
+                                </p>
                             </div>
-                        )}
-                        {getExpiredCount() > 0 && (
-                            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 flex items-start gap-3">
-                                <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
-                                <div>
-                                    <h3 className="font-semibold text-red-900">Assinaturas Expiradas</h3>
-                                    <p className="text-sm text-red-700">
-                                        {getExpiredCount()} assinatura(s) expirada(s)
-                                    </p>
-                                </div>
+                        </div>
+                    </Card>
+                )}
+                {getExpiredCount() > 0 && (
+                    <Card className="bg-red-500/10 border-red-500/20 p-4">
+                        <div className="flex items-start gap-3">
+                            <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-500 mt-0.5 flex-shrink-0" />
+                            <div>
+                                <h3 className="font-semibold text-red-900 dark:text-red-100">Assinaturas Expiradas</h3>
+                                <p className="text-sm text-red-700 dark:text-red-200">
+                                    {getExpiredCount()} assinatura(s) expirada(s)
+                                </p>
                             </div>
-                        )}
-                    </div>
+                        </div>
+                    </Card>
+                )}
+            </div>
 
-                    <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Assinaturas</h2>
-                    </div>
-
-                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-                        <Table>
+            <Card className="overflow-hidden">
+                <Table>
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Usuário</TableHead>
@@ -351,11 +355,9 @@ export default function AdminSubscriptions() {
                                         </TableRow>
                                     ))
                                 )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-            </div>
-        </DashboardLayout>
+                        </TableBody>
+                    </Table>
+                </Card>
+        </AdminLayoutModern>
     );
 }

@@ -11,11 +11,11 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Textarea } from "@/shared/components/ui/textarea";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { Card } from "@/shared/components/ui/card";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Check } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Plus, Pencil, Trash2, CreditCard } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -140,15 +140,18 @@ export default function AdminPlans() {
     };
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
-                    </div>
-                    <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Planos</h2>
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Planos"
+                subtitle="Gerenciar planos de assinatura"
+                icon={CreditCard}
+                iconColor="bg-purple-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Usuários & Planos' },
+                    { label: 'Planos' }
+                ]}
+                actions={
                     <Dialog open={isDialogOpen} onOpenChange={(open) => {
                         setIsDialogOpen(open);
                         if (!open) resetForm();
@@ -196,11 +199,12 @@ export default function AdminPlans() {
                                 <Button onClick={handleSave}>Salvar</Button>
                             </DialogFooter>
                         </DialogContent>
-                        </Dialog>
-                    </div>
+                    </Dialog>
+                }
+            />
 
-                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-                    <Table>
+            <Card className="overflow-hidden">
+                <Table>
                         <TableHeader>
                             <TableRow>
                                 <TableHead>Nome</TableHead>
@@ -250,11 +254,9 @@ export default function AdminPlans() {
                                     </TableRow>
                                 ))
                             )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-            </div>
-        </DashboardLayout>
+                        </TableBody>
+                    </Table>
+                </Card>
+        </AdminLayoutModern>
     );
 }

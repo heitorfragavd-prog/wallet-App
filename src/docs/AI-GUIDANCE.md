@@ -178,9 +178,10 @@ User Action → Component → Hook → Service → Infrastructure → Database
 
 - **Components**:
   - `AdminDashboardLayout.tsx`: Admin dashboard layout
-  - `AdminLayout.tsx`: Admin page layout
-  - `AdminSidebar.tsx`: Admin navigation sidebar
-  - `AdminTabs.tsx`: Admin tab navigation
+  - `AdminLayoutModern.tsx`: Modern admin page layout with collapsible sidebar
+  - `AdminSidebarModern.tsx`: Modern admin navigation sidebar with grouped menus
+  - `AdminPageHeader.tsx`: Consistent page header with breadcrumbs
+  - `AdminStatsCard.tsx`: Stats card with gradient backgrounds
 
 - **Hooks**:
   - `useAuditLog.ts`: Audit log management

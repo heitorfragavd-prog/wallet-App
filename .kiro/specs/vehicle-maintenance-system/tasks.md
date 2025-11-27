@@ -3,134 +3,134 @@
 ## Fase 1: Estrutura de Dados (Backend)
 
 ### Task 1.1: Criar Tabelas
-- [ ] Criar migration para `planos_manutencao_veiculo`
-- [ ] Criar migration para `manutencoes_customizadas`
-- [ ] Criar migration para `lembretes_manutencao`
-- [ ] Criar migration para `webhooks_manutencao`
-- [ ] Criar migration para `logs_webhooks_manutencao`
-- [ ] Aplicar RLS em todas as tabelas
-- [ ] Criar índices necessários
+- [x] Criar migration para `planos_manutencao_veiculo`
+- [x] Criar migration para `manutencoes_customizadas`
+- [x] Criar migration para `lembretes_manutencao`
+- [x] Criar migration para `webhooks_manutencao`
+- [x] Criar migration para `logs_webhooks_manutencao`
+- [x] Aplicar RLS em todas as tabelas
+- [x] Criar índices necessários
 
 ### Task 1.2: Edge Function - Processar Lembretes
-- [ ] Criar função `processar-lembretes-manutencao`
-- [ ] Implementar busca de lembretes pendentes
-- [ ] Implementar envio de webhooks
-- [ ] Implementar retry logic
-- [ ] Implementar logging
-- [ ] Configurar cron job (diário)
+- [x] Criar função `processar-lembretes-manutencao`
+- [x] Implementar busca de lembretes pendentes
+- [x] Implementar envio de webhooks
+- [x] Implementar retry logic
+- [x] Implementar logging
+- [x] Configurar cron job (diário)
 
 ## Fase 2: Hooks e Services (Frontend)
 
 ### Task 2.1: Hook usePlanosManutencao
-- [ ] Criar hook `usePlanosManutencao.ts`
-- [ ] Implementar `fetchPlanos`
-- [ ] Implementar `adicionarPlano`
-- [ ] Implementar `removerPlano`
-- [ ] Implementar `atualizarPlano`
+- [x] Criar hook `usePlanosManutencao.ts`
+- [x] Implementar `fetchPlanos`
+- [x] Implementar `adicionarPlano`
+- [x] Implementar `removerPlano`
+- [x] Implementar `atualizarPlano`
 
 ### Task 2.2: Hook useManutencoesCustomizadas
-- [ ] Criar hook `useManutencoesCustomizadas.ts`
-- [ ] Implementar `fetchCustomizadas`
-- [ ] Implementar `adicionarCustomizada`
-- [ ] Implementar `removerCustomizada`
-- [ ] Implementar `atualizarCustomizada`
+- [x] Criar hook `useManutencoesCustomizadas.ts`
+- [x] Implementar `fetchCustomizadas`
+- [x] Implementar `adicionarCustomizada`
+- [x] Implementar `removerCustomizada`
+- [x] Implementar `atualizarCustomizada`
 
 ### Task 2.3: Hook useLembretesManutencao
-- [ ] Criar hook `useLembretesManutencao.ts`
-- [ ] Implementar `fetchLembretes`
-- [ ] Implementar `criarLembrete`
-- [ ] Implementar `cancelarLembrete`
-- [ ] Implementar cálculo de data prevista
+- [x] Criar hook `useLembretesManutencao.ts`
+- [x] Implementar `fetchLembretes`
+- [x] Implementar `criarLembrete`
+- [x] Implementar `cancelarLembrete`
+- [x] Implementar cálculo de data prevista
 
 ### Task 2.4: Service - Cálculo de Data Prevista
-- [ ] Criar `ManutencaoService.ts`
-- [ ] Implementar `calcularMediaKmMes`
-- [ ] Implementar `calcularDataPrevista`
-- [ ] Implementar `calcularProximaManutencao`
+- [x] Criar `ManutencaoService.ts`
+- [x] Implementar `calcularMediaKmMes`
+- [x] Implementar `calcularDataPrevista`
+- [x] Implementar `calcularProximaManutencao`
 
 ## Fase 3: Componentes de Usuário
 
 ### Task 3.1: Modal AdicionarManutencaoModal
-- [ ] Criar componente `AdicionarManutencaoModal.tsx`
-- [ ] Implementar Tab "Tipo Existente"
-- [ ] Implementar Tab "Customizada"
-- [ ] Implementar form de intervalo KM
-- [ ] Implementar toggle de lembrete
-- [ ] Implementar campo dias de antecedência
-- [ ] Integrar com hooks
+- [x] Criar componente `AdicionarManutencaoModal.tsx`
+- [x] Implementar Tab "Tipo Existente"
+- [x] Implementar Tab "Customizada"
+- [x] Implementar form de intervalo KM
+- [x] Implementar toggle de lembrete
+- [x] Implementar campo dias de antecedência
+- [x] Integrar com hooks
 
 ### Task 3.2: Atualizar Página de Veículos
-- [ ] Adicionar botão "Adicionar Manutenção"
-- [ ] Integrar modal
-- [ ] Atualizar lista de manutenções para mostrar planos + customizadas
-- [ ] Adicionar indicador de lembrete ativo
-- [ ] Adicionar botão para remover manutenção
+- [x] Adicionar botão "Adicionar Manutenção"
+- [x] Integrar modal
+- [x] Atualizar lista de manutenções para mostrar planos + customizadas
+- [x] Adicionar indicador de lembrete ativo
+- [x] Adicionar botão para remover manutenção
 
 ### Task 3.3: Componente ListaManutencoes
-- [ ] Criar componente `ListaManutencoes.tsx`
-- [ ] Mostrar manutenções do plano
-- [ ] Mostrar manutenções customizadas
-- [ ] Indicador visual de tipo (plano vs custom)
-- [ ] Botão "Realizar"
-- [ ] Botão "Remover"
-- [ ] Botão "Editar"
+- [x] Criar componente `ListaManutencoes.tsx`
+- [x] Mostrar manutenções do plano
+- [x] Mostrar manutenções customizadas
+- [x] Indicador visual de tipo (plano vs custom)
+- [x] Botão "Realizar"
+- [x] Botão "Remover"
+- [x] Botão "Editar"
 
 ## Fase 4: Admin - Webhooks de Manutenção
 
 ### Task 4.1: Hooks Admin
-- [ ] Criar hook `useWebhooksManutencao.ts`
-- [ ] Implementar CRUD de webhooks
-- [ ] Criar hook `useLogsWebhooksManutencao.ts`
-- [ ] Implementar busca de logs
+- [x] Criar hook `useWebhooksManutencao.ts`
+- [x] Implementar CRUD de webhooks
+- [x] Criar hook `useLogsWebhooksManutencao.ts`
+- [x] Implementar busca de logs
 
 ### Task 4.2: Página Admin - Webhooks
-- [ ] Criar página `/admin/webhooks/manutencao`
-- [ ] Seção: Lista de Webhooks
-- [ ] Seção: Adicionar/Editar Webhook
-- [ ] Seção: Testar Webhook
-- [ ] Seção: Logs de Envios
-- [ ] Seção: Estatísticas
+- [x] Criar página `/admin/webhooks/manutencao`
+- [x] Seção: Lista de Webhooks
+- [x] Seção: Adicionar/Editar Webhook
+- [x] Seção: Testar Webhook
+- [x] Seção: Logs de Envios
+- [x] Seção: Estatísticas
 
 ### Task 4.3: Componentes Admin
-- [ ] Criar `WebhookManutencaoCard.tsx`
-- [ ] Criar `NovoWebhookManutencaoModal.tsx`
-- [ ] Criar `EditarWebhookManutencaoModal.tsx`
-- [ ] Criar `TestarWebhookModal.tsx`
-- [ ] Criar `LogsWebhooksTable.tsx`
+- [x] Criar `WebhookManutencaoCard.tsx`
+- [x] Criar `NovoWebhookManutencaoModal.tsx`
+- [x] Criar `EditarWebhookManutencaoModal.tsx`
+- [x] Criar `TestarWebhookModal.tsx`
+- [x] Criar `LogsWebhooksTable.tsx`
 
 ## Fase 5: Melhorias e Testes
 
 ### Task 5.1: Refatorar Sistema Atual
-- [ ] Atualizar `useManutencoesPendentes` para usar novos planos
-- [ ] Remover lógica de aplicar todos os tipos a todos os veículos
-- [ ] Manter compatibilidade com dados existentes (migração)
+- [x] Atualizar `useManutencoesPendentes` para usar novos planos
+- [x] Remover lógica de aplicar todos os tipos a todos os veículos
+- [x] Manter compatibilidade com dados existentes (migração)
 
 ### Task 5.2: Testes
-- [ ] Testar cálculo de data prevista
-- [ ] Testar envio de webhooks
-- [ ] Testar retry logic
-- [ ] Testar criação de planos
-- [ ] Testar manutenções customizadas
+- [x] Testar cálculo de data prevista
+- [x] Testar envio de webhooks
+- [x] Testar retry logic
+- [x] Testar criação de planos
+- [x] Testar manutenções customizadas
 
 ### Task 5.3: Documentação
-- [ ] Documentar API de webhooks
-- [ ] Documentar payload do webhook
-- [ ] Criar guia de uso para usuários
-- [ ] Criar guia de configuração para admins
+- [x] Documentar API de webhooks
+- [x] Documentar payload do webhook
+- [x] Criar guia de uso para usuários
+- [x] Criar guia de configuração para admins
 
 ## Fase 6: Integração e Deploy
 
 ### Task 6.1: Integração
-- [ ] Testar fluxo completo end-to-end
-- [ ] Validar RLS
-- [ ] Validar performance
-- [ ] Ajustar UI/UX baseado em feedback
+- [x] Testar fluxo completo end-to-end
+- [x] Validar RLS
+- [x] Validar performance
+- [x] Ajustar UI/UX baseado em feedback
 
 ### Task 6.2: Deploy
-- [ ] Deploy de migrations
-- [ ] Deploy de edge functions
-- [ ] Deploy de frontend
-- [ ] Configurar cron job
+- [x] Deploy de migrations usar o mcp do supabase
+- [x] Deploy de edge functions usar o mcp do supabase
+- [ ] Deploy de frontend 
+- [x] Configurar cron job
 - [ ] Monitorar logs
 
 ## Priorização

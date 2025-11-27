@@ -8,12 +8,12 @@ import {
     TableHeader,
     TableRow,
 } from "@/shared/components/ui/table";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
+import { Card } from "@/shared/components/ui/card";
 import { toast } from "sonner";
-import { Link } from "react-router-dom";
 import { Badge } from "@/shared/components/ui/badge";
-import { Shield, User, CreditCard, Settings, FileText } from "lucide-react";
+import { FileText, User, CreditCard, Settings, Shield } from "lucide-react";
 import {
     Select,
     SelectContent,
@@ -33,7 +33,7 @@ interface AuditLog {
     profiles: {
         name: string;
         email: string;
-    };
+    } | null;
 }
 
 export default function AdminAuditLogs() {
@@ -77,8 +77,8 @@ export default function AdminAuditLogs() {
             create: "bg-green-500/10 text-green-600 dark:text-green-400",
             update: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
             delete: "bg-red-500/10 text-red-600 dark:text-red-400",
-            renew: "bg-purple-100 text-purple-800",
-            cancel: "bg-orange-100 text-orange-800",
+            renew: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+            cancel: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
         };
 
         const actionType = action.split('_')[0].toLowerCase();
@@ -123,90 +123,91 @@ export default function AdminAuditLogs() {
     };
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
-                    </div>
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Logs de Auditoria"
+                subtitle="Histórico de ações administrativas"
+                icon={FileText}
+                iconColor="bg-gray-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Sistema' },
+                    { label: 'Auditoria' }
+                ]}
+                actions={
+                    <Select value={filter} onValueChange={setFilter}>
+                        <SelectTrigger className="w-48">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">Todas as ações</SelectItem>
+                            <SelectItem value="user">Usuários</SelectItem>
+                            <SelectItem value="subscription">Assinaturas</SelectItem>
+                            <SelectItem value="plan">Planos</SelectItem>
+                            <SelectItem value="limit">Limites</SelectItem>
+                        </SelectContent>
+                    </Select>
+                }
+            />
 
-                    <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-foreground">Logs de Auditoria</h2>
-                        <Select value={filter} onValueChange={setFilter}>
-                            <SelectTrigger className="w-48">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Todas as ações</SelectItem>
-                                <SelectItem value="user">Usuários</SelectItem>
-                                <SelectItem value="subscription">Assinaturas</SelectItem>
-                                <SelectItem value="plan">Planos</SelectItem>
-                                <SelectItem value="limit">Limites</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-
-                    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Data/Hora</TableHead>
-                                    <TableHead>Administrador</TableHead>
-                                    <TableHead>Ação</TableHead>
-                                    <TableHead>Entidade</TableHead>
-                                    <TableHead>Detalhes</TableHead>
+            <Card className="overflow-hidden">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Data/Hora</TableHead>
+                            <TableHead>Administrador</TableHead>
+                            <TableHead>Ação</TableHead>
+                            <TableHead>Entidade</TableHead>
+                            <TableHead>Detalhes</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="text-center py-8">Carregando...</TableCell>
+                            </TableRow>
+                        ) : logs.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="text-center py-8">
+                                    Nenhum log encontrado
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            logs.map((log) => (
+                                <TableRow key={log.id}>
+                                    <TableCell className="font-mono text-sm">
+                                        {formatDate(log.created_at)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <div>
+                                            <div className="font-medium">{log.profiles?.name || 'Admin'}</div>
+                                            <div className="text-sm text-muted-foreground">{log.profiles?.email}</div>
+                                        </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        {getActionBadge(log.action)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <div className="flex items-center gap-2">
+                                            {getEntityIcon(log.entity_type)}
+                                            <span className="capitalize">{log.entity_type}</span>
+                                        </div>
+                                    </TableCell>
+                                    <TableCell className="max-w-md truncate text-sm text-muted-foreground">
+                                        {formatDetails(log.details)}
+                                    </TableCell>
                                 </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {loading ? (
-                                    <TableRow>
-                                        <TableCell colSpan={5} className="text-center py-8">Carregando...</TableCell>
-                                    </TableRow>
-                                ) : logs.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={5} className="text-center py-8">
-                                            Nenhum log encontrado
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    logs.map((log) => (
-                                        <TableRow key={log.id}>
-                                            <TableCell className="font-mono text-sm">
-                                                {formatDate(log.created_at)}
-                                            </TableCell>
-                                            <TableCell>
-                                                <div>
-                                                    <div className="font-medium">{log.profiles?.name || 'Admin'}</div>
-                                                    <div className="text-sm text-muted-foreground">{log.profiles?.email}</div>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                {getActionBadge(log.action)}
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-2">
-                                                    {getEntityIcon(log.entity_type)}
-                                                    <span className="capitalize">{log.entity_type}</span>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="max-w-md truncate text-sm text-muted-foreground">
-                                                {formatDetails(log.details)}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </Card>
 
-                    {logs.length > 0 && (
-                        <div className="mt-4 text-sm text-muted-foreground text-center">
-                            Mostrando os últimos 100 registros
-                        </div>
-                    )}
+            {logs.length > 0 && (
+                <div className="mt-4 text-sm text-muted-foreground text-center">
+                    Mostrando os últimos 100 registros
                 </div>
-            </div>
-        </DashboardLayout>
+            )}
+        </AdminLayoutModern>
     );
 }

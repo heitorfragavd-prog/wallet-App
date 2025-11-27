@@ -21,9 +21,13 @@ import {
 import { NovoVeiculoModal } from "@/domains/vehicles/components/NovoVeiculoModal";
 import { EditarVeiculoModal } from "@/domains/vehicles/components/EditarVeiculoModal";
 import { GerenciarTiposManutencaoModal } from "@/domains/vehicles/components/GerenciarTiposManutencaoModal";
+import { AdicionarManutencaoModal } from "@/domains/vehicles/components/AdicionarManutencaoModal";
+import { ListaManutencoes } from "@/domains/vehicles/components/ListaManutencoes";
 import { useVeiculos, Veiculo } from "@/domains/vehicles/hooks/useVeiculos";
 import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao";
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
+import { usePlanosManutencao } from "@/domains/vehicles/hooks/usePlanosManutencao";
+import { useManutencoesCustomizadas } from "@/domains/vehicles/hooks/useManutencoesCustomizadas";
 
 export default function Veiculos() {
   const {
@@ -44,6 +48,8 @@ export default function Veiculos() {
   const [veiculoSelecionado, setVeiculoSelecionado] = useState<Veiculo | null>(null);
   const [veiculoExpandido, setVeiculoExpandido] = useState<string | null>(null);
   const [gerenciarTiposModalOpen, setGerenciarTiposModalOpen] = useState(false);
+  const [adicionarManutencaoModalOpen, setAdicionarManutencaoModalOpen] = useState(false);
+  const [veiculoManutencaoSelecionado, setVeiculoManutencaoSelecionado] = useState<string | null>(null);
   const [realizando, setRealizando] = useState<string | null>(null);
 
   const stats = useMemo(() => {
@@ -377,19 +383,31 @@ export default function Veiculos() {
                               </div>
                             </div>
 
-                            {/* Manutenções */}
+                            {/* Manutenções - Usando componente ListaManutencoes */}
                             <div>
                               <div className="flex items-center justify-between mb-3">
                                 <h4 className="font-semibold flex items-center gap-2">
                                   <Wrench className="w-4 h-4 text-orange-500" />
-                                  Manutenções ({manutencoesVeiculo.length})
+                                  Planos de Manutenção
                                 </h4>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                   {atrasadas > 0 && (
-                                    <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 border-0">
+                                    <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 border-0 text-xs">
                                       {atrasadas} atrasada{atrasadas > 1 ? "s" : ""}
                                     </Badge>
                                   )}
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setVeiculoManutencaoSelecionado(veiculo.id);
+                                      setAdicionarManutencaoModalOpen(true);
+                                    }}
+                                    className="h-8 bg-orange-500 hover:bg-orange-600 text-white"
+                                  >
+                                    <Plus className="w-3.5 h-3.5 mr-1" />
+                                    <span className="hidden sm:inline">Adicionar Manutenção</span>
+                                    <span className="sm:hidden">Adicionar</span>
+                                  </Button>
                                   <Button
                                     size="sm"
                                     onClick={() => setGerenciarTiposModalOpen(true)}
@@ -397,74 +415,80 @@ export default function Veiculos() {
                                     className="h-8 text-orange-500 border-orange-500/50 hover:bg-orange-500/10"
                                   >
                                     <Settings className="w-3.5 h-3.5 mr-1" />
-                                    Gerenciar Tipos
+                                    <span className="hidden sm:inline">Gerenciar Tipos</span>
+                                    <span className="sm:hidden">Tipos</span>
                                   </Button>
                                 </div>
                               </div>
-                              {manutencoesVeiculo.length > 0 ? (
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                  {manutencoesVeiculo.map((manutencao) => {
-                                    const statusConfig = getStatusConfig(manutencao.status);
-                                    const StatusIcon = statusConfig.icon;
-                                    const isRealizando = realizando === manutencao.id;
+                              
+                              {/* Usar componente ListaManutencoes para melhor organização */}
+                              <ListaManutencoes veiculoId={veiculo.id} />
+                              
+                              {/* Manutenções Pendentes do Sistema Antigo */}
+                              {manutencoesVeiculo.length > 0 && (
+                                <div className="mt-4 pt-4 border-t">
+                                  <h5 className="text-sm font-medium mb-3 text-muted-foreground">
+                                    Manutenções Pendentes ({manutencoesVeiculo.length})
+                                  </h5>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {manutencoesVeiculo.map((manutencao) => {
+                                      const statusConfig = getStatusConfig(manutencao.status);
+                                      const StatusIcon = statusConfig.icon;
+                                      const isRealizando = realizando === manutencao.id;
 
-                                    return (
-                                      <div
-                                        key={manutencao.id}
-                                        className={`p-3 rounded-lg border ${
-                                          manutencao.status === "Atrasada"
-                                            ? "bg-red-500/5 border-red-500/20"
-                                            : manutencao.status === "Pendente"
-                                            ? "bg-yellow-500/5 border-yellow-500/20"
-                                            : "bg-muted/30 border-border"
-                                        }`}
-                                      >
-                                        <div className="flex items-start justify-between gap-2 mb-2">
-                                          <div className="min-w-0 flex-1">
-                                            <p className="font-medium text-sm truncate">{manutencao.tipo}</p>
-                                            <p className="text-xs text-muted-foreground">Sistema: {manutencao.sistema}</p>
-                                          </div>
-                                          <Badge className={`${statusConfig.bgLight} ${statusConfig.text} border-0 shrink-0 text-xs`}>
-                                            <StatusIcon className="w-3 h-3 mr-1" />
-                                            {manutencao.status}
-                                          </Badge>
-                                        </div>
-                                        <p className="text-xs text-muted-foreground mb-2">{manutencao.proximaEm}</p>
-                                        <Button
-                                          size="sm"
-                                          onClick={() => handleRealizarManutencao(manutencao)}
-                                          disabled={isRealizando || manutencao.realizada}
-                                          className={`w-full h-8 ${
-                                            manutencao.realizada
-                                              ? "bg-green-500/20 text-green-600 hover:bg-green-500/30"
-                                              : "bg-green-500 hover:bg-green-600 text-white"
+                                      return (
+                                        <div
+                                          key={manutencao.id}
+                                          className={`p-3 rounded-lg border ${
+                                            manutencao.status === "Atrasada"
+                                              ? "bg-red-500/5 border-red-500/20"
+                                              : manutencao.status === "Pendente"
+                                              ? "bg-yellow-500/5 border-yellow-500/20"
+                                              : "bg-muted/30 border-border"
                                           }`}
                                         >
-                                          {isRealizando ? (
-                                            <>
-                                              <div className="w-3 h-3 mr-2 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                              Realizando...
-                                            </>
-                                          ) : manutencao.realizada ? (
-                                            <>
-                                              <CheckCircle className="w-3.5 h-3.5 mr-1" />
-                                              Realizada
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Wrench className="w-3.5 h-3.5 mr-1" />
-                                              Realizar
-                                            </>
-                                          )}
-                                        </Button>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <div className="text-center py-6 text-muted-foreground">
-                                  <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500/50" />
-                                  <p className="text-sm">Nenhuma manutenção pendente</p>
+                                          <div className="flex items-start justify-between gap-2 mb-2">
+                                            <div className="min-w-0 flex-1">
+                                              <p className="font-medium text-sm truncate">{manutencao.tipo}</p>
+                                              <p className="text-xs text-muted-foreground">Sistema: {manutencao.sistema}</p>
+                                            </div>
+                                            <Badge className={`${statusConfig.bgLight} ${statusConfig.text} border-0 shrink-0 text-xs`}>
+                                              <StatusIcon className="w-3 h-3 mr-1" />
+                                              {manutencao.status}
+                                            </Badge>
+                                          </div>
+                                          <p className="text-xs text-muted-foreground mb-2">{manutencao.proximaEm}</p>
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleRealizarManutencao(manutencao)}
+                                            disabled={isRealizando || manutencao.realizada}
+                                            className={`w-full h-8 ${
+                                              manutencao.realizada
+                                                ? "bg-green-500/20 text-green-600 hover:bg-green-500/30"
+                                                : "bg-green-500 hover:bg-green-600 text-white"
+                                            }`}
+                                          >
+                                            {isRealizando ? (
+                                              <>
+                                                <div className="w-3 h-3 mr-2 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                                Realizando...
+                                              </>
+                                            ) : manutencao.realizada ? (
+                                              <>
+                                                <CheckCircle className="w-3.5 h-3.5 mr-1" />
+                                                Realizada
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Wrench className="w-3.5 h-3.5 mr-1" />
+                                                Realizar
+                                              </>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -625,6 +649,14 @@ export default function Veiculos() {
           open={gerenciarTiposModalOpen}
           onOpenChange={setGerenciarTiposModalOpen}
         />
+
+        {veiculoManutencaoSelecionado && (
+          <AdicionarManutencaoModal
+            open={adicionarManutencaoModalOpen}
+            onOpenChange={setAdicionarManutencaoModalOpen}
+            veiculoId={veiculoManutencaoSelecionado}
+          />
+        )}
       </div>
     </DashboardLayout>
   );

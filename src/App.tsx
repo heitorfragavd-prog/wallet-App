@@ -20,6 +20,8 @@ import AdminReports from "./pages/AdminReports";
 import AdminAuditLogs from "./pages/AdminAuditLogs";
 import AdminPaymentSettings from "./pages/AdminPaymentSettings";
 import AdminWebhookSettings from "./pages/AdminWebhookSettings";
+import AdminWebhooksManutencao from "./pages/AdminWebhooksManutencao";
+import AdminWebhooks from "./pages/AdminWebhooks";
 import Lembretes from "./pages/Lembretes";
 import Login from "./pages/Login";
 import LandingPage from "./pages/LandingPage";
@@ -204,10 +206,26 @@ function App() {
             }
           />
           <Route
+            path="/admin/webhooks"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminWebhooks />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/admin/webhook-settings"
             element={
               <ProtectedRoute requiredRole="admin">
                 <AdminWebhookSettings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/webhooks/manutencao"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminWebhooksManutencao />
               </ProtectedRoute>
             }
           />

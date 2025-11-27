@@ -10,11 +10,11 @@ import {
 } from "@/shared/components/ui/table";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { Card } from "@/shared/components/ui/card";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
-import { Link } from "react-router-dom";
-import { Pencil, Save, X } from "lucide-react";
+import { Pencil, Save, X, Gauge } from "lucide-react";
 import { Badge } from "@/shared/components/ui/badge";
 
 interface PlanLimit {
@@ -114,27 +114,28 @@ export default function AdminPlanLimits() {
     }, {} as Record<string, PlanLimit[]>);
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
-                    </div>
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Limites de Planos"
+                subtitle="Gerenciar limites de recursos por plano"
+                icon={Gauge}
+                iconColor="bg-indigo-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Usuários & Planos' },
+                    { label: 'Limites' }
+                ]}
+            />
 
-                    <div className="flex justify-between items-center mb-8">
-                        <h2 className="text-2xl font-semibold text-foreground">Gerenciar Limites de Recursos</h2>
-                    </div>
-
-                    {loading ? (
-                        <div className="text-center py-8">Carregando...</div>
-                    ) : (
-                        <div className="space-y-8">
-                            {Object.entries(groupedLimits).map(([planName, planLimits]) => (
-                                <div key={planName} className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-                                    <div className="px-6 py-4 bg-background border-b border-border">
-                                        <h3 className="text-lg font-semibold text-foreground">Plano {planName}</h3>
-                                    </div>
+            {loading ? (
+                <div className="text-center py-8">Carregando...</div>
+            ) : (
+                <div className="space-y-6">
+                    {Object.entries(groupedLimits).map(([planName, planLimits]) => (
+                        <Card key={planName} className="overflow-hidden">
+                            <div className="px-6 py-4 bg-muted/50 border-b border-border">
+                                <h3 className="text-lg font-semibold text-foreground">Plano {planName}</h3>
+                            </div>
                                     <Table>
                                         <TableHeader>
                                             <TableRow>
@@ -193,15 +194,13 @@ export default function AdminPlanLimits() {
                                                         )}
                                                     </TableCell>
                                                 </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </DashboardLayout>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </Card>
+                        ))}
+                    </div>
+                )}
+        </AdminLayoutModern>
     );
 }

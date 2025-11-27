@@ -10,10 +10,10 @@ import {
 } from "@/shared/components/ui/table";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { AdminTabs } from "@/domains/admin/components/AdminTabs";
+import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
+import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
-import { Pencil, Save, X, Copy, Check, ExternalLink } from "lucide-react";
+import { Pencil, Save, X, Copy, Check, ExternalLink, Wallet } from "lucide-react";
 import { Badge } from "@/shared/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 
@@ -139,15 +139,20 @@ export default function AdminPaymentSettings() {
     };
 
     return (
-        <DashboardLayout>
-            <div className="min-h-screen bg-background">
-                <div className="container mx-auto py-10 px-4">
-                    <div className="mb-8">
-                        <h1 className="text-3xl font-bold mb-4 text-foreground">Painel Administrativo</h1>
-                        <AdminTabs />
-                    </div>
+        <AdminLayoutModern>
+            <AdminPageHeader
+                title="Configurações de Pagamento"
+                subtitle="Gerenciar links de pagamento e webhooks"
+                icon={Wallet}
+                iconColor="bg-emerald-500"
+                breadcrumbs={[
+                    { label: 'Admin', path: '/admin' },
+                    { label: 'Financeiro' },
+                    { label: 'Pagamentos' }
+                ]}
+            />
 
-                    <div className="space-y-8">
+            <div className="space-y-6">
                         {/* Webhook URL Card */}
                         <Card>
                             <CardHeader>
@@ -365,10 +370,8 @@ export default function AdminPaymentSettings() {
                                     </div>
                                 </div>
                             </CardContent>
-                        </Card>
-                    </div>
-                </div>
+                </Card>
             </div>
-        </DashboardLayout>
+        </AdminLayoutModern>
     );
 }
