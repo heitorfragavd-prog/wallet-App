@@ -42,11 +42,13 @@ import {
   CheckCircle2,
   Wallet,
   Building2,
+  Save,
+  Bell,
+  DollarSignIcon,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
-import { EditarDividaModal } from "@/domains/finance/components/EditarDividaModal";
 import { ReminderStatusBadge } from "@/domains/finance/components/ReminderStatusBadge";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
@@ -87,10 +89,9 @@ const Dividas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
   const { dividas, loading, createDivida, updateDivida, deleteDivida } = useDividas();
-  const { createReminder } = useDebtReminders();
+  const { createReminder, getReminderByDebtId, updateReminder, deleteReminder } = useDebtReminders();
   const [activeTab, setActiveTab] = useState("lista");
-  const [dividaEditando, setDividaEditando] = useState<Divida | null>(null);
-  const [modalEditarAberto, setModalEditarAberto] = useState(false);
+  const [dividaEditando, setDividaEditando] = useState<string | null>(null);
 
   const [filtro, setFiltro] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("");
@@ -104,6 +105,18 @@ const Dividas = () => {
   const [novaCategoria, setNovaCategoria] = useState("");
   const [novoCredor, setNovoCredor] = useState("");
   const [novoReminderHours, setNovoReminderHours] = useState<number | null>(null);
+
+  // Estados para edição inline
+  const [editDescricao, setEditDescricao] = useState("");
+  const [editValorTotal, setEditValorTotal] = useState("");
+  const [editValorPago, setEditValorPago] = useState("");
+  const [editDataVencimento, setEditDataVencimento] = useState("");
+  const [editParcelas, setEditParcelas] = useState("");
+  const [editParcelasPagas, setEditParcelasPagas] = useState("");
+  const [editCategoria, setEditCategoria] = useState("");
+  const [editCredor, setEditCredor] = useState("");
+  const [editReminderHours, setEditReminderHours] = useState<number | null>(null);
+  const [existingReminderId, setExistingReminderId] = useState<string | null>(null);
 
   // Dados processados
   const { dividasFiltradas, totalDividas, dividasVencidas, dividasPendentes, dividasQuitadas, categorias, totalPago, progressoGeral } = useMemo(() => {
@@ -191,20 +204,85 @@ const Dividas = () => {
 
   const handleExcluirDivida = async (id: string) => { await deleteDivida(id); };
 
-  const handleEditarDivida = (id: string) => {
+  const handleEditarDivida = async (id: string) => {
     const divida = dividas.find((d) => d.id === id);
-    if (divida) { setDividaEditando(divida); setModalEditarAberto(true); }
+    if (divida) {
+      setDividaEditando(id);
+      setEditDescricao(divida.descricao);
+      setEditValorTotal(divida.valor_total.toString());
+      setEditValorPago(divida.valor_pago.toString());
+      setEditDataVencimento(divida.data_vencimento.split('T')[0]);
+      setEditParcelas(divida.parcelas.toString());
+      setEditParcelasPagas(divida.parcelas_pagas.toString());
+      setEditCategoria(divida.categorias?.nome || "");
+      setEditCredor(divida.credor);
+      
+      // Load existing reminder
+      const reminder = await getReminderByDebtId(id);
+      if (reminder) {
+        setEditReminderHours(reminder.reminder_hours);
+        setExistingReminderId(reminder.id);
+      } else {
+        setEditReminderHours(null);
+        setExistingReminderId(null);
+      }
+    }
   };
 
-  const handleSalvarEdicao = async (dividaEditada: Divida) => {
-    const categoria = categoriasDespesa.find((c) => c.nome === dividaEditada.categoria);
-    await updateDivida(dividaEditada.id, {
-      descricao: dividaEditada.descricao, valor_total: dividaEditada.valor_total,
-      valor_pago: dividaEditada.valor_pago, data_vencimento: dividaEditada.data_vencimento,
-      parcelas: dividaEditada.parcelas, parcelas_pagas: dividaEditada.parcelas_pagas,
-      status: dividaEditada.status, categoria_id: categoria?.id, credor: dividaEditada.credor,
+  const handleSalvarEdicao = async (id: string) => {
+    if (!editDescricao || !editValorTotal || !editDataVencimento || !editParcelas || !editCategoria || !editCredor) {
+      toast({ title: "Erro", description: "Por favor, preencha todos os campos obrigatórios.", variant: "destructive" });
+      return;
+    }
+
+    const valorTotalNum = parseFloat(editValorTotal);
+    const valorPagoNum = parseFloat(editValorPago) || 0;
+    const parcelasNum = parseInt(editParcelas);
+    const parcelasPagasNum = parseInt(editParcelasPagas) || 0;
+
+    const categoria = categoriasDespesa.find((c) => c.nome === editCategoria);
+    const status = parcelasPagasNum >= parcelasNum ? 'quitada' : 
+                   new Date(editDataVencimento) < new Date() ? 'vencida' : 'pendente';
+
+    await updateDivida(id, {
+      descricao: editDescricao,
+      valor_total: valorTotalNum,
+      valor_pago: valorPagoNum,
+      valor_restante: valorTotalNum - valorPagoNum,
+      data_vencimento: editDataVencimento,
+      parcelas: parcelasNum,
+      parcelas_pagas: parcelasPagasNum,
+      status,
+      categoria_id: categoria?.id,
+      credor: editCredor,
     });
+
+    // Handle reminder creation/update/deletion
+    if (editReminderHours !== null && editReminderHours > 0) {
+      if (existingReminderId) {
+        await updateReminder(existingReminderId, editReminderHours, editDataVencimento);
+      } else {
+        await createReminder(id, editReminderHours, editDataVencimento);
+      }
+    } else if (existingReminderId && editReminderHours === null) {
+      await deleteReminder(existingReminderId);
+    }
+
     setDividaEditando(null);
+  };
+
+  const handleCancelarEdicao = () => {
+    setDividaEditando(null);
+    setEditDescricao("");
+    setEditValorTotal("");
+    setEditValorPago("");
+    setEditDataVencimento("");
+    setEditParcelas("");
+    setEditParcelasPagas("");
+    setEditCategoria("");
+    setEditCredor("");
+    setEditReminderHours(null);
+    setExistingReminderId(null);
   };
 
   const getStatusBadge = (status: string) => {
@@ -375,205 +453,363 @@ const Dividas = () => {
             </Card>
 
             {/* Lista Desktop */}
-            <div className="hidden md:block">
-              <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead className="font-semibold">Descrição</TableHead>
-                        <TableHead className="font-semibold">Credor</TableHead>
-                        <TableHead className="font-semibold">Parcelas</TableHead>
-                        <TableHead className="font-semibold">Vencimento</TableHead>
-                        <TableHead className="font-semibold">Status</TableHead>
-                        <TableHead className="font-semibold">Lembrete</TableHead>
-                        <TableHead className="font-semibold text-right">Valor Restante</TableHead>
-                        <TableHead className="font-semibold text-center w-24">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {loading ? (
-                        [...Array(5)].map((_, i) => (
-                          <TableRow key={i}>
-                            <TableCell><Skeleton className="h-5 w-32" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-16" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-20" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-16" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-24 ml-auto" /></TableCell>
-                            <TableCell><Skeleton className="h-8 w-16 mx-auto" /></TableCell>
-                          </TableRow>
-                        ))
-                      ) : dividasFiltradas.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                            <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
-                            Nenhuma dívida encontrada
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        dividasFiltradas.map((divida) => (
-                          <TableRow key={divida.id} className="group">
-                            <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className={`p-2 rounded-lg ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
-                                  <CreditCard className={`w-4 h-4 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
-                                </div>
-                                <div>
-                                  <span className="font-medium">{divida.descricao}</span>
-                                  <p className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</p>
-                                </div>
+            <div className="hidden md:block space-y-3">
+              {loading ? (
+                [...Array(5)].map((_, i) => (
+                  <Card key={i}>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between">
+                        <Skeleton className="h-5 w-48" />
+                        <Skeleton className="h-5 w-24" />
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : dividasFiltradas.length === 0 ? (
+                <Card>
+                  <CardContent className="p-8 text-center text-muted-foreground">
+                    <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                    Nenhuma dívida encontrada
+                  </CardContent>
+                </Card>
+              ) : (
+                dividasFiltradas.map((divida) => (
+                  <Card key={divida.id} className={dividaEditando === divida.id ? "ring-2 ring-rose-500" : ""}>
+                    <CardContent className="p-4">
+                      {dividaEditando === divida.id ? (
+                        // Formulário de edição inline
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-rose-500">Editando Dívida</h3>
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={() => handleSalvarEdicao(divida.id)} className="bg-rose-500 hover:bg-rose-600">
+                                <Save className="w-4 h-4 mr-1" />Salvar
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={handleCancelarEdicao}>
+                                <X className="w-4 h-4 mr-1" />Cancelar
+                              </Button>
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-descricao">Descrição *</Label>
+                              <Input id="edit-descricao" value={editDescricao} onChange={(e) => setEditDescricao(e.target.value)} placeholder="Ex: Cartão de crédito" />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-credor">Credor *</Label>
+                              <Input id="edit-credor" value={editCredor} onChange={(e) => setEditCredor(e.target.value)} placeholder="Ex: Banco ABC" />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-categoria">Categoria *</Label>
+                              <select id="edit-categoria" value={editCategoria} onChange={(e) => setEditCategoria(e.target.value)}
+                                className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500">
+                                <option value="">Selecione</option>
+                                {categoriasDespesa.map((cat) => <option key={cat.id} value={cat.nome}>{cat.nome}</option>)}
+                              </select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-valor-total">Valor Total *</Label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                                <Input id="edit-valor-total" type="number" value={editValorTotal} onChange={(e) => setEditValorTotal(e.target.value)} className="pl-10" />
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-valor-pago">Valor Pago</Label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                                <Input id="edit-valor-pago" type="number" value={editValorPago} onChange={(e) => setEditValorPago(e.target.value)} className="pl-10" />
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-vencimento">Vencimento *</Label>
+                              <Input id="edit-vencimento" type="date" value={editDataVencimento} onChange={(e) => setEditDataVencimento(e.target.value)} />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-parcelas">Total Parcelas *</Label>
+                              <Input id="edit-parcelas" type="number" value={editParcelas} onChange={(e) => setEditParcelas(e.target.value)} />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-parcelas-pagas">Parcelas Pagas</Label>
+                              <Input id="edit-parcelas-pagas" type="number" value={editParcelasPagas} onChange={(e) => setEditParcelasPagas(e.target.value)} />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="edit-reminder">Lembrete</Label>
+                              <ReminderSelector value={editReminderHours} onChange={setEditReminderHours} />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        // Visualização normal com grid fixo
+                        <div className="grid grid-cols-[auto_1fr_420px] gap-4 items-center">
+                          {/* Coluna 1: Ícone */}
+                          <div className={`p-3 rounded-lg ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
+                            <CreditCard className={`w-5 h-5 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
+                          </div>
+
+                          {/* Coluna 2: Informações em grid fixo */}
+                          <div className="grid grid-cols-5 gap-4 items-center">
+                            <div>
+                              <p className="font-medium">{divida.descricao}</p>
+                              <p className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Credor</p>
+                              <div className="flex items-center gap-1.5">
                                 <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
                                 <span className="text-sm">{divida.credor}</span>
                               </div>
-                            </TableCell>
-                            <TableCell>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Parcelas</p>
                               <div className="space-y-1">
-                                <span className="text-sm">{divida.parcelas_pagas}/{divida.parcelas}</span>
-                                <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1 w-16" />
+                                <span className="text-sm font-medium">{divida.parcelas_pagas}/{divida.parcelas}</span>
+                                <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1" />
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-1.5 text-muted-foreground">
-                                <Calendar className="w-3.5 h-3.5" />
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Vencimento</p>
+                              <div className="flex items-center gap-1.5">
+                                <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
                                 <span className="text-sm">{formatarData(divida.data_vencimento)}</span>
                               </div>
-                            </TableCell>
-                            <TableCell>{getStatusBadge(divida.status)}</TableCell>
-                            <TableCell>
-                              {divida.debt_reminders && divida.debt_reminders.length > 0 && (
-                                <ReminderStatusBadge status={divida.debt_reminders[0].status} triggerAt={divida.debt_reminders[0].trigger_at} sentAt={divida.debt_reminders[0].sent_at} />
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <span className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button variant="ghost" size="sm" onClick={() => handleEditarDivida(divida.id)} className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10">
-                                  <Edit className="w-4 h-4" />
-                                </Button>
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10">
-                                      <Trash2 className="w-4 h-4" />
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Excluir Dívida</AlertDialogTitle>
-                                      <AlertDialogDescription>Tem certeza que deseja excluir a dívida "{divida.descricao}"? Esta ação não pode ser desfeita.</AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                      <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Lista Mobile */}
-            <div className="md:hidden">
-              <Card>
-                <CardContent className="p-4">
-                  <ScrollArea className="h-[500px]">
-                    {loading ? (
-                      <div className="space-y-4">
-                        {[...Array(4)].map((_, i) => (
-                          <div key={i} className="p-4 rounded-xl border border-border space-y-3">
-                            <div className="flex justify-between"><Skeleton className="h-5 w-32" /><Skeleton className="h-5 w-20" /></div>
-                            <Skeleton className="h-4 w-24" />
-                            <div className="grid grid-cols-2 gap-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /></div>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Valor Restante</p>
+                              <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    ) : dividasFiltradas.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                        <Wallet className="w-10 h-10 mb-2 opacity-20" />
-                        <p className="text-sm">Nenhuma dívida encontrada</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {dividasFiltradas.map((divida) => (
-                          <div key={divida.id} className={`p-4 rounded-xl border ${divida.status === "vencida" ? "border-red-500/30 bg-red-500/5" : divida.status === "quitada" ? "border-green-500/30 bg-green-500/5" : "border-border"}`}>
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className={`p-2 rounded-lg ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
-                                  <CreditCard className={`w-4 h-4 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
-                                </div>
-                                <div>
-                                  <p className="font-medium">{divida.descricao}</p>
-                                  <p className="text-xs text-muted-foreground">{divida.credor}</p>
-                                </div>
-                              </div>
+
+                          {/* Coluna 3: Ações com largura fixa de 420px */}
+                          <div className="flex items-center gap-2 justify-end">
+                            <div className="w-[90px] flex justify-center">
                               {getStatusBadge(divida.status)}
                             </div>
-                            <div className="grid grid-cols-2 gap-3 text-sm mb-3">
-                              <div>
-                                <p className="text-xs text-muted-foreground">Parcelas</p>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{divida.parcelas_pagas}/{divida.parcelas}</span>
-                                  <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1 flex-1" />
-                                </div>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Vencimento</p>
-                                <p className="font-medium">{formatarData(divida.data_vencimento)}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Categoria</p>
-                                <p className="font-medium">{divida.categorias?.nome || "Sem categoria"}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Valor Restante</p>
-                                <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
-                              </div>
+                            <div className="w-[32px] flex justify-center">
+                              {divida.debt_reminders && divida.debt_reminders.length > 0 && (
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Lembrete configurado">
+                                  <Bell className="w-4 h-4 text-yellow-500" />
+                                </Button>
+                              )}
                             </div>
-                            {divida.debt_reminders && divida.debt_reminders.length > 0 && (
-                              <div className="mb-3">
-                                <p className="text-xs text-muted-foreground mb-1">Lembrete</p>
-                                <ReminderStatusBadge status={divida.debt_reminders[0].status} triggerAt={divida.debt_reminders[0].trigger_at} sentAt={divida.debt_reminders[0].sent_at} />
-                              </div>
-                            )}
-                            <div className="flex justify-end gap-2 pt-3 border-t border-border/50">
-                              <Button variant="ghost" size="sm" onClick={() => handleEditarDivida(divida.id)} className="h-8 w-8 p-0 text-blue-500"><Edit className="w-4 h-4" /></Button>
+                            <div className="w-[90px] flex justify-center">
+                              {divida.status !== "quitada" && (
+                                <Button 
+                                  variant="outline" 
+                                  size="sm" 
+                                  className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white"
+                                  title="Registrar Pagamento"
+                                >
+                                  <DollarSign className="w-4 h-4 mr-1" />
+                                  Pagar
+                                </Button>
+                              )}
+                            </div>
+                            <div className="w-[32px] flex justify-center">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditarDivida(divida.id)} className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10">
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            </div>
+                            <div className="w-[32px] flex justify-center">
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
-                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500"><Trash2 className="w-4 h-4" /></Button>
+                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10">
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
                                 </AlertDialogTrigger>
                                 <AlertDialogContent>
                                   <AlertDialogHeader>
                                     <AlertDialogTitle>Excluir Dívida</AlertDialogTitle>
-                                    <AlertDialogDescription>Tem certeza que deseja excluir "{divida.descricao}"?</AlertDialogDescription>
+                                    <AlertDialogDescription>Tem certeza que deseja excluir a dívida "{divida.descricao}"? Esta ação não pode ser desfeita.</AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
                                     <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500">Excluir</AlertDialogAction>
+                                    <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
                                   </AlertDialogFooter>
                                 </AlertDialogContent>
                               </AlertDialog>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </ScrollArea>
-                </CardContent>
-              </Card>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+            </div>
+
+            {/* Lista Mobile */}
+            <div className="md:hidden">
+              <ScrollArea className="h-[600px]">
+                {loading ? (
+                  <div className="space-y-3">
+                    {[...Array(4)].map((_, i) => (
+                      <Card key={i}>
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex justify-between"><Skeleton className="h-5 w-32" /><Skeleton className="h-5 w-20" /></div>
+                          <Skeleton className="h-4 w-24" />
+                          <div className="grid grid-cols-2 gap-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /></div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : dividasFiltradas.length === 0 ? (
+                  <Card>
+                    <CardContent className="p-8 flex flex-col items-center justify-center text-muted-foreground">
+                      <Wallet className="w-10 h-10 mb-2 opacity-20" />
+                      <p className="text-sm">Nenhuma dívida encontrada</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="space-y-3">
+                    {dividasFiltradas.map((divida) => (
+                      <Card key={divida.id} className={dividaEditando === divida.id ? "ring-2 ring-rose-500" : ""}>
+                        <CardContent className="p-4">
+                          {dividaEditando === divida.id ? (
+                            // Formulário de edição inline mobile
+                            <div className="space-y-4">
+                              <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-base font-semibold text-rose-500">Editando</h3>
+                                <div className="flex gap-2">
+                                  <Button size="sm" onClick={() => handleSalvarEdicao(divida.id)} className="bg-rose-500 hover:bg-rose-600 h-8">
+                                    <Save className="w-3.5 h-3.5 mr-1" />Salvar
+                                  </Button>
+                                  <Button size="sm" variant="outline" onClick={handleCancelarEdicao} className="h-8">
+                                    <X className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-3">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-descricao-mobile" className="text-xs">Descrição *</Label>
+                                  <Input id="edit-descricao-mobile" value={editDescricao} onChange={(e) => setEditDescricao(e.target.value)} className="h-9" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-credor-mobile" className="text-xs">Credor *</Label>
+                                  <Input id="edit-credor-mobile" value={editCredor} onChange={(e) => setEditCredor(e.target.value)} className="h-9" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-categoria-mobile" className="text-xs">Categoria *</Label>
+                                  <select id="edit-categoria-mobile" value={editCategoria} onChange={(e) => setEditCategoria(e.target.value)}
+                                    className="w-full h-9 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
+                                    <option value="">Selecione</option>
+                                    {categoriasDespesa.map((cat) => <option key={cat.id} value={cat.nome}>{cat.nome}</option>)}
+                                  </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="edit-valor-total-mobile" className="text-xs">Valor Total *</Label>
+                                    <Input id="edit-valor-total-mobile" type="number" value={editValorTotal} onChange={(e) => setEditValorTotal(e.target.value)} className="h-9" />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="edit-valor-pago-mobile" className="text-xs">Valor Pago</Label>
+                                    <Input id="edit-valor-pago-mobile" type="number" value={editValorPago} onChange={(e) => setEditValorPago(e.target.value)} className="h-9" />
+                                  </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-vencimento-mobile" className="text-xs">Vencimento *</Label>
+                                  <Input id="edit-vencimento-mobile" type="date" value={editDataVencimento} onChange={(e) => setEditDataVencimento(e.target.value)} className="h-9" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="edit-parcelas-mobile" className="text-xs">Total Parcelas *</Label>
+                                    <Input id="edit-parcelas-mobile" type="number" value={editParcelas} onChange={(e) => setEditParcelas(e.target.value)} className="h-9" />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="edit-parcelas-pagas-mobile" className="text-xs">Pagas</Label>
+                                    <Input id="edit-parcelas-pagas-mobile" type="number" value={editParcelasPagas} onChange={(e) => setEditParcelasPagas(e.target.value)} className="h-9" />
+                                  </div>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-reminder-mobile" className="text-xs">Lembrete</Label>
+                                  <ReminderSelector value={editReminderHours} onChange={setEditReminderHours} />
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            // Visualização normal mobile
+                            <>
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex items-center gap-3">
+                                  <div className={`p-2 rounded-lg ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
+                                    <CreditCard className={`w-4 h-4 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
+                                  </div>
+                                  <div>
+                                    <p className="font-medium">{divida.descricao}</p>
+                                    <p className="text-xs text-muted-foreground">{divida.credor}</p>
+                                  </div>
+                                </div>
+                                {getStatusBadge(divida.status)}
+                              </div>
+                              <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Parcelas</p>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{divida.parcelas_pagas}/{divida.parcelas}</span>
+                                    <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1 flex-1" />
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Vencimento</p>
+                                  <p className="font-medium">{formatarData(divida.data_vencimento)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Categoria</p>
+                                  <p className="font-medium">{divida.categorias?.nome || "Sem categoria"}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Valor Restante</p>
+                                  <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
+                                <div className="flex items-center gap-2">
+                                  {divida.debt_reminders && divida.debt_reminders.length > 0 && (
+                                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Lembrete configurado">
+                                      <Bell className="w-4 h-4 text-yellow-500" />
+                                    </Button>
+                                  )}
+                                  {divida.status !== "quitada" && (
+                                    <Button 
+                                      variant="outline" 
+                                      size="sm" 
+                                      className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white text-xs"
+                                      title="Registrar Pagamento"
+                                    >
+                                      <DollarSign className="w-3.5 h-3.5 mr-1" />
+                                      Pagar
+                                    </Button>
+                                  )}
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button variant="ghost" size="sm" onClick={() => handleEditarDivida(divida.id)} className="h-8 w-8 p-0 text-blue-500"><Edit className="w-4 h-4" /></Button>
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500"><Trash2 className="w-4 h-4" /></Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>Excluir Dívida</AlertDialogTitle>
+                                        <AlertDialogDescription>Tem certeza que deseja excluir "{divida.descricao}"?</AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                        <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500">Excluir</AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
             </div>
           </TabsContent>
 
@@ -638,8 +874,6 @@ const Dividas = () => {
           </TabsContent>
         </Tabs>
 
-        {/* Modal de Edição */}
-        <EditarDividaModal isOpen={modalEditarAberto} onClose={() => { setModalEditarAberto(false); setDividaEditando(null); }} divida={dividaEditando} onSave={handleSalvarEdicao} />
       </div>
     </DashboardLayout>
   );

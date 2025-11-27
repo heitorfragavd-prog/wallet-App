@@ -4,8 +4,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/compo
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Textarea } from "@/shared/components/ui/textarea";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
+import { PaymentMethodSelector } from "./PaymentMethodSelector";
+import { AccountSelector } from "./AccountSelector";
+import { TagsInput } from "./TagsInput";
+import { AttachmentUploader } from "./AttachmentUploader";
+import { useAttachments } from "../hooks/useAttachments";
+import { PaymentMethod, AnexoTransacao } from "../types";
 
 interface Despesa {
   id: string;
@@ -14,26 +21,37 @@ interface Despesa {
   categoria: string;
   data: string;
   tipo: 'fixa' | 'variavel';
+  metodo_pagamento?: PaymentMethod | null;
+  conta_id?: string | null;
+  observacoes?: string | null;
+  tags?: string[];
 }
 
 interface EditarDespesaModalProps {
   despesa: Despesa | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: (despesa: Despesa) => void;
+  onSave: (despesa: Despesa, tags: string[]) => void;
 }
 
 export const EditarDespesaModal = ({ despesa, isOpen, onClose, onSave }: EditarDespesaModalProps) => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
+  const { fetchAttachments } = useAttachments();
   
   const [formData, setFormData] = useState({
     descricao: '',
     valor: '',
     categoria: '',
     data: '',
-    tipo: 'variavel' as 'fixa' | 'variavel'
+    tipo: 'variavel' as 'fixa' | 'variavel',
+    metodo_pagamento: null as PaymentMethod | null,
+    conta_id: null as string | null,
+    observacoes: '',
+    tags: [] as string[]
   });
+
+  const [attachments, setAttachments] = useState<AnexoTransacao[]>([]);
 
   useEffect(() => {
     if (despesa) {
@@ -42,10 +60,25 @@ export const EditarDespesaModal = ({ despesa, isOpen, onClose, onSave }: EditarD
         valor: despesa.valor.toString(),
         categoria: despesa.categoria,
         data: despesa.data,
-        tipo: despesa.tipo
+        tipo: despesa.tipo,
+        metodo_pagamento: despesa.metodo_pagamento || null,
+        conta_id: despesa.conta_id || null,
+        observacoes: despesa.observacoes || '',
+        tags: despesa.tags || []
       });
     }
   }, [despesa]);
+
+  // Fetch attachments when modal opens
+  useEffect(() => {
+    const loadAttachments = async () => {
+      if (despesa?.id && isOpen) {
+        const anexos = await fetchAttachments('despesa', despesa.id);
+        setAttachments(anexos);
+      }
+    };
+    loadAttachments();
+  }, [despesa?.id, isOpen]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,10 +100,14 @@ export const EditarDespesaModal = ({ despesa, isOpen, onClose, onSave }: EditarD
       valor: parseFloat(formData.valor),
       categoria: formData.categoria,
       data: formData.data,
-      tipo: formData.tipo
+      tipo: formData.tipo,
+      metodo_pagamento: formData.metodo_pagamento,
+      conta_id: formData.conta_id,
+      observacoes: formData.observacoes || null,
+      tags: formData.tags
     };
 
-    onSave(despesaAtualizada);
+    onSave(despesaAtualizada, formData.tags);
     onClose();
     
     toast({
@@ -161,6 +198,61 @@ export const EditarDespesaModal = ({ despesa, isOpen, onClose, onSave }: EditarD
                 <span>Despesa Variável</span>
               </label>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="metodo_pagamento">Método de Pagamento</Label>
+            <PaymentMethodSelector
+              value={formData.metodo_pagamento}
+              onChange={(method) => setFormData({...formData, metodo_pagamento: method})}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="conta">Conta</Label>
+            <AccountSelector
+              value={formData.conta_id}
+              onChange={(accountId) => setFormData({...formData, conta_id: accountId})}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="observacoes">Observações</Label>
+            <Textarea
+              id="observacoes"
+              value={formData.observacoes}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value.length <= 500) {
+                  setFormData({...formData, observacoes: value});
+                }
+              }}
+              placeholder="Adicione observações sobre esta despesa..."
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground text-right">
+              {formData.observacoes.length}/500 caracteres
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tags">Tags</Label>
+            <TagsInput
+              value={formData.tags}
+              onChange={(tags) => setFormData({...formData, tags})}
+              placeholder="Digite uma tag e pressione Enter"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Anexos</Label>
+            <AttachmentUploader
+              transacaoId={despesa?.id}
+              transacaoTipo="despesa"
+              attachments={attachments}
+              onUploadSuccess={(anexo) => setAttachments(prev => [...prev, anexo])}
+              onDeleteSuccess={(anexoId) => setAttachments(prev => prev.filter(a => a.id !== anexoId))}
+            />
           </div>
 
           <div className="flex justify-end space-x-2 pt-4">

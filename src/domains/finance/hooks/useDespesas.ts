@@ -1,16 +1,10 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { Despesa as DespesaType, PaymentMethod } from "../types";
 
-export interface Despesa {
-  id: string;
-  user_id: string;
-  categoria_id?: string;
-  descricao: string;
-  valor: number;
-  data: string;
-  created_at: string;
-  updated_at: string;
+export interface Despesa extends Omit<DespesaType, 'tags' | 'anexos'> {
+  updated_at?: string;
   categorias?: {
     nome: string;
     cor: string;
@@ -69,7 +63,10 @@ export const useDespesas = () => {
     }
   };
 
-  const createDespesa = async (despesa: Omit<Despesa, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>) => {
+  const createDespesa = async (
+    despesa: Omit<Despesa, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>,
+    tagNames?: string[]
+  ) => {
     try {
       const { data, error } = await supabase
         .from('despesas')
@@ -84,6 +81,12 @@ export const useDespesas = () => {
         .single();
 
       if (error) throw error;
+
+      // Add tag relationships if provided
+      if (tagNames && tagNames.length > 0) {
+        await addTagsToDespesa(data.id, tagNames);
+      }
+
       setDespesas(prev => [data, ...prev]);
       
       toast({
@@ -102,7 +105,11 @@ export const useDespesas = () => {
     }
   };
 
-  const updateDespesa = async (id: string, updates: Partial<Despesa>) => {
+  const updateDespesa = async (
+    id: string,
+    updates: Partial<Despesa>,
+    tagNames?: string[]
+  ) => {
     try {
       const { data, error } = await supabase
         .from('despesas')
@@ -115,6 +122,12 @@ export const useDespesas = () => {
         .single();
 
       if (error) throw error;
+
+      // Update tag relationships if provided
+      if (tagNames !== undefined) {
+        await updateDespesaTags(id, tagNames);
+      }
+
       setDespesas(prev => prev.map(despesa => despesa.id === id ? data : despesa));
       
       toast({
@@ -159,6 +172,98 @@ export const useDespesas = () => {
     }
   };
 
+  const filterByPaymentMethod = (paymentMethod: PaymentMethod | null) => {
+    if (paymentMethod === null) {
+      return despesas.filter(d => !d.metodo_pagamento);
+    }
+    return despesas.filter(d => d.metodo_pagamento === paymentMethod);
+  };
+
+  const filterByAccount = (accountId: string) => {
+    return despesas.filter(d => d.conta_id === accountId);
+  };
+
+  const addTagsToDespesa = async (despesaId: string, tagNames: string[]) => {
+    try {
+      // Get tag IDs from tag names
+      const { data: tags, error: tagsError } = await supabase
+        .from('tags')
+        .select('id, nome')
+        .in('nome', tagNames);
+
+      if (tagsError) throw tagsError;
+
+      // Create tag relationships
+      const tagRelations = tags.map(tag => ({
+        despesa_id: despesaId,
+        tag_id: tag.id
+      }));
+
+      const { error: relError } = await supabase
+        .from('despesa_tags')
+        .insert(tagRelations);
+
+      if (relError) throw relError;
+    } catch (error) {
+      console.error('Error adding tags to despesa:', error);
+    }
+  };
+
+  const updateDespesaTags = async (despesaId: string, tagNames: string[]) => {
+    try {
+      // Remove existing tag relationships
+      await supabase
+        .from('despesa_tags')
+        .delete()
+        .eq('despesa_id', despesaId);
+
+      // Add new tag relationships
+      if (tagNames.length > 0) {
+        await addTagsToDespesa(despesaId, tagNames);
+      }
+    } catch (error) {
+      console.error('Error updating despesa tags:', error);
+    }
+  };
+
+  const getDespesaTags = async (despesaId: string): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('despesa_tags')
+        .select(`
+          tags (nome)
+        `)
+        .eq('despesa_id', despesaId);
+
+      if (error) throw error;
+      return data.map((item: any) => item.tags.nome);
+    } catch (error) {
+      console.error('Error fetching despesa tags:', error);
+      return [];
+    }
+  };
+
+  const filterByTags = (tagNames: string[]) => {
+    if (tagNames.length === 0) {
+      return despesas;
+    }
+    // This would require fetching tag relationships - implement when needed
+    return despesas;
+  };
+
+  const searchDespesas = (searchTerm: string) => {
+    if (!searchTerm.trim()) {
+      return despesas;
+    }
+
+    const term = searchTerm.toLowerCase();
+    return despesas.filter(d => 
+      d.descricao.toLowerCase().includes(term) ||
+      d.categorias?.nome.toLowerCase().includes(term) ||
+      (d.observacoes && d.observacoes.toLowerCase().includes(term))
+    );
+  };
+
   useEffect(() => {
     fetchDespesas();
   }, []);
@@ -169,6 +274,11 @@ export const useDespesas = () => {
     createDespesa,
     updateDespesa,
     deleteDespesa,
-    refetch: fetchDespesas
+    refetch: fetchDespesas,
+    filterByPaymentMethod,
+    filterByAccount,
+    filterByTags,
+    searchDespesas,
+    getDespesaTags,
   };
 };

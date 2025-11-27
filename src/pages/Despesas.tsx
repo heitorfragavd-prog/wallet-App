@@ -7,6 +7,7 @@ import { Label } from "@/shared/components/ui/label";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
+import { Textarea } from "@/shared/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -43,7 +44,12 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
-import { EditarDespesaModal } from "@/domains/finance/components/EditarDespesaModal";
+
+import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
+import { AccountSelector } from "@/domains/finance/components/AccountSelector";
+import { TagsInput } from "@/domains/finance/components/TagsInput";
+import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
+import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
 
 interface Despesa {
   id: string;
@@ -82,19 +88,24 @@ const Despesas = () => {
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaDespesa, setNovaDespesa] = useState({
+    id: null as string | null,
     descricao: "",
     valor: "",
     categoria: "",
     data: "",
     tipo: "variavel" as "fixa" | "variavel",
+    metodo_pagamento: null as PaymentMethod | null,
+    conta_id: null as string | null,
+    observacoes: "",
+    tags: [] as string[],
   });
+  const [tempAttachments, setTempAttachments] = useState<AnexoTransacao[]>([]);
+  const [modoEdicao, setModoEdicao] = useState(false);
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-  const [despesaEditando, setDespesaEditando] = useState<Despesa | null>(null);
-  const [modalEditarAberto, setModalEditarAberto] = useState(false);
 
-  const adicionarDespesa = async (e: React.FormEvent) => {
+  const salvarDespesa = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!novaDespesa.descricao || !novaDespesa.valor || !novaDespesa.categoria || !novaDespesa.data) {
@@ -108,37 +119,92 @@ const Despesas = () => {
 
     const categoria = categoriasDespesa.find((c) => c.nome === novaDespesa.categoria);
 
-    await createDespesa({
-      descricao: novaDespesa.descricao,
-      valor: parseFloat(novaDespesa.valor),
-      categoria_id: categoria?.id,
-      data: novaDespesa.data,
-    });
+    if (modoEdicao && novaDespesa.id) {
+      // Atualizar despesa existente
+      await updateDespesa(novaDespesa.id, {
+        descricao: novaDespesa.descricao,
+        valor: parseFloat(novaDespesa.valor),
+        categoria_id: categoria?.id,
+        data: novaDespesa.data,
+        metodo_pagamento: novaDespesa.metodo_pagamento,
+        conta_id: novaDespesa.conta_id,
+        observacoes: novaDespesa.observacoes || null,
+      });
+      
+      toast({
+        title: "Sucesso!",
+        description: "Despesa atualizada com sucesso",
+      });
+    } else {
+      // Criar nova despesa
+      await createDespesa({
+        descricao: novaDespesa.descricao,
+        valor: parseFloat(novaDespesa.valor),
+        categoria_id: categoria?.id,
+        data: novaDespesa.data,
+        metodo_pagamento: novaDespesa.metodo_pagamento,
+        conta_id: novaDespesa.conta_id,
+        observacoes: novaDespesa.observacoes || null,
+      });
+      
+      toast({
+        title: "Sucesso!",
+        description: "Despesa criada com sucesso",
+      });
+    }
 
-    setNovaDespesa({ descricao: "", valor: "", categoria: "", data: "", tipo: "variavel" });
+    // Limpar formulário
+    setNovaDespesa({ 
+      id: null,
+      descricao: "", 
+      valor: "", 
+      categoria: "", 
+      data: "", 
+      tipo: "variavel",
+      metodo_pagamento: null,
+      conta_id: null,
+      observacoes: "",
+      tags: [],
+    });
+    setTempAttachments([]);
+    setModoEdicao(false);
     setActiveTab("lista");
   };
 
-  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string } }) => {
-    setDespesaEditando({
+  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: string[] }) => {
+    // Preencher formulário com dados da despesa
+    setNovaDespesa({
       id: despesa.id,
       descricao: despesa.descricao,
-      valor: despesa.valor,
+      valor: despesa.valor.toString(),
       categoria: despesa.categorias?.nome || "",
       data: despesa.data,
       tipo: "variavel",
+      metodo_pagamento: despesa.metodo_pagamento || null,
+      conta_id: despesa.conta_id || null,
+      observacoes: despesa.observacoes || "",
+      tags: despesa.tags || [],
     });
-    setModalEditarAberto(true);
+    setModoEdicao(true);
+    setActiveTab("adicionar");
   };
 
-  const handleSalvarEdicao = async (despesaAtualizada: Despesa) => {
-    const categoria = categoriasDespesa.find((c) => c.nome === despesaAtualizada.categoria);
-    await updateDespesa(despesaAtualizada.id, {
-      descricao: despesaAtualizada.descricao,
-      valor: despesaAtualizada.valor,
-      categoria_id: categoria?.id,
-      data: despesaAtualizada.data,
+  const handleCancelarEdicao = () => {
+    setNovaDespesa({ 
+      id: null,
+      descricao: "", 
+      valor: "", 
+      categoria: "", 
+      data: "", 
+      tipo: "variavel",
+      metodo_pagamento: null,
+      conta_id: null,
+      observacoes: "",
+      tags: [],
     });
+    setTempAttachments([]);
+    setModoEdicao(false);
+    setActiveTab("lista");
   };
 
   const handleExcluirDespesa = async (id: string) => {
@@ -546,12 +612,21 @@ const Despesas = () => {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Plus className="w-5 h-5 text-red-500" />
-                  Nova Despesa
+                  {modoEdicao ? (
+                    <>
+                      <Edit className="w-5 h-5 text-blue-500" />
+                      Editar Despesa
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-5 h-5 text-red-500" />
+                      Nova Despesa
+                    </>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <form onSubmit={adicionarDespesa} className="space-y-6">
+                <form onSubmit={salvarDespesa} className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="descricao">Descrição *</Label>
@@ -631,15 +706,84 @@ const Despesas = () => {
                         </label>
                       </div>
                     </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="metodo_pagamento">Método de Pagamento</Label>
+                      <PaymentMethodSelector
+                        value={novaDespesa.metodo_pagamento}
+                        onChange={(method) => setNovaDespesa({ ...novaDespesa, metodo_pagamento: method })}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="conta">Conta</Label>
+                      <AccountSelector
+                        value={novaDespesa.conta_id}
+                        onChange={(accountId) => setNovaDespesa({ ...novaDespesa, conta_id: accountId })}
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="observacoes">Observações</Label>
+                      <Textarea
+                        id="observacoes"
+                        value={novaDespesa.observacoes}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (value.length <= 500) {
+                            setNovaDespesa({ ...novaDespesa, observacoes: value });
+                          }
+                        }}
+                        placeholder="Adicione observações sobre esta despesa..."
+                        rows={3}
+                      />
+                      <p className="text-xs text-muted-foreground text-right">
+                        {novaDespesa.observacoes.length}/500 caracteres
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="tags">Tags</Label>
+                      <TagsInput
+                        value={novaDespesa.tags}
+                        onChange={(tags) => setNovaDespesa({ ...novaDespesa, tags })}
+                        placeholder="Digite uma tag e pressione Enter"
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label>Anexos</Label>
+                      <AttachmentUploader
+                        transacaoId={novaDespesa.id}
+                        transacaoTipo="despesa"
+                        attachments={tempAttachments}
+                        onUploadSuccess={(anexo) => setTempAttachments(prev => [...prev, anexo])}
+                        onDeleteSuccess={(anexoId) => setTempAttachments(prev => prev.filter(a => a.id !== anexoId))}
+                      />
+                      {!novaDespesa.id && (
+                        <p className="text-xs text-muted-foreground">
+                          Os anexos serão salvos após criar a despesa
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
-                    <Button type="button" variant="outline" onClick={() => setActiveTab("lista")}>
+                    <Button type="button" variant="outline" onClick={handleCancelarEdicao}>
                       Cancelar
                     </Button>
-                    <Button type="submit" className="bg-red-500 hover:bg-red-600">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Adicionar Despesa
+                    <Button type="submit" className={modoEdicao ? "bg-blue-500 hover:bg-blue-600" : "bg-red-500 hover:bg-red-600"}>
+                      {modoEdicao ? (
+                        <>
+                          <Edit className="w-4 h-4 mr-2" />
+                          Salvar Alterações
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 mr-2" />
+                          Adicionar Despesa
+                        </>
+                      )}
                     </Button>
                   </div>
                 </form>
@@ -647,17 +791,6 @@ const Despesas = () => {
             </Card>
           </TabsContent>
         </Tabs>
-
-        {/* Modal de Edição */}
-        <EditarDespesaModal
-          despesa={despesaEditando}
-          isOpen={modalEditarAberto}
-          onClose={() => {
-            setModalEditarAberto(false);
-            setDespesaEditando(null);
-          }}
-          onSave={handleSalvarEdicao}
-        />
       </div>
     </DashboardLayout>
   );

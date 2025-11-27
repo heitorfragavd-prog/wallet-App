@@ -1,16 +1,10 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { Receita as ReceitaType, PaymentMethod } from "../types";
 
-export interface Receita {
-  id: string;
-  user_id: string;
-  categoria_id?: string;
-  descricao: string;
-  valor: number;
-  data: string;
-  created_at: string;
-  updated_at: string;
+export interface Receita extends Omit<ReceitaType, 'tags' | 'anexos'> {
+  updated_at?: string;
   categorias?: {
     nome: string;
     cor: string;
@@ -69,7 +63,10 @@ export const useReceitas = () => {
     }
   };
 
-  const createReceita = async (receita: Omit<Receita, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>) => {
+  const createReceita = async (
+    receita: Omit<Receita, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>,
+    tagNames?: string[]
+  ) => {
     try {
       const { data, error } = await supabase
         .from('receitas')
@@ -84,6 +81,12 @@ export const useReceitas = () => {
         .single();
 
       if (error) throw error;
+
+      // Add tag relationships if provided
+      if (tagNames && tagNames.length > 0) {
+        await addTagsToReceita(data.id, tagNames);
+      }
+
       setReceitas(prev => [data, ...prev]);
       
       toast({
@@ -102,7 +105,11 @@ export const useReceitas = () => {
     }
   };
 
-  const updateReceita = async (id: string, updates: Partial<Receita>) => {
+  const updateReceita = async (
+    id: string,
+    updates: Partial<Receita>,
+    tagNames?: string[]
+  ) => {
     try {
       const { data, error } = await supabase
         .from('receitas')
@@ -115,6 +122,12 @@ export const useReceitas = () => {
         .single();
 
       if (error) throw error;
+
+      // Update tag relationships if provided
+      if (tagNames !== undefined) {
+        await updateReceitaTags(id, tagNames);
+      }
+
       setReceitas(prev => prev.map(receita => receita.id === id ? data : receita));
       
       toast({
@@ -159,6 +172,98 @@ export const useReceitas = () => {
     }
   };
 
+  const filterByPaymentMethod = (paymentMethod: PaymentMethod | null) => {
+    if (paymentMethod === null) {
+      return receitas.filter(r => !r.metodo_pagamento);
+    }
+    return receitas.filter(r => r.metodo_pagamento === paymentMethod);
+  };
+
+  const filterByAccount = (accountId: string) => {
+    return receitas.filter(r => r.conta_id === accountId);
+  };
+
+  const addTagsToReceita = async (receitaId: string, tagNames: string[]) => {
+    try {
+      // Get tag IDs from tag names
+      const { data: tags, error: tagsError } = await supabase
+        .from('tags')
+        .select('id, nome')
+        .in('nome', tagNames);
+
+      if (tagsError) throw tagsError;
+
+      // Create tag relationships
+      const tagRelations = tags.map(tag => ({
+        receita_id: receitaId,
+        tag_id: tag.id
+      }));
+
+      const { error: relError } = await supabase
+        .from('receita_tags')
+        .insert(tagRelations);
+
+      if (relError) throw relError;
+    } catch (error) {
+      console.error('Error adding tags to receita:', error);
+    }
+  };
+
+  const updateReceitaTags = async (receitaId: string, tagNames: string[]) => {
+    try {
+      // Remove existing tag relationships
+      await supabase
+        .from('receita_tags')
+        .delete()
+        .eq('receita_id', receitaId);
+
+      // Add new tag relationships
+      if (tagNames.length > 0) {
+        await addTagsToReceita(receitaId, tagNames);
+      }
+    } catch (error) {
+      console.error('Error updating receita tags:', error);
+    }
+  };
+
+  const getReceitaTags = async (receitaId: string): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('receita_tags')
+        .select(`
+          tags (nome)
+        `)
+        .eq('receita_id', receitaId);
+
+      if (error) throw error;
+      return data.map((item: any) => item.tags.nome);
+    } catch (error) {
+      console.error('Error fetching receita tags:', error);
+      return [];
+    }
+  };
+
+  const filterByTags = (tagNames: string[]) => {
+    if (tagNames.length === 0) {
+      return receitas;
+    }
+    // This would require fetching tag relationships - implement when needed
+    return receitas;
+  };
+
+  const searchReceitas = (searchTerm: string) => {
+    if (!searchTerm.trim()) {
+      return receitas;
+    }
+
+    const term = searchTerm.toLowerCase();
+    return receitas.filter(r => 
+      r.descricao.toLowerCase().includes(term) ||
+      r.categorias?.nome.toLowerCase().includes(term) ||
+      (r.observacoes && r.observacoes.toLowerCase().includes(term))
+    );
+  };
+
   useEffect(() => {
     fetchReceitas();
   }, []);
@@ -169,6 +274,11 @@ export const useReceitas = () => {
     createReceita,
     updateReceita,
     deleteReceita,
-    refetch: fetchReceitas
+    refetch: fetchReceitas,
+    filterByPaymentMethod,
+    filterByAccount,
+    filterByTags,
+    searchReceitas,
+    getReceitaTags,
   };
 };

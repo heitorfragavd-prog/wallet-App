@@ -7,6 +7,7 @@ import { Label } from "@/shared/components/ui/label";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
+import { Textarea } from "@/shared/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -44,7 +45,12 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
-import { EditarReceitaModal } from "@/domains/finance/components/EditarReceitaModal";
+
+import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
+import { AccountSelector } from "@/domains/finance/components/AccountSelector";
+import { TagsInput } from "@/domains/finance/components/TagsInput";
+import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
+import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
 
 interface Receita {
   id: string;
@@ -83,19 +89,24 @@ const Receitas = () => {
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaReceita, setNovaReceita] = useState({
+    id: null as string | null,
     descricao: "",
     valor: "",
     categoria: "",
     data: "",
     tipo: "variavel" as "fixa" | "variavel",
+    metodo_pagamento: null as PaymentMethod | null,
+    conta_id: null as string | null,
+    observacoes: "",
+    tags: [] as string[],
   });
+  const [tempAttachments, setTempAttachments] = useState<AnexoTransacao[]>([]);
+  const [modoEdicao, setModoEdicao] = useState(false);
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-  const [receitaEditando, setReceitaEditando] = useState<Receita | null>(null);
-  const [modalEditarAberto, setModalEditarAberto] = useState(false);
 
-  const adicionarReceita = async (e: React.FormEvent) => {
+  const salvarReceita = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!novaReceita.descricao || !novaReceita.valor || !novaReceita.categoria || !novaReceita.data) {
@@ -109,37 +120,92 @@ const Receitas = () => {
 
     const categoria = categoriasReceita.find((c) => c.nome === novaReceita.categoria);
 
-    await createReceita({
-      descricao: novaReceita.descricao,
-      valor: parseFloat(novaReceita.valor),
-      categoria_id: categoria?.id,
-      data: novaReceita.data,
-    });
+    if (modoEdicao && novaReceita.id) {
+      // Atualizar receita existente
+      await updateReceita(novaReceita.id, {
+        descricao: novaReceita.descricao,
+        valor: parseFloat(novaReceita.valor),
+        categoria_id: categoria?.id,
+        data: novaReceita.data,
+        metodo_pagamento: novaReceita.metodo_pagamento,
+        conta_id: novaReceita.conta_id,
+        observacoes: novaReceita.observacoes || null,
+      });
+      
+      toast({
+        title: "Sucesso!",
+        description: "Receita atualizada com sucesso",
+      });
+    } else {
+      // Criar nova receita
+      await createReceita({
+        descricao: novaReceita.descricao,
+        valor: parseFloat(novaReceita.valor),
+        categoria_id: categoria?.id,
+        data: novaReceita.data,
+        metodo_pagamento: novaReceita.metodo_pagamento,
+        conta_id: novaReceita.conta_id,
+        observacoes: novaReceita.observacoes || null,
+      });
+      
+      toast({
+        title: "Sucesso!",
+        description: "Receita criada com sucesso",
+      });
+    }
 
-    setNovaReceita({ descricao: "", valor: "", categoria: "", data: "", tipo: "variavel" });
+    // Limpar formulário
+    setNovaReceita({ 
+      id: null,
+      descricao: "", 
+      valor: "", 
+      categoria: "", 
+      data: "", 
+      tipo: "variavel",
+      metodo_pagamento: null,
+      conta_id: null,
+      observacoes: "",
+      tags: [],
+    });
+    setTempAttachments([]);
+    setModoEdicao(false);
     setActiveTab("lista");
   };
 
-  const handleEditarReceita = (receita: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string } }) => {
-    setReceitaEditando({
+  const handleEditarReceita = (receita: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: string[] }) => {
+    // Preencher formulário com dados da receita
+    setNovaReceita({
       id: receita.id,
       descricao: receita.descricao,
-      valor: receita.valor,
+      valor: receita.valor.toString(),
       categoria: receita.categorias?.nome || "",
       data: receita.data,
       tipo: "variavel",
+      metodo_pagamento: receita.metodo_pagamento || null,
+      conta_id: receita.conta_id || null,
+      observacoes: receita.observacoes || "",
+      tags: receita.tags || [],
     });
-    setModalEditarAberto(true);
+    setModoEdicao(true);
+    setActiveTab("adicionar");
   };
 
-  const handleSalvarEdicao = async (receitaAtualizada: Receita) => {
-    const categoria = categoriasReceita.find((c) => c.nome === receitaAtualizada.categoria);
-    await updateReceita(receitaAtualizada.id, {
-      descricao: receitaAtualizada.descricao,
-      valor: receitaAtualizada.valor,
-      categoria_id: categoria?.id,
-      data: receitaAtualizada.data,
+  const handleCancelarEdicao = () => {
+    setNovaReceita({ 
+      id: null,
+      descricao: "", 
+      valor: "", 
+      categoria: "", 
+      data: "", 
+      tipo: "variavel",
+      metodo_pagamento: null,
+      conta_id: null,
+      observacoes: "",
+      tags: [],
     });
+    setTempAttachments([]);
+    setModoEdicao(false);
+    setActiveTab("lista");
   };
 
   const handleExcluirReceita = async (id: string) => {
@@ -547,12 +613,21 @@ const Receitas = () => {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Plus className="w-5 h-5 text-green-500" />
-                  Nova Receita
+                  {modoEdicao ? (
+                    <>
+                      <Edit className="w-5 h-5 text-blue-500" />
+                      Editar Receita
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-5 h-5 text-green-500" />
+                      Nova Receita
+                    </>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <form onSubmit={adicionarReceita} className="space-y-6">
+                <form onSubmit={salvarReceita} className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="descricao">Descrição *</Label>
@@ -632,15 +707,84 @@ const Receitas = () => {
                         </label>
                       </div>
                     </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="metodo_pagamento">Método de Pagamento</Label>
+                      <PaymentMethodSelector
+                        value={novaReceita.metodo_pagamento}
+                        onChange={(method) => setNovaReceita({ ...novaReceita, metodo_pagamento: method })}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="conta">Conta</Label>
+                      <AccountSelector
+                        value={novaReceita.conta_id}
+                        onChange={(accountId) => setNovaReceita({ ...novaReceita, conta_id: accountId })}
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="observacoes">Observações</Label>
+                      <Textarea
+                        id="observacoes"
+                        value={novaReceita.observacoes}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (value.length <= 500) {
+                            setNovaReceita({ ...novaReceita, observacoes: value });
+                          }
+                        }}
+                        placeholder="Adicione observações sobre esta receita..."
+                        rows={3}
+                      />
+                      <p className="text-xs text-muted-foreground text-right">
+                        {novaReceita.observacoes.length}/500 caracteres
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="tags">Tags</Label>
+                      <TagsInput
+                        value={novaReceita.tags}
+                        onChange={(tags) => setNovaReceita({ ...novaReceita, tags })}
+                        placeholder="Digite uma tag e pressione Enter"
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label>Anexos</Label>
+                      <AttachmentUploader
+                        transacaoId={novaReceita.id}
+                        transacaoTipo="receita"
+                        attachments={tempAttachments}
+                        onUploadSuccess={(anexo) => setTempAttachments(prev => [...prev, anexo])}
+                        onDeleteSuccess={(anexoId) => setTempAttachments(prev => prev.filter(a => a.id !== anexoId))}
+                      />
+                      {!novaReceita.id && (
+                        <p className="text-xs text-muted-foreground">
+                          Os anexos serão salvos após criar a receita
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
-                    <Button type="button" variant="outline" onClick={() => setActiveTab("lista")}>
+                    <Button type="button" variant="outline" onClick={handleCancelarEdicao}>
                       Cancelar
                     </Button>
-                    <Button type="submit" className="bg-green-500 hover:bg-green-600">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Adicionar Receita
+                    <Button type="submit" className={modoEdicao ? "bg-blue-500 hover:bg-blue-600" : "bg-green-500 hover:bg-green-600"}>
+                      {modoEdicao ? (
+                        <>
+                          <Edit className="w-4 h-4 mr-2" />
+                          Salvar Alterações
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 mr-2" />
+                          Adicionar Receita
+                        </>
+                      )}
                     </Button>
                   </div>
                 </form>
@@ -648,17 +792,6 @@ const Receitas = () => {
             </Card>
           </TabsContent>
         </Tabs>
-
-        {/* Modal de Edição */}
-        <EditarReceitaModal
-          receita={receitaEditando}
-          isOpen={modalEditarAberto}
-          onClose={() => {
-            setModalEditarAberto(false);
-            setReceitaEditando(null);
-          }}
-          onSave={handleSalvarEdicao}
-        />
       </div>
     </DashboardLayout>
   );

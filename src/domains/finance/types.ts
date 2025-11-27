@@ -4,6 +4,12 @@
  * Type definitions for financial operations
  */
 
+export type PaymentMethod = 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | 'transferencia';
+
+export type AccountType = 'conta_corrente' | 'poupanca' | 'carteira' | 'cartao_credito' | 'outro';
+
+export type RecurrenceType = 'unica' | 'diaria' | 'semanal' | 'mensal' | 'anual';
+
 export interface Transaction {
   id: string;
   user_id: string;
@@ -24,6 +30,54 @@ export interface Category {
   icon?: string;
 }
 
+export interface Tag {
+  id: string;
+  user_id: string;
+  nome: string;
+  cor?: string;
+  created_at: string;
+}
+
+export interface ContaUsuario {
+  id: string;
+  user_id: string;
+  nome: string;
+  tipo: AccountType;
+  created_at: string;
+}
+
+export interface AnexoTransacao {
+  id: string;
+  transacao_tipo: 'receita' | 'despesa' | 'divida';
+  transacao_id: string;
+  user_id: string;
+  nome: string;
+  storage_path: string;
+  tipo_arquivo: string;
+  tamanho: number;
+  created_at: string;
+}
+
+export interface TransacaoRecorrente {
+  id: string;
+  user_id: string;
+  tipo_transacao: 'receita' | 'despesa';
+  descricao: string;
+  valor: number;
+  categoria_id?: string;
+  metodo_pagamento?: PaymentMethod;
+  conta_id?: string;
+  recorrencia: Exclude<RecurrenceType, 'unica'>;
+  dia_execucao?: number;
+  dia_semana?: number;
+  data_inicio: string;
+  data_fim?: string;
+  ativo: boolean;
+  ultima_execucao?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Receita {
   id: string;
   user_id: string;
@@ -31,7 +85,14 @@ export interface Receita {
   valor: number;
   data: string;
   categoria_id?: string;
+  metodo_pagamento?: PaymentMethod;
+  conta_id?: string;
+  observacoes?: string;
+  recorrencia_id?: string;
   created_at: string;
+  // Relations
+  tags?: Tag[];
+  anexos?: AnexoTransacao[];
 }
 
 export interface Despesa {
@@ -41,7 +102,14 @@ export interface Despesa {
   valor: number;
   data: string;
   categoria_id?: string;
+  metodo_pagamento?: PaymentMethod;
+  conta_id?: string;
+  observacoes?: string;
+  recorrencia_id?: string;
   created_at: string;
+  // Relations
+  tags?: Tag[];
+  anexos?: AnexoTransacao[];
 }
 
 export interface Divida {
@@ -50,8 +118,24 @@ export interface Divida {
   descricao: string;
   valor_total: number;
   valor_pago: number;
+  valor_restante: number;
   data_vencimento: string;
-  status: 'pendente' | 'pago' | 'atrasado';
+  parcelas: number;
+  parcelas_pagas: number;
+  status: 'pendente' | 'vencida' | 'quitada';
+  credor: string;
+  created_at: string;
+}
+
+export interface PagamentoDivida {
+  id: string;
+  divida_id: string;
+  user_id: string;
+  valor: number;
+  data_pagamento: string;
+  metodo_pagamento: PaymentMethod;
+  conta_id?: string;
+  observacoes?: string;
   created_at: string;
 }
 

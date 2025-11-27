@@ -4,8 +4,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/compo
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Textarea } from "@/shared/components/ui/textarea";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
+import { PaymentMethodSelector } from "./PaymentMethodSelector";
+import { AccountSelector } from "./AccountSelector";
+import { TagsInput } from "./TagsInput";
+import { AttachmentUploader } from "./AttachmentUploader";
+import { useAttachments } from "../hooks/useAttachments";
+import { PaymentMethod, AnexoTransacao } from "../types";
 
 interface Receita {
   id: string;
@@ -14,26 +21,37 @@ interface Receita {
   categoria: string;
   data: string;
   tipo: 'fixa' | 'variavel';
+  metodo_pagamento?: PaymentMethod | null;
+  conta_id?: string | null;
+  observacoes?: string | null;
+  tags?: string[];
 }
 
 interface EditarReceitaModalProps {
   receita: Receita | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: (receita: Receita) => void;
+  onSave: (receita: Receita, tags: string[]) => void;
 }
 
 export const EditarReceitaModal = ({ receita, isOpen, onClose, onSave }: EditarReceitaModalProps) => {
   const { toast } = useToast();
   const { categoriasReceita } = useCategorias();
+  const { fetchAttachments } = useAttachments();
   
   const [formData, setFormData] = useState({
     descricao: '',
     valor: '',
     categoria: '',
     data: '',
-    tipo: 'variavel' as 'fixa' | 'variavel'
+    tipo: 'variavel' as 'fixa' | 'variavel',
+    metodo_pagamento: null as PaymentMethod | null,
+    conta_id: null as string | null,
+    observacoes: '',
+    tags: [] as string[]
   });
+
+  const [attachments, setAttachments] = useState<AnexoTransacao[]>([]);
 
   useEffect(() => {
     if (receita) {
@@ -42,10 +60,25 @@ export const EditarReceitaModal = ({ receita, isOpen, onClose, onSave }: EditarR
         valor: receita.valor.toString(),
         categoria: receita.categoria,
         data: receita.data,
-        tipo: receita.tipo
+        tipo: receita.tipo,
+        metodo_pagamento: receita.metodo_pagamento || null,
+        conta_id: receita.conta_id || null,
+        observacoes: receita.observacoes || '',
+        tags: receita.tags || []
       });
     }
   }, [receita]);
+
+  // Fetch attachments when modal opens
+  useEffect(() => {
+    const loadAttachments = async () => {
+      if (receita?.id && isOpen) {
+        const anexos = await fetchAttachments('receita', receita.id);
+        setAttachments(anexos);
+      }
+    };
+    loadAttachments();
+  }, [receita?.id, isOpen]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,10 +100,14 @@ export const EditarReceitaModal = ({ receita, isOpen, onClose, onSave }: EditarR
       valor: parseFloat(formData.valor),
       categoria: formData.categoria,
       data: formData.data,
-      tipo: formData.tipo
+      tipo: formData.tipo,
+      metodo_pagamento: formData.metodo_pagamento,
+      conta_id: formData.conta_id,
+      observacoes: formData.observacoes || null,
+      tags: formData.tags
     };
 
-    onSave(receitaAtualizada);
+    onSave(receitaAtualizada, formData.tags);
     onClose();
     
     toast({
@@ -161,6 +198,61 @@ export const EditarReceitaModal = ({ receita, isOpen, onClose, onSave }: EditarR
                 <span>Receita Variável</span>
               </label>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="metodo_pagamento">Método de Pagamento</Label>
+            <PaymentMethodSelector
+              value={formData.metodo_pagamento}
+              onChange={(method) => setFormData({...formData, metodo_pagamento: method})}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="conta">Conta</Label>
+            <AccountSelector
+              value={formData.conta_id}
+              onChange={(accountId) => setFormData({...formData, conta_id: accountId})}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="observacoes">Observações</Label>
+            <Textarea
+              id="observacoes"
+              value={formData.observacoes}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value.length <= 500) {
+                  setFormData({...formData, observacoes: value});
+                }
+              }}
+              placeholder="Adicione observações sobre esta receita..."
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground text-right">
+              {formData.observacoes.length}/500 caracteres
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tags">Tags</Label>
+            <TagsInput
+              value={formData.tags}
+              onChange={(tags) => setFormData({...formData, tags})}
+              placeholder="Digite uma tag e pressione Enter"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Anexos</Label>
+            <AttachmentUploader
+              transacaoId={receita?.id}
+              transacaoTipo="receita"
+              attachments={attachments}
+              onUploadSuccess={(anexo) => setAttachments(prev => [...prev, anexo])}
+              onDeleteSuccess={(anexoId) => setAttachments(prev => prev.filter(a => a.id !== anexoId))}
+            />
           </div>
 
           <div className="flex justify-end space-x-2 pt-4">

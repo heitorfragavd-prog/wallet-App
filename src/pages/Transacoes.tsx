@@ -110,6 +110,9 @@ const Transacoes = () => {
   // Filtros avançados
   const [valorMinimo, setValorMinimo] = useState("");
   const [valorMaximo, setValorMaximo] = useState("");
+  const [metodoPagamentoFiltro, setMetodoPagamentoFiltro] = useState("");
+  const [contaFiltro, setContaFiltro] = useState("");
+  const [tagFiltro, setTagFiltro] = useState("");
   const [filtrosAvancadosAbertos, setFiltrosAvancadosAbertos] = useState(false);
 
   // Dados processados
@@ -161,8 +164,22 @@ const Transacoes = () => {
       let matchValor = true;
       if (valorMinimo && t.valor < parseFloat(valorMinimo)) matchValor = false;
       if (valorMaximo && t.valor > parseFloat(valorMaximo)) matchValor = false;
+      
+      // Filtro de método de pagamento
+      const matchMetodoPagamento = metodoPagamentoFiltro === "" || t.metodo_pagamento === metodoPagamentoFiltro;
+      
+      // Filtro de conta
+      const matchConta = contaFiltro === "" || t.conta_id === contaFiltro;
+      
+      // Filtro de tag
+      let matchTag = true;
+      if (tagFiltro && t.tags) {
+        matchTag = t.tags.some(tag => tag.toLowerCase().includes(tagFiltro.toLowerCase()));
+      } else if (tagFiltro) {
+        matchTag = false;
+      }
 
-      return matchDescricao && matchTipo && matchCategoria && matchPeriodo && matchDataPersonalizada && matchValor;
+      return matchDescricao && matchTipo && matchCategoria && matchPeriodo && matchDataPersonalizada && matchValor && matchMetodoPagamento && matchConta && matchTag;
     });
 
     // Ordenar por data de cadastro
@@ -200,7 +217,7 @@ const Transacoes = () => {
         total: filtradas.length,
       },
     };
-  }, [transacoes, filtro, tipoFiltro, categoriaFiltro, periodoFiltro, dataInicio, dataFim, valorMinimo, valorMaximo]);
+  }, [transacoes, filtro, tipoFiltro, categoriaFiltro, periodoFiltro, dataInicio, dataFim, valorMinimo, valorMaximo, metodoPagamentoFiltro, contaFiltro, tagFiltro]);
 
   const limparFiltros = () => {
     setFiltro("");
@@ -211,9 +228,12 @@ const Transacoes = () => {
     setDataFim("");
     setValorMinimo("");
     setValorMaximo("");
+    setMetodoPagamentoFiltro("");
+    setContaFiltro("");
+    setTagFiltro("");
   };
 
-  const temFiltrosAtivos = filtro !== "" || tipoFiltro !== "" || categoriaFiltro !== "" || periodoFiltro !== "" || dataInicio !== "" || dataFim !== "" || valorMinimo !== "" || valorMaximo !== "";
+  const temFiltrosAtivos = filtro !== "" || tipoFiltro !== "" || categoriaFiltro !== "" || periodoFiltro !== "" || dataInicio !== "" || dataFim !== "" || valorMinimo !== "" || valorMaximo !== "" || metodoPagamentoFiltro !== "" || contaFiltro !== "" || tagFiltro !== "";
   
   const getPeriodoLabel = (periodo: string) => {
     const labels: { [key: string]: string } = {
@@ -403,7 +423,7 @@ const Transacoes = () => {
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="pt-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-lg bg-muted/30 border border-border/50">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4 rounded-lg bg-muted/30 border border-border/50">
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
@@ -457,6 +477,31 @@ const Transacoes = () => {
                       placeholder="0,00"
                       value={valorMaximo}
                       onChange={(e) => setValorMaximo(e.target.value)}
+                      className="h-9"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Método de Pagamento</Label>
+                    <select
+                      value={metodoPagamentoFiltro}
+                      onChange={(e) => setMetodoPagamentoFiltro(e.target.value)}
+                      className="h-9 w-full px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    >
+                      <option value="">Todos</option>
+                      <option value="pix">PIX</option>
+                      <option value="cartao_credito">Cartão de Crédito</option>
+                      <option value="cartao_debito">Cartão de Débito</option>
+                      <option value="boleto">Boleto</option>
+                      <option value="dinheiro">Dinheiro</option>
+                      <option value="transferencia">Transferência</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Tag</Label>
+                    <Input
+                      placeholder="Buscar por tag..."
+                      value={tagFiltro}
+                      onChange={(e) => setTagFiltro(e.target.value)}
                       className="h-9"
                     />
                   </div>
@@ -517,6 +562,23 @@ const Transacoes = () => {
                     <button onClick={() => setValorMaximo("")} className="hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
+                {metodoPagamentoFiltro && (
+                  <Badge variant="secondary" className="text-xs gap-1 bg-purple-500/20 text-purple-600">
+                    {metodoPagamentoFiltro === "pix" && "PIX"}
+                    {metodoPagamentoFiltro === "cartao_credito" && "Cartão de Crédito"}
+                    {metodoPagamentoFiltro === "cartao_debito" && "Cartão de Débito"}
+                    {metodoPagamentoFiltro === "boleto" && "Boleto"}
+                    {metodoPagamentoFiltro === "dinheiro" && "Dinheiro"}
+                    {metodoPagamentoFiltro === "transferencia" && "Transferência"}
+                    <button onClick={() => setMetodoPagamentoFiltro("")} className="hover:text-destructive"><X className="w-3 h-3" /></button>
+                  </Badge>
+                )}
+                {tagFiltro && (
+                  <Badge variant="secondary" className="text-xs gap-1 bg-orange-500/20 text-orange-600">
+                    Tag: {tagFiltro}
+                    <button onClick={() => setTagFiltro("")} className="hover:text-destructive"><X className="w-3 h-3" /></button>
+                  </Badge>
+                )}
                 <Button variant="ghost" size="sm" onClick={limparFiltros} className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive">
                   <X className="w-3 h-3 mr-1" />
                   Limpar todos
@@ -540,6 +602,7 @@ const Transacoes = () => {
                     <TableHead className="font-semibold">Descrição</TableHead>
                     <TableHead className="font-semibold">Categoria</TableHead>
                     <TableHead className="font-semibold">Tipo</TableHead>
+                    <TableHead className="font-semibold">Pagamento</TableHead>
                     <TableHead className="font-semibold">Data</TableHead>
                     <TableHead className="font-semibold text-right">Valor</TableHead>
                   </TableRow>
@@ -551,13 +614,14 @@ const Transacoes = () => {
                         <TableCell><Skeleton className="h-5 w-40" /></TableCell>
                         <TableCell><Skeleton className="h-5 w-24" /></TableCell>
                         <TableCell><Skeleton className="h-5 w-20" /></TableCell>
+                        <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                         <TableCell><Skeleton className="h-5 w-24" /></TableCell>
                         <TableCell><Skeleton className="h-5 w-24 ml-auto" /></TableCell>
                       </TableRow>
                     ))
                   ) : transacoesFiltradas.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
                         Nenhuma transação encontrada
                       </TableCell>
@@ -574,7 +638,23 @@ const Transacoes = () => {
                                 <ArrowDownRight className="w-4 h-4 text-red-500" />
                               )}
                             </div>
-                            <span className="font-medium">{transacao.descricao}</span>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{transacao.descricao}</span>
+                              {transacao.tags && transacao.tags.length > 0 && (
+                                <div className="flex gap-1 mt-1">
+                                  {transacao.tags.slice(0, 2).map((tag, idx) => (
+                                    <Badge key={idx} variant="outline" className="text-xs px-1 py-0">
+                                      {tag}
+                                    </Badge>
+                                  ))}
+                                  {transacao.tags.length > 2 && (
+                                    <Badge variant="outline" className="text-xs px-1 py-0">
+                                      +{transacao.tags.length - 2}
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -586,6 +666,20 @@ const Transacoes = () => {
                           <Badge className={`${transacao.tipo === "receita" ? "bg-green-500/20 text-green-600 hover:bg-green-500/30" : "bg-red-500/20 text-red-600 hover:bg-red-500/30"} border-0`}>
                             {transacao.tipo === "receita" ? "Receita" : "Despesa"}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {transacao.metodo_pagamento ? (
+                            <Badge variant="outline" className="text-xs">
+                              {transacao.metodo_pagamento === "pix" && "PIX"}
+                              {transacao.metodo_pagamento === "cartao_credito" && "Crédito"}
+                              {transacao.metodo_pagamento === "cartao_debito" && "Débito"}
+                              {transacao.metodo_pagamento === "boleto" && "Boleto"}
+                              {transacao.metodo_pagamento === "dinheiro" && "Dinheiro"}
+                              {transacao.metodo_pagamento === "transferencia" && "Transf."}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {formatarData(transacao.data)}
