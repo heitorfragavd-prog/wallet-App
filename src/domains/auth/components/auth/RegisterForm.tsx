@@ -1,61 +1,142 @@
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Eye, EyeOff } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
+import { toast } from "sonner";
+
+// Função para normalizar telefone (sempre com 55 no início, apenas números)
+const normalizePhone = (phone: string): string => {
+  // Remove tudo que não é número
+  const numbers = phone.replace(/\D/g, "");
+  
+  // Se já começa com 55, retorna como está
+  if (numbers.startsWith("55")) {
+    return numbers;
+  }
+  
+  // Adiciona 55 no início
+  return `55${numbers}`;
+};
+
+// Função para formatar telefone para exibição
+const formatPhoneDisplay = (phone: string): string => {
+  const numbers = phone.replace(/\D/g, "");
+  
+  // Remove o 55 do início para formatação visual
+  const localNumber = numbers.startsWith("55") ? numbers.slice(2) : numbers;
+  
+  if (localNumber.length <= 2) return localNumber;
+  if (localNumber.length <= 7) return `(${localNumber.slice(0, 2)}) ${localNumber.slice(2)}`;
+  if (localNumber.length <= 11) {
+    return `(${localNumber.slice(0, 2)}) ${localNumber.slice(2, 7)}-${localNumber.slice(7)}`;
+  }
+  return `(${localNumber.slice(0, 2)}) ${localNumber.slice(2, 7)}-${localNumber.slice(7, 11)}`;
+};
+
+// Schema de validação com Zod
+const registerSchema = z.object({
+  name: z.string().min(3, "Nome deve ter pelo menos 3 caracteres"),
+  organizationName: z.string().min(2, "Nome da organização deve ter pelo menos 2 caracteres"),
+  telefone: z
+    .string()
+    .min(10, "Telefone deve ter pelo menos 10 dígitos")
+    .refine((val) => {
+      const numbers = val.replace(/\D/g, "");
+      // Aceita telefone com ou sem 55, mas deve ter 10-11 dígitos locais
+      const localDigits = numbers.startsWith("55") ? numbers.slice(2) : numbers;
+      return localDigits.length >= 10 && localDigits.length <= 11;
+    }, "Telefone inválido. Use o formato (XX) XXXXX-XXXX"),
+  email: z
+    .string()
+    .min(1, "Email é obrigatório")
+    .email("Email inválido. Use o formato exemplo@dominio.com"),
+  password: z.string().min(6, "Senha deve ter pelo menos 6 caracteres"),
+  confirmPassword: z.string().min(1, "Confirme sua senha"),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "As senhas não coincidem",
+  path: ["confirmPassword"],
+});
+
+type RegisterFormData = z.infer<typeof registerSchema>;
 
 interface RegisterFormProps {
   onSwitchToLogin: () => void;
 }
 
 export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
-  const [name, setName] = useState("");
-  const [organizationName, setOrganizationName] = useState("");
-  const [telefone, setTelefone] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { signUp } = useAuth();
-  const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    watch,
+    formState: { errors },
+  } = useForm<RegisterFormData>({
+    resolver: zodResolver(registerSchema),
+    defaultValues: {
+      name: "",
+      organizationName: "",
+      telefone: "",
+      email: "",
+      password: "",
+      confirmPassword: "",
+    },
+  });
+
+  const telefoneValue = watch("telefone");
+
+  // Handler para formatar telefone enquanto digita
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneDisplay(e.target.value);
+    setValue("telefone", formatted, { shouldValidate: true });
+  };
+
+  const onSubmit = async (data: RegisterFormData) => {
     setIsLoading(true);
 
-    if (password !== confirmPassword) {
-      setIsLoading(false);
-      return;
-    }
-
-    if (password.length < 6) {
-      setIsLoading(false);
-      return;
-    }
-
-    const { error } = await signUp(email, password, name, organizationName, telefone);
+    // Normaliza o telefone antes de enviar (adiciona 55 se necessário)
+    const normalizedPhone = normalizePhone(data.telefone);
     
-    // Note: With email confirmation enabled, user won't be automatically signed in
-    // They need to verify their email first
+    const { error } = await signUp(
+      data.email.trim().toLowerCase(),
+      data.password,
+      data.name.trim(),
+      data.organizationName.trim(),
+      normalizedPhone
+    );
+
+    if (error) {
+      toast.error("Erro ao criar conta", {
+        description: error.message,
+      });
+    }
+    
     setIsLoading(false);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="name">Nome completo</Label>
         <Input
           id="name"
           type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          {...register("name")}
           placeholder="Seu nome completo"
-          required
+          className={errors.name ? "border-red-500" : ""}
         />
+        {errors.name && (
+          <p className="text-sm text-red-500">{errors.name.message}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -63,11 +144,13 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
         <Input
           id="organizationName"
           type="text"
-          value={organizationName}
-          onChange={(e) => setOrganizationName(e.target.value)}
+          {...register("organizationName")}
           placeholder="Nome da sua empresa ou organização"
-          required
+          className={errors.organizationName ? "border-red-500" : ""}
         />
+        {errors.organizationName && (
+          <p className="text-sm text-red-500">{errors.organizationName.message}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -75,11 +158,17 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
         <Input
           id="telefone"
           type="tel"
-          value={telefone}
-          onChange={(e) => setTelefone(e.target.value)}
-          placeholder="(11) 99999-9999"
-          required
+          value={telefoneValue}
+          onChange={handlePhoneChange}
+          placeholder="(31) 99999-9999"
+          className={errors.telefone ? "border-red-500" : ""}
         />
+        <p className="text-xs text-gray-500">
+          O código do Brasil (+55) será adicionado automaticamente
+        </p>
+        {errors.telefone && (
+          <p className="text-sm text-red-500">{errors.telefone.message}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -87,11 +176,13 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
         <Input
           id="email"
           type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          {...register("email")}
           placeholder="seu@email.com"
-          required
+          className={errors.email ? "border-red-500" : ""}
         />
+        {errors.email && (
+          <p className="text-sm text-red-500">{errors.email.message}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -100,10 +191,9 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
           <Input
             id="password"
             type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            {...register("password")}
             placeholder="Mínimo 6 caracteres"
-            required
+            className={errors.password ? "border-red-500" : ""}
           />
           <Button
             type="button"
@@ -119,6 +209,9 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
             )}
           </Button>
         </div>
+        {errors.password && (
+          <p className="text-sm text-red-500">{errors.password.message}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -127,10 +220,9 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
           <Input
             id="confirmPassword"
             type={showConfirmPassword ? "text" : "password"}
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
+            {...register("confirmPassword")}
             placeholder="Confirme sua senha"
-            required
+            className={errors.confirmPassword ? "border-red-500" : ""}
           />
           <Button
             type="button"
@@ -146,6 +238,9 @@ export const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
             )}
           </Button>
         </div>
+        {errors.confirmPassword && (
+          <p className="text-sm text-red-500">{errors.confirmPassword.message}</p>
+        )}
       </div>
 
       <Button

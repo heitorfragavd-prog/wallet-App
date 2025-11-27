@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
-import { Card } from "@/shared/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Badge } from "@/shared/components/ui/badge";
+import { Skeleton } from "@/shared/components/ui/skeleton";
+import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import {
   Table,
   TableBody,
@@ -27,12 +30,15 @@ import {
 import {
   Plus,
   Search,
-  Filter,
   TrendingDown,
-  Calendar,
   DollarSign,
   Edit,
   Trash2,
+  ArrowDownRight,
+  Wallet,
+  Tag,
+  X,
+  Receipt,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
@@ -48,11 +54,31 @@ interface Despesa {
   tipo: "fixa" | "variavel";
 }
 
+// Função para formatar data
+const formatarData = (dataString: string) => {
+  if (!dataString) return "";
+  const [ano, mes, dia] = dataString.split("T")[0].split("-");
+  return `${dia}/${mes}/${ano}`;
+};
+
+// Função para formatar data relativa
+const formatarDataRelativa = (dataString: string) => {
+  if (!dataString) return "";
+  const data = new Date(dataString.split("T")[0] + "T12:00:00");
+  const hoje = new Date();
+  hoje.setHours(12, 0, 0, 0);
+  const ontem = new Date(hoje);
+  ontem.setDate(ontem.getDate() - 1);
+  
+  if (data.toDateString() === hoje.toDateString()) return "Hoje";
+  if (data.toDateString() === ontem.toDateString()) return "Ontem";
+  return formatarData(dataString);
+};
+
 const Despesas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
-  const { despesas, createDespesa, updateDespesa, deleteDespesa } =
-    useDespesas();
+  const { despesas, loading, createDespesa, updateDespesa, deleteDespesa } = useDespesas();
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaDespesa, setNovaDespesa] = useState({
@@ -65,20 +91,13 @@ const Despesas = () => {
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
-
-  // Estados para o modal de edição
   const [despesaEditando, setDespesaEditando] = useState<Despesa | null>(null);
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
 
   const adicionarDespesa = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (
-      !novaDespesa.descricao ||
-      !novaDespesa.valor ||
-      !novaDespesa.categoria ||
-      !novaDespesa.data
-    ) {
+    if (!novaDespesa.descricao || !novaDespesa.valor || !novaDespesa.categoria || !novaDespesa.data) {
       toast({
         title: "Erro",
         description: "Preencha todos os campos obrigatórios",
@@ -87,9 +106,7 @@ const Despesas = () => {
       return;
     }
 
-    const categoria = categoriasDespesa.find(
-      (c) => c.nome === novaDespesa.categoria
-    );
+    const categoria = categoriasDespesa.find((c) => c.nome === novaDespesa.categoria);
 
     await createDespesa({
       descricao: novaDespesa.descricao,
@@ -98,35 +115,24 @@ const Despesas = () => {
       data: novaDespesa.data,
     });
 
-    setNovaDespesa({
-      descricao: "",
-      valor: "",
-      categoria: "",
-      data: "",
-      tipo: "variavel",
-    });
-
+    setNovaDespesa({ descricao: "", valor: "", categoria: "", data: "", tipo: "variavel" });
     setActiveTab("lista");
   };
 
   const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string } }) => {
-    const despesaFormatada = {
+    setDespesaEditando({
       id: despesa.id,
       descricao: despesa.descricao,
       valor: despesa.valor,
       categoria: despesa.categorias?.nome || "",
       data: despesa.data,
-      tipo: "variavel" as "fixa" | "variavel",
-    };
-    setDespesaEditando(despesaFormatada);
+      tipo: "variavel",
+    });
     setModalEditarAberto(true);
   };
 
   const handleSalvarEdicao = async (despesaAtualizada: Despesa) => {
-    const categoria = categoriasDespesa.find(
-      (c) => c.nome === despesaAtualizada.categoria
-    );
-
+    const categoria = categoriasDespesa.find((c) => c.nome === despesaAtualizada.categoria);
     await updateDespesa(despesaAtualizada.id, {
       descricao: despesaAtualizada.descricao,
       valor: despesaAtualizada.valor,
@@ -139,473 +145,505 @@ const Despesas = () => {
     await deleteDespesa(id);
   };
 
-  const despesasFiltradas = despesas
-    .filter((despesa) => {
-      const matchDescricao = despesa.descricao
-        .toLowerCase()
-        .includes(filtro.toLowerCase());
-      const matchCategoria =
-        categoriaFiltro === "" || despesa.categorias?.nome === categoriaFiltro;
-      return matchDescricao && matchCategoria;
-    })
-    .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+  // Dados processados
+  const { despesasFiltradas, despesasAgrupadas, totalDespesas, mediaMensal } = useMemo(() => {
+    const filtradas = despesas
+      .filter((despesa) => {
+        const matchDescricao = despesa.descricao.toLowerCase().includes(filtro.toLowerCase());
+        const matchCategoria = categoriaFiltro === "" || despesa.categorias?.nome === categoriaFiltro;
+        return matchDescricao && matchCategoria;
+      })
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  const totalDespesas = despesas.reduce(
-    (total, despesa) => total + despesa.valor,
-    0
-  );
-  const categorias = categoriasDespesa.map((c) => c.nome);
+    // Agrupar por data de cadastro
+    const grupos: { [key: string]: typeof filtradas } = {};
+    filtradas.forEach((d) => {
+      const dataKey = formatarDataRelativa(d.created_at);
+      if (!grupos[dataKey]) grupos[dataKey] = [];
+      grupos[dataKey].push(d);
+    });
+
+    const total = despesas.reduce((sum, d) => sum + d.valor, 0);
+    const media = despesas.length > 0 ? total / Math.max(1, new Set(despesas.map(d => d.data.substring(0, 7))).size) : 0;
+
+    return { despesasFiltradas: filtradas, despesasAgrupadas: grupos, totalDespesas: total, mediaMensal: media };
+  }, [despesas, filtro, categoriaFiltro]);
 
   const limparFiltros = () => {
     setFiltro("");
     setCategoriaFiltro("");
   };
 
+  const temFiltrosAtivos = filtro !== "" || categoriaFiltro !== "";
+
   return (
     <DashboardLayout>
-      <div className="p-4 md:p-6">
+      <div className="p-4 md:p-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 md:mb-8">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-foreground">
-              Despesas
-            </h1>
-            <p className="text-sm md:text-base text-muted-foreground">
-              Gerencie seus gastos e despesas
-            </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="bg-gradient-to-br from-red-500 to-rose-600 rounded-2xl p-3 shadow-lg shadow-red-500/20">
+              <ArrowDownRight className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">Despesas</h1>
+              <p className="text-muted-foreground">Gerencie seus gastos e despesas</p>
+            </div>
           </div>
-          <Button
-            onClick={() => setActiveTab("adicionar")}
-            className="bg-orange-500 hover:bg-orange-600 w-full sm:w-auto"
-          >
+          <Button onClick={() => setActiveTab("adicionar")} className="bg-red-500 hover:bg-red-600">
             <Plus className="w-4 h-4 mr-2" />
             Nova Despesa
           </Button>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-          <Card className="p-4 md:p-6">
-            <div className="flex items-center space-x-4">
-              <div className="bg-red-100 rounded-full p-2 md:p-3">
-                <DollarSign className="w-5 h-5 md:w-6 md:h-6 text-red-600" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Total Despesas</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      R$ {totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-red-500/20">
+                  <DollarSign className="w-5 h-5 text-red-500" />
+                </div>
               </div>
-              <div>
-                <p className="text-xs md:text-sm text-muted-foreground">
-                  Total de Despesas
-                </p>
-                <p className="text-lg md:text-2xl font-bold text-foreground">
-                  R${" "}
-                  {totalDespesas.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}
-                </p>
-              </div>
-            </div>
+            </CardContent>
           </Card>
 
-          <Card className="p-4 md:p-6">
-            <div className="flex items-center space-x-4">
-              <div className="bg-blue-100 rounded-full p-2 md:p-3">
-                <TrendingDown className="w-5 h-5 md:w-6 md:h-6 text-blue-600" />
+          <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Média Mensal</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      R$ {mediaMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-orange-500/20">
+                  <TrendingDown className="w-5 h-5 text-orange-500" />
+                </div>
               </div>
-              <div>
-                <p className="text-xs md:text-sm text-muted-foreground">Despesas</p>
-                <p className="text-lg md:text-2xl font-bold text-foreground">
-                  {despesas.length}
-                </p>
-              </div>
-            </div>
+            </CardContent>
           </Card>
 
-          <Card className="p-4 md:p-6">
-            <div className="flex items-center space-x-4">
-              <div className="bg-orange-100 rounded-full p-2 md:p-3">
-                <Calendar className="w-5 h-5 md:w-6 md:h-6 text-orange-600" />
+          <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Total Registros</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-16" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">{despesas.length}</p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-purple-500/20">
+                  <Receipt className="w-5 h-5 text-purple-500" />
+                </div>
               </div>
-              <div>
-                <p className="text-xs md:text-sm text-muted-foreground">Categorias</p>
-                <p className="text-lg md:text-2xl font-bold text-foreground">
-                  {categoriasDespesa.length}
-                </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Categorias</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-16" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">{categoriasDespesa.length}</p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-blue-500/20">
+                  <Tag className="w-5 h-5 text-blue-500" />
+                </div>
               </div>
-            </div>
+            </CardContent>
           </Card>
         </div>
 
         {/* Tabs */}
-        <Tabs
-          value={activeTab}
-          onValueChange={setActiveTab}
-          className="space-y-4 md:space-y-6"
-        >
-          <TabsList className="w-full grid grid-cols-2 sm:w-auto sm:inline-flex">
-            <TabsTrigger value="lista" className="text-sm">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <TabsList className="bg-muted/50">
+            <TabsTrigger value="lista" className="data-[state=active]:bg-red-500 data-[state=active]:text-white">
               Lista de Despesas
             </TabsTrigger>
-            <TabsTrigger value="adicionar" className="text-sm">
+            <TabsTrigger value="adicionar" className="data-[state=active]:bg-red-500 data-[state=active]:text-white">
               Adicionar Despesa
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="lista" className="space-y-4 md:space-y-6">
+          <TabsContent value="lista" className="space-y-4">
             {/* Filtros */}
-            <Card className="p-4 md:p-6">
-              <h2 className="text-base md:text-lg font-bold text-foreground mb-4">
-                Filtros
-              </h2>
-              <div className="flex flex-col space-y-4">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                  <Input
-                    placeholder="Buscar despesas..."
-                    value={filtro}
-                    onChange={(e) => setFiltro(e.target.value)}
-                    className="pl-10"
-                  />
-                </div>
-                <div className="flex flex-col sm:flex-row gap-4">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                    <Input
+                      placeholder="Buscar despesas..."
+                      value={filtro}
+                      onChange={(e) => setFiltro(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
                   <select
-                    id="categoria-filtro"
-                    title="Filtrar por categoria"
                     value={categoriaFiltro}
                     onChange={(e) => setCategoriaFiltro(e.target.value)}
-                    className="w-full sm:w-48 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    className="h-10 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
                   >
                     <option value="">Todas as categorias</option>
-                    {categorias.map((categoria) => (
-                      <option key={categoria} value={categoria}>
-                        {categoria}
-                      </option>
+                    {categoriasDespesa.map((cat) => (
+                      <option key={cat.id} value={cat.nome}>{cat.nome}</option>
                     ))}
                   </select>
-                  <Button
-                    variant="outline"
-                    onClick={limparFiltros}
-                    className="w-full sm:w-auto"
-                  >
-                    <Filter className="w-4 h-4 mr-2" />
-                    Limpar Filtros
-                  </Button>
+                  {temFiltrosAtivos && (
+                    <Button variant="outline" size="sm" onClick={limparFiltros} className="h-10">
+                      <X className="w-4 h-4 mr-1" />
+                      Limpar
+                    </Button>
+                  )}
                 </div>
-              </div>
+                {temFiltrosAtivos && (
+                  <div className="flex items-center gap-2 mt-3">
+                    <span className="text-xs text-muted-foreground">Filtros ativos:</span>
+                    {filtro && (
+                      <Badge variant="secondary" className="text-xs">
+                        Busca: {filtro}
+                        <button onClick={() => setFiltro("")} className="ml-1 hover:text-destructive">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    )}
+                    {categoriaFiltro && (
+                      <Badge variant="secondary" className="text-xs">
+                        {categoriaFiltro}
+                        <button onClick={() => setCategoriaFiltro("")} className="ml-1 hover:text-destructive">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground ml-2">
+                      {despesasFiltradas.length} resultado{despesasFiltradas.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                )}
+              </CardContent>
             </Card>
 
-            {/* Tabela de Despesas - Visível apenas em desktop */}
+            {/* Lista Desktop */}
             <div className="hidden md:block">
               <Card>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead>Categoria</TableHead>
-                      <TableHead>Tipo</TableHead>
-                      <TableHead>Data</TableHead>
-                      <TableHead className="text-right">Valor</TableHead>
-                      <TableHead className="text-center">Ações</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {despesasFiltradas.map((despesa) => (
-                      <TableRow key={despesa.id}>
-                        <TableCell className="font-medium">
-                          {despesa.descricao}
-                        </TableCell>
-                        <TableCell>
-                          {despesa.categorias?.nome || "Sem categoria"}
-                        </TableCell>
-                        <TableCell>
-                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400">
-                            Despesa
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {new Date(
-                            despesa.data + "T00:00:00"
-                          ).toLocaleDateString("pt-BR")}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-red-600">
-                          R${" "}
-                          {despesa.valor.toLocaleString("pt-BR", {
-                            minimumFractionDigits: 2,
-                          })}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center space-x-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleEditarDespesa(despesa)}
-                              className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="font-semibold">Descrição</TableHead>
+                        <TableHead className="font-semibold">Categoria</TableHead>
+                        <TableHead className="font-semibold">Data</TableHead>
+                        <TableHead className="font-semibold text-right">Valor</TableHead>
+                        <TableHead className="font-semibold text-center w-24">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {loading ? (
+                        [...Array(5)].map((_, i) => (
+                          <TableRow key={i}>
+                            <TableCell><Skeleton className="h-5 w-40" /></TableCell>
+                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
+                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
+                            <TableCell><Skeleton className="h-5 w-20 ml-auto" /></TableCell>
+                            <TableCell><Skeleton className="h-8 w-16 mx-auto" /></TableCell>
+                          </TableRow>
+                        ))
+                      ) : despesasFiltradas.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                            <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                            Nenhuma despesa encontrada
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        despesasFiltradas.map((despesa) => (
+                          <TableRow key={despesa.id} className="group">
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-red-500/10">
+                                  <ArrowDownRight className="w-4 h-4 text-red-500" />
+                                </div>
+                                <span className="font-medium">{despesa.descricao}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary" className="font-normal">
+                                {despesa.categorias?.nome || "Sem categoria"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {formatarData(despesa.data)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <span className="font-semibold text-red-500">
+                                -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
+                                  onClick={() => handleEditarDespesa(despesa)}
+                                  className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Edit className="w-4 h-4" />
                                 </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent className="sm:max-w-[425px]">
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>
-                                    Confirmar exclusão
-                                  </AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    Tem certeza que deseja excluir a despesa "
-                                    {despesa.descricao}"? Esta ação não pode ser
-                                    desfeita.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>
-                                    Cancelar
-                                  </AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() =>
-                                      handleExcluirDespesa(despesa.id)
-                                    }
-                                  >
-                                    Excluir
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        Tem certeza que deseja excluir a despesa "{despesa.descricao}"? Esta ação não pode ser desfeita.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                      <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500 hover:bg-red-600">
+                                        Excluir
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
               </Card>
             </div>
 
-            {/* Visualização Mobile - Cards */}
-            <div className="md:hidden space-y-4">
-              {despesasFiltradas.length === 0 ? (
-                <Card className="p-4">
-                  <p className="text-center text-muted-foreground">
-                    Nenhuma despesa encontrada.
-                  </p>
-                </Card>
-              ) : (
-                despesasFiltradas.map((despesa) => (
-                  <Card key={despesa.id} className="p-4">
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="font-medium text-foreground">
-                            {despesa.descricao}
-                          </h3>
-                          <p className="text-sm text-muted-foreground">
-                            {despesa.categorias?.nome || "Sem categoria"}
-                          </p>
-                        </div>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400">
-                          Despesa
-                        </span>
+            {/* Lista Mobile - Agrupada por data */}
+            <div className="md:hidden">
+              <Card>
+                <CardContent className="p-4">
+                  <ScrollArea className="h-[500px]">
+                    {loading ? (
+                      <div className="space-y-4">
+                        {[...Array(4)].map((_, i) => (
+                          <div key={i} className="flex items-center gap-3">
+                            <Skeleton className="w-10 h-10 rounded-lg" />
+                            <div className="flex-1 space-y-2">
+                              <Skeleton className="h-4 w-3/4" />
+                              <Skeleton className="h-3 w-1/2" />
+                            </div>
+                            <Skeleton className="h-5 w-20" />
+                          </div>
+                        ))}
                       </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>
-                          <p className="text-muted-foreground">Data</p>
-                          <p className="font-medium">
-                            {new Date(
-                              despesa.data + "T00:00:00"
-                            ).toLocaleDateString("pt-BR")}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground">Valor</p>
-                          <p className="font-medium text-red-600">
-                            R${" "}
-                            {despesa.valor.toLocaleString("pt-BR", {
-                              minimumFractionDigits: 2,
-                            })}
-                          </p>
-                        </div>
+                    ) : Object.keys(despesasAgrupadas).length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                        <Wallet className="w-10 h-10 mb-2 opacity-20" />
+                        <p className="text-sm">Nenhuma despesa encontrada</p>
                       </div>
-
-                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-border">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleEditarDespesa(despesa)}
-                          className="h-8 w-8 p-0 text-blue-600 hover:text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 dark:hover:bg-blue-500/20"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0 text-red-600 hover:text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/20"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent className="sm:max-w-[425px]">
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>
-                                Confirmar exclusão
-                              </AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Tem certeza que deseja excluir a despesa "
-                                {despesa.descricao}"? Esta ação não pode ser
-                                desfeita.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleExcluirDespesa(despesa.id)}
-                              >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                    ) : (
+                      <div className="space-y-6">
+                        {Object.entries(despesasAgrupadas).map(([data, items]) => (
+                          <div key={data}>
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{data}</span>
+                              <div className="flex-1 h-px bg-border" />
+                            </div>
+                            <div className="space-y-2">
+                              {items.map((despesa) => (
+                                <div key={despesa.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
+                                  <div className="p-2 rounded-lg bg-red-500/10">
+                                    <ArrowDownRight className="w-4 h-4 text-red-500" />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-foreground truncate">{despesa.descricao}</p>
+                                    <div className="flex items-center gap-2 mt-0.5">
+                                      <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0">
+                                        {despesa.categorias?.nome || "Sem categoria"}
+                                      </Badge>
+                                      <span className="text-xs text-muted-foreground">{formatarData(despesa.data)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-red-500 whitespace-nowrap">
+                                      -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                    </span>
+                                    <div className="flex gap-1">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleEditarDespesa(despesa)}
+                                        className="h-8 w-8 p-0 text-blue-500"
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </Button>
+                                      <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500">
+                                            <Trash2 className="w-4 h-4" />
+                                          </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent>
+                                          <AlertDialogHeader>
+                                            <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                              Tem certeza que deseja excluir "{despesa.descricao}"?
+                                            </AlertDialogDescription>
+                                          </AlertDialogHeader>
+                                          <AlertDialogFooter>
+                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                            <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500">
+                                              Excluir
+                                            </AlertDialogAction>
+                                          </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                      </AlertDialog>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                  </Card>
-                ))
-              )}
+                    )}
+                  </ScrollArea>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
 
+
           <TabsContent value="adicionar">
-            <Card className="p-4 md:p-6">
-              <form onSubmit={adicionarDespesa} className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                  <div className="space-y-2">
-                    <Label htmlFor="descricao">Descrição *</Label>
-                    <Input
-                      id="descricao"
-                      placeholder="Ex: Aluguel, Supermercado, Conta de Luz..."
-                      value={novaDespesa.descricao}
-                      onChange={(e) =>
-                        setNovaDespesa({
-                          ...novaDespesa,
-                          descricao: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-red-500" />
+                  Nova Despesa
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={adicionarDespesa} className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="descricao">Descrição *</Label>
+                      <Input
+                        id="descricao"
+                        placeholder="Ex: Aluguel, Supermercado, Conta de Luz..."
+                        value={novaDespesa.descricao}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, descricao: e.target.value })}
+                      />
+                    </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="valor">Valor *</Label>
-                    <Input
-                      id="valor"
-                      type="number"
-                      step="0.01"
-                      placeholder="0,00"
-                      value={novaDespesa.valor}
-                      onChange={(e) =>
-                        setNovaDespesa({
-                          ...novaDespesa,
-                          valor: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="categoria">Categoria *</Label>
-                    <select
-                      id="categoria"
-                      title="Selecionar categoria"
-                      value={novaDespesa.categoria}
-                      onChange={(e) =>
-                        setNovaDespesa({
-                          ...novaDespesa,
-                          categoria: e.target.value,
-                        })
-                      }
-                      className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    >
-                      <option value="">Selecione uma categoria</option>
-                      {categoriasDespesa.map((categoria) => (
-                        <option key={categoria.id} value={categoria.nome}>
-                          {categoria.nome}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="data">Data *</Label>
-                    <Input
-                      id="data"
-                      type="date"
-                      value={novaDespesa.data}
-                      onChange={(e) =>
-                        setNovaDespesa({ ...novaDespesa, data: e.target.value })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2 md:col-span-2">
-                    <Label>Tipo de Despesa</Label>
-                    <div className="flex flex-col sm:flex-row gap-4 sm:space-x-4">
-                      <label className="flex items-center space-x-2">
-                        <input
-                          type="radio"
-                          name="tipo"
-                          value="fixa"
-                          checked={novaDespesa.tipo === "fixa"}
-                          onChange={(e) =>
-                            setNovaDespesa({
-                              ...novaDespesa,
-                              tipo: e.target.value as "fixa" | "variavel",
-                            })
-                          }
-                          className="text-orange-600"
+                    <div className="space-y-2">
+                      <Label htmlFor="valor">Valor *</Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                        <Input
+                          id="valor"
+                          type="number"
+                          step="0.01"
+                          placeholder="0,00"
+                          value={novaDespesa.valor}
+                          onChange={(e) => setNovaDespesa({ ...novaDespesa, valor: e.target.value })}
+                          className="pl-10"
                         />
-                        <span>Despesa Fixa</span>
-                      </label>
-                      <label className="flex items-center space-x-2">
-                        <input
-                          type="radio"
-                          name="tipo"
-                          value="variavel"
-                          checked={novaDespesa.tipo === "variavel"}
-                          onChange={(e) =>
-                            setNovaDespesa({
-                              ...novaDespesa,
-                              tipo: e.target.value as "fixa" | "variavel",
-                            })
-                          }
-                          className="text-orange-600"
-                        />
-                        <span>Despesa Variável</span>
-                      </label>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="categoria">Categoria *</Label>
+                      <select
+                        id="categoria"
+                        value={novaDespesa.categoria}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, categoria: e.target.value })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        <option value="">Selecione uma categoria</option>
+                        {categoriasDespesa.map((cat) => (
+                          <option key={cat.id} value={cat.nome}>{cat.nome}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="data">Data *</Label>
+                      <Input
+                        id="data"
+                        type="date"
+                        value={novaDespesa.data}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, data: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <Label>Tipo de Despesa</Label>
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="tipo"
+                            value="fixa"
+                            checked={novaDespesa.tipo === "fixa"}
+                            onChange={(e) => setNovaDespesa({ ...novaDespesa, tipo: e.target.value as "fixa" | "variavel" })}
+                            className="w-4 h-4 text-red-500 focus:ring-red-500"
+                          />
+                          <span className="text-sm">Despesa Fixa</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="tipo"
+                            value="variavel"
+                            checked={novaDespesa.tipo === "variavel"}
+                            onChange={(e) => setNovaDespesa({ ...novaDespesa, tipo: e.target.value as "fixa" | "variavel" })}
+                            className="w-4 h-4 text-red-500 focus:ring-red-500"
+                          />
+                          <span className="text-sm">Despesa Variável</span>
+                        </label>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex flex-col sm:flex-row gap-4 sm:space-x-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setActiveTab("lista")}
-                    className="w-full sm:w-auto"
-                  >
-                    Cancelar
-                  </Button>
-                  <Button
-                    type="submit"
-                    className="bg-orange-500 hover:bg-orange-600 w-full sm:w-auto"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Adicionar Despesa
-                  </Button>
-                </div>
-              </form>
+                  <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+                    <Button type="button" variant="outline" onClick={() => setActiveTab("lista")}>
+                      Cancelar
+                    </Button>
+                    <Button type="submit" className="bg-red-500 hover:bg-red-600">
+                      <Plus className="w-4 h-4 mr-2" />
+                      Adicionar Despesa
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
             </Card>
           </TabsContent>
         </Tabs>

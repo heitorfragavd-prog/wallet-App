@@ -63,9 +63,9 @@ export const useTransacoes = () => {
         ...(despesasData || []).map(d => ({ ...d, tipo: 'despesa' as const }))
       ];
 
-      // Ordenar por data
+      // Ordenar por data de criação (último cadastro primeiro)
       const sortedTransacoes = allTransacoes.sort((a, b) => 
-        new Date(b.data).getTime() - new Date(a.data).getTime()
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
 
       setTransacoes(sortedTransacoes as Transacao[]);

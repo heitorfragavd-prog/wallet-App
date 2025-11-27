@@ -1,15 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
-import { Card } from "@/shared/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/shared/components/ui/table";
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
+import { Badge } from "@/shared/components/ui/badge";
+import { Progress } from "@/shared/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -18,7 +12,6 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import { Input } from "@/shared/components/ui/input";
-import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,10 +30,15 @@ import {
   Plus,
   Search,
   Filter,
-  DollarSign,
   TrendingUp,
   TrendingDown,
   Download,
+  ShoppingCart,
+  Package,
+  AlertTriangle,
+  CheckCircle,
+  Wallet,
+  Tag,
 } from "lucide-react";
 import { NovoItemMercadoModal } from "@/domains/market/components/NovoItemMercadoModal";
 import { EditarItemMercadoModal } from "@/domains/market/components/EditarItemMercadoModal";
@@ -52,9 +50,7 @@ import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useCategoriasMercado, CategoriaMercado } from "@/domains/market/hooks/useCategoriasMercado";
 import { useItensMercado, ItemMercado } from "@/domains/market/hooks/useItensMercado";
 import { useOrcamentosMercado } from "@/domains/finance/hooks/useOrcamentosMercado";
-import { ScrollArea } from "@/shared/components/ui/scroll-area";
 
-// Interface para compatibilidade com componentes existentes
 interface ItemMercadoForm {
   descricao: string;
   categoria_mercado_id?: string;
@@ -71,35 +67,38 @@ interface CategoriaMercadoForm {
   ativa: boolean;
 }
 
-// Simulando dados de despesas de supermercado (normalmente viriam de um contexto/hook)
-const despesasSupermercado = [
-  {
-    id: "1",
-    descricao: "Compras do mês",
-    valor: 850,
-    categoria: "Alimentação",
-    data: "2025-06-01",
-  },
-  {
-    id: "2",
-    descricao: "Feira",
-    valor: 120,
-    categoria: "Alimentação",
-    data: "2025-06-08",
-  },
-  {
-    id: "3",
-    descricao: "Açougue",
-    valor: 180,
-    categoria: "Alimentação",
-    data: "2025-06-12",
-  },
-];
-
 const Mercado = () => {
+  const { toast } = useToast();
+  const { categoriasDespesa } = useCategorias();
+  const { categoriasMercado, createCategoriaMercado, updateCategoriaMercado, deleteCategoriaMercado } = useCategoriasMercado();
+  const { itensMercado, createItemMercado, updateItemMercado, deleteItemMercado } = useItensMercado();
+  const { orcamentosMercado, createOrcamentoMercado, updateOrcamentoMercado, getOrcamentoAtivo } = useOrcamentosMercado();
+
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [filtroDescricao, setFiltroDescricao] = useState("");
+  const [itemParaEditar, setItemParaEditar] = useState<ItemMercado | null>(null);
+  const [modalEditarAberto, setModalEditarAberto] = useState(false);
+  const [categoriaParaEditar, setCategoriaParaEditar] = useState<CategoriaMercado | null>(null);
+  const [modalEditarCategoriaAberto, setModalEditarCategoriaAberto] = useState(false);
+  const [orcamentoMensal, setOrcamentoMensal] = useState(0);
+  const [estimativaGastos, setEstimativaGastos] = useState(0);
+  const [categoriaOrcamento, setCategoriaOrcamento] = useState("");
+  const [modalOrcamentoAberto, setModalOrcamentoAberto] = useState(false);
+
+  useEffect(() => {
+    if (orcamentosMercado.length > 0) {
+      const orcamentoAtivo = orcamentosMercado[0];
+      if (orcamentoAtivo) {
+        setOrcamentoMensal(orcamentoAtivo.valor_orcamento);
+        setEstimativaGastos(orcamentoAtivo.estimativa_gastos);
+        const categoria = categoriasDespesa.find((cat) => cat.id === orcamentoAtivo.categoria_despesa);
+        setCategoriaOrcamento(categoria ? categoria.nome : orcamentoAtivo.categoria_despesa);
+      }
+    }
+  }, [orcamentosMercado, categoriasDespesa]);
+
   const handleImportarCategoriasPadrao = async () => {
-    type CategoriaMercadoPadrao = { nome: string; descricao: string; cor: string };
-    const categoriasPadrao: CategoriaMercadoPadrao[] = [
+    const categoriasPadrao = [
       { nome: 'Alimentação Básica', descricao: 'Itens essenciais de alimentação', cor: '#10B981' },
       { nome: 'Limpeza', descricao: 'Produtos de limpeza e higiene', cor: '#3B82F6' },
       { nome: 'Higiene Pessoal', descricao: 'Produtos de cuidado pessoal', cor: '#8B5CF6' },
@@ -108,137 +107,34 @@ const Mercado = () => {
       { nome: 'Laticínios', descricao: 'Leite, queijos e derivados', cor: '#06B6D4' },
       { nome: 'Frutas e Verduras', descricao: 'Hortifruti em geral', cor: '#84CC16' },
     ];
-
     try {
       for (const categoria of categoriasPadrao) {
-        // A função createCategoriaMercado espera um objeto com mais campos,
-        // então precisamos adicionar os que faltam com valores padrão.
         await createCategoriaMercado({ ...categoria, ativa: true });
       }
-      toast({
-        title: "Sucesso!",
-        description: "Categorias de mercado padrão importadas com sucesso.",
-      });
+      toast({ title: "Sucesso!", description: "Categorias de mercado padrão importadas." });
     } catch (error) {
-      console.error("Erro ao importar categorias de mercado padrão:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível importar as categorias de mercado padrão. Tente novamente.",
-        variant: "destructive",
-      });
+      toast({ title: "Erro", description: "Não foi possível importar as categorias.", variant: "destructive" });
     }
   };
-  const { toast } = useToast();
-  const { categoriasDespesa } = useCategorias();
-  const {
-    categoriasMercado,
-    createCategoriaMercado,
-    updateCategoriaMercado,
-    deleteCategoriaMercado,
-  } = useCategoriasMercado();
-  const {
-    itensMercado,
-    createItemMercado,
-    updateItemMercado,
-    deleteItemMercado,
-  } = useItensMercado();
-  const {
-    orcamentosMercado,
-    createOrcamentoMercado,
-    updateOrcamentoMercado,
-    getOrcamentoAtivo,
-  } = useOrcamentosMercado();
 
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [filtroDescricao, setFiltroDescricao] = useState("");
-  const [itemParaEditar, setItemParaEditar] = useState<ItemMercado | null>(null);
-  const [modalEditarAberto, setModalEditarAberto] = useState(false);
-  const [categoriaParaEditar, setCategoriaParaEditar] = useState<CategoriaMercado | null>(null);
-  const [modalEditarCategoriaAberto, setModalEditarCategoriaAberto] =
-    useState(false);
-  const [orcamentoMensal, setOrcamentoMensal] = useState(0);
-  const [estimativaGastos, setEstimativaGastos] = useState(0);
-  const [categoriaOrcamento, setCategoriaOrcamento] = useState("");
-  const [modalOrcamentoAberto, setModalOrcamentoAberto] = useState(false);
-
-  // Carregar orçamento ativo e buscar nome da categoria
-  useEffect(() => {
-    if (orcamentosMercado.length > 0) {
-      const orcamentoAtivo = orcamentosMercado[0]; // Pega o primeiro orçamento ativo
-      if (orcamentoAtivo) {
-        setOrcamentoMensal(orcamentoAtivo.valor_orcamento);
-        setEstimativaGastos(orcamentoAtivo.estimativa_gastos);
-
-        // Buscar o nome da categoria pelo ID
-        const categoria = categoriasDespesa.find(
-          (cat) => cat.id === orcamentoAtivo.categoria_despesa
-        );
-        setCategoriaOrcamento(
-          categoria ? categoria.nome : orcamentoAtivo.categoria_despesa
-        );
-      }
-    }
-  }, [orcamentosMercado, categoriasDespesa]);
-
-  // Cálculos do orçamento mensal baseados na categoria selecionada e na lista de mercado
-  const dadosOrcamento = useMemo(() => {
-    // Gastos reais calculados pelos itens da lista
-    const gastosItensLista = itensMercado.reduce((total, item) => {
-      return total + item.preco_atual * item.quantidade_atual;
-    }, 0);
-
-    // Saldo disponível = Orçamento - Gastos Reais (não a estimativa)
+  // Estatísticas
+  const stats = useMemo(() => {
+    const totalItens = itensMercado.length;
+    const itensEstoqueAdequado = itensMercado.filter((i) => i.status === "estoque_adequado").length;
+    const itensEstoqueBaixo = itensMercado.filter((i) => i.status === "estoque_baixo" || i.status === "sem_estoque").length;
+    const gastosItensLista = itensMercado.reduce((total, item) => total + item.preco_atual * item.quantidade_atual, 0);
     const saldoDisponivel = orcamentoMensal - gastosItensLista;
-    const percentualGasto =
-      orcamentoMensal > 0 ? (gastosItensLista / orcamentoMensal) * 100 : 0;
+    const percentualGasto = orcamentoMensal > 0 ? (gastosItensLista / orcamentoMensal) * 100 : 0;
     const orcamentoExcedido = gastosItensLista > orcamentoMensal;
 
-    return {
-      orcamento: orcamentoMensal,
-      gastosItensLista,
-      estimativaGastos: estimativaGastos,
-      saldoDisponivel,
-      percentualGasto,
-      orcamentoExcedido,
-    };
-  }, [orcamentoMensal, estimativaGastos, itensMercado]);
-
-  const stockLevels = [
-    {
-      color: "bg-green-500",
-      label: "ESTOQUE ADEQUADO",
-      description: "(Quantidade atual é ideal)",
-    },
-    {
-      color: "bg-yellow-500",
-      label: "ESTOQUE MÉDIO",
-      description: "(Quantidade entre 30% e 99% do ideal)",
-    },
-    {
-      color: "bg-red-500",
-      label: "ESTOQUE BAIXO",
-      description: "(Menos de 30% do ideal)",
-    },
-    {
-      color: "bg-background0",
-      label: "SEM ESTOQUE",
-      description: "(Sem itens ou item não foi adicionado na lista de compras)",
-    },
-  ];
+    return { totalItens, itensEstoqueAdequado, itensEstoqueBaixo, gastosItensLista, saldoDisponivel, percentualGasto, orcamentoExcedido, estimativaGastos };
+  }, [itensMercado, orcamentoMensal, estimativaGastos]);
 
   const categoriasAtivas = categoriasMercado.filter((cat) => cat.ativa);
-  const categoriasDisponiveis = [
-    "all",
-    ...categoriasAtivas.map((cat) => cat.nome),
-  ];
 
   const itemsFiltrados = itensMercado.filter((item) => {
-    const matchCategoria =
-      selectedCategory === "all" ||
-      item.categorias_mercado?.nome === selectedCategory;
-    const matchDescricao = item.descricao
-      .toLowerCase()
-      .includes(filtroDescricao.toLowerCase());
+    const matchCategoria = selectedCategory === "all" || item.categorias_mercado?.nome === selectedCategory;
+    const matchDescricao = item.descricao.toLowerCase().includes(filtroDescricao.toLowerCase());
     return matchCategoria && matchDescricao;
   });
 
@@ -252,7 +148,6 @@ const Mercado = () => {
   };
 
   const handleEditarItem = async (itemEditado: ItemMercado) => {
-    console.log("Item recebido para editar:", itemEditado);
     await updateItemMercado(itemEditado.id, itemEditado);
   };
 
@@ -260,9 +155,7 @@ const Mercado = () => {
     await deleteItemMercado(id);
   };
 
-  const handleAdicionarCategoria = async (
-    novaCategoria: CategoriaMercadoForm
-  ) => {
+  const handleAdicionarCategoria = async (novaCategoria: CategoriaMercadoForm) => {
     await createCategoriaMercado(novaCategoria);
   };
 
@@ -284,40 +177,32 @@ const Mercado = () => {
     setModalEditarCategoriaAberto(true);
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
+  const getStatusConfig = (status: string) => {
+    switch (status) {
       case "estoque_adequado":
-        return "text-green-600";
+        return { color: "bg-green-500", bgLight: "bg-green-500/10", text: "text-green-600 dark:text-green-400", label: "Adequado" };
       case "estoque_medio":
-        return "text-yellow-600";
+        return { color: "bg-yellow-500", bgLight: "bg-yellow-500/10", text: "text-yellow-600 dark:text-yellow-400", label: "Médio" };
       case "estoque_baixo":
-        return "text-red-600";
+        return { color: "bg-red-500", bgLight: "bg-red-500/10", text: "text-red-600 dark:text-red-400", label: "Baixo" };
       case "sem_estoque":
-        return "text-muted-foreground";
+        return { color: "bg-gray-500", bgLight: "bg-gray-500/10", text: "text-gray-600 dark:text-gray-400", label: "Sem estoque" };
       default:
-        return "text-muted-foreground";
+        return { color: "bg-gray-500", bgLight: "bg-gray-500/10", text: "text-gray-600", label: status };
     }
   };
 
-  const handleSalvarOrcamento = async (
-    novoOrcamento: number,
-    novaEstimativa: number,
-    categoriaSelecionada: string
-  ) => {
-    const mesAtual = new Date().toISOString().slice(0, 7) + "-01"; // YYYY-MM-01
-
-    // Verificar se já existe um orçamento ativo para esta categoria no mês atual
+  const handleSalvarOrcamento = async (novoOrcamento: number, novaEstimativa: number, categoriaSelecionada: string) => {
+    const mesAtual = new Date().toISOString().slice(0, 7) + "-01";
     const orcamentoExistente = getOrcamentoAtivo(categoriaSelecionada);
 
     if (orcamentoExistente) {
-      // Atualizar orçamento existente
       await updateOrcamentoMercado(orcamentoExistente.id, {
         valor_orcamento: novoOrcamento,
         estimativa_gastos: novaEstimativa,
         categoria_despesa: categoriaSelecionada,
       });
     } else {
-      // Criar novo orçamento
       await createOrcamentoMercado({
         categoria_despesa: categoriaSelecionada,
         valor_orcamento: novoOrcamento,
@@ -336,500 +221,220 @@ const Mercado = () => {
     <DashboardLayout>
       <div className="p-4 md:p-6 space-y-6">
         {/* Header */}
-        <div className="flex flex-col space-y-2">
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground">
-            Mercado
-          </h1>
-          <p className="text-sm md:text-base text-muted-foreground">
-            Gerencie seu estoque e lista de compras
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-3 shadow-lg shadow-emerald-500/20">
+                <ShoppingCart className="w-6 h-6 text-white" />
+              </div>
+              {stats.itensEstoqueBaixo > 0 && (
+                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-red-500 rounded-full border-2 border-background flex items-center justify-center">
+                  <span className="text-[10px] text-white font-bold">{stats.itensEstoqueBaixo > 9 ? "9+" : stats.itensEstoqueBaixo}</span>
+                </div>
+              )}
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">Mercado</h1>
+              <p className="text-muted-foreground">Gerencie seu estoque e lista de compras</p>
+            </div>
+          </div>
+          <NovoItemMercadoModal
+            trigger={
+              <Button className="bg-emerald-500 hover:bg-emerald-600">
+                <Plus className="w-4 h-4 mr-2" />
+                Novo Item
+              </Button>
+            }
+          />
         </div>
 
         {/* Alerta de Orçamento Excedido */}
-        {dadosOrcamento.orcamentoExcedido && (
-          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-              <h3 className="text-sm md:text-base text-red-600 dark:text-red-400 font-semibold">
-                ⚠️ Orçamento Excedido!
-              </h3>
-            </div>
-            <p className="text-sm md:text-base text-red-700 mt-1">
-              Você ultrapassou o orçamento mensal em R${" "}
-              {Math.abs(dadosOrcamento.saldoDisponivel).toLocaleString(
-                "pt-BR",
-                { minimumFractionDigits: 2 }
-              )}
-            </p>
-          </div>
+        {stats.orcamentoExcedido && (
+          <Card className="border-red-500/30 bg-red-500/5">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-red-500/20">
+                <AlertTriangle className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <p className="font-medium text-red-600 dark:text-red-400">Orçamento Excedido!</p>
+                <p className="text-sm text-muted-foreground">
+                  Você ultrapassou o orçamento em R$ {Math.abs(stats.saldoDisponivel).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
-        {/* Orçamento Mensal Card */}
-        <Card
-          className={`p-4 md:p-6 border-l-4 ${
-            dadosOrcamento.orcamentoExcedido
-              ? "border-l-red-500 bg-red-500/10"
-              : dadosOrcamento.percentualGasto > 80
-              ? "border-l-yellow-500 bg-yellow-500/10"
-              : "border-l-orange-500"
-          }`}
-        >
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-            <div>
-              <h2 className="text-lg md:text-xl font-bold text-foreground">
-                Orçamento Mensal
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Categoria: {categoriaOrcamento}
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Orçamento */}
+          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 cursor-pointer hover:shadow-md transition-shadow" onClick={() => setModalOrcamentoAberto(true)}>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-muted-foreground">Orçamento Mensal</p>
+                <div className="p-2 rounded-xl bg-emerald-500/20">
+                  <Wallet className="w-4 h-4 text-emerald-500" />
+                </div>
+              </div>
+              <p className="text-2xl font-bold text-emerald-500">
+                R$ {orcamentoMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setModalOrcamentoAberto(true)}
-              className="w-full md:w-auto"
-            >
-              <Edit className="w-4 h-4 mr-2" />
-              Editar
-            </Button>
-          </div>
+              <p className="text-xs text-muted-foreground mt-1">{categoriaOrcamento || "Clique para configurar"}</p>
+            </CardContent>
+          </Card>
 
-          <div className="space-y-4">
-            <div
-              className={`text-2xl md:text-3xl font-bold ${
-                dadosOrcamento.orcamentoExcedido
-                  ? "text-red-600"
-                  : "text-foreground"
-              }`}
-            >
-              R${" "}
-              {dadosOrcamento.orcamento.toLocaleString("pt-BR", {
-                minimumFractionDigits: 2,
-              })}
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-muted-foreground">
-                  Gastos Reais (Lista de Mercado):
-                </span>
-                <span className="font-bold text-purple-600">
-                  R${" "}
-                  {dadosOrcamento.gastosItensLista.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}
-                </span>
-              </div>
-
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-muted-foreground">
-                  Estimativa de Gastos:
-                </span>
-                <div className="flex items-center space-x-2">
-                  <div className="w-full md:w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        dadosOrcamento.orcamentoExcedido
-                          ? "bg-red-500"
-                          : dadosOrcamento.percentualGasto > 80
-                          ? "bg-yellow-500"
-                          : "bg-gradient-to-r from-green-400 to-yellow-500"
-                      }`}
-                      style={{
-                        width: `${Math.min(
-                          dadosOrcamento.percentualGasto,
-                          100
-                        )}%`,
-                      }}
-                    ></div>
-                  </div>
-                  <span
-                    className={`font-bold ${
-                      dadosOrcamento.orcamentoExcedido
-                        ? "text-red-600"
-                        : "text-foreground"
-                    }`}
-                  >
-                    R${" "}
-                    {dadosOrcamento.estimativaGastos.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
+          {/* Gastos */}
+          <Card className={`relative overflow-hidden border-0 ${stats.orcamentoExcedido ? "bg-gradient-to-br from-red-500/10 to-red-500/5" : "bg-gradient-to-br from-purple-500/10 to-purple-500/5"}`}>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-muted-foreground">Gastos Atuais</p>
+                <div className={`p-2 rounded-xl ${stats.orcamentoExcedido ? "bg-red-500/20" : "bg-purple-500/20"}`}>
+                  <TrendingDown className={`w-4 h-4 ${stats.orcamentoExcedido ? "text-red-500" : "text-purple-500"}`} />
                 </div>
               </div>
+              <p className={`text-2xl font-bold ${stats.orcamentoExcedido ? "text-red-500" : "text-purple-500"}`}>
+                R$ {stats.gastosItensLista.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </p>
+              <Progress value={Math.min(stats.percentualGasto, 100)} className="h-1.5 mt-2" />
+              <p className="text-xs text-muted-foreground mt-1">{stats.percentualGasto.toFixed(0)}% do orçamento</p>
+            </CardContent>
+          </Card>
 
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                <span className="text-sm md:text-base text-muted-foreground">
-                  Saldo Disponível:
-                </span>
-                <div className="flex items-center space-x-2">
-                  {dadosOrcamento.saldoDisponivel >= 0 ? (
-                    <TrendingUp className="w-4 h-4 text-green-600" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4 text-red-600" />
-                  )}
-                  <span
-                    className={`font-bold ${
-                      dadosOrcamento.saldoDisponivel >= 0
-                        ? "text-green-600"
-                        : "text-red-600"
-                    }`}
-                  >
-                    R${" "}
-                    {Math.abs(dadosOrcamento.saldoDisponivel).toLocaleString(
-                      "pt-BR",
-                      { minimumFractionDigits: 2 }
-                    )}
-                  </span>
+          {/* Saldo */}
+          <Card className={`relative overflow-hidden border-0 ${stats.saldoDisponivel >= 0 ? "bg-gradient-to-br from-blue-500/10 to-blue-500/5" : "bg-gradient-to-br from-orange-500/10 to-orange-500/5"}`}>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-muted-foreground">Saldo Disponível</p>
+                <div className={`p-2 rounded-xl ${stats.saldoDisponivel >= 0 ? "bg-blue-500/20" : "bg-orange-500/20"}`}>
+                  {stats.saldoDisponivel >= 0 ? <TrendingUp className="w-4 h-4 text-blue-500" /> : <TrendingDown className="w-4 h-4 text-orange-500" />}
                 </div>
               </div>
-            </div>
-          </div>
-        </Card>
+              <p className={`text-2xl font-bold ${stats.saldoDisponivel >= 0 ? "text-blue-500" : "text-orange-500"}`}>
+                R$ {Math.abs(stats.saldoDisponivel).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">{stats.saldoDisponivel >= 0 ? "Disponível para compras" : "Acima do orçamento"}</p>
+            </CardContent>
+          </Card>
 
-        <Tabs defaultValue="itens" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="itens">Itens</TabsTrigger>
-            <TabsTrigger value="categorias">Categorias</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="itens" className="space-y-6">
-            {/* Stock Level Legend */}
-            <Card className="p-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {stockLevels.map((level, index) => (
-                  <div key={index} className="flex items-center space-x-3">
-                    <div
-                      className={`w-3 h-3 rounded-full ${level.color}`}
-                    ></div>
-                    <div className="flex flex-col md:flex-row md:items-center">
-                      <span className="text-sm font-medium text-foreground">
-                        {level.label}
-                      </span>
-                      <span className="text-xs text-muted-foreground md:ml-1">
-                        {level.description}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+          {/* Total Itens */}
+          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-cyan-500/10 to-cyan-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-muted-foreground">Total de Itens</p>
+                <div className="p-2 rounded-xl bg-cyan-500/20">
+                  <Package className="w-4 h-4 text-cyan-500" />
+                </div>
               </div>
-            </Card>
+              <p className="text-2xl font-bold text-cyan-500">{stats.totalItens}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <Badge className="bg-green-500/20 text-green-600 dark:text-green-400 border-0 text-xs">{stats.itensEstoqueAdequado} ok</Badge>
+                {stats.itensEstoqueBaixo > 0 && (
+                  <Badge className="bg-red-500/20 text-red-600 dark:text-red-400 border-0 text-xs">{stats.itensEstoqueBaixo} baixo</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Tabs */}
+        <Tabs defaultValue="itens" className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <TabsList className="grid grid-cols-2 w-full sm:w-auto bg-muted/50">
+              <TabsTrigger value="itens" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white">
+                <Package className="w-4 h-4 mr-2" />
+                Itens
+              </TabsTrigger>
+              <TabsTrigger value="categorias" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white">
+                <Tag className="w-4 h-4 mr-2" />
+                Categorias
+              </TabsTrigger>
+            </TabsList>
 
             {/* Filtros */}
-            <Card className="p-4 md:p-6">
-              <h2 className="text-lg font-bold text-foreground mb-4">Filtros</h2>
-              <div className="flex flex-col space-y-4">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                  <Input
-                    placeholder="Buscar itens..."
-                    value={filtroDescricao}
-                    onChange={(e) => setFiltroDescricao(e.target.value)}
-                    className="pl-10"
-                  />
-                </div>
-                <div className="flex flex-col md:flex-row gap-4">
-                  <Select
-                    value={selectedCategory}
-                    onValueChange={setSelectedCategory}
-                  >
-                    <SelectTrigger className="w-full md:w-48">
-                      <SelectValue placeholder="Todas as categorias" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todas as categorias</SelectItem>
-                      {categoriasAtivas.map((categoria) => (
-                        <SelectItem key={categoria.id} value={categoria.nome}>
-                          {categoria.nome}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    variant="outline"
-                    onClick={limparFiltros}
-                    className="w-full md:w-auto"
-                  >
-                    <Filter className="w-4 h-4 mr-2" />
-                    Limpar Filtros
-                  </Button>
-                </div>
-              </div>
-            </Card>
-
-            {/* Items Table/Cards */}
-            <Card className="p-4 md:p-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                <h2 className="text-lg font-bold text-foreground">
-                  Lista de Itens
-                </h2>
-                <NovoItemMercadoModal
-                  trigger={
-                    <Button className="w-full md:w-auto bg-orange-500 hover:bg-orange-600">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Adicionar Item
-                    </Button>
-                  }
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1 sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar itens..."
+                  value={filtroDescricao}
+                  onChange={(e) => setFiltroDescricao(e.target.value)}
+                  className="pl-9 h-9"
                 />
               </div>
+              <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                <SelectTrigger className="h-9 w-full sm:w-40">
+                  <SelectValue placeholder="Categoria" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas</SelectItem>
+                  {categoriasAtivas.map((cat) => (
+                    <SelectItem key={cat.id} value={cat.nome}>{cat.nome}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(selectedCategory !== "all" || filtroDescricao) && (
+                <Button variant="ghost" size="sm" onClick={limparFiltros} className="h-9">
+                  <Filter className="w-4 h-4 mr-1" />
+                  Limpar
+                </Button>
+              )}
+            </div>
+          </div>
 
-              {/* Desktop Table */}
-              <div className="hidden md:block">
-                <ScrollArea className="rounded-md border h-[600px]">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12">
-                          <Checkbox />
-                        </TableHead>
-                        <TableHead>Categoria</TableHead>
-                        <TableHead>Descrição</TableHead>
-                        <TableHead>Unid. Medida</TableHead>
-                        <TableHead>Qtd. Atual</TableHead>
-                        <TableHead>Qtd. Ideal</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Preço Est.</TableHead>
-                        <TableHead>Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {itemsFiltrados.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            <Checkbox />
-                          </TableCell>
-                          <TableCell>
-                            {item.categorias_mercado?.nome || "Sem categoria"}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {item.descricao}
-                          </TableCell>
-                          <TableCell>{item.unidade_medida}</TableCell>
-                          <TableCell>{item.quantidade_atual}</TableCell>
-                          <TableCell>{item.quantidade_ideal}</TableCell>
-                          <TableCell>
-                            <span
-                              className={`font-medium ${getStatusColor(
-                                item.status
-                              )}`}
-                            >
-                              {item.status.replace("_", " ")}
-                            </span>
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            R$ {item.preco_atual.toFixed(2)}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center space-x-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => abrirModalEdicao(item)}
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="text-red-600 hover:text-red-700"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>
-                                      Excluir Item
-                                    </AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                      Tem certeza que deseja excluir "
-                                      {item.descricao}"? Esta ação não pode ser
-                                      desfeita.
-                                    </AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>
-                                      Cancelar
-                                    </AlertDialogCancel>
-                                    <AlertDialogAction
-                                      onClick={() => handleExcluirItem(item.id)}
-                                      className="bg-red-600 hover:bg-red-700"
-                                    >
-                                      Excluir
-                                    </AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </ScrollArea>
+          {/* Tab Itens */}
+          <TabsContent value="itens" className="space-y-4">
+            {/* Legenda de Status */}
+            <div className="flex flex-wrap gap-4 p-3 rounded-lg bg-muted/30">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
+                <span className="text-xs text-muted-foreground">Adequado</span>
               </div>
-
-              {/* Mobile Cards */}
-              <div className="grid grid-cols-1 gap-4 md:hidden">
-                {itemsFiltrados.map((item) => (
-                  <Card key={item.id} className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-medium text-foreground">
-                          {item.descricao}
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          {item.categorias_mercado?.nome || "Sem categoria"}
-                        </p>
-                      </div>
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => abrirModalEdicao(item)}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Excluir Item</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Tem certeza que deseja excluir "{item.descricao}
-                                "?
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleExcluirItem(item.id)}
-                                className="bg-red-600 hover:bg-red-700"
-                              >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </div>
-                    <div className="mt-4 space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Unidade:</span>
-                        <span>{item.unidade_medida}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Quantidade:</span>
-                        <span>
-                          {item.quantidade_atual} / {item.quantidade_ideal}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Status:</span>
-                        <span
-                          className={`font-medium ${getStatusColor(
-                            item.status
-                          )}`}
-                        >
-                          {item.status.replace("_", " ")}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Preço Estimado:</span>
-                        <span className="font-medium">
-                          R$ {item.preco_atual.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
+                <span className="text-xs text-muted-foreground">Médio</span>
               </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="categorias" className="space-y-6">
-            <Card className="p-4 md:p-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                <h2 className="text-lg font-bold text-foreground">Categorias</h2>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <Button
-                    onClick={handleImportarCategoriasPadrao}
-                    variant="outline"
-                    className="w-full sm:w-auto"
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Importar Categorias Padrão
-                  </Button>
-                  <NovaCategoriaModal
-                    trigger={
-                      <Button className="w-full md:w-auto bg-orange-500 hover:bg-orange-600">
-                        <Plus className="w-4 h-4 mr-2" />
-                        Nova Categoria
-                      </Button>
-                    }
-                  />
-                </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                <span className="text-xs text-muted-foreground">Baixo</span>
               </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-gray-500" />
+                <span className="text-xs text-muted-foreground">Sem estoque</span>
+              </div>
+            </div>
 
-              {/* Desktop Table */}
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead>Cor</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Ações</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {categoriasMercado.map((categoria) => (
-                      <TableRow key={categoria.id}>
-                        <TableCell className="font-medium">
-                          {categoria.nome}
-                        </TableCell>
-                        <TableCell>{categoria.descricao}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
-                            <div
-                              className="w-4 h-4 rounded-full"
-                              style={{ backgroundColor: categoria.cor }}
-                            ></div>
-                            <span className="text-sm text-muted-foreground">
-                              {categoria.cor}
-                            </span>
+            {/* Lista de Itens */}
+            {itemsFiltrados.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Package className="w-12 h-12 text-muted-foreground/30 mb-4" />
+                  <p className="text-muted-foreground">
+                    {itensMercado.length === 0 ? "Nenhum item cadastrado" : "Nenhum item encontrado"}
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {itemsFiltrados.map((item) => {
+                  const statusConfig = getStatusConfig(item.status);
+                  const percentualEstoque = item.quantidade_ideal > 0 ? (item.quantidade_atual / item.quantidade_ideal) * 100 : 0;
+
+                  return (
+                    <Card key={item.id} className="group relative overflow-hidden hover:shadow-lg transition-all duration-300 hover:border-emerald-500/30">
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-foreground truncate">{item.descricao}</h3>
+                            <p className="text-sm text-muted-foreground truncate">
+                              {item.categorias_mercado?.nome || "Sem categoria"}
+                            </p>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className={`px-2 py-1 text-xs rounded-full ${
-                              categoria.ativa
-                                ? "bg-green-500/10 text-green-600 dark:text-green-400"
-                                : "bg-muted text-foreground"
-                            }`}
-                          >
-                            {categoria.ativa ? "Ativa" : "Inativa"}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
+                          <div className="flex items-center gap-1 shrink-0">
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() =>
-                                abrirModalEdicaoCategoria(categoria)
-                              }
+                              onClick={() => abrirModalEdicao(item)}
+                              className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
@@ -838,126 +443,171 @@ const Mercado = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="text-red-600 hover:text-red-700"
+                                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-600 hover:bg-red-500/10"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle>
-                                    Excluir Categoria
-                                  </AlertDialogTitle>
+                                  <AlertDialogTitle>Excluir Item</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    Tem certeza que deseja excluir a categoria "
-                                    {categoria.nome}"?
+                                    Tem certeza que deseja excluir "{item.descricao}"? Esta ação não pode ser desfeita.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
-                                  <AlertDialogCancel>
-                                    Cancelar
-                                  </AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() =>
-                                      handleExcluirCategoria(categoria.id)
-                                    }
-                                    className="bg-red-600 hover:bg-red-700"
-                                  >
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleExcluirItem(item.id)} className="bg-red-600 hover:bg-red-700">
                                     Excluir
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
                             </AlertDialog>
                           </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                        </div>
 
-              {/* Mobile Cards */}
-              <div className="grid grid-cols-1 gap-4 md:hidden">
-                {categoriasMercado.map((categoria) => (
-                  <Card key={categoria.id} className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <h3 className="font-medium text-foreground">
-                          {categoria.nome}
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          {categoria.descricao}
-                        </p>
-                      </div>
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => abrirModalEdicaoCategoria(categoria)}
-                        >
-                          <Edit className="w-4 h-4" />
+                        {/* Status Badge */}
+                        <Badge className={`${statusConfig.bgLight} ${statusConfig.text} border-0 mb-3`}>
+                          <div className={`w-1.5 h-1.5 rounded-full ${statusConfig.color} mr-1.5`} />
+                          {statusConfig.label}
+                        </Badge>
+
+                        {/* Progresso do Estoque */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">Estoque</span>
+                            <span className="font-medium">{item.quantidade_atual} / {item.quantidade_ideal} {item.unidade_medida}</span>
+                          </div>
+                          <Progress value={Math.min(percentualEstoque, 100)} className="h-1.5" />
+                        </div>
+
+                        {/* Preço */}
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+                          <span className="text-sm text-muted-foreground">Preço estimado</span>
+                          <span className="font-semibold text-emerald-500">
+                            R$ {item.preco_atual.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Tab Categorias */}
+          <TabsContent value="categorias" className="space-y-4">
+            {/* Card para adicionar categoria */}
+            <Card className="border-0 bg-gradient-to-br from-emerald-500/10 to-teal-500/5">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-lg bg-emerald-500/20">
+                      <Tag className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base">Categorias de Mercado</CardTitle>
+                      <p className="text-sm text-muted-foreground">{categoriasMercado.length} categorias cadastradas</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={handleImportarCategoriasPadrao}>
+                      <Download className="w-4 h-4 mr-2" />
+                      Importar Padrão
+                    </Button>
+                    <NovaCategoriaModal
+                      trigger={
+                        <Button size="sm" className="bg-emerald-500 hover:bg-emerald-600">
+                          <Plus className="w-4 h-4 mr-2" />
+                          Nova
                         </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>
-                                Excluir Categoria
-                              </AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Tem certeza que deseja excluir a categoria "
-                                {categoria.nome}"?
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() =>
-                                  handleExcluirCategoria(categoria.id)
-                                }
-                                className="bg-red-600 hover:bg-red-700"
+                      }
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+            </Card>
+
+            {/* Lista de Categorias */}
+            {categoriasMercado.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Tag className="w-12 h-12 text-muted-foreground/30 mb-4" />
+                  <p className="text-muted-foreground">Nenhuma categoria cadastrada</p>
+                  <p className="text-sm text-muted-foreground mt-1">Crie uma categoria ou importe as padrão</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {categoriasMercado.map((categoria) => (
+                  <Card
+                    key={categoria.id}
+                    className={`group relative overflow-hidden transition-all hover:shadow-md ${
+                      categoria.ativa ? "hover:border-emerald-500/30" : "opacity-60"
+                    }`}
+                  >
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div
+                            className="w-4 h-4 rounded-full shrink-0 ring-2 ring-offset-2 ring-offset-background"
+                            style={{ backgroundColor: categoria.cor }}
+                          />
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground truncate">{categoria.nome}</p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {categoria.descricao || "Sem descrição"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => abrirModalEdicaoCategoria(categoria)}
+                            className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:bg-blue-500/10"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-500/10"
                               >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Excluir Categoria</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Tem certeza que deseja excluir a categoria "{categoria.nome}"?
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleExcluirCategoria(categoria.id)}
+                                  className="bg-red-600 hover:bg-red-700"
+                                >
+                                  Excluir
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       </div>
-                    </div>
-                    <div className="mt-4 space-y-2">
-                      <div className="flex items-center space-x-2">
-                        <div
-                          className="w-4 h-4 rounded-full"
-                          style={{ backgroundColor: categoria.cor }}
-                        ></div>
-                        <span className="text-sm text-muted-foreground">
-                          {categoria.cor}
-                        </span>
-                      </div>
-                      <div>
-                        <span
-                          className={`inline-block px-2 py-1 text-xs rounded-full ${
-                            categoria.ativa
-                              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-                              : "bg-muted text-foreground"
-                          }`}
-                        >
-                          {categoria.ativa ? "Ativa" : "Inativa"}
-                        </span>
-                      </div>
-                    </div>
+                      {!categoria.ativa && (
+                        <Badge variant="secondary" className="mt-2 text-xs">Inativa</Badge>
+                      )}
+                    </CardContent>
                   </Card>
                 ))}
               </div>
-            </Card>
+            )}
           </TabsContent>
         </Tabs>
 
@@ -979,11 +629,7 @@ const Mercado = () => {
           open={modalOrcamentoAberto}
           onOpenChange={setModalOrcamentoAberto}
           orcamentoAtual={orcamentoMensal}
-          estimativaAtual={
-            estimativaGastos > 0
-              ? estimativaGastos
-              : dadosOrcamento.gastosItensLista
-          }
+          estimativaAtual={estimativaGastos > 0 ? estimativaGastos : stats.gastosItensLista}
           categoriaAtual={categoriaOrcamento}
           onSalvarOrcamento={handleSalvarOrcamento}
         />
