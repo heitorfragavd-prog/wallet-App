@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -44,39 +44,22 @@ import {
   Building2,
   Save,
   Bell,
-  DollarSignIcon,
+  History,
+  Smartphone,
+  Banknote,
+  ArrowRightLeft,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
-import { useDividas } from "@/domains/finance/hooks/useDividas";
+import { useDividas, Divida } from "@/domains/finance/hooks/useDividas";
 import { ReminderStatusBadge } from "@/domains/finance/components/ReminderStatusBadge";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
-
-interface DebtReminderInfo {
-  id: string;
-  reminder_hours: number;
-  trigger_at: string;
-  status: 'pending' | 'sent' | 'failed';
-  sent_at?: string;
-}
-
-interface Divida {
-  id: string;
-  descricao: string;
-  valor_total: number;
-  valor_pago: number;
-  valor_restante: number;
-  data_vencimento: string;
-  parcelas: number;
-  parcelas_pagas: number;
-  status: "pendente" | "vencida" | "quitada";
-  categoria_id?: string;
-  credor: string;
-  categorias?: { id: string; nome: string };
-  debt_reminders?: DebtReminderInfo[];
-  created_at?: string;
-}
+import { RegistrarPagamentoModal } from "@/domains/finance/components/RegistrarPagamentoModal";
+import { usePagamentosDivida, PagamentoDividaComDivida } from "@/domains/finance/hooks/usePagamentosDivida";
+import { PaymentMethod } from "@/domains/finance/types";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 // Função para formatar data
 const formatarData = (dataString: string) => {
@@ -85,13 +68,37 @@ const formatarData = (dataString: string) => {
   return `${dia}/${mes}/${ano}`;
 };
 
+// Ícones e labels para métodos de pagamento
+const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
+  pix: Smartphone,
+  cartao_credito: CreditCard,
+  cartao_debito: CreditCard,
+  boleto: Banknote,
+  dinheiro: Wallet,
+  transferencia: ArrowRightLeft,
+};
+
+const paymentMethodLabels: Record<PaymentMethod, string> = {
+  pix: 'PIX',
+  cartao_credito: 'Cartão de Crédito',
+  cartao_debito: 'Cartão de Débito',
+  boleto: 'Boleto',
+  dinheiro: 'Dinheiro',
+  transferencia: 'Transferência',
+};
+
 const Dividas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
-  const { dividas, loading, createDivida, updateDivida, deleteDivida } = useDividas();
+  const { dividas, loading, createDivida, updateDivida, deleteDivida, refetch: refetchDividas } = useDividas();
   const { createReminder, getReminderByDebtId, updateReminder, deleteReminder } = useDebtReminders();
+  const { pagamentos, loading: loadingPagamentos, fetchAllPagamentos, deletePagamento } = usePagamentosDivida();
   const [activeTab, setActiveTab] = useState("lista");
   const [dividaEditando, setDividaEditando] = useState<string | null>(null);
+  
+  // Estado para o modal de pagamento
+  const [dividaSelecionada, setDividaSelecionada] = useState<Divida | null>(null);
+  const [modalPagamentoAberto, setModalPagamentoAberto] = useState(false);
 
   const [filtro, setFiltro] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("");
@@ -285,6 +292,24 @@ const Dividas = () => {
     setExistingReminderId(null);
   };
 
+  // Handlers para o modal de pagamento
+  const handleAbrirModalPagamento = (divida: Divida) => {
+    setDividaSelecionada(divida);
+    setModalPagamentoAberto(true);
+  };
+
+  const handlePagamentoSucesso = () => {
+    refetchDividas();
+    fetchAllPagamentos();
+  };
+
+  // Carregar histórico quando a aba de histórico for selecionada
+  useEffect(() => {
+    if (activeTab === "historico") {
+      fetchAllPagamentos();
+    }
+  }, [activeTab]);
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "pendente": return <Badge className="bg-yellow-500/20 text-yellow-600 border-0 hover:bg-yellow-500/30"><Clock className="w-3 h-3 mr-1" />Pendente</Badge>;
@@ -410,6 +435,10 @@ const Dividas = () => {
             </TabsTrigger>
             <TabsTrigger value="adicionar" className="data-[state=active]:bg-rose-500 data-[state=active]:text-white">
               Adicionar Dívida
+            </TabsTrigger>
+            <TabsTrigger value="historico" className="data-[state=active]:bg-rose-500 data-[state=active]:text-white">
+              <History className="w-4 h-4 mr-1" />
+              Histórico
             </TabsTrigger>
           </TabsList>
 
@@ -596,6 +625,7 @@ const Dividas = () => {
                             <div className="w-[90px] flex justify-center">
                               {divida.status !== "quitada" && (
                                 <Button 
+                                  onClick={() => handleAbrirModalPagamento(divida)}
                                   variant="outline" 
                                   size="sm" 
                                   className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white"
@@ -773,6 +803,7 @@ const Dividas = () => {
                                   )}
                                   {divida.status !== "quitada" && (
                                     <Button 
+                                      onClick={() => handleAbrirModalPagamento(divida)}
                                       variant="outline" 
                                       size="sm" 
                                       className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white text-xs"
@@ -872,8 +903,113 @@ const Dividas = () => {
               </CardContent>
             </Card>
           </TabsContent>
+
+          <TabsContent value="historico" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="w-5 h-5 text-rose-500" />
+                  Histórico de Pagamentos
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loadingPagamentos ? (
+                  <div className="space-y-3">
+                    {[...Array(5)].map((_, i) => (
+                      <div key={i} className="flex items-center justify-between p-4 border rounded-lg">
+                        <Skeleton className="h-5 w-48" />
+                        <Skeleton className="h-5 w-24" />
+                      </div>
+                    ))}
+                  </div>
+                ) : pagamentos.length === 0 ? (
+                  <div className="p-8 text-center text-muted-foreground">
+                    <History className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                    <p>Nenhum pagamento registrado ainda.</p>
+                    <p className="text-sm mt-1">Os pagamentos de dívidas aparecerão aqui.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {pagamentos.map((pagamento) => {
+                      const Icon = paymentMethodIcons[pagamento.metodo_pagamento];
+                      return (
+                        <div
+                          key={pagamento.id}
+                          className="flex items-start justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                        >
+                          <div className="flex-1 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Icon className="h-4 w-4 text-muted-foreground" />
+                              <span className="font-medium">
+                                {pagamento.dividas?.descricao || "Dívida"}
+                              </span>
+                              <Badge variant="outline" className="text-xs">
+                                {pagamento.dividas?.credor}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                              <span>{paymentMethodLabels[pagamento.metodo_pagamento]}</span>
+                              <span>•</span>
+                              <span>
+                                {format(new Date(pagamento.data_pagamento), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                              </span>
+                            </div>
+                            {pagamento.observacoes && (
+                              <p className="text-sm text-muted-foreground mt-1">
+                                {pagamento.observacoes}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-lg font-semibold text-green-600">
+                              R$ {pagamento.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            </span>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-destructive hover:text-destructive h-8 w-8"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Remover Pagamento</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Tem certeza que deseja remover este pagamento? Esta ação não pode ser desfeita e não reverterá a despesa criada.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => deletePagamento(pagamento.id)}
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  >
+                                    Remover
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
         </Tabs>
 
+        {/* Modal de Pagamento */}
+        <RegistrarPagamentoModal
+          divida={dividaSelecionada}
+          open={modalPagamentoAberto}
+          onOpenChange={setModalPagamentoAberto}
+          onSuccess={handlePagamentoSucesso}
+        />
       </div>
     </DashboardLayout>
   );

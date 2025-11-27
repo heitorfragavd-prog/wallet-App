@@ -2,6 +2,32 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.9] - 2024-11-27
+
+### ✨ Adicionado
+- **Sistema de Pagamento de Dívidas**
+  - Botão "Pagar" agora funcional, abrindo modal de registro de pagamento
+  - Registro automático de despesa ao pagar dívida (opcional via checkbox)
+  - Atualização automática da dívida (valor_pago, valor_restante, parcelas_pagas, status)
+  - Nova aba "Histórico" na página de Dívidas com todos os pagamentos realizados
+
+### 🎨 Interface
+- **Modal de Pagamento Responsivo**
+  - Layout otimizado para telas menores com scroll
+  - Resumo da dívida em grid compacto
+  - Campos organizados em 2 colunas em telas maiores
+  - Footer fixo com botões de ação
+
+---
+
+## [1.0.8] - 2024-11-27
+
+### 🚀 Deploy
+- Build e push da versão 1.0.8 para Docker Hub
+- Suporte multi-arquitetura (linux/amd64, linux/arm64)
+
+---
+
 ## [1.0.7] - 2024-11-26
 
 ### ✨ Adicionado
