@@ -143,6 +143,12 @@
 
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
+  }
+
+  html, body, #root {
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 
   /* Custom 3D Scrollbar Styles */

@@ -82,7 +82,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex relative">
+    <div className="min-h-screen bg-background flex relative overflow-x-hidden">
       {/* Mobile Menu Button - Only show when menu is closed */}
       {!isMobileMenuOpen && (
         <div className="lg:hidden fixed top-4 left-4 z-50">
@@ -215,13 +215,15 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
       {/* Main Content */}
       <div
-        className={`flex-1 ${
+        className={`flex-1 min-w-0 ${
           isCollapsed ? "lg:ml-20" : "lg:ml-64"
         } transition-all duration-300`}
       >
         <div className="lg:hidden h-16"></div>{" "}
         {/* Spacer for mobile menu button */}
-        {children}
+        <div className="w-full max-w-full overflow-x-hidden">
+          {children}
+        </div>
       </div>
     </div>
   );

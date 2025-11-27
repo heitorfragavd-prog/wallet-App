@@ -2,6 +2,22 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.11] - 2024-11-27
+
+### 🔧 Corrigido
+- **Responsividade Mobile - Overflow Horizontal**
+  - Corrigido scroll horizontal indesejado em dispositivos móveis
+  - Adicionado `overflow-x-hidden` no container raiz do DashboardLayout
+  - Adicionado `min-w-0` no container principal para evitar expansão de flex items
+  - Wrapper com `max-w-full overflow-x-hidden` no conteúdo
+  - Regras CSS globais para prevenir overflow em html, body e #root
+
+### 🎨 Interface
+- **Imagem da Homepage**
+  - Atualizada imagem do hero para nova versão
+
+---
+
 ## [1.0.10] - 2024-11-27
 
 ### 🎨 Interface

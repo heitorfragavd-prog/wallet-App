@@ -83,7 +83,7 @@ export const HeroPremium = memo(function HeroPremium({
   ctaPrimary = { text: 'Começar Agora (Grátis)', href: '/login', variant: 'primary' },
   ctaSecondary,
   trustBadges = defaultTrustBadges,
-  heroImage = 'https://cdn.jsdelivr.net/gh/mathuzabr/img-packtypebot/mordomo.jpg',
+  heroImage = 'https://seuspuloflix.pro/wp-content/uploads/2025/11/walletai.png',
 }: HeroPremiumProps) {
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const { ref, inView } = useInView<HTMLElement>({ triggerOnce: true, threshold: 0.1 });
