@@ -545,35 +545,37 @@ const Despesas = () => {
                             </div>
                             <div className="space-y-2">
                               {items.map((despesa) => (
-                                <div key={despesa.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
-                                  <div className="p-2 rounded-lg bg-red-500/10">
+                                <div key={despesa.id} className="flex gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
+                                  <div className="p-2 rounded-lg bg-red-500/10 shrink-0">
                                     <ArrowDownRight className="w-4 h-4 text-red-500" />
                                   </div>
-                                  <div className="flex-1 min-w-0">
+                                  <div className="flex-1 min-w-0 space-y-2">
                                     <p className="font-medium text-foreground truncate">{despesa.descricao}</p>
-                                    <div className="flex items-center gap-2 mt-0.5">
-                                      <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0">
+                                    <div className="flex flex-col gap-2">
+                                      <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
                                         {despesa.categorias?.nome || "Sem categoria"}
                                       </Badge>
                                       <span className="text-xs text-muted-foreground">{formatarData(despesa.data)}</span>
                                     </div>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-red-500 whitespace-nowrap">
+                                    <div className="font-semibold text-red-500">
                                       -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                    </span>
-                                    <div className="flex gap-1">
+                                    </div>
+                                    <div className="flex gap-2">
                                       <Button
                                         variant="ghost"
                                         size="sm"
                                         onClick={() => handleEditarDespesa(despesa)}
-                                        className="h-8 w-8 p-0 text-blue-500"
+                                        className="h-11 w-11 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                                       >
                                         <Edit className="w-4 h-4" />
                                       </Button>
                                       <AlertDialog>
                                         <AlertDialogTrigger asChild>
-                                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500">
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            className="h-11 w-11 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                          >
                                             <Trash2 className="w-4 h-4" />
                                           </Button>
                                         </AlertDialogTrigger>

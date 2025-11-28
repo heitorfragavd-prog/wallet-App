@@ -731,26 +731,26 @@ const Transacoes = () => {
                         </div>
                         <div className="space-y-2">
                           {items.map((transacao) => (
-                            <div key={transacao.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
-                              <div className={`p-2 rounded-lg ${transacao.tipo === "receita" ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                            <div key={transacao.id} className="flex gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
+                              <div className={`p-2 rounded-lg shrink-0 ${transacao.tipo === "receita" ? "bg-green-500/10" : "bg-red-500/10"}`}>
                                 {transacao.tipo === "receita" ? (
                                   <ArrowUpRight className="w-4 h-4 text-green-500" />
                                 ) : (
                                   <ArrowDownRight className="w-4 h-4 text-red-500" />
                                 )}
                               </div>
-                              <div className="flex-1 min-w-0">
+                              <div className="flex-1 min-w-0 space-y-2">
                                 <p className="font-medium text-foreground truncate">{transacao.descricao}</p>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                  <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0">
+                                <div className="flex flex-col gap-2">
+                                  <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
                                     {transacao.categorias?.nome || "Sem categoria"}
                                   </Badge>
                                   <span className="text-xs text-muted-foreground">{formatarData(transacao.data)}</span>
                                 </div>
+                                <div className={`font-semibold ${transacao.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
+                                  {transacao.tipo === "receita" ? "+" : "-"}R$ {transacao.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </div>
                               </div>
-                              <span className={`font-semibold whitespace-nowrap ${transacao.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
-                                {transacao.tipo === "receita" ? "+" : "-"}R$ {transacao.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                              </span>
                             </div>
                           ))}
                         </div>

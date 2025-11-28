@@ -12,9 +12,17 @@ import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import { Check, ArrowRight, Crown } from "lucide-react";
+import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
 type Plan = Tables<"plans">;
+
+interface PaymentLink {
+  id: string;
+  plan_id: string;
+  payment_link: string;
+  is_active: boolean;
+}
 
 interface UpgradePlanModalProps {
   isOpen: boolean;
@@ -30,6 +38,7 @@ export const UpgradePlanModal = ({
   currentPlanPrice,
 }: UpgradePlanModalProps) => {
   const [availablePlans, setAvailablePlans] = useState<Plan[]>([]);
+  const [paymentLinks, setPaymentLinks] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +64,27 @@ export const UpgradePlanModal = ({
         throw new Error(plansError.message);
       }
 
+      // Buscar links de pagamento ativos para os planos disponíveis
+      if (plans && plans.length > 0) {
+        const planIds = plans.map(p => p.id);
+        const { data: links, error: linksError } = await supabase
+          .from("payment_links")
+          .select("plan_id, payment_link")
+          .in("plan_id", planIds)
+          .eq("is_active", true);
+
+        if (linksError) {
+          console.error("Error fetching payment links:", linksError);
+        } else if (links) {
+          // Criar um mapa de plan_id -> payment_link
+          const linksMap: Record<string, string> = {};
+          links.forEach((link: PaymentLink) => {
+            linksMap[link.plan_id] = link.payment_link;
+          });
+          setPaymentLinks(linksMap);
+        }
+      }
+
       setAvailablePlans(plans || []);
     } catch (err) {
       console.error("Error fetching plans:", err);
@@ -69,9 +99,15 @@ export const UpgradePlanModal = ({
   };
 
   const handleUpgrade = (planId: string) => {
-    // Aqui você pode implementar a lógica de upgrade
-    // Por exemplo, redirecionar para página de pagamento ou abrir outro modal
-    console.log("Upgrading to plan:", planId);
+    const paymentLink = paymentLinks[planId];
+    
+    if (!paymentLink) {
+      toast.error("Link de pagamento não configurado para este plano. Entre em contato com o suporte.");
+      return;
+    }
+
+    // Redirecionar para o link de pagamento
+    window.open(paymentLink, "_blank");
     onClose();
   };
 

@@ -27,16 +27,20 @@ import { usePlanosManutencao } from "../hooks/usePlanosManutencao";
 import { useManutencoesCustomizadas } from "../hooks/useManutencoesCustomizadas";
 import { useLembretesManutencao } from "../hooks/useLembretesManutencao";
 import { useToast } from "@/shared/hooks/use-toast";
+import { EditarManutencaoModal } from "./EditarManutencaoModal";
+import { RealizarManutencaoModal } from "./RealizarManutencaoModal";
+import { PlanoManutencaoVeiculo, ManutencaoCustomizada } from "../types";
 
 interface ListaManutencoesProps {
   veiculoId: string;
+  quilometragemAtual?: number;
 }
 
-export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
+export const ListaManutencoes = ({ veiculoId, quilometragemAtual = 0 }: ListaManutencoesProps) => {
   const { toast } = useToast();
-  const { planos, loading: loadingPlanos, removerPlano } = usePlanosManutencao(veiculoId);
-  const { customizadas, loading: loadingCustomizadas, removerCustomizada } = useManutencoesCustomizadas(veiculoId);
-  const { lembretes, loading: loadingLembretes } = useLembretesManutencao(veiculoId);
+  const { planos, loading: loadingPlanos, removerPlano, atualizarPlano, refetch: refetchPlanos } = usePlanosManutencao(veiculoId);
+  const { customizadas, loading: loadingCustomizadas, removerCustomizada, atualizarCustomizada, refetch: refetchCustomizadas } = useManutencoesCustomizadas(veiculoId);
+  const { lembretes, loading: loadingLembretes, refetch: refetchLembretes } = useLembretesManutencao(veiculoId);
   
   const [removendo, setRemovendo] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -49,6 +53,28 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
     type: null,
     id: null,
     nome: null
+  });
+
+  // Estado para modal de editar
+  const [editarModal, setEditarModal] = useState<{
+    open: boolean;
+    tipo: 'plano' | 'customizada';
+    plano?: PlanoManutencaoVeiculo;
+    customizada?: ManutencaoCustomizada;
+  }>({
+    open: false,
+    tipo: 'plano'
+  });
+
+  // Estado para modal de realizar
+  const [realizarModal, setRealizarModal] = useState<{
+    open: boolean;
+    tipo: 'plano' | 'customizada';
+    plano?: PlanoManutencaoVeiculo;
+    customizada?: ManutencaoCustomizada;
+  }>({
+    open: false,
+    tipo: 'plano'
   });
 
   const loading = loadingPlanos || loadingCustomizadas || loadingLembretes;
@@ -110,18 +136,50 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
     }
   };
 
-  const handleRealizarManutencao = (nome: string) => {
-    toast({
-      title: "Em desenvolvimento",
-      description: `Funcionalidade de realizar manutenção "${nome}" será implementada em breve.`,
+  const handleRealizarPlano = (plano: PlanoManutencaoVeiculo) => {
+    setRealizarModal({
+      open: true,
+      tipo: 'plano',
+      plano
     });
   };
 
-  const handleEditarManutencao = (nome: string) => {
-    toast({
-      title: "Em desenvolvimento",
-      description: `Funcionalidade de editar manutenção "${nome}" será implementada em breve.`,
+  const handleRealizarCustomizada = (customizada: ManutencaoCustomizada) => {
+    setRealizarModal({
+      open: true,
+      tipo: 'customizada',
+      customizada
     });
+  };
+
+  const handleEditarPlano = (plano: PlanoManutencaoVeiculo) => {
+    setEditarModal({
+      open: true,
+      tipo: 'plano',
+      plano
+    });
+  };
+
+  const handleEditarCustomizada = (customizada: ManutencaoCustomizada) => {
+    setEditarModal({
+      open: true,
+      tipo: 'customizada',
+      customizada
+    });
+  };
+
+  const handleSaveEditar = async (data: any) => {
+    if (editarModal.tipo === 'plano') {
+      await atualizarPlano(data);
+    } else {
+      await atualizarCustomizada(data);
+    }
+  };
+
+  const handleRealizarSuccess = () => {
+    refetchPlanos();
+    refetchCustomizadas();
+    refetchLembretes();
   };
 
   if (loading) {
@@ -210,7 +268,7 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => handleEditarManutencao(plano.tipo_manutencao?.nome || 'manutenção')}
+                  onClick={() => handleEditarPlano(plano)}
                   className="h-8 px-2 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                   title="Editar"
                 >
@@ -219,7 +277,7 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => handleRealizarManutencao(plano.tipo_manutencao?.nome || 'manutenção')}
+                  onClick={() => handleRealizarPlano(plano)}
                   className="h-8 px-2 text-green-500 hover:text-green-600 hover:bg-green-500/10"
                   title="Realizar"
                 >
@@ -308,7 +366,7 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => handleEditarManutencao(customizada.nome)}
+                  onClick={() => handleEditarCustomizada(customizada)}
                   className="h-8 px-2 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                   title="Editar"
                 >
@@ -317,7 +375,7 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => handleRealizarManutencao(customizada.nome)}
+                  onClick={() => handleRealizarCustomizada(customizada)}
                   className="h-8 px-2 text-green-500 hover:text-green-600 hover:bg-green-500/10"
                   title="Realizar"
                 >
@@ -365,6 +423,28 @@ export const ListaManutencoes = ({ veiculoId }: ListaManutencoesProps) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Modal de Editar */}
+      <EditarManutencaoModal
+        open={editarModal.open}
+        onOpenChange={(open) => setEditarModal(prev => ({ ...prev, open }))}
+        tipo={editarModal.tipo}
+        plano={editarModal.plano}
+        customizada={editarModal.customizada}
+        onSave={handleSaveEditar}
+      />
+
+      {/* Modal de Realizar */}
+      <RealizarManutencaoModal
+        open={realizarModal.open}
+        onOpenChange={(open) => setRealizarModal(prev => ({ ...prev, open }))}
+        tipo={realizarModal.tipo}
+        plano={realizarModal.plano}
+        customizada={realizarModal.customizada}
+        veiculoId={veiculoId}
+        quilometragemAtual={quilometragemAtual}
+        onSuccess={handleRealizarSuccess}
+      />
     </div>
   );
 };

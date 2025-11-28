@@ -2,6 +2,14 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.12] - 2024-11-28
+
+### 🚀 Deploy
+- Build e push da versão 1.0.12 para Docker Hub
+- Suporte multi-arquitetura (linux/amd64, linux/arm64)
+
+---
+
 ## [1.0.11] - 2024-11-27
 
 ### 🔧 Corrigido

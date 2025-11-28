@@ -71,9 +71,26 @@
 - [x] Mostrar manutenções do plano
 - [x] Mostrar manutenções customizadas
 - [x] Indicador visual de tipo (plano vs custom)
-- [x] Botão "Realizar"
-- [x] Botão "Remover"
-- [x] Botão "Editar"
+- [x] Botão "Remover" (funcional)
+- [x] Botão "Realizar" (funcional)
+- [x] Botão "Editar" (funcional)
+
+### Task 3.4: Modal Editar Manutenção
+- [x] Criar componente `EditarManutencaoModal.tsx`
+- [x] Implementar edição de planos (intervalo_km, ativo)
+- [x] Implementar edição de customizadas (nome, sistema, intervalo_km, data_prevista, ativo)
+- [x] Gerenciar lembretes (ativar/desativar, dias de antecedência)
+- [x] Integrar com ListaManutencoes
+
+### Task 3.5: Modal Realizar Manutenção
+- [x] Criar componente `RealizarManutencaoModal.tsx`
+- [x] Implementar form (data, quilometragem, observações, custo)
+- [x] Registrar manutenção no histórico (tabela `manutencoes`)
+- [x] Cancelar lembrete antigo
+- [x] Calcular próxima data prevista
+- [x] Criar novo lembrete
+- [x] Atualizar quilometragem do veículo
+- [x] Integrar com ListaManutencoes
 
 ## Fase 4: Admin - Webhooks de Manutenção
 

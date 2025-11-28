@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Configurações
 IMAGE_NAME="heltonfraga/wallet"
-VERSION="1.0.11"
+VERSION="1.0.12"
 PLATFORMS="linux/amd64,linux/arm64"
 
 echo -e "${GREEN}========================================${NC}"

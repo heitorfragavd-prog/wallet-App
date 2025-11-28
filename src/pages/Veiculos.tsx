@@ -270,7 +270,8 @@ export default function Veiculos() {
                       <Card className={`group relative overflow-hidden hover:shadow-lg transition-all duration-300 ${isExpanded ? "border-orange-500/50" : "hover:border-orange-500/30"}`}>
                         {atrasadas > 0 && <div className="absolute top-0 left-0 right-0 h-1 bg-red-500" />}
                         <CardContent className="p-5">
-                          <div className="flex items-start justify-between gap-4">
+                          {/* Desktop Layout */}
+                          <div className="hidden md:flex items-start justify-between gap-4">
                             <div className="flex items-center gap-4 min-w-0 flex-1">
                               <div className="p-3 rounded-xl bg-orange-500/10 shrink-0">
                                 <Car className="w-6 h-6 text-orange-500" />
@@ -316,6 +317,55 @@ export default function Veiculos() {
                                 <Edit className="w-4 h-4 mr-2" />
                                 Editar
                               </Button>
+                            </div>
+                          </div>
+
+                          {/* Mobile Layout */}
+                          <div className="md:hidden flex gap-3">
+                            <div className="p-3 rounded-xl bg-orange-500/10 shrink-0">
+                              <Car className="w-6 h-6 text-orange-500" />
+                            </div>
+                            <div className="flex-1 min-w-0 space-y-2">
+                              <h3 className="text-lg font-semibold text-foreground">{veiculo.marca} {veiculo.modelo}</h3>
+                              <p className="text-sm text-muted-foreground">{veiculo.ano} • {veiculo.placa} • {veiculo.combustivel || "Combustível não informado"}</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-0">
+                                  <Gauge className="w-3 h-3 mr-1" />
+                                  {veiculo.quilometragem.toLocaleString()} km
+                                </Badge>
+                                {atrasadas > 0 && (
+                                  <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 border-0">
+                                    <AlertTriangle className="w-3 h-3 mr-1" />
+                                    {atrasadas}
+                                  </Badge>
+                                )}
+                                {pendentes > 0 && (
+                                  <Badge className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-0">
+                                    <Clock className="w-3 h-3 mr-1" />
+                                    {pendentes}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => toggleDetalhes(veiculo.id)}
+                                  className="h-11 flex-1 text-orange-500 hover:text-orange-600 hover:bg-orange-500/10"
+                                >
+                                  <Settings className="w-4 h-4 mr-2" />
+                                  {isExpanded ? "Ocultar" : "Detalhes"}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => abrirEdicao(veiculo)}
+                                  className="h-11 flex-1 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
+                                >
+                                  <Edit className="w-4 h-4 mr-2" />
+                                  Editar
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         </CardContent>
@@ -422,7 +472,7 @@ export default function Veiculos() {
                               </div>
                               
                               {/* Usar componente ListaManutencoes para melhor organização */}
-                              <ListaManutencoes veiculoId={veiculo.id} />
+                              <ListaManutencoes veiculoId={veiculo.id} quilometragemAtual={veiculo.quilometragem} />
                               
                               {/* Manutenções Pendentes do Sistema Antigo */}
                               {manutencoesVeiculo.length > 0 && (
