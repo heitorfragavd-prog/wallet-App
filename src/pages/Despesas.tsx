@@ -446,11 +446,29 @@ const Despesas = () => {
                         despesasFiltradas.map((despesa) => (
                           <TableRow key={despesa.id} className="group">
                             <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 rounded-lg bg-red-500/10">
+                              <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-lg bg-red-500/10 shrink-0 mt-0.5">
                                   <ArrowDownRight className="w-4 h-4 text-red-500" />
                                 </div>
-                                <span className="font-medium">{despesa.descricao}</span>
+                                <div className="space-y-1">
+                                  <span className="font-medium">{despesa.descricao}</span>
+                                  {despesa.observacoes && (
+                                    <p className="text-xs text-muted-foreground italic line-clamp-1">{despesa.observacoes}</p>
+                                  )}
+                                  {despesa.tags && despesa.tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {despesa.tags.map((tag) => (
+                                        <span
+                                          key={tag.id}
+                                          className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                          style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                        >
+                                          {tag.nome}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell>
@@ -551,6 +569,22 @@ const Despesas = () => {
                                   </div>
                                   <div className="flex-1 min-w-0 space-y-2">
                                     <p className="font-medium text-foreground truncate">{despesa.descricao}</p>
+                                    {despesa.observacoes && (
+                                      <p className="text-xs text-muted-foreground italic line-clamp-2">{despesa.observacoes}</p>
+                                    )}
+                                    {despesa.tags && despesa.tags.length > 0 && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {despesa.tags.map((tag) => (
+                                          <span
+                                            key={tag.id}
+                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                            style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                          >
+                                            {tag.nome}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <div className="flex flex-col gap-2">
                                       <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
                                         {despesa.categorias?.nome || "Sem categoria"}

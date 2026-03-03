@@ -103,6 +103,9 @@ const Relatorios = () => {
     to: new Date()
   });
   const [selectedCategory, setSelectedCategory] = useState("todas");
+  const [showAllCategories, setShowAllCategories] = useState<boolean>(false);
+  const [showAllDespesas, setShowAllDespesas] = useState<boolean>(false);
+  const [showAllReceitas, setShowAllReceitas] = useState<boolean>(false);
   const { toast } = useToast();
   const { transacoes, loading } = useTransacoes();
   const { metas } = useMetas();
@@ -157,7 +160,7 @@ const Relatorios = () => {
     const totalDespesas = filteredByPeriod.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
 
     // Dados do gráfico por período
-    let chartData: any[] = [];
+    let chartData: Array<{ periodo: string; receitas: number; despesas: number; saldo: number }> = [];
     const msPerDay = 1000 * 60 * 60 * 24;
     const diasNoRange = dateRange?.from && dateRange?.to ? 
       Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / msPerDay) + 1 : 
@@ -212,12 +215,11 @@ const Relatorios = () => {
       .map(([k, v]) => ({ categoria: k.split("-")[0], valor: v.valor, cor: v.cor }))
       .sort((a, b) => b.valor - a.valor);
 
-    const topCategoriasDespesa = categoryData.slice(0, 5);
+    const topCategoriasDespesa = categoryData;
     const topCategoriasReceita = Array.from(categoryMap.entries())
       .filter(([_, v]) => v.tipo === "receita")
       .map(([k, v]) => ({ categoria: k.split("-")[0], valor: v.valor, cor: v.cor }))
-      .sort((a, b) => b.valor - a.valor)
-      .slice(0, 5);
+      .sort((a, b) => b.valor - a.valor);
 
     // Transações filtradas
     const filteredTransactions = filteredByPeriod
@@ -254,6 +256,33 @@ const Relatorios = () => {
 
   // Metas ativas
   const metasAtivas = metas.filter((m) => m.status === "ativa").slice(0, 3);
+
+  // Projeção de saldo — baseada na média diária do período selecionado
+  const diasNoPeriodo = useMemo(() => {
+    if (dateRange?.from && dateRange?.to) {
+      return Math.max(1, Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    }
+    return 30;
+  }, [dateRange]);
+
+  const projecaoMeses = useMemo(() => {
+    if (diasNoPeriodo === 0 || (totalReceitas === 0 && totalDespesas === 0)) return [];
+    const receitaDiaria = totalReceitas / diasNoPeriodo;
+    const despesaDiaria = totalDespesas / diasNoPeriodo;
+    const today = new Date();
+    return [1, 2, 3].map((offset) => {
+      const mes = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+      const diasNoMes = new Date(mes.getFullYear(), mes.getMonth() + 1, 0).getDate();
+      const projetadoReceitas = receitaDiaria * diasNoMes;
+      const projetadoDespesas = despesaDiaria * diasNoMes;
+      return {
+        mes: mes.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
+        receitas: projetadoReceitas,
+        despesas: projetadoDespesas,
+        saldo: projetadoReceitas - projetadoDespesas,
+      };
+    });
+  }, [totalReceitas, totalDespesas, diasNoPeriodo]);
 
   const handleExportReport = () => {
     try {
@@ -564,13 +593,13 @@ const Relatorios = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-2 sm:px-6">
-                  <div className="h-[320px] sm:h-[380px]">
+                  <div className={`transition-all duration-300 ${showAllCategories ? "h-[500px] sm:h-[600px]" : "h-[380px] sm:h-[460px]"}`}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie 
                           data={categoryData} 
                           cx="50%" 
-                          cy="42%" 
+                          cy={showAllCategories ? "30%" : "38%"} 
                           innerRadius={65} 
                           outerRadius={95} 
                           paddingAngle={3} 
@@ -630,15 +659,20 @@ const Relatorios = () => {
                           }}
                         />
                         <Legend 
-                          verticalAlign="bottom" 
-                          height={120}
-                          content={(props: any) => {
+                          verticalAlign="bottom"
+                          wrapperStyle={{ paddingTop: "20px" }}
+                          content={(props: { payload?: Array<{ color: string; payload: any }> }) => {
                             const { payload } = props;
                             if (!payload) return null;
                             
+                            const maxItems = 6;
+                            const hasMore = payload.length > maxItems;
+                            const displayedItems = showAllCategories ? payload : payload.slice(0, maxItems);
+                            
                             return (
-                              <ul className="grid grid-cols-2 gap-x-2 gap-y-3 pt-6">
-                                {payload.map((entry: any, index: number) => {
+                              <div className="flex flex-col">
+                                <ul className="grid grid-cols-2 gap-x-2 gap-y-3 pt-6">
+                                  {displayedItems.map((entry: { color: string; payload: { valor: number; icone?: string; categoria?: string; cor?: string } }, index: number) => {
                                   const data = entry.payload;
                                   const iconName = data.icone as keyof typeof icons;
                                   const IconComponent = iconName && icons[iconName] 
@@ -666,7 +700,16 @@ const Relatorios = () => {
                                     </li>
                                   );
                                 })}
-                              </ul>
+                                </ul>
+                                {hasMore && (
+                                  <button
+                                    onClick={() => setShowAllCategories(!showAllCategories)}
+                                    className="mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors mx-auto flex items-center gap-1 bg-secondary/30 px-3 py-1.5 rounded-full"
+                                  >
+                                    {showAllCategories ? "Ver menos" : `Ver mais (${payload.length - maxItems})`}
+                                  </button>
+                                )}
+                              </div>
                             );
                           }}
                         />
@@ -680,10 +723,10 @@ const Relatorios = () => {
               <div className="space-y-4">
                 <Card>
                   <CardHeader className="pb-2 px-3 sm:px-6">
-                    <CardTitle className="text-sm sm:text-base text-red-500">Top 5 Despesas</CardTitle>
+                    <CardTitle className="text-sm sm:text-base text-red-500">Top Despesas</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 px-3 sm:px-6">
-                    {topCategoriasDespesa.map((cat, i) => (
+                    {(showAllDespesas ? topCategoriasDespesa : topCategoriasDespesa.slice(0, 5)).map((cat, i) => (
                       <div key={i} className="flex items-center gap-3">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.cor }} />
                         <div className="flex-1">
@@ -695,15 +738,25 @@ const Relatorios = () => {
                         </div>
                       </div>
                     ))}
+                    {topCategoriasDespesa.length > 5 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full text-xs text-muted-foreground hover:text-red-400 mt-1"
+                        onClick={() => setShowAllDespesas(!showAllDespesas)}
+                      >
+                        {showAllDespesas ? "Ver menos" : `Ver mais (${topCategoriasDespesa.length - 5})`}
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
 
                 <Card>
                   <CardHeader className="pb-2 px-3 sm:px-6">
-                    <CardTitle className="text-sm sm:text-base text-green-500">Top 5 Receitas</CardTitle>
+                    <CardTitle className="text-sm sm:text-base text-green-500">Top Receitas</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 px-3 sm:px-6">
-                    {topCategoriasReceita.map((cat, i) => (
+                    {(showAllReceitas ? topCategoriasReceita : topCategoriasReceita.slice(0, 5)).map((cat, i) => (
                       <div key={i} className="flex items-center gap-3">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.cor }} />
                         <div className="flex-1">
@@ -715,6 +768,16 @@ const Relatorios = () => {
                         </div>
                       </div>
                     ))}
+                    {topCategoriasReceita.length > 5 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full text-xs text-muted-foreground hover:text-green-400 mt-1"
+                        onClick={() => setShowAllReceitas(!showAllReceitas)}
+                      >
+                        {showAllReceitas ? "Ver menos" : `Ver mais (${topCategoriasReceita.length - 5})`}
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -889,6 +952,52 @@ const Relatorios = () => {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Projeção de Saldo */}
+            {projecaoMeses.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2 px-3 sm:px-6">
+                  <CardTitle className="text-sm sm:text-base flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500 flex-shrink-0" />
+                    Projeção de Saldo — Próximos 3 Meses
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-3 sm:px-6 space-y-4">
+                  <div className="h-[160px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={projecaoMeses} barGap={4}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="opacity-10" />
+                        <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip
+                          formatter={(value: number, name: string) => [
+                            `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+                            name === "receitas" ? "Receitas" : name === "despesas" ? "Despesas" : "Saldo",
+                          ]}
+                        />
+                        <Bar dataKey="receitas" fill="#22c55e" radius={[4, 4, 0, 0]} name="receitas" />
+                        <Bar dataKey="despesas" fill="#ef4444" radius={[4, 4, 0, 0]} name="despesas" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="space-y-2">
+                    {projecaoMeses.map((p, i) => (
+                      <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                        <span className="text-sm font-medium capitalize">{p.mes}</span>
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="text-green-500">+{p.receitas.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                          <span className="text-red-500">-{p.despesas.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                          <span className={`font-semibold ${p.saldo >= 0 ? "text-blue-500" : "text-orange-500"}`}>
+                            = R$ {p.saldo.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">* Projeção baseada na média diária do período selecionado.</p>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Dicas Financeiras */}
             <Card>

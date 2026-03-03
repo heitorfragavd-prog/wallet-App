@@ -447,11 +447,29 @@ const Receitas = () => {
                         receitasFiltradas.map((receita) => (
                           <TableRow key={receita.id} className="group">
                             <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className="p-2 rounded-lg bg-green-500/10">
+                              <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-lg bg-green-500/10 shrink-0 mt-0.5">
                                   <ArrowUpRight className="w-4 h-4 text-green-500" />
                                 </div>
-                                <span className="font-medium">{receita.descricao}</span>
+                                <div className="space-y-1">
+                                  <span className="font-medium">{receita.descricao}</span>
+                                  {receita.observacoes && (
+                                    <p className="text-xs text-muted-foreground italic line-clamp-1">{receita.observacoes}</p>
+                                  )}
+                                  {receita.tags && receita.tags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {receita.tags.map((tag) => (
+                                        <span
+                                          key={tag.id}
+                                          className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                          style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                        >
+                                          {tag.nome}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell>
@@ -552,6 +570,22 @@ const Receitas = () => {
                                   </div>
                                   <div className="flex-1 min-w-0 space-y-2">
                                     <p className="font-medium text-foreground truncate">{receita.descricao}</p>
+                                    {receita.observacoes && (
+                                      <p className="text-xs text-muted-foreground italic line-clamp-2">{receita.observacoes}</p>
+                                    )}
+                                    {receita.tags && receita.tags.length > 0 && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {receita.tags.map((tag) => (
+                                          <span
+                                            key={tag.id}
+                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                            style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                          >
+                                            {tag.nome}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                     <div className="flex flex-col gap-2">
                                       <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
                                         {receita.categorias?.nome || "Sem categoria"}

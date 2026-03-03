@@ -10,6 +10,7 @@ export interface Despesa extends Omit<DespesaType, 'tags' | 'anexos'> {
     cor: string;
     icone: string;
   };
+  tags?: Array<{ id: string; nome: string; cor?: string }>;
 }
 
 export const useDespesas = () => {
@@ -24,7 +25,8 @@ export const useDespesas = () => {
         .from('despesas')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias (nome, cor, icone),
+          despesa_tags (tags (id, nome, cor))
         `);
 
       if (despesasError) throw despesasError;
@@ -40,9 +42,15 @@ export const useDespesas = () => {
 
       if (transacoesError) throw transacoesError;
 
+      // Mapear tags para estrutura flat
+      const mappedDespesas = (despesasData || []).map((d: any) => ({
+        ...d,
+        tags: d.despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) || [],
+      }));
+
       // Combinar os dados
       const allDespesas = [
-        ...(despesasData || []),
+        ...mappedDespesas,
         ...(transacoesData || [])
       ];
 

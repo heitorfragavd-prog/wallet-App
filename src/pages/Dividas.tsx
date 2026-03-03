@@ -68,6 +68,24 @@ const formatarData = (dataString: string) => {
   return `${dia}/${mes}/${ano}`;
 };
 
+// Calcula dias até o vencimento (negativo = já venceu)
+const calcularDiasAteVencimento = (dataVencimento: string): number => {
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const vencimento = new Date(dataVencimento.split("T")[0] + "T00:00:00");
+  return Math.ceil((vencimento.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
+};
+
+const DiasVencimentoBadge = ({ dataVencimento, status }: { dataVencimento: string; status: string }) => {
+  if (status === "quitada") return null;
+  const dias = calcularDiasAteVencimento(dataVencimento);
+  if (dias < 0) return <span className="text-xs font-medium text-red-500">{Math.abs(dias)}d vencida</span>;
+  if (dias === 0) return <span className="text-xs font-medium text-red-500">Vence hoje!</span>;
+  if (dias <= 7) return <span className="text-xs font-medium text-orange-500">{dias}d restantes</span>;
+  if (dias <= 30) return <span className="text-xs font-medium text-yellow-600">{dias}d restantes</span>;
+  return <span className="text-xs text-muted-foreground">{dias}d</span>;
+};
+
 // Ícones e labels para métodos de pagamento
 const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
   pix: Smartphone,
@@ -603,6 +621,7 @@ const Dividas = () => {
                                 <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
                                 <span className="text-sm">{formatarData(divida.data_vencimento)}</span>
                               </div>
+                              <DiasVencimentoBadge dataVencimento={divida.data_vencimento} status={divida.status} />
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground mb-1">Valor Restante</p>
@@ -784,6 +803,7 @@ const Dividas = () => {
                                 <div>
                                   <p className="text-xs text-muted-foreground">Vencimento</p>
                                   <p className="font-medium">{formatarData(divida.data_vencimento)}</p>
+                                  <DiasVencimentoBadge dataVencimento={divida.data_vencimento} status={divida.status} />
                                 </div>
                                 <div>
                                   <p className="text-xs text-muted-foreground">Categoria</p>

@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
+import { DateRange } from "react-day-picker";
+import { DatePickerWithRange } from "@/shared/components/ui/date-range-picker";
 import { Badge } from "@/shared/components/ui/badge";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -26,6 +27,11 @@ import {
   ChevronRight,
   Target,
   Sparkles,
+  Wrench,
+  Repeat,
+  CalendarX2,
+  BarChart3,
+  Layers,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
@@ -34,6 +40,9 @@ import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useVeiculos } from "@/domains/vehicles/hooks/useVeiculos";
 import { useMetas } from "@/domains/finance/hooks/useMetas";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
+import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao";
+import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
+import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTransactions";
 
 // Função para formatar a data corretamente
 const formatarData = (dataString: string) => {
@@ -50,36 +59,16 @@ const formatarDataRelativa = (dataString: string) => {
   hoje.setHours(12, 0, 0, 0);
   const ontem = new Date(hoje);
   ontem.setDate(ontem.getDate() - 1);
-  
+
   if (data.toDateString() === hoje.toDateString()) return "Hoje";
   if (data.toDateString() === ontem.toDateString()) return "Ontem";
   return formatarData(dataString);
-};
-
-// Função para obter a data atual no formato do banco (YYYY-MM-DD)
-const getDataAtual = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-};
-
-// Função para obter o primeiro dia da semana
-const getPrimeiroDiaSemana = () => {
-  const now = new Date();
-  const primeiroDiaSemana = new Date(now);
-  primeiroDiaSemana.setDate(now.getDate() - now.getDay());
-  return `${primeiroDiaSemana.getFullYear()}-${String(primeiroDiaSemana.getMonth() + 1).padStart(2, "0")}-${String(primeiroDiaSemana.getDate()).padStart(2, "0")}`;
 };
 
 // Função para obter o primeiro dia do mês
 const getPrimeiroDiaMes = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-};
-
-// Função para obter o primeiro dia do ano
-const getPrimeiroDiaAno = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-01-01`;
 };
 
 // Função para formatar o nome do mês
@@ -90,7 +79,10 @@ const formatarMes = (data: Date) => {
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const [selectedPeriod, setSelectedPeriod] = useState("mês");
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+    to: new Date()
+  });
 
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
   const { itensMercado, loading: loadingItens } = useItensMercado();
@@ -98,6 +90,9 @@ const Dashboard = () => {
   const { veiculos, loading: loadingVeiculos } = useVeiculos();
   const { metas, loading: loadingMetas } = useMetas();
   const { profile } = useProfile();
+  const { tiposManutencao } = useTiposManutencao();
+  const { manutencoesPendentes, loading: loadingManutencoes } = useManutencoesPendentes(veiculos, tiposManutencao);
+  const { recorrentes } = useRecurringTransactions();
 
   // Processar dados com useMemo para performance
   const processedData = useMemo(() => {
@@ -111,17 +106,12 @@ const Dashboard = () => {
       };
     }
 
-    const hoje = getDataAtual();
+    const dataInicio = dateRange?.from ? dateRange.from.toISOString().split("T")[0] : getPrimeiroDiaMes();
+    const dataFim = dateRange?.to ? dateRange.to.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
 
     const transacoesFiltradas = transacoes.filter((transacao) => {
       const dataTransacao = transacao.data.split("T")[0];
-      switch (selectedPeriod) {
-        case "dia": return dataTransacao === hoje;
-        case "semana": return dataTransacao >= getPrimeiroDiaSemana();
-        case "mês": return dataTransacao >= getPrimeiroDiaMes();
-        case "ano": return dataTransacao >= getPrimeiroDiaAno();
-        default: return true;
-      }
+      return dataTransacao >= dataInicio && dataTransacao <= dataFim;
     });
 
     const totalReceitas = transacoesFiltradas
@@ -133,7 +123,7 @@ const Dashboard = () => {
       .reduce((total, t) => total + Number(t.valor), 0);
 
     return {
-      transacoesFiltradas: transacoesFiltradas.sort((a, b) => 
+      transacoesFiltradas: transacoesFiltradas.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       ),
       totalReceitas,
@@ -141,9 +131,82 @@ const Dashboard = () => {
       saldoPeriodo: totalReceitas - totalDespesas,
       percentualDespesas: totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0,
     };
-  }, [transacoes, selectedPeriod, loadingTransacoes]);
+  }, [transacoes, dateRange, loadingTransacoes]);
 
   const { transacoesFiltradas, totalReceitas, totalDespesas, saldoPeriodo, percentualDespesas } = processedData;
+
+  // Top categorias de despesas no período
+  const topCategorias = useMemo(() => {
+    const categoriaMap: Record<string, number> = {};
+    transacoesFiltradas
+      .filter((t) => t.tipo === "despesa")
+      .forEach((t) => {
+        const cat = t.categorias?.nome || "Sem categoria";
+        categoriaMap[cat] = (categoriaMap[cat] || 0) + Number(t.valor);
+      });
+    return Object.entries(categoriaMap)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([nome, valor]) => ({
+        nome,
+        valor,
+        percentual: totalDespesas > 0 ? (valor / totalDespesas) * 100 : 0,
+      }));
+  }, [transacoesFiltradas, totalDespesas]);
+
+  // Dívidas próximas ao vencimento (pendente, próximos 30 dias)
+  const dividasPendentesProximas = useMemo(() => {
+    const hoje = new Date();
+    const em30Dias = new Date(hoje);
+    em30Dias.setDate(hoje.getDate() + 30);
+    const hojeStr = hoje.toISOString().split("T")[0];
+    const em30DiasStr = em30Dias.toISOString().split("T")[0];
+    return dividas
+      .filter(
+        (d) =>
+          d.status === "pendente" &&
+          d.data_vencimento >= hojeStr &&
+          d.data_vencimento <= em30DiasStr
+      )
+      .sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento));
+  }, [dividas]);
+
+  // Total de dívidas em aberto (não quitadas)
+  const totalDividaGeral = useMemo(() => {
+    return dividas
+      .filter((d) => d.status !== "quitada")
+      .reduce((sum, d) => sum + Number(d.valor_restante), 0);
+  }, [dividas]);
+
+  // Manutenções atrasadas
+  const manutencoesAtrasadas = useMemo(() => {
+    return manutencoesPendentes.filter((m) => m.status === "Atrasada");
+  }, [manutencoesPendentes]);
+
+  // Manutenções pendentes (iminentes)
+  const manutencoesPendentesLista = useMemo(() => {
+    return manutencoesPendentes.filter((m) => m.status === "Pendente");
+  }, [manutencoesPendentes]);
+
+  // Transações recorrentes ativas
+  const recorrentesAtivos = useMemo(() => {
+    return recorrentes.filter((r) => r.ativo);
+  }, [recorrentes]);
+
+  // Total mensal das recorrentes (despesas - receitas)
+  const totalMensalRecorrentes = useMemo(() => {
+    return recorrentesAtivos.reduce((sum, r) => {
+      const mensal =
+        r.recorrencia === "anual"
+          ? r.valor / 12
+          : r.recorrencia === "semanal"
+          ? r.valor * 4.33
+          : r.recorrencia === "diaria"
+          ? r.valor * 30
+          : r.valor;
+      return sum + (r.tipo_transacao === "despesa" ? mensal : -mensal);
+    }, 0);
+  }, [recorrentesAtivos]);
 
   // Função para obter ícone da categoria
   const obterIconeCategoria = (categoria: string, tipo: "receita" | "despesa") => {
@@ -187,21 +250,30 @@ const Dashboard = () => {
       .slice(0, 3);
   }, [metas]);
 
+  // Metas próximas do prazo (ativas, vencendo em até 30 dias)
+  const metasProximasPrazo = useMemo(() => {
+    const hoje = new Date();
+    const em30Dias = new Date(hoje);
+    em30Dias.setDate(hoje.getDate() + 30);
+    const hojeStr = hoje.toISOString().split("T")[0];
+    const em30DiasStr = em30Dias.toISOString().split("T")[0];
+    return metas.filter(
+      (m) =>
+        m.status === "ativa" &&
+        m.data_limite >= hojeStr &&
+        m.data_limite <= em30DiasStr
+    );
+  }, [metas]);
+
   const user = {
     name: profile?.name || "Usuário",
     getCurrentPeriod: () => {
-      const now = new Date();
-      switch (selectedPeriod) {
-        case "dia": return formatarData(now.toISOString());
-        case "semana": {
-          const startOfWeek = new Date(now);
-          startOfWeek.setDate(now.getDate() - now.getDay());
-          return `Semana de ${formatarData(startOfWeek.toISOString())}`;
-        }
-        case "mês": return formatarMes(now);
-        case "ano": return now.getFullYear().toString();
-        default: return "Período atual";
+      if (dateRange?.from && dateRange?.to) {
+        return `${dateRange.from.toLocaleDateString("pt-BR")} - ${dateRange.to.toLocaleDateString("pt-BR")}`;
+      } else if (dateRange?.from) {
+        return `A partir de ${dateRange.from.toLocaleDateString("pt-BR")}`;
       }
+      return "Selecione um período";
     },
   };
 
@@ -213,6 +285,15 @@ const Dashboard = () => {
   };
 
   const saude = getSaudeFinanceira();
+
+  // Cores para as categorias no gráfico
+  const coresCategorias = [
+    "bg-orange-500",
+    "bg-blue-500",
+    "bg-purple-500",
+    "bg-pink-500",
+    "bg-teal-500",
+  ];
 
   return (
     <DashboardLayout>
@@ -231,14 +312,12 @@ const Dashboard = () => {
               <p className="text-muted-foreground">{user.getCurrentPeriod()}</p>
             </div>
           </div>
-          <Tabs value={selectedPeriod} onValueChange={setSelectedPeriod}>
-            <TabsList className="grid grid-cols-4 bg-muted/50">
-              <TabsTrigger value="dia" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white">Dia</TabsTrigger>
-              <TabsTrigger value="semana" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white">Semana</TabsTrigger>
-              <TabsTrigger value="mês" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white">Mês</TabsTrigger>
-              <TabsTrigger value="ano" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white">Ano</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex items-center gap-2">
+            <DatePickerWithRange
+              date={dateRange}
+              setDate={setDateRange}
+            />
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -328,6 +407,145 @@ const Dashboard = () => {
                   </>
                 )}
               </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Insights Row: Gastos por Categoria + Resumo de Dívidas */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Gastos por Categoria */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-orange-500" />
+                <CardTitle className="text-lg">Gastos por Categoria</CardTitle>
+              </div>
+              <Button variant="ghost" size="sm" className="text-orange-500 hover:text-orange-600" onClick={() => navigate("/relatorios")}>
+                Ver relatório <ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {loadingTransacoes ? (
+                <div className="space-y-3">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="space-y-1.5">
+                      <Skeleton className="h-4 w-1/2" />
+                      <Skeleton className="h-2 w-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : topCategorias.length > 0 ? (
+                <div className="space-y-3">
+                  {topCategorias.map((cat, idx) => (
+                    <div key={cat.nome} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${coresCategorias[idx % coresCategorias.length]}`} />
+                          <span className="text-foreground font-medium truncate max-w-[140px]">{cat.nome}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-right">
+                          <span className="text-muted-foreground text-xs">{cat.percentual.toFixed(0)}%</span>
+                          <span className="font-semibold text-red-500 whitespace-nowrap">
+                            R$ {cat.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                      <Progress
+                        value={cat.percentual}
+                        className={`h-1.5`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
+                  <BarChart3 className="w-10 h-10 mb-2 opacity-20" />
+                  <p className="text-sm">Nenhuma despesa no período</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Resumo Geral de Dívidas */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-orange-500" />
+                <CardTitle className="text-lg">Visão Geral de Dívidas</CardTitle>
+              </div>
+              <Button variant="ghost" size="sm" className="text-orange-500 hover:text-orange-600" onClick={() => navigate("/dividas")}>
+                Gerenciar <ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {loadingDividas ? (
+                <div className="space-y-3">
+                  {[...Array(3)].map((_, i) => (
+                    <Skeleton key={i} className="h-14 w-full rounded-xl" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  {/* Total em aberto */}
+                  <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-red-500/10 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Total em Aberto</p>
+                    <p className="text-lg font-bold text-red-500">
+                      R$ {totalDividaGeral.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  {/* Vencidas */}
+                  <div className={`flex flex-col items-center justify-center p-3 rounded-xl text-center ${dividasVencidas.length > 0 ? "bg-red-500/10" : "bg-muted/50"}`}>
+                    <p className="text-xs text-muted-foreground mb-1">Vencidas</p>
+                    <p className={`text-2xl font-bold ${dividasVencidas.length > 0 ? "text-red-500" : "text-foreground"}`}>
+                      {dividasVencidas.length}
+                    </p>
+                    <p className="text-xs text-muted-foreground">dívida{dividasVencidas.length !== 1 ? "s" : ""}</p>
+                  </div>
+                  {/* Próximas a vencer */}
+                  <div className={`flex flex-col items-center justify-center p-3 rounded-xl text-center ${dividasPendentesProximas.length > 0 ? "bg-yellow-500/10" : "bg-muted/50"}`}>
+                    <p className="text-xs text-muted-foreground mb-1">Próx. 30 dias</p>
+                    <p className={`text-2xl font-bold ${dividasPendentesProximas.length > 0 ? "text-yellow-600" : "text-foreground"}`}>
+                      {dividasPendentesProximas.length}
+                    </p>
+                    <p className="text-xs text-muted-foreground">vencendo</p>
+                  </div>
+                  {/* Próximas a vencer - lista */}
+                  {dividasPendentesProximas.length > 0 && (
+                    <div className="col-span-3 mt-1 space-y-1.5">
+                      {dividasPendentesProximas.slice(0, 3).map((divida) => (
+                        <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <CalendarX2 className="w-3.5 h-3.5 text-yellow-600 shrink-0" />
+                            <span className="text-sm truncate">{divida.descricao}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0 ml-2">
+                            <span className="text-xs text-muted-foreground">{formatarData(divida.data_vencimento)}</span>
+                            <span className="text-sm font-medium text-yellow-700">
+                              R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Recorrentes ativas */}
+                  <div className="col-span-3 flex items-center justify-between p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
+                    <div className="flex items-center gap-2">
+                      <Repeat className="w-4 h-4 text-blue-500" />
+                      <div>
+                        <p className="text-sm font-medium">Recorrentes Ativas</p>
+                        <p className="text-xs text-muted-foreground">{recorrentesAtivos.length} transaç{recorrentesAtivos.length !== 1 ? "ões" : "ão"} ativa{recorrentesAtivos.length !== 1 ? "s" : ""}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground">Impacto mensal</p>
+                      <p className={`text-sm font-bold ${totalMensalRecorrentes > 0 ? "text-red-500" : "text-green-500"}`}>
+                        {totalMensalRecorrentes > 0 ? "-" : "+"}R$ {Math.abs(totalMensalRecorrentes).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -424,51 +642,62 @@ const Dashboard = () => {
                     ))}
                   </div>
                 ) : metasAtivas.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {metasAtivas.map((meta) => (
-                      <div
-                        key={meta.id}
-                        className="relative p-4 rounded-xl bg-background/60 border border-border/50 hover:border-violet-500/30 transition-colors cursor-pointer"
-                        onClick={() => navigate("/metas")}
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-foreground truncate">{meta.titulo}</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              {meta.categorias_metas?.nome || meta.tipo}
+                  <div className="space-y-3">
+                    {/* Metas próximas do prazo */}
+                    {metasProximasPrazo.length > 0 && (
+                      <div className="flex items-center gap-2 p-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                        <AlertCircle className="w-4 h-4 text-yellow-600 shrink-0" />
+                        <p className="text-xs text-yellow-700">
+                          {metasProximasPrazo.length} meta{metasProximasPrazo.length !== 1 ? "s" : ""} próxima{metasProximasPrazo.length !== 1 ? "s" : ""} do prazo: {metasProximasPrazo.map(m => m.titulo).join(", ")}
+                        </p>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {metasAtivas.map((meta) => (
+                        <div
+                          key={meta.id}
+                          className="relative p-4 rounded-xl bg-background/60 border border-border/50 hover:border-violet-500/30 transition-colors cursor-pointer"
+                          onClick={() => navigate("/metas")}
+                        >
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{meta.titulo}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {meta.categorias_metas?.nome || meta.tipo}
+                              </p>
+                            </div>
+                            {meta.progresso >= 100 && (
+                              <Sparkles className="w-4 h-4 text-yellow-500 shrink-0" />
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                R$ {meta.valor_atual.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                              </span>
+                              <span className="font-medium text-violet-500">
+                                {meta.progresso.toFixed(0)}%
+                              </span>
+                            </div>
+                            <Progress
+                              value={Math.min(meta.progresso, 100)}
+                              className="h-1.5 bg-violet-500/20"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Meta: R$ {meta.valor_alvo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
                             </p>
                           </div>
-                          {meta.progresso >= 100 && (
-                            <Sparkles className="w-4 h-4 text-yellow-500 shrink-0" />
-                          )}
                         </div>
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">
-                              R$ {meta.valor_atual.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
-                            </span>
-                            <span className="font-medium text-violet-500">
-                              {meta.progresso.toFixed(0)}%
-                            </span>
-                          </div>
-                          <Progress 
-                            value={Math.min(meta.progresso, 100)} 
-                            className="h-1.5 bg-violet-500/20"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Meta: R$ {meta.valor_alvo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
                     <Target className="w-10 h-10 mb-2 opacity-20" />
                     <p className="text-sm">Nenhuma meta ativa</p>
-                    <Button 
-                      variant="link" 
-                      size="sm" 
+                    <Button
+                      variant="link"
+                      size="sm"
                       className="text-violet-500 mt-1"
                       onClick={() => navigate("/metas")}
                     >
@@ -480,7 +709,7 @@ const Dashboard = () => {
             </Card>
           </div>
 
-          {/* Alertas */}
+          {/* Alertas e Resumos */}
           <div className="space-y-4">
             {/* Dívidas Vencidas */}
             <Card className={dividasVencidas.length > 0 ? "border-red-500/30 bg-red-500/5" : ""}>
@@ -525,6 +754,78 @@ const Dashboard = () => {
                   </div>
                 </CardContent>
               )}
+            </Card>
+
+            {/* Manutenções Urgentes */}
+            <Card className={manutencoesAtrasadas.length > 0 ? "border-orange-500/30 bg-orange-500/5" : ""}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <div className="flex items-center gap-2">
+                  <div className={`p-2 rounded-lg ${manutencoesAtrasadas.length > 0 ? "bg-orange-500/20" : "bg-muted"}`}>
+                    <Wrench className={`w-4 h-4 ${manutencoesAtrasadas.length > 0 ? "text-orange-500" : "text-muted-foreground"}`} />
+                  </div>
+                  <div>
+                    <CardTitle className="text-sm font-medium">Manutenções</CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      {manutencoesAtrasadas.length > 0
+                        ? `${manutencoesAtrasadas.length} atrasada${manutencoesAtrasadas.length !== 1 ? "s" : ""}`
+                        : manutencoesPendentesLista.length > 0
+                        ? `${manutencoesPendentesLista.length} pendente${manutencoesPendentesLista.length !== 1 ? "s" : ""}`
+                        : "Em dia"}
+                    </p>
+                  </div>
+                </div>
+                <Button variant="ghost" size="sm" className="text-orange-500 h-8" onClick={() => navigate("/veiculos")}>
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </CardHeader>
+              {loadingManutencoes ? (
+                <CardContent className="pt-0">
+                  <div className="space-y-2">
+                    {[...Array(2)].map((_, i) => (
+                      <Skeleton key={i} className="h-10 w-full rounded-lg" />
+                    ))}
+                  </div>
+                </CardContent>
+              ) : manutencoesAtrasadas.length > 0 || manutencoesPendentesLista.length > 0 ? (
+                <CardContent className="pt-0">
+                  <div className="space-y-2">
+                    {[...manutencoesAtrasadas, ...manutencoesPendentesLista].slice(0, 3).map((m) => (
+                      <div key={m.id} className="flex items-center justify-between p-2 rounded-lg bg-background/50">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className={`w-2 h-2 rounded-full shrink-0 ${m.status === "Atrasada" ? "bg-red-500" : "bg-orange-400"}`} />
+                          <div className="min-w-0">
+                            <p className="text-sm truncate">{m.tipo}</p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {m.veiculo ? `${m.veiculo.marca} ${m.veiculo.modelo}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`text-xs shrink-0 ml-2 ${
+                            m.status === "Atrasada"
+                              ? "border-red-500/50 text-red-500"
+                              : "border-orange-500/50 text-orange-500"
+                          }`}
+                        >
+                          {m.status}
+                        </Badge>
+                      </div>
+                    ))}
+                    <p className="text-xs text-muted-foreground pt-1">
+                      {manutencoesAtrasadas.length > 0 && (
+                        <span className="text-red-500 font-medium">
+                          {manutencoesAtrasadas.map(m => m.proximaEm.replace("Atrasada em ", "")).join(" • ")}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </CardContent>
+              ) : manutencoesPendentes.length > 0 ? (
+                <CardContent className="pt-0">
+                  <p className="text-sm text-muted-foreground text-center py-2">Todas em dia</p>
+                </CardContent>
+              ) : null}
             </Card>
 
             {/* Estoque Baixo */}
@@ -587,17 +888,25 @@ const Dashboard = () => {
                   </div>
                 ) : veiculos.length > 0 ? (
                   <div className="space-y-2">
-                    {veiculos.slice(0, 3).map((veiculo) => (
-                      <div key={veiculo.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors">
-                        <div className="p-2 rounded-lg bg-muted">
-                          <Car className="w-4 h-4 text-muted-foreground" />
+                    {veiculos.slice(0, 3).map((veiculo) => {
+                      const atrasadasVeiculo = manutencoesAtrasadas.filter(m => m.veiculo_id === veiculo.id);
+                      return (
+                        <div key={veiculo.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors">
+                          <div className="p-2 rounded-lg bg-muted">
+                            <Car className="w-4 h-4 text-muted-foreground" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{veiculo.marca} {veiculo.modelo}</p>
+                            <p className="text-xs text-muted-foreground">{veiculo.ano} • {veiculo.quilometragem.toLocaleString()} km</p>
+                          </div>
+                          {atrasadasVeiculo.length > 0 && (
+                            <Badge variant="outline" className="text-xs border-red-500/50 text-red-500 shrink-0">
+                              {atrasadasVeiculo.length} atr.
+                            </Badge>
+                          )}
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{veiculo.marca} {veiculo.modelo}</p>
-                          <p className="text-xs text-muted-foreground">{veiculo.ano} • {veiculo.quilometragem.toLocaleString()} km</p>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-4">Nenhum veículo cadastrado</p>

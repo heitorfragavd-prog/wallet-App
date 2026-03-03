@@ -41,11 +41,15 @@ import {
   Sparkles,
   ChevronRight,
   Filter,
+  RefreshCw,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useMetas } from "@/domains/finance/hooks/useMetas";
 import { useCategoriasMetas, CategoriaMeta } from "@/domains/finance/hooks/useCategoriasMetas";
 import { Meta } from "@/domains/finance/hooks/useMetas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 
 interface MetaForm {
   titulo: string;
@@ -71,6 +75,8 @@ const formatDateForDisplay = (dateString: string) => {
 const Metas = () => {
   const { toast } = useToast();
   const { metas, createMeta, updateMeta, deleteMeta } = useMetas();
+  const { despesas } = useDespesas();
+  const { receitas } = useReceitas();
   const {
     categoriasMetas,
     createCategoriaMeta,
@@ -191,6 +197,45 @@ const Metas = () => {
 
   const calcularProgresso = (valorAtual: number, valorAlvo: number) => {
     return Math.min((valorAtual / valorAlvo) * 100, 100);
+  };
+
+  // Calcula progresso automático baseado nas transações do período da meta
+  const progressosAutomaticos = useMemo(() => {
+    const map: Record<string, number> = {};
+    metas.forEach((meta) => {
+      const inicio = new Date(meta.data_inicio + "T00:00:00");
+      const limite = new Date(meta.data_limite + "T23:59:59");
+
+      const receitasNoPeriodo = receitas
+        .filter((r) => { const d = new Date(r.data); return d >= inicio && d <= limite; })
+        .reduce((acc, r) => acc + r.valor, 0);
+
+      const despesasNoPeriodo = despesas
+        .filter((d) => { const dt = new Date(d.data); return dt >= inicio && dt <= limite; })
+        .reduce((acc, d) => acc + d.valor, 0);
+
+      switch (meta.tipo) {
+        case "receita":
+          map[meta.id] = receitasNoPeriodo;
+          break;
+        case "despesa":
+          map[meta.id] = despesasNoPeriodo;
+          break;
+        case "economia":
+          map[meta.id] = Math.max(0, receitasNoPeriodo - despesasNoPeriodo);
+          break;
+        default:
+          map[meta.id] = meta.valor_atual;
+      }
+    });
+    return map;
+  }, [metas, receitas, despesas]);
+
+  const sincronizarProgresso = async (meta: Meta) => {
+    const valorCalculado = progressosAutomaticos[meta.id];
+    if (valorCalculado === undefined || valorCalculado === meta.valor_atual) return;
+    await updateMeta(meta.id, { valor_atual: valorCalculado });
+    toast({ title: "Progresso sincronizado", description: `"${meta.titulo}" atualizado para R$ ${valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` });
   };
 
   const getStatusConfig = (status: string) => {
@@ -489,6 +534,28 @@ const Metas = () => {
                               <span>Meta: R$ {meta.valor_alvo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                               <span>Prazo: {formatDateForDisplay(meta.data_limite)}</span>
                             </div>
+                            {/* Auto-progress indicator */}
+                            {meta.tipo !== "investimento" && (() => {
+                              const autoVal = progressosAutomaticos[meta.id];
+                              if (autoVal === undefined || autoVal === meta.valor_atual) return null;
+                              return (
+                                <div className="flex items-center justify-between p-2 rounded-lg bg-blue-500/10 mt-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <Zap className="w-3 h-3 text-blue-500" />
+                                    <span className="text-xs text-blue-600 dark:text-blue-400">
+                                      Calculado: R$ {autoVal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => sincronizarProgresso(meta)}
+                                    className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    Sincronizar
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Indicador de progresso completo */}
@@ -573,6 +640,37 @@ const Metas = () => {
                             </p>
                           </div>
                         </div>
+
+                        {/* Auto-progress sync */}
+                        {meta.tipo !== "investimento" && (() => {
+                          const autoVal = progressosAutomaticos[meta.id];
+                          if (autoVal === undefined || autoVal === meta.valor_atual) return null;
+                          const autoProgresso = calcularProgresso(autoVal, meta.valor_alvo);
+                          return (
+                            <div className="p-3 rounded-lg bg-blue-500/10 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                  <Zap className="w-3.5 h-3.5 text-blue-500" />
+                                  <span className="text-xs font-medium text-blue-600 dark:text-blue-400">Calculado pelas transações</span>
+                                </div>
+                                <button
+                                  onClick={() => sincronizarProgresso(meta)}
+                                  className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  Sincronizar
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-blue-600 dark:text-blue-400">
+                                  R$ {autoVal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </span>
+                                <span className="text-blue-500 font-medium">{autoProgresso.toFixed(1)}%</span>
+                              </div>
+                              <Progress value={autoProgresso} className="h-1.5 bg-blue-200/50" />
+                            </div>
+                          );
+                        })()}
 
                         {/* Footer */}
                         <div className="flex items-center justify-between pt-2 border-t border-border">

@@ -10,6 +10,7 @@ export interface Receita extends Omit<ReceitaType, 'tags' | 'anexos'> {
     cor: string;
     icone: string;
   };
+  tags?: Array<{ id: string; nome: string; cor?: string }>;
 }
 
 export const useReceitas = () => {
@@ -24,7 +25,8 @@ export const useReceitas = () => {
         .from('receitas')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias (nome, cor, icone),
+          receita_tags (tags (id, nome, cor))
         `);
 
       if (receitasError) throw receitasError;
@@ -40,9 +42,15 @@ export const useReceitas = () => {
 
       if (transacoesError) throw transacoesError;
 
+      // Mapear tags para estrutura flat
+      const mappedReceitas = (receitasData || []).map((r: any) => ({
+        ...r,
+        tags: r.receita_tags?.map((rt: any) => rt.tags).filter(Boolean) || [],
+      }));
+
       // Combinar os dados
       const allReceitas = [
-        ...(receitasData || []),
+        ...mappedReceitas,
         ...(transacoesData || [])
       ];
 
