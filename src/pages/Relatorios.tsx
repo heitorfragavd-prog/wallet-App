@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { addDays, subDays } from "date-fns";
+import { DateRange } from "react-day-picker";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
@@ -13,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select";
+import { DatePickerWithRange } from "@/shared/components/ui/date-range-picker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
 import {
   Table,
@@ -38,7 +41,9 @@ import {
   Area,
   Tooltip,
   Legend,
+  TooltipProps
 } from "recharts";
+import * as LucideIcons from "lucide-react";
 import {
   TrendingUp,
   TrendingDown,
@@ -93,7 +98,10 @@ const getMesAnterior = () => {
 };
 
 const Relatorios = () => {
-  const [selectedPeriod, setSelectedPeriod] = useState("mes");
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({
+    from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+    to: new Date()
+  });
   const [selectedCategory, setSelectedCategory] = useState("todas");
   const { toast } = useToast();
   const { transacoes, loading } = useTransacoes();
@@ -112,29 +120,37 @@ const Relatorios = () => {
     }
 
     // Filtrar por período
-    const getDataInicio = () => {
-      switch (selectedPeriod) {
-        case "semana": return getPrimeiroDiaSemana();
-        case "mes": return getPrimeiroDiaMes();
-        case "trimestre": return getPrimeiroDiaTrimestre();
-        case "ano": return getPrimeiroDiaAno();
-        default: return getPrimeiroDiaMes();
-      }
-    };
+    const dataInicio = dateRange?.from ? dateRange.from.toISOString().split("T")[0] : getPrimeiroDiaMes();
+    const dataFim = dateRange?.to ? dateRange.to.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
 
-    const dataInicio = getDataInicio();
-    const filteredByPeriod = transacoes.filter((t) => t.data.split("T")[0] >= dataInicio);
-
-    // Dados do mês anterior para comparação
-    const mesAnteriorInicio = getMesAnterior();
-    const mesAnteriorFim = getPrimeiroDiaMes();
-    const transacoesMesAnterior = transacoes.filter((t) => {
-      const data = t.data.split("T")[0];
-      return data >= mesAnteriorInicio && data < mesAnteriorFim;
+    const filteredByPeriod = transacoes.filter((t) => {
+      const dataTransacao = t.data.split("T")[0];
+      return dataTransacao >= dataInicio && dataTransacao <= dataFim;
     });
 
-    const receitasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-    const despesasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
+    // Dados do mês/período anterior para comparação (mesma duração do range atual)
+    let receitasMesAnterior = 0;
+    let despesasMesAnterior = 0;
+    
+    if (dateRange?.from) {
+      const msPerDay = 1000 * 60 * 60 * 24;
+      const rangeDuration = dateRange.to ? 
+        Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / msPerDay) : 30;
+      
+      const previousPeriodEnd = subDays(dateRange.from, 1);
+      const previousPeriodStart = subDays(previousPeriodEnd, rangeDuration);
+      
+      const prevInicio = previousPeriodStart.toISOString().split("T")[0];
+      const prevFim = previousPeriodEnd.toISOString().split("T")[0];
+
+      const transacoesMesAnterior = transacoes.filter((t) => {
+        const data = t.data.split("T")[0];
+        return data >= prevInicio && data <= prevFim;
+      });
+
+      receitasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
+      despesasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
+    }
 
     // Totais do período atual
     const totalReceitas = filteredByPeriod.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
@@ -142,34 +158,41 @@ const Relatorios = () => {
 
     // Dados do gráfico por período
     let chartData: any[] = [];
-    const meses = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const diasNoRange = dateRange?.from && dateRange?.to ? 
+      Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / msPerDay) + 1 : 
+      dateRange?.from ? 1 : 30;
 
-    if (selectedPeriod === "semana") {
-      const days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-      chartData = days.map((day, idx) => {
-        const dayTransactions = filteredByPeriod.filter((t) => new Date(t.data + "T12:00:00").getDay() === idx);
-        const receitas = dayTransactions.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-        const despesas = dayTransactions.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-        return { periodo: day, receitas, despesas, saldo: receitas - despesas };
-      });
-    } else if (selectedPeriod === "mes") {
-      const now = new Date();
-      const diasNoMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      chartData = Array.from({ length: diasNoMes }, (_, i) => {
-        const dia = String(i + 1).padStart(2, "0");
-        const dataDia = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${dia}`;
-        const transacoesDia = filteredByPeriod.filter((t) => t.data.split("T")[0] === dataDia);
+    if (diasNoRange <= 31) {
+      // Agrupar por dia
+      for (let i = 0; i < diasNoRange; i++) {
+        const currentDate = dateRange?.from ? addDays(dateRange.from, i) : new Date();
+        const dataStr = currentDate.toISOString().split("T")[0];
+        
+        const transacoesDia = filteredByPeriod.filter((t) => t.data.split("T")[0] === dataStr);
         const receitas = transacoesDia.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
         const despesas = transacoesDia.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-        return { periodo: dia, receitas, despesas, saldo: receitas - despesas };
+        
+        const formatoDia = currentDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        chartData.push({ periodo: formatoDia, receitas, despesas, saldo: receitas - despesas });
+      }
+    } else {
+      // Agrupar por mês
+      const mesesMap = new Map();
+      filteredByPeriod.forEach(t => {
+        const dateObj = new Date(t.data);
+        const mesAnoVar = dateObj.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+        
+        if (!mesesMap.has(mesAnoVar)) {
+          mesesMap.set(mesAnoVar, { periodo: mesAnoVar, receitas: 0, despesas: 0 });
+        }
+        
+        const data = mesesMap.get(mesAnoVar);
+        if (t.tipo === "receita") data.receitas += Number(t.valor);
+        if (t.tipo === "despesa") data.despesas += Number(t.valor);
+        data.saldo = data.receitas - data.despesas;
       });
-    } else if (selectedPeriod === "ano") {
-      chartData = meses.map((mes, idx) => {
-        const mesTransactions = filteredByPeriod.filter((t) => new Date(t.data + "T12:00:00").getMonth() === idx);
-        const receitas = mesTransactions.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-        const despesas = mesTransactions.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-        return { periodo: mes, receitas, despesas, saldo: receitas - despesas };
-      });
+      chartData = Array.from(mesesMap.values());
     }
 
     // Dados por categoria
@@ -218,7 +241,7 @@ const Relatorios = () => {
       diasComTransacoes: diasUnicos,
       maiorReceita, maiorDespesa,
     };
-  }, [transacoes, selectedPeriod, selectedCategory, loading]);
+  }, [transacoes, dateRange, selectedCategory, loading]);
 
   const { chartData, categoryData, filteredTransactions, totalReceitas, totalDespesas, saldoTotal,
     receitasMesAnterior, despesasMesAnterior, topCategoriasDespesa, topCategoriasReceita,
@@ -239,7 +262,8 @@ const Relatorios = () => {
       const blob = new Blob([csvHeader + csvData], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `relatorio-${selectedPeriod}-${new Date().toISOString().split("T")[0]}.csv`;
+      const dataInicio = dateRange?.from ? dateRange.from.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
+      link.download = `relatorio-${dataInicio}.csv`;
       link.click();
       toast({ title: "Relatório exportado!", description: "O arquivo CSV foi baixado." });
     } catch {
@@ -248,13 +272,12 @@ const Relatorios = () => {
   };
 
   const getPeriodoLabel = () => {
-    switch (selectedPeriod) {
-      case "semana": return "Esta Semana";
-      case "mes": return "Este Mês";
-      case "trimestre": return "Este Trimestre";
-      case "ano": return "Este Ano";
-      default: return "";
+    if (dateRange?.from && dateRange?.to) {
+      return `${dateRange.from.toLocaleDateString("pt-BR")} - ${dateRange.to.toLocaleDateString("pt-BR")}`;
+    } else if (dateRange?.from) {
+      return `A partir de ${dateRange.from.toLocaleDateString("pt-BR")}`;
     }
+    return "Selecione um período";
   };
 
   return (
@@ -272,21 +295,16 @@ const Relatorios = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-              <SelectTrigger className="w-36">
-                <Calendar className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="semana">Semana</SelectItem>
-                <SelectItem value="mes">Mês</SelectItem>
-                <SelectItem value="trimestre">Trimestre</SelectItem>
-                <SelectItem value="ano">Ano</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button onClick={handleExportReport} variant="outline">
+            <DatePickerWithRange 
+              date={dateRange}
+              setDate={setDateRange}
+            />
+            <Button onClick={handleExportReport} variant="outline" className="hidden sm:flex">
               <Download className="w-4 h-4 mr-2" />
               Exportar
+            </Button>
+            <Button onClick={handleExportReport} variant="outline" size="icon" className="sm:hidden">
+              <Download className="w-4 h-4" />
             </Button>
           </div>
         </div>
@@ -546,45 +564,63 @@ const Relatorios = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-2 sm:px-6">
-                  <div className="h-[250px] sm:h-[300px]">
+                  <div className="h-[320px] sm:h-[380px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie 
                           data={categoryData} 
                           cx="50%" 
-                          cy="50%" 
-                          innerRadius={60} 
-                          outerRadius={100} 
-                          paddingAngle={2} 
+                          cy="42%" 
+                          innerRadius={65} 
+                          outerRadius={95} 
+                          paddingAngle={3} 
                           dataKey="valor"
-                          label={({ categoria, percent }) => `${categoria} (${(percent * 100).toFixed(0)}%)`}
-                          labelLine={{ stroke: "hsl(var(--muted-foreground))", strokeWidth: 1 }}
+                          stroke="none"
                         >
                           {categoryData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.cor} className="outline-none focus:outline-none" />
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={entry.cor} 
+                              className="outline-none focus:outline-none drop-shadow-sm transition-all duration-300 hover:opacity-80" 
+                            />
                           ))}
                         </Pie>
                         <Tooltip 
-                          content={({ active, payload }) => {
+                          cursor={{ fill: "transparent" }}
+                          content={({ active, payload }: TooltipProps<number, string>) => {
                             if (active && payload && payload.length) {
                               const data = payload[0].payload;
                               const percentual = totalDespesas > 0 ? ((data.valor / totalDespesas) * 100).toFixed(1) : 0;
+                              
+                              // Resolving the icon from Lucide React
+                              const iconName = data.icone as keyof typeof LucideIcons;
+                              const IconComponent = iconName && LucideIcons[iconName] 
+                                ? LucideIcons[iconName] as React.ElementType
+                                : LucideIcons.Tag;
+
                               return (
-                                <div className="bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[180px]">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: data.cor }} />
-                                    <span className="font-semibold text-popover-foreground">{data.categoria}</span>
+                                <div className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl p-4 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
+                                  <div className="flex items-center gap-3 mb-3 pb-3 border-b border-border/50">
+                                    <div 
+                                      className="flex items-center justify-center w-8 h-8 rounded-full shadow-inner" 
+                                      style={{ backgroundColor: `${data.cor}20`, color: data.cor }}
+                                    >
+                                      <IconComponent size={16} strokeWidth={2.5} />
+                                    </div>
+                                    <span className="font-semibold text-foreground">{data.categoria}</span>
                                   </div>
-                                  <div className="space-y-1">
-                                    <div className="flex justify-between text-sm">
-                                      <span className="text-muted-foreground">Valor:</span>
-                                      <span className="font-medium text-popover-foreground">
+                                  <div className="space-y-2">
+                                    <div className="flex justify-between items-end text-sm">
+                                      <span className="text-muted-foreground">Valor</span>
+                                      <span className="font-bold text-foreground text-base">
                                         R$ {data.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                                       </span>
                                     </div>
-                                    <div className="flex justify-between text-sm">
-                                      <span className="text-muted-foreground">Percentual:</span>
-                                      <span className="font-medium text-popover-foreground">{percentual}%</span>
+                                    <div className="flex justify-between items-end text-sm">
+                                      <span className="text-muted-foreground">Participação</span>
+                                      <div className="bg-secondary px-2 py-0.5 rounded-md text-secondary-foreground font-semibold">
+                                        {percentual}%
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -595,10 +631,44 @@ const Relatorios = () => {
                         />
                         <Legend 
                           verticalAlign="bottom" 
-                          height={36}
-                          formatter={(value, entry: any) => (
-                            <span className="text-sm text-foreground">{entry.payload.categoria}</span>
-                          )}
+                          height={120}
+                          content={(props: any) => {
+                            const { payload } = props;
+                            if (!payload) return null;
+                            
+                            return (
+                              <ul className="grid grid-cols-2 gap-x-2 gap-y-3 pt-6">
+                                {payload.map((entry: any, index: number) => {
+                                  const data = entry.payload;
+                                  const iconName = data.icone as keyof typeof LucideIcons;
+                                  const IconComponent = iconName && LucideIcons[iconName] 
+                                    ? LucideIcons[iconName] as React.ElementType
+                                    : LucideIcons.Tag;
+                                    
+                                  const percentual = totalDespesas > 0 ? ((data.valor / totalDespesas) * 100).toFixed(1) : 0;
+                                  
+                                  return (
+                                    <li key={`item-${index}`} className="flex items-center gap-2 group cursor-default">
+                                      <div 
+                                        className="flex items-center justify-center w-7 h-7 rounded-md transition-transform group-hover:scale-110" 
+                                        style={{ backgroundColor: `${entry.color}15`, color: entry.color }}
+                                      >
+                                        <IconComponent size={14} strokeWidth={2.5} />
+                                      </div>
+                                      <div className="flex flex-col overflow-hidden">
+                                        <span className="text-xs font-medium text-foreground truncate" title={entry.value}>
+                                          {entry.value}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground font-semibold">
+                                          {percentual}%
+                                        </span>
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            );
+                          }}
                         />
                       </PieChart>
                     </ResponsiveContainer>
