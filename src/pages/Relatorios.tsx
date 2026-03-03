@@ -43,7 +43,7 @@ import {
   Legend,
   TooltipProps
 } from "recharts";
-import * as LucideIcons from "lucide-react";
+import { icons } from "lucide-react";
 import {
   TrendingUp,
   TrendingDown,
@@ -593,10 +593,10 @@ const Relatorios = () => {
                               const percentual = totalDespesas > 0 ? ((data.valor / totalDespesas) * 100).toFixed(1) : 0;
                               
                               // Resolving the icon from Lucide React
-                              const iconName = data.icone as keyof typeof LucideIcons;
-                              const IconComponent = iconName && LucideIcons[iconName] 
-                                ? LucideIcons[iconName] as React.ElementType
-                                : LucideIcons.Tag;
+                              const iconName = data.icone as keyof typeof icons;
+                              const IconComponent = iconName && icons[iconName] 
+                                ? icons[iconName] as React.ElementType
+                                : icons.Tag;
 
                               return (
                                 <div className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl p-4 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
@@ -640,10 +640,10 @@ const Relatorios = () => {
                               <ul className="grid grid-cols-2 gap-x-2 gap-y-3 pt-6">
                                 {payload.map((entry: any, index: number) => {
                                   const data = entry.payload;
-                                  const iconName = data.icone as keyof typeof LucideIcons;
-                                  const IconComponent = iconName && LucideIcons[iconName] 
-                                    ? LucideIcons[iconName] as React.ElementType
-                                    : LucideIcons.Tag;
+                                  const iconName = data.icone as keyof typeof icons;
+                                  const IconComponent = iconName && icons[iconName] 
+                                    ? icons[iconName] as React.ElementType
+                                    : icons.Tag;
                                     
                                   const percentual = totalDespesas > 0 ? ((data.valor / totalDespesas) * 100).toFixed(1) : 0;
                                   
@@ -656,8 +656,8 @@ const Relatorios = () => {
                                         <IconComponent size={14} strokeWidth={2.5} />
                                       </div>
                                       <div className="flex flex-col overflow-hidden">
-                                        <span className="text-xs font-medium text-foreground truncate" title={entry.value}>
-                                          {entry.value}
+                                        <span className="text-xs font-medium text-foreground truncate" title={data.categoria}>
+                                          {data.categoria}
                                         </span>
                                         <span className="text-[10px] text-muted-foreground font-semibold">
                                           {percentual}%
