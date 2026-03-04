@@ -1,18 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
+import { Textarea } from "@/shared/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/shared/components/ui/alert-dialog";
-import { Upload, Key, Brain, FileText, Settings, Check, AlertCircle, X, FileUp, Edit, Trash2 } from "lucide-react";
+import { Upload, Key, Brain, FileText, Settings, Check, AlertCircle, X, FileUp, Trash2, MessageSquare, Send, RefreshCw, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { EditarResultadoIAModal } from "@/components/EditarResultadoIAModal";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useIAConfiguracoes } from "@/hooks/useIAConfiguracoes";
 import { useIAAnalysis, type AnalysisResult } from "@/hooks/useIAAnalysis";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
+import { useFinancialContext } from "@/hooks/useFinancialContext";
+import { useChatFinanceiro } from "@/hooks/useChatFinanceiro";
 import { supabase } from "@/integrations/supabase/client";
 
 interface UploadedFile {
@@ -24,16 +27,32 @@ interface UploadedFile {
 }
 
 
+const CHAT_SUGGESTIONS = [
+  "Quanto gastei este mês?",
+  "Quais são minhas maiores despesas?",
+  "Como estão minhas metas financeiras?",
+  "Tenho alguma dívida vencendo em breve?",
+];
+
 const IA = () => {
   const { toast } = useToast();
   const { configuracao, isLoading: configLoading, salvarConfiguracao, isConfigured } = useIAConfiguracoes();
   const { results: analysisResults, atualizarStatus, atualizarCategoria, editarResultado, excluirResultado, salvarResultado } = useIAAnalysis();
   const { categoriasDespesa, categoriasReceita } = useCategorias();
+  const { context: financialContext, loading: contextLoading, refresh: refreshContext } = useFinancialContext();
+  const { messages, isLoading: chatLoading, systemPrompt, setSystemPrompt, sendMessage, clearChat } = useChatFinanceiro();
   const [apiKey, setApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gpt-4o');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<{ dataUrl: string; base64: string; mimeType: string } | null>(null);
+  const [dismissedRegistrations, setDismissedRegistrations] = useState<Set<string>>(new Set());
+  const [registeringId, setRegisteringId] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputChatRef = useRef<HTMLInputElement>(null);
 
   // Atualizar campos quando configuração carrega
   useEffect(() => {
@@ -42,6 +61,115 @@ const IA = () => {
       setSelectedModel(configuracao.modelo);
     }
   }, [configuracao]);
+
+  // Auto-scroll para o fim do chat
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, chatLoading]);
+
+  const handleSendChat = async () => {
+    if ((!chatInput.trim() && !attachedImage) || chatLoading) return;
+    if (!isConfigured) {
+      toast({
+        title: "Configuração necessária",
+        description: "Configure sua chave API OpenAI na aba Configurações.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const text = chatInput;
+    const img = attachedImage;
+    setChatInput('');
+    setAttachedImage(null);
+    await sendMessage(text, apiKey, selectedModel, financialContext, img?.base64, img?.mimeType, img?.dataUrl);
+  };
+
+  const handleChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendChat();
+    }
+  };
+
+  const handleImageAttach = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast({ title: "Formato inválido", description: "Envie apenas imagens (PNG, JPG, etc.).", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      const base64 = dataUrl.split(',')[1];
+      setAttachedImage({ dataUrl, base64, mimeType: file.type });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const parseMessageContent = (content: string): { displayText: string; registerData: Record<string, unknown> | null } => {
+    const match = content.match(/__REGISTER__([\s\S]*?)__END_REGISTER__/);
+    if (!match) return { displayText: content, registerData: null };
+    const displayText = content.replace(/__REGISTER__[\s\S]*?__END_REGISTER__/, '').trim();
+    try {
+      return { displayText, registerData: JSON.parse(match[1]) };
+    } catch {
+      return { displayText: content, registerData: null };
+    }
+  };
+
+  const handleRegisterFromChat = async (
+    data: { tipo: string; descricao: string; valor: number; data: string; categoria: string },
+    messageId: string
+  ) => {
+    setRegisteringId(messageId);
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      const allCats = [...categoriasDespesa, ...categoriasReceita];
+      const cat = allCats.find(c => c.nome.toLowerCase() === data.categoria.toLowerCase());
+
+      if (data.tipo === 'despesa') {
+        const { error } = await supabase.from('despesas').insert({
+          descricao: data.descricao,
+          valor: data.valor,
+          data: data.data,
+          categoria_id: cat?.id || null,
+          user_id: userId,
+        });
+        if (error) throw error;
+      } else if (data.tipo === 'receita') {
+        const { error } = await supabase.from('receitas').insert({
+          descricao: data.descricao,
+          valor: data.valor,
+          data: data.data,
+          categoria_id: cat?.id || null,
+          user_id: userId,
+        });
+        if (error) throw error;
+      } else if (data.tipo === 'divida') {
+        const { error } = await supabase.from('dividas').insert({
+          descricao: data.descricao,
+          valor_total: data.valor,
+          data_vencimento: data.data,
+          status: 'ativa',
+          user_id: userId,
+        });
+        if (error) throw error;
+      }
+
+      setDismissedRegistrations(prev => new Set([...prev, messageId]));
+      toast({
+        title: "Cadastrado com sucesso!",
+        description: `${data.tipo === 'receita' ? 'Receita' : data.tipo === 'despesa' ? 'Despesa' : 'Dívida'} de R$ ${Number(data.valor).toFixed(2).replace('.', ',')} registrada.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Erro ao cadastrar",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setRegisteringId(null);
+    }
+  };
 
   const openaiModels = [
     { value: 'gpt-4o', label: 'GPT-4o (Recomendado para visão)' },
@@ -383,21 +511,302 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
           </div>
         </div>
 
-        <Tabs defaultValue="upload" className="space-y-6">
-          <TabsList className="grid grid-cols-3 bg-muted/50">
+        <Tabs defaultValue="chat" className="space-y-6">
+          <TabsList className="grid grid-cols-4 bg-muted/50">
+            <TabsTrigger value="chat" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white">
+              <MessageSquare className="w-4 h-4 mr-1 md:mr-2" />
+              <span className="hidden sm:inline">Chat</span>
+            </TabsTrigger>
             <TabsTrigger value="upload" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white">
-              <FileUp className="w-4 h-4 mr-2" />
-              Upload & Análise
+              <FileUp className="w-4 h-4 mr-1 md:mr-2" />
+              <span className="hidden sm:inline">Upload</span>
             </TabsTrigger>
             <TabsTrigger value="config" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white">
-              <Settings className="w-4 h-4 mr-2" />
-              Configurações
+              <Settings className="w-4 h-4 mr-1 md:mr-2" />
+              <span className="hidden sm:inline">Config</span>
             </TabsTrigger>
             <TabsTrigger value="history" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white">
-              <FileText className="w-4 h-4 mr-2" />
-              Histórico
+              <FileText className="w-4 h-4 mr-1 md:mr-2" />
+              <span className="hidden sm:inline">Histórico</span>
             </TabsTrigger>
           </TabsList>
+
+          {/* ═══════════════════ CHAT TAB ═══════════════════ */}
+          <TabsContent value="chat" className="space-y-4">
+            {/* Header card with status + system prompt editor */}
+            <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-violet-500/5">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-xl bg-purple-500/20">
+                      <Brain className="w-5 h-5 text-purple-500" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-foreground">Assistente Financeiro</h2>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <div className={`w-2 h-2 rounded-full ${contextLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+                        <span className="text-xs text-muted-foreground">
+                          {contextLoading ? "Carregando dados financeiros..." : "Dados financeiros carregados"}
+                        </span>
+                        <button
+                          onClick={refreshContext}
+                          disabled={contextLoading}
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          title="Atualizar dados"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${contextLoading ? 'animate-spin' : ''}`} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowSystemPromptEditor(v => !v)}
+                    className="text-muted-foreground hover:text-foreground gap-1"
+                  >
+                    {showSystemPromptEditor ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    <span className="text-xs hidden sm:inline">Prompt do Agente</span>
+                  </Button>
+                </div>
+              </CardHeader>
+              {showSystemPromptEditor && (
+                <CardContent className="pt-0">
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">
+                      Edite o comportamento do assistente. Suas alterações se aplicam às próximas mensagens.
+                    </Label>
+                    <Textarea
+                      value={systemPrompt}
+                      onChange={e => setSystemPrompt(e.target.value)}
+                      rows={6}
+                      className="text-sm bg-background/50 border-border/50 font-mono resize-none"
+                      placeholder="Instrução de sistema para o agente..."
+                    />
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+
+            {/* Chat area */}
+            <Card className="border-0 bg-card/50">
+              <CardContent className="p-0">
+                {/* Messages */}
+                <div className="h-[440px] overflow-y-auto p-4 space-y-4">
+                  {messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+                      <div className="p-4 rounded-full bg-purple-500/10">
+                        <MessageSquare className="w-8 h-8 text-purple-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">Converse com seus dados financeiros</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Faça perguntas ou envie uma imagem de comprovante para cadastro automático.
+                        </p>
+                      </div>
+                      {!isConfigured && (
+                        <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 max-w-sm">
+                          <AlertCircle className="w-4 h-4 text-yellow-600 shrink-0" />
+                          <span className="text-xs text-yellow-600 dark:text-yellow-400">
+                            Configure sua chave API OpenAI na aba Config para começar.
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 justify-center max-w-md">
+                        {CHAT_SUGGESTIONS.map(s => (
+                          <button
+                            key={s}
+                            onClick={() => setChatInput(s)}
+                            className="px-3 py-1.5 text-xs rounded-full border border-purple-500/30 bg-purple-500/5 text-purple-600 dark:text-purple-400 hover:bg-purple-500/15 transition-colors"
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {messages.map(msg => {
+                        const { displayText, registerData } = parseMessageContent(msg.content);
+                        const tipo = registerData?.tipo as string | undefined;
+                        const tipoBadgeColor =
+                          tipo === 'receita' ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' :
+                          tipo === 'despesa' ? 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400' :
+                          'bg-orange-500/10 border-orange-500/20 text-orange-600 dark:text-orange-400';
+                        const isRegistered = dismissedRegistrations.has(msg.id);
+                        return (
+                          <div key={msg.id}>
+                            <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                              <div
+                                className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                                  msg.role === 'user'
+                                    ? 'bg-purple-500 text-white rounded-br-sm'
+                                    : 'bg-muted text-foreground rounded-bl-sm'
+                                }`}
+                              >
+                                {/* Image preview inside bubble */}
+                                {msg.imageDataUrl && (
+                                  <img
+                                    src={msg.imageDataUrl}
+                                    alt="Comprovante enviado"
+                                    className="w-full max-w-[200px] rounded-lg mb-2 object-cover border border-white/20"
+                                  />
+                                )}
+                                {displayText}
+                                <div className={`text-[10px] mt-1 ${msg.role === 'user' ? 'text-purple-200' : 'text-muted-foreground'}`}>
+                                  {msg.timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Auto-registration card */}
+                            {msg.role === 'assistant' && registerData && !isRegistered && (
+                              <div className="flex justify-start mt-2">
+                                <div className={`max-w-[82%] rounded-xl border p-3 ${tipoBadgeColor} bg-opacity-10`}>
+                                  <div className="flex items-center gap-1.5 mb-2">
+                                    <div className={`w-1.5 h-1.5 rounded-full ${tipo === 'receita' ? 'bg-green-500' : tipo === 'despesa' ? 'bg-red-500' : 'bg-orange-500'}`} />
+                                    <span className="text-xs font-semibold capitalize">{tipo} identificada — deseja cadastrar?</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs mb-3">
+                                    <span className="text-muted-foreground">Descrição: <span className="text-foreground font-medium">{String(registerData.descricao || '')}</span></span>
+                                    <span className="text-muted-foreground">Valor: <span className="text-foreground font-medium">R$ {Number(registerData.valor || 0).toFixed(2).replace('.', ',')}</span></span>
+                                    <span className="text-muted-foreground">Data: <span className="text-foreground font-medium">{(() => { try { return new Date(String(registerData.data) + 'T12:00:00').toLocaleDateString('pt-BR'); } catch { return String(registerData.data || ''); } })()}</span></span>
+                                    <span className="text-muted-foreground">Categoria: <span className="text-foreground font-medium">{String(registerData.categoria || '')}</span></span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleRegisterFromChat(registerData as any, msg.id)}
+                                      disabled={registeringId === msg.id}
+                                      className={`text-xs h-7 text-white ${tipo === 'receita' ? 'bg-green-500 hover:bg-green-600' : tipo === 'despesa' ? 'bg-red-500 hover:bg-red-600' : 'bg-orange-500 hover:bg-orange-600'}`}
+                                    >
+                                      <Check className="w-3 h-3 mr-1" />
+                                      {registeringId === msg.id ? 'Cadastrando...' : 'Cadastrar'}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setDismissedRegistrations(prev => new Set([...prev, msg.id]))}
+                                      className="text-xs h-7 text-muted-foreground hover:text-foreground"
+                                    >
+                                      Ignorar
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Registered confirmation */}
+                            {msg.role === 'assistant' && registerData && isRegistered && (
+                              <div className="flex justify-start mt-2">
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 text-xs text-green-600 dark:text-green-400">
+                                  <Check className="w-3 h-3" />
+                                  Cadastrado com sucesso
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {chatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-3">
+                            <div className="flex gap-1 items-center">
+                              <div className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
+                              <div className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
+                              <div className="w-2 h-2 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:300ms]" />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      <div ref={messagesEndRef} />
+                    </>
+                  )}
+                </div>
+
+                {/* Image preview strip */}
+                {attachedImage && (
+                  <div className="px-4 pt-3 flex items-center gap-2 border-t border-border/30">
+                    <div className="relative inline-block shrink-0">
+                      <img
+                        src={attachedImage.dataUrl}
+                        alt="Anexo"
+                        className="h-14 w-14 object-cover rounded-lg border border-border/50"
+                      />
+                      <button
+                        onClick={() => setAttachedImage(null)}
+                        className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                    <span className="text-xs text-muted-foreground">Imagem pronta para envio — adicione uma mensagem opcional</span>
+                  </div>
+                )}
+
+                {/* Input area */}
+                <div className="border-t border-border/50 p-4">
+                  <div className="flex gap-2 items-end">
+                    {/* Image attach button */}
+                    <button
+                      onClick={() => fileInputChatRef.current?.click()}
+                      disabled={chatLoading || !isConfigured}
+                      className="shrink-0 p-2 rounded-lg text-muted-foreground hover:text-purple-500 hover:bg-purple-500/10 transition-colors disabled:opacity-40"
+                      title="Anexar comprovante (imagem)"
+                    >
+                      <Paperclip className="w-5 h-5" />
+                    </button>
+                    <input
+                      ref={fileInputChatRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (file) handleImageAttach(file);
+                        e.target.value = '';
+                      }}
+                    />
+
+                    <Textarea
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      onKeyDown={handleChatKeyDown}
+                      placeholder={attachedImage ? "Mensagem opcional..." : "Pergunte sobre suas finanças ou envie um comprovante..."}
+                      rows={2}
+                      disabled={chatLoading || !isConfigured}
+                      className="flex-1 bg-background/50 border-border/50 resize-none text-sm"
+                    />
+
+                    <div className="flex flex-col gap-1.5 shrink-0">
+                      <Button
+                        onClick={handleSendChat}
+                        disabled={chatLoading || (!chatInput.trim() && !attachedImage) || !isConfigured}
+                        size="sm"
+                        className="bg-gradient-to-r from-purple-500 to-violet-600 hover:from-purple-600 hover:to-violet-700 text-white h-9 w-9 p-0"
+                      >
+                        <Send className="w-4 h-4" />
+                      </Button>
+                      {messages.length > 0 && (
+                        <Button
+                          onClick={clearChat}
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-red-500 h-9 w-9 p-0"
+                          title="Limpar conversa"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    Clipe para anexar imagens · Enter para enviar · Shift+Enter para nova linha
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="config" className="space-y-6">
             <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
