@@ -11,9 +11,9 @@ export interface Conversa {
 const CONVERSAS_KEY = ["chat_conversas"];
 
 async function getUserId(): Promise<string> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Usuário não autenticado");
-  return user.id;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error("Usuário não autenticado");
+  return session.user.id;
 }
 
 export const useConversas = () => {

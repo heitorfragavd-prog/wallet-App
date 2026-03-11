@@ -86,7 +86,10 @@ const IA = () => {
       const nova = await criarConversa.mutateAsync("Nova Conversa");
       setConversaAtiva(nova.id);
       clearChat();
-    } catch {
+    } catch (err) {
+      logger.error("IA", "Erro ao criar conversa", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       toast({ title: "Erro ao criar conversa", variant: "destructive" });
     }
   };
@@ -128,19 +131,25 @@ const IA = () => {
     }
     if (!conversaAtiva) {
       // Cria conversa automaticamente se não existir
+      let novaId: string;
       try {
         const nova = await criarConversa.mutateAsync(chatInput.trim().slice(0, 50) || "Nova Conversa");
-        setConversaAtiva(nova.id);
-        const text = chatInput;
-        const img = attachedImage;
-        setChatInput("");
-        setAttachedImage(null);
-        await sendMessage(text, selectedModel, img?.base64, img?.mimeType, img?.dataUrl, handleMessageSent);
-        return;
-      } catch {
+        novaId = nova.id;
+        setConversaAtiva(novaId);
+      } catch (err) {
+        logger.error("IA", "Erro ao criar conversa automaticamente", {
+          error: err instanceof Error ? err.message : String(err),
+        });
         toast({ title: "Erro ao criar conversa", variant: "destructive" });
         return;
       }
+      const text = chatInput;
+      const img = attachedImage;
+      setChatInput("");
+      setAttachedImage(null);
+      // Passa novaId diretamente para evitar closure stale (conversaAtiva ainda é null neste render)
+      await sendMessage(text, selectedModel, img?.base64, img?.mimeType, img?.dataUrl, handleMessageSent, novaId);
+      return;
     }
     const text = chatInput;
     const img = attachedImage;

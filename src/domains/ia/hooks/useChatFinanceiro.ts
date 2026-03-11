@@ -51,9 +51,9 @@ export const DEFAULT_SYSTEM_PROMPT = `Você é um assistente financeiro pessoal 
 
 
 async function getUserId(): Promise<string> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Usuário não autenticado");
-  return user.id;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error("Usuário não autenticado");
+  return session.user.id;
 }
 
 export const useChatFinanceiro = (conversaId: string | null) => {
@@ -132,10 +132,12 @@ export const useChatFinanceiro = (conversaId: string | null) => {
       imageBase64?: string,
       imageMimeType?: string,
       imageDataUrl?: string,
-      onMessageSent?: (conversaId: string) => void
+      onMessageSent?: (conversaId: string) => void,
+      targetConversaId?: string
     ) => {
       if ((!text.trim() && !imageBase64) || isLoading) return;
-      if (!conversaId) return;
+      const effectiveConversaId = targetConversaId ?? conversaId;
+      if (!effectiveConversaId) return;
 
       const userMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -149,8 +151,8 @@ export const useChatFinanceiro = (conversaId: string | null) => {
       setIsLoading(true);
 
       // Persiste mensagem do usuário
-      await persistMessage(userMessage, conversaId, imageBase64);
-      onMessageSent?.(conversaId);
+      await persistMessage(userMessage, effectiveConversaId, imageBase64);
+      onMessageSent?.(effectiveConversaId);
 
       try {
         const historyMessages = messages.map((m) => ({
@@ -195,7 +197,10 @@ export const useChatFinanceiro = (conversaId: string | null) => {
         });
 
         if (error) throw new Error(error.message || "Erro na Edge Function");
-        if (data?.error) throw new Error(data.error.message || "Erro na API OpenAI");
+        if (data?.error) {
+          const errMsg = typeof data.error === "string" ? data.error : (data.error?.message || "Erro na API OpenAI");
+          throw new Error(errMsg);
+        }
 
         const content = data?.choices?.[0]?.message?.content as string;
         if (!content) throw new Error("Resposta inválida da API");
@@ -210,8 +215,8 @@ export const useChatFinanceiro = (conversaId: string | null) => {
         setMessages((prev) => [...prev, assistantMessage]);
 
         // Persiste resposta do assistente
-        await persistMessage(assistantMessage, conversaId);
-        onMessageSent?.(conversaId);
+        await persistMessage(assistantMessage, effectiveConversaId);
+        onMessageSent?.(effectiveConversaId);
       } catch (error) {
         logger.error("useChatFinanceiro", "Erro ao enviar mensagem", {
           error: error instanceof Error ? error.message : String(error),
