@@ -16,17 +16,31 @@ export interface Receita extends Omit<ReceitaType, "tags" | "anexos"> {
 
 export const RECEITAS_QUERY_KEY = ["receitas"] as const;
 
+export interface ReceitasQueryParams {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
 // ─── Fetcher puro ─────────────────────────────────────────────────
-async function fetchReceitas(): Promise<Receita[]> {
-  const [receitasResp, transacoesResp] = await Promise.all([
-    supabase
-      .from("receitas")
-      .select("*, categorias (nome, cor, icone), receita_tags (tags (id, nome, cor))"),
-    supabase
-      .from("transacoes")
-      .select("*, categorias (nome, cor, icone)")
-      .eq("tipo", "receita"),
-  ]);
+async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[]> {
+  const { startDate, endDate } = params;
+
+  let receitasQuery = supabase
+    .from("receitas")
+    .select("*, categorias (nome, cor, icone), receita_tags (tags (id, nome, cor))");
+
+  if (startDate) receitasQuery = receitasQuery.gte("data", startDate);
+  if (endDate) receitasQuery = receitasQuery.lte("data", endDate);
+
+  let transacoesQuery = supabase
+    .from("transacoes")
+    .select("*, categorias (nome, cor, icone)")
+    .eq("tipo", "receita");
+
+  if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
+  if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
+
+  const [receitasResp, transacoesResp] = await Promise.all([receitasQuery, transacoesQuery]);
 
   if (receitasResp.error) throw receitasResp.error;
   if (transacoesResp.error) throw transacoesResp.error;
@@ -62,13 +76,14 @@ async function updateReceitaTags(receitaId: string, tagNames: string[]) {
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────
-export const useReceitas = () => {
+export const useReceitas = (params: ReceitasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { startDate = null, endDate = null } = params;
 
   const { data: receitas = [], isLoading: loading } = useQuery({
-    queryKey: RECEITAS_QUERY_KEY,
-    queryFn: fetchReceitas,
+    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate }],
+    queryFn: () => fetchReceitas({ startDate, endDate }),
     staleTime: 1000 * 60 * 2,
   });
 

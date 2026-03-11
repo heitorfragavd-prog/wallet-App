@@ -8,14 +8,6 @@ import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Progress } from "@/shared/components/ui/progress";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/shared/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
 import {
   AlertDialog,
@@ -52,11 +44,11 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas, Divida } from "@/domains/finance/hooks/useDividas";
-import { ReminderStatusBadge } from "@/domains/finance/components/ReminderStatusBadge";
+import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
 import { RegistrarPagamentoModal } from "@/domains/finance/components/RegistrarPagamentoModal";
-import { usePagamentosDivida, PagamentoDividaComDivida } from "@/domains/finance/hooks/usePagamentosDivida";
+import { usePagamentosDivida } from "@/domains/finance/hooks/usePagamentosDivida";
 import { PaymentMethod } from "@/domains/finance/types";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -108,7 +100,15 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
 const Dividas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
-  const { dividas, loading, createDivida, updateDivida, deleteDivida, refetch: refetchDividas } = useDividas();
+
+  // ── Filtro de data (vencimento)
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+
+  const { dividas, loading, createDivida, updateDivida, deleteDivida, refetch: refetchDividas } = useDividas({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
+
   const { createReminder, getReminderByDebtId, updateReminder, deleteReminder } = useDebtReminders();
   const { pagamentos, loading: loadingPagamentos, fetchAllPagamentos, deletePagamento } = usePagamentosDivida();
   const [activeTab, setActiveTab] = useState("lista");
@@ -212,8 +212,8 @@ const Dividas = () => {
       credor: novoCredor,
     });
 
-    if (result?.data?.id && novoReminderHours !== null && novoReminderHours > 0) {
-      await createReminder(result.data.id, novoReminderHours, novaDataVencimento);
+    if (result?.id && novoReminderHours !== null && novoReminderHours > 0) {
+      await createReminder(result.id, novoReminderHours, novaDataVencimento);
     }
 
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
@@ -465,6 +465,13 @@ const Dividas = () => {
             <Card>
               <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row gap-3">
+                  {/* Filtro por data de vencimento */}
+                  <DateRangePicker
+                    value={dateRange}
+                    onChange={setRange}
+                    onClear={clearFilter}
+                    placeholder="Filtrar por vencimento"
+                  />
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                     <Input placeholder="Buscar dívidas..." value={filtro} onChange={(e) => setFiltro(e.target.value)} className="pl-10" />

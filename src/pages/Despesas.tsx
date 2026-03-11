@@ -44,21 +44,13 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
 import { AccountSelector } from "@/domains/finance/components/AccountSelector";
 import { TagsInput } from "@/domains/finance/components/TagsInput";
 import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
 import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
-
-interface Despesa {
-  id: string;
-  descricao: string;
-  valor: number;
-  categoria: string;
-  data: string;
-  tipo: "fixa" | "variavel";
-}
 
 // Função para formatar data
 const formatarData = (dataString: string) => {
@@ -84,7 +76,15 @@ const formatarDataRelativa = (dataString: string) => {
 const Despesas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
-  const { despesas, loading, createDespesa, updateDespesa, deleteDespesa } = useDespesas();
+
+  // ── Filtro de data ────────────────────────────────────────────
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+
+  const { despesas, loading, createDespesa, updateDespesa, deleteDespesa } = useDespesas({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
+
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaDespesa, setNovaDespesa] = useState({
@@ -171,7 +171,7 @@ const Despesas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: string[] }) => {
+  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
     // Preencher formulário com dados da despesa
     setNovaDespesa({
       id: despesa.id,
@@ -183,7 +183,7 @@ const Despesas = () => {
       metodo_pagamento: despesa.metodo_pagamento || null,
       conta_id: despesa.conta_id || null,
       observacoes: despesa.observacoes || "",
-      tags: despesa.tags || [],
+      tags: (despesa.tags ?? []).map((t) => (typeof t === 'string' ? t : t.nome)),
     });
     setModoEdicao(true);
     setActiveTab("adicionar");
@@ -357,6 +357,13 @@ const Despesas = () => {
             <Card>
               <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row gap-3">
+                  {/* Filtro por data */}
+                  <DateRangePicker
+                    value={dateRange}
+                    onChange={setRange}
+                    onClear={clearFilter}
+                    placeholder="Filtrar por data"
+                  />
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                     <Input

@@ -1,9 +1,8 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
-import { DateRange } from "react-day-picker";
-import { DatePickerWithRange } from "@/shared/components/ui/date-range-picker";
+import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { Badge } from "@/shared/components/ui/badge";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -79,11 +78,11 @@ const formatarMes = (data: Date) => {
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-    to: new Date()
-  });
 
+  // ── Filtro de data global do dashboard
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+
+  // Iniciar com o mês atual por padrão (apenas na primeira vez)
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
   const { itensMercado, loading: loadingItens } = useItensMercado();
   const { dividas, loading: loadingDividas } = useDividas();
@@ -106,8 +105,8 @@ const Dashboard = () => {
       };
     }
 
-    const dataInicio = dateRange?.from ? dateRange.from.toISOString().split("T")[0] : getPrimeiroDiaMes();
-    const dataFim = dateRange?.to ? dateRange.to.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
+    const dataInicio = dateRange.startDate ?? getPrimeiroDiaMes();
+    const dataFim = dateRange.endDate ?? new Date().toISOString().split("T")[0];
 
     const transacoesFiltradas = transacoes.filter((transacao) => {
       const dataTransacao = transacao.data.split("T")[0];
@@ -268,12 +267,11 @@ const Dashboard = () => {
   const user = {
     name: profile?.name || "Usuário",
     getCurrentPeriod: () => {
-      if (dateRange?.from && dateRange?.to) {
-        return `${dateRange.from.toLocaleDateString("pt-BR")} - ${dateRange.to.toLocaleDateString("pt-BR")}`;
-      } else if (dateRange?.from) {
-        return `A partir de ${dateRange.from.toLocaleDateString("pt-BR")}`;
+      if (dateRange.startDate && dateRange.endDate) {
+        const fmt = (iso: string) => iso.split("-").reverse().join("/");
+        return `${fmt(dateRange.startDate)} - ${fmt(dateRange.endDate)}`;
       }
-      return "Selecione um período";
+      return formatarMes(new Date());
     },
   };
 
@@ -313,9 +311,11 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <DatePickerWithRange
-              date={dateRange}
-              setDate={setDateRange}
+            <DateRangePicker
+              value={dateRange}
+              onChange={setRange}
+              onClear={clearFilter}
+              placeholder="Filtrar período"
             />
           </div>
         </div>

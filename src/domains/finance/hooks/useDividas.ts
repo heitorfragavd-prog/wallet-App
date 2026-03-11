@@ -36,22 +36,38 @@ export interface Divida {
 
 export const DIVIDAS_QUERY_KEY = ["dividas"] as const;
 
-// ─── Fetcher com fallback (debt_reminders pode não existir) ───────
-async function fetchDividas(): Promise<Divida[]> {
-  const { data, error } = await supabase
+export interface DividasQueryParams {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+// ─── Fetcher com fallback (debt_reminders pode não existir) ─────────────
+async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> {
+  const { startDate, endDate } = params;
+
+  let query = supabase
     .from("dividas")
     .select(
       "*, categorias (nome, cor, icone), debt_reminders (id, reminder_hours, trigger_at, status, sent_at)"
     )
     .order("data_vencimento", { ascending: true });
 
+  if (startDate) query = query.gte("data_vencimento", startDate);
+  if (endDate) query = query.lte("data_vencimento", endDate);
+
+  const { data, error } = await query;
+
   // Se debt_reminders não existir, cai no fallback sem ela
   if (error && (error.code === "PGRST200" || error.code === "PGRST205")) {
-    const { data: fallback, error: fallbackError } = await supabase
+    let fallbackQuery = supabase
       .from("dividas")
       .select("*, categorias (nome, cor, icone)")
       .order("data_vencimento", { ascending: true });
 
+    if (startDate) fallbackQuery = fallbackQuery.gte("data_vencimento", startDate);
+    if (endDate) fallbackQuery = fallbackQuery.lte("data_vencimento", endDate);
+
+    const { data: fallback, error: fallbackError } = await fallbackQuery;
     if (fallbackError) throw fallbackError;
     return (fallback ?? []) as Divida[];
   }
@@ -60,14 +76,15 @@ async function fetchDividas(): Promise<Divida[]> {
   return (data ?? []) as Divida[];
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────
-export const useDividas = () => {
+// ─── Hook ──────────────────────────────────────────────────
+export const useDividas = (params: DividasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { startDate = null, endDate = null } = params;
 
   const { data: dividas = [], isLoading: loading } = useQuery({
-    queryKey: DIVIDAS_QUERY_KEY,
-    queryFn: fetchDividas,
+    queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate }],
+    queryFn: () => fetchDividas({ startDate, endDate }),
     staleTime: 1000 * 60 * 2,
   });
 
