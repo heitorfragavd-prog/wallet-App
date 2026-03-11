@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
 
@@ -10,64 +10,154 @@ export interface ChatMessage {
   imageDataUrl?: string;
 }
 
-export const DEFAULT_SYSTEM_PROMPT = `Você é um assistente financeiro pessoal especializado. Você tem acesso ao contexto financeiro completo do usuário e deve ajudá-lo a entender e melhorar suas finanças.
+export const DEFAULT_SYSTEM_PROMPT = `Você é um assistente financeiro pessoal especializado. Você tem acesso a ferramentas para consultar e modificar os dados financeiros do usuário em tempo real.
 
-Sempre:
-- Responda em português brasileiro de forma clara e objetiva
-- Use os dados financeiros fornecidos no contexto para dar respostas precisas e personalizadas
+## Regras fundamentais
+- Responda sempre em português brasileiro, de forma clara e objetiva
+- NUNCA invente dados financeiros — use sempre as ferramentas para buscar informações reais antes de responder
 - Quando mencionar valores monetários, use o formato R$ X.XXX,XX
 - Sugira ações concretas e práticas para melhorar a saúde financeira quando relevante
 - Seja empático e motivador ao tratar de assuntos financeiros delicados
-- Se não souber algo que não está no contexto, diga claramente que não tem essa informação disponível
+- Para perguntas sobre saúde financeira, combine múltiplas ferramentas para dar uma visão completa
 
-Quando o usuário enviar uma imagem de comprovante financeiro (nota fiscal, recibo, extrato, fatura, boleto, etc.):
-1. Analise a imagem com atenção e extraia todas as informações financeiras relevantes
-2. Responda de forma amigável descrevendo o que encontrou e os dados extraídos
-3. Ao final da resposta, inclua EXATAMENTE o seguinte bloco especial (sem nenhum texto após ele):
-__REGISTER__{"tipo":"despesa","descricao":"descrição clara","valor":0.00,"data":"YYYY-MM-DD","categoria":"Alimentação"}__END_REGISTER__
+## Ferramentas de consulta disponíveis
+- buscar_transacoes: busca transações com filtros por período, tipo e categoria
+- consultar_resumo_mensal: resumo financeiro de um mês (receitas, despesas, saldo, top categorias)
+- comparar_periodos: compara dois meses mostrando variação % de receitas, despesas e saldo
+- consultar_saldos: saldo de todas as contas do usuário (corrente, poupança, carteira, etc)
+- consultar_categorias: lista categorias de transações disponíveis para o usuário
+- consultar_transacoes_recorrentes: lista gastos e receitas fixos mensais (assinaturas, aluguel, salário)
+- projetar_gastos: projeta receitas e despesas dos próximos N meses com base nas recorrências
+- consultar_dividas: lista dívidas com status, vencimentos e valores pendentes
+- consultar_metas: metas financeiras com progresso, valor alvo e prazo
+- consultar_veiculos: veículos do usuário com manutenções pendentes ou atrasadas
+- consultar_orcamentos: orçamentos de compras/mercado com itens pendentes
 
-Regras para o bloco especial:
-- "tipo": use apenas "receita", "despesa" ou "divida"
-- "categoria": use um de: Alimentação, Transporte, Saúde, Educação, Lazer, Moradia, Salário, Freelance, Vendas, Serviços, Outros
-- "data": formato YYYY-MM-DD. Se não encontrar a data, use a data de hoje
-- "valor": apenas o número (ex: 150.50, não "R$ 150,50")`;
+## Ferramentas de cadastro e atualização
+- cadastrar_transacao: registra nova receita ou despesa (use consultar_categorias antes para escolher a certa)
+- deletar_transacao: remove transação cadastrada incorretamente (apenas com confirmação explícita do usuário)
+- cadastrar_divida: registra nova dívida ou financiamento
+- atualizar_divida: atualiza status de dívida (ex: marcar como paga, registrar pagamento parcial)
+- cadastrar_meta: cria nova meta financeira com valor alvo e prazo
+- atualizar_meta: atualiza progresso ou dados de uma meta existente
 
-export const useChatFinanceiro = () => {
+## Comportamento esperado
+- Ao analisar saúde financeira: combine resumo_mensal + saldos + dividas + metas
+- Ao projetar futuro: use transacoes_recorrentes + projetar_gastos
+- Ao comparar evolução: use comparar_periodos
+- Ao cadastrar transação: consulte categorias disponíveis antes para escolher a categoria correta
+- Ao receber imagem de comprovante: analise, extraia dados e use cadastrar_transacao automaticamente
+- Ao marcar dívida como paga: use atualizar_divida com status "quitada" ou valor_pago atualizado`;
+
+
+async function getUserId(): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuário não autenticado");
+  return user.id;
+}
+
+export const useChatFinanceiro = (conversaId: string | null) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+
+  // Carrega histórico sempre que a conversa muda
+  useEffect(() => {
+    if (!conversaId) {
+      setMessages([]);
+      return;
+    }
+
+    const loadHistory = async () => {
+      setIsLoadingHistory(true);
+      try {
+        const { data, error } = await supabase
+          .from("chat_mensagens")
+          .select("id, role, conteudo, imagem_base64, created_at")
+          .eq("conversa_id", conversaId)
+          .order("created_at", { ascending: true });
+
+        if (error) throw error;
+
+        const loaded: ChatMessage[] = (data ?? []).map((row) => ({
+          id: row.id,
+          role: row.role as "user" | "assistant",
+          content: row.conteudo,
+          timestamp: new Date(row.created_at),
+          imageDataUrl: row.imagem_base64
+            ? `data:image/jpeg;base64,${row.imagem_base64}`
+            : undefined,
+        }));
+
+        setMessages(loaded);
+      } catch (err) {
+        logger.error("useChatFinanceiro", "Erro ao carregar histórico", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    loadHistory();
+  }, [conversaId]);
+
+  const persistMessage = async (
+    msg: ChatMessage,
+    conversaIdParam: string,
+    imageBase64?: string
+  ) => {
+    try {
+      const userId = await getUserId();
+      await supabase.from("chat_mensagens").insert({
+        id: msg.id,
+        conversa_id: conversaIdParam,
+        user_id: userId,
+        role: msg.role,
+        conteudo: msg.content,
+        imagem_base64: imageBase64 ?? null,
+      });
+    } catch (err) {
+      logger.error("useChatFinanceiro", "Erro ao persistir mensagem", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
 
   const sendMessage = useCallback(
     async (
       text: string,
       model: string,
-      financialContext: string,
       imageBase64?: string,
       imageMimeType?: string,
       imageDataUrl?: string,
+      onMessageSent?: (conversaId: string) => void
     ) => {
       if ((!text.trim() && !imageBase64) || isLoading) return;
+      if (!conversaId) return;
 
       const userMessage: ChatMessage = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         role: "user",
         content: text.trim() || "Analise esta imagem.",
         timestamp: new Date(),
         imageDataUrl,
       };
 
-      setMessages(prev => [...prev, userMessage]);
+      setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
 
-      try {
-        const fullSystemContent = `${systemPrompt}\n\n${financialContext}`;
+      // Persiste mensagem do usuário
+      await persistMessage(userMessage, conversaId, imageBase64);
+      onMessageSent?.(conversaId);
 
-        const historyMessages = messages.map(m => ({
+      try {
+        const historyMessages = messages.map((m) => ({
           role: m.role,
           content: m.content,
         }));
 
-        // Build user content — with or without image
         type TextPart = { type: "text"; text: string };
         type ImagePart = { type: "image_url"; image_url: { url: string; detail: string } };
         type ContentPart = TextPart | ImagePart;
@@ -75,7 +165,10 @@ export const useChatFinanceiro = () => {
         let userContent: string | ContentPart[];
         if (imageBase64 && imageMimeType) {
           userContent = [
-            { type: "text" as const, text: text.trim() || "Analise este comprovante financeiro e extraia os dados para cadastro." },
+            {
+              type: "text" as const,
+              text: text.trim() || "Analise este comprovante financeiro e extraia os dados para cadastro.",
+            },
             {
               type: "image_url" as const,
               image_url: {
@@ -88,58 +181,54 @@ export const useChatFinanceiro = () => {
           userContent = text.trim();
         }
 
-        // Call via Supabase Edge Function proxy — API key never leaves the server
         const { data, error } = await supabase.functions.invoke("openai-proxy", {
           body: {
             model,
             messages: [
-              { role: "system", content: fullSystemContent },
+              { role: "system", content: systemPrompt },
               ...historyMessages,
               { role: "user", content: userContent },
             ],
-            max_tokens: 1500,
+            max_tokens: 2000,
             temperature: 0.4,
           },
         });
 
-        if (error) {
-          throw new Error(error.message || "Erro na Edge Function");
-        }
-
-        if (data?.error) {
-          throw new Error(data.error.message || `Erro na API OpenAI`);
-        }
+        if (error) throw new Error(error.message || "Erro na Edge Function");
+        if (data?.error) throw new Error(data.error.message || "Erro na API OpenAI");
 
         const content = data?.choices?.[0]?.message?.content as string;
-        if (!content) {
-          throw new Error("Resposta inválida da API");
-        }
+        if (!content) throw new Error("Resposta inválida da API");
 
         const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
+          id: crypto.randomUUID(),
           role: "assistant",
           content,
           timestamp: new Date(),
         };
 
-        setMessages(prev => [...prev, assistantMessage]);
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        // Persiste resposta do assistente
+        await persistMessage(assistantMessage, conversaId);
+        onMessageSent?.(conversaId);
       } catch (error) {
-        logger.error("useChatFinanceiro", "Erro ao enviar mensagem para o assistente", {
+        logger.error("useChatFinanceiro", "Erro ao enviar mensagem", {
           error: error instanceof Error ? error.message : String(error),
         });
         const errContent = error instanceof Error ? error.message : "Erro desconhecido";
         const errorMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
+          id: crypto.randomUUID(),
           role: "assistant",
           content: `⚠️ Erro ao processar: ${errContent}. Verifique as configurações do chat.`,
           timestamp: new Date(),
         };
-        setMessages(prev => [...prev, errorMessage]);
+        setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setIsLoading(false);
       }
     },
-    [messages, systemPrompt, isLoading]
+    [messages, systemPrompt, isLoading, conversaId]
   );
 
   const clearChat = useCallback(() => {
@@ -149,6 +238,7 @@ export const useChatFinanceiro = () => {
   return {
     messages,
     isLoading,
+    isLoadingHistory,
     systemPrompt,
     setSystemPrompt,
     sendMessage,

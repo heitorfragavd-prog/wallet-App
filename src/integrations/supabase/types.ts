@@ -174,6 +174,77 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_conversas: {
+        Row: {
+          id: string
+          user_id: string
+          titulo: string
+          openai_thread_id: string | null
+          created_at: string
+          updated_at: string
+          ultima_mensagem_em: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          titulo?: string
+          openai_thread_id?: string | null
+          created_at?: string
+          updated_at?: string
+          ultima_mensagem_em?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          titulo?: string
+          openai_thread_id?: string | null
+          created_at?: string
+          updated_at?: string
+          ultima_mensagem_em?: string | null
+        }
+        Relationships: []
+      }
+      chat_mensagens: {
+        Row: {
+          id: string
+          conversa_id: string
+          user_id: string
+          role: string
+          conteudo: string
+          imagem_base64: string | null
+          metadata: Json | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          conversa_id: string
+          user_id: string
+          role: string
+          conteudo: string
+          imagem_base64?: string | null
+          metadata?: Json | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          conversa_id?: string
+          user_id?: string
+          role?: string
+          conteudo?: string
+          imagem_base64?: string | null
+          metadata?: Json | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_mensagens_conversa_id_fkey"
+            columns: ["conversa_id"]
+            isOneToOne: false
+            referencedRelation: "chat_conversas"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       categorias_metas: {
         Row: {
           ativa: boolean
