@@ -7,7 +7,8 @@ import {
   Banknote, 
   Wallet, 
   ArrowRightLeft,
-  TrendingDown 
+  TrendingDown,
+  Ticket
 } from "lucide-react";
 import { PaymentMethod } from "../types";
 
@@ -39,6 +40,7 @@ const paymentMethodConfig = {
   boleto: { label: 'Boleto', icon: Banknote, color: 'bg-orange-500' },
   dinheiro: { label: 'Dinheiro', icon: Wallet, color: 'bg-yellow-500' },
   transferencia: { label: 'Transferência', icon: ArrowRightLeft, color: 'bg-indigo-500' },
+  voucher: { label: 'Voucher', icon: Ticket, color: 'bg-teal-500' },
   nao_informado: { label: 'Não Informado', icon: TrendingDown, color: 'bg-gray-500' },
 };
 

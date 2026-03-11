@@ -6,7 +6,8 @@ import {
   Banknote, 
   Wallet, 
   ArrowRightLeft,
-  Trash2
+  Trash2,
+  Ticket
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
@@ -36,6 +37,7 @@ const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
   boleto: Banknote,
   dinheiro: Wallet,
   transferencia: ArrowRightLeft,
+  voucher: Ticket,
 };
 
 const paymentMethodLabels: Record<PaymentMethod, string> = {
@@ -45,6 +47,7 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
   boleto: 'Boleto',
   dinheiro: 'Dinheiro',
   transferencia: 'Transferência',
+  voucher: 'Voucher',
 };
 
 export function HistoricoPagamentos({ dividaId, className }: HistoricoPagamentosProps) {

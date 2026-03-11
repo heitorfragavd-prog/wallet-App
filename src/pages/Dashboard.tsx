@@ -1,14 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { Badge } from "@/shared/components/ui/badge";
-import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Progress } from "@/shared/components/ui/progress";
 import {
-  TrendingUp,
   TrendingDown,
   DollarSign,
   Home,
@@ -81,10 +79,11 @@ const Dashboard = () => {
 
   // ── Filtro de data global do dashboard
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+  const [dividasInterval, setDividasInterval] = useState<7 | 15 | 30>(30);
 
   // Iniciar com o mês atual por padrão (apenas na primeira vez)
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
-  const { itensMercado, loading: loadingItens } = useItensMercado();
+  const { itensMercado } = useItensMercado();
   const { dividas, loading: loadingDividas } = useDividas();
   const { veiculos, loading: loadingVeiculos } = useVeiculos();
   const { metas, loading: loadingMetas } = useMetas();
@@ -156,26 +155,31 @@ const Dashboard = () => {
   // Dívidas próximas ao vencimento (pendente, próximos 30 dias)
   const dividasPendentesProximas = useMemo(() => {
     const hoje = new Date();
-    const em30Dias = new Date(hoje);
-    em30Dias.setDate(hoje.getDate() + 30);
+    const noPrazo = new Date(hoje);
+    noPrazo.setDate(hoje.getDate() + dividasInterval);
     const hojeStr = hoje.toISOString().split("T")[0];
-    const em30DiasStr = em30Dias.toISOString().split("T")[0];
+    const noPrazoStr = noPrazo.toISOString().split("T")[0];
     return dividas
       .filter(
         (d) =>
           d.status === "pendente" &&
           d.data_vencimento >= hojeStr &&
-          d.data_vencimento <= em30DiasStr
+          d.data_vencimento <= noPrazoStr
       )
       .sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento));
-  }, [dividas]);
+  }, [dividas, dividasInterval]);
 
-  // Total de dívidas em aberto (não quitadas)
-  const totalDividaGeral = useMemo(() => {
+  // Total de dívidas que vencem no período selecionado (inclui vencidas e as que vencem no prazo)
+  const totalDividaPeriodo = useMemo(() => {
+    const hoje = new Date();
+    const noPrazo = new Date(hoje);
+    noPrazo.setDate(hoje.getDate() + dividasInterval);
+    const noPrazoStr = noPrazo.toISOString().split("T")[0];
+
     return dividas
-      .filter((d) => d.status !== "quitada")
+      .filter((d) => d.status !== "quitada" && d.data_vencimento <= noPrazoStr)
       .reduce((sum, d) => sum + Number(d.valor_restante), 0);
-  }, [dividas]);
+  }, [dividas, dividasInterval]);
 
   // Manutenções atrasadas
   const manutencoesAtrasadas = useMemo(() => {
@@ -192,20 +196,28 @@ const Dashboard = () => {
     return recorrentes.filter((r) => r.ativo);
   }, [recorrentes]);
 
-  // Total mensal das recorrentes (despesas - receitas)
-  const totalMensalRecorrentes = useMemo(() => {
+  // Impacto das recorrentes no período selecionado (7, 15 ou 30 dias)
+  const totalImpactoRecorrentesPeriodo = useMemo(() => {
     return recorrentesAtivos.reduce((sum, r) => {
-      const mensal =
-        r.recorrencia === "anual"
-          ? r.valor / 12
-          : r.recorrencia === "semanal"
-          ? r.valor * 4.33
-          : r.recorrencia === "diaria"
-          ? r.valor * 30
-          : r.valor;
-      return sum + (r.tipo_transacao === "despesa" ? mensal : -mensal);
+      const valorBase = Number(r.valor);
+      let valorNoPeriodo = 0;
+
+      // Cálculo simplificado pró-rata
+      if (r.recorrencia === "diaria") {
+        valorNoPeriodo = valorBase * dividasInterval;
+      } else if (r.recorrencia === "semanal") {
+        valorNoPeriodo = (valorBase / 7) * dividasInterval;
+      } else if (r.recorrencia === "mensal") {
+        valorNoPeriodo = (valorBase / 30) * dividasInterval;
+      } else if (r.recorrencia === "anual") {
+        valorNoPeriodo = (valorBase / 365) * dividasInterval;
+      } else {
+        valorNoPeriodo = (valorBase / 30) * dividasInterval; // fallback mensal
+      }
+
+      return sum + (r.tipo_transacao === "despesa" ? valorNoPeriodo : -valorNoPeriodo);
     }, 0);
-  }, [recorrentesAtivos]);
+  }, [recorrentesAtivos, dividasInterval]);
 
   // Função para obter ícone da categoria
   const obterIconeCategoria = (categoria: string, tipo: "receita" | "despesa") => {
@@ -468,12 +480,30 @@ const Dashboard = () => {
 
           {/* Resumo Geral de Dívidas */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between pb-2 gap-2">
               <div className="flex items-center gap-2">
                 <Layers className="w-5 h-5 text-orange-500" />
                 <CardTitle className="text-lg">Visão Geral de Dívidas</CardTitle>
               </div>
-              <Button variant="ghost" size="sm" className="text-orange-500 hover:text-orange-600" onClick={() => navigate("/dividas")}>
+              
+              {/* Filtro de dias */}
+              <div className="flex items-center bg-muted/50 p-1 rounded-lg self-start sm:self-center">
+                {[7, 15, 30].map((days) => (
+                  <button
+                    key={days}
+                    onClick={() => setDividasInterval(days as 7 | 15 | 30)}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                      dividasInterval === days
+                        ? "bg-background text-orange-500 shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {days}d
+                  </button>
+                ))}
+              </div>
+
+              <Button variant="ghost" size="sm" className="hidden sm:flex text-orange-500 hover:text-orange-600" onClick={() => navigate("/dividas")}>
                 Gerenciar <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             </CardHeader>
@@ -486,11 +516,11 @@ const Dashboard = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-3">
-                  {/* Total em aberto */}
+                  {/* Total no período */}
                   <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-red-500/10 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">Total em Aberto</p>
+                    <p className="text-xs text-muted-foreground mb-1">Total {dividasInterval}d</p>
                     <p className="text-lg font-bold text-red-500">
-                      R$ {totalDividaGeral.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                      R$ {totalDividaPeriodo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
                     </p>
                   </div>
                   {/* Vencidas */}
@@ -503,7 +533,7 @@ const Dashboard = () => {
                   </div>
                   {/* Próximas a vencer */}
                   <div className={`flex flex-col items-center justify-center p-3 rounded-xl text-center ${dividasPendentesProximas.length > 0 ? "bg-yellow-500/10" : "bg-muted/50"}`}>
-                    <p className="text-xs text-muted-foreground mb-1">Próx. 30 dias</p>
+                    <p className="text-xs text-muted-foreground mb-1 font-medium">Próx. {dividasInterval} dias</p>
                     <p className={`text-2xl font-bold ${dividasPendentesProximas.length > 0 ? "text-yellow-600" : "text-foreground"}`}>
                       {dividasPendentesProximas.length}
                     </p>
@@ -538,9 +568,9 @@ const Dashboard = () => {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-muted-foreground">Impacto mensal</p>
-                      <p className={`text-sm font-bold ${totalMensalRecorrentes > 0 ? "text-red-500" : "text-green-500"}`}>
-                        {totalMensalRecorrentes > 0 ? "-" : "+"}R$ {Math.abs(totalMensalRecorrentes).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      <p className="text-xs text-muted-foreground">Impacto {dividasInterval}d</p>
+                      <p className={`text-sm font-bold ${totalImpactoRecorrentesPeriodo > 0 ? "text-red-500" : "text-green-500"}`}>
+                        {totalImpactoRecorrentesPeriodo > 0 ? "-" : "+"}R$ {Math.abs(totalImpactoRecorrentesPeriodo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                       </p>
                     </div>
                   </div>

@@ -10,7 +10,8 @@ import {
   CreditCard, 
   Banknote, 
   Wallet, 
-  ArrowRightLeft 
+  ArrowRightLeft,
+  Ticket
 } from "lucide-react";
 import { PaymentMethod } from "../types";
 
@@ -28,6 +29,7 @@ const paymentMethods = [
   { value: 'boleto' as const, label: 'Boleto', icon: Banknote },
   { value: 'dinheiro' as const, label: 'Dinheiro', icon: Wallet },
   { value: 'transferencia' as const, label: 'Transferência', icon: ArrowRightLeft },
+  { value: 'voucher' as const, label: 'Voucher', icon: Ticket },
 ];
 
 export function PaymentMethodSelector({

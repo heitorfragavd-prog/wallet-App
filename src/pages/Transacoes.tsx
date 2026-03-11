@@ -494,6 +494,7 @@ const Transacoes = () => {
                       <option value="boleto">Boleto</option>
                       <option value="dinheiro">Dinheiro</option>
                       <option value="transferencia">Transferência</option>
+                      <option value="voucher">Voucher</option>
                     </select>
                   </div>
                   <div className="space-y-2">
@@ -570,6 +571,7 @@ const Transacoes = () => {
                     {metodoPagamentoFiltro === "boleto" && "Boleto"}
                     {metodoPagamentoFiltro === "dinheiro" && "Dinheiro"}
                     {metodoPagamentoFiltro === "transferencia" && "Transferência"}
+                    {metodoPagamentoFiltro === "voucher" && "Voucher"}
                     <button onClick={() => setMetodoPagamentoFiltro("")} className="hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
@@ -676,6 +678,7 @@ const Transacoes = () => {
                               {transacao.metodo_pagamento === "boleto" && "Boleto"}
                               {transacao.metodo_pagamento === "dinheiro" && "Dinheiro"}
                               {transacao.metodo_pagamento === "transferencia" && "Transf."}
+                              {transacao.metodo_pagamento === "voucher" && "Voucher"}
                             </Badge>
                           ) : (
                             <span className="text-xs text-muted-foreground">-</span>

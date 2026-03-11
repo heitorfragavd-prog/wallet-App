@@ -40,6 +40,7 @@ import {
   Smartphone,
   Banknote,
   ArrowRightLeft,
+  Ticket,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
@@ -50,6 +51,8 @@ import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
 import { RegistrarPagamentoModal } from "@/domains/finance/components/RegistrarPagamentoModal";
 import { usePagamentosDivida } from "@/domains/finance/hooks/usePagamentosDivida";
 import { PaymentMethod } from "@/domains/finance/types";
+import { Checkbox } from "@/shared/components/ui/checkbox";
+import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -86,6 +89,7 @@ const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
   boleto: Banknote,
   dinheiro: Wallet,
   transferencia: ArrowRightLeft,
+  voucher: Ticket,
 };
 
 const paymentMethodLabels: Record<PaymentMethod, string> = {
@@ -95,6 +99,7 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
   boleto: 'Boleto',
   dinheiro: 'Dinheiro',
   transferencia: 'Transferência',
+  voucher: 'Voucher',
 };
 
 const Dividas = () => {
@@ -111,6 +116,7 @@ const Dividas = () => {
 
   const { createReminder, getReminderByDebtId, updateReminder, deleteReminder } = useDebtReminders();
   const { pagamentos, loading: loadingPagamentos, fetchAllPagamentos, deletePagamento } = usePagamentosDivida();
+  const { createTransacao } = useTransacoes();
   const [activeTab, setActiveTab] = useState("lista");
   const [dividaEditando, setDividaEditando] = useState<string | null>(null);
   
@@ -130,6 +136,8 @@ const Dividas = () => {
   const [novaCategoria, setNovaCategoria] = useState("");
   const [novoCredor, setNovoCredor] = useState("");
   const [novoReminderHours, setNovoReminderHours] = useState<number | null>(null);
+  const [isTaxaAtiva, setIsTaxaAtiva] = useState(false);
+  const [novoValorTaxa, setNovoValorTaxa] = useState("");
 
   // Estados para edição inline
   const [editDescricao, setEditDescricao] = useState("");
@@ -198,6 +206,11 @@ const Dividas = () => {
       return;
     }
 
+    if (isTaxaAtiva && (!novoValorTaxa || Number(novoValorTaxa) <= 0)) {
+      toast({ title: "Erro", description: "Por favor, preencha o valor da taxa.", variant: "destructive" });
+      return;
+    }
+
     const categoria = categoriasDespesa.find((c) => c.nome === novaCategoria);
     const result = await createDivida({
       descricao: novaDescricao,
@@ -215,15 +228,27 @@ const Dividas = () => {
     if (result?.id && novoReminderHours !== null && novoReminderHours > 0) {
       await createReminder(result.id, novoReminderHours, novaDataVencimento);
     }
+    
+    if (isTaxaAtiva && result?.id) {
+      await createTransacao({
+        descricao: `Taxa - ${novaDescricao}`,
+        valor: parseFloat(novoValorTaxa),
+        data: novaDataVencimento,
+        categoria_id: categoria?.id,
+        tipo: 'despesa',
+      });
+    }
 
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovoReminderHours(null);
+    setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
 
   const handleCancelar = () => {
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovoReminderHours(null);
+    setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
 
@@ -918,6 +943,35 @@ const Dividas = () => {
                       <Label htmlFor="reminder">Lembrete</Label>
                       <ReminderSelector value={novoReminderHours} onChange={setNovoReminderHours} />
                       <p className="text-xs text-muted-foreground">Configure um lembrete para ser notificado antes do vencimento</p>
+                    </div>
+                    <div className="space-y-4 md:col-span-2 border rounded-lg p-4 bg-muted/30">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox 
+                          id="taxa-ativa" 
+                          checked={isTaxaAtiva} 
+                          onCheckedChange={(checked) => setIsTaxaAtiva(checked as boolean)} 
+                        />
+                        <Label htmlFor="taxa-ativa" className="cursor-pointer">Adicionar taxa à dívida</Label>
+                      </div>
+                      {isTaxaAtiva && (
+                        <div className="space-y-2 mt-2">
+                          <Label htmlFor="valorTaxa">Valor da Taxa *</Label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                            <Input 
+                              id="valorTaxa" 
+                              type="number" 
+                              placeholder="0,00" 
+                              value={novoValorTaxa} 
+                              onChange={(e) => setNovoValorTaxa(e.target.value)} 
+                              className="pl-10 max-w-xs bg-background" 
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Este valor será registrado como uma despesa automaticamente.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">

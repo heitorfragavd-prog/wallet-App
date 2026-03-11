@@ -4,7 +4,7 @@
  * Type definitions for financial operations
  */
 
-export type PaymentMethod = 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | 'transferencia';
+export type PaymentMethod = 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | 'transferencia' | 'voucher';
 
 export type AccountType = 'conta_corrente' | 'poupanca' | 'carteira' | 'cartao_credito' | 'outro';
 
