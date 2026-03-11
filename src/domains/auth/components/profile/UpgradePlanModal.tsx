@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -74,7 +75,7 @@ export const UpgradePlanModal = ({
           .eq("is_active", true);
 
         if (linksError) {
-          console.error("Error fetching payment links:", linksError);
+          logger.error('UpgradePlanModal', 'Erro', { detail: "Error fetching payment links:", linksError });
         } else if (links) {
           // Criar um mapa de plan_id -> payment_link
           const linksMap: Record<string, string> = {};
@@ -87,7 +88,7 @@ export const UpgradePlanModal = ({
 
       setAvailablePlans(plans || []);
     } catch (err) {
-      console.error("Error fetching plans:", err);
+      logger.error('UpgradePlanModal', 'Erro', { detail: "Error fetching plans:", err });
       setError(err instanceof Error ? err.message : "Erro ao carregar planos");
     } finally {
       setLoading(false);

@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { addMonths, differenceInDays } from "date-fns";
+import { logger } from "@/core/logging/LoggerService";
 
 /**
  * Service para cálculos relacionados a manutenções de veículos
@@ -27,7 +28,7 @@ export class ManutencaoService {
         .limit(1);
 
       if (error) {
-        console.error('Erro ao buscar histórico de manutenções:', error);
+        logger.error('ManutencaoService', 'Erro ao buscar histórico de manutenções', { veiculoId, error: error.message });
         return 1000; // Retornar padrão em caso de erro
       }
 
@@ -67,7 +68,7 @@ export class ManutencaoService {
 
       return Math.round(mediaKmMes);
     } catch (error) {
-      console.error('Erro ao calcular média de km/mês:', error);
+      logger.error('ManutencaoService', 'Erro ao calcular média de km/mês', { veiculoId, error: error instanceof Error ? error.message : String(error) });
       return 1000; // Retornar padrão em caso de erro
     }
   }
@@ -91,7 +92,7 @@ export class ManutencaoService {
         .single();
 
       if (veiculoError || !veiculo) {
-        console.error('Erro ao buscar veículo:', veiculoError);
+        logger.error('ManutencaoService', 'Erro ao buscar veículo para data prevista', { veiculoId, error: veiculoError?.message });
         return null;
       }
 
@@ -112,7 +113,7 @@ export class ManutencaoService {
 
       return dataPrevista;
     } catch (error) {
-      console.error('Erro ao calcular data prevista:', error);
+      logger.error('ManutencaoService', 'Erro ao calcular data prevista', { veiculoId, error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }
@@ -143,7 +144,7 @@ export class ManutencaoService {
         .single();
 
       if (veiculoError || !veiculo) {
-        console.error('Erro ao buscar veículo:', veiculoError);
+        logger.error('ManutencaoService', 'Erro ao buscar veículo para próxima manutenção', { veiculoId, error: veiculoError?.message });
         return null;
       }
 
@@ -196,7 +197,7 @@ export class ManutencaoService {
         status
       };
     } catch (error) {
-      console.error('Erro ao calcular próxima manutenção:', error);
+      logger.error('ManutencaoService', 'Erro ao calcular próxima manutenção', { veiculoId, error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }

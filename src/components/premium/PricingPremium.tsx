@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -333,7 +334,7 @@ export const PricingPremium = memo(function PricingPremium({
         setPlans(combinedPlans);
       }
     } catch (error) {
-      console.error('Erro ao carregar planos:', error);
+      logger.error('PricingPremium', 'Erro', { detail: String('Erro ao carregar planos:', error) });
     } finally {
       setLoading(false);
     }

@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
@@ -67,7 +68,7 @@ export const usePlanLimits = () => {
       // Buscar uso atual
       await fetchCurrentUsage();
     } catch (error) {
-      console.error('Error fetching limits:', error);
+      logger.error('usePlanLimits', 'Erro', { detail: 'Error fetching limits:', error });
     } finally {
       setLoading(false);
     }

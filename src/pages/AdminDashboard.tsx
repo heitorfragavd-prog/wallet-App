@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { DollarSign, Users, CreditCard, TrendingUp, LayoutDashboard, UserPlus, Plus, BarChart3 } from "lucide-react";
 import { toast } from "sonner";
+import { logger } from "@/core/logging/LoggerService";
 import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
 import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { AdminStatsCard } from "@/domains/admin/components/AdminStatsCard";
@@ -56,7 +57,7 @@ export default function AdminDashboard() {
             });
 
         } catch (error) {
-            console.error('Error fetching dashboard data:', error);
+            logger.error('AdminDashboard', 'Erro ao buscar dados do dashboard', { error: error instanceof Error ? error.message : String(error) });
             toast.error("Erro ao carregar dados do dashboard");
         } finally {
             setLoading(false);

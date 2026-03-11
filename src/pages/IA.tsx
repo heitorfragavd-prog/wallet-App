@@ -17,6 +17,7 @@ import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useFinancialContext } from "@/hooks/useFinancialContext";
 import { useChatFinanceiro } from "@/hooks/useChatFinanceiro";
 import { supabase } from "@/integrations/supabase/client";
+import { logger } from "@/core/logging/LoggerService";
 
 interface UploadedFile {
   id: string;
@@ -81,7 +82,7 @@ const IA = () => {
     const img = attachedImage;
     setChatInput('');
     setAttachedImage(null);
-    await sendMessage(text, apiKey, selectedModel, financialContext, img?.base64, img?.mimeType, img?.dataUrl);
+    await sendMessage(text, selectedModel, financialContext, img?.base64, img?.mimeType, img?.dataUrl);
   };
 
   const handleChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -147,7 +148,9 @@ const IA = () => {
       } else if (data.tipo === 'divida') {
         const { error } = await supabase.from('dividas').insert({
           descricao: data.descricao,
+          credor: 'Enviado pelo Chat IA',
           valor_total: data.valor,
+          valor_restante: data.valor,
           data_vencimento: data.data,
           status: 'ativa',
           user_id: userId,
@@ -373,7 +376,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
       
       await salvarResultado(resultado);
     } catch (error) {
-      console.error('Erro na análise OpenAI:', error);
+      logger.error('IA', 'Erro na análise OpenAI', { fileName: file.name, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   };
@@ -408,7 +411,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
             await analyzeWithOpenAI(uploadedFile.file);
             results.push({} as Record<string, unknown>); // Placeholder para contagem
           } catch (error) {
-            console.error('Erro na análise de arquivo:', error);
+            logger.error('IA', 'Erro na análise de arquivo', { error: error instanceof Error ? error.message : String(error) });
           }
         } else {
           // Para PDFs, mostrar mensagem que não é suportado ainda
@@ -427,7 +430,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
         description: `${results.length} arquivo(s) analisado(s) com sucesso!`,
       });
     } catch (error) {
-      console.error('Erro na análise:', error);
+      logger.error('IA', 'Erro na análise de arquivos', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro na análise",
         description: "Verifique sua chave API e tente novamente.",
@@ -475,7 +478,7 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
         description: `${result.tipo === 'despesa' ? 'Despesa' : 'Receita'} criada com sucesso!`,
       });
     } catch (error) {
-      console.error('Erro ao criar transação:', error);
+      logger.error('IA', 'Erro ao criar transação a partir de resultado IA', { resultId: result.id, error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Erro ao criar transação. Verifique se uma categoria foi selecionada.",
@@ -676,7 +679,10 @@ Responda APENAS com o JSON, sem explicações adicionais.`;
                                   <div className="flex gap-2">
                                     <Button
                                       size="sm"
-                                      onClick={() => handleRegisterFromChat(registerData as any, msg.id)}
+                                      onClick={() => handleRegisterFromChat(
+                                        registerData as { tipo: string; descricao: string; valor: number; data: string; categoria: string },
+                                        msg.id
+                                      )}
                                       disabled={registeringId === msg.id}
                                       className={`text-xs h-7 text-white ${tipo === 'receita' ? 'bg-green-500 hover:bg-green-600' : tipo === 'despesa' ? 'bg-red-500 hover:bg-red-600' : 'bg-orange-500 hover:bg-orange-600'}`}
                                     >

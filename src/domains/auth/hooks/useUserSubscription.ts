@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
@@ -110,7 +111,7 @@ export const useUserSubscription = (): UseUserSubscriptionReturn => {
         }
       }
     } catch (err) {
-      console.error("Error fetching subscription:", err);
+      logger.error('useUserSubscription', 'Erro', { detail: "Error fetching subscription:", err });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");
       setError(errorObj);
       toast({

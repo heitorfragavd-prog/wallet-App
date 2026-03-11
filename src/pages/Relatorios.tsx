@@ -1,5 +1,4 @@
 import { useState, useMemo } from "react";
-import { addDays, subDays } from "date-fns";
 import { DateRange } from "react-day-picker";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -47,7 +46,6 @@ import { icons } from "lucide-react";
 import {
   TrendingUp,
   TrendingDown,
-  DollarSign,
   FileText,
   Download,
   PieChart as PieChartIcon,
@@ -56,7 +54,6 @@ import {
   ArrowDownRight,
   Wallet,
   Target,
-  Calendar,
   Percent,
   Activity,
 } from "lucide-react";
@@ -64,38 +61,6 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { useMetas } from "@/domains/finance/hooks/useMetas";
 
-// Funções de data
-const formatarData = (dataString: string) => {
-  if (!dataString) return "";
-  const [ano, mes, dia] = dataString.split("T")[0].split("-");
-  return `${dia}/${mes}/${ano}`;
-};
-
-const getPrimeiroDiaSemana = () => {
-  const now = new Date();
-  const primeiro = new Date(now);
-  primeiro.setDate(now.getDate() - now.getDay());
-  return `${primeiro.getFullYear()}-${String(primeiro.getMonth() + 1).padStart(2, "0")}-${String(primeiro.getDate()).padStart(2, "0")}`;
-};
-
-const getPrimeiroDiaMes = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-};
-
-const getPrimeiroDiaTrimestre = () => {
-  const now = new Date();
-  const mes = Math.floor(now.getMonth() / 3) * 3 + 1;
-  return `${now.getFullYear()}-${String(mes).padStart(2, "0")}-01`;
-};
-
-const getPrimeiroDiaAno = () => `${new Date().getFullYear()}-01-01`;
-
-const getMesAnterior = () => {
-  const now = new Date();
-  now.setMonth(now.getMonth() - 1);
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-};
 
 const Relatorios = () => {
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
@@ -110,140 +75,7 @@ const Relatorios = () => {
   const { transacoes, loading } = useTransacoes();
   const { metas } = useMetas();
 
-  const processedData = useMemo(() => {
-    if (loading || !transacoes.length) {
-      return {
-        chartData: [], categoryData: [], filteredTransactions: [],
-        totalReceitas: 0, totalDespesas: 0, saldoTotal: 0,
-        receitasMesAnterior: 0, despesasMesAnterior: 0,
-        topCategoriasDespesa: [], topCategoriasReceita: [],
-        mediaReceitaDiaria: 0, mediaDespesaDiaria: 0,
-        diasComTransacoes: 0, maiorReceita: null, maiorDespesa: null,
-      };
-    }
-
-    // Filtrar por período
-    const dataInicio = dateRange?.from ? dateRange.from.toISOString().split("T")[0] : getPrimeiroDiaMes();
-    const dataFim = dateRange?.to ? dateRange.to.toISOString().split("T")[0] : new Date().toISOString().split("T")[0];
-
-    const filteredByPeriod = transacoes.filter((t) => {
-      const dataTransacao = t.data.split("T")[0];
-      return dataTransacao >= dataInicio && dataTransacao <= dataFim;
-    });
-
-    // Dados do mês/período anterior para comparação (mesma duração do range atual)
-    let receitasMesAnterior = 0;
-    let despesasMesAnterior = 0;
-    
-    if (dateRange?.from) {
-      const msPerDay = 1000 * 60 * 60 * 24;
-      const rangeDuration = dateRange.to ? 
-        Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / msPerDay) : 30;
-      
-      const previousPeriodEnd = subDays(dateRange.from, 1);
-      const previousPeriodStart = subDays(previousPeriodEnd, rangeDuration);
-      
-      const prevInicio = previousPeriodStart.toISOString().split("T")[0];
-      const prevFim = previousPeriodEnd.toISOString().split("T")[0];
-
-      const transacoesMesAnterior = transacoes.filter((t) => {
-        const data = t.data.split("T")[0];
-        return data >= prevInicio && data <= prevFim;
-      });
-
-      receitasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-      despesasMesAnterior = transacoesMesAnterior.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-    }
-
-    // Totais do período atual
-    const totalReceitas = filteredByPeriod.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-    const totalDespesas = filteredByPeriod.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-
-    // Dados do gráfico por período
-    let chartData: Array<{ periodo: string; receitas: number; despesas: number; saldo: number }> = [];
-    const msPerDay = 1000 * 60 * 60 * 24;
-    const diasNoRange = dateRange?.from && dateRange?.to ? 
-      Math.floor((dateRange.to.getTime() - dateRange.from.getTime()) / msPerDay) + 1 : 
-      dateRange?.from ? 1 : 30;
-
-    if (diasNoRange <= 31) {
-      // Agrupar por dia
-      for (let i = 0; i < diasNoRange; i++) {
-        const currentDate = dateRange?.from ? addDays(dateRange.from, i) : new Date();
-        const dataStr = currentDate.toISOString().split("T")[0];
-        
-        const transacoesDia = filteredByPeriod.filter((t) => t.data.split("T")[0] === dataStr);
-        const receitas = transacoesDia.filter((t) => t.tipo === "receita").reduce((sum, t) => sum + Number(t.valor), 0);
-        const despesas = transacoesDia.filter((t) => t.tipo === "despesa").reduce((sum, t) => sum + Number(t.valor), 0);
-        
-        const formatoDia = currentDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-        chartData.push({ periodo: formatoDia, receitas, despesas, saldo: receitas - despesas });
-      }
-    } else {
-      // Agrupar por mês
-      const mesesMap = new Map();
-      filteredByPeriod.forEach(t => {
-        const dateObj = new Date(t.data);
-        const mesAnoVar = dateObj.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
-        
-        if (!mesesMap.has(mesAnoVar)) {
-          mesesMap.set(mesAnoVar, { periodo: mesAnoVar, receitas: 0, despesas: 0 });
-        }
-        
-        const data = mesesMap.get(mesAnoVar);
-        if (t.tipo === "receita") data.receitas += Number(t.valor);
-        if (t.tipo === "despesa") data.despesas += Number(t.valor);
-        data.saldo = data.receitas - data.despesas;
-      });
-      chartData = Array.from(mesesMap.values());
-    }
-
-    // Dados por categoria
-    const categoryMap = new Map<string, { valor: number; cor: string; tipo: string }>();
-    filteredByPeriod.forEach((t) => {
-      const key = `${t.categorias?.nome || "Sem categoria"}-${t.tipo}`;
-      const existing = categoryMap.get(key);
-      if (existing) {
-        categoryMap.set(key, { ...existing, valor: existing.valor + Number(t.valor) });
-      } else {
-        categoryMap.set(key, { valor: Number(t.valor), cor: t.categorias?.cor || "#6B7280", tipo: t.tipo });
-      }
-    });
-
-    const categoryData = Array.from(categoryMap.entries())
-      .filter(([_, v]) => v.tipo === "despesa")
-      .map(([k, v]) => ({ categoria: k.split("-")[0], valor: v.valor, cor: v.cor }))
-      .sort((a, b) => b.valor - a.valor);
-
-    const topCategoriasDespesa = categoryData;
-    const topCategoriasReceita = Array.from(categoryMap.entries())
-      .filter(([_, v]) => v.tipo === "receita")
-      .map(([k, v]) => ({ categoria: k.split("-")[0], valor: v.valor, cor: v.cor }))
-      .sort((a, b) => b.valor - a.valor);
-
-    // Transações filtradas
-    const filteredTransactions = filteredByPeriod
-      .filter((t) => selectedCategory === "todas" || t.tipo === selectedCategory)
-      .map((t) => ({ id: t.id, data: t.data, descricao: t.descricao, categoria: t.categorias?.nome || "Sem categoria", valor: Number(t.valor), tipo: t.tipo }))
-      .sort((a, b) => b.data.localeCompare(a.data))
-      .slice(0, 50);
-
-    // Estatísticas adicionais
-    const diasUnicos = new Set(filteredByPeriod.map((t) => t.data.split("T")[0])).size;
-    const maiorReceita = filteredByPeriod.filter((t) => t.tipo === "receita").sort((a, b) => Number(b.valor) - Number(a.valor))[0];
-    const maiorDespesa = filteredByPeriod.filter((t) => t.tipo === "despesa").sort((a, b) => Number(b.valor) - Number(a.valor))[0];
-
-    return {
-      chartData, categoryData, filteredTransactions,
-      totalReceitas, totalDespesas, saldoTotal: totalReceitas - totalDespesas,
-      receitasMesAnterior, despesasMesAnterior,
-      topCategoriasDespesa, topCategoriasReceita,
-      mediaReceitaDiaria: diasUnicos > 0 ? totalReceitas / diasUnicos : 0,
-      mediaDespesaDiaria: diasUnicos > 0 ? totalDespesas / diasUnicos : 0,
-      diasComTransacoes: diasUnicos,
-      maiorReceita, maiorDespesa,
-    };
-  }, [transacoes, dateRange, selectedCategory, loading]);
+  const processedData = useRelatoriosData(transacoes, loading, dateRange, selectedCategory);
 
   const { chartData, categoryData, filteredTransactions, totalReceitas, totalDespesas, saldoTotal,
     receitasMesAnterior, despesasMesAnterior, topCategoriasDespesa, topCategoriasReceita,
@@ -265,24 +97,7 @@ const Relatorios = () => {
     return 30;
   }, [dateRange]);
 
-  const projecaoMeses = useMemo(() => {
-    if (diasNoPeriodo === 0 || (totalReceitas === 0 && totalDespesas === 0)) return [];
-    const receitaDiaria = totalReceitas / diasNoPeriodo;
-    const despesaDiaria = totalDespesas / diasNoPeriodo;
-    const today = new Date();
-    return [1, 2, 3].map((offset) => {
-      const mes = new Date(today.getFullYear(), today.getMonth() + offset, 1);
-      const diasNoMes = new Date(mes.getFullYear(), mes.getMonth() + 1, 0).getDate();
-      const projetadoReceitas = receitaDiaria * diasNoMes;
-      const projetadoDespesas = despesaDiaria * diasNoMes;
-      return {
-        mes: mes.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
-        receitas: projetadoReceitas,
-        despesas: projetadoDespesas,
-        saldo: projetadoReceitas - projetadoDespesas,
-      };
-    });
-  }, [totalReceitas, totalDespesas, diasNoPeriodo]);
+  const projecaoMeses = useProjecaoMeses(totalReceitas, totalDespesas, diasNoPeriodo);
 
   const handleExportReport = () => {
     try {

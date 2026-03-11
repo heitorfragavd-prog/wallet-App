@@ -1,14 +1,12 @@
 import { useLocation, Link } from "react-router-dom";
 import { useEffect } from "react";
+import { logger } from "@/core/logging/LoggerService";
 
 const NotFound = () => {
   const location = useLocation();
 
   useEffect(() => {
-    console.error(
-      "404 Error: User attempted to access non-existent route:",
-      location.pathname
-    );
+    logger.warn('NotFound', 'Rota não encontrada', { pathname: location.pathname });
   }, [location.pathname]);
 
   const isAuthenticated = localStorage.getItem("isAuthenticated") === "true";

@@ -84,7 +84,7 @@ export default function AdminUsers() {
             setUsers(data || []);
         } catch (error) {
             toast.error("Erro ao carregar usuários");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }

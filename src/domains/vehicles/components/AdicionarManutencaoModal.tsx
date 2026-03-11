@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/components/ui/dialog";
 import { Button } from "@/shared/components/ui/button";
@@ -101,7 +102,7 @@ export const AdicionarManutencaoModal = ({
       resetForm();
       onOpenChange(false);
     } catch (error) {
-      console.error('Erro ao adicionar plano:', error);
+      logger.error('AdicionarManutencaoModal', 'Erro', { detail: 'Erro ao adicionar plano:', error });
       toast({
         title: "Erro ao Adicionar",
         description: "Não foi possível adicionar a manutenção. Tente novamente.",
@@ -171,7 +172,7 @@ export const AdicionarManutencaoModal = ({
       resetForm();
       onOpenChange(false);
     } catch (error) {
-      console.error('Erro ao adicionar manutenção customizada:', error);
+      logger.error('AdicionarManutencaoModal', 'Erro', { detail: 'Erro ao adicionar manutenção customizada:', error });
       toast({
         title: "Erro ao Adicionar",
         description: "Não foi possível adicionar a manutenção customizada. Tente novamente.",

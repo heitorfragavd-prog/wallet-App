@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { logger } from "@/core/logging/LoggerService";
 import { Despesa as DespesaType, PaymentMethod } from "../types";
 
-export interface Despesa extends Omit<DespesaType, 'tags' | 'anexos'> {
+export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
   updated_at?: string;
   categorias?: {
     nome: string;
@@ -13,276 +14,207 @@ export interface Despesa extends Omit<DespesaType, 'tags' | 'anexos'> {
   tags?: Array<{ id: string; nome: string; cor?: string }>;
 }
 
-export const useDespesas = () => {
-  const [despesas, setDespesas] = useState<Despesa[]>([]);
-  const [loading, setLoading] = useState(true);
+export const DESPESAS_QUERY_KEY = ["despesas"] as const;
+
+export interface DespesasQueryParams {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+// ─── Fetcher puro (sem React) ───────────────────────────────────────────
+async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
+  const { startDate, endDate } = params;
+
+  let despesasQuery = supabase
+    .from("despesas")
+    .select("*, categorias (nome, cor, icone), despesa_tags (tags (id, nome, cor))");
+
+  if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
+  if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
+
+  let transacoesQuery = supabase
+    .from("transacoes")
+    .select("*, categorias (nome, cor, icone)")
+    .eq("tipo", "despesa");
+
+  if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
+  if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
+
+  const [despesasResp, transacoesResp] = await Promise.all([despesasQuery, transacoesQuery]);
+
+  if (despesasResp.error) throw despesasResp.error;
+  if (transacoesResp.error) throw transacoesResp.error;
+
+  const mappedDespesas = (despesasResp.data ?? []).map((d) => ({
+    ...d,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tags: (d as any).despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
+  }));
+
+  return [...mappedDespesas, ...(transacoesResp.data ?? [])].sort(
+    (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+  ) as Despesa[];
+}
+
+// ─── Tag helpers ─────────────────────────────────────────────────
+async function addTagsToDespesa(despesaId: string, tagNames: string[]) {
+  const { data: tags, error: tagsError } = await supabase
+    .from("tags")
+    .select("id, nome")
+    .in("nome", tagNames);
+  if (tagsError) throw tagsError;
+
+  const { error } = await supabase.from("despesa_tags").insert(
+    tags.map((tag) => ({ despesa_id: despesaId, tag_id: tag.id }))
+  );
+  if (error) throw error;
+}
+
+async function updateDespesaTags(despesaId: string, tagNames: string[]) {
+  await supabase.from("despesa_tags").delete().eq("despesa_id", despesaId);
+  if (tagNames.length > 0) await addTagsToDespesa(despesaId, tagNames);
+}
+
+// ─── Hook ─────────────────────────────────────────────────────
+export const useDespesas = (params: DespesasQueryParams = {}) => {
+  const qc = useQueryClient();
   const { toast } = useToast();
+  const { startDate = null, endDate = null } = params;
 
-  const fetchDespesas = async () => {
-    try {
-      // Buscar dados da tabela despesas
-      const { data: despesasData, error: despesasError } = await supabase
-        .from('despesas')
-        .select(`
-          *,
-          categorias (nome, cor, icone),
-          despesa_tags (tags (id, nome, cor))
-        `);
+  // ── Query — queryKey inclui datas: muda o período -> refetch automático
+  const { data: despesas = [], isLoading: loading } = useQuery({
+    queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate }],
+    queryFn: () => fetchDespesas({ startDate, endDate }),
+    staleTime: 1000 * 60 * 2, // 2 min
+  });
 
-      if (despesasError) throw despesasError;
-
-      // Buscar dados da tabela transacoes com tipo despesa
-      const { data: transacoesData, error: transacoesError } = await supabase
-        .from('transacoes')
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
-        .eq('tipo', 'despesa');
-
-      if (transacoesError) throw transacoesError;
-
-      // Mapear tags para estrutura flat
-      const mappedDespesas = (despesasData || []).map((d: any) => ({
-        ...d,
-        tags: d.despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) || [],
-      }));
-
-      // Combinar os dados
-      const allDespesas = [
-        ...mappedDespesas,
-        ...(transacoesData || [])
-      ];
-
-      // Ordenar por data
-      const sortedDespesas = allDespesas.sort((a, b) => 
-        new Date(b.data).getTime() - new Date(a.data).getTime()
-      );
-
-      setDespesas(sortedDespesas);
-    } catch (error) {
-      toast({
-        title: "Erro ao carregar despesas",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createDespesa = async (
-    despesa: Omit<Despesa, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>,
-    tagNames?: string[]
-  ) => {
-    try {
+  // ── Mutations
+  const createDespesa = useMutation({
+    mutationFn: async ({
+      despesa,
+      tagNames,
+    }: {
+      despesa: Omit<Despesa, "id" | "user_id" | "created_at" | "updated_at" | "categorias">;
+      tagNames?: string[];
+    }) => {
+      const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
-        .from('despesas')
-        .insert([{
-          ...despesa,
-          user_id: (await supabase.auth.getUser()).data.user?.id
-        }])
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .from("despesas")
+        .insert([{ ...despesa, user_id: userId }])
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
+      if (tagNames?.length) await addTagsToDespesa(data.id, tagNames);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      toast({ title: "Despesa criada", description: "Despesa criada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDespesas", "Erro ao criar despesa", { error: String(error) });
+      toast({ title: "Erro ao criar despesa", description: String(error), variant: "destructive" });
+    },
+  });
 
-      // Add tag relationships if provided
-      if (tagNames && tagNames.length > 0) {
-        await addTagsToDespesa(data.id, tagNames);
-      }
-
-      setDespesas(prev => [data, ...prev]);
-      
-      toast({
-        title: "Despesa criada",
-        description: "Despesa criada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao criar despesa",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
-
-  const updateDespesa = async (
-    id: string,
-    updates: Partial<Despesa>,
-    tagNames?: string[]
-  ) => {
-    try {
+  const updateDespesa = useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+      tagNames,
+    }: {
+      id: string;
+      updates: Partial<Despesa>;
+      tagNames?: string[];
+    }) => {
       const { data, error } = await supabase
-        .from('despesas')
+        .from("despesas")
         .update(updates)
-        .eq('id', id)
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .eq("id", id)
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
+      if (tagNames !== undefined) await updateDespesaTags(id, tagNames);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      toast({ title: "Despesa atualizada", description: "Despesa atualizada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDespesas", "Erro ao atualizar despesa", { error: String(error) });
+      toast({ title: "Erro ao atualizar despesa", description: String(error), variant: "destructive" });
+    },
+  });
 
-      // Update tag relationships if provided
-      if (tagNames !== undefined) {
-        await updateDespesaTags(id, tagNames);
-      }
-
-      setDespesas(prev => prev.map(despesa => despesa.id === id ? data : despesa));
-      
-      toast({
-        title: "Despesa atualizada",
-        description: "Despesa atualizada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao atualizar despesa",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
-
-  const deleteDespesa = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('despesas')
-        .delete()
-        .eq('id', id);
-
+  const deleteDespesa = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("despesas").delete().eq("id", id);
       if (error) throw error;
-      setDespesas(prev => prev.filter(despesa => despesa.id !== id));
-      
-      toast({
-        title: "Despesa removida",
-        description: "Despesa removida com sucesso!",
-      });
-      
-      return { error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao remover despesa",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { error };
-    }
-  };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      toast({ title: "Despesa removida", description: "Despesa removida com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDespesas", "Erro ao remover despesa", { error: String(error) });
+      toast({ title: "Erro ao remover despesa", description: String(error), variant: "destructive" });
+    },
+  });
 
+  // ── Filtros e utilitários (derivações puras do cache)
   const filterByPaymentMethod = (paymentMethod: PaymentMethod | null) => {
-    if (paymentMethod === null) {
-      return despesas.filter(d => !d.metodo_pagamento);
-    }
-    return despesas.filter(d => d.metodo_pagamento === paymentMethod);
+    if (paymentMethod === null) return despesas.filter((d) => !d.metodo_pagamento);
+    return despesas.filter((d) => d.metodo_pagamento === paymentMethod);
   };
 
-  const filterByAccount = (accountId: string) => {
-    return despesas.filter(d => d.conta_id === accountId);
+  const filterByAccount = (accountId: string) =>
+    despesas.filter((d) => d.conta_id === accountId);
+
+  const filterByTags = (tagNames: string[]) => {
+    if (!tagNames.length) return despesas;
+    return despesas.filter((d) =>
+      tagNames.every((name) => d.tags?.some((t) => t.nome === name))
+    );
   };
 
-  const addTagsToDespesa = async (despesaId: string, tagNames: string[]) => {
-    try {
-      // Get tag IDs from tag names
-      const { data: tags, error: tagsError } = await supabase
-        .from('tags')
-        .select('id, nome')
-        .in('nome', tagNames);
-
-      if (tagsError) throw tagsError;
-
-      // Create tag relationships
-      const tagRelations = tags.map(tag => ({
-        despesa_id: despesaId,
-        tag_id: tag.id
-      }));
-
-      const { error: relError } = await supabase
-        .from('despesa_tags')
-        .insert(tagRelations);
-
-      if (relError) throw relError;
-    } catch (error) {
-      console.error('Error adding tags to despesa:', error);
-    }
-  };
-
-  const updateDespesaTags = async (despesaId: string, tagNames: string[]) => {
-    try {
-      // Remove existing tag relationships
-      await supabase
-        .from('despesa_tags')
-        .delete()
-        .eq('despesa_id', despesaId);
-
-      // Add new tag relationships
-      if (tagNames.length > 0) {
-        await addTagsToDespesa(despesaId, tagNames);
-      }
-    } catch (error) {
-      console.error('Error updating despesa tags:', error);
-    }
+  const searchDespesas = (searchTerm: string) => {
+    if (!searchTerm.trim()) return despesas;
+    const term = searchTerm.toLowerCase();
+    return despesas.filter(
+      (d) =>
+        d.descricao.toLowerCase().includes(term) ||
+        d.categorias?.nome.toLowerCase().includes(term) ||
+        (d.observacoes && d.observacoes.toLowerCase().includes(term))
+    );
   };
 
   const getDespesaTags = async (despesaId: string): Promise<string[]> => {
     try {
       const { data, error } = await supabase
-        .from('despesa_tags')
-        .select(`
-          tags (nome)
-        `)
-        .eq('despesa_id', despesaId);
-
+        .from("despesa_tags")
+        .select("tags (nome)")
+        .eq("despesa_id", despesaId);
       if (error) throw error;
-      return data.map((item: any) => item.tags.nome);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return data.map((item: any) => item.tags?.nome).filter(Boolean);
     } catch (error) {
-      console.error('Error fetching despesa tags:', error);
+      logger.error("useDespesas", "Erro ao buscar tags da despesa", { error: String(error) });
       return [];
     }
   };
 
-  const filterByTags = (tagNames: string[]) => {
-    if (tagNames.length === 0) {
-      return despesas;
-    }
-    // This would require fetching tag relationships - implement when needed
-    return despesas;
-  };
-
-  const searchDespesas = (searchTerm: string) => {
-    if (!searchTerm.trim()) {
-      return despesas;
-    }
-
-    const term = searchTerm.toLowerCase();
-    return despesas.filter(d => 
-      d.descricao.toLowerCase().includes(term) ||
-      d.categorias?.nome.toLowerCase().includes(term) ||
-      (d.observacoes && d.observacoes.toLowerCase().includes(term))
-    );
-  };
-
-  useEffect(() => {
-    fetchDespesas();
-  }, []);
-
   return {
     despesas,
     loading,
-    createDespesa,
-    updateDespesa,
-    deleteDespesa,
-    refetch: fetchDespesas,
+    createDespesa: (
+      despesa: Omit<Despesa, "id" | "user_id" | "created_at" | "updated_at" | "categorias">,
+      tagNames?: string[]
+    ) => createDespesa.mutateAsync({ despesa, tagNames }),
+    updateDespesa: (id: string, updates: Partial<Despesa>, tagNames?: string[]) =>
+      updateDespesa.mutateAsync({ id, updates, tagNames }),
+    deleteDespesa: (id: string) => deleteDespesa.mutateAsync(id),
+    refetch: () => qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY }),
     filterByPaymentMethod,
     filterByAccount,
     filterByTags,

@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -67,7 +68,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
       const { data, error } = await query;
 
       if (error) {
-        console.error('Erro ao buscar lembretes:', error);
+        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao buscar lembretes:', error) });
         toast({
           title: "Erro",
           description: "Erro ao carregar lembretes de manutenção",
@@ -110,7 +111,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
 
       setLembretes(lembretesComDetalhes);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao carregar lembretes de manutenção",
@@ -181,7 +182,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         .single();
 
       if (error) {
-        console.error('Erro ao criar lembrete:', error);
+        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao criar lembrete:', error) });
         toast({
           title: "Erro",
           description: "Erro ao criar lembrete de manutenção",
@@ -222,7 +223,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
 
       return lembreteComDetalhes;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao criar lembrete de manutenção",
@@ -239,7 +240,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         .eq('id', id);
 
       if (error) {
-        console.error('Erro ao cancelar lembrete:', error);
+        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao cancelar lembrete:', error) });
         toast({
           title: "Erro",
           description: "Erro ao cancelar lembrete de manutenção",
@@ -257,7 +258,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         description: "Lembrete de manutenção cancelado com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao cancelar lembrete de manutenção",

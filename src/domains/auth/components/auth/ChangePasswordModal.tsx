@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/shared/components/ui/dialog";
@@ -58,7 +59,7 @@ export const ChangePasswordModal = ({ isOpen, onClose }: ChangePasswordModalProp
       });
 
       if (error) {
-        console.error("Erro ao alterar senha:", error);
+        logger.error('ChangePasswordModal', 'Erro', { detail: "Erro ao alterar senha:", error });
         toast({
           title: "Erro",
           description: error.message || "Erro ao alterar senha. Tente novamente.",
@@ -80,7 +81,7 @@ export const ChangePasswordModal = ({ isOpen, onClose }: ChangePasswordModalProp
       
       onClose();
     } catch (error) {
-      console.error("Erro inesperado:", error);
+      logger.error('ChangePasswordModal', 'Erro', { detail: "Erro inesperado:", error });
       toast({
         title: "Erro",
         description: "Erro inesperado ao alterar senha. Tente novamente.",

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { AdminLayoutModern } from "@/domains/admin/components/AdminLayoutModern";
 import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { AdminStatsCard } from "@/domains/admin/components/AdminStatsCard";
 import { toast } from "sonner";
+import { logger } from "@/core/logging/LoggerService";
 import { BarChart3, Users, DollarSign, Activity, TrendingUp } from "lucide-react";
 import {
     Select,
@@ -36,11 +37,7 @@ export default function AdminReports() {
         mostPopularPlan: "",
     });
 
-    useEffect(() => {
-        fetchReportsData();
-    }, [period]);
-
-    const fetchReportsData = async () => {
+    const fetchReportsData = useCallback(async () => {
         try {
             const months = parseInt(period);
             const monthlyStats: MonthlyData[] = [];
@@ -86,12 +83,16 @@ export default function AdminReports() {
             setMonthlyData(monthlyStats);
             await calculateStats();
         } catch (error) {
-            console.error('Error fetching reports:', error);
+            logger.error('AdminReports', 'Erro ao buscar relatórios', { error: error instanceof Error ? error.message : String(error) });
             toast.error("Erro ao carregar relatórios");
         } finally {
             setLoading(false);
         }
-    };
+    }, [period]);
+
+    useEffect(() => {
+        fetchReportsData();
+    }, [fetchReportsData]);
 
     const calculateStats = async () => {
         const { count: totalUsers } = await supabase

@@ -15,6 +15,7 @@ import { AdminPageHeader } from "@/domains/admin/components/AdminPageHeader";
 import { toast } from "sonner";
 import { Badge } from "@/shared/components/ui/badge";
 import { RefreshCw, AlertCircle, Receipt } from "lucide-react";
+import { logger } from "@/core/logging/LoggerService";
 import {
     Dialog,
     DialogContent,
@@ -75,7 +76,7 @@ export default function AdminSubscriptions() {
             setSubscriptions(data || []);
         } catch (error) {
             toast.error("Erro ao carregar assinaturas");
-            console.error(error);
+            logger.error('AdminSubscriptions', 'Erro ao carregar assinaturas', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }
@@ -114,7 +115,7 @@ export default function AdminSubscriptions() {
             fetchSubscriptions();
         } catch (error) {
             toast.error("Erro ao renovar assinatura");
-            console.error(error);
+            logger.error('AdminSubscriptions', 'Erro ao renovar assinatura', { id: selectedSub?.id, error: error instanceof Error ? error.message : String(error) });
         }
     };
 

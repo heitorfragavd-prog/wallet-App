@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useNavigate } from "react-router-dom";
 import { Check, X } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
@@ -129,7 +130,7 @@ export const Pricing = () => {
 
       setPlans(combinedPlans);
     } catch (error) {
-      console.error("Erro ao carregar planos:", error);
+      logger.error('Pricing', 'Erro', { detail: String("Erro ao carregar planos:", error) });
       // Fallback para planos estáticos em caso de erro
       setPlans([
         {

@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -63,7 +64,7 @@ export const ResetPasswordForm = ({
       onSwitchToLogin();
       navigate("/login");
     } catch (error) {
-      console.error("Erro ao redefinir senha:", error);
+      logger.error('ResetPasswordForm', 'Erro', { detail: "Erro ao redefinir senha:", error });
       toast({
         title: "Erro",
         description:

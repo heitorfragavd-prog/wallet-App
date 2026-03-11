@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -146,7 +147,7 @@ export const useAttachments = () => {
       if (error) throw error;
       return data.signedUrl;
     } catch (error) {
-      console.error('Error getting signed URL:', error);
+      logger.error('useAttachments', 'Erro', { detail: String('Error getting signed URL:', error) });
       return null;
     }
   };

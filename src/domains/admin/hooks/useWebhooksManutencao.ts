@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -50,7 +51,7 @@ export const useWebhooksManutencao = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Erro ao buscar webhooks:', error);
+        logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro ao buscar webhooks:', error });
         toast({
           title: "Erro",
           description: "Erro ao carregar webhooks de manutenção",
@@ -61,7 +62,7 @@ export const useWebhooksManutencao = () => {
 
       setWebhooks(data || []);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao carregar webhooks de manutenção",
@@ -89,7 +90,7 @@ export const useWebhooksManutencao = () => {
         .single();
 
       if (error) {
-        console.error('Erro ao criar webhook:', error);
+        logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro ao criar webhook:', error });
         toast({
           title: "Erro",
           description: "Erro ao criar webhook de manutenção",
@@ -106,7 +107,7 @@ export const useWebhooksManutencao = () => {
 
       return data;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao criar webhook de manutenção",
@@ -144,7 +145,7 @@ export const useWebhooksManutencao = () => {
         .single();
 
       if (error) {
-        console.error('Erro ao atualizar webhook:', error);
+        logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro ao atualizar webhook:', error });
         toast({
           title: "Erro",
           description: "Erro ao atualizar webhook de manutenção",
@@ -161,7 +162,7 @@ export const useWebhooksManutencao = () => {
 
       return data;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao atualizar webhook de manutenção",
@@ -179,7 +180,7 @@ export const useWebhooksManutencao = () => {
         .eq('id', id);
 
       if (error) {
-        console.error('Erro ao excluir webhook:', error);
+        logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro ao excluir webhook:', error });
         toast({
           title: "Erro",
           description: "Erro ao excluir webhook de manutenção",
@@ -196,7 +197,7 @@ export const useWebhooksManutencao = () => {
 
       return true;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao excluir webhook de manutenção",
@@ -256,7 +257,7 @@ export const useWebhooksManutencao = () => {
 
       return true;
     } catch (error) {
-      console.error('Erro ao testar webhook:', error);
+      logger.error('useWebhooksManutencao', 'Erro', { detail: 'Erro ao testar webhook:', error });
       toast({
         title: "Erro",
         description: error instanceof Error ? error.message : "Erro ao testar webhook",

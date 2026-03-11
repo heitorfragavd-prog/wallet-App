@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState } from "react";
 import {
   AlertDialog,
@@ -73,7 +74,7 @@ export const DeleteAccountModal = ({
       // Redirecionar para página inicial
       navigate("/");
     } catch (error) {
-      console.error("Erro ao excluir conta:", error);
+      logger.error('DeleteAccountModal', 'Erro', { detail: "Erro ao excluir conta:", error });
       toast({
         title: "Erro",
         description:

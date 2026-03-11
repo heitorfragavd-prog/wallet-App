@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { logger } from "@/core/logging/LoggerService";
 import { Receita as ReceitaType, PaymentMethod } from "../types";
 
-export interface Receita extends Omit<ReceitaType, 'tags' | 'anexos'> {
+export interface Receita extends Omit<ReceitaType, "tags" | "anexos"> {
   updated_at?: string;
   categorias?: {
     nome: string;
@@ -13,276 +14,190 @@ export interface Receita extends Omit<ReceitaType, 'tags' | 'anexos'> {
   tags?: Array<{ id: string; nome: string; cor?: string }>;
 }
 
+export const RECEITAS_QUERY_KEY = ["receitas"] as const;
+
+// ─── Fetcher puro ─────────────────────────────────────────────────
+async function fetchReceitas(): Promise<Receita[]> {
+  const [receitasResp, transacoesResp] = await Promise.all([
+    supabase
+      .from("receitas")
+      .select("*, categorias (nome, cor, icone), receita_tags (tags (id, nome, cor))"),
+    supabase
+      .from("transacoes")
+      .select("*, categorias (nome, cor, icone)")
+      .eq("tipo", "receita"),
+  ]);
+
+  if (receitasResp.error) throw receitasResp.error;
+  if (transacoesResp.error) throw transacoesResp.error;
+
+  const mappedReceitas = (receitasResp.data ?? []).map((r) => ({
+    ...r,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tags: (r as any).receita_tags?.map((rt: any) => rt.tags).filter(Boolean) ?? [],
+  }));
+
+  return [...mappedReceitas, ...(transacoesResp.data ?? [])].sort(
+    (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+  ) as Receita[];
+}
+
+// ─── Tag helpers ──────────────────────────────────────────────────
+async function addTagsToReceita(receitaId: string, tagNames: string[]) {
+  const { data: tags, error: tagsError } = await supabase
+    .from("tags")
+    .select("id, nome")
+    .in("nome", tagNames);
+  if (tagsError) throw tagsError;
+
+  const { error } = await supabase.from("receita_tags").insert(
+    tags.map((tag) => ({ receita_id: receitaId, tag_id: tag.id }))
+  );
+  if (error) throw error;
+}
+
+async function updateReceitaTags(receitaId: string, tagNames: string[]) {
+  await supabase.from("receita_tags").delete().eq("receita_id", receitaId);
+  if (tagNames.length > 0) await addTagsToReceita(receitaId, tagNames);
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────
 export const useReceitas = () => {
-  const [receitas, setReceitas] = useState<Receita[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
   const { toast } = useToast();
 
-  const fetchReceitas = async () => {
-    try {
-      // Buscar dados da tabela receitas
-      const { data: receitasData, error: receitasError } = await supabase
-        .from('receitas')
-        .select(`
-          *,
-          categorias (nome, cor, icone),
-          receita_tags (tags (id, nome, cor))
-        `);
+  const { data: receitas = [], isLoading: loading } = useQuery({
+    queryKey: RECEITAS_QUERY_KEY,
+    queryFn: fetchReceitas,
+    staleTime: 1000 * 60 * 2,
+  });
 
-      if (receitasError) throw receitasError;
-
-      // Buscar dados da tabela transacoes com tipo receita
-      const { data: transacoesData, error: transacoesError } = await supabase
-        .from('transacoes')
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
-        .eq('tipo', 'receita');
-
-      if (transacoesError) throw transacoesError;
-
-      // Mapear tags para estrutura flat
-      const mappedReceitas = (receitasData || []).map((r: any) => ({
-        ...r,
-        tags: r.receita_tags?.map((rt: any) => rt.tags).filter(Boolean) || [],
-      }));
-
-      // Combinar os dados
-      const allReceitas = [
-        ...mappedReceitas,
-        ...(transacoesData || [])
-      ];
-
-      // Ordenar por data
-      const sortedReceitas = allReceitas.sort((a, b) => 
-        new Date(b.data).getTime() - new Date(a.data).getTime()
-      );
-
-      setReceitas(sortedReceitas);
-    } catch (error) {
-      toast({
-        title: "Erro ao carregar receitas",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createReceita = async (
-    receita: Omit<Receita, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>,
-    tagNames?: string[]
-  ) => {
-    try {
+  const createReceita = useMutation({
+    mutationFn: async ({
+      receita,
+      tagNames,
+    }: {
+      receita: Omit<Receita, "id" | "user_id" | "created_at" | "updated_at" | "categorias">;
+      tagNames?: string[];
+    }) => {
+      const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
-        .from('receitas')
-        .insert([{
-          ...receita,
-          user_id: (await supabase.auth.getUser()).data.user?.id
-        }])
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .from("receitas")
+        .insert([{ ...receita, user_id: userId }])
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
+      if (tagNames?.length) await addTagsToReceita(data.id, tagNames);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      toast({ title: "Receita criada", description: "Receita criada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useReceitas", "Erro ao criar receita", { error: String(error) });
+      toast({ title: "Erro ao criar receita", description: String(error), variant: "destructive" });
+    },
+  });
 
-      // Add tag relationships if provided
-      if (tagNames && tagNames.length > 0) {
-        await addTagsToReceita(data.id, tagNames);
-      }
-
-      setReceitas(prev => [data, ...prev]);
-      
-      toast({
-        title: "Receita criada",
-        description: "Receita criada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao criar receita",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
-
-  const updateReceita = async (
-    id: string,
-    updates: Partial<Receita>,
-    tagNames?: string[]
-  ) => {
-    try {
+  const updateReceita = useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+      tagNames,
+    }: {
+      id: string;
+      updates: Partial<Receita>;
+      tagNames?: string[];
+    }) => {
       const { data, error } = await supabase
-        .from('receitas')
+        .from("receitas")
         .update(updates)
-        .eq('id', id)
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .eq("id", id)
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
+      if (tagNames !== undefined) await updateReceitaTags(id, tagNames);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      toast({ title: "Receita atualizada", description: "Receita atualizada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useReceitas", "Erro ao atualizar receita", { error: String(error) });
+      toast({ title: "Erro ao atualizar receita", description: String(error), variant: "destructive" });
+    },
+  });
 
-      // Update tag relationships if provided
-      if (tagNames !== undefined) {
-        await updateReceitaTags(id, tagNames);
-      }
-
-      setReceitas(prev => prev.map(receita => receita.id === id ? data : receita));
-      
-      toast({
-        title: "Receita atualizada",
-        description: "Receita atualizada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao atualizar receita",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
-
-  const deleteReceita = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('receitas')
-        .delete()
-        .eq('id', id);
-
+  const deleteReceita = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("receitas").delete().eq("id", id);
       if (error) throw error;
-      setReceitas(prev => prev.filter(receita => receita.id !== id));
-      
-      toast({
-        title: "Receita removida",
-        description: "Receita removida com sucesso!",
-      });
-      
-      return { error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao remover receita",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { error };
-    }
-  };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      toast({ title: "Receita removida", description: "Receita removida com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useReceitas", "Erro ao remover receita", { error: String(error) });
+      toast({ title: "Erro ao remover receita", description: String(error), variant: "destructive" });
+    },
+  });
 
+  // ── Filtros e utilitários
   const filterByPaymentMethod = (paymentMethod: PaymentMethod | null) => {
-    if (paymentMethod === null) {
-      return receitas.filter(r => !r.metodo_pagamento);
-    }
-    return receitas.filter(r => r.metodo_pagamento === paymentMethod);
+    if (paymentMethod === null) return receitas.filter((r) => !r.metodo_pagamento);
+    return receitas.filter((r) => r.metodo_pagamento === paymentMethod);
   };
 
-  const filterByAccount = (accountId: string) => {
-    return receitas.filter(r => r.conta_id === accountId);
+  const filterByAccount = (accountId: string) =>
+    receitas.filter((r) => r.conta_id === accountId);
+
+  const filterByTags = (tagNames: string[]) => {
+    if (!tagNames.length) return receitas;
+    return receitas.filter((r) =>
+      tagNames.every((name) => r.tags?.some((t) => t.nome === name))
+    );
   };
 
-  const addTagsToReceita = async (receitaId: string, tagNames: string[]) => {
-    try {
-      // Get tag IDs from tag names
-      const { data: tags, error: tagsError } = await supabase
-        .from('tags')
-        .select('id, nome')
-        .in('nome', tagNames);
-
-      if (tagsError) throw tagsError;
-
-      // Create tag relationships
-      const tagRelations = tags.map(tag => ({
-        receita_id: receitaId,
-        tag_id: tag.id
-      }));
-
-      const { error: relError } = await supabase
-        .from('receita_tags')
-        .insert(tagRelations);
-
-      if (relError) throw relError;
-    } catch (error) {
-      console.error('Error adding tags to receita:', error);
-    }
-  };
-
-  const updateReceitaTags = async (receitaId: string, tagNames: string[]) => {
-    try {
-      // Remove existing tag relationships
-      await supabase
-        .from('receita_tags')
-        .delete()
-        .eq('receita_id', receitaId);
-
-      // Add new tag relationships
-      if (tagNames.length > 0) {
-        await addTagsToReceita(receitaId, tagNames);
-      }
-    } catch (error) {
-      console.error('Error updating receita tags:', error);
-    }
+  const searchReceitas = (searchTerm: string) => {
+    if (!searchTerm.trim()) return receitas;
+    const term = searchTerm.toLowerCase();
+    return receitas.filter(
+      (r) =>
+        r.descricao.toLowerCase().includes(term) ||
+        r.categorias?.nome.toLowerCase().includes(term) ||
+        (r.observacoes && r.observacoes.toLowerCase().includes(term))
+    );
   };
 
   const getReceitaTags = async (receitaId: string): Promise<string[]> => {
     try {
       const { data, error } = await supabase
-        .from('receita_tags')
-        .select(`
-          tags (nome)
-        `)
-        .eq('receita_id', receitaId);
-
+        .from("receita_tags")
+        .select("tags (nome)")
+        .eq("receita_id", receitaId);
       if (error) throw error;
-      return data.map((item: any) => item.tags.nome);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return data.map((item: any) => item.tags?.nome).filter(Boolean);
     } catch (error) {
-      console.error('Error fetching receita tags:', error);
+      logger.error("useReceitas", "Erro ao buscar tags da receita", { error: String(error) });
       return [];
     }
   };
 
-  const filterByTags = (tagNames: string[]) => {
-    if (tagNames.length === 0) {
-      return receitas;
-    }
-    // This would require fetching tag relationships - implement when needed
-    return receitas;
-  };
-
-  const searchReceitas = (searchTerm: string) => {
-    if (!searchTerm.trim()) {
-      return receitas;
-    }
-
-    const term = searchTerm.toLowerCase();
-    return receitas.filter(r => 
-      r.descricao.toLowerCase().includes(term) ||
-      r.categorias?.nome.toLowerCase().includes(term) ||
-      (r.observacoes && r.observacoes.toLowerCase().includes(term))
-    );
-  };
-
-  useEffect(() => {
-    fetchReceitas();
-  }, []);
-
   return {
     receitas,
     loading,
-    createReceita,
-    updateReceita,
-    deleteReceita,
-    refetch: fetchReceitas,
+    createReceita: (
+      receita: Omit<Receita, "id" | "user_id" | "created_at" | "updated_at" | "categorias">,
+      tagNames?: string[]
+    ) => createReceita.mutateAsync({ receita, tagNames }),
+    updateReceita: (id: string, updates: Partial<Receita>, tagNames?: string[]) =>
+      updateReceita.mutateAsync({ id, updates, tagNames }),
+    deleteReceita: (id: string) => deleteReceita.mutateAsync(id),
+    refetch: () => qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY }),
     filterByPaymentMethod,
     filterByAccount,
     filterByTags,

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
+import { logger } from "@/core/logging/LoggerService";
 import type { Tables, TablesUpdate } from "@/integrations/supabase/types";
 
 type Profile = Tables<"profiles">;
@@ -23,18 +24,16 @@ export const useProfile = () => {
 
     try {
       setError(null);
-      console.log("Buscando perfil para user_id:", user.id);
+      logger.info('useProfile', 'Buscando perfil do usuário');
       
       const { data, error: supabaseError } = await supabase
         .from("profiles")
-        .select("*")
+        .select("id, user_id, name, email, telefone, endereco, avatar_url, organization_name, role, created_at, updated_at")
         .eq("user_id", user.id)
         .maybeSingle();
 
-      console.log("Resultado da busca:", { data, error: supabaseError });
-
       if (supabaseError) {
-        console.error("Erro ao carregar perfil:", supabaseError);
+        logger.error('useProfile', 'Erro ao carregar perfil', { error: supabaseError.message });
         setError(new Error(supabaseError.message));
         toast({
           title: "Erro",
@@ -45,7 +44,7 @@ export const useProfile = () => {
       }
 
       if (!data) {
-        console.warn("Perfil não encontrado para user_id:", user.id);
+        logger.warn('useProfile', 'Perfil não encontrado, criando automaticamente');
         toast({
           title: "Aviso",
           description: "Perfil não encontrado. Criando perfil...",
@@ -65,10 +64,10 @@ export const useProfile = () => {
         return;
       }
 
-      console.log("Perfil carregado com sucesso:", data);
+      logger.info('useProfile', 'Perfil carregado com sucesso');
       setProfile(data);
     } catch (err) {
-      console.error("Erro inesperado:", err);
+      logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");
       setError(errorObj);
       toast({
@@ -101,7 +100,7 @@ export const useProfile = () => {
         .single();
 
       if (error) {
-        console.error("Erro ao atualizar perfil:", error);
+        logger.error('useProfile', 'Erro ao atualizar perfil', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao atualizar perfil.",
@@ -117,7 +116,7 @@ export const useProfile = () => {
       });
       return true;
     } catch (error) {
-      console.error("Erro inesperado:", error);
+      logger.error('useProfile', 'Erro inesperado ao atualizar perfil', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Erro inesperado ao atualizar perfil.",
@@ -149,7 +148,7 @@ export const useProfile = () => {
         .single();
 
       if (error) {
-        console.error("Erro ao criar perfil:", error);
+        logger.error('useProfile', 'Erro ao criar perfil', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao criar perfil.",
@@ -158,6 +157,7 @@ export const useProfile = () => {
         return false;
       }
 
+      logger.info('useProfile', 'Perfil criado com sucesso');
       setProfile(data);
       toast({
         title: "Sucesso",
@@ -165,7 +165,7 @@ export const useProfile = () => {
       });
       return true;
     } catch (error) {
-      console.error("Erro inesperado:", error);
+      logger.error('useProfile', 'Erro inesperado ao criar perfil', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Erro inesperado ao criar perfil.",
@@ -200,7 +200,7 @@ export const useProfile = () => {
         });
 
       if (uploadError) {
-        console.error("Erro no upload:", uploadError);
+        logger.error('useProfile', 'Erro no upload do avatar', { error: uploadError.message });
         toast({
           title: "Erro",
           description: "Erro ao fazer upload da imagem.",
@@ -227,7 +227,7 @@ export const useProfile = () => {
 
       return null;
     } catch (error) {
-      console.error("Erro inesperado:", error);
+      logger.error('useProfile', 'Erro inesperado no upload do avatar', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Erro inesperado no upload do avatar.",

@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
+import { logger } from "@/core/logging/LoggerService";
 import {
   Card,
   CardContent,
@@ -177,7 +178,7 @@ const Metas = () => {
         description: "Categorias de metas padrão importadas com sucesso.",
       });
     } catch (error) {
-      console.error("Erro ao importar categorias de metas padrão:", error);
+      logger.error('Metas', 'Erro ao importar categorias de metas padrão', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Não foi possível importar as categorias de metas padrão. Tente novamente.",
@@ -306,7 +307,7 @@ const Metas = () => {
           </div>
           <NovaMetaModal
             onAdicionarMeta={adicionarMeta}
-            categoriasMetas={categoriasMetas.filter((c) => c.ativa) as CategoriaMeta[]}
+            categoriasMetas={categoriasMetas.filter((c) => c.ativa).map(c => ({ ...c, descricao: c.descricao ?? '' })) as CategoriaMeta[]}
           />
         </div>
 
@@ -803,7 +804,7 @@ const Metas = () => {
                           <div className="flex items-center gap-3 min-w-0">
                             <div
                               className="w-4 h-4 rounded-full shrink-0 ring-2 ring-offset-2 ring-offset-background"
-                              style={{ backgroundColor: categoria.cor, ringColor: categoria.cor }}
+                              style={{ backgroundColor: categoria.cor, ['--tw-ring-color' as string]: categoria.cor }}
                             />
                             <div className="min-w-0">
                               <p className="font-medium text-foreground truncate">{categoria.nome}</p>

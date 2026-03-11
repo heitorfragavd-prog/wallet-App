@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -44,7 +45,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
       const { data, error } = await query;
 
       if (error) {
-        console.error('Erro ao buscar planos de manutenção:', error);
+        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao buscar planos de manutenção:', error) });
         toast({
           title: "Erro",
           description: "Erro ao carregar planos de manutenção",
@@ -55,7 +56,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       setPlanos(data || []);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao carregar planos de manutenção",
@@ -102,7 +103,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .single();
 
       if (planoError) {
-        console.error('Erro ao adicionar plano:', planoError);
+        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao adicionar plano:', planoError) });
         
         // Verificar se é erro de duplicação
         if (planoError.code === '23505') {
@@ -142,7 +143,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
             }]);
 
           if (lembreteError) {
-            console.error('Erro ao criar lembrete:', lembreteError);
+            logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao criar lembrete:', lembreteError) });
             // Não falhar a operação se o lembrete não for criado
             toast({
               title: "Aviso",
@@ -161,7 +162,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       return plano;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao adicionar plano de manutenção",
@@ -193,7 +194,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .single();
 
       if (error) {
-        console.error('Erro ao atualizar plano:', error);
+        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao atualizar plano:', error) });
         toast({
           title: "Erro",
           description: "Erro ao atualizar plano de manutenção",
@@ -210,7 +211,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       return data;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao atualizar plano de manutenção",
@@ -230,7 +231,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .eq('status', 'pendente');
 
       if (lembreteError) {
-        console.error('Erro ao cancelar lembretes:', lembreteError);
+        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao cancelar lembretes:', lembreteError) });
         // Continuar mesmo se houver erro ao cancelar lembretes
       }
 
@@ -241,7 +242,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .eq('id', id);
 
       if (error) {
-        console.error('Erro ao remover plano:', error);
+        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao remover plano:', error) });
         toast({
           title: "Erro",
           description: "Erro ao remover plano de manutenção",
@@ -256,7 +257,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         description: "Plano de manutenção removido com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
       toast({
         title: "Erro",
         description: "Erro ao remover plano de manutenção",

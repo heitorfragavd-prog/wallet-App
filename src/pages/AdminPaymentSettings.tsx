@@ -72,7 +72,7 @@ export default function AdminPaymentSettings() {
             setPaymentLinks(data || []);
         } catch (error) {
             toast.error("Erro ao carregar links de pagamento");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }
@@ -97,7 +97,7 @@ export default function AdminPaymentSettings() {
             fetchPaymentLinks();
         } catch (error) {
             toast.error("Erro ao atualizar link");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         }
     };
 

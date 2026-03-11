@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -147,7 +148,7 @@ export const RealizarManutencaoModal = ({
         }]);
 
       if (manutencaoError) {
-        console.error('Erro ao registrar manutenção:', manutencaoError);
+        logger.error('RealizarManutencaoModal', 'Erro', { detail: 'Erro ao registrar manutenção:', manutencaoError });
         throw new Error('Erro ao registrar manutenção');
       }
 
@@ -170,7 +171,7 @@ export const RealizarManutencaoModal = ({
           .eq('id', veiculoId);
 
         if (veiculoError) {
-          console.error('Erro ao atualizar quilometragem:', veiculoError);
+          logger.error('RealizarManutencaoModal', 'Erro', { detail: 'Erro ao atualizar quilometragem:', veiculoError });
           // Não falhar a operação por isso
         }
       }
@@ -205,7 +206,7 @@ export const RealizarManutencaoModal = ({
       onSuccess();
       onOpenChange(false);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('RealizarManutencaoModal', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro ao Registrar",
         description: "Não foi possível registrar a manutenção. Tente novamente.",

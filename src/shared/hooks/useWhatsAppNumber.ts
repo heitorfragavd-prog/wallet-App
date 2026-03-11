@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -34,7 +35,7 @@ export const useWhatsAppNumber = (): UseWhatsAppNumberReturn => {
         .single();
 
       if (error) {
-        console.error("Error fetching WhatsApp number:", error);
+        logger.error('useWhatsAppNumber', 'Erro', { detail: String("Error fetching WhatsApp number:", error) });
         return null;
       }
 

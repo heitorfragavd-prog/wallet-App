@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -91,7 +92,7 @@ export const RecentActivityCard = ({
 
       setActivities(formattedActivities);
     } catch (error) {
-      console.error('Error fetching recent activity:', error);
+      logger.error('RecentActivityCard', 'Erro', { detail: 'Error fetching recent activity:', error });
     } finally {
       setLoading(false);
     }

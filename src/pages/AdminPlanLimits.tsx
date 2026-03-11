@@ -55,7 +55,7 @@ export default function AdminPlanLimits() {
             setLimits(limitsWithPlanName);
         } catch (error) {
             toast.error("Erro ao carregar limites");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }
@@ -82,7 +82,7 @@ export default function AdminPlanLimits() {
             fetchLimits();
         } catch (error) {
             toast.error("Erro ao atualizar limite");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         }
     };
 

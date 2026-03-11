@@ -44,8 +44,6 @@ export const EditarItemMercadoModal = ({ item, open, onOpenChange, onEditarItem 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    console.log('FormData no submit:', formData);
-    
     if (!formData.categoria_mercado_id || !formData.descricao || !formData.quantidade_ideal || !formData.preco_atual || !item) {
       toast({
         title: "Erro",
@@ -81,7 +79,6 @@ export const EditarItemMercadoModal = ({ item, open, onOpenChange, onEditarItem 
       updated_at: item.updated_at
     };
 
-    console.log('Item editado final:', itemEditado);
     onEditarItem(itemEditado);
     onOpenChange(false);
     

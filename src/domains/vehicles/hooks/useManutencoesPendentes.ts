@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -42,13 +43,13 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
         .order('data_realizada', { ascending: false });
 
       if (error) {
-        console.error('Erro ao buscar manutenções realizadas:', error);
+        logger.error('useManutencoesPendentes', 'Erro', { detail: 'Erro ao buscar manutenções realizadas:', error });
         return;
       }
 
       setManutencaoRealizada(data || []);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useManutencoesPendentes', 'Erro', { detail: 'Erro:', error });
     }
   };
 
@@ -201,7 +202,7 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
         }]);
 
       if (error) {
-        console.error('Erro ao realizar manutenção:', error);
+        logger.error('useManutencoesPendentes', 'Erro', { detail: 'Erro ao realizar manutenção:', error });
         toast({
           title: "Erro",
           description: "Erro ao realizar manutenção",
@@ -218,7 +219,7 @@ export const useManutencoesPendentes = (veiculos: Veiculo[], tiposManutencao: Ti
         description: "Manutenção realizada com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useManutencoesPendentes', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao realizar manutenção",

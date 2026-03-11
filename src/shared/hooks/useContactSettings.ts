@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -20,7 +21,7 @@ export const useContactSettings = (): UseContactSettingsReturn => {
         .in("key", ["contact_email", "contact_phone"]);
 
       if (error) {
-        console.error("Error fetching contact settings:", error);
+        logger.error('useContactSettings', 'Erro', { detail: String("Error fetching contact settings:", error) });
         return { email: null, phone: null };
       }
 

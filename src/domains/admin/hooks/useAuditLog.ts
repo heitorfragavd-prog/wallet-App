@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { logger } from "@/core/logging/LoggerService";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
 
 interface LogDetails {
@@ -25,7 +26,7 @@ export const useAuditLog = () => {
         details: details || {},
       });
     } catch (error) {
-      console.error('Error logging action:', error);
+      logger.error('useAuditLog', 'Erro', { detail: 'Error logging action:', error });
     }
   };
 

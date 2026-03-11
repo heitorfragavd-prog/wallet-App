@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -65,7 +66,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
       const { data, error, count } = await query;
 
       if (error) {
-        console.error('Erro ao buscar logs:', error);
+        logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro ao buscar logs:', error });
         toast({
           title: "Erro",
           description: "Erro ao carregar logs de webhooks",
@@ -77,7 +78,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
       setLogs(data || []);
       setTotal(count || 0);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao carregar logs de webhooks",
@@ -101,7 +102,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
       const { data, error } = await query;
 
       if (error) {
-        console.error('Erro ao buscar estatísticas:', error);
+        logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro ao buscar estatísticas:', error });
         return null;
       }
 
@@ -127,7 +128,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
         ultimosSete
       };
     } catch (error) {
-      console.error('Erro ao calcular estatísticas:', error);
+      logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro ao calcular estatísticas:', error });
       return null;
     }
   };
@@ -143,7 +144,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
         .lt('created_at', dataLimite.toISOString());
 
       if (error) {
-        console.error('Erro ao limpar logs:', error);
+        logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro ao limpar logs:', error });
         toast({
           title: "Erro",
           description: "Erro ao limpar logs antigos",
@@ -160,7 +161,7 @@ export const useLogsWebhooksManutencao = (filtros?: FiltrosLogs) => {
       await fetchLogs();
       return true;
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useLogsWebhooksManutencao', 'Erro', { detail: 'Erro:', error });
       toast({
         title: "Erro",
         description: "Erro ao limpar logs antigos",

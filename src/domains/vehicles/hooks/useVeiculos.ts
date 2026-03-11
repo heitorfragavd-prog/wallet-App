@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { logger } from "@/core/logging/LoggerService";
 
 export interface Veiculo {
   id: string;
@@ -21,7 +22,7 @@ export const useVeiculos = () => {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  const fetchVeiculos = async () => {
+  const fetchVeiculos = useCallback(async () => {
     try {
       setLoading(true);
       const { data, error } = await supabase
@@ -30,7 +31,7 @@ export const useVeiculos = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Erro ao buscar veículos:', error);
+        logger.error('useVeiculos', 'Erro ao buscar veículos', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao carregar veículos",
@@ -41,7 +42,7 @@ export const useVeiculos = () => {
 
       setVeiculos(data || []);
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useVeiculos', 'Erro ao carregar veículos', { error: error instanceof Error ? error.message : String(error) });
       toast({
         title: "Erro",
         description: "Erro ao carregar veículos",
@@ -50,7 +51,7 @@ export const useVeiculos = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
   const adicionarVeiculo = async (novoVeiculo: Omit<Veiculo, 'id'>) => {
     try {
@@ -74,7 +75,7 @@ export const useVeiculos = () => {
         .single();
 
       if (error) {
-        console.error('Erro ao adicionar veículo:', error);
+        logger.error('useVeiculos', 'Erro ao adicionar veículo', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao adicionar veículo",
@@ -89,10 +90,8 @@ export const useVeiculos = () => {
         description: "Veículo adicionado com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useVeiculos', 'Erro catch ao adicionar veículo', { error: error instanceof Error ? error.message : String(error) });
       toast({
-        title: "Erro",
-        description: "Erro ao adicionar veículo",
         variant: "destructive"
       });
     }
@@ -115,7 +114,7 @@ export const useVeiculos = () => {
         .eq('id', veiculoEditado.id);
 
       if (error) {
-        console.error('Erro ao editar veículo:', error);
+        logger.error('useVeiculos', 'Erro ao editar veículo', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao editar veículo",
@@ -130,10 +129,8 @@ export const useVeiculos = () => {
         description: "Veículo editado com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useVeiculos', 'Erro catch ao editar veículo', { error: error instanceof Error ? error.message : String(error) });
       toast({
-        title: "Erro",
-        description: "Erro ao editar veículo",
         variant: "destructive"
       });
     }
@@ -147,7 +144,7 @@ export const useVeiculos = () => {
         .eq('id', id);
 
       if (error) {
-        console.error('Erro ao excluir veículo:', error);
+        logger.error('useVeiculos', 'Erro ao excluir veículo', { error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao excluir veículo",
@@ -162,10 +159,8 @@ export const useVeiculos = () => {
         description: "Veículo excluído com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useVeiculos', 'Erro catch ao excluir veículo', { error: error instanceof Error ? error.message : String(error) });
       toast({
-        title: "Erro",
-        description: "Erro ao excluir veículo",
         variant: "destructive"
       });
     }
@@ -179,7 +174,7 @@ export const useVeiculos = () => {
         .eq('id', id);
 
       if (error) {
-        console.error('Erro ao atualizar quilometragem:', error);
+        logger.error('useVeiculos', 'Erro ao atualizar quilometragem', { id, error: error.message });
         toast({
           title: "Erro",
           description: "Erro ao atualizar quilometragem",
@@ -194,10 +189,8 @@ export const useVeiculos = () => {
         description: "Quilometragem atualizada com sucesso!"
       });
     } catch (error) {
-      console.error('Erro:', error);
+      logger.error('useVeiculos', 'Erro catch ao atualizar quilometragem', { error: error instanceof Error ? error.message : String(error) });
       toast({
-        title: "Erro",
-        description: "Erro ao atualizar quilometragem",
         variant: "destructive"
       });
     }
@@ -205,7 +198,7 @@ export const useVeiculos = () => {
 
   useEffect(() => {
     fetchVeiculos();
-  }, []);
+  }, [fetchVeiculos]);
 
   return {
     veiculos,

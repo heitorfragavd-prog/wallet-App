@@ -66,7 +66,7 @@ export default function AdminAuditLogs() {
             setLogs(data || []);
         } catch (error) {
             toast.error("Erro ao carregar logs");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }

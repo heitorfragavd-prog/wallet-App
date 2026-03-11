@@ -66,7 +66,7 @@ export default function AdminPlans() {
             setPlans(plansWithFeatures);
         } catch (error) {
             toast.error("Erro ao carregar planos");
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
             setLoading(false);
         }
@@ -103,7 +103,7 @@ export default function AdminPlans() {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Erro ao salvar plano";
             toast.error(errorMessage);
-            console.error(error);
+            logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         }
     };
 

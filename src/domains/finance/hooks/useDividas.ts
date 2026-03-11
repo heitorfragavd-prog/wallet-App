@@ -1,12 +1,13 @@
-import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { logger } from "@/core/logging/LoggerService";
 
 export interface DebtReminderInfo {
   id: string;
   reminder_hours: number;
   trigger_at: string;
-  status: 'pending' | 'sent' | 'failed';
+  status: "pending" | "sent" | "failed";
   sent_at?: string;
 }
 
@@ -21,7 +22,7 @@ export interface Divida {
   data_vencimento: string;
   parcelas: number;
   parcelas_pagas: number;
-  status: 'pendente' | 'vencida' | 'quitada';
+  status: "pendente" | "vencida" | "quitada";
   credor: string;
   created_at: string;
   updated_at: string;
@@ -33,151 +34,111 @@ export interface Divida {
   debt_reminders?: DebtReminderInfo[];
 }
 
+export const DIVIDAS_QUERY_KEY = ["dividas"] as const;
+
+// ─── Fetcher com fallback (debt_reminders pode não existir) ───────
+async function fetchDividas(): Promise<Divida[]> {
+  const { data, error } = await supabase
+    .from("dividas")
+    .select(
+      "*, categorias (nome, cor, icone), debt_reminders (id, reminder_hours, trigger_at, status, sent_at)"
+    )
+    .order("data_vencimento", { ascending: true });
+
+  // Se debt_reminders não existir, cai no fallback sem ela
+  if (error && (error.code === "PGRST200" || error.code === "PGRST205")) {
+    const { data: fallback, error: fallbackError } = await supabase
+      .from("dividas")
+      .select("*, categorias (nome, cor, icone)")
+      .order("data_vencimento", { ascending: true });
+
+    if (fallbackError) throw fallbackError;
+    return (fallback ?? []) as Divida[];
+  }
+
+  if (error) throw error;
+  return (data ?? []) as Divida[];
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────
 export const useDividas = () => {
-  const [dividas, setDividas] = useState<Divida[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
   const { toast } = useToast();
 
-  const fetchDividas = async () => {
-    try {
-      // Try to fetch with debt_reminders join first
+  const { data: dividas = [], isLoading: loading } = useQuery({
+    queryKey: DIVIDAS_QUERY_KEY,
+    queryFn: fetchDividas,
+    staleTime: 1000 * 60 * 2,
+  });
+
+  const createDivida = useMutation({
+    mutationFn: async (
+      divida: Omit<Divida, "id" | "user_id" | "created_at" | "updated_at" | "categorias">
+    ) => {
+      const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
-        .from('dividas')
-        .select(`
-          *,
-          categorias (nome, cor, icone),
-          debt_reminders (id, reminder_hours, trigger_at, status, sent_at)
-        `)
-        .order('data_vencimento', { ascending: true });
-
-      // If the debt_reminders table doesn't exist (PGRST200, PGRST205 error), fallback to query without it
-      if (error && (error.code === 'PGRST200' || error.code === 'PGRST205')) {
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('dividas')
-          .select(`
-            *,
-            categorias (nome, cor, icone)
-          `)
-          .order('data_vencimento', { ascending: true });
-
-        if (fallbackError) throw fallbackError;
-        setDividas((fallbackData || []) as Divida[]);
-        return;
-      }
-
-      if (error) throw error;
-      setDividas((data || []) as Divida[]);
-    } catch (error) {
-      toast({
-        title: "Erro ao carregar dívidas",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createDivida = async (divida: Omit<Divida, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>) => {
-    try {
-      const { data, error } = await supabase
-        .from('dividas')
-        .insert([{
-          ...divida,
-          user_id: (await supabase.auth.getUser()).data.user?.id
-        }])
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .from("dividas")
+        .insert([{ ...divida, user_id: userId }])
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
-      setDividas(prev => [data as Divida, ...prev]);
-      
-      toast({
-        title: "Dívida criada",
-        description: "Dívida criada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao criar dívida",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
+      return data as Divida;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      toast({ title: "Dívida criada", description: "Dívida criada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDividas", "Erro ao criar dívida", { error: String(error) });
+      toast({ title: "Erro ao criar dívida", description: String(error), variant: "destructive" });
+    },
+  });
 
-  const updateDivida = async (id: string, updates: Partial<Divida>) => {
-    try {
+  const updateDivida = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Divida> }) => {
       const { data, error } = await supabase
-        .from('dividas')
+        .from("dividas")
         .update(updates)
-        .eq('id', id)
-        .select(`
-          *,
-          categorias (nome, cor, icone)
-        `)
+        .eq("id", id)
+        .select("*, categorias (nome, cor, icone)")
         .single();
-
       if (error) throw error;
-      setDividas(prev => prev.map(divida => divida.id === id ? data as Divida : divida));
-      
-      toast({
-        title: "Dívida atualizada",
-        description: "Dívida atualizada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao atualizar dívida",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { data: null, error };
-    }
-  };
+      return data as Divida;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      toast({ title: "Dívida atualizada", description: "Dívida atualizada com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDividas", "Erro ao atualizar dívida", { error: String(error) });
+      toast({ title: "Erro ao atualizar dívida", description: String(error), variant: "destructive" });
+    },
+  });
 
-  const deleteDivida = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('dividas')
-        .delete()
-        .eq('id', id);
-
+  const deleteDivida = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("dividas").delete().eq("id", id);
       if (error) throw error;
-      setDividas(prev => prev.filter(divida => divida.id !== id));
-      
-      toast({
-        title: "Dívida removida",
-        description: "Dívida removida com sucesso!",
-      });
-      
-      return { error: null };
-    } catch (error) {
-      toast({
-        title: "Erro ao remover dívida",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-      return { error };
-    }
-  };
-
-  useEffect(() => {
-    fetchDividas();
-  }, []);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      toast({ title: "Dívida removida", description: "Dívida removida com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useDividas", "Erro ao remover dívida", { error: String(error) });
+      toast({ title: "Erro ao remover dívida", description: String(error), variant: "destructive" });
+    },
+  });
 
   return {
     dividas,
     loading,
-    createDivida,
-    updateDivida,
-    deleteDivida,
-    refetch: fetchDividas
+    createDivida: (
+      divida: Omit<Divida, "id" | "user_id" | "created_at" | "updated_at" | "categorias">
+    ) => createDivida.mutateAsync(divida),
+    updateDivida: (id: string, updates: Partial<Divida>) =>
+      updateDivida.mutateAsync({ id, updates }),
+    deleteDivida: (id: string) => deleteDivida.mutateAsync(id),
+    refetch: () => qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY }),
   };
 };
