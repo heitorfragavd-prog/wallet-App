@@ -21,6 +21,7 @@ const TOOLS = [
           data_fim: { type: "string", description: "Data fim no formato YYYY-MM-DD" },
           tipo: { type: "string", enum: ["receita", "despesa"], description: "Tipo da transação" },
           categoria_id: { type: "string", description: "ID da categoria para filtrar" },
+          categoria_nome: { type: "string", description: "Nome da categoria para filtrar (alternativa ao ID)" },
           limit: { type: "number", description: "Limite de resultados (padrão 50)" },
         },
       },
@@ -60,7 +61,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "consultar_saldos",
-      description: "Retorna saldo de todas as contas do usuário (corrente, poupança, carteira, etc).",
+      description: "Lista todas as contas do usuário com ID, nome, tipo e saldo. Use para descobrir o ID de uma conta pelo nome.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -68,7 +69,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "consultar_categorias",
-      description: "Lista categorias de transações disponíveis para o usuário.",
+      description: "Lista categorias de transações com ID e nome. Use para descobrir o ID de uma categoria pelo nome.",
       parameters: {
         type: "object",
         properties: {
@@ -145,7 +146,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "cadastrar_transacao",
-      description: "Registra nova receita ou despesa. Use consultar_categorias antes para escolher a categoria correta.",
+      description: "Registra nova receita ou despesa. Aceita nomes de conta e categoria (resolve automaticamente para IDs). SEMPRE forneça categoria_nome e conta_nome quando o usuário mencionar.",
       parameters: {
         type: "object",
         properties: {
@@ -153,12 +154,37 @@ const TOOLS = [
           valor: { type: "number", description: "Valor positivo" },
           tipo: { type: "string", enum: ["receita", "despesa"] },
           data: { type: "string", description: "YYYY-MM-DD" },
-          categoria_id: { type: "string" },
-          conta_id: { type: "string", description: "ID da conta (opcional)" },
-          metodo_pagamento: { type: "string", description: "Método de pagamento (pix, cartao, dinheiro, boleto, transferencia, voucher)" },
+          categoria_id: { type: "string", description: "UUID da categoria (use se já tiver o ID)" },
+          categoria_nome: { type: "string", description: "Nome da categoria (ex: 'Vendas', 'Alimentação'). Resolvido automaticamente para ID." },
+          conta_id: { type: "string", description: "UUID da conta (use se já tiver o ID)" },
+          conta_nome: { type: "string", description: "Nome da conta (ex: 'PagSeguro', 'Sicoob', 'Nubank'). Resolvido automaticamente para ID." },
+          metodo_pagamento: { type: "string", description: "Método: pix, cartao, dinheiro, boleto, transferencia, voucher" },
           observacoes: { type: "string", description: "Observações adicionais" },
         },
         required: ["descricao", "valor", "tipo", "data"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "atualizar_transacao",
+      description: "Atualiza uma transação existente (receita ou despesa). Aceita nomes de conta e categoria.",
+      parameters: {
+        type: "object",
+        properties: {
+          transacao_id: { type: "string", description: "ID da transação" },
+          descricao: { type: "string" },
+          valor: { type: "number" },
+          data: { type: "string", description: "YYYY-MM-DD" },
+          categoria_id: { type: "string" },
+          categoria_nome: { type: "string", description: "Nome da categoria (resolvido automaticamente)" },
+          conta_id: { type: "string" },
+          conta_nome: { type: "string", description: "Nome da conta (resolvido automaticamente)" },
+          metodo_pagamento: { type: "string" },
+          observacoes: { type: "string" },
+        },
+        required: ["transacao_id"],
       },
     },
   },
@@ -173,6 +199,39 @@ const TOOLS = [
           transacao_id: { type: "string" },
         },
         required: ["transacao_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "criar_conta",
+      description: "Cria uma nova conta financeira para o usuário.",
+      parameters: {
+        type: "object",
+        properties: {
+          nome: { type: "string", description: "Nome da conta (ex: 'PagSeguro', 'Nubank')" },
+          tipo: { type: "string", enum: ["conta_corrente", "poupanca", "carteira", "investimento", "cartao_credito", "outro"], description: "Tipo da conta" },
+          saldo: { type: "number", description: "Saldo inicial (padrão 0)" },
+        },
+        required: ["nome", "tipo"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "atualizar_conta",
+      description: "Atualiza dados de uma conta existente. Aceita nome da conta para resolver o ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          conta_id: { type: "string", description: "UUID da conta (use se já tiver)" },
+          conta_nome: { type: "string", description: "Nome da conta para localizar (alternativa ao ID)" },
+          nome: { type: "string", description: "Novo nome" },
+          saldo: { type: "number", description: "Novo saldo" },
+        },
+        required: [],
       },
     },
   },
@@ -250,8 +309,51 @@ const TOOLS = [
 ];
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Helper: fuzzy name resolution for accounts and categories
+// ──────────────────────────────────────────────────────────────────────────────
+// deno-lint-ignore no-explicit-any
+async function resolveContaByName(supabase: any, userId: string, nome: string): Promise<string | null> {
+  const { data } = await supabase.from("contas_usuario").select("id,nome").eq("user_id", userId);
+  if (!data || data.length === 0) return null;
+  const lower = nome.toLowerCase().trim();
+  // Exact match first
+  // deno-lint-ignore no-explicit-any
+  const exact = data.find((c: any) => c.nome.toLowerCase() === lower);
+  if (exact) return exact.id;
+  // Partial match (contains)
+  // deno-lint-ignore no-explicit-any
+  const partial = data.find((c: any) => c.nome.toLowerCase().includes(lower) || lower.includes(c.nome.toLowerCase()));
+  if (partial) return partial.id;
+  // Normalized match (remove spaces, accents)
+  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "");
+  const normalizedInput = normalize(nome);
+  // deno-lint-ignore no-explicit-any
+  const normalized = data.find((c: any) => normalize(c.nome) === normalizedInput || normalize(c.nome).includes(normalizedInput) || normalizedInput.includes(normalize(c.nome)));
+  return normalized?.id || null;
+}
+
+// deno-lint-ignore no-explicit-any
+async function resolveCategoriaByName(supabase: any, userId: string, nome: string, tipo?: string): Promise<string | null> {
+  let q = supabase.from("categorias").select("id,nome,tipo").eq("user_id", userId);
+  if (tipo) q = q.eq("tipo", tipo);
+  const { data } = await q;
+  if (!data || data.length === 0) return null;
+  const lower = nome.toLowerCase().trim();
+  // deno-lint-ignore no-explicit-any
+  const exact = data.find((c: any) => c.nome.toLowerCase() === lower);
+  if (exact) return exact.id;
+  // deno-lint-ignore no-explicit-any
+  const partial = data.find((c: any) => c.nome.toLowerCase().includes(lower) || lower.includes(c.nome.toLowerCase()));
+  if (partial) return partial.id;
+  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "");
+  const normalizedInput = normalize(nome);
+  // deno-lint-ignore no-explicit-any
+  const normalized = data.find((c: any) => normalize(c.nome) === normalizedInput || normalize(c.nome).includes(normalizedInput) || normalizedInput.includes(normalize(c.nome)));
+  return normalized?.id || null;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Helper: fetch transactions from ALL 3 tables (transacoes + receitas + despesas)
-// This mirrors the frontend useTransacoes hook merge pattern.
 // ──────────────────────────────────────────────────────────────────────────────
 interface TransacaoRow {
   id: string;
@@ -278,9 +380,8 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: {
   select?: string;
 }): Promise<TransacaoRow[]> {
   const sel = opts?.select || "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome)";
-  const selNonTipo = sel.replace(",tipo", ""); // receitas/despesas don't have tipo column
+  const selNonTipo = sel.replace(",tipo", "");
 
-  // Build queries in parallel for all 3 tables
   // deno-lint-ignore no-explicit-any
   const buildQuery = (table: string, hasTipo: boolean) => {
     let q = supabase.from(table).select(hasTipo ? sel : selNonTipo).eq("user_id", userId);
@@ -291,7 +392,6 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: {
     return q;
   };
 
-  // If filtering by tipo, skip the table that doesn't match
   const skipReceitas = opts?.tipo === "despesa";
   const skipDespesas = opts?.tipo === "receita";
 
@@ -323,11 +423,17 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: {
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
     case "buscar_transacoes": {
+      // Resolve categoria_nome to ID if provided
+      let categoriaId = args.categoria_id as string | undefined;
+      if (!categoriaId && args.categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, args.categoria_nome as string) || undefined;
+        if (!categoriaId) return { error: `Categoria "${args.categoria_nome}" não encontrada. Use consultar_categorias para ver as categorias disponíveis.` };
+      }
       const data = await fetchAllTransacoes(supabase, userId, {
         dataInicio: args.data_inicio as string | undefined,
         dataFim: args.data_fim as string | undefined,
         tipo: args.tipo as string | undefined,
-        categoriaId: args.categoria_id as string | undefined,
+        categoriaId,
         limit: (args.limit as number) || 50,
       });
       return data;
@@ -438,18 +544,41 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       return data;
     }
     case "cadastrar_transacao": {
-      const { descricao, valor, tipo, data, categoria_id, conta_id, metodo_pagamento, observacoes } = args as Record<string, unknown>;
-      // Insert into the correct table based on tipo (matching frontend behavior)
+      const { descricao, valor, tipo, data, metodo_pagamento, observacoes } = args as Record<string, unknown>;
+
+      // Resolve conta by name if conta_nome is provided
+      let contaId = args.conta_id as string | null;
+      if (!contaId && args.conta_nome) {
+        contaId = await resolveContaByName(supabase, userId, args.conta_nome as string);
+        if (!contaId) {
+          // List available accounts to help the agent
+          const { data: contas } = await supabase.from("contas_usuario").select("id,nome").eq("user_id", userId);
+          const nomesDisponiveis = (contas || []).map((c: { nome: string }) => c.nome).join(", ");
+          return { error: `Conta "${args.conta_nome}" não encontrada. Contas disponíveis: ${nomesDisponiveis || "nenhuma"}. Use criar_conta para criar uma nova.` };
+        }
+      }
+
+      // Resolve categoria by name if categoria_nome is provided
+      let categoriaId = args.categoria_id as string | null;
+      if (!categoriaId && args.categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, args.categoria_nome as string, tipo as string);
+        if (!categoriaId) {
+          const { data: cats } = await supabase.from("categorias").select("nome").eq("user_id", userId).eq("tipo", tipo as string);
+          const nomesDisponiveis = (cats || []).map((c: { nome: string }) => c.nome).join(", ");
+          return { error: `Categoria "${args.categoria_nome}" não encontrada para tipo "${tipo}". Categorias disponíveis: ${nomesDisponiveis || "nenhuma"}.` };
+        }
+      }
+
+      // Insert into the correct table based on tipo
       const table = tipo === "receita" ? "receitas" : tipo === "despesa" ? "despesas" : "transacoes";
       const insertData: Record<string, unknown> = {
         user_id: userId,
         descricao,
         valor: Number(valor),
         data,
-        categoria_id: categoria_id || null,
-        conta_id: conta_id || null,
+        categoria_id: categoriaId || null,
+        conta_id: contaId || null,
       };
-      // receitas/despesas tables have metodo_pagamento and observacoes columns
       if (table !== "transacoes") {
         insertData.metodo_pagamento = metodo_pagamento || null;
         insertData.observacoes = observacoes || null;
@@ -460,9 +589,43 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       if (error) return { error: error.message };
       return { sucesso: true, transacao: { ...result, tipo }, tabela: table };
     }
+    case "atualizar_transacao": {
+      const id = args.transacao_id as string;
+
+      // Resolve conta by name
+      let contaId = args.conta_id as string | undefined;
+      if (!contaId && args.conta_nome) {
+        contaId = await resolveContaByName(supabase, userId, args.conta_nome as string) || undefined;
+        if (!contaId) return { error: `Conta "${args.conta_nome}" não encontrada.` };
+      }
+
+      // Resolve categoria by name
+      let categoriaId = args.categoria_id as string | undefined;
+      if (!categoriaId && args.categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, args.categoria_nome as string) || undefined;
+        if (!categoriaId) return { error: `Categoria "${args.categoria_nome}" não encontrada.` };
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (args.descricao) updates.descricao = args.descricao;
+      if (args.valor !== undefined) updates.valor = Number(args.valor);
+      if (args.data) updates.data = args.data;
+      if (categoriaId) updates.categoria_id = categoriaId;
+      if (contaId) updates.conta_id = contaId;
+      if (args.metodo_pagamento) updates.metodo_pagamento = args.metodo_pagamento;
+      if (args.observacoes !== undefined) updates.observacoes = args.observacoes;
+
+      // Try updating in all 3 tables
+      const tables = ["receitas", "despesas", "transacoes"];
+      for (const table of tables) {
+        const { data: result, error } = await supabase.from(table).update(updates).eq("id", id).eq("user_id", userId).select("id,descricao,valor,data").maybeSingle();
+        if (result) return { sucesso: true, transacao: result, tabela: table };
+        if (error && error.code !== "PGRST116") return { error: error.message };
+      }
+      return { error: `Transação ${id} não encontrada.` };
+    }
     case "deletar_transacao": {
       const id = args.transacao_id as string;
-      // Try deleting from all 3 tables (only one will match)
       const results = await Promise.all([
         supabase.from("transacoes").delete().eq("id", id).eq("user_id", userId),
         supabase.from("receitas").delete().eq("id", id).eq("user_id", userId),
@@ -471,6 +634,33 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       const anyError = results.find(r => r.error);
       if (anyError?.error) return { error: anyError.error.message };
       return { sucesso: true };
+    }
+    case "criar_conta": {
+      const { nome, tipo, saldo } = args as { nome: string; tipo: string; saldo?: number };
+      const { data: result, error } = await supabase.from("contas_usuario").insert({
+        user_id: userId,
+        nome,
+        tipo,
+        saldo: Number(saldo || 0),
+      }).select("id,nome,tipo,saldo").single();
+      if (error) return { error: error.message };
+      return { sucesso: true, conta: result };
+    }
+    case "atualizar_conta": {
+      let contaId = args.conta_id as string | undefined;
+      if (!contaId && args.conta_nome) {
+        contaId = await resolveContaByName(supabase, userId, args.conta_nome as string) || undefined;
+        if (!contaId) return { error: `Conta "${args.conta_nome}" não encontrada.` };
+      }
+      if (!contaId) return { error: "Informe conta_id ou conta_nome para localizar a conta." };
+
+      const updates: Record<string, unknown> = {};
+      if (args.nome) updates.nome = args.nome;
+      if (args.saldo !== undefined) updates.saldo = Number(args.saldo);
+
+      const { data: result, error } = await supabase.from("contas_usuario").update(updates).eq("id", contaId).eq("user_id", userId).select("id,nome,tipo,saldo").single();
+      if (error) return { error: error.message };
+      return { sucesso: true, conta: result };
     }
     case "cadastrar_divida": {
       const { descricao, valor_total, credor, data_vencimento, parcelas } = args as Record<string, unknown>;
@@ -547,7 +737,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const messages = [...body.messages] as Record<string, unknown>[];
-  const MAX_ITERATIONS = 5;
+  const MAX_ITERATIONS = 8;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const response = await fetch(OPENAI_API_URL, {
@@ -567,12 +757,10 @@ Deno.serve(async (req: Request) => {
 
     messages.push(message);
 
-    // No tool calls → final response
     if (!message.tool_calls || message.tool_calls.length === 0) {
       return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
-    // Execute tool calls in parallel
     await Promise.all(
       // deno-lint-ignore no-explicit-any
       message.tool_calls.map(async (tc: any) => {
