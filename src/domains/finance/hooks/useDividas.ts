@@ -107,7 +107,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao criar dívida", { error: String(error) });
-      toast({ title: "Erro ao criar dívida", description: String(error), variant: "destructive" });
+      toast({ title: "Erro ao criar dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
     },
   });
 
@@ -128,7 +128,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao atualizar dívida", { error: String(error) });
-      toast({ title: "Erro ao atualizar dívida", description: String(error), variant: "destructive" });
+      toast({ title: "Erro ao atualizar dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
     },
   });
 
@@ -143,7 +143,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao remover dívida", { error: String(error) });
-      toast({ title: "Erro ao remover dívida", description: String(error), variant: "destructive" });
+      toast({ title: "Erro ao remover dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
     },
   });
 
