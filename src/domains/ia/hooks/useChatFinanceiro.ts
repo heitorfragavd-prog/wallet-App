@@ -187,7 +187,10 @@ export const useChatFinanceiro = (conversaId: string | null) => {
           body: {
             model,
             messages: [
-              { role: "system", content: systemPrompt },
+              {
+                role: "system",
+                content: systemPrompt + `\n\n## Contexto de data e hora\nHoje é ${new Date().toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. Ano atual: ${new Date().getFullYear()}. Quando o usuário mencionar um mês sem especificar o ano, assuma o ano atual (${new Date().getFullYear()}) ou o mais recente que faça sentido no contexto.`,
+              },
               ...historyMessages,
               { role: "user", content: userContent },
             ],
