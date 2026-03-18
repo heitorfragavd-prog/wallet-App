@@ -88,7 +88,7 @@ const IA = () => {
       clearChat();
     } catch (err) {
       logger.error("IA", "Erro ao criar conversa", {
-        error: err instanceof Error ? err.message : String(err),
+        error: err instanceof Error ? err.message : JSON.stringify(err),
       });
       toast({ title: "Erro ao criar conversa", variant: "destructive" });
     }
@@ -138,7 +138,7 @@ const IA = () => {
         setConversaAtiva(novaId);
       } catch (err) {
         logger.error("IA", "Erro ao criar conversa automaticamente", {
-          error: err instanceof Error ? err.message : String(err),
+          error: err instanceof Error ? err.message : JSON.stringify(err),
         });
         toast({ title: "Erro ao criar conversa", variant: "destructive" });
         return;
