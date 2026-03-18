@@ -155,6 +155,8 @@ const TOOLS = [
           data: { type: "string", description: "YYYY-MM-DD" },
           categoria_id: { type: "string" },
           conta_id: { type: "string", description: "ID da conta (opcional)" },
+          metodo_pagamento: { type: "string", description: "Método de pagamento (pix, cartao, dinheiro, boleto, transferencia, voucher)" },
+          observacoes: { type: "string", description: "Observações adicionais" },
         },
         required: ["descricao", "valor", "tipo", "data"],
       },
@@ -247,26 +249,98 @@ const TOOLS = [
   },
 ];
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Helper: fetch transactions from ALL 3 tables (transacoes + receitas + despesas)
+// This mirrors the frontend useTransacoes hook merge pattern.
+// ──────────────────────────────────────────────────────────────────────────────
+interface TransacaoRow {
+  id: string;
+  descricao: string;
+  valor: number;
+  tipo: string;
+  data: string;
+  created_at: string;
+  categoria_id?: string | null;
+  categorias?: { nome: string } | null;
+  metodo_pagamento?: string | null;
+  observacoes?: string | null;
+  conta_id?: string | null;
+  origem: "transacoes" | "receitas" | "despesas";
+}
+
+// deno-lint-ignore no-explicit-any
+async function fetchAllTransacoes(supabase: any, userId: string, opts?: {
+  dataInicio?: string;
+  dataFim?: string;
+  tipo?: string;
+  categoriaId?: string;
+  limit?: number;
+  select?: string;
+}): Promise<TransacaoRow[]> {
+  const sel = opts?.select || "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome)";
+  const selNonTipo = sel.replace(",tipo", ""); // receitas/despesas don't have tipo column
+
+  // Build queries in parallel for all 3 tables
+  // deno-lint-ignore no-explicit-any
+  const buildQuery = (table: string, hasTipo: boolean) => {
+    let q = supabase.from(table).select(hasTipo ? sel : selNonTipo).eq("user_id", userId);
+    if (opts?.dataInicio) q = q.gte("data", opts.dataInicio);
+    if (opts?.dataFim) q = q.lte("data", opts.dataFim);
+    if (hasTipo && opts?.tipo) q = q.eq("tipo", opts.tipo);
+    if (opts?.categoriaId) q = q.eq("categoria_id", opts.categoriaId);
+    return q;
+  };
+
+  // If filtering by tipo, skip the table that doesn't match
+  const skipReceitas = opts?.tipo === "despesa";
+  const skipDespesas = opts?.tipo === "receita";
+
+  const promises = [
+    buildQuery("transacoes", true),
+    skipReceitas ? Promise.resolve({ data: [], error: null }) : buildQuery("receitas", false),
+    skipDespesas ? Promise.resolve({ data: [], error: null }) : buildQuery("despesas", false),
+  ];
+
+  const [resT, resR, resD] = await Promise.all(promises);
+
+  // deno-lint-ignore no-explicit-any
+  const transacoes = (resT.data || []).map((t: any) => ({ ...t, origem: "transacoes" }));
+  // deno-lint-ignore no-explicit-any
+  const receitas = (resR.data || []).map((r: any) => ({ ...r, tipo: "receita", origem: "receitas" }));
+  // deno-lint-ignore no-explicit-any
+  const despesas = (resD.data || []).map((d: any) => ({ ...d, tipo: "despesa", origem: "despesas" }));
+
+  const merged = [...transacoes, ...receitas, ...despesas];
+  merged.sort((a: TransacaoRow, b: TransacaoRow) => (b.data || "").localeCompare(a.data || ""));
+
+  if (opts?.limit) {
+    return merged.slice(0, opts.limit);
+  }
+  return merged;
+}
+
 // deno-lint-ignore no-explicit-any
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
     case "buscar_transacoes": {
-      // deno-lint-ignore no-explicit-any
-      let q = supabase.from("transacoes").select("id,descricao,valor,tipo,data,created_at,categorias(nome)").eq("user_id", userId).order("data", { ascending: false }).limit((args.limit as number) || 50);
-      if (args.data_inicio) q = q.gte("data", args.data_inicio as string);
-      if (args.data_fim) q = q.lte("data", args.data_fim as string);
-      if (args.tipo) q = q.eq("tipo", args.tipo as string);
-      if (args.categoria_id) q = q.eq("categoria_id", args.categoria_id as string);
-      const { data, error } = await q;
-      if (error) return { error: error.message };
+      const data = await fetchAllTransacoes(supabase, userId, {
+        dataInicio: args.data_inicio as string | undefined,
+        dataFim: args.data_fim as string | undefined,
+        tipo: args.tipo as string | undefined,
+        categoriaId: args.categoria_id as string | undefined,
+        limit: (args.limit as number) || 50,
+      });
       return data;
     }
     case "consultar_resumo_mensal": {
       const { ano, mes } = args as { ano: number; mes: number };
       const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
       const fim = new Date(ano, mes, 0).toISOString().split("T")[0];
-      const { data, error } = await supabase.from("transacoes").select("valor,tipo,categorias(nome)").eq("user_id", userId).gte("data", inicio).lte("data", fim);
-      if (error) return { error: error.message };
+      const data = await fetchAllTransacoes(supabase, userId, {
+        dataInicio: inicio,
+        dataFim: fim,
+        select: "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome)",
+      });
       // deno-lint-ignore no-explicit-any
       const receitas = data.filter((t: any) => t.tipo === "receita").reduce((s: number, t: any) => s + Number(t.valor), 0);
       // deno-lint-ignore no-explicit-any
@@ -278,18 +352,22 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
         porCategoria[cat] = (porCategoria[cat] || 0) + Number(t.valor);
       });
       const topCategorias = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([nome, valor]) => ({ nome, valor }));
-      return { periodo: `${mes}/${ano}`, receitas, despesas, saldo: receitas - despesas, topCategorias };
+      return { periodo: `${mes}/${ano}`, receitas, despesas, saldo: receitas - despesas, topCategorias, total_transacoes: data.length };
     }
     case "comparar_periodos": {
       const { ano1, mes1, ano2, mes2 } = args as { ano1: number; mes1: number; ano2: number; mes2: number };
       async function getResumo(ano: number, mes: number) {
         const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
         const fim = new Date(ano, mes, 0).toISOString().split("T")[0];
-        const { data } = await supabase.from("transacoes").select("valor,tipo").eq("user_id", userId).gte("data", inicio).lte("data", fim);
+        const data = await fetchAllTransacoes(supabase, userId, {
+          dataInicio: inicio,
+          dataFim: fim,
+          select: "id,valor,tipo,data,created_at,categoria_id",
+        });
         // deno-lint-ignore no-explicit-any
-        const receitas = (data || []).filter((t: any) => t.tipo === "receita").reduce((s: number, t: any) => s + Number(t.valor), 0);
+        const receitas = data.filter((t: any) => t.tipo === "receita").reduce((s: number, t: any) => s + Number(t.valor), 0);
         // deno-lint-ignore no-explicit-any
-        const despesas = (data || []).filter((t: any) => t.tipo === "despesa").reduce((s: number, t: any) => s + Number(t.valor), 0);
+        const despesas = data.filter((t: any) => t.tipo === "despesa").reduce((s: number, t: any) => s + Number(t.valor), 0);
         return { receitas, despesas, saldo: receitas - despesas };
       }
       const [p1, p2] = await Promise.all([getResumo(ano1, mes1), getResumo(ano2, mes2)]);
@@ -360,14 +438,38 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       return data;
     }
     case "cadastrar_transacao": {
-      const { descricao, valor, tipo, data, categoria_id, conta_id } = args as Record<string, unknown>;
-      const { data: result, error } = await supabase.from("transacoes").insert({ user_id: userId, descricao, valor: Number(valor), tipo, data, categoria_id: categoria_id || null, conta_id: conta_id || null }).select("id,descricao,valor,tipo,data").single();
+      const { descricao, valor, tipo, data, categoria_id, conta_id, metodo_pagamento, observacoes } = args as Record<string, unknown>;
+      // Insert into the correct table based on tipo (matching frontend behavior)
+      const table = tipo === "receita" ? "receitas" : tipo === "despesa" ? "despesas" : "transacoes";
+      const insertData: Record<string, unknown> = {
+        user_id: userId,
+        descricao,
+        valor: Number(valor),
+        data,
+        categoria_id: categoria_id || null,
+        conta_id: conta_id || null,
+      };
+      // receitas/despesas tables have metodo_pagamento and observacoes columns
+      if (table !== "transacoes") {
+        insertData.metodo_pagamento = metodo_pagamento || null;
+        insertData.observacoes = observacoes || null;
+      } else {
+        insertData.tipo = tipo;
+      }
+      const { data: result, error } = await supabase.from(table).insert(insertData).select("id,descricao,valor,data").single();
       if (error) return { error: error.message };
-      return { sucesso: true, transacao: result };
+      return { sucesso: true, transacao: { ...result, tipo }, tabela: table };
     }
     case "deletar_transacao": {
-      const { error } = await supabase.from("transacoes").delete().eq("id", args.transacao_id as string).eq("user_id", userId);
-      if (error) return { error: error.message };
+      const id = args.transacao_id as string;
+      // Try deleting from all 3 tables (only one will match)
+      const results = await Promise.all([
+        supabase.from("transacoes").delete().eq("id", id).eq("user_id", userId),
+        supabase.from("receitas").delete().eq("id", id).eq("user_id", userId),
+        supabase.from("despesas").delete().eq("id", id).eq("user_id", userId),
+      ]);
+      const anyError = results.find(r => r.error);
+      if (anyError?.error) return { error: anyError.error.message };
       return { sucesso: true };
     }
     case "cadastrar_divida": {
