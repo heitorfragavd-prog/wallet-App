@@ -50,7 +50,7 @@ export const NovaMetaModal = ({ onAdicionarMeta, categoriasMetas }: NovaMetaModa
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.titulo || !formData.valorAlvo || !formData.dataLimite || !formData.categoriaId) {
+    if (!formData.titulo || !formData.valorAlvo || !formData.dataLimite) {
       toast({
         title: "Erro",
         description: "Por favor, preencha todos os campos obrigatórios.",
@@ -67,7 +67,7 @@ export const NovaMetaModal = ({ onAdicionarMeta, categoriasMetas }: NovaMetaModa
       data_inicio: formData.dataInicio || new Date().toISOString().split('T')[0],
       data_limite: formData.dataLimite,
       status: 'ativa',
-      categoria_meta_id: formData.categoriaId,
+      categoria_meta_id: formData.categoriaId || undefined,
       descricao: formData.descricao
     };
 
@@ -122,13 +122,12 @@ export const NovaMetaModal = ({ onAdicionarMeta, categoriasMetas }: NovaMetaModa
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="categoria">Categoria *</Label>
+              <Label htmlFor="categoria">Categoria</Label>
               <select
                 id="categoria"
                 value={formData.categoriaId}
                 onChange={(e) => handleInputChange('categoriaId', e.target.value)}
                 className="w-full px-3 py-2 border border-input bg-background text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 [&>option]:bg-background [&>option]:text-foreground"
-                required
               >
                 <option value="">Selecione uma categoria</option>
                 {categoriasMetas.map(categoria => (

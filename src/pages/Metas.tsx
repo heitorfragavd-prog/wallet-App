@@ -204,15 +204,16 @@ const Metas = () => {
   const progressosAutomaticos = useMemo(() => {
     const map: Record<string, number> = {};
     metas.forEach((meta) => {
-      const inicio = new Date(meta.data_inicio + "T00:00:00");
-      const limite = new Date(meta.data_limite + "T23:59:59");
+      // Comparação por string de data (YYYY-MM-DD) para evitar problemas de timezone UTC vs local
+      const dataInicio = meta.data_inicio;
+      const dataLimite = meta.data_limite;
 
       const receitasNoPeriodo = receitas
-        .filter((r) => { const d = new Date(r.data); return d >= inicio && d <= limite; })
+        .filter((r) => { const d = r.data.split("T")[0]; return d >= dataInicio && d <= dataLimite; })
         .reduce((acc, r) => acc + r.valor, 0);
 
       const despesasNoPeriodo = despesas
-        .filter((d) => { const dt = new Date(d.data); return dt >= inicio && dt <= limite; })
+        .filter((d) => { const dt = d.data.split("T")[0]; return dt >= dataInicio && dt <= dataLimite; })
         .reduce((acc, d) => acc + d.valor, 0);
 
       switch (meta.tipo) {
@@ -234,7 +235,7 @@ const Metas = () => {
 
   const sincronizarProgresso = async (meta: Meta) => {
     const valorCalculado = progressosAutomaticos[meta.id];
-    if (valorCalculado === undefined || valorCalculado === meta.valor_atual) return;
+    if (valorCalculado === undefined || Math.abs(valorCalculado - meta.valor_atual) < 0.01) return;
     await updateMeta(meta.id, { valor_atual: valorCalculado });
     toast({ title: "Progresso sincronizado", description: `"${meta.titulo}" atualizado para R$ ${valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` });
   };
@@ -276,7 +277,10 @@ const Metas = () => {
   const metasPausadas = metas.filter((m) => m.status === "pausada").length;
   const progressoMedio =
     totalMetas > 0
-      ? metas.reduce((acc, meta) => acc + calcularProgresso(meta.valor_atual, meta.valor_alvo), 0) / totalMetas
+      ? metas.reduce((acc, meta) => {
+          const valorEfetivo = progressosAutomaticos[meta.id] ?? meta.valor_atual;
+          return acc + calcularProgresso(valorEfetivo, meta.valor_alvo);
+        }, 0) / totalMetas
       : 0;
 
   const cores = [
@@ -538,7 +542,7 @@ const Metas = () => {
                             {/* Auto-progress indicator */}
                             {meta.tipo !== "investimento" && (() => {
                               const autoVal = progressosAutomaticos[meta.id];
-                              if (autoVal === undefined || autoVal === meta.valor_atual) return null;
+                              if (autoVal === undefined || Math.abs(autoVal - meta.valor_atual) < 0.01) return null;
                               return (
                                 <div className="flex items-center justify-between p-2 rounded-lg bg-blue-500/10 mt-1">
                                   <div className="flex items-center gap-1.5">
@@ -561,10 +565,17 @@ const Metas = () => {
 
                           {/* Indicador de progresso completo */}
                           {progresso >= 100 && (
-                            <div className="flex items-center gap-2 p-2 rounded-lg bg-green-500/10">
-                              <Sparkles className="w-4 h-4 text-green-500" />
-                              <span className="text-sm text-green-600 dark:text-green-400 font-medium">Meta alcançada!</span>
-                            </div>
+                            meta.tipo === "despesa" ? (
+                              <div className="flex items-center gap-2 p-2 rounded-lg bg-red-500/10">
+                                <AlertCircle className="w-4 h-4 text-red-500" />
+                                <span className="text-sm text-red-600 dark:text-red-400 font-medium">Limite de gastos atingido!</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2 p-2 rounded-lg bg-green-500/10">
+                                <Sparkles className="w-4 h-4 text-green-500" />
+                                <span className="text-sm text-green-600 dark:text-green-400 font-medium">Meta alcançada!</span>
+                              </div>
+                            )
                           )}
                         </div>
                       </CardContent>
@@ -623,20 +634,26 @@ const Metas = () => {
                         {/* Valores */}
                         <div className="grid grid-cols-3 gap-3">
                           <div className="p-3 rounded-lg bg-muted/50 text-center">
-                            <p className="text-xs text-muted-foreground mb-1">Atual</p>
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {meta.tipo === "despesa" ? "Gasto" : "Atual"}
+                            </p>
                             <p className="text-sm font-semibold text-foreground">
                               R$ {meta.valor_atual.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
                             </p>
                           </div>
                           <div className="p-3 rounded-lg bg-violet-500/10 text-center">
-                            <p className="text-xs text-muted-foreground mb-1">Meta</p>
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {meta.tipo === "despesa" ? "Limite" : "Meta"}
+                            </p>
                             <p className="text-sm font-semibold text-violet-500">
                               R$ {meta.valor_alvo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
                             </p>
                           </div>
                           <div className="p-3 rounded-lg bg-muted/50 text-center">
-                            <p className="text-xs text-muted-foreground mb-1">Faltam</p>
-                            <p className={`text-sm font-semibold ${faltante <= 0 ? "text-green-500" : "text-foreground"}`}>
+                            <p className="text-xs text-muted-foreground mb-1">
+                              {meta.tipo === "despesa" ? "Disponível" : "Faltam"}
+                            </p>
+                            <p className={`text-sm font-semibold ${faltante <= 0 ? (meta.tipo === "despesa" ? "text-red-500" : "text-green-500") : "text-foreground"}`}>
                               R$ {Math.max(0, faltante).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
                             </p>
                           </div>
@@ -645,7 +662,7 @@ const Metas = () => {
                         {/* Auto-progress sync */}
                         {meta.tipo !== "investimento" && (() => {
                           const autoVal = progressosAutomaticos[meta.id];
-                          if (autoVal === undefined || autoVal === meta.valor_atual) return null;
+                          if (autoVal === undefined || Math.abs(autoVal - meta.valor_atual) < 0.01) return null;
                           const autoProgresso = calcularProgresso(autoVal, meta.valor_alvo);
                           return (
                             <div className="p-3 rounded-lg bg-blue-500/10 space-y-2">
