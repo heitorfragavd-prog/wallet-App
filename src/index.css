@@ -242,6 +242,16 @@
     scrollbar-color: #f97316 #1e293b;
   }
 
+  /* Native date/time inputs: use dark color-scheme so the browser renders
+     the calendar icon and text in light colors (visible on dark backgrounds) */
+  .dark input[type="date"],
+  .dark input[type="datetime-local"],
+  .dark input[type="time"],
+  .dark input[type="month"],
+  .dark input[type="week"] {
+    color-scheme: dark;
+  }
+
   /* 3D hover effects for scrollable elements */
   .scroll-3d {
     transition: all 0.3s ease;

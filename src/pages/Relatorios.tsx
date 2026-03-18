@@ -227,21 +227,39 @@ function useRelatoriosData(
       .filter((t) => t.tipo === "despesa")
       .reduce((s, t) => s + Number(t.valor), 0);
 
-    // ── Chart data por mês ─────────────────────────────────────────────────
-    const mesesMap: Record<string, { receitas: number; despesas: number }> = {};
+    // ── Chart data (por dia se ≤ 60 dias, senão por mês) ──────────────────
+    const diffDias = Math.round(
+      (new Date(dataFim + "T12:00:00").getTime() - new Date(dataInicio + "T12:00:00").getTime()) /
+      (1000 * 60 * 60 * 24)
+    ) + 1;
+    const groupByDay = diffDias <= 60;
+
+    const periodMap: Record<string, { receitas: number; despesas: number; sortKey: string }> = {};
     filtered.forEach((t) => {
       const d = new Date(t.data.split("T")[0] + "T12:00:00");
-      const key = getMesPorExtenso(d);
-      if (!mesesMap[key]) mesesMap[key] = { receitas: 0, despesas: 0 };
-      if (t.tipo === "receita") mesesMap[key].receitas += Number(t.valor);
-      else mesesMap[key].despesas += Number(t.valor);
+      let key: string;
+      let sortKey: string;
+      if (groupByDay) {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        key = `${dd}/${mm}`;
+        sortKey = t.data.split("T")[0];
+      } else {
+        key = getMesPorExtenso(d);
+        sortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      }
+      if (!periodMap[key]) periodMap[key] = { receitas: 0, despesas: 0, sortKey };
+      if (t.tipo === "receita") periodMap[key].receitas += Number(t.valor);
+      else periodMap[key].despesas += Number(t.valor);
     });
-    const chartData = Object.entries(mesesMap).map(([mes, vals]) => ({
-      mes,
-      receitas: vals.receitas,
-      despesas: vals.despesas,
-      saldo: vals.receitas - vals.despesas,
-    }));
+    const chartData = Object.entries(periodMap)
+      .sort(([, a], [, b]) => a.sortKey.localeCompare(b.sortKey))
+      .map(([mes, vals]) => ({
+        mes,
+        receitas: vals.receitas,
+        despesas: vals.despesas,
+        saldo: vals.receitas - vals.despesas,
+      }));
 
     // ── Top categorias despesa (com cor e icone) ───────────────────────────
     const catDespMap: Record<string, { valor: number; cor: string; icone?: string }> = {};
@@ -1012,12 +1030,22 @@ const Relatorios = () => {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="opacity-10" />
-                        <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
+                        <XAxis
+                          dataKey="mes"
+                          tick={{ fontSize: 10 }}
+                          interval={chartData.length > 15 ? Math.floor(chartData.length / 8) : 0}
+                        />
                         <YAxis
                           tick={{ fontSize: 10 }}
                           tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`}
                         />
                         <Tooltip
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--background))",
+                            border: "1px solid hsl(var(--border))",
+                            borderRadius: "8px",
+                            color: "hsl(var(--foreground))",
+                          }}
                           formatter={(value: number, name: string) => [
                             formatCurrency(value),
                             name === "receitas" ? "Receitas" : "Despesas",
@@ -1155,6 +1183,13 @@ const Relatorios = () => {
                         <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
                         <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`} />
                         <Tooltip
+                          cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--background))",
+                            border: "1px solid hsl(var(--border))",
+                            borderRadius: "8px",
+                            color: "hsl(var(--foreground))",
+                          }}
                           formatter={(value: number, name: string) => [
                             formatCurrency(value),
                             name === "receitas" ? "Receitas proj." : name === "despesas" ? "Despesas proj." : "Saldo",
@@ -1204,131 +1239,110 @@ const Relatorios = () => {
                       Sem despesas no período
                     </div>
                   ) : (
-                    <div className="h-72">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={categoryData}
-                            cx="50%"
-                            cy="45%"
-                            innerRadius={55}
-                            outerRadius={90}
-                            dataKey="valor"
-                            nameKey="categoria"
-                          >
-                            {categoryData.map((entry, index) => (
-                              <Cell
-                                key={`cell-${index}`}
-                                fill={entry.cor}
-                                className="outline-none transition-all duration-300 hover:opacity-80"
-                              />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            content={({ active, payload }: TooltipProps<number, string>) => {
-                              if (active && payload && payload.length) {
-                                const data = payload[0].payload;
-                                const pct =
-                                  totalDespesas > 0
-                                    ? ((data.valor / totalDespesas) * 100).toFixed(1)
-                                    : "0";
-                                const iconName = data.icone as keyof typeof icons;
-                                const IconComponent =
-                                  iconName && icons[iconName]
-                                    ? (icons[iconName] as React.ElementType)
-                                    : icons.Tag;
-                                return (
-                                  <div className="bg-background/90 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl p-3 min-w-[160px]">
-                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-border/50">
-                                      <div
-                                        className="flex items-center justify-center w-7 h-7 rounded-full"
-                                        style={{ backgroundColor: `${data.cor}20`, color: data.cor }}
-                                      >
-                                        <IconComponent size={14} />
+                    <>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={categoryData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={55}
+                              outerRadius={90}
+                              dataKey="valor"
+                              nameKey="categoria"
+                            >
+                              {categoryData.map((entry, index) => (
+                                <Cell
+                                  key={`cell-${index}`}
+                                  fill={entry.cor}
+                                  className="outline-none transition-all duration-300 hover:opacity-80"
+                                />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              content={({ active, payload }: TooltipProps<number, string>) => {
+                                if (active && payload && payload.length) {
+                                  const data = payload[0].payload;
+                                  const pct =
+                                    totalDespesas > 0
+                                      ? ((data.valor / totalDespesas) * 100).toFixed(1)
+                                      : "0";
+                                  const iconName = data.icone as keyof typeof icons;
+                                  const IconComponent =
+                                    iconName && icons[iconName]
+                                      ? (icons[iconName] as React.ElementType)
+                                      : icons.Tag;
+                                  return (
+                                    <div className="bg-background/90 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl p-3 min-w-[160px]">
+                                      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-border/50">
+                                        <div
+                                          className="flex items-center justify-center w-7 h-7 rounded-full"
+                                          style={{ backgroundColor: `${data.cor}20`, color: data.cor }}
+                                        >
+                                          <IconComponent size={14} />
+                                        </div>
+                                        <span className="font-semibold text-sm">{data.categoria}</span>
                                       </div>
-                                      <span className="font-semibold text-sm">{data.categoria}</span>
+                                      <div className="flex justify-between text-xs">
+                                        <span className="text-muted-foreground">Valor</span>
+                                        <span className="font-bold">{formatCurrency(data.valor)}</span>
+                                      </div>
+                                      <div className="flex justify-between text-xs mt-1">
+                                        <span className="text-muted-foreground">Participação</span>
+                                        <span className="font-semibold">{pct}%</span>
+                                      </div>
                                     </div>
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">Valor</span>
-                                      <span className="font-bold">{formatCurrency(data.valor)}</span>
-                                    </div>
-                                    <div className="flex justify-between text-xs mt-1">
-                                      <span className="text-muted-foreground">Participação</span>
-                                      <span className="font-semibold">{pct}%</span>
-                                    </div>
-                                  </div>
-                                );
-                              }
-                              return null;
-                            }}
-                          />
-                          <Legend
-                            verticalAlign="bottom"
-                            wrapperStyle={{ paddingTop: "12px" }}
-                            content={(props: { payload?: Array<{ color: string; payload: any }> }) => {
-                              const { payload } = props;
-                              if (!payload) return null;
-                              const maxItems = 6;
-                              const displayed = showAllCategories ? payload : payload.slice(0, maxItems);
+                                  );
+                                }
+                                return null;
+                              }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Legend fora do Recharts para não sobrepor o gráfico */}
+                      <div className="pt-3 px-2 pb-2">
+                        <ul className="grid grid-cols-2 gap-x-2 gap-y-2">
+                          {(showAllCategories ? categoryData : categoryData.slice(0, 6)).map(
+                            (entry, index) => {
+                              const iconName = entry.icone as keyof typeof icons;
+                              const IconComponent =
+                                iconName && icons[iconName]
+                                  ? (icons[iconName] as React.ElementType)
+                                  : icons.Tag;
+                              const pct =
+                                totalDespesas > 0
+                                  ? ((entry.valor / totalDespesas) * 100).toFixed(1)
+                                  : "0";
                               return (
-                                <div>
-                                  <ul className="grid grid-cols-2 gap-x-2 gap-y-2 pt-3">
-                                    {displayed.map(
-                                      (entry: { color: string; payload: any }, index: number) => {
-                                        const d = entry.payload;
-                                        const iconName = d.icone as keyof typeof icons;
-                                        const IconComponent =
-                                          iconName && icons[iconName]
-                                            ? (icons[iconName] as React.ElementType)
-                                            : icons.Tag;
-                                        const pct =
-                                          totalDespesas > 0
-                                            ? ((d.valor / totalDespesas) * 100).toFixed(1)
-                                            : "0";
-                                        return (
-                                          <li
-                                            key={`leg-${index}`}
-                                            className="flex items-center gap-2"
-                                          >
-                                            <div
-                                              className="flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0"
-                                              style={{
-                                                backgroundColor: `${entry.color}15`,
-                                                color: entry.color,
-                                              }}
-                                            >
-                                              <IconComponent size={12} />
-                                            </div>
-                                            <div className="flex flex-col overflow-hidden">
-                                              <span className="text-xs font-medium truncate">
-                                                {d.categoria}
-                                              </span>
-                                              <span className="text-[10px] text-muted-foreground">
-                                                {pct}%
-                                              </span>
-                                            </div>
-                                          </li>
-                                        );
-                                      }
-                                    )}
-                                  </ul>
-                                  {payload.length > maxItems && (
-                                    <button
-                                      onClick={() => setShowAllCategories((v) => !v)}
-                                      className="mt-3 text-xs text-muted-foreground hover:text-foreground mx-auto flex items-center gap-1"
-                                    >
-                                      {showAllCategories
-                                        ? "Ver menos"
-                                        : `Ver mais (${payload.length - maxItems})`}
-                                    </button>
-                                  )}
-                                </div>
+                                <li key={`leg-${index}`} className="flex items-center gap-2 min-w-0">
+                                  <div
+                                    className="flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0"
+                                    style={{ backgroundColor: `${entry.cor}15`, color: entry.cor }}
+                                  >
+                                    <IconComponent size={12} />
+                                  </div>
+                                  <div className="flex flex-col overflow-hidden">
+                                    <span className="text-xs font-medium truncate">{entry.categoria}</span>
+                                    <span className="text-[10px] text-muted-foreground">{pct}%</span>
+                                  </div>
+                                </li>
                               );
-                            }}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
+                            }
+                          )}
+                        </ul>
+                        {categoryData.length > 6 && (
+                          <button
+                            onClick={() => setShowAllCategories((v) => !v)}
+                            className="mt-3 text-xs text-muted-foreground hover:text-foreground mx-auto flex items-center gap-1"
+                          >
+                            {showAllCategories ? "Ver menos" : `Ver mais (${categoryData.length - 6})`}
+                          </button>
+                        )}
+                      </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
