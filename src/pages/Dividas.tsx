@@ -223,20 +223,11 @@ const Dividas = () => {
       status: new Date(novaDataVencimento) < new Date() ? "vencida" : "pendente",
       categoria_id: categoria?.id,
       credor: novoCredor,
+      valor_taxa: isTaxaAtiva && novoValorTaxa ? parseFloat(novoValorTaxa) : 0,
     });
 
     if (result?.id && novoReminderHours !== null && novoReminderHours > 0) {
       await createReminder(result.id, novoReminderHours, novaDataVencimento);
-    }
-    
-    if (isTaxaAtiva && result?.id) {
-      await createTransacao({
-        descricao: `Taxa - ${novaDescricao}`,
-        valor: parseFloat(novoValorTaxa),
-        data: novaDataVencimento,
-        categoria_id: categoria?.id,
-        tipo: 'despesa',
-      });
     }
 
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
@@ -609,6 +600,24 @@ const Dividas = () => {
                               <Label htmlFor="edit-parcelas">Total Parcelas *</Label>
                               <Input id="edit-parcelas" type="number" value={editParcelas} onChange={(e) => setEditParcelas(e.target.value)} />
                             </div>
+                            {(() => {
+                              const vt = parseFloat(editValorTotal);
+                              const np = parseInt(editParcelas);
+                              const valido = !isNaN(vt) && vt > 0 && !isNaN(np) && np > 0;
+                              if (!valido) return null;
+                              const valorParcela = vt / np;
+                              return (
+                                <div className="md:col-span-3 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+                                  <div className="flex items-center gap-2">
+                                    <CreditCard className="w-4 h-4 text-rose-500" />
+                                    <span className="text-sm text-muted-foreground">Valor de cada parcela</span>
+                                  </div>
+                                  <span className="text-lg font-bold text-rose-500">
+                                    R$ {valorParcela.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                              );
+                            })()}
                             <div className="space-y-2">
                               <Label htmlFor="edit-parcelas-pagas">Parcelas Pagas</Label>
                               <Input id="edit-parcelas-pagas" type="number" value={editParcelasPagas} onChange={(e) => setEditParcelasPagas(e.target.value)} />
@@ -628,7 +637,7 @@ const Dividas = () => {
                           </div>
 
                           {/* Coluna 2: Informações em grid fixo */}
-                          <div className="grid grid-cols-5 gap-4 items-center">
+                          <div className="grid grid-cols-6 gap-3 items-center">
                             <div>
                               <p className="font-medium">{divida.descricao}</p>
                               <p className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</p>
@@ -657,7 +666,11 @@ const Dividas = () => {
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground mb-1">Valor Restante</p>
-                              <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                              <p className="font-semibold text-rose-500 whitespace-nowrap">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Parcela</p>
+                              <p className="font-semibold text-foreground whitespace-nowrap">R$ {(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
                             </div>
                           </div>
 
@@ -798,6 +811,24 @@ const Dividas = () => {
                                     <Label htmlFor="edit-parcelas-mobile" className="text-xs">Total Parcelas *</Label>
                                     <Input id="edit-parcelas-mobile" type="number" value={editParcelas} onChange={(e) => setEditParcelas(e.target.value)} className="h-9" />
                                   </div>
+                                  {(() => {
+                                    const vt = parseFloat(editValorTotal);
+                                    const np = parseInt(editParcelas);
+                                    const valido = !isNaN(vt) && vt > 0 && !isNaN(np) && np > 0;
+                                    if (!valido) return null;
+                                    const valorParcela = vt / np;
+                                    return (
+                                      <div className="flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+                                        <div className="flex items-center gap-2">
+                                          <CreditCard className="w-4 h-4 text-rose-500" />
+                                          <span className="text-xs text-muted-foreground">Valor de cada parcela</span>
+                                        </div>
+                                        <span className="text-base font-bold text-rose-500">
+                                          R$ {valorParcela.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </span>
+                                      </div>
+                                    );
+                                  })()}
                                   <div className="space-y-1.5">
                                     <Label htmlFor="edit-parcelas-pagas-mobile" className="text-xs">Pagas</Label>
                                     <Input id="edit-parcelas-pagas-mobile" type="number" value={editParcelasPagas} onChange={(e) => setEditParcelasPagas(e.target.value)} className="h-9" />
@@ -844,6 +875,10 @@ const Dividas = () => {
                                 <div>
                                   <p className="text-xs text-muted-foreground">Valor Restante</p>
                                   <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Valor Parcela</p>
+                                  <p className="font-semibold text-foreground">R$ {(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
                                 </div>
                               </div>
                               <div className="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
@@ -927,6 +962,24 @@ const Dividas = () => {
                       <Label htmlFor="parcelas">Número de Parcelas *</Label>
                       <Input id="parcelas" type="number" placeholder="Ex: 12" value={novasParcelas} onChange={(e) => setNovasParcelas(e.target.value)} />
                     </div>
+                    {(() => {
+                      const vt = parseFloat(novoValorTotal);
+                      const np = parseInt(novasParcelas);
+                      const valido = !isNaN(vt) && vt > 0 && !isNaN(np) && np > 0;
+                      if (!valido) return null;
+                      const valorParcela = vt / np;
+                      return (
+                        <div className="md:col-span-2 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <CreditCard className="w-4 h-4 text-rose-500" />
+                            <span className="text-sm text-muted-foreground">Valor de cada parcela</span>
+                          </div>
+                          <span className="text-lg font-bold text-rose-500">
+                            R$ {valorParcela.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      );
+                    })()}
                     <div className="space-y-2">
                       <Label htmlFor="categoria">Categoria *</Label>
                       <select id="categoria" value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value)}
@@ -968,7 +1021,7 @@ const Dividas = () => {
                             />
                           </div>
                           <p className="text-xs text-muted-foreground mt-1">
-                            Este valor será registrado como uma despesa automaticamente.
+                            Este valor será registrado como despesa de taxa quando a dívida for paga.
                           </p>
                         </div>
                       )}

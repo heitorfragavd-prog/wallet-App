@@ -73,6 +73,20 @@ const formatarDataRelativa = (dataString: string) => {
   return formatarData(dataString);
 };
 
+const formatarMetodoPagamento = (metodo?: string | null) => {
+  if (!metodo) return null;
+  const map: { [key: string]: string } = {
+    pix: "Pix",
+    boleto: "Boleto",
+    cartao_credito: "Cartão Crédito",
+    cartao_debito: "Cartão Débito",
+    dinheiro: "Dinheiro",
+    transferencia: "Transferência",
+    voucher: "Voucher",
+  };
+  return map[metodo] || metodo;
+};
+
 const Despesas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
@@ -426,6 +440,7 @@ const Despesas = () => {
                       <TableRow className="hover:bg-transparent">
                         <TableHead className="font-semibold">Descrição</TableHead>
                         <TableHead className="font-semibold">Categoria</TableHead>
+                        <TableHead className="font-semibold">Método</TableHead>
                         <TableHead className="font-semibold">Data</TableHead>
                         <TableHead className="font-semibold text-right">Valor</TableHead>
                         <TableHead className="font-semibold text-center w-24">Ações</TableHead>
@@ -437,6 +452,7 @@ const Despesas = () => {
                           <TableRow key={i}>
                             <TableCell><Skeleton className="h-5 w-40" /></TableCell>
                             <TableCell><Skeleton className="h-5 w-24" /></TableCell>
+                            <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                             <TableCell><Skeleton className="h-5 w-24" /></TableCell>
                             <TableCell><Skeleton className="h-5 w-20 ml-auto" /></TableCell>
                             <TableCell><Skeleton className="h-8 w-16 mx-auto" /></TableCell>
@@ -444,7 +460,7 @@ const Despesas = () => {
                         ))
                       ) : despesasFiltradas.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                             <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
                             Nenhuma despesa encontrada
                           </TableCell>
@@ -482,6 +498,15 @@ const Despesas = () => {
                               <Badge variant="secondary" className="font-normal">
                                 {despesa.categorias?.nome || "Sem categoria"}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {despesa.metodo_pagamento ? (
+                                <Badge variant="outline" className="font-normal text-xs bg-muted/20 border-muted">
+                                  {formatarMetodoPagamento(despesa.metodo_pagamento)}
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {formatarData(despesa.data)}

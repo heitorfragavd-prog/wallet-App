@@ -1714,6 +1714,7 @@ const Relatorios = () => {
                             <TableHead>Credor</TableHead>
                             <TableHead>Valor Total</TableHead>
                             <TableHead>Restante</TableHead>
+                            <TableHead>Parcela</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Progresso</TableHead>
                             <TableHead>Status</TableHead>
@@ -1735,6 +1736,9 @@ const Relatorios = () => {
                                 <TableCell className="text-sm">{formatCurrency(Number(d.valor_total))}</TableCell>
                                 <TableCell className="text-sm text-orange-500 font-medium">
                                   {formatCurrency(Number(d.valor_restante ?? 0))}
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">
+                                  {formatCurrency(Number(d.parcelas > 0 ? d.valor_total / d.parcelas : 0))}
                                 </TableCell>
                                 <TableCell className="text-sm text-muted-foreground">
                                   {d.data_vencimento ? formatarData(d.data_vencimento) : "—"}

@@ -121,7 +121,7 @@ export function RegistrarPagamentoModal({
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
           <div className="flex-1 overflow-y-auto px-4 sm:px-6 space-y-4">
             {/* Resumo da dívida - compacto */}
-            <div className="grid grid-cols-3 gap-2 p-3 bg-muted/50 rounded-lg text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-muted/50 rounded-lg text-center">
               <div>
                 <p className="text-xs text-muted-foreground">Total</p>
                 <p className="text-sm font-medium">R$ {divida.valor_total.toFixed(2)}</p>
@@ -133,6 +133,10 @@ export function RegistrarPagamentoModal({
               <div>
                 <p className="text-xs text-muted-foreground">Restante</p>
                 <p className="text-sm font-semibold text-rose-500">R$ {divida.valor_restante.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Parcela</p>
+                <p className="text-sm font-semibold text-foreground">R$ {(divida.valor_total / divida.parcelas).toFixed(2)}</p>
               </div>
             </div>
 

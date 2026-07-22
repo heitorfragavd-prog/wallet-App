@@ -79,7 +79,7 @@ const Dashboard = () => {
 
   // ── Filtro de data global do dashboard
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
-  const [dividasInterval, setDividasInterval] = useState<7 | 15 | 30>(30);
+  const [dividasInterval, setDividasInterval] = useState<"semana" | 7 | 15 | 30>("semana");
 
   // Iniciar com o mês atual por padrão (apenas na primeira vez)
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
@@ -104,12 +104,21 @@ const Dashboard = () => {
       };
     }
 
-    const dataInicio = dateRange.startDate ?? getPrimeiroDiaMes();
-    const dataFim = dateRange.endDate ?? new Date().toISOString().split("T")[0];
+    const dataInicio = dateRange.startDate;
+    const dataFim = dateRange.endDate;
 
     const transacoesFiltradas = transacoes.filter((transacao) => {
       const dataTransacao = transacao.data.split("T")[0];
-      return dataTransacao >= dataInicio && dataTransacao <= dataFim;
+      if (dataInicio && dataFim) {
+        return dataTransacao >= dataInicio && dataTransacao <= dataFim;
+      }
+      if (dataInicio) {
+        return dataTransacao >= dataInicio;
+      }
+      if (dataFim) {
+        return dataTransacao <= dataFim;
+      }
+      return true;
     });
 
     const totalReceitas = transacoesFiltradas
@@ -122,7 +131,7 @@ const Dashboard = () => {
 
     return {
       transacoesFiltradas: transacoesFiltradas.sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        new Date(b.created_at || b.data).getTime() - new Date(a.created_at || a.data).getTime()
       ),
       totalReceitas,
       totalDespesas,
@@ -152,33 +161,69 @@ const Dashboard = () => {
       }));
   }, [transacoesFiltradas, totalDespesas]);
 
-  // Dívidas próximas ao vencimento (pendente, próximos 30 dias)
+  // Dívidas próximas ao vencimento (pendente, filtradas pelo período selecionado)
   const dividasPendentesProximas = useMemo(() => {
     const hoje = new Date();
-    const noPrazo = new Date(hoje);
-    noPrazo.setDate(hoje.getDate() + dividasInterval);
     const hojeStr = hoje.toISOString().split("T")[0];
-    const noPrazoStr = noPrazo.toISOString().split("T")[0];
+
+    let inicioStr = hojeStr;
+    let fimStr = hojeStr;
+
+    if (dividasInterval === "semana") {
+      const diaSemana = hoje.getDay(); // 0 = Domingo, 6 = Sábado
+      const domingo = new Date(hoje);
+      domingo.setDate(hoje.getDate() - diaSemana);
+      const sabado = new Date(domingo);
+      sabado.setDate(domingo.getDate() + 6);
+
+      inicioStr = domingo.toISOString().split("T")[0];
+      fimStr = sabado.toISOString().split("T")[0];
+    } else {
+      const noPrazo = new Date(hoje);
+      noPrazo.setDate(hoje.getDate() + dividasInterval);
+      fimStr = noPrazo.toISOString().split("T")[0];
+    }
+
     return dividas
       .filter(
         (d) =>
           d.status === "pendente" &&
-          d.data_vencimento >= hojeStr &&
-          d.data_vencimento <= noPrazoStr
+          d.data_vencimento >= inicioStr &&
+          d.data_vencimento <= fimStr
       )
       .sort((a, b) => a.data_vencimento.localeCompare(b.data_vencimento));
   }, [dividas, dividasInterval]);
 
-  // Total de dívidas que vencem no período selecionado (inclui vencidas e as que vencem no prazo)
+  // Total de dívidas que vencem no período selecionado
   const totalDividaPeriodo = useMemo(() => {
     const hoje = new Date();
-    const noPrazo = new Date(hoje);
-    noPrazo.setDate(hoje.getDate() + dividasInterval);
-    const noPrazoStr = noPrazo.toISOString().split("T")[0];
+    const hojeStr = hoje.toISOString().split("T")[0];
+
+    let inicioStr = "1900-01-01";
+    let fimStr = hojeStr;
+
+    if (dividasInterval === "semana") {
+      const diaSemana = hoje.getDay();
+      const domingo = new Date(hoje);
+      domingo.setDate(hoje.getDate() - diaSemana);
+      const sabado = new Date(domingo);
+      sabado.setDate(domingo.getDate() + 6);
+
+      inicioStr = domingo.toISOString().split("T")[0];
+      fimStr = sabado.toISOString().split("T")[0];
+    } else {
+      const noPrazo = new Date(hoje);
+      noPrazo.setDate(hoje.getDate() + dividasInterval);
+      fimStr = noPrazo.toISOString().split("T")[0];
+    }
 
     return dividas
-      .filter((d) => d.status !== "quitada" && d.data_vencimento <= noPrazoStr)
-      .reduce((sum, d) => sum + Number(d.valor_restante), 0);
+      .filter((d) => d.status !== "quitada" && d.data_vencimento >= inicioStr && d.data_vencimento <= fimStr)
+      .reduce((sum, d) => {
+        const valorParcela = d.parcelas && d.parcelas > 1 ? Number(d.valor_total) / Number(d.parcelas) : Number(d.valor_restante);
+        const valorTaxa = Number(d.valor_taxa || 0);
+        return sum + valorParcela + valorTaxa;
+      }, 0);
   }, [dividas, dividasInterval]);
 
   // Manutenções atrasadas
@@ -196,23 +241,24 @@ const Dashboard = () => {
     return recorrentes.filter((r) => r.ativo);
   }, [recorrentes]);
 
-  // Impacto das recorrentes no período selecionado (7, 15 ou 30 dias)
+  // Impacto das recorrentes no período selecionado (semana, 7, 15 ou 30 dias)
   const totalImpactoRecorrentesPeriodo = useMemo(() => {
+    const dias = dividasInterval === "semana" ? 7 : dividasInterval;
     return recorrentesAtivos.reduce((sum, r) => {
       const valorBase = Number(r.valor);
       let valorNoPeriodo = 0;
 
       // Cálculo simplificado pró-rata
       if (r.recorrencia === "diaria") {
-        valorNoPeriodo = valorBase * dividasInterval;
+        valorNoPeriodo = valorBase * dias;
       } else if (r.recorrencia === "semanal") {
-        valorNoPeriodo = (valorBase / 7) * dividasInterval;
+        valorNoPeriodo = (valorBase / 7) * dias;
       } else if (r.recorrencia === "mensal") {
-        valorNoPeriodo = (valorBase / 30) * dividasInterval;
+        valorNoPeriodo = (valorBase / 30) * dias;
       } else if (r.recorrencia === "anual") {
-        valorNoPeriodo = (valorBase / 365) * dividasInterval;
+        valorNoPeriodo = (valorBase / 365) * dias;
       } else {
-        valorNoPeriodo = (valorBase / 30) * dividasInterval; // fallback mensal
+        valorNoPeriodo = (valorBase / 30) * dias; // fallback mensal
       }
 
       return sum + (r.tipo_transacao === "despesa" ? valorNoPeriodo : -valorNoPeriodo);
@@ -283,7 +329,7 @@ const Dashboard = () => {
         const fmt = (iso: string) => iso.split("-").reverse().join("/");
         return `${fmt(dateRange.startDate)} - ${fmt(dateRange.endDate)}`;
       }
-      return formatarMes(new Date());
+      return dateRange.label || "Todos os períodos";
     },
   };
 
@@ -488,17 +534,17 @@ const Dashboard = () => {
               
               {/* Filtro de dias */}
               <div className="flex items-center bg-muted/50 p-1 rounded-lg self-start sm:self-center">
-                {[7, 15, 30].map((days) => (
+                {(["semana", 7, 15, 30] as const).map((interval) => (
                   <button
-                    key={days}
-                    onClick={() => setDividasInterval(days as 7 | 15 | 30)}
+                    key={interval}
+                    onClick={() => setDividasInterval(interval)}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                      dividasInterval === days
+                      dividasInterval === interval
                         ? "bg-background text-orange-500 shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    {days}d
+                    {interval === "semana" ? "Semana" : `${interval}d`}
                   </button>
                 ))}
               </div>
@@ -518,9 +564,11 @@ const Dashboard = () => {
                 <div className="grid grid-cols-3 gap-3">
                   {/* Total no período */}
                   <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-red-500/10 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">Total {dividasInterval}d</p>
+                    <p className="text-xs text-muted-foreground mb-1">
+                      {dividasInterval === "semana" ? "Total Semana" : `Total ${dividasInterval}d`}
+                    </p>
                     <p className="text-lg font-bold text-red-500">
-                      R$ {totalDividaPeriodo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                      R$ {totalDividaPeriodo.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                   {/* Vencidas */}
@@ -533,7 +581,9 @@ const Dashboard = () => {
                   </div>
                   {/* Próximas a vencer */}
                   <div className={`flex flex-col items-center justify-center p-3 rounded-xl text-center ${dividasPendentesProximas.length > 0 ? "bg-yellow-500/10" : "bg-muted/50"}`}>
-                    <p className="text-xs text-muted-foreground mb-1 font-medium">Próx. {dividasInterval} dias</p>
+                    <p className="text-xs text-muted-foreground mb-1 font-medium">
+                      {dividasInterval === "semana" ? "Esta Semana" : `Próx. ${dividasInterval} dias`}
+                    </p>
                     <p className={`text-2xl font-bold ${dividasPendentesProximas.length > 0 ? "text-yellow-600" : "text-foreground"}`}>
                       {dividasPendentesProximas.length}
                     </p>
@@ -542,20 +592,36 @@ const Dashboard = () => {
                   {/* Próximas a vencer - lista */}
                   {dividasPendentesProximas.length > 0 && (
                     <div className="col-span-3 mt-1 space-y-1.5">
-                      {dividasPendentesProximas.slice(0, 3).map((divida) => (
-                        <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <CalendarX2 className="w-3.5 h-3.5 text-yellow-600 shrink-0" />
-                            <span className="text-sm truncate">{divida.descricao}</span>
+                      {dividasPendentesProximas.slice(0, 3).map((divida) => {
+                        const valorParcelaBase = divida.parcelas && divida.parcelas > 1
+                          ? Number(divida.valor_total) / Number(divida.parcelas)
+                          : Number(divida.valor_restante);
+                        const valorTaxa = Number(divida.valor_taxa || 0);
+                        const valorParcelaTotal = valorParcelaBase + valorTaxa;
+
+                        return (
+                          <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <CalendarX2 className="w-3.5 h-3.5 text-yellow-600 shrink-0" />
+                              <span className="text-sm truncate font-medium">{divida.descricao}</span>
+                              {valorTaxa > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-500 border border-orange-500/20 font-normal shrink-0">
+                                  + R$ {valorTaxa.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} taxa
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0 ml-2">
+                              <span className="text-xs text-muted-foreground">{formatarData(divida.data_vencimento)}</span>
+                              <span className="text-sm font-medium text-yellow-700">
+                                R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                · Parcela R$ {valorParcelaBase.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0 ml-2">
-                            <span className="text-xs text-muted-foreground">{formatarData(divida.data_vencimento)}</span>
-                            <span className="text-sm font-medium text-yellow-700">
-                              R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                   {/* Recorrentes ativas */}
@@ -568,7 +634,9 @@ const Dashboard = () => {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-muted-foreground">Impacto {dividasInterval}d</p>
+                      <p className="text-xs text-muted-foreground">
+                        {dividasInterval === "semana" ? "Impacto Semana" : `Impacto ${dividasInterval}d`}
+                      </p>
                       <p className={`text-sm font-bold ${totalImpactoRecorrentesPeriodo > 0 ? "text-red-500" : "text-green-500"}`}>
                         {totalImpactoRecorrentesPeriodo > 0 ? "-" : "+"}R$ {Math.abs(totalImpactoRecorrentesPeriodo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                       </p>
@@ -768,6 +836,9 @@ const Dashboard = () => {
                         </div>
                         <span className="text-sm font-medium text-red-500 whitespace-nowrap ml-2">
                           R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          <span className="text-xs text-muted-foreground font-normal">
+                            {" "}· Parcela R$ {Number(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
                         </span>
                       </div>
                     ))}

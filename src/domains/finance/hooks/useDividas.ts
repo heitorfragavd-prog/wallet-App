@@ -24,6 +24,7 @@ export interface Divida {
   parcelas_pagas: number;
   status: "pendente" | "vencida" | "quitada";
   credor: string;
+  valor_taxa?: number;
   created_at: string;
   updated_at: string;
   categorias?: {

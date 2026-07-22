@@ -26,16 +26,14 @@ export const LoginForm = ({ onSwitchToRegister, onSwitchToForgot }: LoginFormPro
   // Subtask 1.1 & 1.2: Aguardar carregamento do perfil e redirecionar baseado em role
   useEffect(() => {
     // Só executar se estamos verificando role e o perfil não está mais carregando
-    if (isCheckingRole && !profileLoading && profile) {
-      // Subtask 1.2: Verificar role e redirecionar condicionalmente
-      if (profile.role === 'admin') {
+    if (isCheckingRole && !profileLoading) {
+      if (profile?.role === 'admin') {
         navigate('/admin');
       } else {
         // Tratar null, undefined ou 'user' como usuário regular
         navigate('/dashboard');
       }
       
-      // Subtask 1.3: Limpar loading state após redirecionamento
       setIsCheckingRole(false);
       setIsLoading(false);
     }

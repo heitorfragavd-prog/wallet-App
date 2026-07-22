@@ -85,7 +85,9 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
   const { data: despesas = [], isLoading: loading } = useQuery({
     queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate }],
     queryFn: () => fetchDespesas({ startDate, endDate }),
-    staleTime: 1000 * 60 * 2, // 2 min
+    staleTime: 0,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   // ── Mutations

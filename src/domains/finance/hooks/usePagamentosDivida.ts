@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { addMonths } from "date-fns";
 import { PagamentoDivida } from "../types";
+import { calculateTriggerAt } from "./useDebtReminders";
 
 export interface PagamentoDividaComDivida extends PagamentoDivida {
   dividas?: {
@@ -14,6 +17,7 @@ export const usePagamentosDivida = (dividaId?: string) => {
   const [pagamentos, setPagamentos] = useState<PagamentoDividaComDivida[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const fetchPagamentos = async () => {
     if (!dividaId) {
@@ -32,7 +36,7 @@ export const usePagamentosDivida = (dividaId?: string) => {
         .order('data_pagamento', { ascending: false });
 
       if (error) throw error;
-      setPagamentos(data || []);
+      setPagamentos((data as PagamentoDividaComDivida[]) || []);
     } catch (error) {
       toast({
         title: "Erro ao carregar pagamentos",
@@ -57,7 +61,7 @@ export const usePagamentosDivida = (dividaId?: string) => {
         .order('data_pagamento', { ascending: false });
 
       if (error) throw error;
-      setPagamentos(data || []);
+      setPagamentos((data as PagamentoDividaComDivida[]) || []);
     } catch (error) {
       toast({
         title: "Erro ao carregar pagamentos",
@@ -111,41 +115,71 @@ export const usePagamentosDivida = (dividaId?: string) => {
       if (error) throw error;
 
       // 2. Atualizar a dívida (valor_pago, valor_restante, parcelas_pagas, status)
+      //    IMPORTANTE: o status "quitada" só acontece quando TODAS as parcelas forem
+      //    pagas (parcelas_pagas >= parcelas). Pagar uma parcela apenas registra o
+      //    pagamento daquela parcela e avança a dívida para o mês seguinte.
       const novoValorPago = divida.valor_pago + pagamento.valor;
-      const novoValorRestante = divida.valor_total - novoValorPago;
-      const novasParcelasPagas = divida.parcelas_pagas + 1;
-      const novoStatus = novoValorRestante <= 0 ? 'quitada' : 
-                         new Date(divida.data_vencimento) < new Date() ? 'vencida' : 'pendente';
+      const novasParcelasPagas = Math.min(divida.parcelas_pagas + 1, divida.parcelas);
+      const todasParcelasPagas = novasParcelasPagas >= divida.parcelas;
+
+      // valor_restante = saldo real (total - pago). Só zera quando tudo quitado.
+      const novoValorRestante = todasParcelasPagas ? 0 : Math.max(0, divida.valor_total - novoValorPago);
+
+      const novoStatus: 'pendente' | 'vencida' | 'quitada' = todasParcelasPagas
+        ? 'quitada'
+        : new Date(divida.data_vencimento) < new Date() ? 'vencida' : 'pendente';
+
+      // Se ainda faltam parcelas, avança a data de vencimento em +1 mês (próxima parcela)
+      const novaDataVencimento = todasParcelasPagas
+        ? divida.data_vencimento
+        : addMonths(new Date(divida.data_vencimento.split('T')[0] + 'T00:00:00'), 1)
+            .toISOString()
+            .split('T')[0];
 
       await supabase
         .from('dividas')
         .update({
           valor_pago: novoValorPago,
           valor_restante: Math.max(0, novoValorRestante),
-          parcelas_pagas: Math.min(novasParcelasPagas, divida.parcelas),
+          parcelas_pagas: novasParcelasPagas,
+          data_vencimento: novaDataVencimento,
           status: novoStatus,
         })
         .eq('id', dividaId);
 
-      // 3. Criar despesa correspondente (se habilitado)
-      if (criarDespesa) {
-        const descricaoDespesa = `Pagamento dívida: ${divida.descricao} (${divida.credor})`;
-        
-        await supabase
-          .from('despesas')
-          .insert([{
-            user_id: userId,
-            descricao: descricaoDespesa,
-            valor: pagamento.valor,
-            data: pagamento.data_pagamento,
-            categoria_id: divida.categoria_id,
-            metodo_pagamento: pagamento.metodo_pagamento,
-            conta_id: pagamento.conta_id,
-            observacoes: pagamento.observacoes || `Pagamento parcial da dívida "${divida.descricao}"`,
-          }]);
+      // 2b. Reagendar lembrete para a nova data de vencimento (se houver um ativo)
+      if (!todasParcelasPagas) {
+        try {
+          const { data: reminderExistente } = await supabase
+            .from('debt_reminders')
+            .select('id, reminder_hours')
+            .eq('divida_id', dividaId)
+            .maybeSingle();
+
+          if (reminderExistente?.id) {
+            const triggerAt = calculateTriggerAt(novaDataVencimento, reminderExistente.reminder_hours);
+            await supabase
+              .from('debt_reminders')
+              .update({
+                trigger_at: triggerAt,
+                status: 'pending',
+                sent_at: null,
+                error_message: null,
+              })
+              .eq('id', reminderExistente.id);
+          }
+        } catch {
+          // Falha silenciosa: a tabela debt_reminders pode não existir ainda
+        }
       }
 
-      setPagamentos(prev => [data, ...prev]);
+      // 3. O banco de dados (trigger sync_pagamento_divida_to_despesa) sincroniza automaticamente 
+      // a despesa do pagamento e a taxa para evitar duplicidade.
+
+      // 4. Invalidar cache de despesas para a nova despesa aparecer na lista
+      queryClient.invalidateQueries({ queryKey: ["despesas"] });
+
+      setPagamentos(prev => [data as PagamentoDividaComDivida, ...prev]);
       
       toast({
         title: "Pagamento registrado",
