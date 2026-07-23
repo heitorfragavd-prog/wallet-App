@@ -75,19 +75,27 @@ export const BankLogoBadge: React.FC<BankLogoBadgeProps> = ({
     lg: "w-12 h-12 p-2.5 text-sm",
   }[size];
 
-  const DIVIPAY_SVG = `<svg viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M 36 28 H 72 V 42 H 84 L 72 54 H 46 Z" fill="#FFA800" />
-    <path d="M 72 80 H 36 V 66 H 24 L 36 54 H 62 Z" fill="#FFA800" />
-  </svg>`;
+  if (targetSlug === "divipay") {
+    return (
+      <div
+        className={`rounded-full flex items-center justify-center shrink-0 shadow-md transition-transform hover:scale-105 overflow-hidden bg-white ${
+          size === "sm" ? "w-7 h-7 p-0.5" : size === "lg" ? "w-12 h-12 p-1" : "w-10 h-10 p-1"
+        } ${className}`}
+        title="DiviPay"
+      >
+        <img
+          src="/logos/divipay.png"
+          alt="DiviPay"
+          className="w-full h-full object-cover rounded-full"
+        />
+      </div>
+    );
+  }
 
-  const svgRaw = targetSlug === "divipay"
-    ? DIVIPAY_SVG
-    : (targetSlug && ICONES[targetSlug as keyof typeof ICONES] ? ICONES[targetSlug as keyof typeof ICONES] : null);
+  const svgRaw = targetSlug && ICONES[targetSlug as keyof typeof ICONES] ? ICONES[targetSlug as keyof typeof ICONES] : null;
 
   if (svgRaw) {
-    const formattedSvg = targetSlug === "divipay"
-      ? DIVIPAY_SVG.replace('<svg ', `<svg class="w-full h-full" `)
-      : svgRaw.replace('<svg ', `<svg class="w-full h-full text-white fill-current" `);
+    const formattedSvg = svgRaw.replace('<svg ', `<svg class="w-full h-full text-white fill-current" `);
 
     return (
       <div
