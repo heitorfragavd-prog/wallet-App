@@ -27,7 +27,7 @@ export const BANCOS_BRASIL_LIST: BankConfig[] = [
   { slug: "pagbank", nome: "PagBank", corBg: "#00A859" },
   { slug: "cora", nome: "Cora", corBg: "#FE3E6D" },
   { slug: "infinitepay", nome: "InfinitePay", corBg: "#000000" },
-  { slug: "divipay", nome: "DiviPay", corBg: "#FF9900" },
+  { slug: "divipay", nome: "DiviPay", corBg: "#FFFFFF" },
 ];
 
 export function mapearNomeParaSlug(nome: string): BancoSlug | null {
@@ -76,8 +76,8 @@ export const BankLogoBadge: React.FC<BankLogoBadgeProps> = ({
   }[size];
 
   const DIVIPAY_SVG = `<svg viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M 38 28 H 68 L 68 42 L 80 42 L 80 54 H 52 L 38 40 Z" fill="currentColor" />
-    <path d="M 70 80 H 40 L 40 66 L 28 66 L 28 54 H 56 L 70 68 Z" fill="currentColor" />
+    <path d="M 36 28 H 72 V 42 H 84 L 72 54 H 46 Z" fill="#FFA800" />
+    <path d="M 72 80 H 36 V 66 H 24 L 36 54 H 62 Z" fill="#FFA800" />
   </svg>`;
 
   const svgRaw = targetSlug === "divipay"
@@ -85,9 +85,9 @@ export const BankLogoBadge: React.FC<BankLogoBadgeProps> = ({
     : (targetSlug && ICONES[targetSlug as keyof typeof ICONES] ? ICONES[targetSlug as keyof typeof ICONES] : null);
 
   if (svgRaw) {
-    // Adiciona fill white para SVGs que usam fill="none"
-    const formattedSvg = svgRaw
-      .replace('<svg ', `<svg class="w-full h-full text-white fill-current" `);
+    const formattedSvg = targetSlug === "divipay"
+      ? DIVIPAY_SVG.replace('<svg ', `<svg class="w-full h-full" `)
+      : svgRaw.replace('<svg ', `<svg class="w-full h-full text-white fill-current" `);
 
     return (
       <div
