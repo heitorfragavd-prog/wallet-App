@@ -59,19 +59,11 @@ export const useOrcamentosCategorias = (mesReferencia?: string) => {
       const userId = userData?.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", userId)
-        .single();
-
-      const targetProfileId = profile?.id || userId;
-
       const { data, error } = await supabase
         .from("orcamentos_categorias" as any)
         .upsert(
           {
-            user_id: targetProfileId,
+            user_id: userId,
             categoria_id,
             valor_limite,
             mes_referencia,
@@ -89,11 +81,12 @@ export const useOrcamentosCategorias = (mesReferencia?: string) => {
       qc.invalidateQueries({ queryKey: ORCAMENTOS_CATEGORIAS_QUERY_KEY });
       toast({ title: "Teto de Gastos Definido", description: "Limite de orçamento salvo com sucesso!" });
     },
-    onError: (error) => {
+    onError: (error: any) => {
       logger.error("useOrcamentosCategorias", "Erro ao salvar limite", { error: String(error) });
+      const msg = error?.message || (typeof error === "object" ? JSON.stringify(error) : String(error));
       toast({
         title: "Erro ao definir limite",
-        description: error instanceof Error ? error.message : String(error),
+        description: msg,
         variant: "destructive",
       });
     },
