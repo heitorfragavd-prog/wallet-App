@@ -324,17 +324,17 @@ export default function ContasCartoes() {
 
         {/* Modal de Cadastro / Edição */}
         <Dialog open={modalAberto} onOpenChange={setModalAberto}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="w-[95vw] max-w-lg sm:max-w-lg overflow-hidden">
             <DialogHeader>
               <DialogTitle>
                 {contaEditando ? "Editar Conta / Cartão" : "Nova Conta / Cartão"}
               </DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
-              <div className="space-y-1.5">
+            <div className="space-y-4 py-2 w-full min-w-0">
+              <div className="space-y-1.5 w-full min-w-0">
                 <Label className="text-xs text-muted-foreground">Selecione o Banco / Instituição</Label>
-                <div className="flex items-center gap-2.5 overflow-x-auto pb-2 scrollbar-none">
+                <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-border/60 bg-muted/20 max-h-32 overflow-y-auto">
                   {BANCOS_BRASIL_LIST.map((b) => (
                     <button
                       key={b.slug}
@@ -346,7 +346,7 @@ export default function ContasCartoes() {
                       className="shrink-0 transition-transform hover:scale-110 focus:outline-none"
                       title={b.nome}
                     >
-                      <BankLogoBadge slug={b.slug} size="md" />
+                      <BankLogoBadge slug={b.slug} size="sm" />
                     </button>
                   ))}
                 </div>
