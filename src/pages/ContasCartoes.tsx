@@ -63,11 +63,14 @@ const TIPO_ICONS: Record<string, any> = {
 };
 
 export default function ContasCartoes() {
-  const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
+  const { contas, loading, saldoConsolidado, lim_credito_total, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas } = useDividas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
+
+  const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
+  const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
 
   const [nome, setNome] = useState("");
   const [tipo, setTipo] = useState<ContaUsuario["tipo"]>("conta_corrente");
@@ -295,6 +298,17 @@ export default function ContasCartoes() {
                             <p className="font-medium text-foreground">Dia {c.dia_vencimento || "—"}</p>
                           </div>
                         </div>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setCartaoFatura(c);
+                            setModalFaturaAberto(true);
+                          }}
+                          className="w-full h-8 text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-medium rounded-lg mt-2"
+                        >
+                          Ver Fatura do Cartão
+                        </Button>
                       </>
                     )}
 
@@ -456,8 +470,14 @@ export default function ContasCartoes() {
                 Salvar
               </Button>
             </div>
-          </DialogContent>
         </Dialog>
+
+        {/* Modal Fatura Organizze */}
+        <FaturaCartaoModal
+          cartao={cartaoFatura}
+          open={modalFaturaAberto}
+          onOpenChange={setModalFaturaAberto}
+        />
       </div>
     </DashboardLayout>
   );

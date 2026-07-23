@@ -5,6 +5,8 @@ import { Eye, EyeOff, Info, ArrowRight, CreditCard as CreditCardIcon } from "luc
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
+import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
+import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -14,6 +16,8 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
   const { contas, loading, saldoConsolidado } = useContasUsuario();
   const { dividas } = useDividas();
   const [esconderValores, setEsconderValores] = useState(false);
+  const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
+  const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
 
   const contasBancarias = contas.filter((c) => c.tipo !== "cartao_credito");
   const cartoesCredito = contas.filter((c) => c.tipo === "cartao_credito");
@@ -178,7 +182,10 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => navigate("/contas")}
+                        onClick={() => {
+                          setCartaoFatura(cartao);
+                          setModalFaturaAberto(true);
+                        }}
                         className="h-7 text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-medium px-3 rounded-full"
                       >
                         Ver fatura
@@ -222,6 +229,13 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Modal Fatura Organizze */}
+      <FaturaCartaoModal
+        cartao={cartaoFatura}
+        open={modalFaturaAberto}
+        onOpenChange={setModalFaturaAberto}
+      />
     </div>
   );
 };
