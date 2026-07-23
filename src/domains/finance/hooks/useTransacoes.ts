@@ -90,7 +90,7 @@ export const useTransacoes = () => {
         }])
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias!categoria_id (nome, cor, icone)
         `)
         .single();
 
@@ -121,7 +121,7 @@ export const useTransacoes = () => {
         .eq('id', id)
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias!categoria_id (nome, cor, icone)
         `)
         .single();
 

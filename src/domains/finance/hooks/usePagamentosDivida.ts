@@ -82,7 +82,7 @@ export const usePagamentosDivida = (dividaId?: string) => {
       // Buscar a dívida para validar o saldo restante e obter informações
       const { data: divida, error: dividaError } = await supabase
         .from('dividas')
-        .select('*, categorias (id, nome)')
+        .select('*, categorias!categoria_id (id, nome)')
         .eq('id', dividaId)
         .single();
 

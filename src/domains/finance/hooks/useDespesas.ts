@@ -103,7 +103,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       const { data, error } = await supabase
         .from("despesas")
         .insert([{ ...despesa, user_id: userId }])
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       if (tagNames?.length) await addTagsToDespesa(data.id, tagNames);
@@ -133,7 +133,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
         .from("despesas")
         .update(updates)
         .eq("id", id)
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       if (tagNames !== undefined) await updateDespesaTags(id, tagNames);

@@ -23,9 +23,9 @@ export const useFinancialContext = () => {
         { data: metas },
         { data: contas },
       ] = await Promise.all([
-        supabase.from("transacoes").select("*, categorias(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(50),
-        supabase.from("despesas").select("*, categorias(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
-        supabase.from("receitas").select("*, categorias(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
+        supabase.from("transacoes").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(50),
+        supabase.from("despesas").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
+        supabase.from("receitas").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
         supabase.from("dividas").select("id, descricao, valor_total, valor_restante, data_vencimento, status").neq("status", "quitada"),
         supabase.from("metas").select("id, titulo, valor_alvo, valor_atual, status"),
         supabase.from("contas_usuario").select("id, nome, saldo"),

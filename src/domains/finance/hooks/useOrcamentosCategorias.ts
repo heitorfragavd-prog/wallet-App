@@ -23,7 +23,7 @@ export const ORCAMENTOS_CATEGORIAS_QUERY_KEY = ["orcamentos_categorias"] as cons
 async function fetchOrcamentosCategorias(mesReferencia: string): Promise<OrcamentoCategoria[]> {
   const { data, error } = await supabase
     .from("orcamentos_categorias" as any)
-    .select("*, categorias(nome, cor, icone)")
+    .select("*, categorias!categoria_id(nome, cor, icone)")
     .eq("mes_referencia", mesReferencia);
 
   if (error && error.code !== "PGRST116" && error.code !== "PGRST200") {
@@ -71,7 +71,7 @@ export const useOrcamentosCategorias = (mesReferencia?: string) => {
           },
           { onConflict: "user_id,categoria_id,mes_referencia" }
         )
-        .select("*, categorias(nome, cor, icone)")
+        .select("*, categorias!categoria_id(nome, cor, icone)")
         .single();
 
       if (error) throw error;

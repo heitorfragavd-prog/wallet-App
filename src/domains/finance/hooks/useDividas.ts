@@ -104,7 +104,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
       const { data, error } = await supabase
         .from("dividas")
         .insert([{ ...divida, user_id: userId }])
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       return data as Divida;
@@ -125,7 +125,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
         .from("dividas")
         .update(updates)
         .eq("id", id)
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       return data as Divida;

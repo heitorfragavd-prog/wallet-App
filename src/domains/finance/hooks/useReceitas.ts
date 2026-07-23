@@ -99,7 +99,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
       const { data, error } = await supabase
         .from("receitas")
         .insert([{ ...receita, user_id: userId }])
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       if (tagNames?.length) await addTagsToReceita(data.id, tagNames);
@@ -129,7 +129,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
         .from("receitas")
         .update(updates)
         .eq("id", id)
-        .select("*, categorias (nome, cor, icone)")
+        .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
       if (tagNames !== undefined) await updateReceitaTags(id, tagNames);
