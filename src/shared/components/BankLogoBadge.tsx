@@ -1,7 +1,7 @@
 import React from "react";
 import { ICONES } from "../../../node_modules/@edusites/bancos-brasil/src/icones.js";
 
-export type BancoSlug = keyof typeof ICONES;
+export type BancoSlug = (keyof typeof ICONES) | "divipay";
 
 export interface BankConfig {
   slug: BancoSlug;
@@ -27,6 +27,7 @@ export const BANCOS_BRASIL_LIST: BankConfig[] = [
   { slug: "pagbank", nome: "PagBank", corBg: "#00A859" },
   { slug: "cora", nome: "Cora", corBg: "#FE3E6D" },
   { slug: "infinitepay", nome: "InfinitePay", corBg: "#000000" },
+  { slug: "divipay", nome: "DiviPay", corBg: "#FF9900" },
 ];
 
 export function mapearNomeParaSlug(nome: string): BancoSlug | null {
@@ -48,6 +49,7 @@ export function mapearNomeParaSlug(nome: string): BancoSlug | null {
   if (n.includes("pagbank") || n.includes("pagseguro")) return "pagbank";
   if (n.includes("cora")) return "cora";
   if (n.includes("infinite")) return "infinitepay";
+  if (n.includes("divi")) return "divipay";
   return null;
 }
 
@@ -73,7 +75,14 @@ export const BankLogoBadge: React.FC<BankLogoBadgeProps> = ({
     lg: "w-12 h-12 p-2.5 text-sm",
   }[size];
 
-  const svgRaw = targetSlug && ICONES[targetSlug] ? ICONES[targetSlug] : null;
+  const DIVIPAY_SVG = `<svg viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M 38 28 H 68 L 68 42 L 80 42 L 80 54 H 52 L 38 40 Z" fill="currentColor" />
+    <path d="M 70 80 H 40 L 40 66 L 28 66 L 28 54 H 56 L 70 68 Z" fill="currentColor" />
+  </svg>`;
+
+  const svgRaw = targetSlug === "divipay"
+    ? DIVIPAY_SVG
+    : (targetSlug && ICONES[targetSlug as keyof typeof ICONES] ? ICONES[targetSlug as keyof typeof ICONES] : null);
 
   if (svgRaw) {
     // Adiciona fill white para SVGs que usam fill="none"
