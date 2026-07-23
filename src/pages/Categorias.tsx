@@ -55,6 +55,7 @@ const Categorias = () => {
   const [novoNome, setNovoNome] = useState("");
   const [novoTipo, setNovoTipo] = useState<"receita" | "despesa">("receita");
   const [novaCor, setNovaCor] = useState("#10B981");
+  const [novoParentId, setNovoParentId] = useState("");
   const [novaDescricao, setNovaDescricao] = useState("");
 
   // Dados processados
@@ -87,8 +88,14 @@ const Categorias = () => {
       return;
     }
 
-    await createCategoria({ nome: novoNome, tipo: novoTipo, cor: novaCor, icone: "DollarSign" });
-    setNovoNome(""); setNovoTipo("receita"); setNovaCor("#10B981"); setNovaDescricao("");
+    await createCategoria({
+      nome: novoNome,
+      tipo: novoTipo,
+      cor: novaCor,
+      icone: "DollarSign",
+      parent_id: novoParentId || undefined,
+    });
+    setNovoNome(""); setNovoTipo("receita"); setNovaCor("#10B981"); setNovoParentId(""); setNovaDescricao("");
     setActiveTab("lista");
   };
 
@@ -406,6 +413,16 @@ const Categorias = () => {
                         className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         <option value="receita">Receita</option>
                         <option value="despesa">Despesa</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="parent">Categoria Pai (Opcional - para transformar em Subcategoria)</Label>
+                      <select id="parent" value={novoParentId} onChange={(e) => setNovoParentId(e.target.value)}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Nenhuma (Categoria Principal)</option>
+                        {categorias.filter(c => c.tipo === novoTipo && !c.parent_id).map((cat) => (
+                          <option key={cat.id} value={cat.id}>{cat.nome}</option>
+                        ))}
                       </select>
                     </div>
                     <div className="space-y-2 md:col-span-2">

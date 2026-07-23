@@ -10,6 +10,7 @@ export interface Categoria {
   tipo: 'receita' | 'despesa';
   cor: string;
   icone: string;
+  parent_id?: string | null;
   created_at: string;
   updated_at: string;
 }

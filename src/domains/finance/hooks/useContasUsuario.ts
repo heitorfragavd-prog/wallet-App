@@ -1,129 +1,132 @@
-import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
-import { ContaUsuario } from "../types";
+import { logger } from "@/core/logging/LoggerService";
+
+export interface ContaUsuario {
+  id: string;
+  user_id: string;
+  nome: string;
+  tipo: "conta_corrente" | "poupanca" | "carteira" | "cartao_credito" | "outro";
+  saldo_inicial?: number;
+  saldo_atual?: number;
+  limite_credito?: number;
+  dia_fechamento?: number;
+  dia_vencimento?: number;
+  cor?: string;
+  created_at: string;
+}
+
+export const CONTAS_QUERY_KEY = ["contas_usuario"] as const;
+
+async function fetchContas(): Promise<ContaUsuario[]> {
+  const { data, error } = await supabase
+    .from("contas_usuario")
+    .select("*")
+    .order("nome", { ascending: true });
+
+  if (error) {
+    logger.error("useContasUsuario", "Erro ao carregar contas", { error: error.message });
+    throw error;
+  }
+
+  return (data ?? []) as ContaUsuario[];
+}
 
 export const useContasUsuario = () => {
-  const [contas, setContas] = useState<ContaUsuario[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
   const { toast } = useToast();
 
-  const fetchContas = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('contas_usuario')
-        .select('*')
-        .order('nome');
+  const { data: contas = [], isLoading: loading } = useQuery({
+    queryKey: CONTAS_QUERY_KEY,
+    queryFn: fetchContas,
+    staleTime: 1000 * 60 * 2,
+  });
 
-      if (error) throw error;
-      setContas(data || []);
-    } catch (error) {
-      toast({
-        title: "Erro ao carregar contas",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createConta = async (conta: Omit<ContaUsuario, 'id' | 'user_id' | 'created_at'>) => {
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      
+  const createConta = useMutation({
+    mutationFn: async (conta: Omit<ContaUsuario, "id" | "user_id" | "created_at">) => {
+      const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
-        .from('contas_usuario')
-        .insert([{
-          ...conta,
-          user_id: userData.user?.id
-        }])
+        .from("contas_usuario")
+        .insert([{ ...conta, user_id: userId }])
         .select()
         .single();
-
       if (error) throw error;
-      setContas(prev => [...prev, data]);
-      
-      toast({
-        title: "Conta criada",
-        description: "Conta criada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
+      return data as ContaUsuario;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      toast({ title: "Conta Criada", description: "Conta/Cartão registrado com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useContasUsuario", "Erro ao criar conta", { error: String(error) });
       toast({
         title: "Erro ao criar conta",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
+        description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
-      return { data: null, error };
-    }
-  };
+    },
+  });
 
-  const updateConta = async (id: string, updates: Partial<ContaUsuario>) => {
-    try {
+  const updateConta = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<ContaUsuario> }) => {
       const { data, error } = await supabase
-        .from('contas_usuario')
+        .from("contas_usuario")
         .update(updates)
-        .eq('id', id)
+        .eq("id", id)
         .select()
         .single();
-
       if (error) throw error;
-      setContas(prev => prev.map(conta => conta.id === id ? data : conta));
-      
-      toast({
-        title: "Conta atualizada",
-        description: "Conta atualizada com sucesso!",
-      });
-      
-      return { data, error: null };
-    } catch (error) {
+      return data as ContaUsuario;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      toast({ title: "Conta Atualizada", description: "Dados atualizados com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useContasUsuario", "Erro ao atualizar conta", { error: String(error) });
       toast({
         title: "Erro ao atualizar conta",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
+        description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
-      return { data: null, error };
-    }
-  };
+    },
+  });
 
-  const deleteConta = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('contas_usuario')
-        .delete()
-        .eq('id', id);
-
+  const deleteConta = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("contas_usuario").delete().eq("id", id);
       if (error) throw error;
-      setContas(prev => prev.filter(conta => conta.id !== id));
-      
-      toast({
-        title: "Conta removida",
-        description: "Conta removida com sucesso!",
-      });
-      
-      return { error: null };
-    } catch (error) {
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      toast({ title: "Conta Removida", description: "Conta removida com sucesso!" });
+    },
+    onError: (error) => {
+      logger.error("useContasUsuario", "Erro ao remover conta", { error: String(error) });
       toast({
         title: "Erro ao remover conta",
-        description: error instanceof Error ? error.message : "Erro desconhecido",
+        description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
-      return { error };
-    }
-  };
+    },
+  });
 
-  useEffect(() => {
-    fetchContas();
-  }, []);
+  const saldoConsolidado = contas
+    .filter((c) => c.tipo !== "cartao_credito")
+    .reduce((acc, c) => acc + (Number(c.saldo_atual) || Number(c.saldo_inicial) || 0), 0);
+
+  const cartoesCredito = contas.filter((c) => c.tipo === "cartao_credito");
 
   return {
     contas,
     loading,
-    createConta,
-    updateConta,
-    deleteConta,
-    refetch: fetchContas
+    saldoConsolidado,
+    cartoesCredito,
+    createConta: (conta: Omit<ContaUsuario, "id" | "user_id" | "created_at">) =>
+      createConta.mutateAsync(conta),
+    updateConta: (id: string, updates: Partial<ContaUsuario>) =>
+      updateConta.mutateAsync({ id, updates }),
+    deleteConta: (id: string) => deleteConta.mutateAsync(id),
   };
 };

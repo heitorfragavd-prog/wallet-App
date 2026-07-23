@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ControleOrcamentoCard } from "@/domains/finance/components/ControleOrcamentoCard";
+import { TetoGastosCard } from "@/domains/finance/components/TetoGastosCard";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
@@ -651,6 +652,9 @@ const Dashboard = () => {
 
         {/* Controle de Orçamento / Distribuição por Temas */}
         <ControleOrcamentoCard compact={true} />
+
+        {/* Teto de Gastos / Orçamentos por Categoria */}
+        <TetoGastosCard />
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

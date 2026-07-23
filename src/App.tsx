@@ -31,6 +31,7 @@ const Veiculos            = lazy(() => import("./pages/Veiculos"));
 const Perfil              = lazy(() => import("./pages/Perfil"));
 const IA                  = lazy(() => import("./pages/IA"));
 const Lembretes           = lazy(() => import("./pages/Lembretes"));
+const ContasCartoes       = lazy(() => import("./pages/ContasCartoes"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazy(() => import("./pages/AdminDashboard"));
@@ -71,6 +72,7 @@ function App() {
               <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
               <Route path="/ia"         element={<ProtectedRoute><IA /></ProtectedRoute>} />
               <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
+              <Route path="/contas"     element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
 
               {/* Protegidas — somente admin */}
               <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

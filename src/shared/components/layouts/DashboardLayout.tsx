@@ -21,6 +21,7 @@ import {
   Shield,
   Bell,
   Wallet,
+  Building2,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -42,6 +43,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   const baseMenuItems = [
     { icon: Home, label: "Dashboard", path: "/dashboard" },
+    { icon: Building2, label: "Contas & Cartões", path: "/contas" },
     { icon: TrendingUp, label: "Receitas", path: "/receitas" },
     { icon: TrendingDown, label: "Despesas", path: "/despesas" },
     { icon: FileText, label: "Transações", path: "/transacoes" },
