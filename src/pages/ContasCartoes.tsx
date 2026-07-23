@@ -45,6 +45,7 @@ import {
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { BankLogoBadge, BANCOS_BRASIL_LIST } from "@/shared/components/BankLogoBadge";
+import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -470,6 +471,7 @@ export default function ContasCartoes() {
                 Salvar
               </Button>
             </div>
+          </DialogContent>
         </Dialog>
 
         {/* Modal Fatura Organizze */}
