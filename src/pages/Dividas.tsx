@@ -46,6 +46,7 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas, Divida } from "@/domains/finance/hooks/useDividas";
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
+import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
@@ -647,10 +648,12 @@ const Dividas = () => {
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</span>
                                 {divida.contas_usuario && (
-                                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20 py-0 px-1.5">
-                                    <CreditCard className="w-2.5 h-2.5 mr-1" />
-                                    {divida.contas_usuario.nome}
-                                  </Badge>
+                                  <div className="flex items-center gap-1">
+                                    <BankLogoBadge nomeOuId={divida.contas_usuario.nome} size="sm" className="w-5 h-5 text-[8px]" />
+                                    <span className="text-xs text-blue-400 font-medium">
+                                      {divida.contas_usuario.nome}
+                                    </span>
+                                  </div>
                                 )}
                               </div>
                             </div>

@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
+import { BankLogoBadge, BANCOS_CONFIG, BancoId } from "@/shared/components/BankLogoBadge";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -222,12 +223,7 @@ export default function ContasCartoes() {
                 <Card key={c.id} className="border border-border bg-card hover:border-border/80 transition-all">
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <div className="flex items-center gap-3">
-                      <div
-                        className="p-2.5 rounded-xl text-white shadow-sm"
-                        style={{ backgroundColor: c.cor || "#3B82F6" }}
-                      >
-                        <IconComp className="w-5 h-5" />
-                      </div>
+                      <BankLogoBadge nomeOuId={c.nome} size="md" />
                       <div>
                         <CardTitle className="text-base font-semibold">{c.nome}</CardTitle>
                         <CardDescription className="text-xs">
@@ -336,6 +332,29 @@ export default function ContasCartoes() {
             </DialogHeader>
 
             <div className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Selecione o Banco / Instituição</Label>
+                <div className="flex items-center gap-2.5 overflow-x-auto pb-2 scrollbar-none">
+                  {(Object.keys(BANCOS_CONFIG) as BancoId[]).filter((id) => id !== "outro").map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        const cfg = BANCOS_CONFIG[id];
+                        if (cfg) {
+                          setNome(cfg.nome);
+                          setCor(cfg.corBg);
+                        }
+                      }}
+                      className="shrink-0 transition-transform hover:scale-110 focus:outline-none"
+                      title={BANCOS_CONFIG[id].nome}
+                    >
+                      <BankLogoBadge bancoId={id} size="md" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="nome">Nome da Conta / Cartão *</Label>
                 <Input
