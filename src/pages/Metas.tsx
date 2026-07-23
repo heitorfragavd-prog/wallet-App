@@ -27,6 +27,7 @@ import {
 } from "@/shared/components/ui/alert-dialog";
 import { NovaMetaModal } from "@/domains/finance/components/NovaMetaModal";
 import { EditarMetaModal } from "@/domains/finance/components/EditarMetaModal";
+import { ControleOrcamentoCard } from "@/domains/finance/components/ControleOrcamentoCard";
 import {
   Plus,
   Target,
@@ -376,6 +377,9 @@ const Metas = () => {
             </CardContent>
           </Card>
         </div>
+
+        {/* Controle de Orçamento (Distribuição por Temas) */}
+        <ControleOrcamentoCard />
 
         {/* Tabs */}
         <Tabs value={abaAtiva} onValueChange={setAbaAtiva} className="space-y-4">

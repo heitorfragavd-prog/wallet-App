@@ -31,6 +31,7 @@ import {
   Layers,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { ControleOrcamentoCard } from "@/domains/finance/components/ControleOrcamentoCard";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
@@ -647,6 +648,9 @@ const Dashboard = () => {
             </CardContent>
           </Card>
         </div>
+
+        {/* Controle de Orçamento / Distribuição por Temas */}
+        <ControleOrcamentoCard compact={true} />
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
