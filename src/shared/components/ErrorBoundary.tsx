@@ -44,7 +44,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleRetry = (): void => {
-    this.setState({ hasError: false, error: undefined });
+    if (this.state.error?.message?.includes("dynamically imported module") || this.state.error?.message?.includes("Failed to fetch")) {
+      window.location.reload();
+    } else {
+      this.setState({ hasError: false, error: undefined });
+    }
   };
 
   render(): ReactNode {
