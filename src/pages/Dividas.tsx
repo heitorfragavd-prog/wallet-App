@@ -45,6 +45,7 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas, Divida } from "@/domains/finance/hooks/useDividas";
+import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
@@ -105,6 +106,7 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
 const Dividas = () => {
   const { toast } = useToast();
   const { categoriasDespesa } = useCategorias();
+  const { contas } = useContasUsuario();
 
   // ── Filtro de data (vencimento)
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
@@ -135,6 +137,7 @@ const Dividas = () => {
   const [novasParcelas, setNovasParcelas] = useState("");
   const [novaCategoria, setNovaCategoria] = useState("");
   const [novoCredor, setNovoCredor] = useState("");
+  const [novaContaId, setNovaContaId] = useState("");
   const [novoReminderHours, setNovoReminderHours] = useState<number | null>(null);
   const [isTaxaAtiva, setIsTaxaAtiva] = useState(false);
   const [novoValorTaxa, setNovoValorTaxa] = useState("");
@@ -222,6 +225,7 @@ const Dividas = () => {
       parcelas_pagas: 0,
       status: new Date(novaDataVencimento) < new Date() ? "vencida" : "pendente",
       categoria_id: categoria?.id,
+      conta_id: novaContaId || null,
       credor: novoCredor,
       valor_taxa: isTaxaAtiva && novoValorTaxa ? parseFloat(novoValorTaxa) : 0,
     });
@@ -231,14 +235,14 @@ const Dividas = () => {
     }
 
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
-    setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovoReminderHours(null);
+    setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
     setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
 
   const handleCancelar = () => {
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
-    setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovoReminderHours(null);
+    setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
     setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
@@ -640,7 +644,15 @@ const Dividas = () => {
                           <div className="grid grid-cols-6 gap-3 items-center">
                             <div>
                               <p className="font-medium">{divida.descricao}</p>
-                              <p className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</span>
+                                {divida.contas_usuario && (
+                                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20 py-0 px-1.5">
+                                    <CreditCard className="w-2.5 h-2.5 mr-1" />
+                                    {divida.contas_usuario.nome}
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground mb-1">Credor</p>
@@ -991,6 +1003,18 @@ const Dividas = () => {
                     <div className="space-y-2">
                       <Label htmlFor="vencimento">Data de Vencimento *</Label>
                       <Input id="vencimento" type="date" value={novaDataVencimento} onChange={(e) => setNovaDataVencimento(e.target.value)} />
+                    </div>
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="conta">Conta / Cartão Vinculado (Opcional)</Label>
+                      <select id="conta" value={novaContaId} onChange={(e) => setNovaContaId(e.target.value)}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500">
+                        <option value="">Nenhum (Vínculo Geral)</option>
+                        {contas.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nome} ({c.tipo === "cartao_credito" ? "Cartão de Crédito" : "Conta / Carteira"})
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="reminder">Lembrete</Label>

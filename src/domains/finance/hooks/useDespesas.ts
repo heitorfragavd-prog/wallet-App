@@ -27,14 +27,14 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
 
   let despesasQuery = supabase
     .from("despesas")
-    .select("*, categorias (nome, cor, icone), despesa_tags (tags (id, nome, cor))");
+    .select("*, categorias!categoria_id (nome, cor, icone), despesa_tags (tags (id, nome, cor))");
 
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
   if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
 
   let transacoesQuery = supabase
     .from("transacoes")
-    .select("*, categorias (nome, cor, icone)")
+    .select("*, categorias!categoria_id (nome, cor, icone)")
     .eq("tipo", "despesa");
 
   if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);

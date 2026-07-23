@@ -27,14 +27,14 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
 
   let receitasQuery = supabase
     .from("receitas")
-    .select("*, categorias (nome, cor, icone), receita_tags (tags (id, nome, cor))");
+    .select("*, categorias!categoria_id (nome, cor, icone), receita_tags (tags (id, nome, cor))");
 
   if (startDate) receitasQuery = receitasQuery.gte("data", startDate);
   if (endDate) receitasQuery = receitasQuery.lte("data", endDate);
 
   let transacoesQuery = supabase
     .from("transacoes")
-    .select("*, categorias (nome, cor, icone)")
+    .select("*, categorias!categoria_id (nome, cor, icone)")
     .eq("tipo", "receita");
 
   if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);

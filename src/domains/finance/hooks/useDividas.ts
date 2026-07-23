@@ -15,6 +15,7 @@ export interface Divida {
   id: string;
   user_id: string;
   categoria_id?: string;
+  conta_id?: string | null;
   descricao: string;
   valor_total: number;
   valor_pago: number;
@@ -32,6 +33,12 @@ export interface Divida {
     cor: string;
     icone: string;
   };
+  contas_usuario?: {
+    id: string;
+    nome: string;
+    tipo: string;
+    cor?: string;
+  } | null;
   debt_reminders?: DebtReminderInfo[];
 }
 
@@ -49,7 +56,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
   let query = supabase
     .from("dividas")
     .select(
-      "*, categorias (nome, cor, icone), debt_reminders (id, reminder_hours, trigger_at, status, sent_at)"
+      "*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor), debt_reminders (id, reminder_hours, trigger_at, status, sent_at)"
     )
     .order("data_vencimento", { ascending: true });
 
@@ -62,7 +69,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
   if (error && (error.code === "PGRST200" || error.code === "PGRST205")) {
     let fallbackQuery = supabase
       .from("dividas")
-      .select("*, categorias (nome, cor, icone)")
+      .select("*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor)")
       .order("data_vencimento", { ascending: true });
 
     if (startDate) fallbackQuery = fallbackQuery.gte("data_vencimento", startDate);

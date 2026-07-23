@@ -31,7 +31,7 @@ export const useTransacoes = () => {
         .from('transacoes')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias!categoria_id (nome, cor, icone)
         `);
 
       if (transacoesError) throw transacoesError;
@@ -41,7 +41,7 @@ export const useTransacoes = () => {
         .from('receitas')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias!categoria_id (nome, cor, icone)
         `);
 
       if (receitasError) throw receitasError;
@@ -51,7 +51,7 @@ export const useTransacoes = () => {
         .from('despesas')
         .select(`
           *,
-          categorias (nome, cor, icone)
+          categorias!categoria_id (nome, cor, icone)
         `);
 
       if (despesasError) throw despesasError;

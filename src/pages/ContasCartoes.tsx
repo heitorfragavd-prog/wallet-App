@@ -43,6 +43,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
+import { useDividas } from "@/domains/finance/hooks/useDividas";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -62,6 +63,7 @@ const TIPO_ICONS: Record<string, any> = {
 
 export default function ContasCartoes() {
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
+  const { dividas } = useDividas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
@@ -299,6 +301,24 @@ export default function ContasCartoes() {
                         </div>
                       </>
                     )}
+
+                    {(() => {
+                      const dividasVinculadas = dividas.filter((d) => d.conta_id === c.id && d.status !== "quitada");
+                      const totalRestante = dividasVinculadas.reduce((sum, d) => sum + Number(d.valor_restante), 0);
+                      if (dividasVinculadas.length === 0) return null;
+
+                      return (
+                        <div className="pt-2 border-t border-border flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground flex items-center gap-1">
+                            <CreditCard className="w-3 h-3 text-rose-500" />
+                            {dividasVinculadas.length} dívida(s) vinculada(s)
+                          </span>
+                          <span className="font-semibold text-rose-500">
+                            R$ {totalRestante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               );
