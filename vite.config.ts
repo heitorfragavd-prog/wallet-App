@@ -58,19 +58,27 @@ function pluggyTokenServerPlugin() {
 
           if (!tokenRes.ok) {
             const errText = await tokenRes.text();
-            res.statusCode = tokenRes.status;
+            res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: `Erro connectToken: ${errText}` }));
+            return res.end(JSON.stringify({ error: `Erro ao gerar token Pluggy: ${errText}` }));
           }
 
-          const { accessToken } = await tokenRes.json();
+          const tokenData = await tokenRes.json();
+          const accessToken = tokenData.accessToken || tokenData.connectToken || tokenData.token;
+
+          if (!accessToken || typeof accessToken !== "string") {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: "API da Pluggy não retornou uma string de token válida." }));
+          }
+
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ accessToken }));
+          return res.end(JSON.stringify({ accessToken, connectToken: accessToken }));
         } catch (err: any) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ error: err.message || "Erro interno no servidor Pluggy" }));
+          return res.end(JSON.stringify({ error: err.message || "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env" }));
         }
       });
 

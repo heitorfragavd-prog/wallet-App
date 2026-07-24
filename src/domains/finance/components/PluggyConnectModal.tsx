@@ -10,7 +10,7 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, Sparkles, ArrowRight, ArrowLeft } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, Sparkles, ArrowRight, ArrowLeft, AlertCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PLUGGY_SANDBOX_CONNECTORS,
@@ -58,32 +58,45 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
   const [bancoConectadoNome, setBancoConectadoNome] = useState<string>("");
 
+  // ── Helper de Validação Estrita de Token ──
+  const isTokenValido = (token: any): boolean => {
+    if (!token || typeof token !== "string") return false;
+    if (token.length < 20) return false;
+    const invalidWords = ["error", "undefined", "null", "[object", "{", "invalid"];
+    return !invalidWords.some((word) => token.toLowerCase().includes(word));
+  };
+
   // ── Busca do Connect Token via rota backend Node ──
   const carregarTokenPluggy = async () => {
-    if (connectToken) return connectToken;
+    if (isTokenValido(connectToken)) return connectToken;
     setIsLoadingToken(true);
     setTokenError(null);
 
     try {
       const data = await createPluggyConnectToken();
-      console.log("Token obtido para o Iframe Pluggy:", data);
+      console.log("Resposta bruta da API de Token:", data);
 
-      const token = typeof data === "string" 
+      const tokenExtraido = typeof data === "string" 
         ? data 
         : data?.connectToken || data?.accessToken || data?.token || data?.access_token;
 
-      if (token && typeof token === "string" && token.length > 20) {
-        setConnectToken(token);
+      console.log("CONTEÚDO REAL DO TOKEN:", tokenExtraido);
+
+      if (isTokenValido(tokenExtraido)) {
+        setConnectToken(tokenExtraido);
         setTokenError(null);
-        return token;
+        return tokenExtraido;
       } else {
-        const msg = "Token inválido retornado da API local.";
+        const msg = "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env";
+        setConnectToken(null);
         setTokenError(msg);
         return null;
       }
     } catch (err: any) {
-      console.warn("Erro ao obter Token Pluggy:", err);
-      setTokenError(err?.message || "Erro de comunicação com o servidor.");
+      console.error("Erro ao obter Token Pluggy:", err);
+      const msg = "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env";
+      setConnectToken(null);
+      setTokenError(msg);
       return null;
     } finally {
       setIsLoadingToken(false);
@@ -246,15 +259,13 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
-  // Trate o token primeiro e monte a URL Final
-  if (showWidget && (!connectToken || typeof connectToken !== 'string')) {
-    console.error("Token da Pluggy inválido ou não carregado:", connectToken);
-  }
-
+  // Montagem da URL Oficial do Iframe da Pluggy
   const connectorQuery = selectedConnectorId ? `&connectorId=${selectedConnectorId}` : '';
-  const iframeUrl = `https://connect.pluggy.ai/?connectToken=${connectToken}${connectorQuery}`;
+  const iframeUrl = isTokenValido(connectToken)
+    ? `https://connect.pluggy.ai/?connectToken=${connectToken}${connectorQuery}`
+    : '';
 
-  if (showWidget && connectToken) {
+  if (showWidget && isTokenValido(connectToken)) {
     console.log("URL Final Montada:", iframeUrl);
   }
 
@@ -291,7 +302,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             </Button>
           </div>
         ) : showWidget ? (
-          /* MODO IFRAME NATIVO DIRETO DA PLUGGY (ZERO LIB OU ERRO ZOID) */
+          /* MODO IFRAME NATIVO DIRETO DA PLUGGY */
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <Button
@@ -304,7 +315,23 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             </div>
 
-            {!connectToken || connectToken === 'undefined' ? (
+            {tokenError ? (
+              <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-center space-y-3">
+                <div className="flex items-center justify-center gap-2 text-rose-500 font-bold text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>Falha de Autenticação da Pluggy</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env
+                </p>
+                <Button
+                  onClick={carregarTokenPluggy}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs h-9"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Tentar Novamente
+                </Button>
+              </div>
+            ) : !isTokenValido(connectToken) ? (
               <div className="py-20 text-center text-slate-300 flex flex-col items-center justify-center">
                 <span className="animate-spin text-xl mb-2">⏳</span>
                 <p>Obtendo token de acesso seguro...</p>
