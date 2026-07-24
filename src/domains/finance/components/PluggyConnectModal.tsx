@@ -246,16 +246,17 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
-  // Montagem da URL Oficial do Iframe da Pluggy
-  const iframeUrl = useMemo(() => {
-    if (!connectToken) return "";
-    let url = `https://connect.pluggy.ai/?connectToken=${connectToken}`;
-    if (selectedConnectorId !== undefined) {
-      url += `&connectorId=${selectedConnectorId}`;
-    }
-    console.log("URL do Iframe Pluggy:", url);
-    return url;
-  }, [connectToken, selectedConnectorId]);
+  // Trate o token primeiro e monte a URL Final
+  if (showWidget && (!connectToken || typeof connectToken !== 'string')) {
+    console.error("Token da Pluggy inválido ou não carregado:", connectToken);
+  }
+
+  const connectorQuery = selectedConnectorId ? `&connectorId=${selectedConnectorId}` : '';
+  const iframeUrl = `https://connect.pluggy.ai/?connectToken=${connectToken}${connectorQuery}`;
+
+  if (showWidget && connectToken) {
+    console.log("URL Final Montada:", iframeUrl);
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -303,9 +304,9 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             </div>
 
-            {connectToken ? (
+            {connectToken && typeof connectToken === 'string' ? (
               <iframe
-                src={`https://connect.pluggy.ai/?connectToken=${connectToken}${selectedConnectorId ? `&connectorId=${selectedConnectorId}` : ''}`}
+                src={iframeUrl}
                 className="w-full h-[650px] border-0 rounded-xl"
                 allow="payment"
                 title="Pluggy Connect Widget"
