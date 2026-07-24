@@ -78,6 +78,12 @@ export default function ContasCartoes() {
 
   const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
   const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
+  const [modoPluggy, setModoPluggy] = useState<"widget" | "direto">("direto");
+
+  const handleAbrirPluggy = (modo: "widget" | "direto") => {
+    setModoPluggy(modo);
+    setModalPluggyAberto(true);
+  };
 
   const [nome, setNome] = useState("");
   const [tipo, setTipo] = useState<ContaUsuario["tipo"]>("conta_corrente");
@@ -162,11 +168,20 @@ export default function ContasCartoes() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => setModalPluggyAberto(true)}
+              onClick={() => handleAbrirPluggy("widget")}
               className="border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 font-semibold"
             >
               <ShieldCheck className="w-4 h-4 mr-2" />
-              Open Finance (Pluggy)
+              Open Finance (Widget Oficial)
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => handleAbrirPluggy("direto")}
+              className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10 font-semibold"
+            >
+              <Building2 className="w-4 h-4 mr-2" />
+              Seleção Direta de Bancos
             </Button>
 
             <Button
@@ -517,6 +532,7 @@ export default function ContasCartoes() {
         <PluggyConnectModal
           open={modalPluggyAberto}
           onOpenChange={setModalPluggyAberto}
+          modoInicial={modoPluggy}
         />
       </div>
     </DashboardLayout>

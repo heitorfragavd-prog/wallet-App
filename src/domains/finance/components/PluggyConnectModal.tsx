@@ -30,11 +30,13 @@ import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 interface PluggyConnectModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  modoInicial?: "widget" | "direto";
 }
 
 export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   open,
   onOpenChange,
+  modoInicial = "direto",
 }) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -47,21 +49,21 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [isLoadingToken, setIsLoadingToken] = useState<boolean>(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   
-  // Modo Padrão: Seleção Direta de Bancos (Harmônica e fluida)
-  const [usarWidgetOficial, setUsarWidgetOficial] = useState<boolean>(false);
+  // Modo de visualização configurável pela prop modoInicial ('widget' | 'direto')
+  const [usarWidgetOficial, setUsarWidgetOficial] = useState<boolean>(modoInicial === "widget");
 
   const [conectorSelecionado, setConectorSelecionado] = useState<PluggyConnector | null>(null);
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
 
-  // ── Pre-fetch de Token em Segundo Plano ao Abrir o Modal ──
-  const carregarTokenPluggyInBackgroud = async () => {
+  // ── Pre-fetch / Carregamento do Token da Pluggy ──
+  const carregarTokenPluggy = async () => {
     setIsLoadingToken(true);
     setTokenError(null);
 
     try {
       const data = await createPluggyConnectToken();
-      console.log("Pre-fetch de Token Pluggy:", data);
+      console.log("Token Pluggy retornado pelo servidor local:", data);
 
       const token = typeof data === "string" 
         ? data 
@@ -71,11 +73,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         setConnectToken(token);
         setTokenError(null);
       } else {
-        setTokenError("Token não disponível na API local.");
+        setTokenError("Token inválido ou não retornado da API local.");
       }
     } catch (err: any) {
-      console.warn("Aviso no pre-fetch de Token Pluggy:", err);
-      setTokenError(err?.message || "Token não disponível.");
+      console.warn("Aviso no carregamento de Token Pluggy:", err);
+      setTokenError(err?.message || "Erro de comunicação com a API local.");
     } finally {
       setIsLoadingToken(false);
     }
@@ -83,18 +85,16 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   useEffect(() => {
     if (open) {
-      // Pré-carrega o token em background sem travar a Seleção Direta inicial
-      carregarTokenPluggyInBackgroud();
-      setUsarWidgetOficial(false); // Inicia no modo padrão Seleção Direta
+      setUsarWidgetOficial(modoInicial === "widget");
+      carregarTokenPluggy();
     } else {
       setConnectToken(null);
       setTokenError(null);
       setIsLoadingToken(false);
       setSucessoConexao(false);
       setConectorSelecionado(null);
-      setUsarWidgetOficial(false);
     }
-  }, [open]);
+  }, [open, modoInicial]);
 
   // Listener para mensagens postMessage da Pluggy (caso o widget esteja ativo)
   useEffect(() => {
@@ -119,11 +119,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const handleAlternarView = (modoWidget: boolean) => {
     setUsarWidgetOficial(modoWidget);
     if (modoWidget && !connectToken && !isLoadingToken) {
-      carregarTokenPluggyInBackgroud();
+      carregarTokenPluggy();
     }
   };
 
-  // ── Handler onSuccess acionado ao conectar via Pluggy ──
+  // ── Handler onSuccess acionado ao conectar com sucesso no Pluggy ──
   const handlePluggySuccess = async (data: any) => {
     console.log("Conexão realizada com sucesso via PluggyConnect:", data);
     setCarregandoConexao(true);
@@ -231,14 +231,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   const handleConectarBanco = async (conector: PluggyConnector) => {
     setConectorSelecionado(conector);
-
-    // Se o token já estiver pré-carregado no background, abre no Widget Oficial
-    if (connectToken && connectToken.length > 20) {
-      setUsarWidgetOficial(true);
-      return;
-    }
-
-    // Caso contrário, conecta diretamente com o conector selecionado
     setCarregandoConexao(true);
 
     try {
@@ -309,7 +301,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             Sincronize suas contas bancárias reguladas pelo Banco Central com criptografia de ponta a ponta.
           </DialogDescription>
 
-          {/* Navegação em Abas Fluidas (Modo Padrão: Seleção Direta de Bancos) */}
+          {/* Alternador de Abas */}
           <div className="grid grid-cols-2 p-1 bg-muted/40 rounded-xl border border-border/50 pt-1 mt-2">
             <button
               type="button"
@@ -363,7 +355,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
             {/* CONTEÚDO CONDICIONAL DAS ABAS */}
             {!usarWidgetOficial ? (
-              /* 1. MODO PADRÃO: SELEÇÃO DIRETA DE BANCOS (Design Harmônico em Dark Mode) */
+              /* MODO SELEÇÃO DIRETA DE BANCOS */
               <div className="space-y-4 pt-1">
                 <div className="relative">
                   <Input
@@ -379,11 +371,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     Conectores em Destaque ({conectoresFiltrados.length}):
                   </p>
-                  {connectToken && (
-                    <span className="text-[11px] text-emerald-500 font-medium flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" /> Connect Token Pronto
-                    </span>
-                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
@@ -408,21 +395,22 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                 </div>
               </div>
             ) : (
-              /* 2. MODO WIDGET OFICIAL EMBUTIDO */
-              isLoadingToken && !connectToken ? (
+              /* MODO WIDGET OFICIAL EMBUTIDO */
+              isLoadingToken || !connectToken ? (
+                /* BLOQUEIO RIGIDO: EXIBE APENAS O SPINNER ENQUANTO O TOKEN CARREGA DA API */
                 <div className="py-20 text-center flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
                   <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
                   <span className="text-sm font-semibold text-foreground">Obtendo acesso seguro à Pluggy...</span>
                   <span className="text-xs text-muted-foreground">Autenticando e gerando o Connect Token no servidor</span>
                 </div>
-              ) : tokenError && !connectToken ? (
+              ) : tokenError ? (
                 <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2 text-center">
                   <div className="flex items-center justify-center gap-2 text-rose-500 font-bold text-sm">
                     <AlertCircle className="w-5 h-5 shrink-0" />
-                    <span>Token indisponível no servidor</span>
+                    <span>Falha na autenticação da Pluggy</span>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Você pode selecionar seu banco diretamente na aba **Seleção Direta de Bancos**.
+                    {tokenError}
                   </p>
                   <Button
                     onClick={() => setUsarWidgetOficial(false)}
@@ -432,6 +420,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                   </Button>
                 </div>
               ) : (
+                /* RENDERIZAÇÃO SEGURA DO IFRAME COM O CONNECT TOKEN EXPLICITAMENTE PREENCHIDO */
                 <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-background relative flex flex-col">
                   <iframe
                     src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
