@@ -42,41 +42,50 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
 
-  // ── Requisição Sequencial Rígida do Token ao Abrir Modal ──
+  // ── Função assíncrona para buscar o accessToken via servidor Node /api/pluggy/connect-token ──
+  const carregarTokenPluggy = async () => {
+    setIsLoadingToken(true);
+    setTokenError(null);
+    setConnectToken(null);
+
+    try {
+      const accessToken = await createPluggyConnectToken();
+      if (accessToken && typeof accessToken === "string" && accessToken.length > 20) {
+        setConnectToken(accessToken);
+        setTokenError(null);
+      } else {
+        throw new Error("O accessToken retornado da API da Pluggy é inválido ou vazio.");
+      }
+    } catch (err: any) {
+      console.error("Falha ao obter Pluggy Connect Token:", err);
+      const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
+      setTokenError(msg);
+      setUsarIframe(false); // Alterna automaticamente para seleção direta se o token falhar
+    } finally {
+      setIsLoadingToken(false);
+    }
+  };
+
+  // ── Dispara a busca do token assim que o modal é aberto ──
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      carregarTokenPluggy();
+    } else {
       setConnectToken(null);
       setTokenError(null);
       setIsLoadingToken(false);
       setSucessoConexao(false);
       setConectorSelecionado(null);
-      return;
     }
-
-    setIsLoadingToken(true);
-    setConnectToken(null);
-    setTokenError(null);
-
-    // Executa a autenticação POST /auth + POST /connect_token
-    createPluggyConnectToken()
-      .then((accessToken) => {
-        if (accessToken && typeof accessToken === "string" && accessToken.length > 20) {
-          setConnectToken(accessToken);
-          setTokenError(null);
-        } else {
-          throw new Error("O accessToken recebido da Pluggy é inválido ou vazio.");
-        }
-      })
-      .catch((err: any) => {
-        console.error("Falha ao obter Pluggy Connect Token:", err);
-        const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
-        setTokenError(msg);
-        setUsarIframe(false); // Alterna para seleção direta se o token falhar
-      })
-      .finally(() => {
-        setIsLoadingToken(false);
-      });
   }, [open]);
+
+  // Alterna entre a view do Widget Oficial e Seleção Direta de Bancos
+  const handleAlternarView = (modoIframe: boolean) => {
+    setUsarIframe(modoIframe);
+    if (modoIframe && !connectToken && !isLoadingToken && !tokenError) {
+      carregarTokenPluggy();
+    }
+  };
 
   // Filtra dinamicamente os conectores (Sicoob, Nubank, Itaú, Bradesco, etc.)
   const conectoresFiltrados = useMemo(() => {
@@ -146,11 +155,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               Open Finance Pluggy Connect
             </Badge>
 
-            {!isLoadingToken && connectToken && !tokenError && (
+            {!isLoadingToken && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setUsarIframe(!usarIframe)}
+                onClick={() => handleAlternarView(!usarIframe)}
                 className="text-xs text-muted-foreground hover:text-foreground h-7"
               >
                 {usarIframe ? "Alternar para Seleção Direta" : "Ver Widget Oficial"}
@@ -192,16 +201,16 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </span>
             </div>
 
-            {/* 1. Estado de Loading Rígido enquanto gera o connectToken */}
-            {isLoadingToken && (
+            {/* 1. BLOQUEIO DE RENDERIZAÇÃO: Spinner enquanto busca o accessToken */}
+            {(isLoadingToken || (usarIframe && !connectToken && !tokenError)) && (
               <div className="py-16 text-center text-xs text-emerald-500 flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
                 <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
-                <span className="text-sm font-semibold text-foreground">Gerando Connect Token Seguro...</span>
-                <span className="text-xs text-muted-foreground">Autenticando com suas credenciais da API Pluggy</span>
+                <span className="text-sm font-semibold text-foreground">Carregando Pluggy Connect...</span>
+                <span className="text-xs text-muted-foreground">Autenticando e obtendo o accessToken seguro</span>
               </div>
             )}
 
-            {/* 2. Tratamento de Erro de Credenciais Visível */}
+            {/* 2. Tratamento de Erros Visível */}
             {!isLoadingToken && tokenError && (
               <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2">
                 <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
@@ -221,8 +230,8 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Renderização Estrita do Iframe Oficial Pluggy Connect (SOMENTE COM TOKEN VÁLIDO) */}
-            {!isLoadingToken && !tokenError && usarIframe && connectToken && (
+            {/* 3. Renderização Estrita do Iframe Oficial Pluggy Connect (SOMENTE APÓS O ACCESS TOKEN SER UMA STRING VÁLIDA E PREENCHIDA) */}
+            {!isLoadingToken && !tokenError && usarIframe && connectToken && connectToken.length > 20 && (
               <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
                 <iframe
                   src={`https://connect.pluggy.ai?connectToken=${encodeURIComponent(connectToken)}`}
@@ -234,7 +243,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             )}
 
             {/* 4. Modo de Seleção Direta de Bancos (quando usarIframe=false ou após erro) */}
-            {!isLoadingToken && (!usarIframe || tokenError || !connectToken) && (
+            {!isLoadingToken && (!usarIframe || tokenError) && (
               <div className="space-y-4 pt-2">
                 <div className="relative">
                   <Input
