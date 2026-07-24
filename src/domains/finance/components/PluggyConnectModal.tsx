@@ -321,8 +321,8 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                   <AlertCircle className="w-5 h-5 shrink-0" />
                   <span>Falha de Autenticação da Pluggy</span>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env
+                <p className="text-xs text-muted-foreground leading-relaxed font-mono bg-muted/40 p-2 rounded-lg text-rose-400">
+                  {tokenError}
                 </p>
                 <Button
                   onClick={carregarTokenPluggy}

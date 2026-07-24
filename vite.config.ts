@@ -10,19 +10,23 @@ function pluggyTokenServerPlugin() {
     configureServer(server: any) {
       // Helper de Autenticação com a API da Pluggy no lado do Servidor Node
       const getApiKey = async (env: any) => {
-        const clientId =
+        const clientId = (
           process.env.PLUGGY_CLIENT_ID ||
           process.env.VITE_PLUGGY_CLIENT_ID ||
           env.PLUGGY_CLIENT_ID ||
           env.VITE_PLUGGY_CLIENT_ID ||
-          "486da007-85b3-4e9e-9260-bea8e2d94c55";
+          "486da007-85b3-4e9e-9260-bea8e2d94c55"
+        ).replace(/['"]/g, "").trim();
 
-        const clientSecret =
+        const clientSecret = (
           process.env.PLUGGY_CLIENT_SECRET ||
           process.env.VITE_PLUGGY_CLIENT_SECRET ||
           env.PLUGGY_CLIENT_SECRET ||
           env.VITE_PLUGGY_CLIENT_SECRET ||
-          "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns";
+          "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns"
+        ).replace(/['"]/g, "").trim();
+
+        console.log(`[Node Server] Autenticando com Pluggy. ClientID: ${clientId}`);
 
         const authRes = await fetch("https://api.pluggy.ai/auth", {
           method: "POST",
@@ -32,10 +36,12 @@ function pluggyTokenServerPlugin() {
 
         if (!authRes.ok) {
           const errText = await authRes.text();
+          console.error(`[Node Server] Erro Auth Pluggy (${authRes.status}):`, errText);
           throw new Error(`Erro Auth Pluggy (${authRes.status}): ${errText}`);
         }
 
         const data = await authRes.json();
+        console.log("[Node Server] Auth Pluggy Sucesso. API Key:", data.apiKey ? data.apiKey.substring(0, 10) + "..." : "nula");
         return data.apiKey;
       };
 
@@ -47,38 +53,46 @@ function pluggyTokenServerPlugin() {
           const env = loadEnv("development", process.cwd(), "");
           const apiKey = await getApiKey(env);
 
+          console.log("[Node Server] Solicitando connect_token para Pluggy API...");
           const tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-API-KEY": apiKey,
             },
-            body: JSON.stringify({ options: { sandbox: true } }),
+            body: JSON.stringify({ options: { clientUserId: "user-default-1" } }),
           });
 
+          const tokenText = await tokenRes.text();
+          console.log(`[Node Server] Pluggy Response Status (${tokenRes.status}) Body:`, tokenText);
+
           if (!tokenRes.ok) {
-            const errText = await tokenRes.text();
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: `Erro ao gerar token Pluggy: ${errText}` }));
+            return res.end(JSON.stringify({ error: `Pluggy API Erro (${tokenRes.status}): ${tokenText}` }));
           }
 
-          const tokenData = await tokenRes.json();
+          let tokenData: any = {};
+          try {
+            tokenData = JSON.parse(tokenText);
+          } catch (e) {}
+
           const accessToken = tokenData.accessToken || tokenData.connectToken || tokenData.token;
 
           if (!accessToken || typeof accessToken !== "string") {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: "API da Pluggy não retornou uma string de token válida." }));
+            return res.end(JSON.stringify({ error: `API da Pluggy não retornou token válido. Resposta: ${tokenText}` }));
           }
 
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ accessToken, connectToken: accessToken }));
         } catch (err: any) {
+          console.error("[Node Server] Erro na rota /api/pluggy/connect-token:", err);
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ error: err.message || "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env" }));
+          return res.end(JSON.stringify({ error: err.message || "Erro ao gerar token de acesso da Pluggy." }));
         }
       });
 
