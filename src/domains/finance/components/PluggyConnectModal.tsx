@@ -10,7 +10,7 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle, Sparkles } from "lucide-react";
 import { PluggyConnect } from "react-pluggy-connect";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -258,23 +258,12 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[92vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-6">
+      <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[92vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-5">
         <DialogHeader>
           <div className="flex items-center justify-between">
-            <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs px-2.5 py-0.5 font-semibold">
-              Open Finance Pluggy Connect
+            <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs px-2.5 py-0.5 font-semibold flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-emerald-500" /> Open Finance Pluggy
             </Badge>
-
-            {!isLoadingToken && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleAlternarView(!usarWidgetOficial)}
-                className="text-xs text-muted-foreground hover:text-foreground h-7"
-              >
-                {usarWidgetOficial ? "Alternar para Seleção Direta" : "Ver Widget Oficial"}
-              </Button>
-            )}
           </div>
 
           <DialogTitle className="text-xl font-bold flex items-center gap-2 pt-1">
@@ -282,8 +271,34 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             Conectar Banco via Open Finance
           </DialogTitle>
           <DialogDescription>
-            Conecte suas contas do Sicoob, Nubank, Itaú, Bradesco, Santander e mais de 100 bancos regulados via Pluggy.
+            Sincronize suas contas bancárias reguladas pelo Banco Central com criptografia de ponta a ponta.
           </DialogDescription>
+
+          {/* Navegação Dupla em Abas (Tabs Switcher) */}
+          <div className="grid grid-cols-2 p-1 bg-muted/40 rounded-xl border border-border/50 pt-1 mt-2">
+            <button
+              type="button"
+              onClick={() => handleAlternarView(true)}
+              className={`py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                usarWidgetOficial
+                  ? "bg-emerald-500 text-white shadow-md font-bold"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Widget Oficial (Pluggy Connect)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAlternarView(false)}
+              className={`py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                !usarWidgetOficial
+                  ? "bg-emerald-500 text-white shadow-md font-bold"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" /> Seleção Direta de Bancos
+            </button>
+          </div>
         </DialogHeader>
 
         {sucessoConexao ? (
@@ -340,9 +355,9 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Componente Oficial PluggyConnect da Biblioteca @pluggy/react-connect */}
+            {/* 3. Componente Embutido (Embedded) Oficial PluggyConnect com Container de Altura Fixa (sem popups soltos) */}
             {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
-              <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
+              <div className="w-full h-[550px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-card relative flex flex-col">
                 <PluggyConnect
                   connectToken={connectToken}
                   includeSandbox={true}
@@ -362,7 +377,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
             {/* 4. Modo de Seleção Direta de Bancos (quando usarWidgetOficial=false ou após erro) */}
             {!isLoadingToken && (!usarWidgetOficial || tokenError) && (
-              <div className="space-y-4 pt-2">
+              <div className="space-y-4 pt-1">
                 <div className="relative">
                   <Input
                     placeholder="Pesquisar banco (ex: Sicoob, Nubank, Itaú, Bradesco, Santander...)"
