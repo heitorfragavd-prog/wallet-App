@@ -88,7 +88,7 @@ function pluggyTokenServerPlugin() {
           }
 
           // 2. Geração do Connect Token de Sessão
-          const tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
+          const tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -200,6 +200,45 @@ function pluggyTokenServerPlugin() {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ error: err?.message || "Erro ao buscar transações do Pluggy Item" }));
+        }
+      });
+
+      // Rota 4: /api/pluggy/investments (Busca investimentos do item conectado)
+      server.middlewares.use("/api/pluggy/investments", async (req: any, res: any, next: any) => {
+        if (req.method !== "GET") return next();
+
+        try {
+          const urlObj = new URL(req.url, `http://${req.headers.host}`);
+          const itemId = urlObj.searchParams.get("itemId");
+
+          if (!itemId) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: "Parâmetro itemId é obrigatório." }));
+          }
+
+          const env = loadEnv(server.config.mode || "development", process.cwd(), "");
+          const apiKey = await getApiKey(env);
+
+          const invRes = await fetch(`https://api.pluggy.ai/investments?itemId=${encodeURIComponent(itemId)}`, {
+            headers: { "X-API-KEY": apiKey },
+          });
+
+          if (!invRes.ok) {
+            const errText = await invRes.text();
+            res.statusCode = invRes.status;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: `Erro ao buscar investimentos: ${errText}` }));
+          }
+
+          const data = await invRes.json();
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify(data));
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ error: err?.message || "Erro ao buscar investimentos do Pluggy Item" }));
         }
       });
     },

@@ -1,4 +1,9 @@
 import React, { useState, useEffect } from "react";
+import { PluggyConnect } from "react-pluggy-connect";
+import { useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/shared/hooks/use-toast";
+import { syncPluggyItemToSupabase } from "@/domains/finance/services/pluggyService";
+import { CONTAS_QUERY_KEY } from "@/domains/finance/hooks/useContasUsuario";
 
 interface PluggyConnectModalProps {
   open: boolean;
@@ -10,10 +15,13 @@ interface PluggyConnectModalProps {
 export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   open,
   onOpenChange,
+  initialConnectorId,
 }) => {
   const [connectToken, setConnectToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (open) {
@@ -47,25 +55,50 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-      <div className="bg-[#0B132B] border border-[#1E2942] rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl relative p-2 min-h-[650px] flex flex-col justify-center">
-        <button
-          onClick={handleClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-white z-10 text-xl font-bold bg-slate-800/60 hover:bg-slate-700 w-8 h-8 rounded-full flex items-center justify-center transition-all"
-        >
-          ✕
-        </button>
+  const handleSuccess = async (data: { item: any }) => {
+    console.log("Pluggy Connection Success:", data);
+    const item = data?.item;
+    if (item?.id) {
+      toast({
+        title: "Sincronizando Open Finance...",
+        description: "Buscando saldos e transações do banco conectado...",
+      });
+      try {
+        const result = await syncPluggyItemToSupabase(item.id, item.connector?.name);
+        toast({
+          title: "Sincronização Concluída!",
+          description: `${result.accountsCount} conta(s), ${result.transactionsCount} transação(ões) e ${result.investmentsCount} investimento(s) importados com sucesso.`,
+        });
+        queryClient.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      } catch (err: any) {
+        toast({
+          title: "Aviso na Importação",
+          description: "Banco conectado, mas falhou a sincronização automática dos dados.",
+          variant: "destructive",
+        });
+      }
+    }
+    handleClose();
+  };
 
-        {loading && (
-          <div className="p-16 text-center text-slate-300 flex flex-col items-center justify-center space-y-3 min-h-[500px]">
+  const handleError = (err: { message: string }) => {
+    console.error("Pluggy Connection Error:", err);
+  };
+
+  return (
+    <>
+      {loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="bg-[#0B132B] border border-[#1E2942] rounded-2xl p-8 text-center text-slate-300 flex flex-col items-center justify-center space-y-3">
             <span className="animate-spin text-3xl">⏳</span>
             <p className="font-semibold text-sm">Carregando Open Finance...</p>
           </div>
-        )}
+        </div>
+      )}
 
-        {error && (
-          <div className="p-8 text-center text-red-400 flex flex-col items-center justify-center space-y-4">
+      {error && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="bg-[#0B132B] border border-[#1E2942] rounded-2xl p-8 text-center text-red-400 flex flex-col items-center justify-center space-y-4 max-w-md">
             <span className="text-4xl">⚠️</span>
             <p className="text-sm font-medium">{error}</p>
             <button
@@ -75,18 +108,20 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               Fechar
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {!loading && !error && connectToken && connectToken.length > 20 ? (
-          <iframe
-            key={connectToken}
-            src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
-            className="w-full h-[650px] border-0 rounded-xl"
-            allow="payment"
-            title="Pluggy Connect Widget"
-          />
-        ) : null}
-      </div>
-    </div>
+      {!loading && !error && connectToken && (
+        <PluggyConnect
+          connectToken={connectToken}
+          includeSandbox={true}
+          selectedConnectorId={initialConnectorId}
+          theme="dark"
+          onSuccess={handleSuccess}
+          onError={handleError}
+          onClose={handleClose}
+        />
+      )}
+    </>
   );
 };
