@@ -1,7 +1,7 @@
 /**
  * Pluggy Open Finance Service (Sandbox / Produção)
  * 
- * Gerencia tokens de conexão, SDK Pluggy e busca de contas/transações bancárias via Open Finance.
+ * Gerencia autenticação, tokens de conexão (connectToken) e conectores via API da Pluggy.
  */
 
 export interface PluggyConnector {
@@ -35,73 +35,75 @@ export interface PluggyTransaction {
 const PLUGGY_API_URL = "/api/pluggy";
 
 /**
- * Obtém as chaves do ambiente VITE ou fallback para testes no Sandbox
+ * Obtém as credenciais do ambiente VITE
  */
 export function getPluggyCredentials() {
-  const clientId = import.meta.env.VITE_PLUGGY_CLIENT_ID || "d3753232-a521-4f81-9b48-111111111111";
-  const clientSecret = import.meta.env.VITE_PLUGGY_CLIENT_SECRET || "11111111-2222-3333-4444-555555555555";
+  const clientId = import.meta.env.VITE_PLUGGY_CLIENT_ID || "";
+  const clientSecret = import.meta.env.VITE_PLUGGY_CLIENT_SECRET || "";
   return { clientId, clientSecret };
 }
 
 /**
- * Autentica com a API da Pluggy e gera o apiKey temporário
+ * Passo 1: Autentica com a API da Pluggy (POST /auth) e gera o apiKey temporário
  */
 export async function getPluggyApiKey(): Promise<string> {
   const { clientId, clientSecret } = getPluggyCredentials();
 
-  try {
-    const response = await fetch(`${PLUGGY_API_URL}/auth`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, clientSecret }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Erro na API Pluggy Auth: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.apiKey;
-  } catch (error) {
-    console.warn("Pluggy API Auth fallback (Sandbox Test Mode):", error);
-    return "sandbox-pluggy-token-demo";
+  if (!clientId || !clientSecret) {
+    throw new Error("Credenciais VITE_PLUGGY_CLIENT_ID ou VITE_PLUGGY_CLIENT_SECRET não foram configuradas no arquivo .env");
   }
+
+  const response = await fetch(`${PLUGGY_API_URL}/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId, clientSecret }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error(errBody.message || `Falha na autenticação da API Pluggy (HTTP ${response.status})`);
+  }
+
+  const data = await response.json();
+  if (!data.apiKey) {
+    throw new Error("A API da Pluggy não retornou a chave apiKey.");
+  }
+  return data.apiKey;
 }
 
 /**
- * Gera um connectToken para inicializar o Widget Pluggy Connect no frontend
+ * Passo 2: Gera o connectToken (POST /connect_token) recebendo o accessToken JWT
  */
 export async function createPluggyConnectToken(): Promise<string> {
   const apiKey = await getPluggyApiKey();
 
-  try {
-    const response = await fetch(`${PLUGGY_API_URL}/connect_token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": apiKey,
+  const response = await fetch(`${PLUGGY_API_URL}/connect_token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": apiKey,
+    },
+    body: JSON.stringify({
+      options: {
+        sandbox: true,
       },
-      body: JSON.stringify({
-        options: {
-          sandbox: true,
-        },
-      }),
-    });
+    }),
+  });
 
-    if (!response.ok) {
-      throw new Error(`Erro ao gerar Connect Token: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.accessToken;
-  } catch (error) {
-    console.warn("Retornando connectToken Sandbox de desenvolvimento:", error);
-    return "sandbox-connect-token-demo";
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error(errBody.message || `Falha ao gerar o Connect Token na API Pluggy (HTTP ${response.status})`);
   }
+
+  const data = await response.json();
+  if (!data.accessToken) {
+    throw new Error("A API da Pluggy não retornou o accessToken.");
+  }
+  return data.accessToken;
 }
 
 /**
- * Lista expandida de conectores de instituições financeiras (com Sicoob, Nubank, Itaú, Bradesco, etc.)
+ * Lista expandida de conectores de instituições financeiras brasileiras (com Sicoob, Nubank, Itaú, Bradesco, etc.)
  */
 export const PLUGGY_SANDBOX_CONNECTORS: PluggyConnector[] = [
   {
@@ -242,31 +244,12 @@ export const PLUGGY_SANDBOX_CONNECTORS: PluggyConnector[] = [
 ];
 
 /**
- * Busca conectores via API da Pluggy com filtro dinâmico
+ * Busca conectores com filtro dinâmico
  */
 export async function fetchPluggyConnectors(searchQuery: string = ""): Promise<PluggyConnector[]> {
-  try {
-    const apiKey = await getPluggyApiKey();
-    if (apiKey && apiKey !== "sandbox-pluggy-token-demo") {
-      const response = await fetch(`${PLUGGY_API_URL}/connectors?name=${encodeURIComponent(searchQuery)}`, {
-        headers: { "X-API-KEY": apiKey },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data.results) && data.results.length > 0) {
-          return data.results;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Fallback para lista de conectores Sandbox estática:", err);
-  }
-
-  // Fallback para filtro local na lista rica de conectores
   if (!searchQuery.trim()) {
     return PLUGGY_SANDBOX_CONNECTORS;
   }
-
   const query = searchQuery.toLowerCase().trim();
   return PLUGGY_SANDBOX_CONNECTORS.filter((c) =>
     c.name.toLowerCase().includes(query)

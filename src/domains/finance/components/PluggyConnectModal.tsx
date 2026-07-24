@@ -10,7 +10,7 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, ExternalLink } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle, KeyRound } from "lucide-react";
 import { PLUGGY_SANDBOX_CONNECTORS, PluggyConnector, createPluggyConnectToken } from "../services/pluggyService";
 import { useContasUsuario } from "../hooks/useContasUsuario";
 import { useDespesas } from "../hooks/useDespesas";
@@ -34,35 +34,51 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   const [busca, setBusca] = useState("");
   const [connectToken, setConnectToken] = useState<string | null>(null);
-  const [carregandoToken, setCarregandoToken] = useState(false);
-  const [usarIframe, setUsarIframe] = useState(true);
-  const [conectorSelecionado, setConectorSelecionado] = useState<PluggyConnector | null>(null);
-  const [carregandoConexao, setCarregandoConexao] = useState(false);
-  const [sucessoConexao, setSucessoConexao] = useState(false);
+  const [isLoadingToken, setIsLoadingToken] = useState<boolean>(true);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [usarIframe, setUsarIframe] = useState<boolean>(true);
 
-  // Gera o connectToken oficial ao abrir o modal
+  const [conectorSelecionado, setConectorSelecionado] = useState<PluggyConnector | null>(null);
+  const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
+  const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
+
+  // ── Requisição Sequencial Rígida do Token ao Abrir Modal ──
   useEffect(() => {
-    if (open) {
-      setCarregandoToken(true);
-      createPluggyConnectToken()
-        .then((token) => {
-          if (token && token !== "sandbox-connect-token-demo") {
-            setConnectToken(token);
-            setUsarIframe(true);
-          } else {
-            setUsarIframe(false);
-          }
-        })
-        .catch(() => setUsarIframe(false))
-        .finally(() => setCarregandoToken(false));
-    } else {
+    if (!open) {
       setConnectToken(null);
+      setTokenError(null);
+      setIsLoadingToken(false);
       setSucessoConexao(false);
       setConectorSelecionado(null);
+      return;
     }
+
+    setIsLoadingToken(true);
+    setConnectToken(null);
+    setTokenError(null);
+
+    // Executa a autenticação POST /auth + POST /connect_token
+    createPluggyConnectToken()
+      .then((accessToken) => {
+        if (accessToken && typeof accessToken === "string" && accessToken.length > 20) {
+          setConnectToken(accessToken);
+          setTokenError(null);
+        } else {
+          throw new Error("O accessToken recebido da Pluggy é inválido ou vazio.");
+        }
+      })
+      .catch((err: any) => {
+        console.error("Falha ao obter Pluggy Connect Token:", err);
+        const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
+        setTokenError(msg);
+        setUsarIframe(false); // Alterna para seleção direta se o token falhar
+      })
+      .finally(() => {
+        setIsLoadingToken(false);
+      });
   }, [open]);
 
-  // Filtra dinamicamente os conectores bancários (Sicoob, Nubank, Itaú, etc.)
+  // Filtra dinamicamente os conectores (Sicoob, Nubank, Itaú, Bradesco, etc.)
   const conectoresFiltrados = useMemo(() => {
     if (!busca.trim()) return PLUGGY_SANDBOX_CONNECTORS;
     const q = busca.toLowerCase().trim();
@@ -74,7 +90,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     setCarregandoConexao(true);
 
     try {
-      // 1. Criar conta sincronizada via Open Finance
       const novaConta = await createConta.mutateAsync({
         nome: conector.name.replace(" (Sandbox)", ""),
         tipo: "conta_corrente",
@@ -82,7 +97,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         saldo_atual: 2500.0,
       });
 
-      // 2. Transação inicial de exemplo
       try {
         if (novaConta?.id) {
           await createReceita.mutateAsync({
@@ -131,7 +145,8 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs px-2.5 py-0.5 font-semibold">
               Open Finance Pluggy Connect
             </Badge>
-            {connectToken && (
+
+            {!isLoadingToken && connectToken && !tokenError && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -142,6 +157,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             )}
           </div>
+
           <DialogTitle className="text-xl font-bold flex items-center gap-2 pt-1">
             <Building2 className="w-6 h-6 text-emerald-500" />
             Conectar Banco via Open Finance
@@ -176,13 +192,37 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </span>
             </div>
 
-            {carregandoToken ? (
+            {/* 1. Estado de Loading Rígido enquanto gera o connectToken */}
+            {isLoadingToken && (
               <div className="py-16 text-center text-xs text-emerald-500 flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
-                <RefreshCw className="w-6 h-6 animate-spin text-emerald-500" />
-                <span>Autenticando e gerando o Connect Token oficial da Pluggy...</span>
+                <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
+                <span className="text-sm font-semibold text-foreground">Gerando Connect Token Seguro...</span>
+                <span className="text-xs text-muted-foreground">Autenticando com suas credenciais da API Pluggy</span>
               </div>
-            ) : usarIframe && connectToken ? (
-              /* Widget Oficial Pluggy Connect via Iframe */
+            )}
+
+            {/* 2. Tratamento de Erro de Credenciais Visível */}
+            {!isLoadingToken && tokenError && (
+              <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2">
+                <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>Atenção: Falha de Autenticação da API Pluggy</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {tokenError}
+                </p>
+                <div className="text-[11px] text-muted-foreground bg-background/50 p-2.5 rounded-xl border border-border/40 font-mono">
+                  Certifique-se de que o arquivo <span className="text-emerald-500 font-bold">.env</span> contém:
+                  <br />
+                  VITE_PLUGGY_CLIENT_ID=seu_client_id
+                  <br />
+                  VITE_PLUGGY_CLIENT_SECRET=seu_client_secret
+                </div>
+              </div>
+            )}
+
+            {/* 3. Renderização Estrita do Iframe Oficial Pluggy Connect (SOMENTE COM TOKEN VÁLIDO) */}
+            {!isLoadingToken && !tokenError && usarIframe && connectToken && (
               <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
                 <iframe
                   src={`https://connect.pluggy.ai?connectToken=${encodeURIComponent(connectToken)}`}
@@ -191,9 +231,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                   title="Pluggy Connect Widget"
                 />
               </div>
-            ) : (
-              /* Conectores Bancários Diretos (Sicoob + Bancos em destaque) */
-              <div className="space-y-4">
+            )}
+
+            {/* 4. Modo de Seleção Direta de Bancos (quando usarIframe=false ou após erro) */}
+            {!isLoadingToken && (!usarIframe || tokenError || !connectToken) && (
+              <div className="space-y-4 pt-2">
                 <div className="relative">
                   <Input
                     placeholder="Pesquisar banco (ex: Sicoob, Nubank, Itaú, Bradesco, Santander...)"
@@ -205,7 +247,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                 </div>
 
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {conectoresFiltrados.length} Instituição(ões) Encontrada(s):
+                  Conectores em Destaque ({conectoresFiltrados.length} encontrados):
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
@@ -222,7 +264,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                         <p className="font-semibold text-sm text-foreground group-hover:text-emerald-500 transition-colors truncate">
                           {conector.name}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">Conectar via Pluggy</p>
+                        <p className="text-[11px] text-muted-foreground">Conectar via Open Finance</p>
                       </div>
                     </button>
                   ))}
@@ -232,7 +274,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
             {carregandoConexao && (
               <div className="py-4 text-center text-xs text-emerald-500 flex items-center justify-center gap-2 font-medium">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando com o banco via Pluggy...
+                <RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando com o banco...
               </div>
             )}
           </div>
