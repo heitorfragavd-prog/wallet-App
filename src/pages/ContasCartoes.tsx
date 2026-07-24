@@ -38,6 +38,7 @@ import {
   DollarSign,
   UploadCloud,
   ShieldCheck,
+  TrendingUp,
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
@@ -45,6 +46,8 @@ import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
 import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/components/ui/tabs";
+import { InvestimentosView } from "@/domains/finance/components/InvestimentosView";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -90,13 +93,7 @@ export default function ContasCartoes() {
   const [diaVencimento, setDiaVencimento] = useState("");
   const [cor, setCor] = useState("#3B82F6");
 
-  const handleAbrirWidgetOficial = () => {
-    setModalPluggyProps({ openWidgetDirectly: true, initialConnectorId: undefined });
-    setModalPluggyAberto(true);
-  };
-
-  const handleAbrirSelecaoDireta = () => {
-    setModalPluggyProps({ openWidgetDirectly: false, initialConnectorId: undefined });
+  const handleAbrirPluggy = () => {
     setModalPluggyAberto(true);
   };
 
@@ -177,24 +174,13 @@ export default function ContasCartoes() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* BOTÃO 1: Widget Oficial da Pluggy */}
             <Button
               variant="outline"
-              onClick={handleAbrirWidgetOficial}
+              onClick={handleAbrirPluggy}
               className="border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 font-semibold"
             >
               <ShieldCheck className="w-4 h-4 mr-2" />
-              Open Finance (Widget Oficial)
-            </Button>
-
-            {/* BOTÃO 2: Seleção Direta de Bancos em Dark Mode */}
-            <Button
-              variant="outline"
-              onClick={handleAbrirSelecaoDireta}
-              className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10 font-semibold"
-            >
-              <Building2 className="w-4 h-4 mr-2" />
-              Seleção Direta de Bancos
+              Conectar via Open Finance
             </Button>
 
             <Button
@@ -213,8 +199,21 @@ export default function ContasCartoes() {
           </div>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Tabs defaultValue="contas" className="w-full space-y-6">
+          <TabsList className="bg-[#0B132B] border border-[#1E2942] p-1 rounded-xl max-w-md">
+            <TabsTrigger value="contas" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white font-semibold">
+              <Building2 className="w-4 h-4 mr-2" />
+              Contas & Cartões
+            </TabsTrigger>
+            <TabsTrigger value="investimentos" className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white font-semibold">
+              <TrendingUp className="w-4 h-4 mr-2" />
+              Carteira de Investimentos
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="contas" className="space-y-6 mt-0">
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
@@ -276,7 +275,7 @@ export default function ContasCartoes() {
                 </p>
               </div>
               <div className="flex justify-center gap-3">
-                <Button onClick={handleAbrirSelecaoDireta} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
+                <Button onClick={handleAbrirPluggy} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
                   <ShieldCheck className="w-4 h-4 mr-2" />
                   Conectar via Open Finance
                 </Button>
@@ -416,6 +415,12 @@ export default function ContasCartoes() {
             })}
           </div>
         )}
+          </TabsContent>
+
+          <TabsContent value="investimentos" className="space-y-6 mt-0">
+            <InvestimentosView />
+          </TabsContent>
+        </Tabs>
 
         {/* Modal Manual de Criar/Editar Conta */}
         <Dialog open={modalAberto} onOpenChange={setModalAberto}>

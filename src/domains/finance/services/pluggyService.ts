@@ -55,15 +55,22 @@ export async function createPluggyConnectToken(): Promise<any> {
  * Busca contas associadas ao Item conectado via Pluggy (GET /api/pluggy/accounts?itemId=...)
  */
 export async function fetchPluggyItemAccounts(itemId: string): Promise<PluggyAccount[]> {
-  try {
-    const response = await fetch(`/api/pluggy/accounts?itemId=${encodeURIComponent(itemId)}`);
-    if (!response.ok) return [];
-    const data = await response.json();
-    return data.results || data.accounts || [];
-  } catch (err) {
-    console.warn("Erro ao buscar contas do Item Pluggy:", err);
-    return [];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const response = await fetch(`/api/pluggy/accounts?itemId=${encodeURIComponent(itemId)}`);
+      if (response.ok) {
+        const data = await response.json();
+        const accs = data.results || data.accounts || [];
+        if (accs.length > 0) return accs;
+      }
+    } catch (err) {
+      console.warn("Erro ao buscar contas do Item Pluggy:", err);
+    }
+    if (attempt < 4) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
   }
+  return [];
 }
 
 /**
@@ -233,4 +240,183 @@ export async function fetchPluggyConnectors(searchQuery: string = ""): Promise<P
   return PLUGGY_SANDBOX_CONNECTORS.filter((c) =>
     c.name.toLowerCase().includes(query)
   );
+}
+
+/**
+ * Busca e sincroniza investimentos do Item Pluggy
+ */
+export async function fetchPluggyItemInvestments(itemId: string): Promise<any[]> {
+  try {
+    const response = await fetch(`/api/pluggy/investments?itemId=${encodeURIComponent(itemId)}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.results || data.investments || [];
+  } catch (err) {
+    console.warn("Erro ao buscar investimentos do Item Pluggy:", err);
+    return [];
+  }
+}
+
+/**
+ * Sincroniza contas, faturas, categorias e transações de um Item conectado na Pluggy com o banco Supabase
+ */
+import { supabase } from "@/integrations/supabase/client";
+
+export async function syncPluggyItemToSupabase(
+  itemId: string,
+  connectorName?: string
+): Promise<{ accountsCount: number; transactionsCount: number; investmentsCount: number }> {
+  try {
+    const userRes = await supabase.auth.getUser();
+    const userId = userRes.data.user?.id;
+    if (!userId) throw new Error("Usuário não autenticado.");
+
+    // 0. Busca categorias existentes do usuário para fazer match
+    const { data: categoriasExistentes } = await supabase
+      .from("categorias")
+      .select("*")
+      .eq("user_id", userId);
+
+    const categoriasMap = new Map<string, string>();
+    (categoriasExistentes || []).forEach((c: any) => {
+      if (c.nome) {
+        categoriasMap.set(c.nome.toLowerCase().trim(), c.id);
+      }
+    });
+
+    // Função auxiliar para encontrar ou criar categoria dinamicamente
+    const getOrCreateCategoriaId = async (nomeCategoria: string, tipo: "receita" | "despesa"): Promise<string | undefined> => {
+      const key = nomeCategoria.toLowerCase().trim();
+      if (categoriasMap.has(key)) {
+        return categoriasMap.get(key);
+      }
+
+      // Se não existir, criar a categoria no Supabase
+      const { data: novaCat, error: catErr } = await supabase
+        .from("categorias")
+        .insert([{
+          user_id: userId,
+          nome: nomeCategoria,
+          tipo: tipo,
+          cor: tipo === "receita" ? "#10B981" : "#F43F5E",
+          icone: "Tag"
+        }])
+        .select()
+        .single();
+
+      if (!catErr && novaCat) {
+        categoriasMap.set(key, novaCat.id);
+        return novaCat.id;
+      }
+      return undefined;
+    };
+
+    // 1. Busca contas do Item Pluggy
+    const pluggyAccounts = await fetchPluggyItemAccounts(itemId);
+    if (!pluggyAccounts || pluggyAccounts.length === 0) {
+      return { accountsCount: 0, transactionsCount: 0, investmentsCount: 0 };
+    }
+
+    let insertedAccountsCount = 0;
+    let insertedTxCount = 0;
+
+    for (const acc of pluggyAccounts as any[]) {
+      // Definir tipo de conta
+      let tipoConta: "conta_corrente" | "poupanca" | "cartao_credito" | "outro" = "conta_corrente";
+      if (acc.type === "CREDIT") tipoConta = "cartao_credito";
+      else if (acc.type === "SAVINGS") tipoConta = "poupanca";
+
+      const nomeConta = connectorName ? `${connectorName} (${acc.name})` : acc.name;
+
+      // Extrair dados de cartão de crédito (Fatura / creditData)
+      let diaFechamento: number | undefined = undefined;
+      let diaVencimento: number | undefined = undefined;
+      let limiteCredito: number | undefined = undefined;
+
+      if (acc.creditData) {
+        limiteCredito = acc.creditData.creditLimit ? Number(acc.creditData.creditLimit) : undefined;
+        if (acc.creditData.balanceCloseDate) {
+          const closeDay = parseInt(acc.creditData.balanceCloseDate.substring(8, 10));
+          if (!isNaN(closeDay)) diaFechamento = closeDay;
+        }
+        if (acc.creditData.balanceDueDate) {
+          const dueDay = parseInt(acc.creditData.balanceDueDate.substring(8, 10));
+          if (!isNaN(dueDay)) diaVencimento = dueDay;
+        }
+      } else if (tipoConta === "cartao_credito") {
+        limiteCredito = 5000;
+        diaFechamento = 1;
+        diaVencimento = 10;
+      }
+
+      // Inserir a conta no Supabase
+      const { data: novaConta, error: accErr } = await supabase
+        .from("contas_usuario")
+        .insert([{
+          user_id: userId,
+          nome: nomeConta,
+          tipo: tipoConta,
+          saldo_inicial: Math.abs(acc.balance || 0),
+          saldo_atual: Math.abs(acc.balance || 0),
+          limite_credito: limiteCredito,
+          dia_fechamento: diaFechamento,
+          dia_vencimento: diaVencimento,
+          cor: tipoConta === "cartao_credito" ? "#820AD1" : "#10B981"
+        }])
+        .select()
+        .single();
+
+      if (accErr) {
+        console.error("Erro ao salvar conta do Pluggy:", accErr);
+        continue;
+      }
+
+      insertedAccountsCount++;
+
+      // 2. Busca transações do Item Pluggy para associar à conta recém-criada
+      const pluggyTxs = await fetchPluggyItemTransactions(itemId);
+      if (pluggyTxs && pluggyTxs.length > 0) {
+        const txRows = [];
+        for (const tx of pluggyTxs) {
+          const isDespesa = tx.amount < 0 || tx.type === "DEBIT";
+          const valorAbs = Math.abs(tx.amount);
+          const tipo = isDespesa ? "despesa" : "receita";
+          const nomeCategoria = tx.category || (isDespesa ? "Despesas Diversas" : "Rendas Diversas");
+
+          const categoriaId = await getOrCreateCategoriaId(nomeCategoria, tipo);
+
+          txRows.push({
+            user_id: userId,
+            conta_id: novaConta.id,
+            categoria_id: categoriaId,
+            tipo,
+            descricao: tx.description || "Transação Open Finance",
+            valor: valorAbs,
+            data: tx.date ? tx.date.substring(0, 10) : new Date().toISOString().substring(0, 10),
+            metodo_pagamento: tipoConta === "cartao_credito" ? "cartao_credito" : "pix",
+            observacoes: `Importado via Pluggy Open Finance (${nomeCategoria})`
+          });
+        }
+
+        const { error: txErr } = await supabase.from("transacoes").insert(txRows);
+        if (!txErr) {
+          insertedTxCount += txRows.length;
+        } else {
+          console.error("Erro ao salvar transações do Pluggy:", txErr);
+        }
+      }
+    }
+
+    // 3. Busca investimentos do Item Pluggy
+    const investments = await fetchPluggyItemInvestments(itemId);
+
+    return {
+      accountsCount: insertedAccountsCount,
+      transactionsCount: insertedTxCount,
+      investmentsCount: investments.length
+    };
+  } catch (err) {
+    console.error("Erro ao sincronizar Item Pluggy no Supabase:", err);
+    throw err;
+  }
 }
