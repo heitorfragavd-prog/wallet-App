@@ -87,6 +87,14 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   };
 
+  // Memoiza e registra no console a URL oficial do Iframe Pluggy Connect (com /?connectToken=)
+  const iframeUrl = useMemo(() => {
+    if (!connectToken || connectToken.length < 20) return "";
+    const url = `https://connect.pluggy.ai/?connectToken=${connectToken}`;
+    console.log("URL do Iframe Pluggy:", url);
+    return url;
+  }, [connectToken]);
+
   // Filtra dinamicamente os conectores (Sicoob, Nubank, Itaú, Bradesco, etc.)
   const conectoresFiltrados = useMemo(() => {
     if (!busca.trim()) return PLUGGY_SANDBOX_CONNECTORS;
@@ -234,7 +242,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             {!isLoadingToken && !tokenError && usarIframe && connectToken && connectToken.length > 20 && (
               <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
                 <iframe
-                  src={`https://connect.pluggy.ai?connectToken=${encodeURIComponent(connectToken)}`}
+                  src={iframeUrl}
                   className="w-full h-full border-0"
                   allow="camera; microphone; geolocation"
                   title="Pluggy Connect Widget"
