@@ -32,7 +32,7 @@ export interface PluggyTransaction {
   type: "DEBIT" | "CREDIT";
 }
 
-const PLUGGY_API_URL = "https://api.pluggy.ai";
+const PLUGGY_API_URL = "/api/pluggy";
 
 /**
  * Obtém as chaves do ambiente VITE ou fallback para testes no Sandbox

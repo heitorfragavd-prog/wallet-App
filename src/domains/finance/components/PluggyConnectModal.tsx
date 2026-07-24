@@ -177,14 +177,15 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             </div>
 
             {carregandoToken ? (
-              <div className="py-12 text-center text-xs text-emerald-500 flex items-center justify-center gap-2 font-medium">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Carregando Widget oficial da Pluggy...
+              <div className="py-16 text-center text-xs text-emerald-500 flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
+                <RefreshCw className="w-6 h-6 animate-spin text-emerald-500" />
+                <span>Autenticando e gerando o Connect Token oficial da Pluggy...</span>
               </div>
             ) : usarIframe && connectToken ? (
               /* Widget Oficial Pluggy Connect via Iframe */
               <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
                 <iframe
-                  src={`https://connect.pluggy.ai?connectToken=${connectToken}&includeSandbox=true`}
+                  src={`https://connect.pluggy.ai?connectToken=${encodeURIComponent(connectToken)}`}
                   className="w-full h-full border-0"
                   allow="camera; microphone; geolocation"
                   title="Pluggy Connect Widget"
