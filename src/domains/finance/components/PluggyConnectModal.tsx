@@ -22,22 +22,15 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       setConnectToken(null);
 
       fetch("/api/pluggy/connect-token", { method: "POST" })
-        .then((res) => {
-          if (!res.ok) throw new Error("Falha ao obter token da Pluggy");
-          return res.json();
-        })
+        .then((res) => res.json())
         .then((data) => {
-          const token = data.accessToken || data.connectToken;
-          if (token && typeof token === "string" && token.length > 20) {
-            setConnectToken(token);
+          if (data.accessToken) {
+            setConnectToken(data.accessToken);
           } else {
-            throw new Error("Token retornado é inválido");
+            setError(data.error || "Erro ao conectar com a Pluggy.");
           }
         })
-        .catch((err) => {
-          console.error("Erro na busca do token:", err);
-          setError("Não foi possível conectar ao serviço financeiro. Verifique as credenciais.");
-        })
+        .catch(() => setError("Erro na requisição da API local."))
         .finally(() => setLoading(false));
     } else {
       setConnectToken(null);
