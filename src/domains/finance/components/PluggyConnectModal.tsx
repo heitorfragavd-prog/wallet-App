@@ -11,7 +11,6 @@ import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
 import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle, Sparkles } from "lucide-react";
-import { PluggyConnect } from "react-pluggy-connect";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PLUGGY_SANDBOX_CONNECTORS,
@@ -89,6 +88,26 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   }, [open]);
 
+  // Listener para eventos postMessage emitidos pelo iframe embutido da Pluggy
+  useEffect(() => {
+    if (!open) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data) return;
+      try {
+        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        if (data.event === "SUCCESS" || data.item || data.itemId) {
+          handlePluggySuccess(data);
+        } else if (data.event === "CLOSE" || data.action === "close") {
+          onOpenChange(false);
+        }
+      } catch (e) {}
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [open]);
+
   const handleAlternarView = (modoWidget: boolean) => {
     setUsarWidgetOficial(modoWidget);
     if (modoWidget && !connectToken && !isLoadingToken && !tokenError) {
@@ -96,7 +115,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   };
 
-  // ── Handler onSuccess acionado pelo PluggyConnect ao conectar com sucesso ──
+  // ── Handler onSuccess acionado ao conectar com sucesso no Pluggy ──
   const handlePluggySuccess = async (data: any) => {
     console.log("Conexão realizada com sucesso via PluggyConnect:", data);
     setCarregandoConexao(true);
@@ -124,7 +143,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             limite_credito: acc.type === "CREDIT" ? 10000.0 : undefined,
           });
 
-          // Sincroniza transações vinculadas à conta criada com try/catch individual
+          // Sincroniza transações vinculadas à conta criada
           if (novaConta?.id && pluggyTransactions.length > 0) {
             for (const tx of pluggyTransactions) {
               try {
@@ -355,22 +374,14 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Componente Embutido (Embedded) Oficial PluggyConnect com Container de Altura Fixa */}
+            {/* 3. Renderização 100% Embutida (Inline) do Iframe da Pluggy dentro do Card Escuro */}
             {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
-              <div className="w-full h-[550px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-card relative flex flex-col">
-                <PluggyConnect
-                  connectToken={connectToken}
-                  includeSandbox={true}
-                  onSuccess={handlePluggySuccess}
-                  onError={(error) => {
-                    console.error("Erro no PluggyConnect:", error);
-                    toast({
-                      title: "Erro no Pluggy Connect",
-                      description: error?.message || "Não foi possível concluir a conexão.",
-                      variant: "destructive",
-                    });
-                  }}
-                  onClose={() => onOpenChange(false)}
+              <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-background relative flex flex-col">
+                <iframe
+                  src={`https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectToken)}`}
+                  className="w-full h-full border-0"
+                  allow="camera; microphone; geolocation"
+                  title="Pluggy Connect Widget Embutido"
                 />
               </div>
             )}
