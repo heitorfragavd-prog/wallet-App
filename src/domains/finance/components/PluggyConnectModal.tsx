@@ -11,7 +11,6 @@ import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
 import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, Sparkles, ArrowRight, ArrowLeft } from "lucide-react";
-import { PluggyConnect } from "react-pluggy-connect";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PLUGGY_SANDBOX_CONNECTORS,
@@ -54,7 +53,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   // ID do conector selecionado (ex: 201 para Sicoob, 2 para Nubank)
   const [selectedConnectorId, setSelectedConnectorId] = useState<number | undefined>(initialConnectorId);
-  // Controla se o widget oficial deve ser exibido no container
+  // Controla se o widget oficial (iframe) deve ser exibido no container
   const [showWidget, setShowWidget] = useState<boolean>(openWidgetDirectly);
 
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
@@ -63,7 +62,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   // ── Carregamento Seguro do Token Pluggy ──
   const carregarTokenPluggy = async () => {
-    if (connectToken) return connectToken; // Já possui token válido
+    if (connectToken) return connectToken;
     setIsLoadingToken(true);
     setTokenError(null);
 
@@ -101,7 +100,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         carregarTokenPluggy();
       }
     } else {
-      // Limpeza completa de estados ao fechar o modal para impedir duplo listener do Zoid
+      // Limpeza completa de estados ao fechar o modal
       setShowWidget(false);
       setConnectToken(null);
       setTokenError(null);
@@ -111,6 +110,26 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       setBusca("");
     }
   }, [open, initialConnectorId, openWidgetDirectly]);
+
+  // Listener para mensagens postMessage da Pluggy (quando a conexão é concluída dentro do iframe)
+  useEffect(() => {
+    if (!open) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data) return;
+      try {
+        const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        if (data.event === "SUCCESS" || data.item || data.itemId) {
+          handlePluggySuccess(data);
+        } else if (data.event === "CLOSE" || data.action === "close") {
+          onOpenChange(false);
+        }
+      } catch (e) {}
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [open, bancoConectadoNome]);
 
   const conectoresFiltrados = useMemo(() => {
     if (!busca.trim()) return PLUGGY_SANDBOX_CONNECTORS;
@@ -124,18 +143,12 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     setBancoConectadoNome(conector.name);
     setShowWidget(true);
 
-    const token = await carregarTokenPluggy();
-    if (!token) {
-      toast({
-        title: "Tentando Conectar...",
-        description: `Conectando ao ${conector.name}.`,
-      });
-    }
+    await carregarTokenPluggy();
   };
 
-  // Callback de Sucesso retornado pelo Widget PluggyConnect (SDK)
+  // Callback de Sucesso retornado pós-conexão
   const handlePluggySuccess = async (data: any) => {
-    console.log("Conexão realizada com sucesso via PluggyConnect:", data);
+    console.log("Conexão realizada com sucesso via Pluggy Iframe:", data);
     setShowWidget(false);
     setCarregandoConexao(true);
 
@@ -239,6 +252,16 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
+  // Montagem da URL Oficial do Iframe da Pluggy
+  const iframeUrl = useMemo(() => {
+    if (!connectToken) return "";
+    let url = `https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectToken)}`;
+    if (selectedConnectorId !== undefined) {
+      url += `&connectorId=${selectedConnectorId}`;
+    }
+    return url;
+  }, [connectToken, selectedConnectorId]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[92vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-5">
@@ -272,7 +295,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             </Button>
           </div>
         ) : showWidget ? (
-          /* MODO WIDGET DE CONEXÃO OFICIAL (Instância Única do SDK) */
+          /* MODO WIDGET DE CONEXÃO OFICIAL (Iframe Direto da Pluggy - Zero Erros de Zoid/React) */
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <Button
@@ -289,7 +312,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               <div className="py-20 text-center flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
                 <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
                 <span className="text-sm font-semibold text-foreground">Iniciando Pluggy Connect...</span>
-                <span className="text-xs text-muted-foreground">Obtendo chave de acesso segura da Pluggy</span>
+                <span className="text-xs text-muted-foreground">Obtendo acesso seguro à Pluggy</span>
               </div>
             ) : tokenError ? (
               <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-center space-y-2">
@@ -300,21 +323,13 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                 </Button>
               </div>
             ) : (
-              /* MONTAGEM ÚNICA DO SDK PLUGGY CONNECT COM KEY EXPLICITA PARA PREVENIR DUPLO LISTENER DO ZOID */
-              <div className="w-full min-h-[500px] rounded-2xl overflow-hidden border border-border/60 bg-background relative flex flex-col p-2">
-                <PluggyConnect
-                  key={`pluggy-sdk-${connectToken}-${selectedConnectorId || 'all'}`}
-                  connectToken={connectToken}
-                  connectorId={selectedConnectorId}
-                  includeSandbox={true}
-                  onSuccess={handlePluggySuccess}
-                  onError={(err) => {
-                    console.error("Erro no PluggyConnect SDK:", err);
-                    setShowWidget(false);
-                  }}
-                  onClose={() => {
-                    setShowWidget(false);
-                  }}
+              /* IFRAME OFICIAL PLUGGY CONNECT 100% ISOLADO */
+              <div className="w-full h-[550px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-background relative flex flex-col">
+                <iframe
+                  src={iframeUrl}
+                  className="w-full h-full border-0"
+                  allow="camera; microphone; geolocation; payment"
+                  title="Pluggy Connect Widget Official"
                 />
               </div>
             )}
