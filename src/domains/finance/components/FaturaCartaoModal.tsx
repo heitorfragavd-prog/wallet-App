@@ -147,10 +147,16 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         };
       });
 
-    // 2. Despesas lançadas direto no cartão
+    // 2. Despesas lançadas direto no cartão (por conta_id ou método de pagamento)
     const despesasDoCartao = despesas
-      .filter((desp) => desp.forma_pagamento === "cartao_credito")
-      .map((desp) => {
+      .filter((desp: any) => {
+        const ehFormaCartao = desp.metodo_pagamento === "cartao_credito" || desp.forma_pagamento === "cartao_credito";
+        if (desp.conta_id) {
+          return desp.conta_id === cartao.id;
+        }
+        return ehFormaCartao;
+      })
+      .map((desp: any) => {
         const dataDesp = new Date(desp.data);
         const categoryInfo = getLucideCategoryInfo(desp.categorias?.nome);
         return {

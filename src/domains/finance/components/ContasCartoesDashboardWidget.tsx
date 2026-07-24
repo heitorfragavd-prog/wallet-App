@@ -4,6 +4,7 @@ import { Button } from "@/shared/components/ui/button";
 import { Eye, EyeOff, Info, ArrowRight, CreditCard as CreditCardIcon } from "lucide-react";
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
@@ -15,6 +16,7 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
   const navigate = useNavigate();
   const { contas, loading, saldoConsolidado } = useContasUsuario();
   const { dividas } = useDividas();
+  const { despesas } = useDespesas();
   const [esconderValores, setEsconderValores] = useState(false);
   const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
@@ -25,11 +27,13 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
   const mesAtualNome = format(new Date(), "MMMM", { locale: ptBR });
   const mesAtualCapitalizado = mesAtualNome.charAt(0).toUpperCase() + mesAtualNome.slice(1);
 
-  // Calcula total das faturas atuais dos cartões
+  // Calcula total das faturas atuais dos cartões (dívidas + despesas diretas)
   const totalFaturasCartoes = cartoesCredito.reduce((acc, cartao) => {
     const dividasDoCartao = dividas.filter((d) => d.conta_id === cartao.id && d.status !== "quitada");
     const totalDivs = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0);
-    return acc + totalDivs;
+    const despesasDoCartao = despesas.filter((d: any) => d.conta_id === cartao.id || ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id)));
+    const totalDesp = despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
+    return acc + totalDivs + totalDesp;
   }, 0);
 
   const formatarValor = (valor: number) => {
@@ -162,7 +166,10 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                 const dividasDoCartao = dividas.filter(
                   (d) => d.conta_id === cartao.id && d.status !== "quitada"
                 );
-                const faturaAtual = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0);
+                const despesasDoCartao = despesas.filter(
+                  (d: any) => d.conta_id === cartao.id || ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id))
+                );
+                const faturaAtual = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0) + despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
                 const limiteTotal = Number(cartao.limite_credito) || 0;
                 const limiteDisponivel = Math.max(0, limiteTotal - faturaAtual);
 
