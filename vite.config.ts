@@ -53,18 +53,33 @@ function pluggyTokenServerPlugin() {
           const env = loadEnv("development", process.cwd(), "");
           const apiKey = await getApiKey(env);
 
-          console.log("[Node Server] Solicitando connect_token para Pluggy API...");
-          const tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
+          console.log("[Node Server] Solicitando token da Pluggy API...");
+          
+          let tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-API-KEY": apiKey,
             },
-            body: JSON.stringify({ options: { clientUserId: "user-default-1" } }),
+            body: JSON.stringify({}),
           });
 
-          const tokenText = await tokenRes.text();
-          console.log(`[Node Server] Pluggy Response Status (${tokenRes.status}) Body:`, tokenText);
+          let tokenText = await tokenRes.text();
+          console.log(`[Node Server] /connect_tokens (Plural) Status (${tokenRes.status}) Body:`, tokenText);
+
+          if (!tokenRes.ok) {
+            console.log("[Node Server] Tentando endpoint /connect_token (Singular)...");
+            tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-API-KEY": apiKey,
+              },
+              body: JSON.stringify({ options: { sandbox: true } }),
+            });
+            tokenText = await tokenRes.text();
+            console.log(`[Node Server] /connect_token (Singular) Status (${tokenRes.status}) Body:`, tokenText);
+          }
 
           if (!tokenRes.ok) {
             res.statusCode = 500;
