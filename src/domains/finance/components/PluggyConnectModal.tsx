@@ -90,7 +90,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     setCarregandoConexao(true);
 
     try {
-      const novaConta = await createConta.mutateAsync({
+      const novaConta = await createConta({
         nome: conector.name.replace(" (Sandbox)", ""),
         tipo: "conta_corrente",
         saldo_inicial: 2500.0,
@@ -99,7 +99,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
       try {
         if (novaConta?.id) {
-          await createReceita.mutateAsync({
+          await createReceita({
             receita: {
               descricao: `Pix Recebido - ${conector.name.replace(" (Sandbox)", "")} Open Finance`,
               valor: 1250.0,

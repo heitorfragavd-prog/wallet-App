@@ -1,7 +1,7 @@
 /**
  * Pluggy Open Finance Service (Sandbox / Produção)
  * 
- * Gerencia autenticação, tokens de conexão (connectToken) e conectores via API da Pluggy.
+ * Comunica-se com o endpoint de servidor /api/pluggy/connect-token e gerencia conectores.
  */
 
 export interface PluggyConnector {
@@ -32,72 +32,23 @@ export interface PluggyTransaction {
   type: "DEBIT" | "CREDIT";
 }
 
-const PLUGGY_API_URL = "/api/pluggy";
-
 /**
- * Obtém as credenciais do ambiente VITE
- */
-export function getPluggyCredentials() {
-  const clientId = import.meta.env.VITE_PLUGGY_CLIENT_ID || "";
-  const clientSecret = import.meta.env.VITE_PLUGGY_CLIENT_SECRET || "";
-  return { clientId, clientSecret };
-}
-
-/**
- * Passo 1: Autentica com a API da Pluggy (POST /auth) e gera o apiKey temporário
- */
-export async function getPluggyApiKey(): Promise<string> {
-  const { clientId, clientSecret } = getPluggyCredentials();
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Credenciais VITE_PLUGGY_CLIENT_ID ou VITE_PLUGGY_CLIENT_SECRET não foram configuradas no arquivo .env");
-  }
-
-  const response = await fetch(`${PLUGGY_API_URL}/auth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ clientId, clientSecret }),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.json().catch(() => ({}));
-    throw new Error(errBody.message || `Falha na autenticação da API Pluggy (HTTP ${response.status})`);
-  }
-
-  const data = await response.json();
-  if (!data.apiKey) {
-    throw new Error("A API da Pluggy não retornou a chave apiKey.");
-  }
-  return data.apiKey;
-}
-
-/**
- * Passo 2: Gera o connectToken (POST /connect_token) recebendo o accessToken JWT
+ * Gera o connectToken (accessToken JWT) via rota de backend segura do servidor
  */
 export async function createPluggyConnectToken(): Promise<string> {
-  const apiKey = await getPluggyApiKey();
-
-  const response = await fetch(`${PLUGGY_API_URL}/connect_token`, {
+  const response = await fetch("/api/pluggy/connect-token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": apiKey,
-    },
-    body: JSON.stringify({
-      options: {
-        sandbox: true,
-      },
-    }),
+    headers: { "Content-Type": "application/json" },
   });
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
-    throw new Error(errBody.message || `Falha ao gerar o Connect Token na API Pluggy (HTTP ${response.status})`);
+    throw new Error(errBody.error || `Erro HTTP ${response.status} ao obter Connect Token da Pluggy.`);
   }
 
   const data = await response.json();
   if (!data.accessToken) {
-    throw new Error("A API da Pluggy não retornou o accessToken.");
+    throw new Error("O servidor backend da Pluggy não retornou o accessToken.");
   }
   return data.accessToken;
 }
