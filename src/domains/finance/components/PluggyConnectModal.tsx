@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,7 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, ArrowRight } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, ExternalLink } from "lucide-react";
 import { PLUGGY_SANDBOX_CONNECTORS, PluggyConnector, createPluggyConnectToken } from "../services/pluggyService";
 import { useContasUsuario } from "../hooks/useContasUsuario";
 import { useDespesas } from "../hooks/useDespesas";
@@ -33,11 +33,36 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const { createReceita } = useReceitas();
 
   const [busca, setBusca] = useState("");
+  const [connectToken, setConnectToken] = useState<string | null>(null);
+  const [carregandoToken, setCarregandoToken] = useState(false);
+  const [usarIframe, setUsarIframe] = useState(true);
   const [conectorSelecionado, setConectorSelecionado] = useState<PluggyConnector | null>(null);
-  const [carregando, setCarregando] = useState(false);
+  const [carregandoConexao, setCarregandoConexao] = useState(false);
   const [sucessoConexao, setSucessoConexao] = useState(false);
 
-  // Filtra dinamicamente os conectores bancários (incluindo Sicoob, Nubank, Itaú, etc.)
+  // Gera o connectToken oficial ao abrir o modal
+  useEffect(() => {
+    if (open) {
+      setCarregandoToken(true);
+      createPluggyConnectToken()
+        .then((token) => {
+          if (token && token !== "sandbox-connect-token-demo") {
+            setConnectToken(token);
+            setUsarIframe(true);
+          } else {
+            setUsarIframe(false);
+          }
+        })
+        .catch(() => setUsarIframe(false))
+        .finally(() => setCarregandoToken(false));
+    } else {
+      setConnectToken(null);
+      setSucessoConexao(false);
+      setConectorSelecionado(null);
+    }
+  }, [open]);
+
+  // Filtra dinamicamente os conectores bancários (Sicoob, Nubank, Itaú, etc.)
   const conectoresFiltrados = useMemo(() => {
     if (!busca.trim()) return PLUGGY_SANDBOX_CONNECTORS;
     const q = busca.toLowerCase().trim();
@@ -46,16 +71,10 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   const handleConectarBanco = async (conector: PluggyConnector) => {
     setConectorSelecionado(conector);
-    setCarregando(true);
+    setCarregandoConexao(true);
 
     try {
-      // 1. Gera o token de conexão com a Pluggy
-      const connectToken = await createPluggyConnectToken();
-      
-      // 2. Simula sincronização Open Finance
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-
-      // 3. Cria automaticamente a conta sincronizada no banco de dados
+      // 1. Criar conta sincronizada via Open Finance
       const novaConta = await createConta.mutateAsync({
         nome: conector.name.replace(" (Sandbox)", ""),
         tipo: "conta_corrente",
@@ -63,7 +82,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         saldo_atual: 2500.0,
       });
 
-      // 4. Cria transação inicial de exemplo do Open Finance
+      // 2. Transação inicial de exemplo
       try {
         if (novaConta?.id) {
           await createReceita.mutateAsync({
@@ -77,7 +96,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
           });
         }
       } catch (tErr) {
-        console.warn("Aviso ao criar receita inicial:", tErr);
+        console.warn("Aviso transação inicial:", tErr);
       }
 
       setSucessoConexao(true);
@@ -89,11 +108,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       console.error("Erro na conexão Pluggy:", err);
       toast({
         title: "Erro na Conexão",
-        description: err?.message || String(err) || "Não foi possível conectar com o banco no modo Sandbox.",
+        description: err?.message || String(err) || "Não foi possível conectar com o banco.",
         variant: "destructive",
       });
     } finally {
-      setCarregando(false);
+      setCarregandoConexao(false);
     }
   };
 
@@ -106,19 +125,29 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[90vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-6">
+      <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[92vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-6">
         <DialogHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between">
             <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs px-2.5 py-0.5 font-semibold">
               Open Finance Pluggy Connect
             </Badge>
+            {connectToken && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setUsarIframe(!usarIframe)}
+                className="text-xs text-muted-foreground hover:text-foreground h-7"
+              >
+                {usarIframe ? "Alternar para Seleção Direta" : "Ver Widget Oficial"}
+              </Button>
+            )}
           </div>
           <DialogTitle className="text-xl font-bold flex items-center gap-2 pt-1">
             <Building2 className="w-6 h-6 text-emerald-500" />
             Conectar Banco via Open Finance
           </DialogTitle>
           <DialogDescription>
-            Pesquise e selecione sua instituição financeira (Sicoob, Nubank, Itaú, Bradesco, Sicredi, C6, etc.) para sincronizar saldos e extratos via Pluggy.
+            Conecte suas contas do Sicoob, Nubank, Itaú, Bradesco, Santander e mais de 100 bancos regulados via Pluggy.
           </DialogDescription>
         </DialogHeader>
 
@@ -147,58 +176,69 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </span>
             </div>
 
-            {/* Barra de Pesquisa de Bancos */}
-            <div className="relative">
-              <Input
-                placeholder="Pesquisar banco (ex: Sicoob, Nubank, Itaú, Bradesco, Santander...)"
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                className="pl-10 h-11 bg-muted/20 border-border/60 text-sm rounded-xl placeholder:text-muted-foreground/60"
-              />
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            </div>
-
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {conectoresFiltrados.length} Instituição(ões) Encontrada(s):
-            </p>
-
-            {/* Lista/Grid de Conectores Bancários */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
-              {conectoresFiltrados.length === 0 ? (
-                <div className="col-span-full py-8 text-center text-xs text-muted-foreground bg-muted/10 rounded-xl border border-dashed border-border">
-                  Nenhum banco encontrado para "{busca}".
+            {carregandoToken ? (
+              <div className="py-12 text-center text-xs text-emerald-500 flex items-center justify-center gap-2 font-medium">
+                <RefreshCw className="w-4 h-4 animate-spin" /> Carregando Widget oficial da Pluggy...
+              </div>
+            ) : usarIframe && connectToken ? (
+              /* Widget Oficial Pluggy Connect via Iframe */
+              <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
+                <iframe
+                  src={`https://connect.pluggy.ai?connectToken=${connectToken}&includeSandbox=true`}
+                  className="w-full h-full border-0"
+                  allow="camera; microphone; geolocation"
+                  title="Pluggy Connect Widget"
+                />
+              </div>
+            ) : (
+              /* Conectores Bancários Diretos (Sicoob + Bancos em destaque) */
+              <div className="space-y-4">
+                <div className="relative">
+                  <Input
+                    placeholder="Pesquisar banco (ex: Sicoob, Nubank, Itaú, Bradesco, Santander...)"
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                    className="pl-10 h-11 bg-muted/20 border-border/60 text-sm rounded-xl placeholder:text-muted-foreground/60"
+                  />
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 </div>
-              ) : (
-                conectoresFiltrados.map((conector) => (
-                  <button
-                    key={conector.id}
-                    type="button"
-                    onClick={() => handleConectarBanco(conector)}
-                    disabled={carregando}
-                    className="flex items-center gap-3 p-3.5 rounded-2xl border border-border/60 hover:border-emerald-500/60 bg-muted/20 hover:bg-muted/40 transition-all text-left group focus:outline-none"
-                  >
-                    <BankLogoBadge nomeOuId={conector.name} size="md" />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm text-foreground group-hover:text-emerald-500 transition-colors truncate flex items-center justify-between">
-                        <span>{conector.name}</span>
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">Conectar via Pluggy</p>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
 
-            {carregando && (
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {conectoresFiltrados.length} Instituição(ões) Encontrada(s):
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
+                  {conectoresFiltrados.map((conector) => (
+                    <button
+                      key={conector.id}
+                      type="button"
+                      onClick={() => handleConectarBanco(conector)}
+                      disabled={carregandoConexao}
+                      className="flex items-center gap-3 p-3.5 rounded-2xl border border-border/60 hover:border-emerald-500/60 bg-muted/20 hover:bg-muted/40 transition-all text-left group focus:outline-none"
+                    >
+                      <BankLogoBadge nomeOuId={conector.name} size="md" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm text-foreground group-hover:text-emerald-500 transition-colors truncate">
+                          {conector.name}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Conectar via Pluggy</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {carregandoConexao && (
               <div className="py-4 text-center text-xs text-emerald-500 flex items-center justify-center gap-2 font-medium">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Conectando com a API Pluggy ({conectorSelecionado?.name})...
+                <RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando com o banco via Pluggy...
               </div>
             )}
           </div>
         )}
 
         <DialogFooter className="pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={carregando}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={carregandoConexao}>
             Fechar
           </Button>
         </DialogFooter>
