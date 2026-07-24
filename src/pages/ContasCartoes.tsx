@@ -38,24 +38,13 @@ import {
   DollarSign,
   UploadCloud,
   ShieldCheck,
-  RefreshCw,
 } from "lucide-react";
-import { PluggyConnect } from "react-pluggy-connect";
-import { useQueryClient } from "@tanstack/react-query";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
-import { useDespesas } from "@/domains/finance/hooks/useDespesas";
-import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
 import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
-import {
-  createPluggyConnectToken,
-  fetchPluggyItemAccounts,
-  fetchPluggyItemTransactions,
-} from "@/domains/finance/services/pluggyService";
-import { useToast } from "@/shared/hooks/use-toast";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -74,12 +63,8 @@ const TIPO_ICONS: Record<string, any> = {
 };
 
 export default function ContasCartoes() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas = [] } = useDividas();
-  const { createDespesa } = useDespesas();
-  const { createReceita } = useReceitas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
@@ -88,11 +73,13 @@ export default function ContasCartoes() {
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
 
   const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
-  const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
 
-  // Estados para o Widget Oficial Pluggy (Fluxo Direto sem modal duplo)
-  const [connectToken, setConnectToken] = useState<string | null>(null);
-  const [loadingToken, setLoadingToken] = useState<boolean>(false);
+  // Modal Pluggy Open Finance com configuração limpa
+  const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
+  const [modalPluggyProps, setModalPluggyProps] = useState<{ openWidgetDirectly?: boolean; initialConnectorId?: number }>({
+    openWidgetDirectly: false,
+    initialConnectorId: undefined,
+  });
 
   const [nome, setNome] = useState("");
   const [tipo, setTipo] = useState<ContaUsuario["tipo"]>("conta_corrente");
@@ -103,131 +90,14 @@ export default function ContasCartoes() {
   const [diaVencimento, setDiaVencimento] = useState("");
   const [cor, setCor] = useState("#3B82F6");
 
-  // ── Fluxo Direto: Dispara o Widget Oficial da Pluggy sem modal do app no fundo ──
-  const handleAbrirPluggyDireto = async () => {
-    setLoadingToken(true);
-    try {
-      const data = await createPluggyConnectToken();
-      console.log("Token obtido para o Widget Oficial Pluggy:", data);
-
-      const token = typeof data === "string" 
-        ? data 
-        : data?.connectToken || data?.accessToken || data?.token || data?.access_token;
-
-      if (token && typeof token === "string" && token.length > 20) {
-        setConnectToken(token);
-      } else {
-        toast({
-          title: "Erro no Pluggy Connect",
-          description: "Token inválido retornado da API da Pluggy.",
-          variant: "destructive",
-        });
-      }
-    } catch (err: any) {
-      toast({
-        title: "Erro de Autenticação",
-        description: err?.message || "Não foi possível obter o token do servidor.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoadingToken(false);
-    }
+  const handleAbrirWidgetOficial = () => {
+    setModalPluggyProps({ openWidgetDirectly: true, initialConnectorId: undefined });
+    setModalPluggyAberto(true);
   };
 
-  // Callback de Sucesso do Widget Oficial Pluggy (Reseta o token para desmontar limpo)
-  const handlePluggySuccess = async (data: any) => {
-    console.log("Conexão concluída via PluggyConnect:", data);
-    setConnectToken(null); // Reset imediato do token desmonta o widget e limpa os listeners do Zoid!
-
-    try {
-      const itemId = data?.item?.id || data?.itemId || data?.id;
-      const connectorName = data?.item?.connector?.name || "Banco Sincronizado";
-
-      let pluggyAccounts = [];
-      let pluggyTransactions = [];
-
-      if (itemId) {
-        pluggyAccounts = await fetchPluggyItemAccounts(itemId);
-        pluggyTransactions = await fetchPluggyItemTransactions(itemId);
-      }
-
-      if (pluggyAccounts.length > 0) {
-        for (const acc of pluggyAccounts) {
-          const tipoConta = acc.type === "CREDIT" ? "cartao_credito" : acc.type === "SAVINGS" ? "poupanca" : "conta_corrente";
-          const novaConta = await createConta({
-            nome: `${connectorName} (${acc.name || "Conta"})`,
-            tipo: tipoConta,
-            saldo_inicial: Number(acc.balance) || 0,
-            saldo_atual: Number(acc.balance) || 0,
-            limite_credito: acc.type === "CREDIT" ? 10000.0 : undefined,
-          });
-
-          if (novaConta?.id && pluggyTransactions.length > 0) {
-            for (const tx of pluggyTransactions) {
-              try {
-                const isReceita = (tx.amount && tx.amount > 0) || tx.type === "CREDIT";
-                if (isReceita) {
-                  await createReceita({
-                    descricao: tx.description || "Lançamento Open Finance",
-                    valor: Math.abs(tx.amount || 0),
-                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
-                    conta_id: novaConta.id,
-                    metodo_pagamento: "pix",
-                  });
-                } else {
-                  await createDespesa({
-                    descricao: tx.description || "Despesa Open Finance",
-                    valor: Math.abs(tx.amount || 0),
-                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
-                    conta_id: novaConta.id,
-                    metodo_pagamento: "cartao_debito",
-                  });
-                }
-              } catch (txErr) {
-                console.warn("Aviso ao salvar transação individual:", txErr);
-              }
-            }
-          }
-        }
-      } else {
-        const novaConta = await createConta({
-          nome: `${connectorName} Open Finance`,
-          tipo: "conta_corrente",
-          saldo_inicial: 2500.0,
-          saldo_atual: 2500.0,
-        });
-
-        if (novaConta?.id) {
-          try {
-            await createReceita({
-              descricao: `Pix Recebido - ${connectorName} Open Finance`,
-              valor: 1500.0,
-              data: new Date().toISOString().split("T")[0],
-              conta_id: novaConta.id,
-              metodo_pagamento: "pix",
-            });
-          } catch (txErr) {
-            console.warn("Aviso transação inicial:", txErr);
-          }
-        }
-      }
-
-      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
-      queryClient.invalidateQueries({ queryKey: ["receitas"] });
-      queryClient.invalidateQueries({ queryKey: ["despesas"] });
-
-      toast({
-        title: "Conexão Open Finance Concluída! 🚀",
-        description: `Contas do ${connectorName} sincronizadas com sucesso.`,
-      });
-    } catch (err: any) {
-      console.error("Erro no processamento do onSuccess:", err);
-      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
-    }
-  };
-
-  const handlePluggyClose = () => {
-    setConnectToken(null); // Desmonta o widget completamente do DOM!
+  const handleAbrirSelecaoDireta = () => {
+    setModalPluggyProps({ openWidgetDirectly: false, initialConnectorId: undefined });
+    setModalPluggyAberto(true);
   };
 
   const resetForm = () => {
@@ -307,25 +177,20 @@ export default function ContasCartoes() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* BOTÃO 1: Open Finance (Widget Oficial) com carregamento direto sem modal do app no fundo */}
+            {/* BOTÃO 1: Widget Oficial da Pluggy */}
             <Button
               variant="outline"
-              onClick={handleAbrirPluggyDireto}
-              disabled={loadingToken}
+              onClick={handleAbrirWidgetOficial}
               className="border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 font-semibold"
             >
-              {loadingToken ? (
-                <RefreshCw className="w-4 h-4 mr-2 animate-spin text-emerald-500" />
-              ) : (
-                <ShieldCheck className="w-4 h-4 mr-2" />
-              )}
-              {loadingToken ? "Carregando Pluggy..." : "Open Finance (Widget Oficial)"}
+              <ShieldCheck className="w-4 h-4 mr-2" />
+              Open Finance (Widget Oficial)
             </Button>
 
             {/* BOTÃO 2: Seleção Direta de Bancos em Dark Mode */}
             <Button
               variant="outline"
-              onClick={() => setModalPluggyAberto(true)}
+              onClick={handleAbrirSelecaoDireta}
               className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10 font-semibold"
             >
               <Building2 className="w-4 h-4 mr-2" />
@@ -411,7 +276,7 @@ export default function ContasCartoes() {
                 </p>
               </div>
               <div className="flex justify-center gap-3">
-                <Button onClick={handleAbrirPluggyDireto} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
+                <Button onClick={handleAbrirSelecaoDireta} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
                   <ShieldCheck className="w-4 h-4 mr-2" />
                   Conectar via Open Finance
                 </Button>
@@ -681,25 +546,12 @@ export default function ContasCartoes() {
           onOpenChange={setModalExtratoAberto}
         />
 
-        {/* COMPONENTE OFICIAL PLUGGY CONNECT (Renderizado APENAS quando connectToken for uma string válida) */}
-        {connectToken && (
-          <PluggyConnect
-            key={connectToken}
-            connectToken={connectToken}
-            includeSandbox={true}
-            onSuccess={handlePluggySuccess}
-            onError={(err) => {
-              console.error("Erro no PluggyConnect:", err);
-              setConnectToken(null);
-            }}
-            onClose={handlePluggyClose}
-          />
-        )}
-
-        {/* Modal Escuro do App para Seleção Direta de Bancos */}
+        {/* Modal Open Finance Pluggy (Iframe Isolado Sem Qualquer Lib Pluggy) */}
         <PluggyConnectModal
           open={modalPluggyAberto}
           onOpenChange={setModalPluggyAberto}
+          openWidgetDirectly={modalPluggyProps.openWidgetDirectly}
+          initialConnectorId={modalPluggyProps.initialConnectorId}
         />
       </div>
     </DashboardLayout>
