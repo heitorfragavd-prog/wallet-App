@@ -265,10 +265,9 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   };
 
   // Montagem da URL Oficial do Iframe da Pluggy
-  const connectorQuery = selectedConnectorId ? `&connectorId=${selectedConnectorId}` : '';
-  const iframeUrl = isTokenValido(connectToken)
-    ? `https://connect.pluggy.ai/?connectToken=${connectToken}${connectorQuery}`
-    : '';
+  const connectTokenClean = String(connectToken || "").trim();
+  const connectorQuery = selectedConnectorId ? `&connectorId=${selectedConnectorId}` : "";
+  const iframeSrc = `https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectTokenClean)}${connectorQuery}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -297,12 +296,12 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
           <div>
             <span className="text-muted-foreground">Estado do Token: </span>
             <span className="font-bold text-foreground">
-              {connectToken ? `${connectToken.substring(0, 20)}...` : "NULO / UNDEFINED"}
+              {connectTokenClean ? `${connectTokenClean.substring(0, 20)}...` : "NULO / UNDEFINED"}
             </span>
           </div>
           <div>
             <span className="text-muted-foreground">Tamanho do Token: </span>
-            <span className="font-bold text-foreground">{connectToken ? connectToken.length : 0} caracteres</span>
+            <span className="font-bold text-foreground">{connectTokenClean ? connectTokenClean.length : 0} caracteres</span>
           </div>
           <div>
             <span className="text-muted-foreground">Erro na Chamada: </span>
@@ -339,27 +338,16 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             </div>
 
-            {!isTokenValido(connectToken) ? (
-              <div className="p-6 bg-slate-800/80 border border-slate-700 rounded-2xl text-center space-y-3">
-                <p className="text-xs text-slate-300 font-medium">
-                  {isLoadingToken ? "⏳ Obtendo token de acesso seguro..." : "Token não validado ou aguardando resposta da API."}
-                </p>
-                <Button
-                  onClick={fetchDirectToken}
-                  disabled={isLoadingToken}
-                  className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs h-9"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isLoadingToken ? "animate-spin" : ""}`} />
-                  Tentar Gerar Token Novamente
-                </Button>
-              </div>
-            ) : (
+            {connectTokenClean.length > 50 ? (
               <iframe
-                src={iframeUrl}
+                key={connectTokenClean}
+                src={iframeSrc}
                 className="w-full h-[650px] border-0 rounded-xl"
                 allow="payment"
                 title="Pluggy Connect Widget"
               />
+            ) : (
+              <div className="py-20 text-center text-slate-300">Carregando Pluggy Connect...</div>
             )}
           </div>
         ) : (
