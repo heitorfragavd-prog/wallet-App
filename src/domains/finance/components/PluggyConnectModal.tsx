@@ -49,8 +49,9 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
           ✕
         </button>
 
-        {connectToken ? (
+        {connectToken && connectToken.length > 20 ? (
           <iframe
+            key={connectToken}
             src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
             className="w-full h-[650px] border-0 rounded-xl"
             allow="payment"
@@ -59,7 +60,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         ) : (
           <div className="p-16 text-center text-slate-300 flex flex-col items-center justify-center space-y-3">
             <span className="animate-spin text-3xl">⏳</span>
-            <p className="font-semibold text-sm">Conectando ao Open Finance...</p>
+            <p className="font-semibold text-sm">Carregando Pluggy Connect...</p>
           </div>
         )}
       </div>
