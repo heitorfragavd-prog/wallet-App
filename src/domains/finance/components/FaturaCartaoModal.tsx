@@ -9,6 +9,12 @@ import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/shared/components/ui/dropdown-menu";
+import {
   ChevronLeft,
   ChevronRight,
   Search,
@@ -39,6 +45,8 @@ import {
   Shirt,
   Sparkles,
   ChevronDown,
+  X,
+  Check,
 } from "lucide-react";
 import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
@@ -108,7 +116,13 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
 }) => {
   const { toast } = useToast();
   const [dataRef, setDataRef] = useState<Date>(new Date());
-  const [busca, setBusca] = useState("");
+  
+  // Estados da Barra de Filtros Organizze
+  const [filtroTipo, setFiltroTipo] = useState<string>("todos");
+  const [filtroCategoria, setFiltroCategoria] = useState<string>("todas");
+  const [filtroTag, setFiltroTag] = useState<string>("todas");
+  const [busca, setBusca] = useState<string>("");
+  const [mostrarCampoBusca, setMostrarCampoBusca] = useState<boolean>(false);
 
   const { dividas } = useDividas();
   const { despesas } = useDespesas();
@@ -123,6 +137,14 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const dataFechamentoStr = `${String(diaFech).padStart(2, "0")}/${String(dataRef.getMonth() + 1).padStart(2, "0")}/${String(dataRef.getFullYear()).slice(-2)}`;
   const dataVencimentoStr = `${String(diaVenc).padStart(2, "0")}/${String(dataRef.getMonth() + 1).padStart(2, "0")}/${String(dataRef.getFullYear()).slice(-2)}`;
 
+  // Categorias únicas para o dropdown
+  const categoriasUnicas = useMemo(() => {
+    const setCat = new Set<string>();
+    dividas.forEach((d) => { if (d.categorias?.nome) setCat.add(d.categorias.nome); });
+    despesas.forEach((d) => { if (d.categorias?.nome) setCat.add(d.categorias.nome); });
+    return Array.from(setCat).sort();
+  }, [dividas, despesas]);
+
   // Filtra lançamentos atrelados a este cartão
   const lancamentos = useMemo(() => {
     if (!cartao) return [];
@@ -136,6 +158,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         return {
           id: d.id,
           tipo: "divida",
+          isParcelado: d.parcelas > 1,
           descricao: d.descricao,
           categoria: d.categorias?.nome || "Compras Cartão",
           valor: d.valor_restante,
@@ -162,6 +185,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         return {
           id: desp.id,
           tipo: "despesa",
+          isParcelado: false,
           descricao: desp.descricao,
           categoria: desp.categorias?.nome || "Despesa Cartão",
           valor: desp.valor,
@@ -173,15 +197,32 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         };
       });
 
-    const todos = [...divsDoCartao, ...despesasDoCartao];
+    let todos = [...divsDoCartao, ...despesasDoCartao];
 
-    return todos
-      .filter((item) =>
-        item.descricao.toLowerCase().includes(busca.toLowerCase()) ||
-        item.categoria.toLowerCase().includes(busca.toLowerCase())
-      )
-      .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
-  }, [cartao, dividas, despesas, busca]);
+    // Aplicar Filtro de Tipo
+    if (filtroTipo === "despesas") {
+      todos = todos.filter((i) => i.tipo === "despesa" || i.tipo === "divida");
+    } else if (filtroTipo === "fixos") {
+      todos = todos.filter((i) => !i.isParcelado);
+    } else if (filtroTipo === "parcelados") {
+      todos = todos.filter((i) => i.isParcelado);
+    }
+
+    // Aplicar Filtro de Categoria
+    if (filtroCategoria !== "todas") {
+      todos = todos.filter((i) => i.categoria.toLowerCase() === filtroCategoria.toLowerCase());
+    }
+
+    // Aplicar Busca Textual
+    if (busca.trim()) {
+      todos = todos.filter((i) =>
+        i.descricao.toLowerCase().includes(busca.toLowerCase()) ||
+        i.categoria.toLowerCase().includes(busca.toLowerCase())
+      );
+    }
+
+    return todos.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
+  }, [cartao, dividas, despesas, filtroTipo, filtroCategoria, busca]);
 
   const totalFatura = lancamentos.reduce((sum, item) => sum + Number(item.valor), 0);
 
@@ -295,7 +336,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
           </div>
         </div>
 
-        {/* Cabeçalho da Seção de Lançamentos + Botão Adicionar */}
+        {/* Seção de Lançamentos + Botão Adicionar + Barra de Filtros Estilo Organizze */}
         <div className="space-y-4 pt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -311,19 +352,118 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             </div>
           </div>
 
-          {/* Barra de Pesquisa e Filtros */}
-          <div className="relative flex items-center">
-            <div className="absolute left-3.5 text-muted-foreground flex items-center gap-2">
-              <SlidersHorizontal className="w-4 h-4" />
-              <span className="text-xs text-muted-foreground/60">|</span>
+          {/* ── BARRA DE FILTROS LARANJA ESTILO ORGANIZZE ── */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between bg-orange-500 text-white rounded-full px-5 py-2.5 text-xs font-semibold shadow-md">
+              <div className="flex items-center gap-6">
+                {/* Botão Limpar Filtros X */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFiltroTipo("todos");
+                    setFiltroCategoria("todas");
+                    setFiltroTag("todas");
+                    setBusca("");
+                  }}
+                  className="hover:opacity-80 transition-opacity focus:outline-none flex items-center gap-1"
+                  title="Limpar todos os filtros"
+                >
+                  <X className="w-4 h-4 stroke-[2.5]" />
+                </button>
+
+                {/* Dropdown 1: Tipo */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-1 hover:opacity-90 focus:outline-none tracking-wide">
+                    <span>Tipo</span>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52 bg-card border border-border shadow-lg p-1">
+                    <DropdownMenuItem onClick={() => setFiltroTipo("todos")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>todos os lançamentos</span>
+                      {filtroTipo === "todos" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFiltroTipo("despesas")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>despesas</span>
+                      {filtroTipo === "despesas" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFiltroTipo("fixos")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>lançamentos fixos</span>
+                      {filtroTipo === "fixos" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFiltroTipo("parcelados")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>lançamentos parcelados</span>
+                      {filtroTipo === "parcelados" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Dropdown 2: Categorias */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-1 hover:opacity-90 focus:outline-none tracking-wide">
+                    <span>Categorias</span>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-60 max-h-64 overflow-y-auto bg-card border border-border shadow-lg p-1">
+                    <DropdownMenuItem onClick={() => setFiltroCategoria("todas")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer font-semibold">
+                      <span>Todas as categorias</span>
+                      {filtroCategoria === "todas" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    {categoriasUnicas.map((cat) => (
+                      <DropdownMenuItem key={cat} onClick={() => setFiltroCategoria(cat)} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                        <span>{cat}</span>
+                        {filtroCategoria === cat && <Check className="w-4 h-4 text-emerald-500" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Dropdown 3: Tags */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-1 hover:opacity-90 focus:outline-none tracking-wide">
+                    <span>Tags</span>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-48 bg-card border border-border shadow-lg p-1">
+                    <DropdownMenuItem onClick={() => setFiltroTag("todas")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>Todas as tags</span>
+                      {filtroTag === "todas" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFiltroTag("Debs")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>Debs</span>
+                      {filtroTag === "Debs" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFiltroTag("Pê")} className="flex items-center justify-between text-xs py-2 px-3 cursor-pointer">
+                      <span>Pê</span>
+                      {filtroTag === "Pê" && <Check className="w-4 h-4 text-emerald-500" />}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {/* Lupa de Pesquisa Textual */}
+              <button
+                type="button"
+                onClick={() => setMostrarCampoBusca(!mostrarCampoBusca)}
+                className="hover:opacity-80 transition-opacity focus:outline-none"
+                title="Buscar lançamento"
+              >
+                <Search className="w-4 h-4 stroke-[2.5]" />
+              </button>
             </div>
-            <Input
-              placeholder="Filtrar por..."
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
-              className="pl-12 pr-10 h-11 bg-muted/20 border-border/60 rounded-full text-sm placeholder:text-muted-foreground/60"
-            />
-            <Search className="w-4 h-4 absolute right-4 text-muted-foreground" />
+
+            {/* Input Textual de Pesquisa (quando clicado na Lupa) */}
+            {mostrarCampoBusca && (
+              <div className="relative pt-1">
+                <Input
+                  placeholder="Pesquisar lançamento por nome..."
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  className="h-9 bg-muted/30 border-border/60 text-xs rounded-full pl-9"
+                  autoFocus
+                />
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              </div>
+            )}
           </div>
 
           {/* Tabela de Lançamentos com Ícones Lucide React */}
@@ -331,9 +471,9 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             {lancamentos.length === 0 ? (
               <div className="py-12 text-center text-muted-foreground space-y-2 bg-muted/10 rounded-2xl border border-dashed border-border/60">
                 <CreditCard className="w-10 h-10 mx-auto opacity-30 text-muted-foreground" />
-                <p className="text-sm font-medium">Nenhum lançamento nesta fatura</p>
+                <p className="text-sm font-medium">Nenhum lançamento encontrado</p>
                 <p className="text-xs text-muted-foreground/70">
-                  Os gastos realizados com este cartão aparecerão organizados aqui.
+                  Experimente alterar os filtros de Tipo, Categorias ou Tags.
                 </p>
               </div>
             ) : (
