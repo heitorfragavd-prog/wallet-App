@@ -3,63 +3,50 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-// Plugin de Servidor Backend Node para geração segura do Connect Token da Pluggy com logs detalhados
+// Plugin de Servidor Backend Node para geração de Tokens e Busca de Contas/Transações da Pluggy
 function pluggyTokenServerPlugin() {
   return {
     name: "pluggy-token-server",
     configureServer(server: any) {
-      server.middlewares.use("/api/pluggy/connect-token", async (req: any, res: any, next: any) => {
-        if (req.method !== "POST" && req.method !== "GET") {
-          return next();
+      // Helper de Autenticação com a API da Pluggy no lado do Servidor Node
+      const getApiKey = async (env: any) => {
+        const clientId =
+          process.env.PLUGGY_CLIENT_ID ||
+          process.env.VITE_PLUGGY_CLIENT_ID ||
+          env.PLUGGY_CLIENT_ID ||
+          env.VITE_PLUGGY_CLIENT_ID ||
+          "486da007-85b3-4e9e-9260-bea8e2d94c55";
+
+        const clientSecret =
+          process.env.PLUGGY_CLIENT_SECRET ||
+          process.env.VITE_PLUGGY_CLIENT_SECRET ||
+          env.PLUGGY_CLIENT_SECRET ||
+          env.VITE_PLUGGY_CLIENT_SECRET ||
+          "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns";
+
+        const authRes = await fetch("https://api.pluggy.ai/auth", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId, clientSecret }),
+        });
+
+        if (!authRes.ok) {
+          const errText = await authRes.text();
+          throw new Error(`Erro Auth Pluggy (${authRes.status}): ${errText}`);
         }
+
+        const data = await authRes.json();
+        return data.apiKey;
+      };
+
+      // Rota 1: /api/pluggy/connect-token
+      server.middlewares.use("/api/pluggy/connect-token", async (req: any, res: any, next: any) => {
+        if (req.method !== "POST" && req.method !== "GET") return next();
 
         try {
           const env = loadEnv("development", process.cwd(), "");
+          const apiKey = await getApiKey(env);
 
-          // 1. Fallback Robusto de Variáveis de Ambiente
-          const clientId =
-            process.env.PLUGGY_CLIENT_ID ||
-            process.env.VITE_PLUGGY_CLIENT_ID ||
-            env.PLUGGY_CLIENT_ID ||
-            env.VITE_PLUGGY_CLIENT_ID ||
-            "486da007-85b3-4e9e-9260-bea8e2d94c55";
-
-          const clientSecret =
-            process.env.PLUGGY_CLIENT_SECRET ||
-            process.env.VITE_PLUGGY_CLIENT_SECRET ||
-            env.PLUGGY_CLIENT_SECRET ||
-            env.VITE_PLUGGY_CLIENT_SECRET ||
-            "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns";
-
-          console.log(`[Pluggy Server Auth] Iniciando POST /auth. ClientID: ${clientId ? clientId.substring(0, 12) + "..." : "NULO"}`);
-
-          // 2. Chamada autenticada POST /auth no lado do servidor com Logs Detalhados
-          const authRes = await fetch("https://api.pluggy.ai/auth", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ clientId, clientSecret }),
-          });
-
-          const authStatus = authRes.status;
-          const authText = await authRes.text();
-          console.log(`[Pluggy Server Auth Response] Status: ${authStatus}, Body: ${authText}`);
-
-          let authData: any = {};
-          try {
-            authData = JSON.parse(authText);
-          } catch (e) {}
-
-          if (!authRes.ok) {
-            console.error(`[Pluggy Server Auth Error] Falha ${authStatus}: ${authText}`);
-            res.statusCode = authStatus;
-            res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: authData.message || `Erro HTTP ${authStatus} na autenticação Pluggy: ${authText}` }));
-          }
-
-          const { apiKey } = authData;
-
-          // 3. Chamada autenticada POST /connect_token
-          console.log(`[Pluggy ConnectToken Request] Solicitando token com apiKey obtido.`);
           const tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
             method: "POST",
             headers: {
@@ -69,32 +56,99 @@ function pluggyTokenServerPlugin() {
             body: JSON.stringify({ options: { sandbox: true } }),
           });
 
-          const tokenStatus = tokenRes.status;
-          const tokenText = await tokenRes.text();
-          console.log(`[Pluggy ConnectToken Response] Status: ${tokenStatus}, Body: ${tokenText}`);
-
-          let tokenData: any = {};
-          try {
-            tokenData = JSON.parse(tokenText);
-          } catch (e) {}
-
           if (!tokenRes.ok) {
-            console.error(`[Pluggy ConnectToken Error] Falha ${tokenStatus}: ${tokenText}`);
-            res.statusCode = tokenStatus;
+            const errText = await tokenRes.text();
+            res.statusCode = tokenRes.status;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: tokenData.message || `Erro HTTP ${tokenStatus} ao gerar connectToken: ${tokenText}` }));
+            return res.end(JSON.stringify({ error: `Erro connectToken: ${errText}` }));
           }
 
-          const { accessToken } = tokenData;
-
+          const { accessToken } = await tokenRes.json();
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ accessToken }));
         } catch (err: any) {
-          console.error("[Pluggy Server Exception]", err);
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ error: err.message || "Erro interno no servidor Pluggy" }));
+        }
+      });
+
+      // Rota 2: /api/pluggy/accounts (Busca contas do item conectado)
+      server.middlewares.use("/api/pluggy/accounts", async (req: any, res: any, next: any) => {
+        if (req.method !== "GET") return next();
+
+        try {
+          const urlObj = new URL(req.url, `http://${req.headers.host}`);
+          const itemId = urlObj.searchParams.get("itemId");
+
+          if (!itemId) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: "Parâmetro itemId é obrigatório." }));
+          }
+
+          const env = loadEnv("development", process.cwd(), "");
+          const apiKey = await getApiKey(env);
+
+          const accRes = await fetch(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(itemId)}`, {
+            headers: { "X-API-KEY": apiKey },
+          });
+
+          if (!accRes.ok) {
+            const errText = await accRes.text();
+            res.statusCode = accRes.status;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: `Erro ao buscar contas: ${errText}` }));
+          }
+
+          const data = await accRes.json();
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify(data));
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ error: err.message || "Erro ao buscar contas do Pluggy Item" }));
+        }
+      });
+
+      // Rota 3: /api/pluggy/transactions (Busca transações do item conectado)
+      server.middlewares.use("/api/pluggy/transactions", async (req: any, res: any, next: any) => {
+        if (req.method !== "GET") return next();
+
+        try {
+          const urlObj = new URL(req.url, `http://${req.headers.host}`);
+          const itemId = urlObj.searchParams.get("itemId");
+
+          if (!itemId) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: "Parâmetro itemId é obrigatório." }));
+          }
+
+          const env = loadEnv("development", process.cwd(), "");
+          const apiKey = await getApiKey(env);
+
+          const txRes = await fetch(`https://api.pluggy.ai/transactions?itemId=${encodeURIComponent(itemId)}`, {
+            headers: { "X-API-KEY": apiKey },
+          });
+
+          if (!txRes.ok) {
+            const errText = await txRes.text();
+            res.statusCode = txRes.status;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ error: `Erro ao buscar transações: ${errText}` }));
+          }
+
+          const data = await txRes.json();
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify(data));
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ error: err.message || "Erro ao buscar transações do Pluggy Item" }));
         }
       });
     },

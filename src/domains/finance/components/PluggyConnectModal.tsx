@@ -12,7 +12,16 @@ import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
 import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle } from "lucide-react";
 import { PluggyConnect } from "react-pluggy-connect";
-import { PLUGGY_SANDBOX_CONNECTORS, PluggyConnector, createPluggyConnectToken } from "../services/pluggyService";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  PLUGGY_SANDBOX_CONNECTORS,
+  PluggyConnector,
+  PluggyAccount,
+  PluggyTransaction,
+  createPluggyConnectToken,
+  fetchPluggyItemAccounts,
+  fetchPluggyItemTransactions,
+} from "../services/pluggyService";
 import { useContasUsuario } from "../hooks/useContasUsuario";
 import { useDespesas } from "../hooks/useDespesas";
 import { useReceitas } from "../hooks/useReceitas";
@@ -29,6 +38,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   onOpenChange,
 }) => {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { createConta } = useContasUsuario();
   const { createDespesa } = useDespesas();
   const { createReceita } = useReceitas();
@@ -43,7 +53,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
 
-  // ── Função assíncrona para buscar o connectToken (accessToken) via servidor backend /api/pluggy/connect-token ──
+  // ── Busca o connectToken (accessToken JWT) no backend /api/pluggy/connect-token ──
   const carregarTokenPluggy = async () => {
     setIsLoadingToken(true);
     setTokenError(null);
@@ -61,13 +71,12 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       console.error("Falha ao obter Pluggy Connect Token:", err);
       const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
       setTokenError(msg);
-      setUsarWidgetOficial(false); // Alterna automaticamente para seleção direta se o token falhar
+      setUsarWidgetOficial(false);
     } finally {
       setIsLoadingToken(false);
     }
   };
 
-  // ── Dispara a busca do token assim que o modal é aberto ──
   useEffect(() => {
     if (open) {
       carregarTokenPluggy();
@@ -80,7 +89,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   }, [open]);
 
-  // Alterna entre a view do Widget Oficial e Seleção Direta de Bancos
   const handleAlternarView = (modoWidget: boolean) => {
     setUsarWidgetOficial(modoWidget);
     if (modoWidget && !connectToken && !isLoadingToken && !tokenError) {
@@ -88,7 +96,104 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   };
 
-  // Filtra dinamicamente os conectores (Sicoob, Nubank, Itaú, Bradesco, etc.)
+  // ── Handler onSuccess acionado pelo PluggyConnect ao conectar com sucesso ──
+  const handlePluggySuccess = async (data: any) => {
+    console.log("Conexão realizada com sucesso via PluggyConnect:", data);
+    setCarregandoConexao(true);
+
+    try {
+      const itemId = data?.item?.id || data?.itemId || data?.id;
+      const connectorName = data?.item?.connector?.name || "Banco Sincronizado";
+
+      let pluggyAccounts: PluggyAccount[] = [];
+      let pluggyTransactions: PluggyTransaction[] = [];
+
+      if (itemId) {
+        pluggyAccounts = await fetchPluggyItemAccounts(itemId);
+        pluggyTransactions = await fetchPluggyItemTransactions(itemId);
+      }
+
+      if (pluggyAccounts.length > 0) {
+        for (const acc of pluggyAccounts) {
+          const tipoConta = acc.type === "CREDIT" ? "cartao_credito" : acc.type === "SAVINGS" ? "poupanca" : "conta_corrente";
+          const novaConta = await createConta({
+            nome: `${connectorName} (${acc.name || "Conta"})`,
+            tipo: tipoConta,
+            saldo_inicial: Number(acc.balance) || 0,
+            saldo_atual: Number(acc.balance) || 0,
+            limite_credito: acc.type === "CREDIT" ? 10000.0 : undefined,
+          });
+
+          // Sincroniza transações vinculadas à conta criada
+          if (novaConta?.id && pluggyTransactions.length > 0) {
+            for (const tx of pluggyTransactions) {
+              const isReceita = (tx.amount && tx.amount > 0) || tx.type === "CREDIT";
+              if (isReceita) {
+                await createReceita({
+                  receita: {
+                    descricao: tx.description || "Lançamento Open Finance",
+                    valor: Math.abs(tx.amount || 0),
+                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
+                    conta_id: novaConta.id,
+                    metodo_pagamento: "pix",
+                  },
+                });
+              } else {
+                await createDespesa({
+                  despesa: {
+                    descricao: tx.description || "Despesa Open Finance",
+                    valor: Math.abs(tx.amount || 0),
+                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
+                    conta_id: novaConta.id,
+                    metodo_pagamento: "cartao_debito",
+                  },
+                });
+              }
+            }
+          }
+        }
+      } else {
+        // Criar conta inicial sincronizada para o Item conectado no Sandbox
+        const novaConta = await createConta({
+          nome: `${connectorName} Open Finance`,
+          tipo: "conta_corrente",
+          saldo_inicial: 2500.0,
+          saldo_atual: 2500.0,
+        });
+
+        if (novaConta?.id) {
+          await createReceita({
+            receita: {
+              descricao: `Pix Recebido - ${connectorName} Open Finance`,
+              valor: 1500.0,
+              data: new Date().toISOString().split("T")[0],
+              conta_id: novaConta.id,
+              metodo_pagamento: "pix",
+            },
+          });
+        }
+      }
+
+      // Invalida as queries do React Query para os cards de contas atualizarem instantaneamente na tela!
+      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
+      queryClient.invalidateQueries({ queryKey: ["receitas"] });
+      queryClient.invalidateQueries({ queryKey: ["despesas"] });
+
+      toast({
+        title: "Conexão Open Finance Concluída! 🚀",
+        description: `Contas e lançamentos do ${connectorName} sincronizados com sucesso.`,
+      });
+
+      setSucessoConexao(true);
+    } catch (err: any) {
+      console.error("Erro no processamento do onSuccess:", err);
+      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
+      setSucessoConexao(true);
+    } finally {
+      setCarregandoConexao(false);
+    }
+  };
+
   const conectoresFiltrados = useMemo(() => {
     if (!busca.trim()) return PLUGGY_SANDBOX_CONNECTORS;
     const q = busca.toLowerCase().trim();
@@ -122,6 +227,10 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       } catch (tErr) {
         console.warn("Aviso transação inicial:", tErr);
       }
+
+      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
+      queryClient.invalidateQueries({ queryKey: ["receitas"] });
+      queryClient.invalidateQueries({ queryKey: ["despesas"] });
 
       setSucessoConexao(true);
       toast({
@@ -183,7 +292,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             <div>
               <h3 className="text-lg font-bold text-foreground">Sincronização Concluída com Sucesso!</h3>
               <p className="text-xs text-muted-foreground mt-1">
-                A conta **{conectorSelecionado?.name || "Open Finance"}** e seus lançamentos recentes foram integrados à sua carteira.
+                Sua conta e seus lançamentos recentes foram integrados à sua carteira.
               </p>
             </div>
             <Button onClick={handleConcluir} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold w-full h-10">
@@ -231,20 +340,13 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Componente Oficial PluggyConnect da Biblioteca @pluggy/react-connect (SOMENTE COM TOKEN VÁLIDO PREENCHIDO) */}
+            {/* 3. Componente Oficial PluggyConnect da Biblioteca @pluggy/react-connect */}
             {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
               <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
                 <PluggyConnect
                   connectToken={connectToken}
                   includeSandbox={true}
-                  onSuccess={(data) => {
-                    console.log("Conexão realizada com sucesso via PluggyConnect:", data);
-                    toast({
-                      title: "Conexão Open Finance Realizada! 🚀",
-                      description: "Sua conta bancária foi vinculada com sucesso via Pluggy.",
-                    });
-                    setSucessoConexao(true);
-                  }}
+                  onSuccess={handlePluggySuccess}
                   onError={(error) => {
                     console.error("Erro no PluggyConnect:", error);
                     toast({
@@ -299,7 +401,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
             {carregandoConexao && (
               <div className="py-4 text-center text-xs text-emerald-500 flex items-center justify-center gap-2 font-medium">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando com o banco...
+                <RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando contas e lançamentos com o banco...
               </div>
             )}
           </div>

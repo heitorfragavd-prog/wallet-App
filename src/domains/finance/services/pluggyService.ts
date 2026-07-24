@@ -1,7 +1,7 @@
 /**
  * Pluggy Open Finance Service (Sandbox / Produção)
  * 
- * Comunica-se com o endpoint de servidor /api/pluggy/connect-token e gerencia conectores.
+ * Comunica-se com o servidor backend Node /api/pluggy para autenticação e sincronização de contas/transações.
  */
 
 export interface PluggyConnector {
@@ -17,10 +17,10 @@ export interface PluggyConnector {
 export interface PluggyAccount {
   id: string;
   name: string;
-  type: "BANK" | "CREDIT";
+  type: "BANK" | "CREDIT" | "SAVINGS";
   balance: number;
-  currencyCode: string;
-  number: string;
+  currencyCode?: string;
+  number?: string;
 }
 
 export interface PluggyTransaction {
@@ -28,12 +28,12 @@ export interface PluggyTransaction {
   description: string;
   amount: number;
   date: string;
-  category: string;
-  type: "DEBIT" | "CREDIT";
+  category?: string;
+  type?: "DEBIT" | "CREDIT";
 }
 
 /**
- * Gera o connectToken (accessToken JWT) via rota de backend segura do servidor
+ * Gera o connectToken (accessToken JWT) via servidor backend
  */
 export async function createPluggyConnectToken(): Promise<string> {
   const response = await fetch("/api/pluggy/connect-token", {
@@ -51,6 +51,36 @@ export async function createPluggyConnectToken(): Promise<string> {
     throw new Error("O servidor backend da Pluggy não retornou o accessToken.");
   }
   return data.accessToken;
+}
+
+/**
+ * Busca contas associadas ao Item conectado via Pluggy (GET /api/pluggy/accounts?itemId=...)
+ */
+export async function fetchPluggyItemAccounts(itemId: string): Promise<PluggyAccount[]> {
+  try {
+    const response = await fetch(`/api/pluggy/accounts?itemId=${encodeURIComponent(itemId)}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.results || data.accounts || [];
+  } catch (err) {
+    console.warn("Erro ao buscar contas do Item Pluggy:", err);
+    return [];
+  }
+}
+
+/**
+ * Busca transações associadas ao Item conectado via Pluggy (GET /api/pluggy/transactions?itemId=...)
+ */
+export async function fetchPluggyItemTransactions(itemId: string): Promise<PluggyTransaction[]> {
+  try {
+    const response = await fetch(`/api/pluggy/transactions?itemId=${encodeURIComponent(itemId)}`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.results || data.transactions || [];
+  } catch (err) {
+    console.warn("Erro ao buscar transações do Item Pluggy:", err);
+    return [];
+  }
 }
 
 /**
