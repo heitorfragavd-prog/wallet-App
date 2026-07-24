@@ -64,7 +64,6 @@ export async function getPluggyApiKey(): Promise<string> {
     return data.apiKey;
   } catch (error) {
     console.warn("Pluggy API Auth fallback (Sandbox Test Mode):", error);
-    // Token sintético para modo de teste local sem bloquear a interface
     return "sandbox-pluggy-token-demo";
   }
 }
@@ -102,9 +101,18 @@ export async function createPluggyConnectToken(): Promise<string> {
 }
 
 /**
- * Lista de conectores populares no ambiente Sandbox para simulação rápida
+ * Lista expandida de conectores de instituições financeiras (com Sicoob, Nubank, Itaú, Bradesco, etc.)
  */
 export const PLUGGY_SANDBOX_CONNECTORS: PluggyConnector[] = [
+  {
+    id: 201,
+    name: "Sicoob (Sandbox)",
+    institutionUrl: "https://sicoob.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/201.png",
+    primaryColor: "003641",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
   {
     id: 2,
     name: "Nubank (Sandbox)",
@@ -150,4 +158,117 @@ export const PLUGGY_SANDBOX_CONNECTORS: PluggyConnector[] = [
     type: "PERSONAL_BANK",
     country: "BR",
   },
+  {
+    id: 7,
+    name: "Santander (Sandbox)",
+    institutionUrl: "https://santander.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/7.png",
+    primaryColor: "EC0000",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 8,
+    name: "Caixa Econômica Federal (Sandbox)",
+    institutionUrl: "https://caixa.gov.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/8.png",
+    primaryColor: "0066B3",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 202,
+    name: "Sicredi (Sandbox)",
+    institutionUrl: "https://sicredi.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/202.png",
+    primaryColor: "3FAF47",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 9,
+    name: "C6 Bank (Sandbox)",
+    institutionUrl: "https://c6bank.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/9.png",
+    primaryColor: "242424",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 10,
+    name: "XP Investimentos (Sandbox)",
+    institutionUrl: "https://xpi.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/10.png",
+    primaryColor: "000000",
+    type: "INVESTMENT",
+    country: "BR",
+  },
+  {
+    id: 11,
+    name: "BTG Pactual (Sandbox)",
+    institutionUrl: "https://btgpactual.com",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/11.png",
+    primaryColor: "001E62",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 12,
+    name: "Mercado Pago (Sandbox)",
+    institutionUrl: "https://mercadopago.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/12.png",
+    primaryColor: "009EE3",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 13,
+    name: "PagBank (Sandbox)",
+    institutionUrl: "https://pagbank.com.br",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/13.png",
+    primaryColor: "00A05B",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
+  {
+    id: 14,
+    name: "PicPay (Sandbox)",
+    institutionUrl: "https://picpay.com",
+    imageUrl: "https://cdn.pluggy.ai/assets/connectors/14.png",
+    primaryColor: "21C25E",
+    type: "PERSONAL_BANK",
+    country: "BR",
+  },
 ];
+
+/**
+ * Busca conectores via API da Pluggy com filtro dinâmico
+ */
+export async function fetchPluggyConnectors(searchQuery: string = ""): Promise<PluggyConnector[]> {
+  try {
+    const apiKey = await getPluggyApiKey();
+    if (apiKey && apiKey !== "sandbox-pluggy-token-demo") {
+      const response = await fetch(`${PLUGGY_API_URL}/connectors?name=${encodeURIComponent(searchQuery)}`, {
+        headers: { "X-API-KEY": apiKey },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data.results) && data.results.length > 0) {
+          return data.results;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Fallback para lista de conectores Sandbox estática:", err);
+  }
+
+  // Fallback para filtro local na lista rica de conectores
+  if (!searchQuery.trim()) {
+    return PLUGGY_SANDBOX_CONNECTORS;
+  }
+
+  const query = searchQuery.toLowerCase().trim();
+  return PLUGGY_SANDBOX_CONNECTORS.filter((c) =>
+    c.name.toLowerCase().includes(query)
+  );
+}
