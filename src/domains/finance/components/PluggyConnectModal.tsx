@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { PluggyConnect } from "react-pluggy-connect";
 
 interface PluggyConnectModalProps {
   open: boolean;
@@ -51,14 +50,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         </button>
 
         {connectToken ? (
-          <PluggyConnect
-            connectToken={connectToken}
-            onSuccess={(data) => {
-              console.log("Conexão realizada com sucesso:", data);
-              handleClose();
-            }}
-            onError={(err) => console.error("Erro Pluggy:", err)}
-            onClose={handleClose}
+          <iframe
+            src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
+            className="w-full h-[650px] border-0 rounded-xl"
+            allow="payment"
+            title="Pluggy Connect Widget"
           />
         ) : (
           <div className="p-16 text-center text-slate-300 flex flex-col items-center justify-center space-y-3">
