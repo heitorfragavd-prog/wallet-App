@@ -345,49 +345,38 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </span>
             </div>
 
-            {/* 1. BLOQUEIO DE RENDERIZAÇÃO: Spinner enquanto busca o accessToken */}
-            {(isLoadingToken || (usarWidgetOficial && !connectToken && !tokenError)) && (
-              <div className="py-16 text-center text-xs text-emerald-500 flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
-                <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
-                <span className="text-sm font-semibold text-foreground">Carregando Pluggy Connect...</span>
-                <span className="text-xs text-muted-foreground">Autenticando e obtendo o accessToken seguro</span>
-              </div>
-            )}
-
-            {/* 2. Tratamento de Erros Visível */}
-            {!isLoadingToken && tokenError && (
-              <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2">
-                <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>Atenção: Falha de Autenticação da API Pluggy</span>
+            {/* CONTEÚDO CONDICIONAL DAS ABAS */}
+            {usarWidgetOficial ? (
+              /* MODO WIDGET OFICIAL EMBUTIDO */
+              isLoadingToken || !connectToken ? (
+                /* BLOQUEIO AMARRADO: EXIBE APENAS SPINNER ENQUANTO TOKEN CARREGA */
+                <div className="py-20 text-center flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
+                  <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
+                  <span className="text-sm font-semibold text-foreground">Obtendo acesso seguro à Pluggy...</span>
+                  <span className="text-xs text-muted-foreground">Autenticando e gerando o Connect Token no servidor</span>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {tokenError}
-                </p>
-                <div className="text-[11px] text-muted-foreground bg-background/50 p-2.5 rounded-xl border border-border/40 font-mono">
-                  Certifique-se de que o arquivo <span className="text-emerald-500 font-bold">.env</span> contém:
-                  <br />
-                  VITE_PLUGGY_CLIENT_ID=seu_client_id
-                  <br />
-                  VITE_PLUGGY_CLIENT_SECRET=seu_client_secret
+              ) : tokenError ? (
+                /* ERRO DE TOKEN VISÍVEL */
+                <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2">
+                  <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    <span>Atenção: Falha de Autenticação da API Pluggy</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{tokenError}</p>
                 </div>
-              </div>
-            )}
-
-            {/* 3. Renderização 100% Embutida (Inline) do Iframe da Pluggy dentro do Card Escuro */}
-            {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
-              <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-background relative flex flex-col">
-                <iframe
-                  src={`https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectToken)}`}
-                  className="w-full h-full border-0"
-                  allow="camera; microphone; geolocation"
-                  title="Pluggy Connect Widget Embutido"
-                />
-              </div>
-            )}
-
-            {/* 4. Modo de Seleção Direta de Bancos (quando usarWidgetOficial=false ou após erro) */}
-            {!isLoadingToken && (!usarWidgetOficial || tokenError) && (
+              ) : (
+                /* IFRAME EMBUTIDO RENDERIZADO SOMENTE QUANDO CONNECT TOKEN EXISTIR */
+                <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-background relative flex flex-col">
+                  <iframe
+                    src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
+                    className="w-full h-full border-0"
+                    allow="camera; microphone; geolocation; payment"
+                    title="Pluggy Connect Widget Embutido"
+                  />
+                </div>
+              )
+            ) : (
+              /* MODO SELEÇÃO DIRETA DE BANCOS */
               <div className="space-y-4 pt-1">
                 <div className="relative">
                   <Input
