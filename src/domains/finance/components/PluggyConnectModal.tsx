@@ -49,7 +49,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
           ✕
         </button>
 
-        {connectToken && connectToken.length > 20 ? (
+        {connectToken && connectToken.length > 50 ? (
           <iframe
             key={connectToken}
             src={`https://connect.pluggy.ai/?connectToken=${connectToken}`}
@@ -58,7 +58,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             title="Pluggy Connect Widget"
           />
         ) : (
-          <div className="p-16 text-center text-slate-300 flex flex-col items-center justify-center space-y-3">
+          <div className="p-16 text-center text-slate-300 flex flex-col items-center justify-center space-y-3 min-h-[500px]">
             <span className="animate-spin text-3xl">⏳</span>
             <p className="font-semibold text-sm">Carregando Pluggy Connect...</p>
           </div>
