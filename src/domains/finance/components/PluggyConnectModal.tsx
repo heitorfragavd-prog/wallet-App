@@ -264,10 +264,10 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
-  // Montagem da URL Oficial do Iframe da Pluggy
+  // Montagem da URL Oficial do Iframe da Pluggy (Token Puro sem encodeURIComponent)
   const connectTokenClean = String(connectToken || "").trim();
   const connectorQuery = selectedConnectorId ? `&connectorId=${selectedConnectorId}` : "";
-  const iframeSrc = `https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectTokenClean)}${connectorQuery}`;
+  const iframeSrc = `https://connect.pluggy.ai/?connectToken=${connectTokenClean}${connectorQuery}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
