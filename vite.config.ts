@@ -8,25 +8,27 @@ function pluggyTokenServerPlugin() {
   return {
     name: "pluggy-token-server",
     configureServer(server: any) {
-      // Helper de Autenticação com a API da Pluggy no lado do Servidor Node
+      // Helper de Autenticação com a API da Pluggy (Leitura Estrita do .env)
       const getApiKey = async (env: any) => {
         const clientId = (
-          process.env.PLUGGY_CLIENT_ID ||
-          process.env.VITE_PLUGGY_CLIENT_ID ||
           env.PLUGGY_CLIENT_ID ||
           env.VITE_PLUGGY_CLIENT_ID ||
-          "486da007-85b3-4e9e-9260-bea8e2d94c55"
-        ).replace(/['"]/g, "").trim();
+          process.env.PLUGGY_CLIENT_ID ||
+          process.env.VITE_PLUGGY_CLIENT_ID ||
+          ""
+        ).trim();
 
         const clientSecret = (
-          process.env.PLUGGY_CLIENT_SECRET ||
-          process.env.VITE_PLUGGY_CLIENT_SECRET ||
           env.PLUGGY_CLIENT_SECRET ||
           env.VITE_PLUGGY_CLIENT_SECRET ||
-          "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns"
-        ).replace(/['"]/g, "").trim();
+          process.env.PLUGGY_CLIENT_SECRET ||
+          process.env.VITE_PLUGGY_CLIENT_SECRET ||
+          ""
+        ).trim();
 
-        console.log(`[Node Server] Autenticando com Pluggy. ClientID: ${clientId}`);
+        if (!clientId || !clientSecret) {
+          throw new Error("Chaves do .env ausentes");
+        }
 
         const authRes = await fetch("https://api.pluggy.ai/auth", {
           method: "POST",
@@ -36,12 +38,10 @@ function pluggyTokenServerPlugin() {
 
         if (!authRes.ok) {
           const errText = await authRes.text();
-          console.error(`[Node Server] Erro Auth Pluggy (${authRes.status}):`, errText);
           throw new Error(`Erro Auth Pluggy (${authRes.status}): ${errText}`);
         }
 
         const data = await authRes.json();
-        console.log("[Node Server] Auth Pluggy Sucesso. API Key:", data.apiKey ? data.apiKey.substring(0, 10) + "..." : "nula");
         return data.apiKey;
       };
 
@@ -50,27 +50,27 @@ function pluggyTokenServerPlugin() {
         if (req.method !== "POST" && req.method !== "GET") return next();
 
         try {
-          const env = loadEnv("development", process.cwd(), "");
+          const env = loadEnv(server.config.mode || "development", process.cwd(), "");
           const clientId = (
-            process.env.PLUGGY_CLIENT_ID ||
-            process.env.VITE_PLUGGY_CLIENT_ID ||
             env.PLUGGY_CLIENT_ID ||
             env.VITE_PLUGGY_CLIENT_ID ||
-            "486da007-85b3-4e9e-9260-bea8e2d94c55"
+            process.env.PLUGGY_CLIENT_ID ||
+            process.env.VITE_PLUGGY_CLIENT_ID ||
+            ""
           ).trim();
 
           const clientSecret = (
-            process.env.PLUGGY_CLIENT_SECRET ||
-            process.env.VITE_PLUGGY_CLIENT_SECRET ||
             env.PLUGGY_CLIENT_SECRET ||
             env.VITE_PLUGGY_CLIENT_SECRET ||
-            "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns"
+            process.env.PLUGGY_CLIENT_SECRET ||
+            process.env.VITE_PLUGGY_CLIENT_SECRET ||
+            ""
           ).trim();
 
           if (!clientId || !clientSecret) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Credenciais do .env não encontradas." }));
+            res.end(JSON.stringify({ error: "Chaves do .env ausentes" }));
             return;
           }
 
@@ -142,7 +142,7 @@ function pluggyTokenServerPlugin() {
             return res.end(JSON.stringify({ error: "Parâmetro itemId é obrigatório." }));
           }
 
-          const env = loadEnv("development", process.cwd(), "");
+          const env = loadEnv(server.config.mode || "development", process.cwd(), "");
           const apiKey = await getApiKey(env);
 
           const accRes = await fetch(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(itemId)}`, {
@@ -163,7 +163,7 @@ function pluggyTokenServerPlugin() {
         } catch (err: any) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ error: err.message || "Erro ao buscar contas do Pluggy Item" }));
+          return res.end(JSON.stringify({ error: err?.message || "Erro ao buscar contas do Pluggy Item" }));
         }
       });
 
@@ -181,7 +181,7 @@ function pluggyTokenServerPlugin() {
             return res.end(JSON.stringify({ error: "Parâmetro itemId é obrigatório." }));
           }
 
-          const env = loadEnv("development", process.cwd(), "");
+          const env = loadEnv(server.config.mode || "development", process.cwd(), "");
           const apiKey = await getApiKey(env);
 
           const txRes = await fetch(`https://api.pluggy.ai/transactions?itemId=${encodeURIComponent(itemId)}`, {
@@ -202,7 +202,7 @@ function pluggyTokenServerPlugin() {
         } catch (err: any) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ error: err.message || "Erro ao buscar transações do Pluggy Item" }));
+          return res.end(JSON.stringify({ error: err?.message || "Erro ao buscar transações do Pluggy Item" }));
         }
       });
     },
