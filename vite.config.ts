@@ -70,67 +70,48 @@ function pluggyTokenServerPlugin() {
           if (!clientId || !clientSecret) {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Chaves do .env ausentes" }));
-            return;
+            return res.end(JSON.stringify({ error: "Credenciais do .env ausentes" }));
           }
 
-          // 1. Autentica e obtém apiKey
+          // 1. Autenticação para obter apiKey
           const authRes = await fetch("https://api.pluggy.ai/auth", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ clientId, clientSecret }),
           });
-
           const authData = await authRes.json();
+
           if (!authData.apiKey) {
             res.statusCode = 401;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Falha na autenticação da Pluggy.", details: authData }));
-            return;
+            return res.end(JSON.stringify({ error: "Falha na autenticação da Pluggy", details: authData }));
           }
 
-          // 2. Cria o Connect Token oficial
-          let tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
+          // 2. Geração do Connect Token de Sessão
+          const tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-API-KEY": authData.apiKey,
             },
-            body: JSON.stringify({ options: { sandbox: true } }),
+            body: JSON.stringify({ options: {} }),
           });
-
-          if (!tokenRes.ok) {
-            tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-API-KEY": authData.apiKey,
-              },
-              body: JSON.stringify({}),
-            });
-          }
-
           const tokenData = await tokenRes.json();
 
-          console.log("=== AUDITORIA PLUGGY ===");
-          console.log("1. API Key obtida:", authData.apiKey ? "SIM (Tamanho: " + authData.apiKey.length + ")" : "NÃO");
-          console.log("2. Resposta Connect Token (Status):", tokenRes.status);
-          console.log("3. Body retornado pela Pluggy:", JSON.stringify(tokenData));
-          console.log("========================");
-
-          if (tokenData.accessToken) {
-            res.statusCode = 200;
+          if (!tokenData.accessToken) {
+            res.statusCode = 400;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ accessToken: tokenData.accessToken }));
-          } else {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Erro ao gerar accessToken", details: tokenData }));
+            return res.end(JSON.stringify({ error: "Erro ao gerar accessToken", details: tokenData }));
           }
+
+          // Retorna puramente o accessToken obtido na Etapa 2
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ accessToken: tokenData.accessToken }));
         } catch (err: any) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: err?.message || "Erro interno do servidor" }));
+          return res.end(JSON.stringify({ error: err?.message || "Erro interno no servidor" }));
         }
       });
 
