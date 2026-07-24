@@ -51,38 +51,36 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         nome: conector.name.replace(" (Sandbox)", ""),
         tipo: "conta_corrente",
         saldo_inicial: 2500.0,
+        saldo_atual: 2500.0,
       });
 
-      // 4. Cria transações iniciais de exemplo do Open Finance
-      await createReceita.mutateAsync({
-        receita: {
-          descricao: "Transferência Pix - Open Finance",
-          valor: 1500.0,
-          data: new Date().toISOString().split("T")[0],
-          conta_id: novaConta.id,
-          metodo_pagamento: "pix",
-        },
-      });
-
-      await createDespesa.mutateAsync({
-        despesa: {
-          descricao: "Supermercado - Open Finance Sync",
-          valor: 245.8,
-          data: new Date().toISOString().split("T")[0],
-          conta_id: novaConta.id,
-          metodo_pagamento: "cartao_debito",
-        },
-      });
+      // 4. Cria transações iniciais de exemplo do Open Finance (se possível)
+      try {
+        if (novaConta?.id) {
+          await createReceita.mutateAsync({
+            receita: {
+              descricao: "Transferência Pix - Open Finance",
+              valor: 1500.0,
+              data: new Date().toISOString().split("T")[0],
+              conta_id: novaConta.id,
+              metodo_pagamento: "pix",
+            },
+          });
+        }
+      } catch (tErr) {
+        console.warn("Aviso ao criar receita inicial:", tErr);
+      }
 
       setSucessoConexao(true);
       toast({
         title: "Conexão Open Finance Realizada! 🚀",
         description: `Sua conta ${conector.name} foi sincronizada com sucesso via Pluggy.`,
       });
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Erro na conexão Pluggy:", err);
       toast({
         title: "Erro na Conexão",
-        description: "Não foi possível conectar com o banco no modo Sandbox.",
+        description: err?.message || String(err) || "Não foi possível conectar com o banco no modo Sandbox.",
         variant: "destructive",
       });
     } finally {
