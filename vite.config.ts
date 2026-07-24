@@ -112,6 +112,12 @@ function pluggyTokenServerPlugin() {
 
           const tokenData = await tokenRes.json();
 
+          console.log("=== AUDITORIA PLUGGY ===");
+          console.log("1. API Key obtida:", authData.apiKey ? "SIM (Tamanho: " + authData.apiKey.length + ")" : "NÃO");
+          console.log("2. Resposta Connect Token (Status):", tokenRes.status);
+          console.log("3. Body retornado pela Pluggy:", JSON.stringify(tokenData));
+          console.log("========================");
+
           if (tokenData.accessToken) {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
