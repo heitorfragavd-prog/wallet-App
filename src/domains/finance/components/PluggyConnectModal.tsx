@@ -124,30 +124,30 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             limite_credito: acc.type === "CREDIT" ? 10000.0 : undefined,
           });
 
-          // Sincroniza transações vinculadas à conta criada
+          // Sincroniza transações vinculadas à conta criada com try/catch individual
           if (novaConta?.id && pluggyTransactions.length > 0) {
             for (const tx of pluggyTransactions) {
-              const isReceita = (tx.amount && tx.amount > 0) || tx.type === "CREDIT";
-              if (isReceita) {
-                await createReceita({
-                  receita: {
+              try {
+                const isReceita = (tx.amount && tx.amount > 0) || tx.type === "CREDIT";
+                if (isReceita) {
+                  await createReceita({
                     descricao: tx.description || "Lançamento Open Finance",
                     valor: Math.abs(tx.amount || 0),
                     data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
                     conta_id: novaConta.id,
                     metodo_pagamento: "pix",
-                  },
-                });
-              } else {
-                await createDespesa({
-                  despesa: {
+                  });
+                } else {
+                  await createDespesa({
                     descricao: tx.description || "Despesa Open Finance",
                     valor: Math.abs(tx.amount || 0),
                     data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
                     conta_id: novaConta.id,
                     metodo_pagamento: "cartao_debito",
-                  },
-                });
+                  });
+                }
+              } catch (txErr) {
+                console.warn("Aviso ao salvar transação individual da Pluggy:", txErr);
               }
             }
           }
@@ -162,15 +162,17 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         });
 
         if (novaConta?.id) {
-          await createReceita({
-            receita: {
+          try {
+            await createReceita({
               descricao: `Pix Recebido - ${connectorName} Open Finance`,
               valor: 1500.0,
               data: new Date().toISOString().split("T")[0],
               conta_id: novaConta.id,
               metodo_pagamento: "pix",
-            },
-          });
+            });
+          } catch (txErr) {
+            console.warn("Aviso transação inicial sandbox:", txErr);
+          }
         }
       }
 
@@ -181,7 +183,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
       toast({
         title: "Conexão Open Finance Concluída! 🚀",
-        description: `Contas e lançamentos do ${connectorName} sincronizados com sucesso.`,
+        description: `Contas do ${connectorName} sincronizadas com sucesso.`,
       });
 
       setSucessoConexao(true);
@@ -215,13 +217,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
       try {
         if (novaConta?.id) {
           await createReceita({
-            receita: {
-              descricao: `Pix Recebido - ${conector.name.replace(" (Sandbox)", "")} Open Finance`,
-              valor: 1250.0,
-              data: new Date().toISOString().split("T")[0],
-              conta_id: novaConta.id,
-              metodo_pagamento: "pix",
-            },
+            descricao: `Pix Recebido - ${conector.name.replace(" (Sandbox)", "")} Open Finance`,
+            valor: 1250.0,
+            data: new Date().toISOString().split("T")[0],
+            conta_id: novaConta.id,
+            metodo_pagamento: "pix",
           });
         }
       } catch (tErr) {
@@ -355,7 +355,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Componente Embutido (Embedded) Oficial PluggyConnect com Container de Altura Fixa (sem popups soltos) */}
+            {/* 3. Componente Embutido (Embedded) Oficial PluggyConnect com Container de Altura Fixa */}
             {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
               <div className="w-full h-[550px] rounded-2xl overflow-hidden border border-border/60 shadow-lg bg-card relative flex flex-col">
                 <PluggyConnect
