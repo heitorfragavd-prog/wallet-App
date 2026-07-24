@@ -46,6 +46,9 @@ import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useConta
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { BankLogoBadge, BANCOS_BRASIL_LIST } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
+import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
+import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
+import { UploadCloud, ShieldCheck } from "lucide-react";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -72,6 +75,9 @@ export default function ContasCartoes() {
 
   const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
+
+  const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
+  const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
 
   const [nome, setNome] = useState("");
   const [tipo, setTipo] = useState<ContaUsuario["tipo"]>("conta_corrente");
@@ -153,10 +159,30 @@ export default function ContasCartoes() {
             </div>
           </div>
 
-          <Button onClick={handleAbrirCriar} className="bg-blue-500 hover:bg-blue-600">
-            <Plus className="w-4 h-4 mr-2" />
-            Nova Conta / Cartão
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setModalPluggyAberto(true)}
+              className="border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 font-semibold"
+            >
+              <ShieldCheck className="w-4 h-4 mr-2" />
+              Open Finance (Pluggy)
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => setModalExtratoAberto(true)}
+              className="border-orange-500/50 text-orange-500 hover:bg-orange-500/10 font-semibold"
+            >
+              <UploadCloud className="w-4 h-4 mr-2" />
+              Importar Extrato (OFX/CSV)
+            </Button>
+
+            <Button onClick={handleAbrirCriar} className="bg-blue-500 hover:bg-blue-600 font-semibold">
+              <Plus className="w-4 h-4 mr-2" />
+              Nova Conta / Cartão
+            </Button>
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -479,6 +505,18 @@ export default function ContasCartoes() {
           cartao={cartaoFatura}
           open={modalFaturaAberto}
           onOpenChange={setModalFaturaAberto}
+        />
+
+        {/* Modal Importador de Extrato OFX / CSV */}
+        <ImportadorExtratoModal
+          open={modalExtratoAberto}
+          onOpenChange={setModalExtratoAberto}
+        />
+
+        {/* Modal Open Finance Pluggy */}
+        <PluggyConnectModal
+          open={modalPluggyAberto}
+          onOpenChange={setModalPluggyAberto}
         />
       </div>
     </DashboardLayout>
