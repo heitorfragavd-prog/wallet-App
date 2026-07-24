@@ -36,11 +36,11 @@ import {
   Edit,
   Trash2,
   DollarSign,
-  Calendar,
   UploadCloud,
   ShieldCheck,
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
+import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
@@ -64,6 +64,7 @@ const TIPO_ICONS: Record<string, any> = {
 
 export default function ContasCartoes() {
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
+  const { dividas = [] } = useDividas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
@@ -262,22 +263,30 @@ export default function ContasCartoes() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {contas.map((conta) => {
               const isCartao = conta.tipo === "cartao_credito";
+              const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id);
+              const totalDividas = dividasVinculadas.reduce(
+                (acc, d) => acc + (Number(d.valor_restante) || Number(d.valor_total) || 0),
+                0
+              );
 
               return (
-                <Card key={conta.id} className="group hover:border-blue-500/50 transition-all shadow-sm">
-                  <CardHeader className="p-4 pb-2">
+                <Card
+                  key={conta.id}
+                  className="group bg-[#0B132B] border border-[#1E2942] hover:border-emerald-500/50 transition-all rounded-2xl shadow-md overflow-hidden"
+                >
+                  <CardHeader className="p-4 pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <BankLogoBadge nomeOuId={conta.nome} size="md" />
                         <div>
-                          <CardTitle className="text-base font-semibold">{conta.nome}</CardTitle>
-                          <Badge variant="secondary" className="text-[10px] mt-0.5">
+                          <CardTitle className="text-base font-bold text-foreground">{conta.nome}</CardTitle>
+                          <p className="text-xs text-muted-foreground mt-0.5">
                             {TIPO_LABELS[conta.tipo] || conta.tipo}
-                          </Badge>
+                          </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                         <Button
                           variant="ghost"
                           size="icon"
@@ -316,57 +325,62 @@ export default function ContasCartoes() {
                     </div>
                   </CardHeader>
 
-                  <CardContent className="p-4 pt-2 space-y-3">
-                    <div className="pt-2 border-t border-border/50">
-                      <p className="text-xs text-muted-foreground">
-                        {isCartao ? "Fatura / Limite Usado" : "Saldo Atual"}
-                      </p>
-                      <p
-                        className={`text-xl font-bold ${
-                          isCartao
-                            ? "text-purple-500"
-                            : conta.saldo_atual >= 0
-                            ? "text-emerald-500"
-                            : "text-rose-500"
-                        }`}
-                      >
-                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                          conta.saldo_atual
-                        )}
-                      </p>
-                    </div>
-
-                    {isCartao && (
-                      <div className="space-y-2 pt-2 border-t border-border/50 text-xs">
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Limite total:</span>
-                          <span className="font-semibold">
+                  <CardContent className="p-4 pt-0 space-y-3">
+                    {isCartao ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between pt-2 border-t border-border/20">
+                          <span className="text-sm text-muted-foreground">Limite Total</span>
+                          <span className="text-lg font-bold text-emerald-400">
                             {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
                               conta.limite_credito || 0
                             )}
                           </span>
                         </div>
-                        {conta.dia_fechamento && (
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Fechamento:</span>
-                            <span>Dia {conta.dia_fechamento}</span>
+
+                        <div className="grid grid-cols-2 text-xs pt-1 border-t border-border/20">
+                          <div>
+                            <p className="text-muted-foreground">Fechamento</p>
+                            <p className="font-semibold text-foreground">Dia {conta.dia_fechamento || "--"}</p>
                           </div>
-                        )}
-                        {conta.dia_vencimento && (
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Vencimento:</span>
-                            <span>Dia {conta.dia_vencimento}</span>
+                          <div>
+                            <p className="text-muted-foreground">Vencimento</p>
+                            <p className="font-semibold text-foreground">Dia {conta.dia_vencimento || "--"}</p>
                           </div>
-                        )}
+                        </div>
 
                         <Button
-                          variant="secondary"
+                          variant="ghost"
                           size="sm"
                           onClick={() => handleAbrirFatura(conta)}
-                          className="w-full mt-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 font-semibold"
+                          className="w-full mt-2 bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border border-emerald-800/30 font-medium h-9 rounded-xl"
                         >
-                          <Calendar className="w-3.5 h-3.5 mr-1.5" /> Ver Fatura do Cartão
+                          Ver Fatura do Cartão
                         </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between pt-2 border-t border-border/20">
+                          <span className="text-sm text-muted-foreground">Saldo Atual</span>
+                          <span className="text-lg font-bold text-foreground">
+                            {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                              conta.saldo_atual
+                            )}
+                          </span>
+                        </div>
+
+                        {dividasVinculadas.length > 0 && (
+                          <div className="flex items-center justify-between text-xs text-rose-500 pt-2 border-t border-border/20">
+                            <span className="flex items-center gap-1.5">
+                              <CreditCard className="w-3.5 h-3.5" />
+                              {dividasVinculadas.length} dívida(s) vinculada(s)
+                            </span>
+                            <span className="font-bold">
+                              {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                                totalDividas
+                              )}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </CardContent>
@@ -505,7 +519,7 @@ export default function ContasCartoes() {
           onOpenChange={setModalExtratoAberto}
         />
 
-        {/* Modal Open Finance Pluggy (Seleção Direta de Bancos em Dark Mode) */}
+        {/* Modal Open Finance Pluggy */}
         <PluggyConnectModal
           open={modalPluggyAberto}
           onOpenChange={setModalPluggyAberto}
