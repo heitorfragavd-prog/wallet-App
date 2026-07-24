@@ -304,18 +304,18 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             </div>
 
-            {connectToken && typeof connectToken === 'string' ? (
+            {!connectToken || connectToken === 'undefined' ? (
+              <div className="py-20 text-center text-slate-300 flex flex-col items-center justify-center">
+                <span className="animate-spin text-xl mb-2">⏳</span>
+                <p>Obtendo token de acesso seguro...</p>
+              </div>
+            ) : (
               <iframe
                 src={iframeUrl}
                 className="w-full h-[650px] border-0 rounded-xl"
                 allow="payment"
                 title="Pluggy Connect Widget"
               />
-            ) : (
-              <div className="py-20 text-center text-slate-300 flex flex-col items-center justify-center">
-                <span className="animate-spin text-xl mb-2">⏳</span>
-                <p>Carregando Pluggy Connect...</p>
-              </div>
             )}
           </div>
         ) : (
