@@ -51,63 +51,80 @@ function pluggyTokenServerPlugin() {
 
         try {
           const env = loadEnv("development", process.cwd(), "");
-          const apiKey = await getApiKey(env);
+          const clientId = (
+            process.env.PLUGGY_CLIENT_ID ||
+            process.env.VITE_PLUGGY_CLIENT_ID ||
+            env.PLUGGY_CLIENT_ID ||
+            env.VITE_PLUGGY_CLIENT_ID ||
+            "486da007-85b3-4e9e-9260-bea8e2d94c55"
+          ).trim();
 
-          console.log("[Node Server] Solicitando token da Pluggy API...");
-          
-          let tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
+          const clientSecret = (
+            process.env.PLUGGY_CLIENT_SECRET ||
+            process.env.VITE_PLUGGY_CLIENT_SECRET ||
+            env.PLUGGY_CLIENT_SECRET ||
+            env.VITE_PLUGGY_CLIENT_SECRET ||
+            "dWHWyvAgSTjYJC5XHBcC0uMk0gO2iFILdyi0IRVkAns"
+          ).trim();
+
+          if (!clientId || !clientSecret) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Credenciais do .env não encontradas." }));
+            return;
+          }
+
+          // 1. Autentica e obtém apiKey
+          const authRes = await fetch("https://api.pluggy.ai/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId, clientSecret }),
+          });
+
+          const authData = await authRes.json();
+          if (!authData.apiKey) {
+            res.statusCode = 401;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: "Falha na autenticação da Pluggy.", details: authData }));
+            return;
+          }
+
+          // 2. Cria o Connect Token oficial
+          let tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-API-KEY": apiKey,
+              "X-API-KEY": authData.apiKey,
             },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ options: { sandbox: true } }),
           });
 
-          let tokenText = await tokenRes.text();
-          console.log(`[Node Server] /connect_tokens (Plural) Status (${tokenRes.status}) Body:`, tokenText);
-
           if (!tokenRes.ok) {
-            console.log("[Node Server] Tentando endpoint /connect_token (Singular)...");
-            tokenRes = await fetch("https://api.pluggy.ai/connect_token", {
+            tokenRes = await fetch("https://api.pluggy.ai/connect_tokens", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "X-API-KEY": apiKey,
+                "X-API-KEY": authData.apiKey,
               },
-              body: JSON.stringify({ options: { sandbox: true } }),
+              body: JSON.stringify({}),
             });
-            tokenText = await tokenRes.text();
-            console.log(`[Node Server] /connect_token (Singular) Status (${tokenRes.status}) Body:`, tokenText);
           }
 
-          if (!tokenRes.ok) {
+          const tokenData = await tokenRes.json();
+
+          if (tokenData.accessToken) {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ accessToken: tokenData.accessToken }));
+          } else {
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: `Pluggy API Erro (${tokenRes.status}): ${tokenText}` }));
+            res.end(JSON.stringify({ error: "Erro ao gerar accessToken", details: tokenData }));
           }
-
-          let tokenData: any = {};
-          try {
-            tokenData = JSON.parse(tokenText);
-          } catch (e) {}
-
-          const accessToken = tokenData.accessToken || tokenData.connectToken || tokenData.token;
-
-          if (!accessToken || typeof accessToken !== "string") {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: `API da Pluggy não retornou token válido. Resposta: ${tokenText}` }));
-          }
-
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ accessToken, connectToken: accessToken }));
         } catch (err: any) {
-          console.error("[Node Server] Erro na rota /api/pluggy/connect-token:", err);
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ error: err.message || "Erro ao gerar token de acesso da Pluggy." }));
+          res.end(JSON.stringify({ error: err?.message || "Erro interno do servidor" }));
         }
       });
 
