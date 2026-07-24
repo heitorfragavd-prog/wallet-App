@@ -249,10 +249,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   // Montagem da URL Oficial do Iframe da Pluggy
   const iframeUrl = useMemo(() => {
     if (!connectToken) return "";
-    let url = `https://connect.pluggy.ai/?connectToken=${encodeURIComponent(connectToken)}`;
+    let url = `https://connect.pluggy.ai/?connectToken=${connectToken}`;
     if (selectedConnectorId !== undefined) {
       url += `&connectorId=${selectedConnectorId}`;
     }
+    console.log("URL do Iframe Pluggy:", url);
     return url;
   }, [connectToken, selectedConnectorId]);
 
@@ -304,7 +305,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
 
             {connectToken ? (
               <iframe
-                src={iframeUrl}
+                src={`https://connect.pluggy.ai/?connectToken=${connectToken}${selectedConnectorId ? `&connectorId=${selectedConnectorId}` : ''}`}
                 className="w-full h-[650px] border-0 rounded-xl"
                 allow="payment"
                 title="Pluggy Connect Widget"
