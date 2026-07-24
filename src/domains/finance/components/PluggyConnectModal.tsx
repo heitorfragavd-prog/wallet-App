@@ -52,23 +52,31 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
 
-  // ── Busca o connectToken (accessToken JWT) no backend /api/pluggy/connect-token ──
+  // ── Busca o connectToken no backend com Diagnóstico e Extração Robusta ──
   const carregarTokenPluggy = async () => {
     setIsLoadingToken(true);
     setTokenError(null);
     setConnectToken(null);
 
     try {
-      const accessToken = await createPluggyConnectToken();
-      if (accessToken && typeof accessToken === "string" && accessToken.length > 20) {
-        setConnectToken(accessToken);
+      const data = await createPluggyConnectToken();
+      console.log("Resposta bruta da API de Token:", data);
+
+      const token = typeof data === "string" 
+        ? data 
+        : data?.connectToken || data?.accessToken || data?.token || data?.access_token;
+
+      if (token && typeof token === "string" && token.length > 20) {
+        const iframeUrl = `https://connect.pluggy.ai/?connectToken=${token}`;
+        console.log("URL montada para o Iframe:", iframeUrl);
+        setConnectToken(token);
         setTokenError(null);
       } else {
-        throw new Error("O connectToken retornado da API da Pluggy é inválido ou vazio.");
+        throw new Error("Token inválido ou não recebido da API local.");
       }
     } catch (err: any) {
       console.error("Falha ao obter Pluggy Connect Token:", err);
-      const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
+      const msg = err?.message || "Token inválido ou não recebido da API local.";
       setTokenError(msg);
       setUsarWidgetOficial(false);
     } finally {
@@ -88,7 +96,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   }, [open]);
 
-  // Listener para eventos postMessage emitidos pelo iframe embutido da Pluggy
+  // Listener para eventos postMessage emitidos pelo iframe da Pluggy
   useEffect(() => {
     if (!open) return;
 
@@ -356,11 +364,11 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
                   <span className="text-xs text-muted-foreground">Autenticando e gerando o Connect Token no servidor</span>
                 </div>
               ) : tokenError ? (
-                /* ERRO DE TOKEN VISÍVEL */
-                <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2">
-                  <div className="flex items-center gap-2 text-rose-500 font-bold text-sm">
+                /* EXIBIÇÃO DE ERRO NO DEBUG */
+                <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-2 text-center">
+                  <div className="flex items-center justify-center gap-2 text-rose-500 font-bold text-sm">
                     <AlertCircle className="w-5 h-5 shrink-0" />
-                    <span>Atenção: Falha de Autenticação da API Pluggy</span>
+                    <span>Token inválido ou não recebido da API local</span>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">{tokenError}</p>
                 </div>

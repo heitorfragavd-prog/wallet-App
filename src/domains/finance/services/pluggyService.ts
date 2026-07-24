@@ -33,9 +33,9 @@ export interface PluggyTransaction {
 }
 
 /**
- * Gera o connectToken (accessToken JWT) via servidor backend
+ * Gera o connectToken via servidor backend
  */
-export async function createPluggyConnectToken(): Promise<string> {
+export async function createPluggyConnectToken(): Promise<any> {
   const response = await fetch("/api/pluggy/connect-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,10 +47,8 @@ export async function createPluggyConnectToken(): Promise<string> {
   }
 
   const data = await response.json();
-  if (!data.accessToken) {
-    throw new Error("O servidor backend da Pluggy não retornou o accessToken.");
-  }
-  return data.accessToken;
+  console.log("Resposta bruta da API de Token:", data);
+  return data;
 }
 
 /**
