@@ -10,7 +10,8 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle, KeyRound } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, AlertCircle } from "lucide-react";
+import { PluggyConnect } from "react-pluggy-connect";
 import { PLUGGY_SANDBOX_CONNECTORS, PluggyConnector, createPluggyConnectToken } from "../services/pluggyService";
 import { useContasUsuario } from "../hooks/useContasUsuario";
 import { useDespesas } from "../hooks/useDespesas";
@@ -36,13 +37,13 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [connectToken, setConnectToken] = useState<string | null>(null);
   const [isLoadingToken, setIsLoadingToken] = useState<boolean>(true);
   const [tokenError, setTokenError] = useState<string | null>(null);
-  const [usarIframe, setUsarIframe] = useState<boolean>(true);
+  const [usarWidgetOficial, setUsarWidgetOficial] = useState<boolean>(true);
 
   const [conectorSelecionado, setConectorSelecionado] = useState<PluggyConnector | null>(null);
   const [carregandoConexao, setCarregandoConexao] = useState<boolean>(false);
   const [sucessoConexao, setSucessoConexao] = useState<boolean>(false);
 
-  // ── Função assíncrona para buscar o accessToken via servidor Node /api/pluggy/connect-token ──
+  // ── Função assíncrona para buscar o connectToken (accessToken) via servidor backend /api/pluggy/connect-token ──
   const carregarTokenPluggy = async () => {
     setIsLoadingToken(true);
     setTokenError(null);
@@ -54,13 +55,13 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
         setConnectToken(accessToken);
         setTokenError(null);
       } else {
-        throw new Error("O accessToken retornado da API da Pluggy é inválido ou vazio.");
+        throw new Error("O connectToken retornado da API da Pluggy é inválido ou vazio.");
       }
     } catch (err: any) {
       console.error("Falha ao obter Pluggy Connect Token:", err);
       const msg = err?.message || "Não foi possível conectar com a API da Pluggy. Verifique as credenciais no arquivo .env.";
       setTokenError(msg);
-      setUsarIframe(false); // Alterna automaticamente para seleção direta se o token falhar
+      setUsarWidgetOficial(false); // Alterna automaticamente para seleção direta se o token falhar
     } finally {
       setIsLoadingToken(false);
     }
@@ -80,20 +81,12 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   }, [open]);
 
   // Alterna entre a view do Widget Oficial e Seleção Direta de Bancos
-  const handleAlternarView = (modoIframe: boolean) => {
-    setUsarIframe(modoIframe);
-    if (modoIframe && !connectToken && !isLoadingToken && !tokenError) {
+  const handleAlternarView = (modoWidget: boolean) => {
+    setUsarWidgetOficial(modoWidget);
+    if (modoWidget && !connectToken && !isLoadingToken && !tokenError) {
       carregarTokenPluggy();
     }
   };
-
-  // Memoiza e registra no console a URL oficial do Iframe Pluggy Connect (com /?connectToken=)
-  const iframeUrl = useMemo(() => {
-    if (!connectToken || connectToken.length < 20) return "";
-    const url = `https://connect.pluggy.ai/?connectToken=${connectToken}`;
-    console.log("URL do Iframe Pluggy:", url);
-    return url;
-  }, [connectToken]);
 
   // Filtra dinamicamente os conectores (Sicoob, Nubank, Itaú, Bradesco, etc.)
   const conectoresFiltrados = useMemo(() => {
@@ -167,10 +160,10 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => handleAlternarView(!usarIframe)}
+                onClick={() => handleAlternarView(!usarWidgetOficial)}
                 className="text-xs text-muted-foreground hover:text-foreground h-7"
               >
-                {usarIframe ? "Alternar para Seleção Direta" : "Ver Widget Oficial"}
+                {usarWidgetOficial ? "Alternar para Seleção Direta" : "Ver Widget Oficial"}
               </Button>
             )}
           </div>
@@ -190,7 +183,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             <div>
               <h3 className="text-lg font-bold text-foreground">Sincronização Concluída com Sucesso!</h3>
               <p className="text-xs text-muted-foreground mt-1">
-                A conta **{conectorSelecionado?.name}** e seus lançamentos recentes foram integrados à sua carteira.
+                A conta **{conectorSelecionado?.name || "Open Finance"}** e seus lançamentos recentes foram integrados à sua carteira.
               </p>
             </div>
             <Button onClick={handleConcluir} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold w-full h-10">
@@ -210,7 +203,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             </div>
 
             {/* 1. BLOQUEIO DE RENDERIZAÇÃO: Spinner enquanto busca o accessToken */}
-            {(isLoadingToken || (usarIframe && !connectToken && !tokenError)) && (
+            {(isLoadingToken || (usarWidgetOficial && !connectToken && !tokenError)) && (
               <div className="py-16 text-center text-xs text-emerald-500 flex flex-col items-center justify-center gap-3 font-medium bg-muted/20 rounded-2xl border border-border/50">
                 <RefreshCw className="w-8 h-8 animate-spin text-emerald-500" />
                 <span className="text-sm font-semibold text-foreground">Carregando Pluggy Connect...</span>
@@ -238,20 +231,35 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </div>
             )}
 
-            {/* 3. Renderização Estrita do Iframe Oficial Pluggy Connect (SOMENTE APÓS O ACCESS TOKEN SER UMA STRING VÁLIDA E PREENCHIDA) */}
-            {!isLoadingToken && !tokenError && usarIframe && connectToken && connectToken.length > 20 && (
-              <div className="w-full h-[500px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
-                <iframe
-                  src={iframeUrl}
-                  className="w-full h-full border-0"
-                  allow="camera; microphone; geolocation"
-                  title="Pluggy Connect Widget"
+            {/* 3. Componente Oficial PluggyConnect da Biblioteca @pluggy/react-connect (SOMENTE COM TOKEN VÁLIDO PREENCHIDO) */}
+            {!isLoadingToken && !tokenError && usarWidgetOficial && connectToken && connectToken.length > 20 && (
+              <div className="w-full h-[520px] rounded-2xl overflow-hidden border border-border/60 shadow-inner bg-background">
+                <PluggyConnect
+                  connectToken={connectToken}
+                  includeSandbox={true}
+                  onSuccess={(data) => {
+                    console.log("Conexão realizada com sucesso via PluggyConnect:", data);
+                    toast({
+                      title: "Conexão Open Finance Realizada! 🚀",
+                      description: "Sua conta bancária foi vinculada com sucesso via Pluggy.",
+                    });
+                    setSucessoConexao(true);
+                  }}
+                  onError={(error) => {
+                    console.error("Erro no PluggyConnect:", error);
+                    toast({
+                      title: "Erro no Pluggy Connect",
+                      description: error?.message || "Não foi possível concluir a conexão.",
+                      variant: "destructive",
+                    });
+                  }}
+                  onClose={() => onOpenChange(false)}
                 />
               </div>
             )}
 
-            {/* 4. Modo de Seleção Direta de Bancos (quando usarIframe=false ou após erro) */}
-            {!isLoadingToken && (!usarIframe || tokenError) && (
+            {/* 4. Modo de Seleção Direta de Bancos (quando usarWidgetOficial=false ou após erro) */}
+            {!isLoadingToken && (!usarWidgetOficial || tokenError) && (
               <div className="space-y-4 pt-2">
                 <div className="relative">
                   <Input
