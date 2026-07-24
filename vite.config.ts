@@ -94,20 +94,30 @@ function pluggyTokenServerPlugin() {
               "Content-Type": "application/json",
               "X-API-KEY": authData.apiKey,
             },
-            body: JSON.stringify({ options: {} }),
+            body: JSON.stringify({
+              options: {
+                clientUserId: "user-default-01",
+              },
+            }),
           });
+
           const tokenData = await tokenRes.json();
 
-          if (!tokenData.accessToken) {
+          if (tokenData.accessToken) {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ accessToken: tokenData.accessToken }));
+          } else {
+            console.error("❌ ERRO PLUGGY CONNECT TOKENS:", tokenData);
             res.statusCode = 400;
             res.setHeader("Content-Type", "application/json");
-            return res.end(JSON.stringify({ error: "Erro ao gerar accessToken", details: tokenData }));
+            return res.end(
+              JSON.stringify({
+                error: tokenData.message || tokenData.detail || "Erro ao gerar accessToken na Pluggy",
+                details: tokenData,
+              })
+            );
           }
-
-          // Retorna puramente o accessToken obtido na Etapa 2
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          return res.end(JSON.stringify({ accessToken: tokenData.accessToken }));
         } catch (err: any) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "application/json");
