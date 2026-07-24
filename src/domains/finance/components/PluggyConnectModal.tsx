@@ -10,14 +10,13 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Badge } from "@/shared/components/ui/badge";
-import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, Sparkles, ArrowRight, ArrowLeft, AlertCircle } from "lucide-react";
+import { ShieldCheck, RefreshCw, CheckCircle2, Building2, Lock, Search, Sparkles, ArrowRight, ArrowLeft, AlertCircle, Bug } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PLUGGY_SANDBOX_CONNECTORS,
   PluggyConnector,
   PluggyAccount,
   PluggyTransaction,
-  createPluggyConnectToken,
   fetchPluggyItemAccounts,
   fetchPluggyItemTransactions,
 } from "../services/pluggyService";
@@ -66,38 +65,44 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     return !invalidWords.some((word) => token.toLowerCase().includes(word));
   };
 
-  // ── Busca do Connect Token via rota backend Node ──
-  const carregarTokenPluggy = async () => {
-    if (isTokenValido(connectToken)) return connectToken;
+  // ── Fetch Direto Obrigatório no useEffect ao abrir o Modal ──
+  const fetchDirectToken = async () => {
     setIsLoadingToken(true);
     setTokenError(null);
 
     try {
-      const data = await createPluggyConnectToken();
-      console.log("Resposta bruta da API de Token:", data);
+      console.log("[Modal Frontend] Disparando POST /api/pluggy/connect-token...");
+      const res = await fetch("/api/pluggy/connect-token", { method: "POST" });
+      const textData = await res.text();
+      console.log(`[Modal Frontend] Status ${res.status} Body:`, textData);
 
-      const tokenExtraido = typeof data === "string" 
-        ? data 
-        : data?.connectToken || data?.accessToken || data?.token || data?.access_token;
+      let parsedData: any = {};
+      try {
+        parsedData = JSON.parse(textData);
+      } catch (e) {}
 
+      if (!res.ok) {
+        const errMsg = parsedData.error || `Erro HTTP ${res.status}: ${textData}`;
+        setTokenError(errMsg);
+        setConnectToken(null);
+        return;
+      }
+
+      const tokenExtraido = parsedData.connectToken || parsedData.accessToken || parsedData.token;
       console.log("CONTEÚDO REAL DO TOKEN:", tokenExtraido);
 
       if (isTokenValido(tokenExtraido)) {
         setConnectToken(tokenExtraido);
         setTokenError(null);
-        return tokenExtraido;
       } else {
-        const msg = "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env";
+        const msg = `Token inválido retornado. Body: ${textData}`;
         setConnectToken(null);
         setTokenError(msg);
-        return null;
       }
     } catch (err: any) {
-      console.error("Erro ao obter Token Pluggy:", err);
-      const msg = "Erro ao gerar token de acesso da Pluggy. Verifique as chaves no arquivo .env";
+      console.error("Erro no fetch do token:", err);
+      setTokenError(err?.message || "Erro de conexão ao buscar token.");
       setConnectToken(null);
-      setTokenError(msg);
-      return null;
     } finally {
       setIsLoadingToken(false);
     }
@@ -107,9 +112,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     if (open) {
       setSelectedConnectorId(initialConnectorId);
       setShowWidget(openWidgetDirectly);
-      if (openWidgetDirectly || initialConnectorId !== undefined) {
-        carregarTokenPluggy();
-      }
+      fetchDirectToken();
     } else {
       setShowWidget(false);
       setConnectToken(null);
@@ -121,7 +124,7 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     }
   }, [open, initialConnectorId, openWidgetDirectly]);
 
-  // Listener para mensagens postMessage transmitidas pelo Iframe da Pluggy
+  // Listener para mensagens postMessage do Iframe
   useEffect(() => {
     if (!open) return;
 
@@ -151,7 +154,9 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     setSelectedConnectorId(conector.id);
     setBancoConectadoNome(conector.name);
     setShowWidget(true);
-    await carregarTokenPluggy();
+    if (!isTokenValido(connectToken)) {
+      await fetchDirectToken();
+    }
   };
 
   const handlePluggySuccess = async (data: any) => {
@@ -265,10 +270,6 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     ? `https://connect.pluggy.ai/?connectToken=${connectToken}${connectorQuery}`
     : '';
 
-  if (showWidget && isTokenValido(connectToken)) {
-    console.log("URL Final Montada:", iframeUrl);
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-2xl sm:max-w-2xl max-h-[92vh] overflow-y-auto p-6 border border-border/60 bg-card space-y-5">
@@ -287,6 +288,29 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
             Sincronize suas contas bancárias reguladas pelo Banco Central com criptografia de ponta a ponta.
           </DialogDescription>
         </DialogHeader>
+
+        {/* CARD DE DIAGNÓSTICO E DEPURAÇÃO VISÍVEL NA TELA */}
+        <div className="p-4 bg-muted/40 rounded-xl border border-border/60 text-xs space-y-1.5 font-mono">
+          <div className="flex items-center gap-2 text-emerald-400 font-bold mb-1">
+            <Bug className="w-4 h-4" /> Diagnóstico de Conexão Pluggy:
+          </div>
+          <div>
+            <span className="text-muted-foreground">Estado do Token: </span>
+            <span className="font-bold text-foreground">
+              {connectToken ? `${connectToken.substring(0, 20)}...` : "NULO / UNDEFINED"}
+            </span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">Tamanho do Token: </span>
+            <span className="font-bold text-foreground">{connectToken ? connectToken.length : 0} caracteres</span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">Erro na Chamada: </span>
+            <span className={`font-bold ${tokenError ? "text-rose-400" : "text-emerald-400"}`}>
+              {tokenError || "Nenhum erro registrado (HTTP 200 OK)"}
+            </span>
+          </div>
+        </div>
 
         {sucessoConexao ? (
           <div className="py-8 text-center space-y-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/20 p-6">
@@ -315,26 +339,19 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
               </Button>
             </div>
 
-            {tokenError ? (
-              <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-center space-y-3">
-                <div className="flex items-center justify-center gap-2 text-rose-500 font-bold text-sm">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  <span>Falha de Autenticação da Pluggy</span>
-                </div>
-                <p className="text-xs text-muted-foreground leading-relaxed font-mono bg-muted/40 p-2 rounded-lg text-rose-400">
-                  {tokenError}
+            {!isTokenValido(connectToken) ? (
+              <div className="p-6 bg-slate-800/80 border border-slate-700 rounded-2xl text-center space-y-3">
+                <p className="text-xs text-slate-300 font-medium">
+                  {isLoadingToken ? "⏳ Obtendo token de acesso seguro..." : "Token não validado ou aguardando resposta da API."}
                 </p>
                 <Button
-                  onClick={carregarTokenPluggy}
+                  onClick={fetchDirectToken}
+                  disabled={isLoadingToken}
                   className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs h-9"
                 >
-                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Tentar Novamente
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isLoadingToken ? "animate-spin" : ""}`} />
+                  Tentar Gerar Token Novamente
                 </Button>
-              </div>
-            ) : !isTokenValido(connectToken) ? (
-              <div className="py-20 text-center text-slate-300 flex flex-col items-center justify-center">
-                <span className="animate-spin text-xl mb-2">⏳</span>
-                <p>Obtendo token de acesso seguro...</p>
               </div>
             ) : (
               <iframe
