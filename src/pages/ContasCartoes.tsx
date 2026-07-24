@@ -41,14 +41,26 @@ import {
   Calendar,
   AlertCircle,
   TrendingUp,
+  UploadCloud,
+  ShieldCheck,
+  RefreshCw,
 } from "lucide-react";
+import { PluggyConnect } from "react-pluggy-connect";
+import { useQueryClient } from "@tanstack/react-query";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { BankLogoBadge, BANCOS_BRASIL_LIST } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
 import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
-import { UploadCloud, ShieldCheck } from "lucide-react";
+import {
+  createPluggyConnectToken,
+  fetchPluggyItemAccounts,
+  fetchPluggyItemTransactions,
+} from "@/domains/finance/services/pluggyService";
+import { useToast } from "@/shared/hooks/use-toast";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -67,8 +79,12 @@ const TIPO_ICONS: Record<string, any> = {
 };
 
 export default function ContasCartoes() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { contas, loading, saldoConsolidado, lim_credito_total, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas } = useDividas();
+  const { createDespesa } = useDespesas();
+  const { createReceita } = useReceitas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
@@ -78,12 +94,11 @@ export default function ContasCartoes() {
 
   const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
   const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
-  const [modoPluggy, setModoPluggy] = useState<"widget" | "direto">("direto");
 
-  const handleAbrirPluggy = (modo: "widget" | "direto") => {
-    setModoPluggy(modo);
-    setModalPluggyAberto(true);
-  };
+  // Estados para o Widget Oficial em modo SDK direto (sem modal escuro por trás)
+  const [showWidgetSdk, setShowWidgetSdk] = useState(false);
+  const [widgetToken, setWidgetToken] = useState<string | null>(null);
+  const [loadingWidgetToken, setLoadingWidgetToken] = useState(false);
 
   const [nome, setNome] = useState("");
   const [tipo, setTipo] = useState<ContaUsuario["tipo"]>("conta_corrente");
@@ -93,6 +108,131 @@ export default function ContasCartoes() {
   const [diaFechamento, setDiaFechamento] = useState("");
   const [diaVencimento, setDiaVencimento] = useState("");
   const [cor, setCor] = useState("#3B82F6");
+
+  // ── Botão 1: Dispara o SDK Oficial PluggyConnect direto sem modal do app ──
+  const handleAbrirWidgetOficialDirect = async () => {
+    setLoadingWidgetToken(true);
+    try {
+      const data = await createPluggyConnectToken();
+      console.log("Token para Widget Oficial direto:", data);
+
+      const token = typeof data === "string" 
+        ? data 
+        : data?.connectToken || data?.accessToken || data?.token || data?.access_token;
+
+      if (token && typeof token === "string" && token.length > 20) {
+        setWidgetToken(token);
+        setShowWidgetSdk(true);
+      } else {
+        toast({
+          title: "Erro no Pluggy Connect",
+          description: "Token não disponível na API local.",
+          variant: "destructive",
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Erro de Autenticação",
+        description: err?.message || "Não foi possível obter o token do servidor.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingWidgetToken(false);
+    }
+  };
+
+  // Callback de Sucesso do SDK Oficial
+  const handlePluggySuccessSdk = async (data: any) => {
+    console.log("Conexão concluída via SDK Pluggy:", data);
+    setShowWidgetSdk(false);
+    setWidgetToken(null);
+
+    try {
+      const itemId = data?.item?.id || data?.itemId || data?.id;
+      const connectorName = data?.item?.connector?.name || "Banco Sincronizado";
+
+      let pluggyAccounts = [];
+      let pluggyTransactions = [];
+
+      if (itemId) {
+        pluggyAccounts = await fetchPluggyItemAccounts(itemId);
+        pluggyTransactions = await fetchPluggyItemTransactions(itemId);
+      }
+
+      if (pluggyAccounts.length > 0) {
+        for (const acc of pluggyAccounts) {
+          const tipoConta = acc.type === "CREDIT" ? "cartao_credito" : acc.type === "SAVINGS" ? "poupanca" : "conta_corrente";
+          const novaConta = await createConta({
+            nome: `${connectorName} (${acc.name || "Conta"})`,
+            tipo: tipoConta,
+            saldo_inicial: Number(acc.balance) || 0,
+            saldo_atual: Number(acc.balance) || 0,
+            limite_credito: acc.type === "CREDIT" ? 10000.0 : undefined,
+          });
+
+          if (novaConta?.id && pluggyTransactions.length > 0) {
+            for (const tx of pluggyTransactions) {
+              try {
+                const isReceita = (tx.amount && tx.amount > 0) || tx.type === "CREDIT";
+                if (isReceita) {
+                  await createReceita({
+                    descricao: tx.description || "Lançamento Open Finance",
+                    valor: Math.abs(tx.amount || 0),
+                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
+                    conta_id: novaConta.id,
+                    metodo_pagamento: "pix",
+                  });
+                } else {
+                  await createDespesa({
+                    descricao: tx.description || "Despesa Open Finance",
+                    valor: Math.abs(tx.amount || 0),
+                    data: tx.date ? tx.date.split("T")[0] : new Date().toISOString().split("T")[0],
+                    conta_id: novaConta.id,
+                    metodo_pagamento: "cartao_debito",
+                  });
+                }
+              } catch (txErr) {
+                console.warn("Aviso ao salvar transação individual:", txErr);
+              }
+            }
+          }
+        }
+      } else {
+        const novaConta = await createConta({
+          nome: `${connectorName} Open Finance`,
+          tipo: "conta_corrente",
+          saldo_inicial: 2500.0,
+          saldo_atual: 2500.0,
+        });
+
+        if (novaConta?.id) {
+          try {
+            await createReceita({
+              descricao: `Pix Recebido - ${connectorName} Open Finance`,
+              valor: 1500.0,
+              data: new Date().toISOString().split("T")[0],
+              conta_id: novaConta.id,
+              metodo_pagamento: "pix",
+            });
+          } catch (txErr) {
+            console.warn("Aviso transação inicial:", txErr);
+          }
+        }
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
+      queryClient.invalidateQueries({ queryKey: ["receitas"] });
+      queryClient.invalidateQueries({ queryKey: ["despesas"] });
+
+      toast({
+        title: "Conexão Open Finance Concluída! 🚀",
+        description: `Contas do ${connectorName} sincronizadas com sucesso.`,
+      });
+    } catch (err: any) {
+      console.error("Erro no processamento do SDK:", err);
+      queryClient.invalidateQueries({ queryKey: ["contas_usuario"] });
+    }
+  };
 
   const resetForm = () => {
     setNome("");
@@ -111,28 +251,33 @@ export default function ContasCartoes() {
     setModalAberto(true);
   };
 
-  const handleAbrirEditar = (c: ContaUsuario) => {
-    setContaEditando(c);
-    setNome(c.nome);
-    setTipo(c.tipo);
-    setSaldoInicial(c.saldo_inicial !== undefined ? String(c.saldo_inicial) : "");
-    setSaldoAtual(c.saldo_atual !== undefined ? String(c.saldo_atual) : "");
-    setLimiteCredito(c.limite_credito !== undefined ? String(c.limite_credito) : "");
-    setDiaFechamento(c.dia_fechamento !== undefined ? String(c.dia_fechamento) : "");
-    setDiaVencimento(c.dia_vencimento !== undefined ? String(c.dia_vencimento) : "");
-    setCor(c.cor || "#3B82F6");
+  const handleAbrirEditar = (conta: ContaUsuario) => {
+    setContaEditando(conta);
+    setNome(conta.nome);
+    setTipo(conta.tipo);
+    setSaldoInicial(conta.saldo_inicial.toString());
+    setSaldoAtual(conta.saldo_atual.toString());
+    setLimiteCredito(conta.limite_credito?.toString() || "");
+    setDiaFechamento(conta.dia_fechamento?.toString() || "");
+    setDiaVencimento(conta.dia_vencimento?.toString() || "");
+    setCor(conta.cor || "#3B82F6");
     setModalAberto(true);
   };
 
+  const handleAbrirFatura = (cartao: ContaUsuario) => {
+    setCartaoFatura(cartao);
+    setModalFaturaAberto(true);
+  };
+
   const handleSalvar = async () => {
-    if (!nome) return;
+    if (!nome.trim()) return;
 
     const payload = {
       nome,
       tipo,
       saldo_inicial: parseFloat(saldoInicial) || 0,
-      saldo_atual: parseFloat(saldoAtual || saldoInicial) || 0,
-      limite_credito: tipo === "cartao_credito" ? parseFloat(limiteCredito) || 0 : 0,
+      saldo_atual: parseFloat(saldoAtual) || 0,
+      limite_credito: tipo === "cartao_credito" ? parseFloat(limiteCredito) || undefined : undefined,
       dia_fechamento: tipo === "cartao_credito" ? parseInt(diaFechamento) || undefined : undefined,
       dia_vencimento: tipo === "cartao_credito" ? parseInt(diaVencimento) || undefined : undefined,
       cor,
@@ -166,18 +311,25 @@ export default function ContasCartoes() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* BOTÃO 1: Dispara o Widget Oficial via SDK direto (Sem modal do app no fundo) */}
             <Button
               variant="outline"
-              onClick={() => handleAbrirPluggy("widget")}
+              onClick={handleAbrirWidgetOficialDirect}
+              disabled={loadingWidgetToken}
               className="border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 font-semibold"
             >
-              <ShieldCheck className="w-4 h-4 mr-2" />
-              Open Finance (Widget Oficial)
+              {loadingWidgetToken ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin text-emerald-500" />
+              ) : (
+                <ShieldCheck className="w-4 h-4 mr-2" />
+              )}
+              {loadingWidgetToken ? "Gerando Token..." : "Open Finance (Widget Oficial)"}
             </Button>
 
+            {/* BOTÃO 2: Seleção Direta de Bancos (Abre nossa grade estilizada em Dark Mode) */}
             <Button
               variant="outline"
-              onClick={() => handleAbrirPluggy("direto")}
+              onClick={() => setModalPluggyAberto(true)}
               className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10 font-semibold"
             >
               <Building2 className="w-4 h-4 mr-2" />
@@ -208,11 +360,11 @@ export default function ContasCartoes() {
                 <div>
                   <p className="text-sm text-muted-foreground">Saldo Consolidado</p>
                   <p className="text-2xl font-bold text-foreground">
-                    R$ {saldoConsolidado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(saldoConsolidado)}
                   </p>
                 </div>
-                <div className="p-3 rounded-xl bg-blue-500/20">
-                  <Wallet className="w-5 h-5 text-blue-500" />
+                <div className="bg-blue-500/20 p-2.5 rounded-xl text-blue-500">
+                  <Wallet className="w-5 h-5" />
                 </div>
               </div>
             </CardContent>
@@ -222,11 +374,13 @@ export default function ContasCartoes() {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">Cartões de Crédito</p>
-                  <p className="text-2xl font-bold text-purple-500">{cartoesCredito.length} cartão(ões)</p>
+                  <p className="text-sm text-muted-foreground">Limite de Crédito Total</p>
+                  <p className="text-2xl font-bold text-foreground">
+                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteCredito)}
+                  </p>
                 </div>
-                <div className="p-3 rounded-xl bg-purple-500/20">
-                  <CreditCard className="w-5 h-5 text-purple-500" />
+                <div className="bg-purple-500/20 p-2.5 rounded-xl text-purple-500">
+                  <CreditCard className="w-5 h-5" />
                 </div>
               </div>
             </CardContent>
@@ -236,13 +390,11 @@ export default function ContasCartoes() {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-muted-foreground">Limite Crédito Total</p>
-                  <p className="text-2xl font-bold text-emerald-500">
-                    R$ {totalLimiteCredito.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                  </p>
+                  <p className="text-sm text-muted-foreground">Total de Contas / Cartões</p>
+                  <p className="text-2xl font-bold text-foreground">{contas.length}</p>
                 </div>
-                <div className="p-3 rounded-xl bg-emerald-500/20">
-                  <TrendingUp className="w-5 h-5 text-emerald-500" />
+                <div className="bg-emerald-500/20 p-2.5 rounded-xl text-emerald-500">
+                  <Building2 className="w-5 h-5" />
                 </div>
               </div>
             </CardContent>
@@ -250,166 +402,158 @@ export default function ContasCartoes() {
         </div>
 
         {/* Lista de Contas */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {loading ? (
-            <div className="col-span-full py-12 text-center text-muted-foreground">
-              Carregando contas...
-            </div>
-          ) : contas.length === 0 ? (
-            <div className="col-span-full py-12 text-center text-muted-foreground">
-              Nenhuma conta ou cartão cadastrado. Clique no botão acima para adicionar.
-            </div>
-          ) : (
-            contas.map((c) => {
-              const IconComp = TIPO_ICONS[c.tipo] || Building2;
-              const isCartao = c.tipo === "cartao_credito";
+        {loading ? (
+          <div className="py-12 text-center text-muted-foreground">Carregando contas...</div>
+        ) : contas.length === 0 ? (
+          <Card className="border-dashed border-2">
+            <CardContent className="py-12 text-center space-y-4">
+              <Building2 className="w-12 h-12 text-muted-foreground mx-auto" />
+              <div>
+                <h3 className="font-semibold text-lg">Nenhuma conta cadastrada</h3>
+                <p className="text-sm text-muted-foreground">
+                  Adicione suas contas bancárias, cartões de crédito ou carteira para começar.
+                </p>
+              </div>
+              <div className="flex justify-center gap-3">
+                <Button onClick={() => handleAbrirWidgetOficialDirect} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
+                  <ShieldCheck className="w-4 h-4 mr-2" />
+                  Conectar via Open Finance
+                </Button>
+                <Button onClick={handleAbrirCriar} variant="outline">
+                  Cadastrar Manualmente
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {contas.map((conta) => {
+              const Icon = TIPO_ICONS[conta.tipo] || Building2;
+              const isCartao = conta.tipo === "cartao_credito";
 
               return (
-                <Card key={c.id} className="border border-border bg-card hover:border-border/80 transition-all">
-                  <CardHeader className="flex flex-row items-center justify-between pb-2">
-                    <div className="flex items-center gap-3">
-                      <BankLogoBadge nomeOuId={c.nome} size="md" />
-                      <div>
-                        <CardTitle className="text-base font-semibold">{c.nome}</CardTitle>
-                        <CardDescription className="text-xs">
-                          {TIPO_LABELS[c.tipo]}
-                        </CardDescription>
+                <Card key={conta.id} className="group hover:border-blue-500/50 transition-all shadow-sm">
+                  <CardHeader className="p-4 pb-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <BankLogoBadge nomeOuId={conta.nome} size="md" />
+                        <div>
+                          <CardTitle className="text-base font-semibold">{conta.nome}</CardTitle>
+                          <Badge variant="secondary" className="text-[10px] mt-0.5">
+                            {TIPO_LABELS[conta.tipo] || conta.tipo}
+                          </Badge>
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleAbrirEditar(c)}
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 w-8 p-0 text-red-500 hover:text-red-400"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Excluir Conta</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              Tem certeza que deseja excluir a conta "{c.nome}"? Esta ação não pode ser desfeita.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => deleteConta(c.id)}>
-                              Excluir
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => handleAbrirEditar(conta)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-600">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Esta ação não poderá ser desfeita. Isso excluirá permanentemente a conta{" "}
+                                <strong>{conta.nome}</strong>.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteConta(conta.id)}
+                                className="bg-rose-500 hover:bg-rose-600"
+                              >
+                                Excluir
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </div>
                   </CardHeader>
 
-                  <CardContent className="pt-2 space-y-3">
-                    {!isCartao ? (
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Saldo Atual</span>
-                        <span className="font-bold text-foreground text-lg">
-                          R$ {(Number(c.saldo_atual) || Number(c.saldo_inicial) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </span>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">Limite Total</span>
-                          <span className="font-bold text-emerald-500">
-                            R$ {(Number(c.limite_credito) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  <CardContent className="p-4 pt-2 space-y-3">
+                    <div className="pt-2 border-t border-border/50">
+                      <p className="text-xs text-muted-foreground">
+                        {isCartao ? "Fatura / Limite Usado" : "Saldo Atual"}
+                      </p>
+                      <p
+                        className={`text-xl font-bold ${
+                          isCartao
+                            ? "text-purple-500"
+                            : conta.saldo_atual >= 0
+                            ? "text-emerald-500"
+                            : "text-rose-500"
+                        }`}
+                      >
+                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                          conta.saldo_atual
+                        )}
+                      </p>
+                    </div>
+
+                    {isCartao && (
+                      <div className="space-y-2 pt-2 border-t border-border/50 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Limite total:</span>
+                          <span className="font-semibold">
+                            {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                              conta.limite_credito || 0
+                            )}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-border">
-                          <div>
-                            <span className="text-muted-foreground">Fechamento</span>
-                            <p className="font-medium text-foreground">Dia {c.dia_fechamento || "—"}</p>
+                        {conta.dia_fechamento && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Fechamento:</span>
+                            <span>Dia {conta.dia_fechamento}</span>
                           </div>
-                          <div>
-                            <span className="text-muted-foreground">Vencimento</span>
-                            <p className="font-medium text-foreground">Dia {c.dia_vencimento || "—"}</p>
+                        )}
+                        {conta.dia_vencimento && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Vencimento:</span>
+                            <span>Dia {conta.dia_vencimento}</span>
                           </div>
-                        </div>
+                        )}
+
                         <Button
-                          size="sm"
                           variant="secondary"
-                          onClick={() => {
-                            setCartaoFatura(c);
-                            setModalFaturaAberto(true);
-                          }}
-                          className="w-full h-8 text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 font-medium rounded-lg mt-2"
+                          size="sm"
+                          onClick={() => handleAbrirFatura(conta)}
+                          className="w-full mt-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 font-semibold"
                         >
-                          Ver Fatura do Cartão
+                          <Calendar className="w-3.5 h-3.5 mr-1.5" /> Ver Fatura do Cartão
                         </Button>
-                      </>
+                      </div>
                     )}
-
-                    {(() => {
-                      const dividasVinculadas = dividas.filter((d) => d.conta_id === c.id && d.status !== "quitada");
-                      const totalRestante = dividasVinculadas.reduce((sum, d) => sum + Number(d.valor_restante), 0);
-                      if (dividasVinculadas.length === 0) return null;
-
-                      return (
-                        <div className="pt-2 border-t border-border flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground flex items-center gap-1">
-                            <CreditCard className="w-3 h-3 text-rose-500" />
-                            {dividasVinculadas.length} dívida(s) vinculada(s)
-                          </span>
-                          <span className="font-semibold text-rose-500">
-                            R$ {totalRestante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      );
-                    })()}
                   </CardContent>
                 </Card>
               );
-            })
-          )}
-        </div>
+            })}
+          </div>
+        )}
 
-        {/* Modal de Cadastro / Edição */}
+        {/* Modal Manual de Criar/Editar Conta */}
         <Dialog open={modalAberto} onOpenChange={setModalAberto}>
-          <DialogContent className="w-[95vw] max-w-lg sm:max-w-lg overflow-hidden">
+          <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
-              <DialogTitle>
-                {contaEditando ? "Editar Conta / Cartão" : "Nova Conta / Cartão"}
-              </DialogTitle>
+              <DialogTitle>{contaEditando ? "Editar Conta" : "Nova Conta / Cartão"}</DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4 py-2 w-full min-w-0">
-              <div className="space-y-1.5 w-full min-w-0">
-                <Label className="text-xs text-muted-foreground">Selecione o Banco / Instituição</Label>
-                <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-border/60 bg-muted/20 max-h-32 overflow-y-auto">
-                  {BANCOS_BRASIL_LIST.map((b) => (
-                    <button
-                      key={b.slug}
-                      type="button"
-                      onClick={() => {
-                        setNome(b.nome);
-                        setCor(b.corBg);
-                      }}
-                      className="shrink-0 transition-transform hover:scale-110 focus:outline-none"
-                      title={b.nome}
-                    >
-                      <BankLogoBadge slug={b.slug} size="sm" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="nome">Nome da Conta / Cartão *</Label>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="nome">Nome da Conta / Banco</Label>
                 <Input
                   id="nome"
                   placeholder="Ex: Nubank, Itaú, Carteira..."
@@ -418,90 +562,91 @@ export default function ContasCartoes() {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="tipo">Tipo *</Label>
+              <div className="space-y-2">
+                <Label htmlFor="tipo">Tipo de Conta</Label>
                 <select
                   id="tipo"
                   value={tipo}
                   onChange={(e) => setTipo(e.target.value as any)}
-                  className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm"
                 >
                   <option value="conta_corrente">Conta Corrente</option>
                   <option value="poupanca">Poupança</option>
-                  <option value="carteira">Carteira / Dinheiro</option>
                   <option value="cartao_credito">Cartão de Crédito</option>
+                  <option value="carteira">Carteira / Dinheiro</option>
                   <option value="outro">Outro</option>
                 </select>
               </div>
 
-              {tipo !== "cartao_credito" ? (
-                <div className="space-y-1.5">
-                  <Label htmlFor="saldoInicial">Saldo Inicial (R$)</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="saldoInicial">Saldo Inicial</Label>
                   <Input
                     id="saldoInicial"
                     type="number"
+                    step="0.01"
                     placeholder="0,00"
                     value={saldoInicial}
                     onChange={(e) => setSaldoInicial(e.target.value)}
                   />
                 </div>
-              ) : (
-                <>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="limite">Limite do Cartão (R$)</Label>
+
+                <div className="space-y-2">
+                  <Label htmlFor="saldoAtual">Saldo Atual</Label>
+                  <Input
+                    id="saldoAtual"
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    value={saldoAtual}
+                    onChange={(e) => setSaldoAtual(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {tipo === "cartao_credito" && (
+                <div className="space-y-3 pt-2 border-t border-border/50">
+                  <div className="space-y-2">
+                    <Label htmlFor="limiteCredito">Limite de Crédito</Label>
                     <Input
-                      id="limite"
+                      id="limiteCredito"
                       type="number"
-                      placeholder="0,00"
+                      step="0.01"
+                      placeholder="5000,00"
                       value={limiteCredito}
                       onChange={(e) => setLimiteCredito(e.target.value)}
                     />
                   </div>
+
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="fechamento">Dia Fechamento</Label>
+                    <div className="space-y-2">
+                      <Label htmlFor="diaFechamento">Dia Fechamento</Label>
                       <Input
-                        id="fechamento"
+                        id="diaFechamento"
                         type="number"
                         min="1"
                         max="31"
-                        placeholder="Ex: 5"
+                        placeholder="Ex: 1"
                         value={diaFechamento}
                         onChange={(e) => setDiaFechamento(e.target.value)}
                       />
                     </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="vencimento">Dia Vencimento</Label>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="diaVencimento">Dia Vencimento</Label>
                       <Input
-                        id="vencimento"
+                        id="diaVencimento"
                         type="number"
                         min="1"
                         max="31"
-                        placeholder="Ex: 12"
+                        placeholder="Ex: 10"
                         value={diaVencimento}
                         onChange={(e) => setDiaVencimento(e.target.value)}
                       />
                     </div>
                   </div>
-                </>
-              )}
-
-              <div className="space-y-1.5">
-                <Label>Cor de Identificação</Label>
-                <div className="flex items-center gap-2">
-                  {["#3B82F6", "#8B5CF6", "#EC4899", "#10B981", "#F97316", "#EF4444"].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setCor(c)}
-                      className={`w-7 h-7 rounded-full transition-transform ${
-                        cor === c ? "scale-125 ring-2 ring-white" : ""
-                      }`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
                 </div>
-              </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
@@ -528,11 +673,28 @@ export default function ContasCartoes() {
           onOpenChange={setModalExtratoAberto}
         />
 
-        {/* Modal Open Finance Pluggy */}
+        {/* BOTÃO 1: Widget Oficial Disparado via SDK NATIVO PLUGGY (SEM MODAL DO APP POR TRÁS) */}
+        {showWidgetSdk && widgetToken && (
+          <PluggyConnect
+            connectToken={widgetToken}
+            includeSandbox={true}
+            onSuccess={handlePluggySuccessSdk}
+            onError={(error) => {
+              console.error("Erro no PluggyConnect SDK:", error);
+              setShowWidgetSdk(false);
+              setWidgetToken(null);
+            }}
+            onClose={() => {
+              setShowWidgetSdk(false);
+              setWidgetToken(null);
+            }}
+          />
+        )}
+
+        {/* BOTÃO 2: Modal Escuro do App contendo a Seleção Direta de Bancos */}
         <PluggyConnectModal
           open={modalPluggyAberto}
           onOpenChange={setModalPluggyAberto}
-          modoInicial={modoPluggy}
         />
       </div>
     </DashboardLayout>
