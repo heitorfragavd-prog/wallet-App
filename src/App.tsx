@@ -32,6 +32,7 @@ const Perfil              = lazy(() => import("./pages/Perfil"));
 const IA                  = lazy(() => import("./pages/IA"));
 const Lembretes           = lazy(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazy(() => import("./pages/ContasCartoes"));
+const EyemobilePDV        = lazy(() => import("./pages/EyemobilePDV"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazy(() => import("./pages/AdminDashboard"));
@@ -72,6 +73,7 @@ function App() {
               <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
               <Route path="/ia"         element={<ProtectedRoute><IA /></ProtectedRoute>} />
               <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
+              <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
               <Route path="/contas"     element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
 
               {/* Protegidas — somente admin */}

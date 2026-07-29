@@ -29,6 +29,15 @@ import {
   AlertDialogTrigger,
 } from "@/shared/components/ui/alert-dialog";
 import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer
+} from "recharts";
+import {
   Plus,
   Search,
   TrendingUp,
@@ -39,6 +48,12 @@ import {
   Wallet,
   Tag,
   X,
+  CalendarDays,
+  Smartphone,
+  CreditCard,
+  Banknote,
+  ArrowRightLeft,
+  Ticket,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
@@ -72,14 +87,30 @@ const formatarDataRelativa = (dataString: string) => {
   return formatarData(dataString);
 };
 
+// Mapa de método de pagamento → rótulo e ícone (reutiliza os do PaymentMethodSelector)
+const PAYMENT_METHOD_INFO: Record<string, { label: string; icon: typeof Smartphone }> = {
+  pix: { label: "PIX", icon: Smartphone },
+  cartao_credito: { label: "Cartão de Crédito", icon: CreditCard },
+  cartao_debito: { label: "Cartão de Débito", icon: CreditCard },
+  boleto: { label: "Boleto", icon: Banknote },
+  dinheiro: { label: "Dinheiro", icon: Wallet },
+  transferencia: { label: "Transferência", icon: ArrowRightLeft },
+  voucher: { label: "Voucher", icon: Ticket },
+};
+
+const getPaymentMethodInfo = (method: string | null | undefined) => {
+  if (!method) return null;
+  return PAYMENT_METHOD_INFO[method] || null;
+};
+
 const Receitas = () => {
   const { toast } = useToast();
   const { categoriasReceita } = useCategorias();
 
   // ── Filtro de data
-  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+    const { dateRange, setRange, clearFilter } = useDateRangeFilter();
 
-  const { receitas, loading, createReceita, updateReceita, deleteReceita } = useReceitas({
+  const { receitas, loading, createReceita, updateReceita, deleteReceita, getReceitaTags } = useReceitas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
@@ -103,6 +134,7 @@ const Receitas = () => {
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
+  const [visibleCount, setVisibleCount] = useState(100);
 
   const salvarReceita = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,7 +202,14 @@ const Receitas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarReceita = (receita: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
+  const handleEditarReceita = async (receita: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
+    // Load tags lazily (not included in the list fetch for performance)
+    let tags: string[] = [];
+    try {
+      tags = await getReceitaTags(receita.id);
+    } catch {
+      tags = [];
+    }
     // Preencher formulário com dados da receita
     setNovaReceita({
       id: receita.id,
@@ -182,7 +221,7 @@ const Receitas = () => {
       metodo_pagamento: receita.metodo_pagamento || null,
       conta_id: receita.conta_id || null,
       observacoes: receita.observacoes || "",
-      tags: (receita.tags ?? []).map((t) => (typeof t === 'string' ? t : t.nome)),
+      tags,
     });
     setModoEdicao(true);
     setActiveTab("adicionar");
@@ -211,19 +250,32 @@ const Receitas = () => {
   };
 
   // Dados processados
-  const { receitasFiltradas, receitasAgrupadas, totalReceitas, mediaMensal } = useMemo(() => {
+  const { 
+    receitasFiltradas, 
+    receitasAgrupadas, 
+    totalReceitas, 
+    mediaMensal, 
+    totalReceitasDoDia,
+    metodoList,
+    hourlyData,
+    totalFiltrado 
+  } = useMemo(() => {
     const filtradas = receitas
       .filter((receita) => {
         const matchDescricao = receita.descricao.toLowerCase().includes(filtro.toLowerCase());
         const matchCategoria = categoriaFiltro === "" || receita.categorias?.nome === categoriaFiltro;
         return matchDescricao && matchCategoria;
       })
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      .sort((a, b) => {
+        const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
 
-    // Agrupar por data de cadastro
+    // Agrupar por data da transação (apenas para os itens visíveis no mobile)
     const grupos: { [key: string]: typeof filtradas } = {};
-    filtradas.forEach((r) => {
-      const dataKey = formatarDataRelativa(r.created_at);
+    filtradas.slice(0, visibleCount).forEach((r) => {
+      const dataKey = formatarDataRelativa(r.data);
       if (!grupos[dataKey]) grupos[dataKey] = [];
       grupos[dataKey].push(r);
     });
@@ -231,12 +283,103 @@ const Receitas = () => {
     const total = receitas.reduce((sum, r) => sum + r.valor, 0);
     const media = receitas.length > 0 ? total / Math.max(1, new Set(receitas.map(r => r.data.substring(0, 7))).size) : 0;
 
-    return { receitasFiltradas: filtradas, receitasAgrupadas: grupos, totalReceitas: total, mediaMensal: media };
-  }, [receitas, filtro, categoriaFiltro]);
+    // Receitas do dia (comparação por data local, ignorando fuso horário)
+    // O Supabase retorna a data como YYYY-MM-DD; new Date('YYYY-MM-DD') vira
+    // UTC meia-noite, o que no Brasil (GMT-3) desloca um dia. Compensamos
+    // usando meio-dia local (igual a formatarDataRelativa) antes de comparar.
+    const hoje = new Date();
+    hoje.setHours(12, 0, 0, 0);
+    const hojeStr = hoje.toISOString().split("T")[0]; // YYYY-MM-DD local
+    const receitasDoDia = receitas.filter((r) => {
+      const dataStr = new Date(r.data.split("T")[0] + "T12:00:00").toISOString().split("T")[0];
+      return dataStr === hojeStr;
+    });
+    const totalReceitasDoDia = receitasDoDia.reduce((sum, r) => sum + r.valor, 0);
+
+    // 1. Meios de Pagamento breakdown (using filtered revenues)
+    const totalFiltrado = filtradas.reduce((sum, r) => sum + r.valor, 0);
+    const metodoStats = {
+      debito: { label: "DÉBITO", valor: 0, cor: "bg-blue-500", textCor: "text-blue-500" },
+      pix: { label: "PIX", valor: 0, cor: "bg-emerald-500", textCor: "text-emerald-500" },
+      dinheiro: { label: "DINHEIRO", valor: 0, cor: "bg-amber-500", textCor: "text-amber-500" },
+      credito: { label: "CRÉDITO", valor: 0, cor: "bg-purple-500", textCor: "text-purple-500" },
+      outros: { label: "OUTROS", valor: 0, cor: "bg-slate-500", textCor: "text-slate-500" },
+    };
+
+    filtradas.forEach((r) => {
+      const metodo = r.metodo_pagamento;
+      if (metodo === "cartao_debito") {
+        metodoStats.debito.valor += r.valor;
+      } else if (metodo === "pix") {
+        metodoStats.pix.valor += r.valor;
+      } else if (metodo === "dinheiro") {
+        metodoStats.dinheiro.valor += r.valor;
+      } else if (metodo === "cartao_credito") {
+        metodoStats.credito.valor += r.valor;
+      } else {
+        metodoStats.outros.valor += r.valor;
+      }
+    });
+
+    const metodoList = Object.values(metodoStats)
+      .map((item) => {
+        const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
+        return {
+          ...item,
+          porcentagem,
+        };
+      })
+      .sort((a, b) => b.valor - a.valor);
+
+    // 2. Fluxo por hora (5h às 23h)
+    const hourlyData = Array.from({ length: 19 }, (_, i) => {
+      const h = i + 5;
+      return {
+        hour: `${String(h).padStart(2, "0")}h`,
+        total: 0,
+      };
+    });
+
+    filtradas.forEach((r) => {
+      if (r.created_at) {
+        const isIntegrated = r.observacoes?.includes("Integrado via Eyemobile API");
+        const date = new Date(r.created_at);
+        const hour = isIntegrated ? date.getUTCHours() : date.getHours();
+
+        if (hour >= 5 && hour <= 23) {
+          const index = hour - 5;
+          if (hourlyData[index]) {
+            hourlyData[index].total += r.valor;
+          }
+        }
+      } else if (r.data) {
+        const date = new Date(r.data.split("T")[0] + "T12:00:00");
+        const hour = date.getHours();
+        if (hour >= 5 && hour <= 23) {
+          const index = hour - 5;
+          if (hourlyData[index]) {
+            hourlyData[index].total += r.valor;
+          }
+        }
+      }
+    });
+
+    return {
+      receitasFiltradas: filtradas,
+      receitasAgrupadas: grupos,
+      totalReceitas: total,
+      mediaMensal: media,
+      totalReceitasDoDia,
+      metodoList,
+      hourlyData,
+      totalFiltrado,
+    };
+  }, [receitas, filtro, categoriaFiltro, visibleCount]);
 
   const limparFiltros = () => {
     setFiltro("");
     setCategoriaFiltro("");
+    setVisibleCount(100);
   };
 
   const temFiltrosAtivos = filtro !== "" || categoriaFiltro !== "";
@@ -262,22 +405,22 @@ const Receitas = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <Card className="border-0 bg-gradient-to-br from-cyan-500/10 to-cyan-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Receitas</p>
+                  <p className="text-sm text-muted-foreground">Receitas do Dia</p>
                   {loading ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      R$ {totalReceitasDoDia.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-green-500/20">
-                  <DollarSign className="w-5 h-5 text-green-500" />
+                <div className="p-3 rounded-xl bg-cyan-500/20">
+                  <CalendarDays className="w-5 h-5 text-cyan-500" />
                 </div>
               </div>
             </CardContent>
@@ -334,6 +477,26 @@ const Receitas = () => {
                 </div>
                 <div className="p-3 rounded-xl bg-orange-500/20">
                   <Tag className="w-5 h-5 text-orange-500" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Total Receitas</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-green-500/20">
+                  <DollarSign className="w-5 h-5 text-green-500" />
                 </div>
               </div>
             </CardContent>
@@ -416,6 +579,115 @@ const Receitas = () => {
               </CardContent>
             </Card>
 
+            {/* Performance de receita da operação Dashboard */}
+            <Card className="border border-border/50 bg-card overflow-hidden">
+              <CardHeader className="pb-3 border-b border-border/50">
+                <CardTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+                  <TrendingUp className="w-4.5 h-4.5 text-green-500" />
+                  Performance de receita da operação
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Métodos de Pagamento */}
+                  <div className="lg:col-span-5 space-y-4">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Meios de Pagamento</h4>
+                      {totalFiltrado === 0 ? (
+                        <div className="h-[200px] flex items-center justify-center border border-dashed border-border rounded-xl text-muted-foreground text-sm">
+                          Sem transações no período
+                        </div>
+                      ) : (
+                        <div className="space-y-3.5">
+                          {metodoList.map((item) => (
+                            <div key={item.label} className="space-y-1.5">
+                              <div className="flex items-center justify-between text-xs sm:text-sm">
+                                <span className="font-medium text-foreground">{item.label}</span>
+                                <div className="space-x-2 text-right">
+                                  <span className="font-semibold text-foreground">
+                                    R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    ({item.porcentagem.toFixed(1)}%)
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${item.cor}`}
+                                  style={{ width: `${item.porcentagem}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Gráfico por Hora */}
+                  <div className="lg:col-span-7 flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Fluxo de Receita por Hora</h4>
+                      <div className="h-[200px] w-full">
+                        {totalFiltrado === 0 ? (
+                          <div className="h-full flex items-center justify-center border border-dashed border-border rounded-xl text-muted-foreground text-sm">
+                            Sem dados de fluxo horário no período
+                          </div>
+                        ) : (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={hourlyData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="colorReceitasHours" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.25} />
+                                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="opacity-5" />
+                              <XAxis
+                                dataKey="hour"
+                                tick={{ fontSize: 10 }}
+                                tickLine={false}
+                                axisLine={false}
+                              />
+                              <YAxis
+                                tick={{ fontSize: 10 }}
+                                tickFormatter={(v) => `R$ ${v}`}
+                                tickLine={false}
+                                axisLine={false}
+                                width={55}
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  backgroundColor: "hsl(var(--background))",
+                                  border: "1px solid hsl(var(--border))",
+                                  borderRadius: "8px",
+                                  color: "hsl(var(--foreground))",
+                                  fontSize: "12px",
+                                }}
+                                formatter={(value: number) => [
+                                  `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+                                  "Receita",
+                                ]}
+                                labelStyle={{ fontWeight: "bold" }}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="total"
+                                stroke="#22c55e"
+                                fill="url(#colorReceitasHours)"
+                                strokeWidth={2}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Lista Desktop */}
             <div className="hidden md:block">
               <Card>
@@ -426,6 +698,7 @@ const Receitas = () => {
                         <TableHead className="font-semibold">Descrição</TableHead>
                         <TableHead className="font-semibold">Categoria</TableHead>
                         <TableHead className="font-semibold">Data</TableHead>
+                        <TableHead className="font-semibold">Método</TableHead>
                         <TableHead className="font-semibold text-right">Valor</TableHead>
                         <TableHead className="font-semibold text-center w-24">Ações</TableHead>
                       </TableRow>
@@ -449,7 +722,7 @@ const Receitas = () => {
                           </TableCell>
                         </TableRow>
                       ) : (
-                        receitasFiltradas.map((receita) => (
+                        receitasFiltradas.slice(0, visibleCount).map((receita) => (
                           <TableRow key={receita.id} className="group">
                             <TableCell>
                               <div className="flex items-start gap-3">
@@ -484,6 +757,21 @@ const Receitas = () => {
                             </TableCell>
                             <TableCell className="text-muted-foreground">
                               {formatarData(receita.data)}
+                            </TableCell>
+                            <TableCell>
+                              {(() => {
+                                const info = getPaymentMethodInfo(receita.metodo_pagamento);
+                                if (!info) {
+                                  return <span className="text-xs text-muted-foreground/60">—</span>;
+                                }
+                                const Icon = info.icon;
+                                return (
+                                  <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                                    <Icon className="w-4 h-4" />
+                                    {info.label}
+                                  </span>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="text-right">
                               <span className="font-semibold text-green-500">
@@ -532,6 +820,18 @@ const Receitas = () => {
                       )}
                     </TableBody>
                   </Table>
+                  {receitasFiltradas.length > visibleCount && (
+                    <div className="flex justify-center p-4 border-t">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleCount((prev) => prev + 200)}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Carregar mais (exibindo {visibleCount} de {receitasFiltradas.length})
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -596,6 +896,16 @@ const Receitas = () => {
                                         {receita.categorias?.nome || "Sem categoria"}
                                       </Badge>
                                       <span className="text-xs text-muted-foreground">{formatarData(receita.data)}</span>
+                                      {getPaymentMethodInfo(receita.metodo_pagamento) && (() => {
+                                        const pmInfo = getPaymentMethodInfo(receita.metodo_pagamento)!;
+                                        const PmIcon = pmInfo.icon;
+                                        return (
+                                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground w-fit">
+                                            <PmIcon className="w-3.5 h-3.5" />
+                                            {pmInfo.label}
+                                          </span>
+                                        );
+                                      })()}
                                     </div>
                                     <div className="font-semibold text-green-500">
                                       +R$ {receita.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -644,6 +954,18 @@ const Receitas = () => {
                       </div>
                     )}
                   </ScrollArea>
+                  {receitasFiltradas.length > visibleCount && (
+                    <div className="flex justify-center pt-4 border-t">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleCount((prev) => prev + 200)}
+                        className="w-full text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Carregar mais (exibindo {visibleCount} de {receitasFiltradas.length})
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

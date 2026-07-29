@@ -49,6 +49,21 @@ export interface DividasQueryParams {
   endDate?: string | null;
 }
 
+function resolveDividaStatus(d: any): Divida {
+  if (d.status === "quitada" || Number(d.valor_restante || 0) <= 0) {
+    return { ...d, status: "quitada" };
+  }
+  
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  
+  const venc = new Date(d.data_vencimento + "T12:00:00");
+  venc.setHours(0, 0, 0, 0);
+  
+  const status = venc < hoje ? "vencida" : "pendente";
+  return { ...d, status };
+}
+
 // ─── Fetcher com fallback (debt_reminders pode não existir) ─────────────
 async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> {
   const { startDate, endDate } = params;
@@ -77,11 +92,11 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
 
     const { data: fallback, error: fallbackError } = await fallbackQuery;
     if (fallbackError) throw fallbackError;
-    return (fallback ?? []) as Divida[];
+    return ((fallback ?? []) as any[]).map(resolveDividaStatus) as Divida[];
   }
 
   if (error) throw error;
-  return (data ?? []) as Divida[];
+  return ((data ?? []) as any[]).map(resolveDividaStatus) as Divida[];
 }
 
 // ─── Hook ──────────────────────────────────────────────────

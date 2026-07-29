@@ -9,6 +9,7 @@ import { useWhatsAppSettings } from "@/domains/admin/hooks/useWhatsAppSettings";
 import { useContactSettings } from "@/domains/admin/hooks/useContactSettings";
 import { Loader2, Save, AlertCircle, CheckCircle, Settings, MessageCircle, Mail, Phone } from "lucide-react";
 import { Alert, AlertDescription } from "@/shared/components/ui/alert";
+import { EyemobileSettingsCard } from "@/domains/admin/components/EyemobileSettingsCard";
 
 export default function AdminWebhookSettings() {
   const {
@@ -108,7 +109,7 @@ export default function AdminWebhookSettings() {
     <AdminLayoutModern>
       <AdminPageHeader
         title="Configurações"
-        subtitle="Configure WhatsApp e informações de contato"
+        subtitle="Configure WhatsApp, informações de contato e integrações"
         icon={Settings}
         iconColor="bg-orange-500"
         breadcrumbs={[
@@ -304,6 +305,9 @@ export default function AdminWebhookSettings() {
             )}
           </CardContent>
         </Card>
+
+        {/* Eyemobile Settings Card */}
+        <EyemobileSettingsCard />
       </div>
     </AdminLayoutModern>
   );

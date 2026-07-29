@@ -85,23 +85,40 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
             ) : (
               contasBancarias.map((conta) => {
                 const saldo = Number(conta.saldo_atual) || Number(conta.saldo_inicial) || 0;
+                const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id && d.status !== "quitada");
+                const totalDividas = dividasVinculadas.reduce((sum, d) => sum + Number(d.valor_restante || 0), 0);
+
                 return (
                   <div
                     key={conta.id}
-                    className="flex items-center justify-between p-3 rounded-xl hover:bg-muted/40 transition-colors border border-transparent hover:border-border/40"
+                    className="p-3 rounded-xl hover:bg-muted/40 transition-colors border border-transparent hover:border-border/40 space-y-1.5"
                   >
-                    <div className="flex items-center gap-3">
-                      <BankLogoBadge nomeOuId={conta.nome} size="md" />
-                      <div>
-                        <p className="font-medium text-sm text-foreground">{conta.nome}</p>
-                        <p className="text-[11px] text-muted-foreground capitalize">
-                          {conta.tipo.replace("_", " ")}
-                        </p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <BankLogoBadge nomeOuId={conta.nome} size="md" />
+                        <div>
+                          <p className="font-medium text-sm text-foreground">{conta.nome}</p>
+                          <p className="text-[11px] text-muted-foreground capitalize">
+                            {conta.tipo.replace("_", " ")}
+                          </p>
+                        </div>
                       </div>
+                      <span className="font-bold text-sm text-blue-500 dark:text-blue-400">
+                        {formatarValor(saldo)}
+                      </span>
                     </div>
-                    <span className="font-bold text-sm text-blue-500 dark:text-blue-400">
-                      {formatarValor(saldo)}
-                    </span>
+
+                    {dividasVinculadas.length > 0 && (
+                      <div className="flex items-center justify-between text-[11px] text-rose-500 pl-11">
+                        <span className="flex items-center gap-1">
+                          <CreditCardIcon className="w-3 h-3" />
+                          {dividasVinculadas.length} dívida(s) vinculada(s)
+                        </span>
+                        <span className="font-semibold">
+                          {formatarValor(totalDividas)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 );
               })

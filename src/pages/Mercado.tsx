@@ -76,6 +76,7 @@ const Mercado = () => {
 
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [filtroDescricao, setFiltroDescricao] = useState("");
+  const [filterEyemobileOnly, setFilterEyemobileOnly] = useState(false);
   const [itemParaEditar, setItemParaEditar] = useState<ItemMercado | null>(null);
   const [modalEditarAberto, setModalEditarAberto] = useState(false);
   const [categoriaParaEditar, setCategoriaParaEditar] = useState<CategoriaMercado | null>(null);
@@ -135,12 +136,14 @@ const Mercado = () => {
   const itemsFiltrados = itensMercado.filter((item) => {
     const matchCategoria = selectedCategory === "all" || item.categorias_mercado?.nome === selectedCategory;
     const matchDescricao = item.descricao.toLowerCase().includes(filtroDescricao.toLowerCase());
-    return matchCategoria && matchDescricao;
+    const matchEyemobile = !filterEyemobileOnly || (item as any).origem === "eyemobile";
+    return matchCategoria && matchDescricao && matchEyemobile;
   });
 
   const limparFiltros = () => {
     setSelectedCategory("all");
     setFiltroDescricao("");
+    setFilterEyemobileOnly(false);
   };
 
   const handleAdicionarItem = async (novoItem: ItemMercadoForm) => {
@@ -372,7 +375,16 @@ const Mercado = () => {
                   ))}
                 </SelectContent>
               </Select>
-              {(selectedCategory !== "all" || filtroDescricao) && (
+              <Button
+                variant={filterEyemobileOnly ? "default" : "outline"}
+                size="sm"
+                onClick={() => setFilterEyemobileOnly(!filterEyemobileOnly)}
+                className={`h-9 text-xs flex items-center gap-1.5 ${filterEyemobileOnly ? "bg-orange-500 hover:bg-orange-600 text-white border-0" : "border-dashed hover:text-orange-500"}`}
+              >
+                <Package className="w-3.5 h-3.5" />
+                PDV Eyemobile
+              </Button>
+              {(selectedCategory !== "all" || filtroDescricao || filterEyemobileOnly) && (
                 <Button variant="ghost" size="sm" onClick={limparFiltros} className="h-9">
                   <Filter className="w-4 h-4 mr-1" />
                   Limpar
@@ -466,11 +478,18 @@ const Mercado = () => {
                           </div>
                         </div>
 
-                        {/* Status Badge */}
-                        <Badge className={`${statusConfig.bgLight} ${statusConfig.text} border-0 mb-3`}>
-                          <div className={`w-1.5 h-1.5 rounded-full ${statusConfig.color} mr-1.5`} />
-                          {statusConfig.label}
-                        </Badge>
+                        {/* Status Badges */}
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          <Badge className={`${statusConfig.bgLight} ${statusConfig.text} border-0`}>
+                            <div className={`w-1.5 h-1.5 rounded-full ${statusConfig.color} mr-1.5`} />
+                            {statusConfig.label}
+                          </Badge>
+                          {(item as any).origem === 'eyemobile' && (
+                            <Badge variant="outline" className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20 text-xs font-semibold">
+                              PDV Eyemobile
+                            </Badge>
+                          )}
+                        </div>
 
                         {/* Progresso do Estoque */}
                         <div className="space-y-2">
@@ -479,11 +498,16 @@ const Mercado = () => {
                             <span className="font-medium">{item.quantidade_atual} / {item.quantidade_ideal} {item.unidade_medida}</span>
                           </div>
                           <Progress value={Math.min(percentualEstoque, 100)} className="h-1.5" />
+                          {(item as any).observacao && (
+                            <p className="text-xs text-muted-foreground italic mt-1.5">
+                              {(item as any).observacao}
+                            </p>
+                          )}
                         </div>
 
                         {/* Preço */}
                         <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-                          <span className="text-sm text-muted-foreground">Preço estimado</span>
+                          <span className="text-sm text-muted-foreground">Preço de Custo</span>
                           <span className="font-semibold text-emerald-500">
                             R$ {item.preco_atual.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                           </span>

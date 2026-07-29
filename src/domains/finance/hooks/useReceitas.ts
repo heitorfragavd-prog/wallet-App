@@ -21,37 +21,78 @@ export interface ReceitasQueryParams {
   endDate?: string | null;
 }
 
+// ─── Paginated fetch helper (Supabase caps at 1000 rows by default) ──
+// Fetches pages in PARALLEL up to maxRows (default 2000) to prevent browser hangs.
+// Separates count probe from column select to prevent options being lost during chaining.
+async function fetchAllRows<T>(
+  buildQuery: () => ReturnType<typeof supabase.from>,
+  applyFilters: (q: any) => any,
+  columns: string,
+  maxRows: number = 2000
+): Promise<T[]> {
+  const PAGE = 1000;
+  
+  // Count probe: call select first to obtain a FilterBuilder before applying filters
+  const { count, error: countErr } = await applyFilters(
+    buildQuery().select("id", { count: "exact", head: true })
+  );
+  if (countErr) throw countErr;
+  
+  const total = Math.min(count ?? 0, maxRows);
+  if (total === 0) return [];
+
+  const pageCount = Math.ceil(total / PAGE);
+  const pages = Array.from({ length: pageCount }, (_, i) => i);
+
+  // Fire every page concurrently, each on its own fresh builder
+  const results = await Promise.all(
+    pages.map((p) =>
+      applyFilters(buildQuery().select(columns))
+        .range(p * PAGE, p * PAGE + PAGE - 1)
+        .then(({ data, error }) => {
+          if (error) throw error;
+          return (data as T[]) ?? [];
+        })
+    )
+  );
+
+  return results.flat();
+}
+
 // ─── Fetcher puro ─────────────────────────────────────────────────
+// NOTE: tags are NOT fetched here (heavy nested join). They are loaded
+// lazily via getReceitaTags() only when editing a single receipt.
 async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[]> {
   const { startDate, endDate } = params;
 
-  let receitasQuery = supabase
-    .from("receitas")
-    .select("*, categorias!categoria_id (nome, cor, icone), receita_tags (tags (id, nome, cor))");
+  const applyFilters = (q: ReturnType<typeof supabase.from>) => {
+    let query = q;
+    if (startDate) query = query.gte("data", startDate);
+    if (endDate) query = query.lte("data", endDate);
+    return query;
+  };
 
-  if (startDate) receitasQuery = receitasQuery.gte("data", startDate);
-  if (endDate) receitasQuery = receitasQuery.lte("data", endDate);
+  // receitas has no 'tipo' column in DB, we select only valid columns
+  // Disambiguate categorias relationship for receitas using the foreign key receitas_categoria_id_fkey
+  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!receitas_categoria_id_fkey (nome, cor, icone)";
+  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
 
-  let transacoesQuery = supabase
-    .from("transacoes")
-    .select("*, categorias!categoria_id (nome, cor, icone)")
-    .eq("tipo", "receita");
+  // Factories: each call returns a brand-new builder (no shared mutable state)
+  const buildReceitas = () => supabase.from("receitas");
+  const buildTransacoes = () => supabase.from("transacoes");
 
-  if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
-  if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
+  const [receitasResp, transacoesResp] = await Promise.all([
+    fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 15000),
+    fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 15000),
+  ]);
 
-  const [receitasResp, transacoesResp] = await Promise.all([receitasQuery, transacoesQuery]);
-
-  if (receitasResp.error) throw receitasResp.error;
-  if (transacoesResp.error) throw transacoesResp.error;
-
-  const mappedReceitas = (receitasResp.data ?? []).map((r) => ({
+  // Map 'tipo' to receita table rows manually since they don't have it in the database
+  const mappedReceitas = (receitasResp ?? []).map((r) => ({
     ...r,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tags: (r as any).receita_tags?.map((rt: any) => rt.tags).filter(Boolean) ?? [],
+    tipo: "receita",
   }));
 
-  return [...mappedReceitas, ...(transacoesResp.data ?? [])].sort(
+  return [...mappedReceitas, ...(transacoesResp ?? [])].sort(
     (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
   ) as Receita[];
 }
@@ -84,7 +125,9 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
   const { data: receitas = [], isLoading: loading } = useQuery({
     queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate }],
     queryFn: () => fetchReceitas({ startDate, endDate }),
-    staleTime: 1000 * 60 * 2,
+    // Keep results hot in cache for 10 min so re-clicking a date range is instant
+    staleTime: 1000 * 60 * 10,
+    gcTime: 1000 * 60 * 30,
   });
 
   const createReceita = useMutation({
