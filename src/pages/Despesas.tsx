@@ -233,12 +233,16 @@ const Despesas = () => {
         const matchCategoria = categoriaFiltro === "" || despesa.categorias?.nome === categoriaFiltro;
         return matchDescricao && matchCategoria;
       })
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      .sort((a, b) => {
+        const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
 
-    // Agrupar por data de cadastro
+    // Agrupar por data da transação
     const grupos: { [key: string]: typeof filtradas } = {};
     filtradas.forEach((d) => {
-      const dataKey = formatarDataRelativa(d.created_at);
+      const dataKey = formatarDataRelativa(d.data);
       if (!grupos[dataKey]) grupos[dataKey] = [];
       grupos[dataKey].push(d);
     });

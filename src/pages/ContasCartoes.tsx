@@ -289,9 +289,9 @@ export default function ContasCartoes() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {contas.map((conta) => {
               const isCartao = conta.tipo === "cartao_credito";
-              const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id);
+              const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id && d.status !== "quitada");
               const totalDividas = dividasVinculadas.reduce(
-                (acc, d) => acc + (Number(d.valor_restante) || Number(d.valor_total) || 0),
+                (acc, d) => acc + Number(d.valor_restante || 0),
                 0
               );
 

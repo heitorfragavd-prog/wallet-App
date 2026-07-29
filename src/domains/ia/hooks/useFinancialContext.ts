@@ -22,13 +22,15 @@ export const useFinancialContext = () => {
         { data: dividas },
         { data: metas },
         { data: contas },
+        { data: eyemobileLogs },
       ] = await Promise.all([
         supabase.from("transacoes").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(50),
         supabase.from("despesas").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
         supabase.from("receitas").select("*, categorias!categoria_id(nome)").gte("data", inicio90).order("data", { ascending: false }).limit(100),
         supabase.from("dividas").select("id, descricao, valor_total, valor_restante, data_vencimento, status").neq("status", "quitada"),
         supabase.from("metas").select("id, titulo, valor_alvo, valor_atual, status"),
-        supabase.from("contas_usuario").select("id, nome, saldo"),
+        supabase.from("contas_usuario").select("id, nome, saldo_atual"),
+        supabase.from("eyemobile_sync_logs").select("*").order("created_at", { ascending: false }).limit(5),
       ]);
 
       const despesasMes = (despesas || []).filter(d => d.data >= inicioMes && d.data <= fimMes);
@@ -50,8 +52,8 @@ export const useFinancialContext = () => {
       });
       const topCats = Object.entries(catMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-      type WithSaldo = { saldo?: number | null; nome?: string };
-      const totalSaldoContas = (contas || []).reduce((s, c) => s + Number((c as unknown as WithSaldo).saldo || 0), 0);
+      type WithSaldo = { saldo_atual?: number | null; nome?: string };
+      const totalSaldoContas = (contas || []).reduce((s, c) => s + Number((c as unknown as WithSaldo).saldo_atual || 0), 0);
       type WithValor = { valor_total?: number | null; valor?: number | null; valor_parcela?: number | null };
       const totalDividas = (dividas || []).reduce((s, d) => s + Number((d as unknown as WithValor).valor_total ?? (d as unknown as WithValor).valor ?? 0), 0);
       const parcelasMes = (dividas || []).reduce((s, d) => s + Number((d as unknown as WithValor).valor_parcela ?? 0), 0);
@@ -81,7 +83,7 @@ export const useFinancialContext = () => {
         ctx += `- Saldo total: ${fmt(totalSaldoContas)}\n`;
         (contas || []).forEach(c => {
           const conta = c as unknown as WithSaldo;
-          ctx += `  - ${conta.nome ?? 'Conta'}: ${fmt(Number(conta.saldo || 0))}\n`;
+          ctx += `  - ${conta.nome ?? 'Conta'}: ${fmt(Number(conta.saldo_atual || 0))}\n`;
         });
         ctx += "\n";
       }
@@ -125,6 +127,18 @@ export const useFinancialContext = () => {
         ctx += "\n";
       }
 
+      if (eyemobileLogs && eyemobileLogs.length > 0) {
+        const lastLog = eyemobileLogs[0];
+        ctx += `## Integração Eyemobile PDV\n`;
+        ctx += `- Última sincronização: ${new Date(lastLog.created_at).toLocaleString("pt-BR")}\n`;
+        ctx += `- Status do último sync: ${lastLog.status}\n`;
+        ctx += `- Itens processados no último sync: ${lastLog.items_processed}\n`;
+        if (lastLog.payload) {
+          ctx += `  - Detalhes: Vendas: ${lastLog.payload.salesCount || 0}, Estoque: ${lastLog.payload.stockAlerts || 0}\n`;
+        }
+        ctx += "\n";
+      }
+      
       ctx += `*Dados carregados em ${new Date().toLocaleString("pt-BR")}*`;
       setContext(ctx);
     } catch (error) {

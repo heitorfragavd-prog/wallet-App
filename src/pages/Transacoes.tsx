@@ -182,13 +182,17 @@ const Transacoes = () => {
       return matchDescricao && matchTipo && matchCategoria && matchPeriodo && matchDataPersonalizada && matchValor && matchMetodoPagamento && matchConta && matchTag;
     });
 
-    // Ordenar por data de cadastro
-    filtradas = filtradas.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    // Ordenar por data da transação e depois por cadastro como critério de desempate
+    filtradas = filtradas.sort((a, b) => {
+      const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
 
-    // Agrupar por data de cadastro
+    // Agrupar por data da transação
     const grupos: { [key: string]: typeof filtradas } = {};
     filtradas.forEach((t) => {
-      const dataKey = formatarDataRelativa(t.created_at);
+      const dataKey = formatarDataRelativa(t.data);
       if (!grupos[dataKey]) grupos[dataKey] = [];
       grupos[dataKey].push(t);
     });

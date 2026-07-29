@@ -2,6 +2,39 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.22] - 2026-07-29
+
+### ✨ Novo
+- **Integração Eyemobile PDV** — Sincronização completa de vendas, produtos e dashboard financeiro via Eyemobile
+- **EyemobileSettingsCard** — Configuração de credenciais e parâmetros da integração no painel admin
+- **EyemobileDashboardView** — Componente de dashboard com métricas de vendas do PDV em tempo real
+- **useEyemobileDashboard** — Hook de dados com cache, refresh automático e tratamento de erros
+- **eyemobileDashboard.ts** — Serviço completo de comunicação com a API Eyemobile
+- **Supabase Edge Function** `eyemobile-sync` — Sincronização serverless de transações PDV
+- **EyemobilePDV.tsx** — Nova página dedicada ao PDV Eyemobile no menu principal
+- **Migration** `50.eyemobile_integration.sql` — Schema de banco para dados do PDV
+
+### 🔧 Melhorado
+- **Receitas.tsx** — Integração com dados de vendas Eyemobile no fluxo de receitas
+- **Dashboard.tsx** — Widget do Eyemobile PDV adicionado ao painel principal
+- **ContasCartoesDashboardWidget.tsx** — Atualizado para incluir resumo PDV
+- **useReceitas.ts** — Expandido para consumir dados Eyemobile junto às receitas bancárias
+- **useDividas.ts** — Melhorias no hook de dívidas com contexto financeiro unificado
+- **useFinancialContext.ts** — Contexto IA atualizado com dados do PDV
+- **DashboardLayout.tsx** — Rota da página EyemobilePDV adicionada ao layout
+- **Mercado.tsx**, **Despesas.tsx**, **Transacoes.tsx** — Ajustes de integração e contexto
+- **useDateRangeFilter.ts** — Filtro de datas aprimorado para suportar sincronização PDV
+- **App.tsx** — Rota `/eyemobile-pdv` registrada
+
+### 🐛 Corrigido
+- Parâmetro `start_date` na sincronização de vendas Eyemobile corrigido
+- Remoção de arquivo de timestamp obsoleto (`vite.config.ts.timestamp-*.mjs`)
+
+### 📊 Estatísticas
+- **27 arquivos alterados** | **+3112 inserções** | **-113 remoções**
+
+---
+
 ## [1.0.12] - 2024-11-28
 
 ### 🚀 Deploy

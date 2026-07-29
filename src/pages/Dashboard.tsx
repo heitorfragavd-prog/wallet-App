@@ -44,6 +44,7 @@ import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao"
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
 import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTransactions";
 
+
 // Função para formatar a data corretamente
 const formatarData = (dataString: string) => {
   if (!dataString) return "";
@@ -83,6 +84,7 @@ const Dashboard = () => {
   // ── Filtro de data global do dashboard
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
   const [dividasInterval, setDividasInterval] = useState<"semana" | 7 | 15 | 30>("semana");
+
 
   // Iniciar com o mês atual por padrão (apenas na primeira vez)
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
@@ -133,9 +135,11 @@ const Dashboard = () => {
       .reduce((total, t) => total + Number(t.valor), 0);
 
     return {
-      transacoesFiltradas: transacoesFiltradas.sort((a, b) =>
-        new Date(b.created_at || b.data).getTime() - new Date(a.created_at || a.data).getTime()
-      ),
+      transacoesFiltradas: transacoesFiltradas.sort((a, b) => {
+        const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }),
       totalReceitas,
       totalDespesas,
       saldoPeriodo: totalReceitas - totalDespesas,
@@ -291,7 +295,7 @@ const Dashboard = () => {
   const transacoesAgrupadas = useMemo(() => {
     const grupos: { [key: string]: typeof transacoesFiltradas } = {};
     transacoesFiltradas.slice(0, 6).forEach((t) => {
-      const dataKey = formatarDataRelativa(t.created_at);
+      const dataKey = formatarDataRelativa(t.data);
       if (!grupos[dataKey]) grupos[dataKey] = [];
       grupos[dataKey].push(t);
     });
