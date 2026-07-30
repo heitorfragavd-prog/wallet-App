@@ -75,17 +75,29 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
     ...r,
     tipo: "receita",
+    metodo_pagamento: r.metodo_pagamento ? String(r.metodo_pagamento).toLowerCase() : r.metodo_pagamento,
   }));
 
-  // 1. Filtragem estrita Eyemobile/PDV: Aceitar SOMENTE pagamentos em Dinheiro.
-  const filteredTransacoes = (transacoesResp ?? []).filter((t) => {
+  // 1. Normalizar e aplicar filtragem estrita Eyemobile/PDV: Aceitar SOMENTE pagamentos em Dinheiro.
+  const filteredTransacoes = (transacoesResp ?? []).map((t) => {
+    const rawMetodo = String(t.metodo_pagamento || "").toLowerCase();
+    let metodoClean: PaymentMethod = "outros";
+    if (rawMetodo.includes("dinheiro") || rawMetodo.includes("cash") || rawMetodo.includes("especie") || rawMetodo.includes("money")) metodoClean = "dinheiro";
+    else if (rawMetodo.includes("pix")) metodoClean = "pix";
+    else if (rawMetodo.includes("credito") || rawMetodo.includes("credit")) metodoClean = "cartao_credito";
+    else if (rawMetodo.includes("debito") || rawMetodo.includes("debit")) metodoClean = "cartao_debito";
+    else if (rawMetodo.includes("boleto") || rawMetodo.includes("ticket")) metodoClean = "boleto";
+
+    return {
+      ...t,
+      metodo_pagamento: metodoClean,
+    };
+  }).filter((t) => {
     const isEyemobilePDV = t.descricao?.toLowerCase().includes("eyemobile") || 
                            t.observacoes?.toLowerCase().includes("eyemobile") ||
                            t.descricao?.toLowerCase().includes("pdv");
     if (isEyemobilePDV) {
-      const metodo = (t.metodo_pagamento || "").toUpperCase();
-      const isDinheiro = metodo === "DINHEIRO" || metodo === "CASH" || metodo === "ESPECIE" || metodo === "MONEY";
-      return isDinheiro;
+      return t.metodo_pagamento === "dinheiro";
     }
     return true;
   });
@@ -93,47 +105,56 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
   // 2. Tentar buscar Entradas Digitais reais da Divipay via API listMovements
   let divipayReceitas: Receita[] = [];
   try {
-    const initialDate = startDate ? startDate.split("T")[0] : new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-    const finalDate = endDate ? endDate.split("T")[0] : new Date().toISOString().split("T")[0];
+    const initialDateQuery = startDate ? (startDate.includes("T") ? startDate : `${startDate}T00:00:00`) : `${new Date().getFullYear()}-01-01T00:00:00`;
+    const finalDateQuery = endDate ? (endDate.includes("T") ? endDate : `${endDate}T23:59:59`) : `${new Date().toISOString().split("T")[0]}T23:59:59`;
 
     const response = await divipayService.listMovements({
-      initialDate,
-      finalDate,
-      type: "CASH_IN",
+      initialDate: initialDateQuery,
+      finalDate: finalDateQuery,
       limit: 200,
     });
 
     if (response.items && response.items.length > 0) {
-      divipayReceitas = response.items.map((m) => {
-        const tp = String(m.type || "").toUpperCase();
-        let metodo: PaymentMethod = "pix";
-        if (tp.includes("CREDIT")) metodo = "cartao_credito";
-        else if (tp.includes("DEBIT")) metodo = "cartao_debito";
-        else if (tp.includes("BOLETO") || tp.includes("TICKET")) metodo = "boleto";
-        else if (tp.includes("PIX")) metodo = "pix";
+      divipayReceitas = response.items
+        .filter((m) => {
+          const typeStr = String(m.type || "").toUpperCase();
+          const isOut = typeStr.includes("CASH_OUT") || typeStr.includes("WITHDRAW") || typeStr.includes("SAQUE");
+          return !isOut;
+        })
+        .map((m) => {
+          const tp = String(m.type || "").toUpperCase();
+          const desc = String(m.description || "").toUpperCase();
+          let metodo: PaymentMethod = "pix";
 
-        return {
-          id: `divipay-${m.id}`,
-          user_id: "",
-          tipo: "receita",
-          valor: Number(m.amountLiquid || m.amount || 0),
-          descricao: m.description || `Entrada Divipay (${m.payerName || "Cliente"})`,
-          data: m.date || new Date().toISOString(),
-          created_at: m.date || new Date().toISOString(),
-          updated_at: m.date || new Date().toISOString(),
-          metodo_pagamento: metodo,
-          observacoes: `Entrada digital Divipay - ID ${m.transactionCode || m.id}`,
-          categorias: {
-            nome: "Vendas Divipay",
-            cor: "#f59e0b",
-            icone: "Smartphone",
-          },
-        };
-      });
+          if (tp.includes("CREDIT") || desc.includes("CREDIT") || desc.includes("CRÉDITO")) metodo = "cartao_credito";
+          else if (tp.includes("DEBIT") || desc.includes("DEBIT") || desc.includes("DÉBITO")) metodo = "cartao_debito";
+          else if (tp.includes("BOLETO") || tp.includes("TICKET") || desc.includes("BOLETO")) metodo = "boleto";
+          else if (tp.includes("PIX") || desc.includes("PIX")) metodo = "pix";
+
+          return {
+            id: `divipay-${m.id}`,
+            user_id: "",
+            tipo: "receita",
+            valor: Number(m.amountLiquid || m.amount || 0),
+            descricao: m.description || `Entrada Divipay (${m.payerName || "Cliente"})`,
+            data: m.date || new Date().toISOString(),
+            created_at: m.date || new Date().toISOString(),
+            updated_at: m.date || new Date().toISOString(),
+            metodo_pagamento: metodo,
+            observacoes: `Entrada digital Divipay - ID ${m.transactionCode || m.id}`,
+            categorias: {
+              nome: "Vendas Divipay",
+              cor: "#f59e0b",
+              icone: "Smartphone",
+            },
+          };
+        });
     }
   } catch (err) {
     console.warn("Nao foi possivel carregar entradas ao vivo da Divipay:", err);
   }
+
+
 
   return [...mappedReceitas, ...filteredTransacoes, ...divipayReceitas].sort(
     (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
