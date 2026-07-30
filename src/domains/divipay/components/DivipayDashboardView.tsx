@@ -41,7 +41,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
   const [showFilters, setShowFilters] = useState(false);
   const [filterType, setFilterType] = useState("");
   const [filterInitialDate, setFilterInitialDate] = useState("2026-07-01T00:00");
-  const [filterFinalDate, setFilterFinalDate] = useState("2026-07-30T23:59");
+  const [filterFinalDate, setFilterFinalDate] = useState("2026-07-31T11:59");
   const [filterMaquineta, setFilterMaquineta] = useState("");
   const [filterPromoter, setFilterPromoter] = useState("");
   const [appliedFilters, setAppliedFilters] = useState<DivipayDashboardFilters | undefined>();
@@ -60,6 +60,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
       type: filterType,
     });
   };
+
 
 
   return (

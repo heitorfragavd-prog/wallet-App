@@ -53,14 +53,15 @@ export interface DivipayDashboardResult {
 
 
 function getDefaultDateRange(): { initialDate: string; finalDate: string } {
-  const today = new Date().toISOString().split("T")[0];
-  const start = new Date();
-  start.setDate(start.getDate() - 30);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
   return {
-    initialDate: start.toISOString().split("T")[0],
-    finalDate: today,
+    initialDate: `${year}-${month}-01`,
+    finalDate: `${year}-${month}-31`,
   };
 }
+
 
 export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
   const defaultDates = getDefaultDateRange();
