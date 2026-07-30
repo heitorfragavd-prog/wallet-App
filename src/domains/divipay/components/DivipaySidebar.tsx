@@ -49,25 +49,20 @@ export function DivipaySidebar({
         collapsed ? "w-16" : "w-64"
       )}
     >
-      {/* Top Header com Logo Oficial e Botão Hambúrguer de 3 Riscos */}
+      {/* Top Header com Botão Hambúrguer de 3 Riscos */}
       <div className="flex items-center justify-between p-3.5 border-b border-border/50">
-        {!collapsed ? (
+        {!collapsed && (
           <div className="flex items-center gap-2.5 overflow-hidden">
-            <img 
-              src="/logos/divipay.png" 
-              alt="Divipay Logo" 
-              className="h-8 object-contain drop-shadow-sm" 
-            />
-          </div>
-        ) : (
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center overflow-hidden mx-auto">
-            <img 
-              src="/logos/divipay.png" 
-              alt="Divipay Logo" 
-              className="h-7 w-7 object-contain" 
-            />
+            <div className="w-8 h-8 rounded-xl bg-amber-500 flex items-center justify-center text-white font-bold shadow-sm flex-shrink-0">
+              <Building2 className="w-4 h-4" />
+            </div>
+            <div className="truncate">
+              <span className="font-extrabold text-sm tracking-tight text-amber-500">DiviPay</span>
+              <span className="text-[10px] text-muted-foreground block -mt-0.5 font-medium">Bank Suite</span>
+            </div>
           </div>
         )}
+
 
         <Button
           variant="ghost"
