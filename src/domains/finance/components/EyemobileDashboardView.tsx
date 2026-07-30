@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, Banknote, CreditCard, LayoutDashboard, RefreshCw, ShoppingCart, Ticket, TrendingUp } from "lucide-react";
+import { AlertTriangle, Banknote, CreditCard, LayoutDashboard, RefreshCw, ShoppingCart, Ticket, TrendingUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -37,12 +37,24 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
   const dashboard = dashboardQuery.data;
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // Estados de paginacao do Estoque Critico (10 itens padrao)
+  const [stockItemsPerPage, setStockItemsPerPage] = useState<number>(10);
+  const [stockCurrentPage, setStockCurrentPage] = useState<number>(1);
+
   const metrics = useMemo(() => dashboard ? [
     { label: "Receita total", value: currency(dashboard.kpis.totalRevenue), icon: TrendingUp, className: "text-emerald-500 bg-emerald-500/10" },
     { label: "Total de transações", value: dashboard.kpis.totalTransactions.toLocaleString("pt-BR"), icon: Ticket, className: "text-blue-500 bg-blue-500/10" },
     { label: "Ticket médio por pessoa", value: currency(dashboard.kpis.averageTicket), icon: CreditCard, className: "text-violet-500 bg-violet-500/10" },
     { label: "Frente de caixa", value: currency(dashboard.kpis.frontCashierRevenue), icon: Banknote, className: "text-orange-500 bg-orange-500/10" },
   ] : [], [dashboard]);
+
+  // Lista paginada de Estoque Critico
+  const criticalStockList = useMemo(() => dashboard?.criticalStock ?? [], [dashboard]);
+  const stockTotalPages = Math.max(1, Math.ceil(criticalStockList.length / stockItemsPerPage));
+  const paginatedCriticalStock = useMemo(() => {
+    const start = (stockCurrentPage - 1) * stockItemsPerPage;
+    return criticalStockList.slice(start, start + stockItemsPerPage);
+  }, [criticalStockList, stockCurrentPage, stockItemsPerPage]);
 
   const addToShoppingList = async (item: NonNullable<typeof dashboard>["criticalStock"][number]) => {
     const result = await createItemMercado({
@@ -113,7 +125,128 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
       <Card className="xl:col-span-2"><CardHeader><CardTitle>Formas de pagamento</CardTitle><CardDescription>Participação no faturamento do período.</CardDescription></CardHeader><CardContent className="space-y-3">{dashboard.payments.length ? dashboard.payments.map((payment) => <div key={payment.name}><div className="mb-1 flex justify-between text-sm"><span>{payment.name}</span><span className="font-medium">{currency(payment.value)} · {payment.percentage.toFixed(1)}%</span></div><Progress value={payment.percentage} className="h-2" /></div>) : <p className="py-16 text-center text-sm text-muted-foreground">Sem pagamentos no período.</p>}</CardContent></Card></div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-5"><Card className="xl:col-span-3"><CardHeader><CardTitle>Top 10 produtos mais vendidos</CardTitle></CardHeader><CardContent className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Qtd.</TableHead><TableHead>ID</TableHead><TableHead>Produto</TableHead><TableHead className="text-right">Valor total</TableHead></TableRow></TableHeader><TableBody>{dashboard.topProducts.length ? dashboard.topProducts.map((product) => <TableRow key={product.id}><TableCell>{product.quantity.toLocaleString("pt-BR")}</TableCell><TableCell className="font-mono text-xs">{product.id}</TableCell><TableCell>{product.product}</TableCell><TableCell className="text-right font-medium">{currency(product.total)}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">Nenhum produto vendido no período.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>
       <Card className="xl:col-span-2"><CardHeader><CardTitle>Caixas, turnos e dispositivos</CardTitle></CardHeader><CardContent className="space-y-3">{dashboard.operationSummary.map((item) => <div key={item.label} className="flex items-center justify-between rounded-lg bg-muted/50 p-3"><span className="text-sm text-muted-foreground">{item.label}</span><span className="font-semibold">{currency(item.value)}</span></div>)}{dashboard.devices.length > 0 && <><p className="pt-2 text-sm font-medium">Maquininhas / POS ativas</p>{dashboard.devices.map((device) => <div key={device.name} className="flex justify-between text-sm"><span>{device.name} <span className="text-muted-foreground">({device.transactions} trans.)</span></span><span className="font-medium">{currency(device.total)}</span></div>)}</>}</CardContent></Card></div>
-      <Card className={dashboard.criticalStock.length ? "border-yellow-500/30" : ""}><CardHeader><CardTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-yellow-500" />Estoque crítico e depósitos</CardTitle><CardDescription>Produtos com saldo atual menor ou igual ao estoque mínimo do Eyemobile.</CardDescription></CardHeader><CardContent className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Produto</TableHead><TableHead>Depósito</TableHead><TableHead>Estoque</TableHead><TableHead>Mínimo</TableHead><TableHead className="text-right">Ação</TableHead></TableRow></TableHeader><TableBody>{dashboard.criticalStock.length ? dashboard.criticalStock.map((item) => <TableRow key={item.id}><TableCell className="font-medium">{item.product}</TableCell><TableCell>{item.depot}</TableCell><TableCell className="text-destructive">{item.stock} {item.unit}</TableCell><TableCell>{item.minStock} {item.unit}</TableCell><TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => addToShoppingList(item)}><ShoppingCart className="mr-2 h-4 w-4" />Enviar ao Mercado</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={5} className="h-24 text-center text-muted-foreground">Nenhum item em estoque crítico.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>
+
+      {/* Tabela Estoque Critico com Paginacao estilo Divipay (Exibir 10, 20, 50, 100) */}
+      <Card className={criticalStockList.length ? "border-yellow-500/30" : ""}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-yellow-500" />
+            Estoque crítico e depósitos
+          </CardTitle>
+          <CardDescription>
+            Produtos com saldo atual menor ou igual ao estoque mínimo do Eyemobile.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Produto</TableHead>
+                <TableHead>Depósito</TableHead>
+                <TableHead>Estoque</TableHead>
+                <TableHead>Mínimo</TableHead>
+                <TableHead className="text-right">Ação</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {paginatedCriticalStock.length ? (
+                paginatedCriticalStock.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-medium">{item.product}</TableCell>
+                    <TableCell>{item.depot}</TableCell>
+                    <TableCell className="text-destructive font-bold">{item.stock} {item.unit}</TableCell>
+                    <TableCell>{item.minStock} {item.unit}</TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="outline" onClick={() => addToShoppingList(item)}>
+                        <ShoppingCart className="mr-2 h-4 w-4" />
+                        Enviar ao Mercado
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                    Nenhum item em estoque crítico.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+
+          {/* Rodape de Paginacao idêntico ao Divipay (<< < > >> Página X de Y | Exibir 10 v) */}
+          {criticalStockList.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-4 p-4 border-t border-border/40 text-xs">
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setStockCurrentPage(1)}
+                  disabled={stockCurrentPage === 1}
+                  className="h-8 w-8 rounded-lg border-border/60"
+                  title="Primeira página"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setStockCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={stockCurrentPage === 1}
+                  className="h-8 w-8 rounded-lg border-border/60"
+                  title="Página anterior"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setStockCurrentPage((p) => Math.min(stockTotalPages, p + 1))}
+                  disabled={stockCurrentPage === stockTotalPages}
+                  className="h-8 w-8 rounded-lg border-border/60"
+                  title="Próxima página"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setStockCurrentPage(stockTotalPages)}
+                  disabled={stockCurrentPage === stockTotalPages}
+                  className="h-8 w-8 rounded-lg border-border/60"
+                  title="Última página"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              <span className="text-xs text-muted-foreground font-medium">
+                Página <strong className="text-foreground font-bold">{stockCurrentPage}</strong> de <strong className="text-foreground font-bold">{stockTotalPages}</strong>
+              </span>
+
+              <div className="flex items-center gap-2">
+                <Select
+                  value={String(stockItemsPerPage)}
+                  onValueChange={(val) => {
+                    setStockItemsPerPage(Number(val));
+                    setStockCurrentPage(1);
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-xs w-[120px] rounded-lg border-border/60 bg-background">
+                    <SelectValue placeholder="Exibir 10" />
+                  </SelectTrigger>
+                  <SelectContent align="end">
+                    <SelectItem value="10">Exibir 10</SelectItem>
+                    <SelectItem value="20">Exibir 20</SelectItem>
+                    <SelectItem value="50">Exibir 50</SelectItem>
+                    <SelectItem value="100">Exibir 100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </>}
   </div>;
-}
+}
