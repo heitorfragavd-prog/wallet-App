@@ -29,6 +29,7 @@ export interface DivipayMovement {
   taxes: number;
   type: string;
   status: string;
+  description?: string | null;
   payerName?: string | null;
 }
 

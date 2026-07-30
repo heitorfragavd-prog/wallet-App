@@ -1,9 +1,10 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ProtectedRoute } from "./domains/auth/components/ProtectedRoute";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { Toaster } from "@/shared/components/ui/toaster";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import { lazyWithRetry } from "@/shared/utils/lazyWithRetry";
 import "./App.css";
 
 // ── Loader global de fallback ──────────────────────────────────────
@@ -14,42 +15,42 @@ const PageLoader = () => (
 );
 
 // ── Lazy imports — carregados apenas na primeira visita ────────────
-const LandingPage         = lazy(() => import("./pages/LandingPage"));
-const Login               = lazy(() => import("./pages/Login"));
-const NotFound            = lazy(() => import("./pages/NotFound"));
+const LandingPage         = lazyWithRetry(() => import("./pages/LandingPage"));
+const Login               = lazyWithRetry(() => import("./pages/Login"));
+const NotFound            = lazyWithRetry(() => import("./pages/NotFound"));
 
 // Rotas protegidas — usuário comum
-const Dashboard           = lazy(() => import("./pages/Dashboard"));
-const Receitas            = lazy(() => import("./pages/Receitas"));
-const Despesas            = lazy(() => import("./pages/Despesas"));
-const Transacoes          = lazy(() => import("./pages/Transacoes"));
-const Dividas             = lazy(() => import("./pages/Dividas"));
-const Categorias          = lazy(() => import("./pages/Categorias"));
-const Relatorios          = lazy(() => import("./pages/Relatorios"));
-const Metas               = lazy(() => import("./pages/Metas"));
-const Mercado             = lazy(() => import("./pages/Mercado"));
-const Veiculos            = lazy(() => import("./pages/Veiculos"));
-const Perfil              = lazy(() => import("./pages/Perfil"));
-const IA                  = lazy(() => import("./pages/IA"));
-const Lembretes           = lazy(() => import("./pages/Lembretes"));
-const ContasCartoes       = lazy(() => import("./pages/ContasCartoes"));
-const EyemobilePDV        = lazy(() => import("./pages/EyemobilePDV"));
-const Divipay             = lazy(() => import("./pages/Divipay"));
-const DRE                 = lazy(() => import("./pages/DRE"));
-const FluxoCaixa          = lazy(() => import("./pages/FluxoCaixa"));
+const Dashboard           = lazyWithRetry(() => import("./pages/Dashboard"));
+const Receitas            = lazyWithRetry(() => import("./pages/Receitas"));
+const Despesas            = lazyWithRetry(() => import("./pages/Despesas"));
+const Transacoes          = lazyWithRetry(() => import("./pages/Transacoes"));
+const Dividas             = lazyWithRetry(() => import("./pages/Dividas"));
+const Categorias          = lazyWithRetry(() => import("./pages/Categorias"));
+const Relatorios          = lazyWithRetry(() => import("./pages/Relatorios"));
+const Metas               = lazyWithRetry(() => import("./pages/Metas"));
+const Mercado             = lazyWithRetry(() => import("./pages/Mercado"));
+const Veiculos            = lazyWithRetry(() => import("./pages/Veiculos"));
+const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
+const IA                  = lazyWithRetry(() => import("./pages/IA"));
+const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
+const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
+const EyemobilePDV        = lazyWithRetry(() => import("./pages/EyemobilePDV"));
+const Divipay             = lazyWithRetry(() => import("./pages/Divipay"));
+const DRE                 = lazyWithRetry(() => import("./pages/DRE"));
+const FluxoCaixa          = lazyWithRetry(() => import("./pages/FluxoCaixa"));
 
 // Rotas admin — carregadas somente para admins
-const AdminDashboard      = lazy(() => import("./pages/AdminDashboard"));
-const AdminUsers          = lazy(() => import("./pages/AdminUsers"));
-const AdminPlans          = lazy(() => import("./pages/AdminPlans"));
-const AdminPlanLimits     = lazy(() => import("./pages/AdminPlanLimits"));
-const AdminSubscriptions  = lazy(() => import("./pages/AdminSubscriptions"));
-const AdminReports        = lazy(() => import("./pages/AdminReports"));
-const AdminAuditLogs      = lazy(() => import("./pages/AdminAuditLogs"));
-const AdminPaymentSettings = lazy(() => import("./pages/AdminPaymentSettings"));
-const AdminWebhookSettings = lazy(() => import("./pages/AdminWebhookSettings"));
-const AdminWebhooksManutencao = lazy(() => import("./pages/AdminWebhooksManutencao"));
-const AdminWebhooks       = lazy(() => import("./pages/AdminWebhooks"));
+const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
+const AdminUsers          = lazyWithRetry(() => import("./pages/AdminUsers"));
+const AdminPlans          = lazyWithRetry(() => import("./pages/AdminPlans"));
+const AdminPlanLimits     = lazyWithRetry(() => import("./pages/AdminPlanLimits"));
+const AdminSubscriptions  = lazyWithRetry(() => import("./pages/AdminSubscriptions"));
+const AdminReports        = lazyWithRetry(() => import("./pages/AdminReports"));
+const AdminAuditLogs      = lazyWithRetry(() => import("./pages/AdminAuditLogs"));
+const AdminPaymentSettings = lazyWithRetry(() => import("./pages/AdminPaymentSettings"));
+const AdminWebhookSettings = lazyWithRetry(() => import("./pages/AdminWebhookSettings"));
+const AdminWebhooksManutencao = lazyWithRetry(() => import("./pages/AdminWebhooksManutencao"));
+const AdminWebhooks       = lazyWithRetry(() => import("./pages/AdminWebhooks"));
 
 // ── App ───────────────────────────────────────────────────────────
 function App() {
