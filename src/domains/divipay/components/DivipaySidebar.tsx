@@ -43,12 +43,9 @@ export function DivipaySidebar({
     { id: "depositar", label: "Depositar", icon: ArrowDownLeft, targetTab: "cobrancas" },
     { id: "extrato", label: "Saldos & Extrato", icon: Wallet, targetTab: "extrato" },
     { id: "transferencias", label: "Saques", icon: ArrowUpRight },
-    { id: "aprovacoes", label: "Aprovações", icon: CheckCircle2, targetTab: "transferencias", indent: true },
-    { id: "lote", label: "Em Lote", icon: Layers, targetTab: "transferencias", indent: true },
-    { id: "favorecidos", label: "Favorecidos", icon: Heart, targetTab: "transferencias", indent: true },
-    { id: "pagar-pix", label: "Pagar com Pix", icon: QrCode, targetTab: "transferencias", indent: true },
     { id: "configuracoes", label: "Configurações", icon: Settings },
   ];
+
 
 
   return (

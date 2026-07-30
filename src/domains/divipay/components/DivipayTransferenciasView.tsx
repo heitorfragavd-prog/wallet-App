@@ -6,9 +6,9 @@ import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
-import { NovaTransferenciaModal } from "./NovaTransferenciaModal";
 import { formatCurrency } from "@/lib/utils";
 import { Eye, Filter } from "lucide-react";
+
 
 export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
@@ -94,9 +94,9 @@ export function DivipayTransferenciasView() {
           <Button variant="outline" size="sm" className="text-xs gap-2 rounded-xl border-border/60">
             <Filter className="w-3.5 h-3.5 text-amber-500" /> Filtros
           </Button>
-          <NovaTransferenciaModal />
         </div>
       </div>
+
 
       {/* Card Principal de Tabela com Layout Divipay Oficial */}
       <Card className="rounded-2xl border-border/60 shadow-sm overflow-hidden bg-card/90 backdrop-blur-sm">
