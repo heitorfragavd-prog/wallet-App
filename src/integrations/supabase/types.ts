@@ -14,6 +14,69 @@ export type Database = {
   }
   public: {
     Tables: {
+      workspaces: {
+        Row: {
+          id: string
+          user_id: string
+          nome: string
+          tipo: "PF" | "PJ"
+          is_default: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          nome: string
+          tipo?: "PF" | "PJ"
+          is_default?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          nome?: string
+          tipo?: "PF" | "PJ"
+          is_default?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      notificacoes: {
+        Row: {
+          id: string
+          user_id: string
+          titulo: string
+          mensagem: string
+          lida: boolean
+          link_redirecionamento: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          titulo: string
+          mensagem: string
+          lida?: boolean
+          link_redirecionamento?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          titulo?: string
+          mensagem?: string
+          lida?: boolean
+          link_redirecionamento?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       admin_logs: {
         Row: {
           action: string

@@ -27,14 +27,30 @@ class FinanceService {
    */
   async getSummary(userId: string): Promise<FinanceSummary> {
     try {
-      logger.info('FinanceService', 'Calculating financial summary', { userId });
+      logger.info('FinanceService', 'Calculating financial summary with consolidation rule', { userId });
 
-      const [receitasResult, despesasResult] = await Promise.all([
+      const [receitasResult, transacoesReceitaResult, despesasResult] = await Promise.all([
         supabase.from('receitas').select('valor').eq('user_id', userId),
+        supabase.from('transacoes').select('valor, descricao, observacoes, metodo_pagamento').eq('user_id', userId).eq('tipo', 'receita'),
         supabase.from('despesas').select('valor').eq('user_id', userId),
       ]);
 
-      const totalReceitas = receitasResult.data?.reduce((sum, r) => sum + (r.valor || 0), 0) || 0;
+      const totalReceitasDiretas = receitasResult.data?.reduce((sum, r) => sum + (r.valor || 0), 0) || 0;
+
+      // Filtrar apenas dinheiro se for do Eyemobile/PDV
+      const totalTransacoesReceita = transacoesReceitaResult.data?.reduce((sum, t) => {
+        const isEyemobilePDV = t.descricao?.toLowerCase().includes("eyemobile") || 
+                               t.observacoes?.toLowerCase().includes("eyemobile") ||
+                               t.descricao?.toLowerCase().includes("pdv");
+        if (isEyemobilePDV) {
+          const metodo = (t.metodo_pagamento || "").toUpperCase();
+          const isDinheiro = metodo === "DINHEIRO" || metodo === "CASH" || metodo === "ESPECIE" || metodo === "MONEY";
+          return isDinheiro ? sum + (t.valor || 0) : sum;
+        }
+        return sum + (t.valor || 0);
+      }, 0) || 0;
+
+      const totalReceitas = totalReceitasDiretas + totalTransacoesReceita;
       const totalDespesas = despesasResult.data?.reduce((sum, d) => sum + (d.valor || 0), 0) || 0;
       const saldo = totalReceitas - totalDespesas;
       const percentualGasto = totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0;
@@ -56,16 +72,22 @@ class FinanceService {
    */
   async getMonthlyData(userId: string, months: number = 6): Promise<MonthlyData[]> {
     try {
-      logger.info('FinanceService', 'Getting monthly data', { userId, months });
+      logger.info('FinanceService', 'Getting monthly data with consolidation rule', { userId, months });
 
       const startDate = new Date();
       startDate.setMonth(startDate.getMonth() - months);
 
-      const [receitasResult, despesasResult] = await Promise.all([
+      const [receitasResult, transacoesReceitaResult, despesasResult] = await Promise.all([
         supabase
           .from('receitas')
           .select('valor, data')
           .eq('user_id', userId)
+          .gte('data', startDate.toISOString()),
+        supabase
+          .from('transacoes')
+          .select('valor, data, descricao, observacoes, metodo_pagamento')
+          .eq('user_id', userId)
+          .eq('tipo', 'receita')
           .gte('data', startDate.toISOString()),
         supabase
           .from('despesas')
@@ -74,13 +96,28 @@ class FinanceService {
           .gte('data', startDate.toISOString()),
       ]);
 
-      // Group by month
       const monthlyMap = new Map<string, MonthlyData>();
 
       receitasResult.data?.forEach((r) => {
         const month = new Date(r.data).toISOString().slice(0, 7);
         const existing = monthlyMap.get(month) || { month, receitas: 0, despesas: 0 };
         existing.receitas += r.valor || 0;
+        monthlyMap.set(month, existing);
+      });
+
+      transacoesReceitaResult.data?.forEach((t) => {
+        const isEyemobilePDV = t.descricao?.toLowerCase().includes("eyemobile") || 
+                               t.observacoes?.toLowerCase().includes("eyemobile") ||
+                               t.descricao?.toLowerCase().includes("pdv");
+        if (isEyemobilePDV) {
+          const metodo = (t.metodo_pagamento || "").toUpperCase();
+          const isDinheiro = metodo === "DINHEIRO" || metodo === "CASH" || metodo === "ESPECIE" || metodo === "MONEY";
+          if (!isDinheiro) return;
+        }
+
+        const month = new Date(t.data).toISOString().slice(0, 7);
+        const existing = monthlyMap.get(month) || { month, receitas: 0, despesas: 0 };
+        existing.receitas += t.valor || 0;
         monthlyMap.set(month, existing);
       });
 
@@ -92,6 +129,7 @@ class FinanceService {
       });
 
       return Array.from(monthlyMap.values()).sort((a, b) => a.month.localeCompare(b.month));
+
     } catch (error) {
       logger.error('FinanceService', 'Error getting monthly data', { error, userId });
       throw error;

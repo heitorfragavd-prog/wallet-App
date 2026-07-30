@@ -14,6 +14,7 @@ import {
 } from "@/shared/components/ui/select";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
 import { SaquesFiltrosSheet, type SaquesFilterValues } from "./SaquesFiltrosSheet";
+import { VerificarSaqueModal, type SaqueDetails } from "./VerificarSaqueModal";
 import { formatCurrency } from "@/lib/utils";
 import { Eye, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
@@ -21,6 +22,22 @@ export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  const [inspectingSaque, setInspectingSaque] = useState<SaqueDetails | null>(null);
+  const [isInspectOpen, setIsInspectOpen] = useState(false);
+
+  const handleInspect = (item: any) => {
+    setInspectingSaque({
+      ...item,
+      cliente: "49.683.323 Heitor Fraga de Oliveira",
+      documentoCliente: "49.683.323/0001-16",
+      chavePix: "23890726000142",
+      idPagamento: "E81014060202607291908QDYvmCy218a",
+      pagoEm: "29/07/2026 16:09:22",
+    });
+    setIsInspectOpen(true);
+  };
+
 
   // Estado dos Filtros
   const [filters, setFilters] = useState<SaquesFilterValues>({
@@ -288,10 +305,17 @@ export function DivipayTransferenciasView() {
                         <TableCell>{getStatusBadge(t.status)}</TableCell>
                         <TableCell className="text-muted-foreground">{t.lote}</TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleInspect(t)}
+                            className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-amber-500/10 hover:text-amber-500"
+                            title="Verificar Saque"
+                          >
                             <Eye className="w-4 h-4" />
                           </Button>
                         </TableCell>
+
                       </TableRow>
                     );
                   })}
@@ -391,6 +415,14 @@ export function DivipayTransferenciasView() {
           })
         }
       />
+
+      {/* Modal Verificar Saque */}
+      <VerificarSaqueModal
+        open={isInspectOpen}
+        onOpenChange={setIsInspectOpen}
+        saque={inspectingSaque}
+      />
     </div>
   );
 }
+

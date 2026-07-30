@@ -138,6 +138,7 @@ export class DivipayService {
         taxes: this.toNumber(record.taxes ?? record.taxas ?? 0),
         type: String(record.type ?? record.tipo ?? ""),
         status: String(record.status ?? ""),
+        description: record.description ? String(record.description) : record.descricao ? String(record.descricao) : record.title ? String(record.title) : null,
         payerName: record.payerName ? String(record.payerName) : record.payer_name ? String(record.payer_name) : null,
       };
     });

@@ -19,15 +19,23 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
-  Trash2,
   Sparkles,
+  Link as LinkIcon,
+  Plus,
 } from "lucide-react";
 import { parseExtratoBancario, ParsedTransaction } from "../services/ofxCsvParser";
 import { useContasUsuario } from "../hooks/useContasUsuario";
 import { useDespesas } from "../hooks/useDespesas";
 import { useReceitas } from "../hooks/useReceitas";
+import { useTransacoes, Transacao } from "../hooks/useTransacoes";
 import { useToast } from "@/shared/hooks/use-toast";
-import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
+import { supabase } from "@/integrations/supabase/client";
+
+interface ItemExtratoComMatch extends ParsedTransaction {
+  idItem: number;
+  match?: Transacao | null;
+  statusMatch: "conciliar" | "novo" | "conciliado";
+}
 
 interface ImportadorExtratoModalProps {
   open: boolean;
@@ -42,10 +50,11 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
   const { contas } = useContasUsuario();
   const { createDespesa } = useDespesas();
   const { createReceita } = useReceitas();
+  const { transacoes, refetch: refetchTransacoes } = useTransacoes();
 
   const [arquivoNome, setArquivoNome] = useState<string>("");
   const [contaIdSelecionada, setContaIdSelecionada] = useState<string>("");
-  const [itens, setItens] = useState<ParsedTransaction[]>([]);
+  const [itens, setItens] = useState<ItemExtratoComMatch[]>([]);
   const [itensSelecionados, setItensSelecionados] = useState<Set<number>>(new Set());
   const [carregando, setCarregando] = useState(false);
 
@@ -56,7 +65,14 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
     }
   }, [contas, contaIdSelecionada]);
 
-  // Handler de Leitura de Arquivo
+  // Função para calcular diferença de dias entre duas datas YYYY-MM-DD
+  const diferencaDias = (d1: string, d2: string): number => {
+    const t1 = new Date(d1 + "T00:00:00").getTime();
+    const t2 = new Date(d2 + "T00:00:00").getTime();
+    return Math.abs(t1 - t2) / (1000 * 3600 * 24);
+  };
+
+  // Handler de Leitura de Arquivo e cruzamento inteligente
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -69,17 +85,36 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
       try {
         const content = event.target?.result as string;
         const parsed = parseExtratoBancario(content, file.name);
-        setItens(parsed);
-        // Por padrão seleciona todos os itens válidos
-        setItensSelecionados(new Set(parsed.map((_, idx) => idx)));
+
+        // Algoritmo de Match (+/- 2 dias e valor exato)
+        const itensProcessados: ItemExtratoComMatch[] = parsed.map((item, idx) => {
+          const matchEncontrado = transacoes.find((t) => {
+            const mesmoTipo = t.tipo === item.tipo;
+            const valorExato = Math.abs(Number(t.valor) - Number(item.valor)) < 0.01;
+            const proximoEmDias = diferencaDias(t.data, item.data) <= 2;
+            return mesmoTipo && valorExato && proximoEmDias;
+          });
+
+          return {
+            ...item,
+            idItem: idx,
+            match: matchEncontrado || null,
+            statusMatch: matchEncontrado ? "conciliar" : "novo",
+          };
+        });
+
+        setItens(itensProcessados);
+        setItensSelecionados(new Set(itensProcessados.map((_, idx) => idx)));
+
+        const conciliaveis = itensProcessados.filter((i) => i.match).length;
         toast({
           title: "Extrato processado",
-          description: `${parsed.length} transações identificadas no arquivo ${file.name}.`,
+          description: `${parsed.length} lançamentos encontrados (${conciliaveis} prontos para conciliar).`,
         });
       } catch (err) {
         toast({
           title: "Erro ao ler extrato",
-          description: "Não foi possível interpretar a estrutura do arquivo selecionado.",
+          description: "Não foi possível interpretar o arquivo.",
           variant: "destructive",
         });
       } finally {
@@ -108,6 +143,38 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
     }
   };
 
+  // Conciliar um único item correspondente
+  const handleConciliarItem = async (item: ItemExtratoComMatch) => {
+    if (!item.match) return;
+
+    try {
+      // Atualiza o registro existente no Supabase marcando como conciliado
+      const { error } = await supabase
+        .from("transacoes")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", item.match.id);
+
+      if (error) throw error;
+
+      setItens((prev) =>
+        prev.map((i) => (i.idItem === item.idItem ? { ...i, statusMatch: "conciliado" } : i))
+      );
+
+      toast({
+        title: "Transação conciliada!",
+        description: `Lançamento '${item.descricao}' conciliado com a transação existente.`,
+      });
+      refetchTransacoes();
+    } catch (err) {
+      toast({
+        title: "Erro ao conciliar",
+        description: "Não foi possível atualizar a transação.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Salvar/Importar novos lançamentos
   const handleSalvarImportacao = async () => {
     if (itensSelecionados.size === 0) {
       toast({ title: "Atenção", description: "Selecione ao menos um lançamento para importar.", variant: "destructive" });
@@ -122,6 +189,13 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
 
       for (const idx of itensSelecionados) {
         const item = itens[idx];
+
+        if (item.statusMatch === "conciliar" && item.match) {
+          await handleConciliarItem(item);
+          salvas++;
+          continue;
+        }
+
         if (item.tipo === "despesa") {
           await createDespesa.mutateAsync({
             despesa: {
@@ -148,17 +222,16 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
 
       toast({
         title: "Importação concluída! 🎉",
-        description: `${salvas} lançamentos importados com sucesso para a conta selecionada.`,
+        description: `${salvas} lançamentos processados com sucesso.`,
       });
 
-      // Reseta modal
       setItens([]);
       setArquivoNome("");
       onOpenChange(false);
     } catch (err) {
       toast({
         title: "Erro durante importação",
-        description: err instanceof Error ? err.message : "Erro ao salvar lançamentos no banco de dados.",
+        description: err instanceof Error ? err.message : "Erro ao salvar lançamentos.",
         variant: "destructive",
       });
     } finally {
@@ -172,14 +245,14 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
         <DialogHeader>
           <DialogTitle className="text-xl font-bold flex items-center gap-2">
             <UploadCloud className="w-6 h-6 text-orange-500" />
-            Importar Extrato Bancário (OFX / CSV)
+            Conciliação Bancária Automática (OFX / CSV)
           </DialogTitle>
           <DialogDescription>
-            Faça upload do extrato fornecido pelo seu banco (.ofx, .qfx ou .csv). O sistema detectará automaticamente as receitas e despesas.
+            Faça upload do extrato bancário. O sistema cruza os valores ($\pm 2$ dias) e sugere **Conciliar** ou **Adicionar Nova**.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Zona de Drop & Upload */}
+        {/* Upload Zone */}
         <div className="border-2 border-dashed border-border/80 hover:border-orange-500/80 transition-colors rounded-2xl p-6 text-center bg-muted/20 space-y-3 relative">
           <Input
             type="file"
@@ -217,12 +290,12 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           </div>
         )}
 
-        {/* Tabela de Pré-visualização dos Lançamentos */}
+        {/* Tabela de Lançamentos com Match */}
         {itens.length > 0 && (
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-bold text-foreground">
-                Lançamentos Identificados ({itensSelecionados.size} de {itens.length} selecionados)
+                Lançamentos ({itensSelecionados.size} de {itens.length} selecionados)
               </span>
               <Button size="sm" variant="ghost" onClick={toggleTodos} className="text-xs text-orange-500 hover:text-orange-600">
                 {itensSelecionados.size === itens.length ? "Desmarcar Todos" : "Selecionar Todos"}
@@ -230,38 +303,67 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
             </div>
 
             <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {itens.map((item, idx) => {
-                const selecionado = itensSelecionados.has(idx);
+              {itens.map((item) => {
+                const selecionado = itensSelecionados.has(item.idItem);
+                const temMatch = !!item.match;
+                const foiConciliado = item.statusMatch === "conciliado";
+
                 return (
                   <div
-                    key={idx}
-                    onClick={() => toggleItem(idx)}
-                    className={`flex items-center justify-between p-3 rounded-xl border transition-colors cursor-pointer ${
-                      selecionado ? "bg-muted/40 border-orange-500/60" : "bg-card border-border/40 opacity-60"
+                    key={item.idItem}
+                    className={`flex items-center justify-between p-3 rounded-xl border transition-colors ${
+                      foiConciliado
+                        ? "bg-emerald-500/10 border-emerald-500/40"
+                        : temMatch
+                        ? "bg-blue-500/10 border-blue-500/40"
+                        : selecionado
+                        ? "bg-muted/40 border-orange-500/60"
+                        : "bg-card border-border/40 opacity-60"
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <Checkbox checked={selecionado} onCheckedChange={() => toggleItem(idx)} />
+                      <Checkbox checked={selecionado} onCheckedChange={() => toggleItem(item.idItem)} />
                       <div>
-                        <p className="font-semibold text-sm text-foreground flex items-center gap-2">
-                          {item.descricao}
-                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 border-border">
-                            {item.categoriaSugerida}
-                          </Badge>
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-sm text-foreground">{item.descricao}</p>
+                          {temMatch && !foiConciliado && (
+                            <Badge className="bg-blue-500/20 text-blue-600 border-blue-300 text-[10px]">
+                              Match Encontrado
+                            </Badge>
+                          )}
+                          {foiConciliado && (
+                            <Badge className="bg-emerald-500 text-white text-[10px]">
+                              Conciliado ✓
+                            </Badge>
+                          )}
+                        </div>
                         <p className="text-[11px] text-muted-foreground">{item.data}</p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 font-bold text-sm">
-                      {item.tipo === "receita" ? (
-                        <span className="text-emerald-500 flex items-center gap-1">
-                          <ArrowUpRight className="w-4 h-4" />+ R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </span>
-                      ) : (
-                        <span className="text-rose-500 flex items-center gap-1">
-                          <ArrowDownRight className="w-4 h-4" />- R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </span>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right font-bold text-sm">
+                        {item.tipo === "receita" ? (
+                          <span className="text-emerald-500 flex items-center justify-end gap-1">
+                            <ArrowUpRight className="w-4 h-4" />+ R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        ) : (
+                          <span className="text-rose-500 flex items-center justify-end gap-1">
+                            <ArrowDownRight className="w-4 h-4" />- R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </span>
+                        )}
+                      </div>
+
+                      {temMatch && !foiConciliado && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleConciliarItem(item)}
+                          className="h-8 text-xs border-blue-500 text-blue-600 hover:bg-blue-50 gap-1"
+                        >
+                          <LinkIcon className="h-3 w-3" />
+                          Conciliar
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -280,7 +382,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
             disabled={carregando || itensSelecionados.size === 0}
             className="bg-orange-500 hover:bg-orange-600 text-white font-bold"
           >
-            {carregando ? "Importando..." : `Importar ${itensSelecionados.size} Lançamento(s)`}
+            {carregando ? "Processando..." : `Processar ${itensSelecionados.size} Lançamento(s)`}
           </Button>
         </DialogFooter>
       </DialogContent>

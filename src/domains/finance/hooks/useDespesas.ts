@@ -2,10 +2,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Despesa as DespesaType, PaymentMethod } from "../types";
 
 export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
   updated_at?: string;
+  workspace_id?: string;
   categorias?: {
     nome: string;
     cor: string;
@@ -19,16 +21,18 @@ export const DESPESAS_QUERY_KEY = ["despesas"] as const;
 export interface DespesasQueryParams {
   startDate?: string | null;
   endDate?: string | null;
+  workspaceId?: string | null;
 }
 
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
-  const { startDate, endDate } = params;
+  const { startDate, endDate, workspaceId } = params;
 
   let despesasQuery = supabase
     .from("despesas")
     .select("*, categorias!categoria_id (nome, cor, icone), despesa_tags (tags (id, nome, cor))");
 
+  if (workspaceId) despesasQuery = despesasQuery.eq("workspace_id", workspaceId);
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
   if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
 
@@ -37,6 +41,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     .select("*, categorias!categoria_id (nome, cor, icone)")
     .eq("tipo", "despesa");
 
+  if (workspaceId) transacoesQuery = transacoesQuery.eq("workspace_id", workspaceId);
   if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
   if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
 
@@ -79,12 +84,14 @@ async function updateDespesaTags(despesaId: string, tagNames: string[]) {
 export const useDespesas = (params: DespesasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const currentWorkspaceId = activeWorkspace?.id || null;
   const { startDate = null, endDate = null } = params;
 
-  // ── Query — queryKey inclui datas: muda o período -> refetch automático
+  // ── Query — queryKey inclui datas e workspaceId
   const { data: despesas = [], isLoading: loading } = useQuery({
-    queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate }],
-    queryFn: () => fetchDespesas({ startDate, endDate }),
+    queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
+    queryFn: () => fetchDespesas({ startDate, endDate, workspaceId: currentWorkspaceId }),
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
@@ -102,7 +109,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("despesas")
-        .insert([{ ...despesa, user_id: userId }])
+        .insert([{ ...despesa, user_id: userId, workspace_id: currentWorkspaceId }])
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
