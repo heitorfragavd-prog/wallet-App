@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 
@@ -30,17 +31,35 @@ async function fetchContas(): Promise<ContaUsuario[]> {
     throw error;
   }
 
-  const result = ((data ?? []) as ContaUsuario[]).map((c) => {
-    if (c.nome.toLowerCase().includes("divipay")) {
-      return {
-        ...c,
-        saldo_atual: 4514.80,
-      };
-    }
-    return c;
-  });
+  const contas = (data ?? []) as ContaUsuario[];
 
-  return result;
+  // Conta Divipay: busca o saldo REAL ao vivo da API (getBalance) e
+  // persiste no banco para as demais telas. Em caso de falha, mantém o
+  // último saldo conhecido do banco.
+  const divipayConta = contas.find((c) => c.nome.toLowerCase().includes("divipay"));
+  if (divipayConta) {
+    try {
+      const balances = await divipayService.getBalance();
+      const saldoReal = balances.reduce((acc, b) => acc + (Number(b.balance) || 0), 0);
+      if (balances.length > 0) {
+        divipayConta.saldo_atual = saldoReal;
+        // Fire-and-forget: atualiza o banco sem bloquear a tela
+        // (tipos gerados do Supabase estão desatualizados: a coluna saldo_atual
+        // existe na tabela real, verificado via information_schema)
+        void supabase
+          .from("contas_usuario")
+          .update({ saldo_atual: saldoReal } as never)
+          .eq("id", divipayConta.id)
+          .then(({ error: updErr }) => {
+            if (updErr) logger.error("useContasUsuario", "Falha ao persistir saldo Divipay", { error: updErr.message });
+          });
+      }
+    } catch (err) {
+      logger.error("useContasUsuario", "Não foi possível buscar saldo ao vivo da Divipay", { error: String(err) });
+    }
+  }
+
+  return contas;
 }
 
 

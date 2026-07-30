@@ -11,7 +11,7 @@ async function fetchTransferencias(): Promise<DivipayTransacao[]> {
   const userId = (await supabase.auth.getUser()).data.user?.id;
   if (!userId) throw new Error("Usuário não autenticado");
 
-  // Busca do banco local
+  // Busca do banco local (saques criados pelo próprio Wallet)
   const { data: localData } = await supabase
     .from("divipay_transacoes")
     .select("*")
@@ -19,44 +19,53 @@ async function fetchTransferencias(): Promise<DivipayTransacao[]> {
     .eq("type", "CASH_OUT")
     .order("created_at", { ascending: false });
 
-  // Busca movimentações de saída da API Divipay
+  // Busca TODOS os saques/pagamentos da API Divipay (endpoint /api/withdraws).
+  // Inclui Pix (DICT) e pagamentos de boleto (BILLET) — inclusive os feitos
+  // direto no painel Divipay. Obs.: /api/movements só tem entradas e o filtro
+  // type=CASH_OUT retorna HTTP 400, por isso usamos listWithdraws.
   try {
-    const today = new Date().toISOString().split("T")[0];
-    const start = new Date();
-    start.setDate(start.getDate() - 60);
-    const startDate = start.toISOString().split("T")[0];
+    const allWithdraws: import("@/domains/divipay/types").DivipaySaque[] = [];
+    const PAGE = 100;
+    const MAX_PAGES = 10; // até 1.000 saques
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const { items, hasMore } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
+      allWithdraws.push(...items);
+      if (!hasMore || items.length < PAGE) break;
+    }
 
-    const response = await divipayService.listMovements({
-      initialDate: startDate,
-      finalDate: today,
-      type: "CASH_OUT",
-      limit: 200,
-    });
-
-    if (response.items && response.items.length > 0) {
-      const apiMovementsAsTransacoes: DivipayTransacao[] = response.items.map((m) => ({
-        id: m.id,
+    if (allWithdraws.length > 0) {
+      const apiAsTransacoes: DivipayTransacao[] = allWithdraws.map((w) => ({
+        id: `api-${w.id}`,
         user_id: userId,
-        external_id: m.id,
+        external_id: w.id,
         type: "CASH_OUT",
-        status: String(m.status).toUpperCase(),
-        amount: Number(m.amount || 0),
-        description: m.description || m.payerName || "Saque Divipay",
-        recipient_key: m.payerName || null,
-        created_at: m.date || new Date().toISOString(),
-        updated_at: m.date || new Date().toISOString(),
+        status: String(w.status || "").toUpperCase(),
+        amount: Number(w.amount || 0),
+        fee: Number(w.tax || 0),
+        description: w.description || (w.type === "BILLET" ? "Pagamento de boleto" : "Saque Pix"),
+        recipient_key: w.name || null,
+        created_at: w.createdAt || new Date().toISOString(),
+        updated_at: w.createdAt || new Date().toISOString(),
         pix_copy_paste: null,
         pix_qr_code: null,
-        metadata: { ...m },
+        metadata: {
+          payerName: w.name,
+          document: w.document,
+          tax: w.tax,
+          lote: w.lote,
+          paymentType: w.type, // "DICT" (Pix) ou "BILLET" (Boleto)
+        },
       }));
 
       // Combina os resultados sem duplicatas
       const existingIds = new Set((localData ?? []).map((t) => t.external_id || t.id));
-      const newFromApi = apiMovementsAsTransacoes.filter((t) => !existingIds.has(t.id));
-      return [...(localData ?? []), ...newFromApi];
+      const newFromApi = apiAsTransacoes.filter((t) => !existingIds.has(t.external_id ?? t.id));
+      return [...(localData ?? []), ...newFromApi].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
     }
   } catch (err) {
-    logger.error("useDivipayTransferencias", "Erro ao buscar movimentações de saída da API Divipay", { error: String(err) });
+    logger.error("useDivipayTransferencias", "Erro ao buscar saques da API Divipay", { error: String(err) });
   }
 
   return localData ?? [];

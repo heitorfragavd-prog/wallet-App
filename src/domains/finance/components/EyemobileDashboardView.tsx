@@ -94,13 +94,13 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
             onClick={async () => {
               setIsSyncing(true);
               try {
-                await dashboardQuery.refetch();
-                if (dashboardQuery.data?.isLocalFallback) {
+                const result = await dashboardQuery.syncLive();
+                if (result?.isLocalFallback) {
                   toast({ title: "Sincronização concluída (dados locais)", description: "Dados da API indisponíveis — exibindo vendas salvas no banco local.", variant: "default" });
-                } else if (!dashboardQuery.data?.configured) {
+                } else if (!result?.configured) {
                   toast({ title: "Chaves não configuradas", description: "Configure suas chaves de API do Eyemobile no Painel Admin para importar dados ao vivo.", variant: "destructive" });
                 } else {
-                  const count = dashboardQuery.data?.kpis?.totalTransactions ?? 0;
+                  const count = result?.kpis?.totalTransactions ?? 0;
                   toast({ title: "Sincronização concluída", description: `${count} vendas importadas com sucesso!`, variant: "default" });
                 }
               } catch (err: unknown) {

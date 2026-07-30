@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { buildEyemobileDashboard, type EyemobileDashboardData } from "@/domains/finance/services/eyemobileDashboard";
 
@@ -131,60 +131,85 @@ async function buildLocalFallbackDashboard(
   };
 }
 
+// Busca AO VIVO na API Eyemobile via Edge Function (lento: pagina todo o
+// período na API). Usado apenas no botão "Sincronizar" ou quando não há
+// nenhum dado local no período.
+async function fetchLiveDashboard(filters: DashboardFilters): Promise<EyemobileDashboardResult> {
+  const isoStartDate = toISODate(filters.startDate);
+  const isoEndDate = toISODate(filters.endDate);
+
+  let data: EyemobileSyncResponse | null = null;
+  let invokeError: Error | null = null;
+
+  try {
+    const result = await supabase.functions.invoke("eyemobile-sync", {
+      body: {
+        mode: "DASHBOARD",
+        start_date: isoStartDate,
+        end_date: isoEndDate,
+        store_id: filters.storeId || undefined,
+      },
+    });
+    data = result.data as EyemobileSyncResponse | null;
+    invokeError = result.error;
+  } catch (err: unknown) {
+    invokeError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  if (invokeError || data?.success === false) {
+    console.warn("Edge Function Eyemobile indisponível, usando fallback local...", invokeError || data?.error);
+
+    if (data?.configured || !data) {
+      return buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate });
+    }
+
+    return {
+      configured: false,
+      stores: [],
+      isLocalFallback: true,
+      ...buildEyemobileDashboard({ sales: [], products: [], stores: [] })
+    };
+  }
+
+  const dashboard = buildEyemobileDashboard({
+    sales: data?.sales ?? [],
+    products: data?.products ?? [],
+    stores: data?.stores ?? [],
+  });
+  return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
+}
+
 export function useEyemobileDashboard(filters: DashboardFilters) {
-  return useQuery({
-    queryKey: ["eyemobile-dashboard", filters.startDate, filters.endDate, filters.storeId ?? "all"],
+  const qc = useQueryClient();
+  const queryKey = ["eyemobile-dashboard", filters.startDate, filters.endDate, filters.storeId ?? "all"];
+
+  const query = useQuery({
+    queryKey,
     queryFn: async (): Promise<EyemobileDashboardResult> => {
-      // Garante que as datas estejam no formato ISO antes de enviar para a API
       const isoStartDate = toISODate(filters.startDate);
       const isoEndDate = toISODate(filters.endDate);
 
-      let data: EyemobileSyncResponse | null = null;
-      let invokeError: Error | null = null;
-
-      // Tenta chamar a Edge Function
-      try {
-        const result = await supabase.functions.invoke("eyemobile-sync", {
-          body: {
-            mode: "DASHBOARD",
-            start_date: isoStartDate,
-            end_date: isoEndDate,
-            store_id: filters.storeId || undefined,
-          },
-        });
-        data = result.data as EyemobileSyncResponse | null;
-        invokeError = result.error;
-      } catch (err: unknown) {
-        // Edge Function não está implantada ou erro de rede
-        invokeError = err instanceof Error ? err : new Error(String(err));
+      // 1) RÁPIDO: vendas já sincronizadas no banco local (~1s).
+      const local = await buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate });
+      if (local.configured && (local.kpis?.totalTransactions ?? 0) > 0) {
+        return local;
       }
 
-      // Se a Edge Function falhou (erro de invocação ou payload com success:false)
-      if (invokeError || data?.success === false) {
-        console.warn("Edge Function Eyemobile indisponível, usando fallback local...", invokeError || data?.error);
-        
-        // Se temos configuração mas a API falhou, tenta fallback local
-        if (data?.configured || !data) {
-          return buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate });
-        }
-        
-        // Se não configurado, retorna estrutura vazia
-        return { 
-          configured: false, 
-          stores: [], 
-          isLocalFallback: true,
-          ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }) 
-        };
-      }
-
-      // Sucesso da Edge Function
-      const dashboard = buildEyemobileDashboard({
-        sales: data?.sales ?? [],
-        products: data?.products ?? [],
-        stores: data?.stores ?? [],
-      });
-      return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
+      // 2) Sem dados locais: primeira vez / período ainda não sincronizado —
+      //    busca ao vivo na API (mais lento, mas necessário).
+      return fetchLiveDashboard(filters);
     },
-    staleTime: 1000 * 60,
+    // Cache quente por 10 min: trocar de tela e voltar é instantâneo
+    staleTime: 1000 * 60 * 10,
+    gcTime: 1000 * 60 * 30,
   });
+
+  // Botão "Sincronizar": força busca ao vivo na API e atualiza o cache.
+  const syncLive = async (): Promise<EyemobileDashboardResult> => {
+    const live = await fetchLiveDashboard(filters);
+    qc.setQueryData(queryKey, live);
+    return live;
+  };
+
+  return { ...query, syncLive };
 }
