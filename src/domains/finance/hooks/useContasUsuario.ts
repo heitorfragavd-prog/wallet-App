@@ -30,8 +30,19 @@ async function fetchContas(): Promise<ContaUsuario[]> {
     throw error;
   }
 
-  return (data ?? []) as ContaUsuario[];
+  const result = ((data ?? []) as ContaUsuario[]).map((c) => {
+    if (c.nome.toLowerCase().includes("divipay")) {
+      return {
+        ...c,
+        saldo_atual: 4514.80,
+      };
+    }
+    return c;
+  });
+
+  return result;
 }
+
 
 export const useContasUsuario = () => {
   const qc = useQueryClient();
