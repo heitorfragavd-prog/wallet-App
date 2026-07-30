@@ -13,12 +13,19 @@ export interface DivipayDashboardFilters {
   status?: string | null;
 }
 
+export interface DivipayDailyChartPoint {
+  date: string;
+  totalAmount: number;
+  count: number;
+}
+
 export interface DivipayDashboardResult {
   balances: DivipayBalance[];
   entradas: number;
   saidas: number;
   transacoes: DivipayTransacao[];
   movements: DivipayMovement[];
+  chartData: DivipayDailyChartPoint[];
   cobrancasSummary: {
     finalizadas: number;
     pendentes: number;
@@ -43,6 +50,7 @@ export interface DivipayDashboardResult {
   connected: boolean;
   connectionError: string | null;
 }
+
 
 function getDefaultDateRange(): { initialDate: string; finalDate: string } {
   const today = new Date().toISOString().split("T")[0];
@@ -77,13 +85,25 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
 
       let movements: DivipayMovement[] = [];
       try {
-        const response = await divipayService.listMovements({
-          initialDate,
-          finalDate,
-          type: type && type !== "all" ? type : undefined,
-          limit: 200,
-        });
-        movements = response.items ?? [];
+        let cursor: string | null | undefined = undefined;
+        let hasMore = true;
+        let pageCount = 0;
+        const maxPages = 30; // Garante ate 6.000 movimentacoes no periodo
+
+        while (hasMore && pageCount < maxPages) {
+          const response = await divipayService.listMovements({
+            initialDate,
+            finalDate,
+            type: type && type !== "all" ? type : undefined,
+            cursor,
+            limit: 200,
+          });
+          const newItems = response.items ?? [];
+          movements = [...movements, ...newItems];
+          hasMore = response.hasMore === true && !!response.nextCursor && newItems.length > 0;
+          cursor = response.nextCursor;
+          pageCount += 1;
+        }
       } catch (err: unknown) {
         logger.error("useDivipayDashboard", "Erro ao buscar movimentações da Divipay API", { error: err instanceof Error ? err.message : String(err) });
       }
@@ -170,6 +190,25 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
         });
       }
 
+      // Agrupamento diário para o gráfico de Vendas no Mês
+      const dailyMap: Record<string, { totalAmount: number; count: number }> = {};
+      movements.forEach((m) => {
+        if (!m.date) return;
+        const dayStr = m.date.split("T")[0]; // YYYY-MM-DD
+        const dayFormatted = dayStr.split("-").slice(1).reverse().join("/"); // MM/DD -> DD/MM
+        if (!dailyMap[dayFormatted]) {
+          dailyMap[dayFormatted] = { totalAmount: 0, count: 0 };
+        }
+        dailyMap[dayFormatted].totalAmount += Number(m.amount || 0);
+        dailyMap[dayFormatted].count += 1;
+      });
+
+      const chartData: DivipayDailyChartPoint[] = Object.entries(dailyMap).map(([date, val]) => ({
+        date,
+        totalAmount: val.totalAmount,
+        count: val.count,
+      })).sort((a, b) => a.date.localeCompare(b.date));
+
       const entradas = transacoes
         .filter((t) => t.type === "CASH_IN")
         .reduce((acc, t) => acc + Number(t.amount), 0);
@@ -183,6 +222,7 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
         saidas,
         transacoes,
         movements,
+        chartData,
         cobrancasSummary: {
           finalizadas: totalFinalizadasVal,
           pendentes: totalPendentesVal,

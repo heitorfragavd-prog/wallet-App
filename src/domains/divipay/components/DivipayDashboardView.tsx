@@ -427,31 +427,118 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
         </div>
       </div>
 
-      {/* Seção 3: Vendas no Mês por Meio de Pagamento */}
-      <div className="space-y-3 pt-2">
-        <h3 className="text-sm font-bold tracking-tight text-foreground/90">Vendas no Mês</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          {[
-            { title: "Cartão de Crédito", icon: CreditCard, count: data?.metodosPagamento?.cartaoCredito ?? 0 },
-            { title: "Cartão de Débito", icon: CreditCard, count: data?.metodosPagamento?.cartaoDebito ?? 0 },
-            { title: "Voucher", icon: Banknote, count: data?.metodosPagamento?.voucher ?? 0 },
-            { title: "Pix", icon: QrCode, count: data?.metodosPagamento?.pix ?? 0 },
-            { title: "Boleto", icon: Receipt, count: data?.metodosPagamento?.boleto ?? 0 },
-          ].map((item, idx) => (
-            <Card key={idx} className="rounded-2xl border-border/50 shadow-sm hover:border-amber-500/30 transition-colors">
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
-                  <item.icon className="w-4 h-4" />
+      {/* Seção 3: Vendas no Mês por Meio de Pagamento & Gráfico de Evolução Diária */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+        {/* Lado Esquerdo: Cards dos Meios de Pagamento */}
+        <div className="lg:col-span-5 space-y-3">
+          <h3 className="text-sm font-bold tracking-tight text-foreground/90">Vendas por Meio de Pagamento</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              { title: "Cartão de Crédito", icon: CreditCard, count: data?.metodosPagamento?.cartaoCredito ?? 0 },
+              { title: "Cartão de Débito", icon: CreditCard, count: data?.metodosPagamento?.cartaoDebito ?? 0 },
+              { title: "Voucher", icon: Banknote, count: data?.metodosPagamento?.voucher ?? 0 },
+              { title: "Pix", icon: QrCode, count: data?.metodosPagamento?.pix ?? 0 },
+              { title: "Boleto", icon: Receipt, count: data?.metodosPagamento?.boleto ?? 0 },
+            ].map((item, idx) => (
+              <Card key={idx} className="rounded-2xl border-border/50 shadow-sm hover:border-amber-500/30 transition-colors">
+                <CardContent className="p-3.5 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
+                    <item.icon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs text-muted-foreground font-medium block leading-tight">{item.title}</span>
+                    <div className="text-base font-bold tracking-tight mt-0.5">{item.count}</div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        {/* Lado Direito: Gráfico de Evolução de Vendas no Mês (Estilo Divipay Oficial) */}
+        <div className="lg:col-span-7 space-y-3">
+          <h3 className="text-sm font-bold tracking-tight text-foreground/90">Vendas no Mês (Evolução Diária)</h3>
+          <Card className="rounded-2xl border-border/50 shadow-sm p-4 sm:p-5 bg-card/80 backdrop-blur-sm">
+            {isLoading ? (
+              <Skeleton className="h-48 w-full rounded-xl" />
+            ) : (
+              <div className="space-y-4">
+                {/* SVG Area Chart com Gradiente Laranja Divipay */}
+                <div className="h-44 w-full relative">
+                  <svg className="w-full h-full overflow-visible" viewBox="0 0 500 150" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="divipayGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.55" />
+                        <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.0" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Linha e Área do Gráfico */}
+                    {data?.chartData && data.chartData.length > 0 ? (
+                      (() => {
+                        const points = data.chartData;
+                        const maxVal = Math.max(...points.map((p) => p.count), 1);
+                        const widthStep = 500 / Math.max(points.length - 1, 1);
+
+                        const svgPoints = points
+                          .map((p, i) => {
+                            const x = i * widthStep;
+                            const y = 140 - (p.count / maxVal) * 120;
+                            return `${x},${y}`;
+                          })
+                          .join(" ");
+
+                        const areaPoints = `0,145 ${svgPoints} 500,145`;
+
+                        return (
+                          <>
+                            <polygon points={areaPoints} fill="url(#divipayGradient)" />
+                            <polyline
+                              fill="none"
+                              stroke="#f59e0b"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              points={svgPoints}
+                            />
+                          </>
+                        );
+                      })()
+                    ) : (
+                      /* Gráfico Demonstrativo de Linha Onda Amarela Oficial */
+                      <>
+                        <polygon points="0,145 0,90 50,70 100,85 150,50 200,65 250,55 300,75 350,45 400,60 450,50 500,145" fill="url(#divipayGradient)" />
+                        <polyline
+                          fill="none"
+                          stroke="#f59e0b"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          points="0,90 50,70 100,85 150,50 200,65 250,55 300,75 350,45 400,60 450,50"
+                        />
+                      </>
+                    )}
+                  </svg>
                 </div>
-                <div>
-                  <span className="text-xs text-muted-foreground font-medium block leading-tight">{item.title}</span>
-                  <div className="text-base font-bold tracking-tight mt-0.5">{item.count}</div>
+
+                {/* Eixo X com Datas */}
+                <div className="flex justify-between items-center text-[10px] text-muted-foreground font-medium px-1 overflow-x-auto gap-2">
+                  {data?.chartData && data.chartData.length > 0 ? (
+                    data.chartData.slice(0, 10).map((pt, i) => (
+                      <span key={i} className="whitespace-nowrap">{pt.date}</span>
+                    ))
+                  ) : (
+                    ["01/07", "04/07", "08/07", "12/07", "16/07", "20/07", "24/07", "28/07", "30/07"].map((d, i) => (
+                      <span key={i}>{d}</span>
+                    ))
+                  )}
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            )}
+          </Card>
         </div>
       </div>
+
 
     </div>
   );
