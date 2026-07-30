@@ -31,29 +31,36 @@ import {
 import { formatCurrency } from "@/lib/utils";
 
 
+import type { DivipayDashboardFilters } from "@/domains/divipay/hooks/useDivipayDashboard";
+
 interface DivipayDashboardViewProps {
   onNavigateTab?: (tab: string) => void;
 }
 
 export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProps) {
-  const { data, isLoading } = useDivipayDashboard();
-  const { config, loading: configLoading } = useDivipayConfig();
-
   const [showFilters, setShowFilters] = useState(false);
   const [filterType, setFilterType] = useState("");
-  const [filterInitialDate, setFilterInitialDate] = useState("2026-07-30T00:00");
-  const [filterFinalDate, setFilterFinalDate] = useState("2026-07-31T11:59");
+  const [filterInitialDate, setFilterInitialDate] = useState("2026-07-01T00:00");
+  const [filterFinalDate, setFilterFinalDate] = useState("2026-07-30T23:59");
   const [filterMaquineta, setFilterMaquineta] = useState("");
   const [filterPromoter, setFilterPromoter] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState<DivipayDashboardFilters | undefined>();
+
+  const { data, isLoading } = useDivipayDashboard(appliedFilters);
+  const { config, loading: configLoading } = useDivipayConfig();
 
   const balance = data?.balances[0];
   const environment = config?.environment ?? "sandbox";
   const isProduction = environment === "production";
 
   const handleSearch = () => {
-    // Redireciona para extrato ou atualiza dados com base nos filtros
-    onNavigateTab?.("extrato");
+    setAppliedFilters({
+      initialDate: filterInitialDate.split("T")[0],
+      finalDate: filterFinalDate.split("T")[0],
+      type: filterType,
+    });
   };
+
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -292,7 +299,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
                 <CheckCircle2 className="w-5 h-5" />
               </div>
               <div>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.cobrancasSummary?.finalizadas ?? 0)}</div>
                 <span className="text-xs text-muted-foreground font-medium">Finalizadas</span>
               </div>
             </CardContent>
@@ -304,7 +311,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
                 <FileText className="w-5 h-5" />
               </div>
               <div>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.cobrancasSummary?.pendentes ?? 0)}</div>
                 <span className="text-xs text-muted-foreground font-medium">Pendentes</span>
               </div>
             </CardContent>
@@ -316,7 +323,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
                 <XCircle className="w-5 h-5" />
               </div>
               <div>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.cobrancasSummary?.canceladas ?? 0)}</div>
                 <span className="text-xs text-muted-foreground font-medium">Canceladas</span>
               </div>
             </CardContent>
@@ -328,7 +335,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
                 <RefreshCw className="w-5 h-5" />
               </div>
               <div>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.cobrancasSummary?.devolucoes ?? 0)}</div>
                 <span className="text-xs text-muted-foreground font-medium">Devoluções</span>
               </div>
             </CardContent>
@@ -347,9 +354,9 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Valor em Vendas</span>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
-                <span className="text-[11px] text-destructive font-medium flex items-center gap-1">
-                  -100% <span className="text-muted-foreground">desde o mês passado</span>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.vendasSummary?.valorEmVendas ?? 0)}</div>
+                <span className="text-[11px] text-emerald-500 font-medium flex items-center gap-1">
+                  +0% <span className="text-muted-foreground">desde o mês passado</span>
                 </span>
               </div>
             </CardContent>
@@ -362,7 +369,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Valor bloqueado</span>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.vendasSummary?.valorBloqueado ?? 0)}</div>
               </div>
             </CardContent>
           </Card>
@@ -374,7 +381,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Líquido Clientes</span>
-                <div className="text-lg font-bold tracking-tight">R$ 0,00</div>
+                <div className="text-lg font-bold tracking-tight">{formatCurrency(data?.vendasSummary?.liquidoClientes ?? 0)}</div>
               </div>
             </CardContent>
           </Card>
@@ -389,7 +396,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Total de vendas</span>
-                <div className="text-lg font-bold tracking-tight">0</div>
+                <div className="text-lg font-bold tracking-tight">{data?.vendasSummary?.totalVendas ?? 0}</div>
               </div>
             </CardContent>
           </Card>
@@ -401,7 +408,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Finalizadas</span>
-                <div className="text-lg font-bold tracking-tight">0</div>
+                <div className="text-lg font-bold tracking-tight">{data?.vendasSummary?.finalizadas ?? 0}</div>
               </div>
             </CardContent>
           </Card>
@@ -413,7 +420,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </div>
               <div>
                 <span className="text-xs text-muted-foreground font-medium">Canceladas</span>
-                <div className="text-lg font-bold tracking-tight">0</div>
+                <div className="text-lg font-bold tracking-tight">{data?.vendasSummary?.canceladas ?? 0}</div>
               </div>
             </CardContent>
           </Card>
@@ -425,11 +432,11 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
         <h3 className="text-sm font-bold tracking-tight text-foreground/90">Vendas no Mês</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {[
-            { title: "Cartão de Crédito", icon: CreditCard, count: 0 },
-            { title: "Cartão de Débito", icon: CreditCard, count: 0 },
-            { title: "Voucher", icon: Banknote, count: 0 },
-            { title: "Pix", icon: QrCode, count: 0 },
-            { title: "Boleto", icon: Receipt, count: 0 },
+            { title: "Cartão de Crédito", icon: CreditCard, count: data?.metodosPagamento?.cartaoCredito ?? 0 },
+            { title: "Cartão de Débito", icon: CreditCard, count: data?.metodosPagamento?.cartaoDebito ?? 0 },
+            { title: "Voucher", icon: Banknote, count: data?.metodosPagamento?.voucher ?? 0 },
+            { title: "Pix", icon: QrCode, count: data?.metodosPagamento?.pix ?? 0 },
+            { title: "Boleto", icon: Receipt, count: data?.metodosPagamento?.boleto ?? 0 },
           ].map((item, idx) => (
             <Card key={idx} className="rounded-2xl border-border/50 shadow-sm hover:border-amber-500/30 transition-colors">
               <CardContent className="p-4 flex items-center gap-3">
@@ -445,6 +452,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
           ))}
         </div>
       </div>
+
     </div>
   );
 }
