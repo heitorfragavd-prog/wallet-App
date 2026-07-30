@@ -21,43 +21,25 @@ export interface ReceitasQueryParams {
   endDate?: string | null;
 }
 
-// ─── Paginated fetch helper (Supabase caps at 1000 rows by default) ──
-// Fetches pages in PARALLEL up to maxRows (default 2000) to prevent browser hangs.
-// Separates count probe from column select to prevent options being lost during chaining.
 async function fetchAllRows<T>(
   buildQuery: () => ReturnType<typeof supabase.from>,
   applyFilters: (q: any) => any,
   columns: string,
   maxRows: number = 2000
 ): Promise<T[]> {
-  const PAGE = 1000;
-  
-  // Count probe: call select first to obtain a FilterBuilder before applying filters
-  const { count, error: countErr } = await applyFilters(
-    buildQuery().select("id", { count: "exact", head: true })
-  );
-  if (countErr) throw countErr;
-  
-  const total = Math.min(count ?? 0, maxRows);
-  if (total === 0) return [];
-
-  const pageCount = Math.ceil(total / PAGE);
-  const pages = Array.from({ length: pageCount }, (_, i) => i);
-
-  // Fire every page concurrently, each on its own fresh builder
-  const results = await Promise.all(
-    pages.map((p) =>
-      applyFilters(buildQuery().select(columns))
-        .range(p * PAGE, p * PAGE + PAGE - 1)
-        .then(({ data, error }) => {
-          if (error) throw error;
-          return (data as T[]) ?? [];
-        })
-    )
-  );
-
-  return results.flat();
+  try {
+    const { data, error } = await applyFilters(buildQuery().select(columns)).limit(maxRows);
+    if (error) {
+      console.warn("Error fetching rows:", error.message);
+      return [];
+    }
+    return (data as T[]) ?? [];
+  } catch (err) {
+    console.warn("Exception fetching rows:", err);
+    return [];
+  }
 }
+
 
 // ─── Fetcher puro ─────────────────────────────────────────────────
 // Regra de Consolidação:
@@ -73,8 +55,8 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
     return query;
   };
 
-  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!receitas_categoria_id_fkey (nome, cor, icone)";
-  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
+  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias (nome, cor, icone)";
+  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias (nome, cor, icone)";
 
   const buildReceitas = () => supabase.from("receitas");
   const buildTransacoes = () => supabase.from("transacoes");
@@ -83,6 +65,7 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
     fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 15000),
     fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 15000),
   ]);
+
 
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
     ...r,
