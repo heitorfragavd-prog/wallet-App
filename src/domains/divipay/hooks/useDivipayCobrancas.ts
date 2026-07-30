@@ -59,7 +59,7 @@ export function useDivipayCobrancas() {
 
       const { data, error } = await supabase
         .from("divipay_transacoes")
-        .update({ status: "CANCELED", updated_at: new Date().toISOString() })
+        .update({ status: "CANCELLED", updated_at: new Date().toISOString() })
         .eq("id", charge.id)
         .select()
         .single();

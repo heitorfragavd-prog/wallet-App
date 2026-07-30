@@ -48,12 +48,12 @@ export function DivipayDashboardView() {
       </div>
 
       {data?.connectionError && !isLoading && (
-        <div className="p-4 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">
+        <div className="p-4 rounded-lg bg-destructive/10 text-destructive text-sm border border-destructive/30">
           {data.connectionError}
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -117,23 +117,23 @@ export function DivipayDashboardView() {
             )}
           </CardContent>
         </Card>
-      </div>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <ArrowUpRight className="w-4 h-4" />
-            Saídas do mês
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-8 w-32" />
-          ) : (
-            <div className="text-2xl font-bold text-red-600">{formatCurrency(data?.saidas ?? 0)}</div>
-          )}
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <ArrowUpRight className="w-4 h-4" />
+              Saídas do mês
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <Skeleton className="h-8 w-32" />
+            ) : (
+              <div className="text-2xl font-bold text-destructive">{formatCurrency(data?.saidas ?? 0)}</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

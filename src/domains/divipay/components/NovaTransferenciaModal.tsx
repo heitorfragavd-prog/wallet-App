@@ -4,6 +4,7 @@ import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Textarea } from "@/shared/components/ui/textarea";
+import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Plus } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
@@ -156,15 +157,14 @@ export function NovaTransferenciaModal() {
             />
           </div>
 
-          <div className="flex items-start gap-2">
-            <input
+          <div className="flex items-start gap-3">
+            <Checkbox
               id="confirm"
-              type="checkbox"
               checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-              className="mt-1"
+              onCheckedChange={(checked) => setConfirmed(checked === true)}
+              className="mt-0.5"
             />
-            <Label htmlFor="confirm" className="text-sm font-normal cursor-pointer">
+            <Label htmlFor="confirm" className="text-sm font-normal cursor-pointer leading-relaxed">
               Confirmo que os dados do destinatário estão corretos e desejo prosseguir com a transferência.
             </Label>
           </div>

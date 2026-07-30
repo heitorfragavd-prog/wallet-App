@@ -5,6 +5,7 @@ import { Label } from "@/shared/components/ui/label";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
 import { Badge } from "@/shared/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
 import { Search, Download } from "lucide-react";
 import { useDivipayExtrato } from "@/domains/divipay/hooks/useDivipayExtrato";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
@@ -65,21 +66,42 @@ export function DivipayExtratoView() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="status">Status</Label>
-              <Input
-                id="status"
-                value={filters.status ?? ""}
-                onChange={(e) => setFilters({ ...filters, status: e.target.value || null })}
-                placeholder="Ex: CONFIRMED"
-              />
+              <Select
+                value={filters.status ?? "all"}
+                onValueChange={(v) => setFilters({ ...filters, status: v === "all" ? null : v })}
+              >
+                <SelectTrigger id="status">
+                  <SelectValue placeholder="Todos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  <SelectItem value="CONFIRMED">Confirmado</SelectItem>
+                  <SelectItem value="PENDING">Pendente</SelectItem>
+                  <SelectItem value="PAID">Pago</SelectItem>
+                  <SelectItem value="COMPLETED">Concluído</SelectItem>
+                  <SelectItem value="FAILED">Falhou</SelectItem>
+                  <SelectItem value="CANCELLED">Cancelado</SelectItem>
+                  <SelectItem value="REJECTED">Rejeitado</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="type">Tipo</Label>
-              <Input
-                id="type"
-                value={filters.type ?? ""}
-                onChange={(e) => setFilters({ ...filters, type: e.target.value || null })}
-                placeholder="Ex: CASH_IN"
-              />
+              <Select
+                value={filters.type ?? "all"}
+                onValueChange={(v) => setFilters({ ...filters, type: v === "all" ? null : v })}
+              >
+                <SelectTrigger id="type">
+                  <SelectValue placeholder="Todos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  <SelectItem value="CASH_IN">Entrada (CASH_IN)</SelectItem>
+                  <SelectItem value="CASH_OUT">Saída (CASH_OUT)</SelectItem>
+                  <SelectItem value="PIX_IN">Pix Entrada</SelectItem>
+                  <SelectItem value="PIX_OUT">Pix Saída</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="mt-4 flex justify-end">
