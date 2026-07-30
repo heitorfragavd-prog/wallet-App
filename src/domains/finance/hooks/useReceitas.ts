@@ -1,8 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 import { Receita as ReceitaType, PaymentMethod } from "../types";
+
 
 export interface Receita extends Omit<ReceitaType, "tags" | "anexos"> {
   updated_at?: string;
@@ -44,7 +46,10 @@ async function fetchAllRows<T>(
 // ─── Fetcher puro ─────────────────────────────────────────────────
 // Regra de Consolidação:
 // 1. Eyemobile/PDV: Apenas transações em DINHEIRO / CASH / ESPECIE
-// 2. Divipay / Demais fontes: Transações digitais normais
+// ─── Fetcher puro ─────────────────────────────────────────────────
+// Regra de Consolidação:
+// 1. Eyemobile/PDV: Apenas transações em DINHEIRO / CASH / ESPECIE
+// 2. Divipay: 100% das Entradas Digitais (Pix, Cartão de Crédito, Débito, Boleto)
 async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[]> {
   const { startDate, endDate } = params;
 
@@ -61,19 +66,18 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
   const buildReceitas = () => supabase.from("receitas");
   const buildTransacoes = () => supabase.from("transacoes");
 
+  // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
     fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 15000),
     fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 15000),
   ]);
-
 
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
     ...r,
     tipo: "receita",
   }));
 
-  // Filtragem estrita para evitar duplicidade com Eyemobile PDV x Divipay:
-  // Se for proveniente de vendas PDV / Eyemobile, aceitar SOMENTE pagamentos em Dinheiro.
+  // 1. Filtragem estrita Eyemobile/PDV: Aceitar SOMENTE pagamentos em Dinheiro.
   const filteredTransacoes = (transacoesResp ?? []).filter((t) => {
     const isEyemobilePDV = t.descricao?.toLowerCase().includes("eyemobile") || 
                            t.observacoes?.toLowerCase().includes("eyemobile") ||
@@ -86,10 +90,56 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
     return true;
   });
 
-  return [...mappedReceitas, ...filteredTransacoes].sort(
+  // 2. Tentar buscar Entradas Digitais reais da Divipay via API listMovements
+  let divipayReceitas: Receita[] = [];
+  try {
+    const initialDate = startDate ? startDate.split("T")[0] : new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+    const finalDate = endDate ? endDate.split("T")[0] : new Date().toISOString().split("T")[0];
+
+    const response = await divipayService.listMovements({
+      initialDate,
+      finalDate,
+      type: "CASH_IN",
+      limit: 200,
+    });
+
+    if (response.items && response.items.length > 0) {
+      divipayReceitas = response.items.map((m) => {
+        const tp = String(m.type || "").toUpperCase();
+        let metodo: PaymentMethod = "pix";
+        if (tp.includes("CREDIT")) metodo = "cartao_credito";
+        else if (tp.includes("DEBIT")) metodo = "cartao_debito";
+        else if (tp.includes("BOLETO") || tp.includes("TICKET")) metodo = "boleto";
+        else if (tp.includes("PIX")) metodo = "pix";
+
+        return {
+          id: `divipay-${m.id}`,
+          user_id: "",
+          tipo: "receita",
+          valor: Number(m.amountLiquid || m.amount || 0),
+          descricao: m.description || `Entrada Divipay (${m.payerName || "Cliente"})`,
+          data: m.date || new Date().toISOString(),
+          created_at: m.date || new Date().toISOString(),
+          updated_at: m.date || new Date().toISOString(),
+          metodo_pagamento: metodo,
+          observacoes: `Entrada digital Divipay - ID ${m.transactionCode || m.id}`,
+          categorias: {
+            nome: "Vendas Divipay",
+            cor: "#f59e0b",
+            icone: "Smartphone",
+          },
+        };
+      });
+    }
+  } catch (err) {
+    console.warn("Nao foi possivel carregar entradas ao vivo da Divipay:", err);
+  }
+
+  return [...mappedReceitas, ...filteredTransacoes, ...divipayReceitas].sort(
     (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
   ) as Receita[];
 }
+
 
 
 // ─── Tag helpers ──────────────────────────────────────────────────
