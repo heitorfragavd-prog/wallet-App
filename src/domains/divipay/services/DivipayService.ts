@@ -118,22 +118,10 @@ export class DivipayService {
     return this.invoke<{ transacao: DivipayTransacao; withdraw: unknown }>("createWithdraw", params as Record<string, unknown>);
   }
 
-  async listWithdraws(): Promise<DivipayTransacao[]> {
-    const userId = await this.requireUser();
-    const { data, error } = await supabase
-      .from("divipay_transacoes")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("type", "CASH_OUT")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      logger.error(COMPONENT, "Erro ao listar saques", { error: error.message });
-      throw error;
-    }
-
-    return data ?? [];
+  async listWithdraws(params?: { limit?: number; offset?: number }): Promise<unknown> {
+    return this.invoke<unknown>("listWithdraws", params as Record<string, unknown>);
   }
+
 
   async listMovements(params: ListMovementsParams): Promise<ListMovementsResult> {
     const data = await this.invoke<Record<string, unknown>>("listMovements", params as Record<string, unknown>);

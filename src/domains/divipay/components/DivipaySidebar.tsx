@@ -10,10 +10,14 @@ import {
   MessageSquare, 
   Calculator, 
   Menu,
-  Building2
+  Building2,
+  CheckCircle2,
+  Layers,
+  Heart
 } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/lib/utils";
+
 
 interface DivipaySidebarProps {
   activeTab: string;
@@ -39,8 +43,13 @@ export function DivipaySidebar({
     { id: "depositar", label: "Depositar", icon: ArrowDownLeft, targetTab: "cobrancas" },
     { id: "extrato", label: "Saldos & Extrato", icon: Wallet, targetTab: "extrato" },
     { id: "transferencias", label: "Saques", icon: ArrowUpRight },
+    { id: "aprovacoes", label: "Aprovações", icon: CheckCircle2, targetTab: "transferencias", indent: true },
+    { id: "lote", label: "Em Lote", icon: Layers, targetTab: "transferencias", indent: true },
+    { id: "favorecidos", label: "Favorecidos", icon: Heart, targetTab: "transferencias", indent: true },
+    { id: "pagar-pix", label: "Pagar com Pix", icon: QrCode, targetTab: "transferencias", indent: true },
     { id: "configuracoes", label: "Configurações", icon: Settings },
   ];
+
 
   return (
     <aside
@@ -107,17 +116,21 @@ export function DivipaySidebar({
               key={item.id}
               onClick={() => onSelectTab(target)}
               className={cn(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all duration-150 group",
-                isActive
+                "w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 group",
+                item.indent && !collapsed ? "pl-7 text-[11px]" : "",
+                isActive && !item.indent
                   ? "bg-amber-500 text-white font-semibold shadow-xs"
+                  : isActive && item.indent
+                  ? "text-amber-500 font-bold bg-amber-500/10"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent/60"
               )}
               title={collapsed ? item.label : undefined}
             >
-              <Icon className={cn("w-4 h-4 flex-shrink-0 transition-transform group-hover:scale-110", isActive ? "text-white" : "text-amber-500")} />
+              <Icon className={cn("w-3.5 h-3.5 flex-shrink-0 transition-transform group-hover:scale-110", isActive ? "text-amber-500" : "text-amber-500/80")} />
               {!collapsed && <span className="truncate">{item.label}</span>}
             </button>
           );
+
         })}
       </div>
 

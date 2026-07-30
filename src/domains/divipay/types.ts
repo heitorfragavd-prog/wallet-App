@@ -86,9 +86,23 @@ export interface ListMovementsResult {
   hasMore?: boolean;
 }
 
+export interface DivipaySaque {
+  id: string;
+  name?: string | null;
+  document?: string | null;
+  description?: string | null;
+  type: string;
+  amount: number;
+  tax: number;
+  status: string;
+  lote?: string | null;
+  createdAt?: string | null;
+}
+
 export interface DivipayApiResponse<T = unknown> {
   success?: boolean;
   data?: T;
   error?: string;
   message?: string;
 }
+
