@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Button } from "@/shared/components/ui/button";
@@ -7,18 +7,56 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
 import { NovaTransferenciaModal } from "./NovaTransferenciaModal";
-import { formatCurrency, formatDateTime } from "@/lib/utils";
-import { Eye, Filter, ArrowUpRight, DollarSign, ArrowDownLeft } from "lucide-react";
+import { formatCurrency } from "@/lib/utils";
+import { Eye, Filter } from "lucide-react";
 
 export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
+  // Lista oficial fornecida pela Divipay para exibição dos saques
+  const mockSaques = [
+    { id: "s1", name: "COMERCIAL CARVALHO DIAS LTDA", document: "---", description: "Gerson salgados", type: "Pix (DICT)", amount: 1341.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s2", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 856.99, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s3", name: "---", document: "61.186.888/0001-93", description: "Pagamento de boleto...", type: "Boleto", amount: 1949.76, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s4", name: "---", document: "17.467.515/0001-07", description: "Pagamento de boleto...", type: "Boleto", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s5", name: "Kenia Keylla Vieira Costa", document: "---", description: "acerto kenia", type: "Pix (DICT)", amount: 4819.11, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s6", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista de do...", type: "Pix (DICT)", amount: 200.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s7", name: "Shuellen Pereira Santos", document: "---", description: "meta e passagem", type: "Pix (DICT)", amount: 258.93, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s8", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 470.10, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s9", name: "GERSON DOS SANTOS PINTO", document: "---", description: "GERSON SALGAD...", type: "Pix (DICT)", amount: 1775.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s10", name: "VICTOR RAFAEL DA PAIXAO FARIA", document: "---", description: "victor folguista", type: "Pix (DICT)", amount: 120.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s11", name: "Geovanna Cardoso Moreira", document: "---", description: "geovanna", type: "Pix (DICT)", amount: 80.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s12", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 658.14, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s13", name: "Shuellen Pereira Santos", document: "---", description: "suellen passagem", type: "Pix (DICT)", amount: 59.67, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s14", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista", type: "Pix (DICT)", amount: 160.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s15", name: "GERSON DOS SANTOS PINTO", document: "---", description: "gerson salgados", type: "Pix (DICT)", amount: 1920.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s16", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 1053.58, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s17", name: "---", document: "02.038.232/0001-64", description: "Pagamento de boleto...", type: "Boleto", amount: 5770.09, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s18", name: "DISTRIBUIDORA PEROBAS LTDA", document: "---", description: "", type: "Pix (DICT)", amount: 650.44, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s19", name: "Viviane Cristina Teotonio Siqueira", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s20", name: "VIVIANE CRISTINA TEOTONIO SIQUEIRA", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 1000.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+  ];
+
+  const displayList = transferencias.length > 0
+    ? transferencias.map((t) => ({
+        id: t.id,
+        name: t.recipient_key || (String(t.description || "").toLowerCase().includes("boleto") ? "---" : t.description || "Favorecido Pix"),
+        document: t.recipient_key ? "---" : "31.908.617/0001-33",
+        description: t.description || "Pagamento de boleto...",
+        type: String(t.description || "").toLowerCase().includes("boleto") ? "Boleto" : "Pix (DICT)",
+        amount: Number(t.amount || 0),
+        tax: 3.50,
+        status: String(t.status || "FINALIZADO").toUpperCase(),
+        lote: "---",
+      }))
+    : mockSaques;
+
   const toggleSelectAll = () => {
-    if (selectedIds.length === transferencias.length) {
+    if (selectedIds.length === displayList.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(transferencias.map((t) => t.id));
+      setSelectedIds(displayList.map((t) => t.id));
     }
   };
 
@@ -28,7 +66,7 @@ export function DivipayTransferenciasView() {
     );
   };
 
-  const totalSelected = transferencias
+  const totalSelected = displayList
     .filter((t) => selectedIds.includes(t.id))
     .reduce((acc, t) => acc + Number(t.amount || 0), 0);
 
@@ -77,44 +115,7 @@ export function DivipayTransferenciasView() {
               <Skeleton className="h-10 w-full rounded-xl" />
               <Skeleton className="h-10 w-full rounded-xl" />
             </div>
-  // Lista oficial fornecida pela Divipay para exibicao instantanea dos saques
-  const mockSaques = [
-    { id: "s1", name: "COMERCIAL CARVALHO DIAS LTDA", document: "---", description: "Gerson salgados", type: "Pix (DICT)", amount: 1341.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s2", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 856.99, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s3", name: "---", document: "61.186.888/0001-93", description: "Pagamento de boleto...", type: "Boleto", amount: 1949.76, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s4", name: "---", document: "17.467.515/0001-07", description: "Pagamento de boleto...", type: "Boleto", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s5", name: "Kenia Keylla Vieira Costa", document: "---", description: "acerto kenia", type: "Pix (DICT)", amount: 4819.11, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s6", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista de do...", type: "Pix (DICT)", amount: 200.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s7", name: "Shuellen Pereira Santos", document: "---", description: "meta e passagem", type: "Pix (DICT)", amount: 258.93, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s8", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 470.10, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s9", name: "GERSON DOS SANTOS PINTO", document: "---", description: "GERSON SALGAD...", type: "Pix (DICT)", amount: 1775.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s10", name: "VICTOR RAFAEL DA PAIXAO FARIA", document: "---", description: "victor folguista", type: "Pix (DICT)", amount: 120.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s11", name: "Geovanna Cardoso Moreira", document: "---", description: "geovanna", type: "Pix (DICT)", amount: 80.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s12", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 658.14, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s13", name: "Shuellen Pereira Santos", document: "---", description: "suellen passagem", type: "Pix (DICT)", amount: 59.67, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s14", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista", type: "Pix (DICT)", amount: 160.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s15", name: "GERSON DOS SANTOS PINTO", document: "---", description: "gerson salgados", type: "Pix (DICT)", amount: 1920.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s16", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 1053.58, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s17", name: "---", document: "02.038.232/0001-64", description: "Pagamento de boleto...", type: "Boleto", amount: 5770.09, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s18", name: "DISTRIBUIDORA PEROBAS LTDA", document: "---", description: "", type: "Pix (DICT)", amount: 650.44, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s19", name: "Viviane Cristina Teotonio Siqueira", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-    { id: "s20", name: "VIVIANE CRISTINA TEOTONIO SIQUEIRA", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 1000.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-  ];
-
-  const displayList = transferencias.length > 0
-    ? transferencias.map((t) => ({
-        id: t.id,
-        name: t.recipient_key || (String(t.description || "").toLowerCase().includes("boleto") ? "---" : t.description || "Favorecido Pix"),
-        document: t.recipient_key ? "---" : "31.908.617/0001-33",
-        description: t.description || "Pagamento de boleto...",
-        type: String(t.description || "").toLowerCase().includes("boleto") ? "Boleto" : "Pix (DICT)",
-        amount: Number(t.amount || 0),
-        tax: 3.50,
-        status: String(t.status || "FINALIZADO").toUpperCase(),
-        lote: "---",
-      }))
-    : mockSaques;
-
+          ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-accent/10 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -175,11 +176,9 @@ export function DivipayTransferenciasView() {
                 </TableBody>
               </Table>
             </div>
-
           )}
         </CardContent>
       </Card>
     </div>
   );
 }
-
