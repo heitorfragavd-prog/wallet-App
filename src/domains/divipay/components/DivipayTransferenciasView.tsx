@@ -1,21 +1,41 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/components/ui/select";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
+import { SaquesFiltrosSheet, type SaquesFilterValues } from "./SaquesFiltrosSheet";
 import { formatCurrency } from "@/lib/utils";
-import { Eye, Filter } from "lucide-react";
-
+import { Eye, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  // Estado dos Filtros
+  const [filters, setFilters] = useState<SaquesFilterValues>({
+    searchQuery: "",
+    status: "ALL",
+    startDate: "2026-07-01T00:00",
+    endDate: "2026-07-31T23:59",
+  });
+
+  // Paginacao (Exibir 20, 50, 100, 250, 500)
+  const [itemsPerPage, setItemsPerPage] = useState<number>(20);
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Lista oficial fornecida pela Divipay para exibição dos saques
-  const mockSaques = [
+  const mockSaques = useMemo(() => [
     { id: "s1", name: "COMERCIAL CARVALHO DIAS LTDA", document: "---", description: "Gerson salgados", type: "Pix (DICT)", amount: 1341.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
     { id: "s2", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 856.99, tax: 3.50, status: "FINALIZADO", lote: "---" },
     { id: "s3", name: "---", document: "61.186.888/0001-93", description: "Pagamento de boleto...", type: "Boleto", amount: 1949.76, tax: 3.50, status: "FINALIZADO", lote: "---" },
@@ -36,27 +56,57 @@ export function DivipayTransferenciasView() {
     { id: "s18", name: "DISTRIBUIDORA PEROBAS LTDA", document: "---", description: "", type: "Pix (DICT)", amount: 650.44, tax: 3.50, status: "FINALIZADO", lote: "---" },
     { id: "s19", name: "Viviane Cristina Teotonio Siqueira", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
     { id: "s20", name: "VIVIANE CRISTINA TEOTONIO SIQUEIRA", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 1000.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
-  ];
+  ], []);
 
-  const displayList = transferencias.length > 0
-    ? transferencias.map((t) => ({
-        id: t.id,
-        name: t.recipient_key || (String(t.description || "").toLowerCase().includes("boleto") ? "---" : t.description || "Favorecido Pix"),
-        document: t.recipient_key ? "---" : "31.908.617/0001-33",
-        description: t.description || "Pagamento de boleto...",
-        type: String(t.description || "").toLowerCase().includes("boleto") ? "Boleto" : "Pix (DICT)",
-        amount: Number(t.amount || 0),
-        tax: 3.50,
-        status: String(t.status || "FINALIZADO").toUpperCase(),
-        lote: "---",
-      }))
-    : mockSaques;
+  const rawList = useMemo(() => {
+    return transferencias.length > 0
+      ? transferencias.map((t) => ({
+          id: t.id,
+          name: t.recipient_key || (String(t.description || "").toLowerCase().includes("boleto") ? "---" : t.description || "Favorecido Pix"),
+          document: t.recipient_key ? "---" : "31.908.617/0001-33",
+          description: t.description || "Pagamento de boleto...",
+          type: String(t.description || "").toLowerCase().includes("boleto") ? "Boleto" : "Pix (DICT)",
+          amount: Number(t.amount || 0),
+          tax: 3.50,
+          status: String(t.status || "FINALIZADO").toUpperCase(),
+          lote: "---",
+        }))
+      : mockSaques;
+  }, [transferencias, mockSaques]);
+
+  // Aplicar Filtros
+  const filteredList = useMemo(() => {
+    return rawList.filter((item) => {
+      // Busca por palavras-chave
+      if (filters.searchQuery.trim()) {
+        const q = filters.searchQuery.toLowerCase();
+        const matchName = item.name.toLowerCase().includes(q);
+        const matchDoc = item.document.toLowerCase().includes(q);
+        const matchDesc = item.description.toLowerCase().includes(q);
+        if (!matchName && !matchDoc && !matchDesc) return false;
+      }
+
+      // Filtro de Status
+      if (filters.status !== "ALL") {
+        if (item.status !== filters.status) return false;
+      }
+
+      return true;
+    });
+  }, [rawList, filters]);
+
+  // Cálculo de Paginação
+  const totalPages = Math.max(1, Math.ceil(filteredList.length / itemsPerPage));
+  const paginatedList = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredList.slice(start, start + itemsPerPage);
+  }, [filteredList, currentPage, itemsPerPage]);
 
   const toggleSelectAll = () => {
-    if (selectedIds.length === displayList.length) {
+    if (selectedIds.length === paginatedList.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(displayList.map((t) => t.id));
+      setSelectedIds(paginatedList.map((t) => t.id));
     }
   };
 
@@ -66,7 +116,7 @@ export function DivipayTransferenciasView() {
     );
   };
 
-  const totalSelected = displayList
+  const totalSelected = rawList
     .filter((t) => selectedIds.includes(t.id))
     .reduce((acc, t) => acc + Number(t.amount || 0), 0);
 
@@ -91,12 +141,16 @@ export function DivipayTransferenciasView() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="text-xs gap-2 rounded-xl border-border/60">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsFilterOpen(true)}
+            className="text-xs gap-2 rounded-xl border-border/60 hover:border-amber-500/40"
+          >
             <Filter className="w-3.5 h-3.5 text-amber-500" /> Filtros
           </Button>
         </div>
       </div>
-
 
       {/* Card Principal de Tabela com Layout Divipay Oficial */}
       <Card className="rounded-2xl border-border/60 shadow-sm overflow-hidden bg-card/90 backdrop-blur-sm">
@@ -122,7 +176,7 @@ export function DivipayTransferenciasView() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-10 text-center">
                       <Checkbox
-                        checked={selectedIds.length === displayList.length && displayList.length > 0}
+                        checked={selectedIds.length === paginatedList.length && paginatedList.length > 0}
                         onCheckedChange={toggleSelectAll}
                       />
                     </TableHead>
@@ -138,7 +192,7 @@ export function DivipayTransferenciasView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody className="text-xs">
-                  {displayList.map((t) => {
+                  {paginatedList.map((t) => {
                     const isSelected = selectedIds.includes(t.id);
 
                     return (
@@ -177,8 +231,98 @@ export function DivipayTransferenciasView() {
               </Table>
             </div>
           )}
+
+          {/* Rodapé de Paginação estilo DiviPay Oficial (<< < > >> Página 1 de 4 | Exibir 20 v) */}
+          <div className="flex flex-col sm:flex-row items-center justify-end gap-4 p-4 border-t border-border/40 text-xs">
+            {/* Controles de Navegação de Páginas */}
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="h-8 w-8 rounded-lg border-border/60"
+                title="Primeira página"
+              >
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="h-8 w-8 rounded-lg border-border/60"
+                title="Página anterior"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="h-8 w-8 rounded-lg border-border/60"
+                title="Próxima página"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="h-8 w-8 rounded-lg border-border/60"
+                title="Última página"
+              >
+                <ChevronsRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+
+            {/* Contador de Página */}
+            <span className="text-xs text-muted-foreground font-medium">
+              Página <strong className="text-foreground font-bold">{currentPage}</strong> de <strong className="text-foreground font-bold">{totalPages}</strong>
+            </span>
+
+            {/* Select do tamanho da página (Exibir 20, 50, 100, 250, 500) */}
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(itemsPerPage)}
+                onValueChange={(val) => {
+                  setItemsPerPage(Number(val));
+                  setCurrentPage(1);
+                }}
+              >
+                <SelectTrigger className="h-8 text-xs w-[120px] rounded-lg border-border/60 bg-background">
+                  <SelectValue placeholder="Exibir 20" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value="20">Exibir 20</SelectItem>
+                  <SelectItem value="50">Exibir 50</SelectItem>
+                  <SelectItem value="100">Exibir 100</SelectItem>
+                  <SelectItem value="250">Exibir 250</SelectItem>
+                  <SelectItem value="500">Exibir 500</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardContent>
       </Card>
+
+      {/* Drawer Lateral de Filtros */}
+      <SaquesFiltrosSheet
+        open={isFilterOpen}
+        onOpenChange={setIsFilterOpen}
+        filters={filters}
+        onApplyFilters={setFilters}
+        onClearFilters={() =>
+          setFilters({
+            searchQuery: "",
+            status: "ALL",
+            startDate: "2026-07-01T00:00",
+            endDate: "2026-07-31T23:59",
+          })
+        }
+      />
     </div>
   );
 }
