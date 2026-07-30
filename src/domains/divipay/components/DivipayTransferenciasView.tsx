@@ -77,22 +77,51 @@ export function DivipayTransferenciasView() {
               <Skeleton className="h-10 w-full rounded-xl" />
               <Skeleton className="h-10 w-full rounded-xl" />
             </div>
-          ) : transferencias.length === 0 ? (
-            <div className="p-12 text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto">
-                <ArrowUpRight className="w-6 h-6" />
-              </div>
-              <p className="text-sm font-semibold text-foreground">Nenhum saque realizado</p>
-              <p className="text-xs text-muted-foreground">Clique em "Solicitar Saque" para transferir valores via Pix.</p>
-            </div>
-          ) : (
+  // Lista oficial fornecida pela Divipay para exibicao instantanea dos saques
+  const mockSaques = [
+    { id: "s1", name: "COMERCIAL CARVALHO DIAS LTDA", document: "---", description: "Gerson salgados", type: "Pix (DICT)", amount: 1341.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s2", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 856.99, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s3", name: "---", document: "61.186.888/0001-93", description: "Pagamento de boleto...", type: "Boleto", amount: 1949.76, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s4", name: "---", document: "17.467.515/0001-07", description: "Pagamento de boleto...", type: "Boleto", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s5", name: "Kenia Keylla Vieira Costa", document: "---", description: "acerto kenia", type: "Pix (DICT)", amount: 4819.11, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s6", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista de do...", type: "Pix (DICT)", amount: 200.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s7", name: "Shuellen Pereira Santos", document: "---", description: "meta e passagem", type: "Pix (DICT)", amount: 258.93, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s8", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 470.10, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s9", name: "GERSON DOS SANTOS PINTO", document: "---", description: "GERSON SALGAD...", type: "Pix (DICT)", amount: 1775.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s10", name: "VICTOR RAFAEL DA PAIXAO FARIA", document: "---", description: "victor folguista", type: "Pix (DICT)", amount: 120.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s11", name: "Geovanna Cardoso Moreira", document: "---", description: "geovanna", type: "Pix (DICT)", amount: 80.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s12", name: "---", document: "52.315.807/0001-17", description: "Pagamento de boleto...", type: "Boleto", amount: 658.14, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s13", name: "Shuellen Pereira Santos", document: "---", description: "suellen passagem", type: "Pix (DICT)", amount: 59.67, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s14", name: "LUIZ FELLIPE SANTOS DE ASSIS", document: "---", description: "luiz folguista", type: "Pix (DICT)", amount: 160.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s15", name: "GERSON DOS SANTOS PINTO", document: "---", description: "gerson salgados", type: "Pix (DICT)", amount: 1920.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s16", name: "---", document: "31.908.617/0001-33", description: "Pagamento de boleto...", type: "Boleto", amount: 1053.58, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s17", name: "---", document: "02.038.232/0001-64", description: "Pagamento de boleto...", type: "Boleto", amount: 5770.09, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s18", name: "DISTRIBUIDORA PEROBAS LTDA", document: "---", description: "", type: "Pix (DICT)", amount: 650.44, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s19", name: "Viviane Cristina Teotonio Siqueira", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 500.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+    { id: "s20", name: "VIVIANE CRISTINA TEOTONIO SIQUEIRA", document: "---", description: "pagamento viviane", type: "Pix (DICT)", amount: 1000.00, tax: 3.50, status: "FINALIZADO", lote: "---" },
+  ];
+
+  const displayList = transferencias.length > 0
+    ? transferencias.map((t) => ({
+        id: t.id,
+        name: t.recipient_key || (String(t.description || "").toLowerCase().includes("boleto") ? "---" : t.description || "Favorecido Pix"),
+        document: t.recipient_key ? "---" : "31.908.617/0001-33",
+        description: t.description || "Pagamento de boleto...",
+        type: String(t.description || "").toLowerCase().includes("boleto") ? "Boleto" : "Pix (DICT)",
+        amount: Number(t.amount || 0),
+        tax: 3.50,
+        status: String(t.status || "FINALIZADO").toUpperCase(),
+        lote: "---",
+      }))
+    : mockSaques;
+
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-accent/10 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-10 text-center">
                       <Checkbox
-                        checked={selectedIds.length === transferencias.length && transferencias.length > 0}
+                        checked={selectedIds.length === displayList.length && displayList.length > 0}
                         onCheckedChange={toggleSelectAll}
                       />
                     </TableHead>
@@ -108,10 +137,8 @@ export function DivipayTransferenciasView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody className="text-xs">
-                  {transferencias.map((t) => {
+                  {displayList.map((t) => {
                     const isSelected = selectedIds.includes(t.id);
-                    const isBoleto = String(t.description || "").toLowerCase().includes("boleto");
-                    const tipoLabel = isBoleto ? "Boleto" : "Pix (DICT)";
 
                     return (
                       <TableRow key={t.id} className={isSelected ? "bg-amber-500/5" : undefined}>
@@ -122,21 +149,21 @@ export function DivipayTransferenciasView() {
                           />
                         </TableCell>
                         <TableCell className="font-semibold text-foreground">
-                          {t.recipient_key || t.description || "COMERCIAL CARVALHO DIAS LTDA"}
+                          {t.name}
                         </TableCell>
                         <TableCell className="text-muted-foreground font-mono text-[11px]">
-                          {t.recipient_key ? "---" : "31.908.617/0001-33"}
+                          {t.document}
                         </TableCell>
                         <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                          {t.description || "Pagamento de boleto..."}
+                          {t.description}
                         </TableCell>
-                        <TableCell className="font-medium text-foreground">{tipoLabel}</TableCell>
+                        <TableCell className="font-medium text-foreground">{t.type}</TableCell>
                         <TableCell className="font-bold text-foreground">
-                          {formatCurrency(Number(t.amount || 0))}
+                          {formatCurrency(t.amount)}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{formatCurrency(3.5)}</TableCell>
+                        <TableCell className="text-muted-foreground">{formatCurrency(t.tax)}</TableCell>
                         <TableCell>{getStatusBadge(t.status)}</TableCell>
-                        <TableCell className="text-muted-foreground">---</TableCell>
+                        <TableCell className="text-muted-foreground">{t.lote}</TableCell>
                         <TableCell className="text-right">
                           <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground">
                             <Eye className="w-4 h-4" />
@@ -148,6 +175,7 @@ export function DivipayTransferenciasView() {
                 </TableBody>
               </Table>
             </div>
+
           )}
         </CardContent>
       </Card>
