@@ -57,63 +57,63 @@ export function VerificarSaqueModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px] rounded-2xl bg-card border-border/60 text-card-foreground p-6 shadow-2xl space-y-4 z-[999]">
-
-        <DialogHeader className="pb-2 border-b border-border/40">
-          <DialogTitle className="text-lg font-bold tracking-tight text-foreground">
+      <DialogContent className="sm:max-w-[420px] rounded-2xl bg-white text-gray-900 border-gray-200 p-6 shadow-2xl space-y-4 z-[9999]">
+        <DialogHeader className="pb-2 border-b border-gray-100">
+          <DialogTitle className="text-lg font-bold tracking-tight text-gray-900">
             Verificar Saque
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 text-xs">
+        <div className="space-y-3.5 text-xs text-gray-800">
+
           {/* Cliente */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Cliente</span>
-            <span className="font-medium text-foreground text-sm block">{cliente}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Cliente</span>
+            <span className="font-medium text-gray-900 text-sm block">{cliente}</span>
           </div>
 
           {/* Documento */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Documento</span>
-            <span className="font-medium text-foreground text-sm block">{documentoCliente}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Documento</span>
+            <span className="font-medium text-gray-900 text-sm block">{documentoCliente}</span>
           </div>
 
           {/* Valor do Saque */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Valor do Saque</span>
-            <span className="font-extrabold text-foreground text-sm block">{formatCurrency(valorSaque)}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Valor do Saque</span>
+            <span className="font-extrabold text-gray-900 text-sm block">{formatCurrency(valorSaque)}</span>
           </div>
 
           {/* Valor da Taxa */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Valor da Taxa</span>
-            <span className="font-medium text-foreground text-sm block">{formatCurrency(taxa)}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Valor da Taxa</span>
+            <span className="font-medium text-gray-900 text-sm block">{formatCurrency(taxa)}</span>
           </div>
 
           {/* Valor Final */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Valor Final</span>
-            <span className="font-bold text-foreground text-sm block">{formatCurrency(valorFinal)}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Valor Final</span>
+            <span className="font-bold text-gray-900 text-sm block">{formatCurrency(valorFinal)}</span>
           </div>
 
           {/* Descrição */}
           <div className="space-y-0.5">
-            <span className="text-[11px] text-muted-foreground font-medium block">Descrição</span>
-            <span className="font-medium text-foreground text-sm block">{saque?.description || "Gerson salgados"}</span>
+            <span className="text-[11px] text-gray-400 font-medium block">Descrição</span>
+            <span className="font-medium text-gray-900 text-sm block">{saque?.description || "Gerson salgados"}</span>
           </div>
 
           {/* Dados bancários */}
-          <div className="pt-2 border-t border-border/40 space-y-2">
-            <h4 className="font-bold text-sm text-foreground">Dados bancários</h4>
+          <div className="pt-2 border-t border-gray-100 space-y-2">
+            <h4 className="font-bold text-sm text-gray-900">Dados bancários</h4>
             <div className="space-y-0.5">
-              <span className="text-[11px] text-muted-foreground font-medium block">Chave Pix</span>
-              <span className="font-mono font-medium text-foreground text-xs block">{chavePix}</span>
+              <span className="text-[11px] text-gray-400 font-medium block">Chave Pix</span>
+              <span className="font-mono font-medium text-gray-900 text-xs block">{chavePix}</span>
             </div>
           </div>
 
           {/* Comprovante */}
-          <div className="pt-2 border-t border-border/40 space-y-3">
-            <h4 className="font-bold text-sm text-foreground">Comprovante</h4>
+          <div className="pt-2 border-t border-gray-100 space-y-3">
+            <h4 className="font-bold text-sm text-gray-900">Comprovante</h4>
 
             {/* Ações Impressão & Download */}
             <div className="flex items-center gap-2">
@@ -121,7 +121,7 @@ export function VerificarSaqueModal({
                 variant="outline"
                 size="icon"
                 onClick={() => window.print()}
-                className="h-8 w-8 rounded-lg border-border/60 text-muted-foreground hover:text-foreground"
+                className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                 title="Imprimir comprovante"
               >
                 <Printer className="w-3.5 h-3.5" />
@@ -130,7 +130,7 @@ export function VerificarSaqueModal({
                 variant="outline"
                 size="icon"
                 onClick={() => alert("Comprovante baixado com sucesso.")}
-                className="h-8 w-8 rounded-lg border-border/60 text-muted-foreground hover:text-foreground"
+                className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                 title="Baixar comprovante PDF"
               >
                 <Download className="w-3.5 h-3.5" />
@@ -139,22 +139,23 @@ export function VerificarSaqueModal({
 
             {/* Status Pagamento */}
             <div className="space-y-0.5">
-              <span className="text-[11px] text-muted-foreground font-medium block">Status Pagamento</span>
-              <span className="font-semibold text-emerald-500 text-sm block">{statusPagamento}</span>
+              <span className="text-[11px] text-gray-400 font-medium block">Status Pagamento</span>
+              <span className="font-semibold text-gray-900 text-sm block">{statusPagamento}</span>
             </div>
 
             {/* Id de Pagamento */}
             <div className="space-y-0.5">
-              <span className="text-[11px] text-muted-foreground font-medium block">Id de Pagamento</span>
-              <span className="font-mono text-[11px] text-muted-foreground block break-all">{idPagamento}</span>
+              <span className="text-[11px] text-gray-400 font-medium block">Id de Pagamento</span>
+              <span className="font-mono text-[11px] text-gray-600 block break-all">{idPagamento}</span>
             </div>
 
             {/* Pago em */}
             <div className="space-y-0.5">
-              <span className="text-[11px] text-muted-foreground font-medium block">Pago em</span>
-              <span className="font-medium text-foreground text-xs block">{pagoEm}</span>
+              <span className="text-[11px] text-gray-400 font-medium block">Pago em</span>
+              <span className="font-medium text-gray-900 text-xs block">{pagoEm}</span>
             </div>
           </div>
+
         </div>
 
         {/* Template do Comprovante Oficial da Divipay para Impressão / PDF (@media print) */}
