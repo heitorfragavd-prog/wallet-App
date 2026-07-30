@@ -39,6 +39,7 @@ export function useDivipayConfig() {
           client_secret: clientSecret.trim(),
           environment,
         });
+        // Garante reset local da configuracao
         setConfig(updated);
         toast({
           title: "Sucesso",

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
@@ -183,29 +184,12 @@ export function DivipayConfiguracoesView() {
 }
 
 function WebhookLogsTable() {
-  const [logsData, setLogsData] = useState<Awaited<ReturnType<typeof divipayService.getWebhookLogs>>>([]);
-  const [logsLoading, setLogsLoading] = useState(true);
-
-  // Como useDivipayDashboard não retorna logs, usamos leitura local simples via service.
-  // Evitamos criar hook extra para manter MVP enxuto.
-  useEffect(() => {
-    let cancelled = false;
-    setLogsLoading(true);
-    divipayService
-      .getWebhookLogs(20)
-      .then((data) => {
-        if (!cancelled) setLogsData(data);
-      })
-      .catch(() => {
-        // silencioso
-      })
-      .finally(() => {
-        if (!cancelled) setLogsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data: logsData = [], isLoading: logsLoading } = useQuery({
+    queryKey: ["divipay-webhook-logs"],
+    queryFn: () => divipayService.getWebhookLogs(20),
+    staleTime: 1000 * 60,
+    retry: 1,
+  });
 
   return (
     <Card>

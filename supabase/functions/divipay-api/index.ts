@@ -56,35 +56,68 @@ function getErrorMessage(data: unknown): string {
 async function getDivipayToken(supabaseAdmin: any, config: DivipayConfig): Promise<string> {
   const expiresAt = config.token_expires_at ? new Date(config.token_expires_at).getTime() : 0
   if (config.access_token && expiresAt > Date.now() + 60_000) {
+    console.log('[divipay-api] Reutilizando token em cache')
     return config.access_token
   }
 
   const baseUrl = BASE_URLS[config.environment] ?? BASE_URLS.sandbox
-  const resp = await fetchWithTimeout(`${baseUrl}/api/auth`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: config.client_id,
-      client_secret: config.client_secret,
-    }),
-    timeout: 15000,
-  })
+  const authUrl = `${baseUrl}/api/auth`
+  console.log('[divipay-api] Autenticando na Divipay:', authUrl, 'env:', config.environment)
 
-  const data = await resp.json().catch(() => ({}))
-  if (!resp.ok || !data?.token) {
-    throw new Error(`Falha na autenticação Divipay (${resp.status}): ${data?.message ?? 'verifique client_id/client_secret'}`)
+  let resp: Response
+  try {
+    resp = await fetchWithTimeout(authUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        client_id: config.client_id,
+        client_secret: config.client_secret,
+        clientId: config.client_id,
+        clientSecret: config.client_secret,
+      }),
+      timeout: 15000,
+    })
+  } catch (fetchErr: unknown) {
+    const errMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+    console.error('[divipay-api] Timeout/network error ao chamar /api/auth:', errMsg)
+    throw new Error(`Erro de rede ao autenticar na Divipay: ${errMsg}`)
   }
 
+  const rawBody = await resp.text()
+  console.log('[divipay-api] Auth response status:', resp.status, 'body:', rawBody.slice(0, 500))
+
+  let data: Record<string, unknown> = {}
+  try {
+    data = JSON.parse(rawBody)
+  } catch {
+    console.error('[divipay-api] Resposta da auth não é JSON válido:', rawBody.slice(0, 200))
+    throw new Error(`Falha na autenticação Divipay (${resp.status}): resposta inválida do servidor`)
+  }
+
+  // Suporta múltiplos campos de token que a API pode retornar
+  const token = data?.token ?? data?.access_token ?? data?.accessToken ?? data?.data?.token ?? null
+
+  if (!resp.ok || !token) {
+    const errMsg = data?.message ?? data?.error ?? data?.detail ?? `verifique client_id/client_secret (status ${resp.status})`
+    console.error('[divipay-api] Auth falhou:', { status: resp.status, data, errMsg })
+    throw new Error(`Falha na autenticação Divipay (${resp.status}): ${errMsg}`)
+  }
+
+  const tokenStr = String(token)
   const tokenExpiresAt = data.expireOn
-    ? new Date(data.expireOn).toISOString()
-    : new Date(Date.now() + (Number(data.expireIn ?? 86400) * 1000)).toISOString()
+    ? new Date(String(data.expireOn)).toISOString()
+    : data.expireIn
+    ? new Date(Date.now() + (Number(data.expireIn) * 1000)).toISOString()
+    : new Date(Date.now() + 86400 * 1000).toISOString()
+
+  console.log('[divipay-api] Token obtido, expira em:', tokenExpiresAt)
 
   await supabaseAdmin
     .from('divipay_config')
-    .update({ access_token: data.token, token_expires_at: tokenExpiresAt })
+    .update({ access_token: tokenStr, token_expires_at: tokenExpiresAt })
     .eq('id', config.id)
 
-  return data.token
+  return tokenStr
 }
 
 async function divipayFetch(
@@ -101,19 +134,42 @@ async function divipayFetch(
     }
   }
 
-  const resp = await fetchWithTimeout(url.toString(), {
-    method: options.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    timeout: 20000,
-  })
+  console.log('[divipay-api] divipayFetch:', options.method ?? 'GET', url.toString())
 
-  const data = await resp.json().catch(() => ({}))
+  let resp: Response
+  try {
+    resp = await fetchWithTimeout(url.toString(), {
+      method: options.method ?? 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      timeout: 20000,
+    })
+  } catch (fetchErr: unknown) {
+    const errMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+    console.error('[divipay-api] Timeout/network error:', options.method ?? 'GET', path, errMsg)
+    throw new Error(`Erro de rede em ${path}: ${errMsg}`)
+  }
+
+  const rawBody = await resp.text()
+  console.log('[divipay-api] Response', resp.status, path, rawBody.slice(0, 300))
+
+  let data: unknown = {}
+  try {
+    data = JSON.parse(rawBody)
+  } catch {
+    if (!resp.ok) {
+      throw new Error(`Divipay ${options.method ?? 'GET'} ${path} falhou (${resp.status}): resposta não-JSON`)
+    }
+    return {}
+  }
+
   if (!resp.ok) {
     const message = getErrorMessage(data) || `Erro HTTP ${resp.status}`
+    console.error('[divipay-api] API error:', resp.status, path, message)
     throw new Error(`Divipay ${options.method ?? 'GET'} ${path} falhou (${resp.status}): ${message}`)
   }
   return data
@@ -322,12 +378,22 @@ serve(async (req) => {
       }
 
       case 'listMovements': {
+        let initialDateStr = params.initialDate ? String(params.initialDate) : undefined
+        let finalDateStr = params.finalDate ? String(params.finalDate) : undefined
+
+        if (initialDateStr && !initialDateStr.includes('T')) {
+          initialDateStr = `${initialDateStr}T00:00:00.000Z`
+        }
+        if (finalDateStr && !finalDateStr.includes('T')) {
+          finalDateStr = `${finalDateStr}T23:59:59.999Z`
+        }
+
         const data = await divipayFetch(cfg, divipayToken, '/api/movements', {
           query: {
             limit: params.limit ?? 100,
             cursor: params.cursor,
-            initialDate: params.initialDate,
-            finalDate: params.finalDate,
+            initialDate: initialDateStr,
+            finalDate: finalDateStr,
             status: params.status,
             type: params.type,
           },
@@ -353,7 +419,8 @@ serve(async (req) => {
         return jsonResponse({ success: false, error: `Ação desconhecida: ${action}` }, 400)
     }
   } catch (error) {
-    console.error('Erro na divipay-api:', error)
-    return jsonResponse({ success: false, error: error.message }, 500)
+    const errMsg = error instanceof Error ? error.message : String(error)
+    console.error('[divipay-api] Erro não tratado:', errMsg, error)
+    return jsonResponse({ success: false, error: errMsg }, 500)
   }
 })
