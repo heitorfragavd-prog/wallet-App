@@ -2,10 +2,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Receita as ReceitaType, PaymentMethod } from "../types";
 
 export interface Receita extends Omit<ReceitaType, "tags" | "anexos"> {
   updated_at?: string;
+  workspace_id?: string;
   categorias?: {
     nome: string;
     cor: string;
@@ -19,6 +21,7 @@ export const RECEITAS_QUERY_KEY = ["receitas"] as const;
 export interface ReceitasQueryParams {
   startDate?: string | null;
   endDate?: string | null;
+  workspaceId?: string | null;
 }
 
 // ─── Paginated fetch helper (Supabase caps at 1000 rows by default) ──
@@ -63,10 +66,11 @@ async function fetchAllRows<T>(
 // NOTE: tags are NOT fetched here (heavy nested join). They are loaded
 // lazily via getReceitaTags() only when editing a single receipt.
 async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[]> {
-  const { startDate, endDate } = params;
+  const { startDate, endDate, workspaceId } = params;
 
   const applyFilters = (q: ReturnType<typeof supabase.from>) => {
     let query = q;
+    if (workspaceId) query = query.eq("workspace_id", workspaceId);
     if (startDate) query = query.gte("data", startDate);
     if (endDate) query = query.lte("data", endDate);
     return query;
@@ -74,8 +78,8 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
 
   // receitas has no 'tipo' column in DB, we select only valid columns
   // Disambiguate categorias relationship for receitas using the foreign key receitas_categoria_id_fkey
-  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!receitas_categoria_id_fkey (nome, cor, icone)";
-  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
+  const RECEITAS_COLS = "id, user_id, workspace_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!receitas_categoria_id_fkey (nome, cor, icone)";
+  const TRANSACOES_COLS = "id, user_id, workspace_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
 
   // Factories: each call returns a brand-new builder (no shared mutable state)
   const buildReceitas = () => supabase.from("receitas");
@@ -120,11 +124,13 @@ async function updateReceitaTags(receitaId: string, tagNames: string[]) {
 export const useReceitas = (params: ReceitasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const currentWorkspaceId = activeWorkspace?.id || null;
   const { startDate = null, endDate = null } = params;
 
   const { data: receitas = [], isLoading: loading } = useQuery({
-    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate }],
-    queryFn: () => fetchReceitas({ startDate, endDate }),
+    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
+    queryFn: () => fetchReceitas({ startDate, endDate, workspaceId: currentWorkspaceId }),
     // Keep results hot in cache for 10 min so re-clicking a date range is instant
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 30,
@@ -141,7 +147,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("receitas")
-        .insert([{ ...receita, user_id: userId }])
+        .insert([{ ...receita, user_id: userId, workspace_id: currentWorkspaceId }])
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;

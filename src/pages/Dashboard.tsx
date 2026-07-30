@@ -34,6 +34,7 @@ import { useNavigate } from "react-router-dom";
 import { ControleOrcamentoCard } from "@/domains/finance/components/ControleOrcamentoCard";
 import { TetoGastosCard } from "@/domains/finance/components/TetoGastosCard";
 import { ContasCartoesDashboardWidget } from "@/domains/finance/components/ContasCartoesDashboardWidget";
+import { FluxoCaixaChart } from "@/domains/finance/components/FluxoCaixaChart";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
@@ -478,6 +479,9 @@ const Dashboard = () => {
 
         {/* Widget Organizze: Minhas Contas & Meus Cartões */}
         <ContasCartoesDashboardWidget />
+
+        {/* Gráfico de Projeção de Fluxo de Caixa */}
+        <FluxoCaixaChart />
 
         {/* Insights Row: Gastos por Categoria + Resumo de Dívidas */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

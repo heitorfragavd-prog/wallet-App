@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { financeService } from "@/domains/finance/services/FinanceService";
 
 export interface DebtReminderInfo {
   id: string;
@@ -14,6 +16,7 @@ export interface DebtReminderInfo {
 export interface Divida {
   id: string;
   user_id: string;
+  workspace_id?: string;
   categoria_id?: string;
   conta_id?: string | null;
   descricao: string;
@@ -23,6 +26,9 @@ export interface Divida {
   data_vencimento: string;
   parcelas: number;
   parcelas_pagas: number;
+  parcela_atual?: number;
+  total_parcelas?: number;
+  parent_id?: string;
   status: "pendente" | "vencida" | "quitada";
   credor: string;
   valor_taxa?: number;
@@ -47,6 +53,7 @@ export const DIVIDAS_QUERY_KEY = ["dividas"] as const;
 export interface DividasQueryParams {
   startDate?: string | null;
   endDate?: string | null;
+  workspaceId?: string | null;
 }
 
 function resolveDividaStatus(d: any): Divida {
@@ -66,7 +73,7 @@ function resolveDividaStatus(d: any): Divida {
 
 // ─── Fetcher com fallback (debt_reminders pode não existir) ─────────────
 async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> {
-  const { startDate, endDate } = params;
+  const { startDate, endDate, workspaceId } = params;
 
   let query = supabase
     .from("dividas")
@@ -75,6 +82,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
     )
     .order("data_vencimento", { ascending: true });
 
+  if (workspaceId) query = query.eq("workspace_id", workspaceId);
   if (startDate) query = query.gte("data_vencimento", startDate);
   if (endDate) query = query.lte("data_vencimento", endDate);
 
@@ -87,6 +95,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
       .select("*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor)")
       .order("data_vencimento", { ascending: true });
 
+    if (workspaceId) fallbackQuery = fallbackQuery.eq("workspace_id", workspaceId);
     if (startDate) fallbackQuery = fallbackQuery.gte("data_vencimento", startDate);
     if (endDate) fallbackQuery = fallbackQuery.lte("data_vencimento", endDate);
 
@@ -103,11 +112,14 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
 export const useDividas = (params: DividasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
   const { startDate = null, endDate = null } = params;
 
+  const currentWorkspaceId = activeWorkspace?.id || null;
+
   const { data: dividas = [], isLoading: loading } = useQuery({
-    queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate }],
-    queryFn: () => fetchDividas({ startDate, endDate }),
+    queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
+    queryFn: () => fetchDividas({ startDate, endDate, workspaceId: currentWorkspaceId }),
     staleTime: 1000 * 60 * 2,
   });
 
@@ -116,9 +128,30 @@ export const useDividas = (params: DividasQueryParams = {}) => {
       divida: Omit<Divida, "id" | "user_id" | "created_at" | "updated_at" | "categorias">
     ) => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) throw new Error("Usuário não autenticado");
+
+      if (divida.parcelas && divida.parcelas > 1) {
+        return await financeService.createDebt({
+          userId,
+          workspaceId: currentWorkspaceId || undefined,
+          descricao: divida.descricao,
+          valorTotal: divida.valor_total,
+          dataVencimentoInicial: divida.data_vencimento,
+          credor: divida.credor,
+          categoriaId: divida.categoria_id,
+          totalParcelas: divida.parcelas,
+        });
+      }
+
       const { data, error } = await supabase
         .from("dividas")
-        .insert([{ ...divida, user_id: userId }])
+        .insert([{
+          ...divida,
+          user_id: userId,
+          workspace_id: currentWorkspaceId || null,
+          parcela_atual: 1,
+          total_parcelas: 1,
+        }])
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -130,7 +163,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao criar dívida", { error: String(error) });
-      toast({ title: "Erro ao criar dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao criar dívida", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     },
   });
 
@@ -151,7 +184,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao atualizar dívida", { error: String(error) });
-      toast({ title: "Erro ao atualizar dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao atualizar dívida", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     },
   });
 
@@ -166,7 +199,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDividas", "Erro ao remover dívida", { error: String(error) });
-      toast({ title: "Erro ao remover dívida", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao remover dívida", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     },
   });
 

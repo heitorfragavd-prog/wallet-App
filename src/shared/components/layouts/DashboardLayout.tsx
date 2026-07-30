@@ -30,6 +30,8 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
 import { ThemeToggle } from "@/shared/components/ThemeToggle";
 import { WhatsAppButton } from "@/shared/components/WhatsAppButton";
+import { WorkspaceSwitcher } from "@/shared/components/WorkspaceSwitcher";
+import { NotificationsPopover } from "@/shared/components/NotificationsPopover";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -54,7 +56,9 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: PieChart, label: "Dívidas", path: "/dividas" },
     { icon: Bell, label: "Lembretes", path: "/lembretes" },
     { icon: Tag, label: "Categorias", path: "/categorias" },
-    { icon: BarChart3, label: "Relatórios", path: "/relatorios" },
+    { icon: BarChart3, label: "Relatorios", path: "/relatorios" },
+    { icon: TrendingUp, label: "Fluxo de Caixa", path: "/fluxo-caixa" },
+    { icon: FileText, label: "DRE Simplificada", path: "/dre" },
     { icon: Target, label: "Metas", path: "/metas" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },
     { icon: Car, label: "Veículos", path: "/veiculos" },
@@ -126,8 +130,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           ${isCollapsed ? "w-20" : "w-64"}
         `}
       >
-        {/* Logo */}
-        <div className="p-6 border-b border-border flex-shrink-0">
+        {/* Logo & Workspace Switcher */}
+        <div className="p-4 border-b border-border flex-shrink-0 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="bg-orange-500 rounded-lg p-2">
@@ -148,6 +152,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               <X className="h-5 w-5 text-muted-foreground" />
             </Button>
           </div>
+
+          <WorkspaceSwitcher isCollapsed={isCollapsed} />
         </div>
 
         {/* Collapse Button - Positioned on the edge - Desktop only */}
@@ -223,11 +229,19 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       <div
         className={`flex-1 min-w-0 ${
           isCollapsed ? "lg:ml-20" : "lg:ml-64"
-        } transition-all duration-300`}
+        } transition-all duration-300 flex flex-col`}
       >
-        <div className="lg:hidden h-16"></div>{" "}
-        {/* Spacer for mobile menu button */}
-        <div className="w-full max-w-full overflow-x-hidden">
+        {/* Header Bar */}
+        <header className="sticky top-0 z-30 h-16 border-b border-border bg-card/80 backdrop-blur px-4 sm:px-6 flex items-center justify-between lg:justify-end">
+          <div className="lg:hidden flex items-center gap-2">
+            {/* Mobile menu space */}
+          </div>
+          <div className="flex items-center gap-3 ml-auto">
+            <NotificationsPopover />
+          </div>
+        </header>
+
+        <div className="w-full max-w-full overflow-x-hidden flex-1">
           {children}
         </div>
       </div>

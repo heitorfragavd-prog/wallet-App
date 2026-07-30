@@ -1,15 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { financeService } from "@/domains/finance/services/FinanceService";
 
 export interface Transacao {
   id: string;
   user_id: string;
+  workspace_id?: string;
   categoria_id?: string;
   tipo: 'receita' | 'despesa';
   descricao: string;
   valor: number;
   data: string;
+  parcela_atual?: number;
+  total_parcelas?: number;
+  parent_id?: string;
   created_at: string;
   updated_at: string;
   categorias?: {
@@ -23,44 +29,54 @@ export const useTransacoes = () => {
   const [transacoes, setTransacoes] = useState<Transacao[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
 
-  const fetchTransacoes = async () => {
+  const fetchTransacoes = useCallback(async () => {
+    setLoading(true);
     try {
-      // Buscar dados da tabela transacoes
-      const { data: transacoesData, error: transacoesError } = await supabase
+      let queryTransacoes = supabase
         .from('transacoes')
         .select(`
           *,
           categorias!categoria_id (nome, cor, icone)
         `);
 
-      if (transacoesError) throw transacoesError;
-
-      // Buscar dados da tabela receitas
-      const { data: receitasData, error: receitasError } = await supabase
+      let queryReceitas = supabase
         .from('receitas')
         .select(`
           *,
           categorias!categoria_id (nome, cor, icone)
         `);
 
-      if (receitasError) throw receitasError;
-
-      // Buscar dados da tabela despesas
-      const { data: despesasData, error: despesasError } = await supabase
+      let queryDespesas = supabase
         .from('despesas')
         .select(`
           *,
           categorias!categoria_id (nome, cor, icone)
         `);
 
-      if (despesasError) throw despesasError;
+      // Filtrar por Workspace ativo se existir
+      if (activeWorkspace) {
+        queryTransacoes = queryTransacoes.eq('workspace_id', activeWorkspace.id);
+        queryReceitas = queryReceitas.eq('workspace_id', activeWorkspace.id);
+        queryDespesas = queryDespesas.eq('workspace_id', activeWorkspace.id);
+      }
+
+      const [transacoesResult, receitasResult, despesasResult] = await Promise.all([
+        queryTransacoes,
+        queryReceitas,
+        queryDespesas,
+      ]);
+
+      if (transacoesResult.error) throw transacoesResult.error;
+      if (receitasResult.error) throw receitasResult.error;
+      if (despesasResult.error) throw despesasResult.error;
 
       // Combinar todos os dados
       const allTransacoes = [
-        ...(transacoesData || []).map(t => ({ ...t, tipo: t.tipo })),
-        ...(receitasData || []).map(r => ({ ...r, tipo: 'receita' as const })),
-        ...(despesasData || []).map(d => ({ ...d, tipo: 'despesa' as const }))
+        ...(transacoesResult.data || []).map(t => ({ ...t, tipo: t.tipo })),
+        ...(receitasResult.data || []).map(r => ({ ...r, tipo: 'receita' as const })),
+        ...(despesasResult.data || []).map(d => ({ ...d, tipo: 'despesa' as const }))
       ];
 
       // Ordenar por data de criação (último cadastro primeiro)
@@ -78,15 +94,45 @@ export const useTransacoes = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeWorkspace, toast]);
 
-  const createTransacao = async (transacao: Omit<Transacao, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'>) => {
+  const createTransacao = async (
+    transacao: Omit<Transacao, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'> & { total_parcelas?: number }
+  ) => {
     try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) throw new Error("Usuário não autenticado");
+
+      // Se tiver mais de 1 parcela, utilizar o motor de parcelamento do FinanceService
+      if (transacao.total_parcelas && transacao.total_parcelas > 1) {
+        await financeService.createTransaction({
+          userId: user.id,
+          workspaceId: activeWorkspace?.id,
+          tipo: transacao.tipo,
+          descricao: transacao.descricao,
+          valorTotal: transacao.valor,
+          dataInicial: transacao.data,
+          categoriaId: transacao.categoria_id,
+          totalParcelas: transacao.total_parcelas,
+        });
+
+        await fetchTransacoes();
+        toast({
+          title: "Transações parceladas criadas",
+          description: `${transacao.total_parcelas} parcelas geradas com sucesso!`,
+        });
+        return { data: true, error: null };
+      }
+
+      // Lançamento de parcela única
       const { data, error } = await supabase
         .from('transacoes')
         .insert([{
           ...transacao,
-          user_id: (await supabase.auth.getUser()).data.user?.id
+          user_id: user.id,
+          workspace_id: activeWorkspace?.id || null,
+          parcela_atual: 1,
+          total_parcelas: 1,
         }])
         .select(`
           *,
@@ -172,7 +218,7 @@ export const useTransacoes = () => {
 
   useEffect(() => {
     fetchTransacoes();
-  }, []);
+  }, [fetchTransacoes]);
 
   // Filtros para compatibilidade
   const receitas = transacoes.filter(t => t.tipo === 'receita');
