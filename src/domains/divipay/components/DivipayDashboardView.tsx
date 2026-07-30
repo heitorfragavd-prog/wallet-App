@@ -24,7 +24,11 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
-export function DivipayDashboardView() {
+interface DivipayDashboardViewProps {
+  onNavigateTab?: (tab: string) => void;
+}
+
+export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProps) {
   const { data, isLoading } = useDivipayDashboard();
   const { config, loading: configLoading } = useDivipayConfig();
 
@@ -79,7 +83,12 @@ export function DivipayDashboardView() {
               </p>
             </div>
           </div>
-          <Button variant="outline" size="sm" className="bg-white/10 hover:bg-white/20 border-white/30 text-white text-xs gap-2 backdrop-blur-sm self-start sm:self-auto">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => onNavigateTab?.("cobrancas")}
+            className="bg-white/10 hover:bg-white/20 border-white/30 text-white text-xs gap-2 backdrop-blur-sm self-start sm:self-auto"
+          >
             <QrCode className="w-3.5 h-3.5" /> Cobrar por Pix
           </Button>
         </div>
@@ -110,7 +119,11 @@ export function DivipayDashboardView() {
 
       {/* Botão Ação Rápida Secundário */}
       <div>
-        <Button size="sm" className="bg-amber-500 hover:bg-amber-600 text-white font-medium text-xs rounded-xl shadow-sm">
+        <Button 
+          size="sm" 
+          onClick={() => onNavigateTab?.("configuracoes")}
+          className="bg-amber-500 hover:bg-amber-600 text-white font-medium text-xs rounded-xl shadow-sm"
+        >
           Configurar conta para saque automático
         </Button>
       </div>
@@ -118,13 +131,17 @@ export function DivipayDashboardView() {
       {/* Atalhos Rápidos Circulares (Estilo Divipay Oficial) */}
       <div className="flex items-center gap-6 overflow-x-auto pb-2 pt-1">
         {[
-          { label: "Pix", icon: QrCode, color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-          { label: "Extrato", icon: Receipt, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
-          { label: "Cobranças", icon: FileText, color: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
-          { label: "Saques", icon: DollarSign, color: "bg-orange-500/10 text-orange-600 dark:text-orange-400" },
-          { label: "Vendas", icon: TrendingUp, color: "bg-purple-500/10 text-purple-600 dark:text-purple-400" },
+          { label: "Pix", icon: QrCode, color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400", tab: "cobrancas" },
+          { label: "Extrato", icon: Receipt, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400", tab: "extrato" },
+          { label: "Cobranças", icon: FileText, color: "bg-amber-500/10 text-amber-600 dark:text-amber-400", tab: "cobrancas" },
+          { label: "Saques", icon: DollarSign, color: "bg-orange-500/10 text-orange-600 dark:text-orange-400", tab: "transferencias" },
+          { label: "Vendas", icon: TrendingUp, color: "bg-purple-500/10 text-purple-600 dark:text-purple-400", tab: "extrato" },
         ].map((item, idx) => (
-          <div key={idx} className="flex flex-col items-center gap-2 cursor-pointer group flex-shrink-0">
+          <div 
+            key={idx} 
+            onClick={() => onNavigateTab?.(item.tab)}
+            className="flex flex-col items-center gap-2 cursor-pointer group flex-shrink-0"
+          >
             <div className={`w-12 h-12 rounded-2xl ${item.color} flex items-center justify-center group-hover:scale-105 transition-transform duration-200 shadow-sm`}>
               <item.icon className="w-5 h-5" />
             </div>
@@ -135,7 +152,12 @@ export function DivipayDashboardView() {
 
       {/* Barra de Filtro */}
       <div className="flex justify-start">
-        <Button variant="outline" size="sm" className="text-xs gap-2 rounded-xl border-border/60">
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={() => onNavigateTab?.("extrato")}
+          className="text-xs gap-2 rounded-xl border-border/60"
+        >
           <Filter className="w-3.5 h-3.5 text-muted-foreground" /> Filtrar
         </Button>
       </div>

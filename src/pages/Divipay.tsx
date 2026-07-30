@@ -66,7 +66,7 @@ const Divipay = () => {
           )}
 
           <TabsContent value="dashboard">
-            <DivipayDashboardView />
+            <DivipayDashboardView onNavigateTab={setActiveTab} />
           </TabsContent>
           <TabsContent value="cobrancas">
             <DivipayCobrancasView />
