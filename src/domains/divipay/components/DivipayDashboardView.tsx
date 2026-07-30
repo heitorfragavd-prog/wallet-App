@@ -522,18 +522,24 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
                   </svg>
                 </div>
 
-                {/* Eixo X com Datas */}
+                {/* Eixo X com Datas (Espalhado por todo o mês de 01 a 31) */}
                 <div className="flex justify-between items-center text-[10px] text-muted-foreground font-medium px-1 overflow-x-auto gap-2">
                   {data?.chartData && data.chartData.length > 0 ? (
-                    data.chartData.slice(0, 10).map((pt, i) => (
-                      <span key={i} className="whitespace-nowrap">{pt.date}</span>
-                    ))
+                    (() => {
+                      const totalPoints = data.chartData.length;
+                      const step = Math.max(1, Math.floor(totalPoints / 10));
+                      const filteredPoints = data.chartData.filter((_, idx) => idx % step === 0 || idx === totalPoints - 1);
+                      return filteredPoints.map((pt, i) => (
+                        <span key={i} className="whitespace-nowrap">{pt.date}</span>
+                      ));
+                    })()
                   ) : (
                     ["01/07", "04/07", "08/07", "12/07", "16/07", "20/07", "24/07", "28/07", "30/07"].map((d, i) => (
                       <span key={i}>{d}</span>
                     ))
                   )}
                 </div>
+
               </div>
             )}
           </Card>
