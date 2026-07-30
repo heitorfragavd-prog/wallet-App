@@ -2,6 +2,52 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.25] - 2026-07-30
+
+### ✨ Novo
+- **WorkspaceContext.tsx** — Contexto de múltiplos workspaces com persistência e troca dinâmica
+- **WorkspaceSwitcher.tsx** — Componente de alternância de workspace no layout principal
+- **DRETable.tsx** — Tabela de Demonstrativo de Resultados do Exercício (DRE)
+- **FluxoCaixaChart.tsx** — Gráfico de Fluxo de Caixa Projetado
+- **useDREData.ts** — Hook de dados para o DRE
+- **useFluxoCaixaProjetado.ts** — Hook para projeção de fluxo de caixa
+- **VerificarSaqueModal.tsx** — Modal detalhado de saques Divipay com tema claro
+- **NotificationsPopover.tsx** — Popover de notificações do sistema
+- **useNotificacoes.ts** — Hook de notificações em tempo real
+- **lazyWithRetry.ts** — Utilitário para lazy loading com retry automático
+- **DRE.tsx** — Nova página de DRE no menu
+- **FluxoCaixa.tsx** — Nova página de Fluxo de Caixa no menu
+- **GitHub Actions** `.github/workflows/docker-publish.yml` — CI/CD para build e push Docker multi-arch
+- **Migration** `52_workspaces_schema.sql` — Schema de workspaces
+- **Migration** `53_installment_engine_schema.sql` — Schema de parcelamentos
+- **Migration** `54_notifications_schema.sql` — Schema de notificações
+- **Scripts** de validação e diagnóstico Divipay (4 scripts Python)
+
+### 🔧 Melhorado
+- **EyemobileDashboardView** — Reformulação completa (+371 linhas)
+- **ImportadorExtratoModal** — Melhorias de UX e fluxo de importação
+- **useReceitas.ts** — Consolidação de receitas: Dinheiro Eyemobile + Entradas Digitais Divipay (Pix, Cartões, Boleto)
+- **useTransacoes.ts** — Melhorias na busca e filtragem de transações
+- **useDespesas.ts** — Refinamentos no hook de despesas
+- **useDividas.ts** — Melhorias no hook de dívidas
+- **FinanceService.ts** — Expansão do serviço financeiro
+- **DashboardLayout.tsx** — Menu com DRE, Fluxo de Caixa, Notificações e WorkspaceSwitcher
+- **App.tsx** — Rotas de DRE e FluxoCaixa registradas + lazy loading
+- **supabase/types.ts** — Tipos atualizados (+63 linhas)
+- **DivipayTransferenciasView** — Botão de visualização de saque vinculado ao modal
+- **docker-stack.yml** — Stack atualizado para imagem 1.0.2
+- **vite.config.ts** — Ajuste de configuração
+
+### 🐛 Corrigido
+- Receitas consolidadas: filtro refinado para movimentações Divipay (Entradas Digitais)
+- Modal Verificar Saque: tema claro e prevenção de nulos
+- Padrão de lazy loading com retry automático
+
+### 📊 Estatísticas
+- **36 arquivos alterados** | **+2.930 inserções** | **-316 remoções** | **14 commits**
+
+---
+
 ## [1.0.24] - 2026-07-30
 
 ### ✨ Novo
