@@ -99,8 +99,8 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
       <div className="bg-gradient-to-r from-amber-500 via-amber-500 to-orange-500 text-white rounded-2xl p-6 shadow-lg shadow-amber-500/10 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/20 pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center p-2 text-white">
-              <img src="/logos/divipay.png" alt="Divipay Logo" className="h-full w-full object-contain brightness-0 invert" />
+            <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-white">
+              <Building2 className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-lg font-bold tracking-tight">49.683.323 Heitor Fraga de Oliveira</h2>
@@ -110,6 +110,7 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
               </p>
             </div>
           </div>
+
 
           <Button 
             variant="outline" 
