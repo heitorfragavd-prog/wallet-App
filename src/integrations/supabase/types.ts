@@ -497,6 +497,132 @@ export type Database = {
           },
         ]
       }
+      divipay_config: {
+        Row: {
+          access_token: string | null
+          client_id: string | null
+          client_secret: string | null
+          created_at: string
+          environment: string
+          id: string
+          is_active: boolean
+          token_expires_at: string | null
+          updated_at: string
+          user_id: string
+          webhook_url: string | null
+        }
+        Insert: {
+          access_token?: string | null
+          client_id?: string | null
+          client_secret?: string | null
+          created_at?: string
+          environment?: string
+          id?: string
+          is_active?: boolean
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id: string
+          webhook_url?: string | null
+        }
+        Update: {
+          access_token?: string | null
+          client_id?: string | null
+          client_secret?: string | null
+          created_at?: string
+          environment?: string
+          id?: string
+          is_active?: boolean
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+          webhook_url?: string | null
+        }
+        Relationships: []
+      }
+      divipay_transacoes: {
+        Row: {
+          amount: number
+          created_at: string
+          description: string | null
+          external_id: string | null
+          fee: number | null
+          id: string
+          metadata: Json
+          pix_copy_paste: string | null
+          pix_qr_code: string | null
+          recipient_key: string | null
+          status: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          description?: string | null
+          external_id?: string | null
+          fee?: number | null
+          id?: string
+          metadata?: Json
+          pix_copy_paste?: string | null
+          pix_qr_code?: string | null
+          recipient_key?: string | null
+          status?: string
+          type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          description?: string | null
+          external_id?: string | null
+          fee?: number | null
+          id?: string
+          metadata?: Json
+          pix_copy_paste?: string | null
+          pix_qr_code?: string | null
+          recipient_key?: string | null
+          status?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      divipay_webhook_logs: {
+        Row: {
+          created_at: string
+          error_message: string | null
+          event_type: string | null
+          external_id: string | null
+          id: string
+          payload: Json
+          processed: boolean
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          error_message?: string | null
+          event_type?: string | null
+          external_id?: string | null
+          id?: string
+          payload: Json
+          processed?: boolean
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          error_message?: string | null
+          event_type?: string | null
+          external_id?: string | null
+          id?: string
+          payload?: Json
+          processed?: boolean
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       ia_analysis_results: {
         Row: {
           categoria: string

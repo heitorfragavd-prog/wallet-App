@@ -23,3 +23,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# MCP config (pode conter tokens)
+.mcp.json
+
+# Vite timestamp files
+vite.config.ts.timestamp-*.mjs
