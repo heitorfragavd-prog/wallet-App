@@ -45,21 +45,20 @@ export function VerificarSaqueModal({
   onOpenChange,
   saque,
 }: VerificarSaqueModalProps) {
-  if (!saque) return null;
-
-  const cliente = saque.cliente || "49.683.323 Heitor Fraga de Oliveira";
-  const documentoCliente = saque.documentoCliente || "49.683.323/0001-16";
-  const valorSaque = saque.amount;
-  const taxa = saque.tax || 3.50;
+  const cliente = saque?.cliente || "49.683.323 Heitor Fraga de Oliveira";
+  const documentoCliente = saque?.documentoCliente || "49.683.323/0001-16";
+  const valorSaque = saque?.amount || 0;
+  const taxa = saque?.tax || 3.50;
   const valorFinal = valorSaque + taxa;
-  const statusPagamento = saque.status === "FINALIZADO" || saque.status === "PAID" ? "Pago" : saque.status;
-  const chavePix = saque.chavePix || "23890726000142";
-  const idPagamento = saque.idPagamento || "E81014060202607291908QDYvmCy218a";
-  const pagoEm = saque.pagoEm || "29/07/2026 16:09:22";
+  const statusPagamento = saque?.status === "FINALIZADO" || saque?.status === "PAID" ? "Pago" : (saque?.status || "Pago");
+  const chavePix = saque?.chavePix || "23890726000142";
+  const idPagamento = saque?.idPagamento || "E81014060202607291908QDYvmCy218a";
+  const pagoEm = saque?.pagoEm || "29/07/2026 16:09:22";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px] rounded-2xl bg-card border-border/60 text-card-foreground p-6 shadow-2xl space-y-4">
+      <DialogContent className="sm:max-w-[440px] rounded-2xl bg-card border-border/60 text-card-foreground p-6 shadow-2xl space-y-4 z-[999]">
+
         <DialogHeader className="pb-2 border-b border-border/40">
           <DialogTitle className="text-lg font-bold tracking-tight text-foreground">
             Verificar Saque
@@ -100,7 +99,7 @@ export function VerificarSaqueModal({
           {/* Descrição */}
           <div className="space-y-0.5">
             <span className="text-[11px] text-muted-foreground font-medium block">Descrição</span>
-            <span className="font-medium text-foreground text-sm block">{saque.description || "Gerson salgados"}</span>
+            <span className="font-medium text-foreground text-sm block">{saque?.description || "Gerson salgados"}</span>
           </div>
 
           {/* Dados bancários */}
@@ -205,7 +204,7 @@ export function VerificarSaqueModal({
 
               <div>
                 <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">TIPO</span>
-                <span className="font-semibold text-gray-800">{saque.type}</span>
+                <span className="font-semibold text-gray-800">{saque?.type || "Pix (DICT)"}</span>
               </div>
               <div>
                 <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">CHAVE PIX</span>
@@ -223,7 +222,7 @@ export function VerificarSaqueModal({
 
               <div className="col-span-2">
                 <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">DESCRIÇÃO</span>
-                <span className="font-bold text-gray-900 text-sm">{saque.description || "Gerson salgados"}</span>
+                <span className="font-bold text-gray-900 text-sm">{saque?.description || "Gerson salgados"}</span>
               </div>
 
               <div className="col-span-2">
@@ -238,23 +237,23 @@ export function VerificarSaqueModal({
               <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-xs">
                 <div className="col-span-2">
                   <span className="text-[10px] text-gray-400 block font-medium">Nome</span>
-                  <span className="font-bold text-gray-900">{saque.pagadorNome || "DIVI SERVIÇOS E TECNOLOGIA LTDA"}</span>
+                  <span className="font-bold text-gray-900">{saque?.pagadorNome || "DIVI SERVIÇOS E TECNOLOGIA LTDA"}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">CPF / CNPJ</span>
-                  <span className="font-semibold text-gray-800">{saque.pagadorCnpj || "47.992.443/0001-70"}</span>
+                  <span className="font-semibold text-gray-800">{saque?.pagadorCnpj || "47.992.443/0001-70"}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">Instituição</span>
-                  <span className="font-semibold text-gray-800">{saque.pagadorInstituicao || "2038232 - CCLAA ITAIPU SICOOB CREDITAIPU"}</span>
+                  <span className="font-semibold text-gray-800">{saque?.pagadorInstituicao || "2038232 - CCLAA ITAIPU SICOOB CREDITAIPU"}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">Agência</span>
-                  <span className="font-semibold text-gray-800">{saque.pagadorAgencia || "3036"}</span>
+                  <span className="font-semibold text-gray-800">{saque?.pagadorAgencia || "3036"}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">Conta</span>
-                  <span className="font-semibold text-gray-800">{saque.pagadorConta || "97217-7"}</span>
+                  <span className="font-semibold text-gray-800">{saque?.pagadorConta || "97217-7"}</span>
                 </div>
               </div>
             </div>
@@ -265,15 +264,15 @@ export function VerificarSaqueModal({
               <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-xs">
                 <div className="col-span-2">
                   <span className="text-[10px] text-gray-400 block font-medium">Nome</span>
-                  <span className="font-bold text-gray-900">{saque.recebedorNome || (saque.type === "Boleto" ? "BRASNORTE DISTRIBUIDORA DE BEBIDAS LTDA" : saque.name)}</span>
+                  <span className="font-bold text-gray-900">{saque?.recebedorNome || (saque?.type === "Boleto" ? "BRASNORTE DISTRIBUIDORA DE BEBIDAS LTDA" : saque?.name)}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">Instituição</span>
-                  <span className="font-semibold text-gray-800">{saque.recebedorInstituicao || (saque.type === "Boleto" ? "756 – BANCO SICOOB S.A." : "60746948 – BCO BRADESCO S.A.")}</span>
+                  <span className="font-semibold text-gray-800">{saque?.recebedorInstituicao || (saque?.type === "Boleto" ? "756 – BANCO SICOOB S.A." : "60746948 – BCO BRADESCO S.A.")}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 block font-medium">CPF / CNPJ</span>
-                  <span className="font-semibold text-gray-800">{saque.recebedorCnpj || (saque.type === "Boleto" ? saque.document : "23.890.726/0001-42")}</span>
+                  <span className="font-semibold text-gray-800">{saque?.recebedorCnpj || (saque?.type === "Boleto" ? saque?.document : "23.890.726/0001-42")}</span>
                 </div>
               </div>
             </div>
@@ -283,3 +282,4 @@ export function VerificarSaqueModal({
     </Dialog>
   );
 }
+
