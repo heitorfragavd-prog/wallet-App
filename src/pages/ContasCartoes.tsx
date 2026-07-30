@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ElementType } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import {
   Card,
@@ -57,7 +58,7 @@ const TIPO_LABELS: Record<string, string> = {
   outro: "Outra Conta",
 };
 
-const TIPO_ICONS: Record<string, any> = {
+const TIPO_ICONS: Record<string, ElementType> = {
   conta_corrente: Building2,
   poupanca: PiggyBank,
   carteira: Wallet,
