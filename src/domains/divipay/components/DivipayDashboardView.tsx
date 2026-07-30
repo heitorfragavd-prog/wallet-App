@@ -1,7 +1,11 @@
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Button } from "@/shared/components/ui/button";
+import { Input } from "@/shared/components/ui/input";
+import { Label } from "@/shared/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
 import { useDivipayDashboard } from "@/domains/divipay/hooks/useDivipayDashboard";
 import { useDivipayConfig } from "@/domains/divipay/hooks/useDivipayConfig";
 import { 
@@ -20,9 +24,12 @@ import {
   Copy,
   ArrowUpRight,
   RefreshCw,
-  Ban
+  Ban,
+  Search,
+  ChevronUp
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+
 
 interface DivipayDashboardViewProps {
   onNavigateTab?: (tab: string) => void;
@@ -32,9 +39,21 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
   const { data, isLoading } = useDivipayDashboard();
   const { config, loading: configLoading } = useDivipayConfig();
 
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterType, setFilterType] = useState("");
+  const [filterInitialDate, setFilterInitialDate] = useState("2026-07-30T00:00");
+  const [filterFinalDate, setFilterFinalDate] = useState("2026-07-31T11:59");
+  const [filterMaquineta, setFilterMaquineta] = useState("");
+  const [filterPromoter, setFilterPromoter] = useState("");
+
   const balance = data?.balances[0];
   const environment = config?.environment ?? "sandbox";
   const isProduction = environment === "production";
+
+  const handleSearch = () => {
+    // Redireciona para extrato ou atualiza dados com base nos filtros
+    onNavigateTab?.("extrato");
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -150,16 +169,117 @@ export function DivipayDashboardView({ onNavigateTab }: DivipayDashboardViewProp
         ))}
       </div>
 
-      {/* Barra de Filtro */}
-      <div className="flex justify-start">
-        <Button 
-          variant="outline" 
-          size="sm" 
-          onClick={() => onNavigateTab?.("extrato")}
-          className="text-xs gap-2 rounded-xl border-border/60"
-        >
-          <Filter className="w-3.5 h-3.5 text-muted-foreground" /> Filtrar
-        </Button>
+      {/* Barra de Filtro e Painel Retrátil Oficial Divipay */}
+      <div className="space-y-4">
+        <div className="flex justify-start">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowFilters(!showFilters)}
+            className="text-xs gap-2 rounded-xl border-border/60 hover:bg-accent"
+          >
+            <Filter className="w-3.5 h-3.5 text-amber-500" /> 
+            {showFilters ? "Fechar filtros" : "Filtrar"}
+          </Button>
+        </div>
+
+        {showFilters && (
+          <Card className="rounded-2xl border-amber-500/20 bg-card/80 backdrop-blur-sm p-4 sm:p-5 shadow-sm space-y-4 animate-in fade-in-50 duration-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+              <div className="space-y-1.5">
+                <Label htmlFor="filter-type" className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                  TIPO DA VENDA:
+                </Label>
+                <Select value={filterType} onValueChange={setFilterType}>
+                  <SelectTrigger id="filter-type" className="h-9 text-xs rounded-xl bg-background/50 border-border/60">
+                    <SelectValue placeholder="Forma de Pagamento" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Forma de Pagamento</SelectItem>
+                    <SelectItem value="CREDIT_CARD">Cartão de Crédito</SelectItem>
+                    <SelectItem value="DEBIT_CARD">Cartão de Débito</SelectItem>
+                    <SelectItem value="PIX">Pix</SelectItem>
+                    <SelectItem value="TICKET">Boleto</SelectItem>
+                    <SelectItem value="CASH">Dinheiro</SelectItem>
+                    <SelectItem value="VOUCHER">Voucher</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="filter-initial-date" className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                  DATA INICIAL:
+                </Label>
+                <Input 
+                  id="filter-initial-date"
+                  type="datetime-local" 
+                  value={filterInitialDate}
+                  onChange={(e) => setFilterInitialDate(e.target.value)}
+                  className="h-9 text-xs rounded-xl bg-background/50 border-border/60"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="filter-final-date" className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                  DATA FINAL:
+                </Label>
+                <Input 
+                  id="filter-final-date"
+                  type="datetime-local" 
+                  value={filterFinalDate}
+                  onChange={(e) => setFilterFinalDate(e.target.value)}
+                  className="h-9 text-xs rounded-xl bg-background/50 border-border/60"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="filter-maquineta" className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                  TERMINAL:
+                </Label>
+                <Select value={filterMaquineta} onValueChange={setFilterMaquineta}>
+                  <SelectTrigger id="filter-maquineta" className="h-9 text-xs rounded-xl bg-background/50 border-border/60">
+                    <SelectValue placeholder="Clique para selecionar" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os Terminais</SelectItem>
+                    <SelectItem value="t1">Maquineta POS 01</SelectItem>
+                    <SelectItem value="t2">Maquineta POS 02</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="filter-promoter" className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                  PROMOTER:
+                </Label>
+                <Select value={filterPromoter} onValueChange={setFilterPromoter}>
+                  <SelectTrigger id="filter-promoter" className="h-9 text-xs rounded-xl bg-background/50 border-border/60">
+                    <SelectValue placeholder="Clique para selecionar" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os Promoters</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <Button 
+                onClick={handleSearch} 
+                className="bg-amber-500 hover:bg-amber-600 text-white font-medium text-xs px-6 h-9 rounded-xl shadow-sm gap-2"
+              >
+                <Search className="w-3.5 h-3.5" /> Buscar
+              </Button>
+              <Button 
+                variant="ghost" 
+                onClick={() => setShowFilters(false)} 
+                className="text-amber-500 hover:text-amber-600 hover:bg-amber-500/10 font-medium text-xs h-9 rounded-xl gap-1.5"
+              >
+                <ChevronUp className="w-3.5 h-3.5" /> Fechar filtros
+              </Button>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* Seção 1: Resumo de Cobranças */}
