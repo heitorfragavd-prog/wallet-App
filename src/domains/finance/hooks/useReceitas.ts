@@ -60,8 +60,9 @@ async function fetchAllRows<T>(
 }
 
 // ─── Fetcher puro ─────────────────────────────────────────────────
-// NOTE: tags are NOT fetched here (heavy nested join). They are loaded
-// lazily via getReceitaTags() only when editing a single receipt.
+// Regra de Consolidação:
+// 1. Eyemobile/PDV: Apenas transações em DINHEIRO / CASH / ESPECIE
+// 2. Divipay / Demais fontes: Transações digitais normais
 async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[]> {
   const { startDate, endDate } = params;
 
@@ -72,12 +73,9 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
     return query;
   };
 
-  // receitas has no 'tipo' column in DB, we select only valid columns
-  // Disambiguate categorias relationship for receitas using the foreign key receitas_categoria_id_fkey
   const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!receitas_categoria_id_fkey (nome, cor, icone)";
   const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
 
-  // Factories: each call returns a brand-new builder (no shared mutable state)
   const buildReceitas = () => supabase.from("receitas");
   const buildTransacoes = () => supabase.from("transacoes");
 
@@ -86,16 +84,30 @@ async function fetchReceitas(params: ReceitasQueryParams = {}): Promise<Receita[
     fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 15000),
   ]);
 
-  // Map 'tipo' to receita table rows manually since they don't have it in the database
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
     ...r,
     tipo: "receita",
   }));
 
-  return [...mappedReceitas, ...(transacoesResp ?? [])].sort(
+  // Filtragem estrita para evitar duplicidade com Eyemobile PDV x Divipay:
+  // Se for proveniente de vendas PDV / Eyemobile, aceitar SOMENTE pagamentos em Dinheiro.
+  const filteredTransacoes = (transacoesResp ?? []).filter((t) => {
+    const isEyemobilePDV = t.descricao?.toLowerCase().includes("eyemobile") || 
+                           t.observacoes?.toLowerCase().includes("eyemobile") ||
+                           t.descricao?.toLowerCase().includes("pdv");
+    if (isEyemobilePDV) {
+      const metodo = (t.metodo_pagamento || "").toUpperCase();
+      const isDinheiro = metodo === "DINHEIRO" || metodo === "CASH" || metodo === "ESPECIE" || metodo === "MONEY";
+      return isDinheiro;
+    }
+    return true;
+  });
+
+  return [...mappedReceitas, ...filteredTransacoes].sort(
     (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
   ) as Receita[];
 }
+
 
 // ─── Tag helpers ──────────────────────────────────────────────────
 async function addTagsToReceita(receitaId: string, tagNames: string[]) {
