@@ -91,10 +91,13 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
         let pageCount = 0;
         const maxPages = 30; // Garante ate 6.000 movimentacoes no periodo
 
+        const initialDateQuery = initialDate.includes("T") ? initialDate : `${initialDate}T00:00:00`;
+        const finalDateQuery = finalDate.includes("T") ? finalDate : `${finalDate}T23:59:59`;
+
         while (hasMore && pageCount < maxPages) {
           const response = await divipayService.listMovements({
-            initialDate,
-            finalDate,
+            initialDate: initialDateQuery,
+            finalDate: finalDateQuery,
             type: type && type !== "all" ? type : undefined,
             cursor,
             limit: 200,

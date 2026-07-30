@@ -378,12 +378,22 @@ serve(async (req) => {
       }
 
       case 'listMovements': {
+        let initialDateStr = params.initialDate ? String(params.initialDate) : undefined
+        let finalDateStr = params.finalDate ? String(params.finalDate) : undefined
+
+        if (initialDateStr && !initialDateStr.includes('T')) {
+          initialDateStr = `${initialDateStr}T00:00:00.000Z`
+        }
+        if (finalDateStr && !finalDateStr.includes('T')) {
+          finalDateStr = `${finalDateStr}T23:59:59.999Z`
+        }
+
         const data = await divipayFetch(cfg, divipayToken, '/api/movements', {
           query: {
             limit: params.limit ?? 100,
             cursor: params.cursor,
-            initialDate: params.initialDate,
-            finalDate: params.finalDate,
+            initialDate: initialDateStr,
+            finalDate: finalDateStr,
             status: params.status,
             type: params.type,
           },
