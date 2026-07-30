@@ -2,6 +2,40 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.24] - 2026-07-30
+
+### ✨ Novo
+- **DivipaySidebar.tsx** — Menu lateral retrátil estilo banco Divipay com alternância via botão de 3 riscos
+- **SaquesFiltrosSheet.tsx** — Modal lateral de Filtros e paginação na tela de Saques
+- Logo oficial Divipay na barra lateral e banner do dashboard
+- Paginação completa por cursor com seletor de itens (20, 50, 100, 250, 500 por página)
+- 80 transações de saques em 4 páginas no seletor de paginação
+
+### 🔧 Melhorado
+- **DivipayDashboardView** — Reformulação completa com UI/UX oficial (+620 linhas, filtros dinâmicos, gráfico Vendas no Mês)
+- **DivipayTransferenciasView** — Redesign completo da tela de Saques idêntico ao painel oficial
+- **useDivipayDashboard** — Filtros de busca e cálculo dinâmico de vendas e cobranças (+205 linhas)
+- **DivipayExtratoView** — Melhorias de layout e UX
+- **DivipayConfiguracoesView** — Ajustes de interface
+- **useDivipayTransferencias** — Paginação e filtros avançados
+- **DivipayService.ts** — Autenticação em produção corrigida
+- **divipay-api (Edge Function)** — Correções de autenticação e fluxo (+127 linhas)
+- **useContasUsuario.ts** — Sincronização do saldo real Divipay na tela de Contas e Cartões
+- **ContasCartoes.tsx** — Exibição do saldo integrado Divipay
+
+### 🐛 Corrigido
+- Erro de sintaxe JSX no `DivipayTransferenciasView`
+- Débitos técnicos e QA audit
+- Formatação ISO de timestamps e contagens de meios de pagamento
+- Distribuição uniforme de datas no gráfico de Vendas no Mês (01 a 30/31)
+- Autenticação na Edge Function em produção
+- Removido botão de Nova Transferência e submenus não utilizados (Aprovações, Em Lote, Favorecidos, Pagar com Pix)
+
+### 📊 Estatísticas
+- **17 arquivos alterados** | **+1.656 inserções** | **-290 remoções** | **21 commits**
+
+---
+
 ## [1.0.23] - 2026-07-29
 
 ### ✨ Novo
