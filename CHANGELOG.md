@@ -2,6 +2,38 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.23] - 2026-07-29
+
+### ✨ Novo
+- **Integração Divipay** — Plataforma financeira completa para gestão de cobranças PIX, transferências e extrato
+- **DivipayDashboardView** — Saldo, transações recentes e métricas da conta
+- **DivipayCobrancasView + NovaCobrancaPixModal** — Criação e gestão de cobranças PIX
+- **DivipayTransferenciasView + NovaTransferenciaModal** — Transferências entre contas
+- **DivipayExtratoView** — Extrato completo com filtros de data e categoria
+- **DivipayConfiguracoesView** — Configuração de credenciais e webhooks
+- **DivipayService.ts** — Serviço completo de API (283 funções, 10KB)
+- **5 hooks** — useDivipayDashboard, useDivipayCobrancas, useDivipayTransferencias, useDivipayExtrato, useDivipayConfig
+- **types.ts** — Tipos TypeScript para todo o domínio Divipay
+- **Edge Function divipay-api** — API serverless no Supabase (359 linhas)
+- **Edge Function divipay-webhook** — Handler de eventos/webhooks (313 linhas)
+- **Migration 51.divipay_integration.sql** — Schema completo do banco de dados
+- **Divipay.tsx** — Nova página com tabs (Dashboard, Cobranças, Transferências, Extrato, Configurações)
+- Rota `/divipay` registrada no `App.tsx`
+
+### 🔧 Melhorado
+- **DashboardLayout.tsx** — Item Divipay adicionado ao menu lateral
+- **supabase/types.ts** — Tipos TypeScript gerados para novas tabelas Divipay (+126 linhas)
+- **lib/utils.ts** — Utilitários adicionais para formatação financeira
+- **.gitignore** — Adicionado `.mcp.json` e padrão `vite.config.ts.timestamp-*.mjs`
+
+### 🔒 Segurança
+- Token PAT do Supabase removido do `.mcp.json` e adicionado ao `.gitignore`
+
+### 📊 Estatísticas
+- **26 arquivos alterados** | **+2872 inserções** | **-11 remoções**
+
+---
+
 ## [1.0.22] - 2026-07-29
 
 ### ✨ Novo
