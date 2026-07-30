@@ -9,7 +9,7 @@ name: Build & Push Docker Image
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop, master]
   workflow_dispatch:
 
 jobs:
