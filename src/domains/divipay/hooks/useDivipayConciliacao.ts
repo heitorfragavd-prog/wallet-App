@@ -1,6 +1,9 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
 import {
   conciliacaoDivipayService,
   type DivipayConciliacao,
@@ -27,9 +30,12 @@ export function useDivipayConciliacoes(status = "pendente") {
 export function useDivipayConciliacao() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
 
   const conciliar = useMutation({
-    mutationFn: (transacoes: DivipayTransacao[]) => conciliacaoDivipayService.conciliar(transacoes),
+    mutationFn: (transacoes: DivipayTransacao[]) =>
+      conciliacaoDivipayService.conciliar(transacoes, workspaceId),
     onSuccess: (resumo) => {
       if (resumo.conciliadasAuto > 0 || resumo.avulsas > 0 || resumo.pendentes > 0) {
         invalidarTudo(qc);
@@ -52,7 +58,7 @@ export function useDivipayConciliacao() {
 
   const confirmar = useMutation({
     mutationFn: ({ conciliacao, dividaId }: { conciliacao: DivipayConciliacao; dividaId: string }) =>
-      conciliacaoDivipayService.confirmar(conciliacao, dividaId),
+      conciliacaoDivipayService.confirmar(conciliacao, dividaId, workspaceId),
     onSuccess: (ok) => {
       if (ok) {
         invalidarTudo(qc);
@@ -64,7 +70,8 @@ export function useDivipayConciliacao() {
   });
 
   const importarAvulsa = useMutation({
-    mutationFn: (conciliacao: DivipayConciliacao) => conciliacaoDivipayService.importarAvulsa(conciliacao),
+    mutationFn: (conciliacao: DivipayConciliacao) =>
+      conciliacaoDivipayService.importarAvulsa(conciliacao, workspaceId),
     onSuccess: () => {
       invalidarTudo(qc);
       toast({ title: "Despesa criada", description: "Saque importado como despesa avulsa." });
@@ -88,4 +95,30 @@ export function useDivipayConciliacao() {
     importarAvulsa: (c: DivipayConciliacao) => importarAvulsa.mutateAsync(c),
     ignorar: (id: string) => ignorar.mutateAsync(id),
   };
+}
+
+/**
+ * Roda o motor de conciliação automaticamente ao abrir o app
+ * (uma vez por dia por sessão), para as despesas da carteira Divipay
+ * aparecerem sem precisar abrir a tela de Saques.
+ * Montar uma única vez no layout autenticado.
+ */
+export function useDivipayConciliacaoAuto() {
+  const { transferencias, loading } = useDivipayTransferencias();
+  const { conciliar } = useDivipayConciliacao();
+  const { activeWorkspace } = useWorkspace();
+  const disparou = useRef(false);
+
+  useEffect(() => {
+    if (disparou.current || loading || transferencias.length === 0) return;
+    const chave = `divipay-conciliacao-auto:${new Date().toISOString().slice(0, 10)}`;
+    if (sessionStorage.getItem(chave)) return;
+    disparou.current = true;
+    sessionStorage.setItem(chave, "1");
+    conciliar(transferencias).catch(() => {
+      // falha: libera para tentar de novo na próxima navegação
+      sessionStorage.removeItem(chave);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferencias, loading, activeWorkspace?.id]);
 }

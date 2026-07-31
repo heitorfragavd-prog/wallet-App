@@ -106,6 +106,19 @@ async function findOrCreateCategoria(
   return nova.id
 }
 
+// Workspace default do usuário (fallback quando o lançamento não vem de uma dívida)
+async function findDefaultWorkspace(supabaseAdmin: any, userId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('is_default', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -204,6 +217,7 @@ serve(async (req) => {
       const userId = transacao.user_id
       const hoje = new Date().toISOString().slice(0, 10)
       const contaId = await findOrCreateConta(supabaseAdmin, userId)
+      const defaultWorkspaceId = await findDefaultWorkspace(supabaseAdmin, userId)
       const metadata: Record<string, unknown> = { ...(transacao.metadata ?? {}) }
 
       if (transacao.type === 'CASH_IN') {
@@ -217,6 +231,7 @@ serve(async (req) => {
             user_id: userId,
             categoria_id: categoriaReceitaId,
             conta_id: contaId,
+            workspace_id: defaultWorkspaceId,
             descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
             valor: transacao.amount,
             data: hoje,
@@ -243,6 +258,7 @@ serve(async (req) => {
               user_id: userId,
               categoria_id: categoriaTaxaId,
               conta_id: contaId,
+              workspace_id: defaultWorkspaceId,
               descricao: `Taxa Divipay - transação ${externalId}`,
               valor: Number(effectiveFee),
               data: hoje,
@@ -260,6 +276,7 @@ serve(async (req) => {
         }
       } else if (transacao.type === 'CASH_OUT') {
         const dividaId = typeof metadata.divida_id === 'string' ? metadata.divida_id : null
+        let dividaWorkspaceId: string | null = null
 
         if (dividaId) {
           // ── Baixa direta na dívida (pagamento iniciado pelo botão "Pagar via Divipay")
@@ -271,6 +288,7 @@ serve(async (req) => {
             .maybeSingle()
 
           if (divida) {
+            dividaWorkspaceId = divida.workspace_id ?? null
             const valorBaixa = Math.min(Number(transacao.amount), Number(divida.valor_restante))
 
             if (valorBaixa > 0) {
@@ -337,6 +355,7 @@ serve(async (req) => {
               user_id: userId,
               categoria_id: categoriaSaidaId,
               conta_id: contaId,
+              workspace_id: defaultWorkspaceId,
               descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
               valor: transacao.amount,
               data: hoje,
@@ -375,6 +394,7 @@ serve(async (req) => {
                 user_id: userId,
                 categoria_id: categoriaTaxaSaqueId,
                 conta_id: contaId,
+                workspace_id: dividaWorkspaceId ?? defaultWorkspaceId,
                 descricao: `Taxa Divipay - saque ${externalId}`,
                 valor: Number(effectiveFee),
                 data: hoje,

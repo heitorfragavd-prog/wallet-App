@@ -80,6 +80,23 @@ async function findContaDivipay(userId: string): Promise<string | null> {
   return data?.id ?? null;
 }
 
+/**
+ * Resolve o workspace das despesas importadas: usa o workspace ativo na UI;
+ * sem ele (webhook/fallback), cai no workspace default do usuário.
+ */
+async function resolveWorkspaceId(userId: string, workspaceId?: string | null): Promise<string | null> {
+  if (workspaceId) return workspaceId;
+  const { data } = await supabase
+    .from("workspaces")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("is_default", true)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
 /** Despesa já criada para este saque? (dedupe por marcador nas observações) */
 async function despesaJaExiste(userId: string, marcador: string): Promise<string | null> {
   const { data } = await supabase
@@ -92,7 +109,11 @@ async function despesaJaExiste(userId: string, marcador: string): Promise<string
   return data?.id ?? null;
 }
 
-async function criarDespesaTaxa(userId: string, saque: SaqueParaConciliar): Promise<string | null> {
+async function criarDespesaTaxa(
+  userId: string,
+  saque: SaqueParaConciliar,
+  workspaceId?: string | null,
+): Promise<string | null> {
   if (!saque.taxa || saque.taxa <= 0) return null;
   const marcador = `divipay-taxa:${saque.externalId}`;
   const existente = await despesaJaExiste(userId, marcador);
@@ -104,6 +125,7 @@ async function criarDespesaTaxa(userId: string, saque: SaqueParaConciliar): Prom
       user_id: userId,
       categoria_id: await findOrCreateCategoria(userId, CATEGORIA_TAXAS, "Percent", "#ef4444"),
       conta_id: await findContaDivipay(userId),
+      workspace_id: await resolveWorkspaceId(userId, workspaceId),
       descricao: `Taxa Divipay - ${saque.tipo === "BILLET" ? "boleto" : "Pix"} ${saque.favorecidoNome ?? saque.externalId}`,
       valor: saque.taxa,
       data: saque.dataPagamento.slice(0, 10),
@@ -120,7 +142,11 @@ async function criarDespesaTaxa(userId: string, saque: SaqueParaConciliar): Prom
   return data.id;
 }
 
-async function criarDespesaAvulsa(userId: string, saque: SaqueParaConciliar): Promise<string | null> {
+async function criarDespesaAvulsa(
+  userId: string,
+  saque: SaqueParaConciliar,
+  workspaceId?: string | null,
+): Promise<string | null> {
   const marcador = `divipay-saque:${saque.externalId}`;
   const existente = await despesaJaExiste(userId, marcador);
   if (existente) return existente;
@@ -132,6 +158,7 @@ async function criarDespesaAvulsa(userId: string, saque: SaqueParaConciliar): Pr
       user_id: userId,
       categoria_id: await findOrCreateCategoria(userId, CATEGORIA_SAQUES, "ArrowUpRight", "#f97316"),
       conta_id: await findContaDivipay(userId),
+      workspace_id: await resolveWorkspaceId(userId, workspaceId),
       descricao: saque.descricao || `${tipoLegivel} Divipay - ${saque.favorecidoNome ?? "favorecido"}`,
       valor: saque.valor,
       data: saque.dataPagamento.slice(0, 10),
@@ -266,7 +293,7 @@ export class ConciliacaoDivipayService {
    * Processa os saques mais recentes: cria conciliações, dá baixas automáticas
    * e gera despesas avulsas. Seguro para rodar várias vezes (idempotente).
    */
-  async conciliar(transacoes: DivipayTransacao[]): Promise<ResumoConciliacao> {
+  async conciliar(transacoes: DivipayTransacao[], workspaceId?: string | null): Promise<ResumoConciliacao> {
     const resumo: ResumoConciliacao = {
       processados: 0,
       conciliadasAuto: 0,
@@ -277,6 +304,7 @@ export class ConciliacaoDivipayService {
     if (transacoes.length === 0) return resumo;
 
     const userId = await requireUserId();
+    const wsId = await resolveWorkspaceId(userId, workspaceId);
 
     // O que já foi processado/importado antes
     const { data: existentes } = await supabase
@@ -345,7 +373,7 @@ export class ConciliacaoDivipayService {
       if (local && typeof localMeta.divida_id === "string" && localMeta.divida_id) {
         const ok = await baixarDivida(userId, localMeta.divida_id, saque);
         if (ok) {
-          await criarDespesaTaxa(userId, saque);
+          await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, saque, "conciliada", {
             dividaId: localMeta.divida_id,
           });
@@ -362,7 +390,7 @@ export class ConciliacaoDivipayService {
       if (resultado.camada === "auto") {
         const ok = await baixarDivida(userId, resultado.divida.id, saque);
         if (ok) {
-          await criarDespesaTaxa(userId, saque);
+          await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, saque, "conciliada", {
             dividaId: resultado.divida.id,
           });
@@ -376,8 +404,8 @@ export class ConciliacaoDivipayService {
         });
         resumo.pendentes++;
       } else {
-        const despesaId = await criarDespesaAvulsa(userId, saque);
-        await criarDespesaTaxa(userId, saque);
+        const despesaId = await criarDespesaAvulsa(userId, saque, wsId);
+        await criarDespesaTaxa(userId, saque, wsId);
         await this.registrarConciliacao(userId, saque, "importada", { despesaId });
         resumo.avulsas++;
       }
@@ -417,7 +445,7 @@ export class ConciliacaoDivipayService {
   }
 
   /** Camada 2 → confirma que o saque pagou uma dívida (a sugerida ou outra). */
-  async confirmar(conciliacao: DivipayConciliacao, dividaId: string): Promise<boolean> {
+  async confirmar(conciliacao: DivipayConciliacao, dividaId: string, workspaceId?: string | null): Promise<boolean> {
     const userId = await requireUserId();
     const saque: SaqueParaConciliar = {
       externalId: conciliacao.divipay_external_id,
@@ -432,7 +460,7 @@ export class ConciliacaoDivipayService {
 
     const ok = await baixarDivida(userId, dividaId, saque);
     if (!ok) return false;
-    await criarDespesaTaxa(userId, saque);
+    await criarDespesaTaxa(userId, saque, workspaceId);
 
     const { error } = await supabase
       .from("divipay_conciliacoes")
@@ -442,7 +470,7 @@ export class ConciliacaoDivipayService {
   }
 
   /** Camada 2 → usuário diz que NÃO é dívida: vira despesa avulsa. */
-  async importarAvulsa(conciliacao: DivipayConciliacao): Promise<boolean> {
+  async importarAvulsa(conciliacao: DivipayConciliacao, workspaceId?: string | null): Promise<boolean> {
     const userId = await requireUserId();
     const saque: SaqueParaConciliar = {
       externalId: conciliacao.divipay_external_id,
@@ -455,8 +483,8 @@ export class ConciliacaoDivipayService {
       descricao: conciliacao.descricao,
     };
 
-    const despesaId = await criarDespesaAvulsa(userId, saque);
-    await criarDespesaTaxa(userId, saque);
+    const despesaId = await criarDespesaAvulsa(userId, saque, workspaceId);
+    await criarDespesaTaxa(userId, saque, workspaceId);
 
     const { error } = await supabase
       .from("divipay_conciliacoes")
