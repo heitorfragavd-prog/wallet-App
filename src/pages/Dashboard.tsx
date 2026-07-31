@@ -84,7 +84,10 @@ const Dashboard = () => {
   const navigate = useNavigate();
 
   // ── Filtro de data global do dashboard
-  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+  // Padrão: MÊS VIGENTE — a saúde financeira mostra receitas e despesas do mês
+  // atual (dia 1 até hoje). O usuário pode trocar para "Todos os períodos" ou
+  // um intervalo personalizado pelo DateRangePicker.
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'month' });
   const [dividasInterval, setDividasInterval] = useState<"semana" | 7 | 15 | 30>("semana");
 
 
