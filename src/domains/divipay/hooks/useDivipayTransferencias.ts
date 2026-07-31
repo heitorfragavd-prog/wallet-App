@@ -26,7 +26,7 @@ async function fetchTransferencias(): Promise<DivipayTransacao[]> {
   try {
     const allWithdraws: import("@/domains/divipay/types").DivipaySaque[] = [];
     const PAGE = 100;
-    const MAX_PAGES = 10; // até 1.000 saques
+    const MAX_PAGES = 50; // até 5.000 saques — cobre o histórico completo para o backfill de despesas
     for (let page = 0; page < MAX_PAGES; page++) {
       const { items, hasMore } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
       allWithdraws.push(...items);
