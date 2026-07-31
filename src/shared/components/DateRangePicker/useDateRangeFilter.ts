@@ -5,7 +5,7 @@ import { useState, useCallback, useMemo } from 'react';
 import type { DateRange } from './DateRangePicker';
 
 interface UseDateRangeFilterOptions {
-  defaultPeriod?: 'all' | 'today';
+  defaultPeriod?: 'all' | 'today' | 'month';
   storageKey?: string;
 }
 
@@ -16,6 +16,14 @@ function getTodayString(): string {
   const month = String(hoje.getMonth() + 1).padStart(2, '0');
   const day = String(hoje.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+// Retorna o primeiro dia do mês atual no formato YYYY-MM-DD (local time)
+function getFirstDayOfMonthString(): string {
+  const hoje = new Date();
+  const year = hoje.getFullYear();
+  const month = String(hoje.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
 }
 
 export function useDateRangeFilter(options?: UseDateRangeFilterOptions): {
@@ -33,6 +41,15 @@ export function useDateRangeFilter(options?: UseDateRangeFilterOptions): {
         endDate: hoje,
         label: 'Hoje',
         period: 'today',
+      };
+    }
+    if (defaultPeriod === 'month') {
+      // Mês vigente: do dia 1 até hoje — saúde financeira do mês atual
+      return {
+        startDate: getFirstDayOfMonthString(),
+        endDate: getTodayString(),
+        label: 'Mês atual',
+        period: 'month',
       };
     }
     return {

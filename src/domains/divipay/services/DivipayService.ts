@@ -6,6 +6,7 @@ import type {
   DivipayConfigInsert,
   DivipayConfigUpdate,
   DivipayMovement,
+  DivipaySaque,
   DivipayTransacao,
   DivipayWebhookLog,
   CreatePixChargeParams,
@@ -118,8 +119,29 @@ export class DivipayService {
     return this.invoke<{ transacao: DivipayTransacao; withdraw: unknown }>("createWithdraw", params as Record<string, unknown>);
   }
 
-  async listWithdraws(params?: { limit?: number; offset?: number }): Promise<unknown> {
-    return this.invoke<unknown>("listWithdraws", params as Record<string, unknown>);
+  async listWithdraws(params?: { limit?: number; offset?: number }): Promise<{ items: DivipaySaque[]; hasMore: boolean }> {
+    const data = await this.invoke<unknown>("listWithdraws", params as Record<string, unknown>);
+    const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+    const rawItems = Array.isArray(data) ? data : (record.data as unknown[]) ?? (record.items as unknown[]) ?? [];
+
+    const items: DivipaySaque[] = rawItems.map((item): DivipaySaque => {
+      const r = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      return {
+        id: String(r.id ?? ""),
+        name: r.name ? String(r.name) : null,
+        document: r.document ? String(r.document) : null,
+        description: r.description ? String(r.description) : null,
+        type: String(r.type ?? ""),
+        amount: this.toNumber(r.amount ?? r.valor ?? 0),
+        tax: this.toNumber(r.tax ?? r.taxa ?? 0),
+        status: String(r.status ?? ""),
+        lote: r.lote ? String(r.lote) : null,
+        createdAt: r.createdAt ? String(r.createdAt) : r.created_at ? String(r.created_at) : r.date ? String(r.date) : null,
+      };
+    });
+
+    const hasMore = !Array.isArray(data) && (record.has_more === true || record.hasMore === true);
+    return { items, hasMore };
   }
 
 

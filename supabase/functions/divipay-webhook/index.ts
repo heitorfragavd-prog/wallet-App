@@ -106,6 +106,19 @@ async function findOrCreateCategoria(
   return nova.id
 }
 
+// Workspace default do usuário (fallback quando o lançamento não vem de uma dívida)
+async function findDefaultWorkspace(supabaseAdmin: any, userId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('workspaces')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('is_default', true)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -204,6 +217,7 @@ serve(async (req) => {
       const userId = transacao.user_id
       const hoje = new Date().toISOString().slice(0, 10)
       const contaId = await findOrCreateConta(supabaseAdmin, userId)
+      const defaultWorkspaceId = await findDefaultWorkspace(supabaseAdmin, userId)
       const metadata: Record<string, unknown> = { ...(transacao.metadata ?? {}) }
 
       if (transacao.type === 'CASH_IN') {
@@ -217,6 +231,7 @@ serve(async (req) => {
             user_id: userId,
             categoria_id: categoriaReceitaId,
             conta_id: contaId,
+            workspace_id: defaultWorkspaceId,
             descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
             valor: transacao.amount,
             data: hoje,
@@ -243,6 +258,7 @@ serve(async (req) => {
               user_id: userId,
               categoria_id: categoriaTaxaId,
               conta_id: contaId,
+              workspace_id: defaultWorkspaceId,
               descricao: `Taxa Divipay - transação ${externalId}`,
               valor: Number(effectiveFee),
               data: hoje,
@@ -259,29 +275,142 @@ serve(async (req) => {
           }
         }
       } else if (transacao.type === 'CASH_OUT') {
-        // Saída: despesa com o valor transferido
-        const categoriaSaidaId = await findOrCreateCategoria(
-          supabaseAdmin, userId, 'Transferências e Saques Divipay', 'despesa', 'ArrowUpRight', '#f97316',
-        )
-        const { data: despesa, error: despesaError } = await supabaseAdmin
-          .from('despesas')
-          .insert({
-            user_id: userId,
-            categoria_id: categoriaSaidaId,
-            conta_id: contaId,
-            descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
-            valor: transacao.amount,
-            data: hoje,
-            metodo_pagamento: 'pix',
-            status: 'pago',
-          })
-          .select('id')
-          .single()
+        const dividaId = typeof metadata.divida_id === 'string' ? metadata.divida_id : null
+        let dividaWorkspaceId: string | null = null
 
-        if (despesaError) {
-          console.error('Erro ao criar despesa de cash-out:', despesaError)
+        if (dividaId) {
+          // ── Baixa direta na dívida (pagamento iniciado pelo botão "Pagar via Divipay")
+          // O trigger sync_pagamento_divida_to_despesa cria a despesa automaticamente.
+          const { data: divida } = await supabaseAdmin
+            .from('dividas')
+            .select('*')
+            .eq('id', dividaId)
+            .maybeSingle()
+
+          if (divida) {
+            dividaWorkspaceId = divida.workspace_id ?? null
+            const valorBaixa = Math.min(Number(transacao.amount), Number(divida.valor_restante))
+
+            if (valorBaixa > 0) {
+              const { error: pagError } = await supabaseAdmin
+                .from('pagamentos_dividas')
+                .insert({
+                  divida_id: dividaId,
+                  user_id: userId,
+                  valor: valorBaixa,
+                  data_pagamento: hoje,
+                  metodo_pagamento: 'pix',
+                  conta_id: contaId,
+                  observacoes: `Pago via Divipay (Pix) - ${externalId}`,
+                  divipay_external_id: externalId,
+                })
+
+              // 23505 = unique violation em divipay_external_id → baixa já feita (idempotente)
+              if (pagError && pagError.code !== '23505') {
+                console.error('Erro ao registrar pagamento da dívida:', pagError)
+              } else if (!pagError) {
+                const novoValorPago = Number(divida.valor_pago) + valorBaixa
+                const novasParcelasPagas = Math.min(Number(divida.parcelas_pagas) + 1, Number(divida.parcelas))
+                const todasPagas = novasParcelasPagas >= Number(divida.parcelas)
+                const novoValorRestante = todasPagas
+                  ? 0
+                  : Math.max(0, Number(divida.valor_total) - novoValorPago)
+                const novoStatus = todasPagas
+                  ? 'quitada'
+                  : new Date(divida.data_vencimento) < new Date()
+                    ? 'vencida'
+                    : 'pendente'
+
+                let novaDataVencimento = divida.data_vencimento
+                if (!todasPagas) {
+                  const venc = new Date(`${divida.data_vencimento}T00:00:00`)
+                  venc.setMonth(venc.getMonth() + 1)
+                  novaDataVencimento = venc.toISOString().split('T')[0]
+                }
+
+                await supabaseAdmin
+                  .from('dividas')
+                  .update({
+                    valor_pago: novoValorPago,
+                    valor_restante: novoValorRestante,
+                    parcelas_pagas: novasParcelasPagas,
+                    data_vencimento: novaDataVencimento,
+                    status: novoStatus,
+                  })
+                  .eq('id', dividaId)
+              }
+            }
+            metadata.divida_baixada = true
+          } else {
+            console.error('Dívida da metadata não encontrada:', dividaId)
+          }
         } else {
-          metadata.despesa_id = despesa.id
+          // Saída sem vínculo com dívida: despesa com o valor transferido
+          const categoriaSaidaId = await findOrCreateCategoria(
+            supabaseAdmin, userId, 'Transferências e Saques Divipay', 'despesa', 'ArrowUpRight', '#f97316',
+          )
+          const { data: despesa, error: despesaError } = await supabaseAdmin
+            .from('despesas')
+            .insert({
+              user_id: userId,
+              categoria_id: categoriaSaidaId,
+              conta_id: contaId,
+              workspace_id: defaultWorkspaceId,
+              descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
+              valor: transacao.amount,
+              data: hoje,
+              observacoes: `Importado via Divipay API (divipay-saque:${externalId})`,
+              metodo_pagamento: 'pix',
+              status: 'pago',
+            })
+            .select('id')
+            .single()
+
+          if (despesaError) {
+            console.error('Erro ao criar despesa de cash-out:', despesaError)
+          } else {
+            metadata.despesa_id = despesa.id
+          }
+        }
+
+        // Taxa do saque: despesa separada (dedupe pelo marcador divipay-taxa)
+        if (effectiveFee && Number(effectiveFee) > 0) {
+          const marcadorTaxa = `divipay-taxa:${externalId}`
+          const { data: taxaExistente } = await supabaseAdmin
+            .from('despesas')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('observacoes', `%${marcadorTaxa}%`)
+            .limit(1)
+            .maybeSingle()
+
+          if (!taxaExistente) {
+            const categoriaTaxaSaqueId = await findOrCreateCategoria(
+              supabaseAdmin, userId, 'Taxas Divipay / Tarifas Bancárias', 'despesa', 'Percent', '#ef4444',
+            )
+            const { data: despesaTaxaSaque, error: taxaSaqueError } = await supabaseAdmin
+              .from('despesas')
+              .insert({
+                user_id: userId,
+                categoria_id: categoriaTaxaSaqueId,
+                conta_id: contaId,
+                workspace_id: dividaWorkspaceId ?? defaultWorkspaceId,
+                descricao: `Taxa Divipay - saque ${externalId}`,
+                valor: Number(effectiveFee),
+                data: hoje,
+                observacoes: `Taxa do saque Divipay ${externalId} (${marcadorTaxa})`,
+                metodo_pagamento: 'pix',
+                status: 'pago',
+              })
+              .select('id')
+              .single()
+
+            if (taxaSaqueError) {
+              console.error('Erro ao criar despesa de taxa do saque:', taxaSaqueError)
+            } else {
+              metadata.despesa_taxa_id = despesaTaxaSaque.id
+            }
+          }
         }
       }
 

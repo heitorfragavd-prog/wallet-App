@@ -563,6 +563,36 @@ async function syncUserEyemobile(
   let processedCount = 0;
   const syncErrors: string[] = [];
 
+  // Workspace das vendas PDV: prefere o workspace empresarial (PJ) do usuário;
+  // fallback para o workspace default. Sem isso as vendas ficavam órfãs e
+  // sumiam do Dashboard/Transações quando um workspace estava ativo.
+  let syncWorkspaceId: string | null = null;
+  try {
+    const { data: wsPj } = await supabaseAdmin
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", user_id)
+      .eq("tipo", "PJ")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (wsPj) {
+      syncWorkspaceId = wsPj.id;
+    } else {
+      const { data: wsDefault } = await supabaseAdmin
+        .from("workspaces")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("is_default", true)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      syncWorkspaceId = wsDefault?.id ?? null;
+    }
+  } catch (wsErr) {
+    console.error("Não foi possível resolver o workspace do sync:", wsErr);
+  }
+
   // 2. Sales Sync
   if ((mode === "SALES" || mode === "ALL" || mode === "HISTORY") && config.auto_sync_sales) {
     try {
@@ -759,6 +789,7 @@ async function syncUserEyemobile(
             // Insert main sale revenue
             const { error: revErr } = await supabaseAdmin.from("transacoes").insert({
               user_id: user_id,
+              workspace_id: syncWorkspaceId,
               tipo: "receita",
               valor: Number(sale.total || 0),
               descricao: `Venda Eyemobile #${sale.id}`,

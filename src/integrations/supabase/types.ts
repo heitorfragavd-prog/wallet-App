@@ -508,6 +508,7 @@ export type Database = {
           credor: string
           data_vencimento: string
           descricao: string
+          documento_favorecido: string | null
           id: string
           parcelas: number
           parcelas_pagas: number
@@ -524,6 +525,7 @@ export type Database = {
           credor: string
           data_vencimento: string
           descricao: string
+          documento_favorecido?: string | null
           id?: string
           parcelas?: number
           parcelas_pagas?: number
@@ -540,6 +542,7 @@ export type Database = {
           credor?: string
           data_vencimento?: string
           descricao?: string
+          documento_favorecido?: string | null
           id?: string
           parcelas?: number
           parcelas_pagas?: number
@@ -556,6 +559,78 @@ export type Database = {
             columns: ["categoria_id"]
             isOneToOne: false
             referencedRelation: "categorias"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      divipay_conciliacoes: {
+        Row: {
+          created_at: string
+          data_pagamento: string | null
+          descricao: string | null
+          despesa_id: string | null
+          divida_id: string | null
+          divida_sugerida_id: string | null
+          divipay_external_id: string
+          favorecido_documento: string | null
+          favorecido_nome: string | null
+          id: string
+          status: string
+          taxa: number
+          tipo: string | null
+          updated_at: string
+          user_id: string
+          valor: number
+        }
+        Insert: {
+          created_at?: string
+          data_pagamento?: string | null
+          descricao?: string | null
+          despesa_id?: string | null
+          divida_id?: string | null
+          divida_sugerida_id?: string | null
+          divipay_external_id: string
+          favorecido_documento?: string | null
+          favorecido_nome?: string | null
+          id?: string
+          status?: string
+          taxa?: number
+          tipo?: string | null
+          updated_at?: string
+          user_id: string
+          valor: number
+        }
+        Update: {
+          created_at?: string
+          data_pagamento?: string | null
+          descricao?: string | null
+          despesa_id?: string | null
+          divida_id?: string | null
+          divida_sugerida_id?: string | null
+          divipay_external_id?: string
+          favorecido_documento?: string | null
+          favorecido_nome?: string | null
+          id?: string
+          status?: string
+          taxa?: number
+          tipo?: string | null
+          updated_at?: string
+          user_id?: string
+          valor?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "divipay_conciliacoes_divida_id_fkey"
+            columns: ["divida_id"]
+            isOneToOne: false
+            referencedRelation: "dividas"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "divipay_conciliacoes_divida_sugerida_id_fkey"
+            columns: ["divida_sugerida_id"]
+            isOneToOne: false
+            referencedRelation: "dividas"
             referencedColumns: ["id"]
           },
         ]
@@ -1212,6 +1287,7 @@ export type Database = {
           created_at: string
           data_pagamento: string
           divida_id: string
+          divipay_external_id: string | null
           id: string
           metodo_pagamento: string
           observacoes: string | null
@@ -1223,6 +1299,7 @@ export type Database = {
           created_at?: string
           data_pagamento?: string
           divida_id: string
+          divipay_external_id?: string | null
           id?: string
           metodo_pagamento: string
           observacoes?: string | null
@@ -1234,6 +1311,7 @@ export type Database = {
           created_at?: string
           data_pagamento?: string
           divida_id?: string
+          divipay_external_id?: string | null
           id?: string
           metodo_pagamento?: string
           observacoes?: string | null

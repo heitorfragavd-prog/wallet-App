@@ -362,7 +362,13 @@ serve(async (req) => {
             status: 'PENDING',
             description: params.description ?? `Transferência Pix para ${params.keyPix}`,
             recipient_key: params.keyPix,
-            metadata: { withdrawResponse: data },
+            metadata: {
+              withdrawResponse: data,
+              // Quando o pagamento é de uma dívida, o divida_id viaja na metadata
+              // para o webhook dar baixa direta na dívida ao confirmar o saque.
+              ...(params.dividaId ? { divida_id: String(params.dividaId) } : {}),
+              ...(params.metadata && typeof params.metadata === 'object' ? params.metadata : {}),
+            },
           })
           .select()
           .single()

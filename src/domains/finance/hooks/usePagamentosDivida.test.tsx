@@ -44,7 +44,10 @@ describe('usePagamentosDivida - despesa do pagamento aparece na lista', () => {
     vi.restoreAllMocks();
   });
 
-  it('ao registrar 1 parcela de dívida, cria despesa válida e ela aparece em fetchDespesas', async () => {
+  it('ao registrar 1 parcela de dívida, grava o pagamento e atualiza a dívida corretamente', async () => {
+    // Nota de arquitetura: a DESPESA do pagamento é criada pelo trigger do banco
+    // (sync_pagamento_divida_to_despesa), não mais pelo hook. O que este teste
+    // garante no nível da unidade é o pagamento registrado e a baixa na dívida.
     const dividaId = 'divida-robo6';
     const divida = {
       id: dividaId,
@@ -61,7 +64,9 @@ describe('usePagamentosDivida - despesa do pagamento aparece na lista', () => {
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let despesaInserida: any = null;
+    let pagamentoInserido: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let dividaAtualizada: any = null;
 
     const mockFrom = vi.fn().mockImplementation((table: string) => {
       if (table === 'dividas') {
@@ -71,33 +76,29 @@ describe('usePagamentosDivida - despesa do pagamento aparece na lista', () => {
               single: vi.fn().mockResolvedValue({ data: divida, error: null }),
             }),
           }),
-          update: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockImplementation((payload) => {
+            dividaAtualizada = payload;
+            return { eq: vi.fn().mockResolvedValue({ data: null, error: null }) };
           }),
         };
       }
       if (table === 'pagamentos_dividas') {
         return {
-          insert: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              single: vi.fn().mockResolvedValue({
-                data: {
-                  id: 'pag-1',
-                  divida_id: dividaId,
-                  valor: 250,
-                  data_pagamento: '2026-07-22',
-                },
-                error: null,
-              }),
-            }),
-          }),
-        };
-      }
-      if (table === 'despesas') {
-        return {
           insert: vi.fn().mockImplementation((rows) => {
-            despesaInserida = rows[0];
-            return { error: null };
+            pagamentoInserido = rows[0];
+            return {
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({
+                  data: {
+                    id: 'pag-1',
+                    divida_id: dividaId,
+                    valor: 250,
+                    data_pagamento: '2026-07-22',
+                  },
+                  error: null,
+                }),
+              }),
+            };
           }),
         };
       }
@@ -136,20 +137,20 @@ describe('usePagamentosDivida - despesa do pagamento aparece na lista', () => {
     expect(retorno.error).toBeNull();
     expect(retorno.data).toBeDefined();
 
-    // 2. A despesa FOI criada (antes o insert podia falhar silenciosamente)
-    expect(despesaInserida).not.toBeNull();
+    // 2. O pagamento gravado tem dívida, usuário e valor corretos
+    expect(pagamentoInserido).not.toBeNull();
+    expect(pagamentoInserido.divida_id).toBe(dividaId);
+    expect(pagamentoInserido.user_id).toBe(MOCK_USER.id);
+    expect(pagamentoInserido.valor).toBe(250);
 
-    // 3. A despesa tem a descrição esperada
-    expect(despesaInserida.descricao).toBe('Pagamento dívida: robo 6 (divipay)');
-
-    // 4. Não manda metodo_pagamento vazio (evita violar CHECK da tabela)
-    expect(despesaInserida.metodo_pagamento).toBeUndefined();
-
-    // 5. Manda categoria_id válido
-    expect(despesaInserida.categoria_id).toBe('cat-tec');
-
-    // 6. user_id correto
-    expect(despesaInserida.user_id).toBe(MOCK_USER.id);
+    // 3. A dívida foi baixada: 1 parcela paga, saldo abatido, vencimento avança 1 mês
+    expect(dividaAtualizada).not.toBeNull();
+    expect(dividaAtualizada.valor_pago).toBe(250);
+    expect(dividaAtualizada.parcelas_pagas).toBe(1);
+    expect(dividaAtualizada.valor_restante).toBe(2250);
+    // vencimento original (2026-07-22) já passou → status recalculado como vencida
+    expect(dividaAtualizada.status).toBe('vencida');
+    expect(dividaAtualizada.data_vencimento).toBe('2026-08-22');
   });
 
   it('não cria despesa quando criarDespesa=false', async () => {

@@ -44,6 +44,7 @@ import { useProfile } from "@/domains/auth/hooks/useProfile";
 import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao";
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
 import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTransactions";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 
 
 // Função para formatar a data corretamente
@@ -83,12 +84,24 @@ const Dashboard = () => {
   const navigate = useNavigate();
 
   // ── Filtro de data global do dashboard
-  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+  // Padrão: MÊS VIGENTE — a saúde financeira mostra receitas e despesas do mês
+  // atual (dia 1 até hoje). O usuário pode trocar para "Todos os períodos" ou
+  // um intervalo personalizado pelo DateRangePicker.
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'month' });
   const [dividasInterval, setDividasInterval] = useState<"semana" | 7 | 15 | 30>("semana");
 
 
   // Iniciar com o mês atual por padrão (apenas na primeira vez)
   const { transacoes, loading: loadingTransacoes } = useTransacoes();
+
+  // Receitas consolidadas — MESMA regra da tela Receitas:
+  // dinheiro do PDV (Eyemobile) + entradas liquidadas da Divipay (valor líquido,
+  // puxado ao vivo da API) + receitas manuais/Pluggy. Sem isso o card ficava
+  // zerado porque as entradas digitais não estão persistidas no banco.
+  const { receitas: receitasConsolidadas } = useReceitas({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
   const { itensMercado } = useItensMercado();
   const { dividas, loading: loadingDividas } = useDividas();
   const { veiculos, loading: loadingVeiculos } = useVeiculos();
@@ -103,10 +116,7 @@ const Dashboard = () => {
     if (loadingTransacoes || !transacoes.length) {
       return {
         transacoesFiltradas: [],
-        totalReceitas: 0,
         totalDespesas: 0,
-        saldoPeriodo: 0,
-        percentualDespesas: 0,
       };
     }
 
@@ -127,10 +137,6 @@ const Dashboard = () => {
       return true;
     });
 
-    const totalReceitas = transacoesFiltradas
-      .filter((t) => t.tipo === "receita")
-      .reduce((total, t) => total + Number(t.valor), 0);
-
     const totalDespesas = transacoesFiltradas
       .filter((t) => t.tipo === "despesa")
       .reduce((total, t) => total + Number(t.valor), 0);
@@ -141,14 +147,19 @@ const Dashboard = () => {
         if (dateDiff !== 0) return dateDiff;
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       }),
-      totalReceitas,
       totalDespesas,
-      saldoPeriodo: totalReceitas - totalDespesas,
-      percentualDespesas: totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0,
     };
   }, [transacoes, dateRange, loadingTransacoes]);
 
-  const { transacoesFiltradas, totalReceitas, totalDespesas, saldoPeriodo, percentualDespesas } = processedData;
+  const { transacoesFiltradas, totalDespesas } = processedData;
+
+  // Total de receitas consolidado (dinheiro PDV + Divipay líquido + manuais)
+  const totalReceitas = useMemo(
+    () => receitasConsolidadas.reduce((soma, r) => soma + Number(r.valor || 0), 0),
+    [receitasConsolidadas],
+  );
+  const saldoPeriodo = totalReceitas - totalDespesas;
+  const percentualDespesas = totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0;
 
   // Top categorias de despesas no período
   const topCategorias = useMemo(() => {

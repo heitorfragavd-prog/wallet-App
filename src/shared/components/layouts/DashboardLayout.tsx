@@ -32,6 +32,7 @@ import { ThemeToggle } from "@/shared/components/ThemeToggle";
 import { WhatsAppButton } from "@/shared/components/WhatsAppButton";
 import { WorkspaceSwitcher } from "@/shared/components/WorkspaceSwitcher";
 import { NotificationsPopover } from "@/shared/components/NotificationsPopover";
+import { useDivipayConciliacaoAuto } from "@/domains/divipay/hooks/useDivipayConciliacao";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -44,6 +45,10 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const { profile } = useProfile();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // Conciliação Divipay em background: despesas da carteira sobem sem
+  // precisar abrir a tela de Saques (1x por dia por sessão).
+  useDivipayConciliacaoAuto();
 
   const baseMenuItems = [
     { icon: Home, label: "Dashboard", path: "/dashboard" },

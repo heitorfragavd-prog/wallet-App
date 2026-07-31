@@ -9,7 +9,7 @@ name: Build & Push Docker Image
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop, master]
   workflow_dispatch:
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            heltonfraga/wallet:1.0.2
+            heltonfraga/wallet:1.0.3
             heltonfraga/wallet:latest
           build-args: |
             VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
