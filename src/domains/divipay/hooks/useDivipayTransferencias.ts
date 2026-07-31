@@ -27,10 +27,18 @@ async function fetchTransferencias(): Promise<DivipayTransacao[]> {
     const allWithdraws: import("@/domains/divipay/types").DivipaySaque[] = [];
     const PAGE = 100;
     const MAX_PAGES = 50; // até 5.000 saques — cobre o histórico completo para o backfill de despesas
+    const seenIds = new Set<string>();
     for (let page = 0; page < MAX_PAGES; page++) {
-      const { items, hasMore } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
-      allWithdraws.push(...items);
-      if (!hasMore || items.length < PAGE) break;
+      const { items } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
+      // A API da Divipay nem sempre devolve a flag hasMore — sem ela o loop
+      // parava na 1ª página (foi por isso que só vieram 100 saques e o
+      // histórico de 2025 + jan–mai/2026 ficou de fora). Agora continuamos
+      // enquanto a página vier cheia e com IDs novos.
+      const fresh = items.filter((w) => w.id && !seenIds.has(w.id));
+      fresh.forEach((w) => seenIds.add(w.id));
+      allWithdraws.push(...fresh);
+      if (items.length < PAGE) break; // página incompleta = fim do histórico
+      if (fresh.length === 0) break;  // página repetida = API não pagina por offset
     }
 
     if (allWithdraws.length > 0) {

@@ -306,12 +306,20 @@ export class ConciliacaoDivipayService {
     const userId = await requireUserId();
     const wsId = await resolveWorkspaceId(userId, workspaceId);
 
-    // O que já foi processado/importado antes
-    const { data: existentes } = await supabase
-      .from("divipay_conciliacoes")
-      .select("divipay_external_id")
-      .eq("user_id", userId);
-    const jaProcessados = new Set((existentes ?? []).map((c) => c.divipay_external_id));
+    // O que já foi processado/importado antes (paginado: o PostgREST corta
+    // em 1000 linhas por requisição — sem isso, com o histórico completo,
+    // a anti-duplicidade falharia e criaria despesas em dobro)
+    const jaProcessados = new Set<string>();
+    for (let offset = 0; offset < 50000; offset += 1000) {
+      const { data: lote } = await supabase
+        .from("divipay_conciliacoes")
+        .select("divipay_external_id")
+        .eq("user_id", userId)
+        .range(offset, offset + 999);
+      const rows = lote ?? [];
+      rows.forEach((c) => jaProcessados.add(c.divipay_external_id));
+      if (rows.length < 1000) break;
+    }
 
     // Transações locais criadas pelo app (webhook pode já ter lançado a despesa)
     const { data: locais } = await supabase
