@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -13,6 +13,8 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import { useDivipayTransferencias } from "@/domains/divipay/hooks/useDivipayTransferencias";
+import { useDivipayConciliacao } from "@/domains/divipay/hooks/useDivipayConciliacao";
+import { ConciliacoesPendentesCard } from "./ConciliacoesPendentesCard";
 import { SaquesFiltrosSheet, type SaquesFilterValues } from "./SaquesFiltrosSheet";
 import { VerificarSaqueModal, type SaqueDetails } from "./VerificarSaqueModal";
 import { formatCurrency } from "@/lib/utils";
@@ -20,6 +22,22 @@ import { Eye, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } f
 
 export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
+  const { conciliar } = useDivipayConciliacao();
+
+  // Motor de conciliação: roda uma vez por conjunto de saques carregado.
+  // Idempotente no banco (unique user_id+external_id), seguro contra re-render.
+  const ultimaAssinatura = useRef<string>("");
+  useEffect(() => {
+    if (loading || transferencias.length === 0) return;
+    const primeira = transferencias[0];
+    const assinatura = `${transferencias.length}:${primeira?.id}:${primeira?.updated_at}`;
+    if (ultimaAssinatura.current === assinatura) return;
+    ultimaAssinatura.current = assinatura;
+    conciliar(transferencias).catch(() => {
+      // falha silenciosa: a próxima abertura da página tenta de novo
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferencias, loading]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
 
@@ -156,6 +174,9 @@ export function DivipayTransferenciasView() {
           </Button>
         </div>
       </div>
+
+      {/* Inbox da conciliação (Camada 2): pagamentos que parecem quitar dívidas */}
+      <ConciliacoesPendentesCard />
 
       {/* Card Principal de Tabela com Layout Divipay Oficial */}
       <Card className="rounded-2xl border-border/60 shadow-sm overflow-hidden bg-card/90 backdrop-blur-sm">

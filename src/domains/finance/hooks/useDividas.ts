@@ -32,6 +32,7 @@ export interface Divida {
   status: "pendente" | "vencida" | "quitada";
   credor: string;
   valor_taxa?: number;
+  documento_favorecido?: string | null;
   created_at: string;
   updated_at: string;
   categorias?: {

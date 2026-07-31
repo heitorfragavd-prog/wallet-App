@@ -38,6 +38,7 @@ import {
   Bell,
   History,
   Smartphone,
+  Zap,
   Banknote,
   ArrowRightLeft,
   Ticket,
@@ -51,6 +52,7 @@ import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRan
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
 import { RegistrarPagamentoModal } from "@/domains/finance/components/RegistrarPagamentoModal";
+import { PagarDividaDivipayModal } from "@/domains/divipay/components/PagarDividaDivipayModal";
 import { usePagamentosDivida } from "@/domains/finance/hooks/usePagamentosDivida";
 import { PaymentMethod } from "@/domains/finance/types";
 import { Checkbox } from "@/shared/components/ui/checkbox";
@@ -127,6 +129,10 @@ const Dividas = () => {
   const [dividaSelecionada, setDividaSelecionada] = useState<Divida | null>(null);
   const [modalPagamentoAberto, setModalPagamentoAberto] = useState(false);
 
+  // Estado para o modal "Pagar via Divipay"
+  const [dividaDivipaySelecionada, setDividaDivipaySelecionada] = useState<Divida | null>(null);
+  const [modalDivipayAberto, setModalDivipayAberto] = useState(false);
+
   const [filtro, setFiltro] = useState("");
   const [statusFiltro, setStatusFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
@@ -138,6 +144,7 @@ const Dividas = () => {
   const [novasParcelas, setNovasParcelas] = useState("");
   const [novaCategoria, setNovaCategoria] = useState("");
   const [novoCredor, setNovoCredor] = useState("");
+  const [novoDocumentoFavorecido, setNovoDocumentoFavorecido] = useState("");
   const [novaContaId, setNovaContaId] = useState("");
   const [novoReminderHours, setNovoReminderHours] = useState<number | null>(null);
   const [isTaxaAtiva, setIsTaxaAtiva] = useState(false);
@@ -152,6 +159,7 @@ const Dividas = () => {
   const [editParcelasPagas, setEditParcelasPagas] = useState("");
   const [editCategoria, setEditCategoria] = useState("");
   const [editCredor, setEditCredor] = useState("");
+  const [editDocumentoFavorecido, setEditDocumentoFavorecido] = useState("");
   const [editReminderHours, setEditReminderHours] = useState<number | null>(null);
   const [existingReminderId, setExistingReminderId] = useState<string | null>(null);
 
@@ -228,6 +236,7 @@ const Dividas = () => {
       categoria_id: categoria?.id,
       conta_id: novaContaId || null,
       credor: novoCredor,
+      documento_favorecido: novoDocumentoFavorecido.trim() || null,
       valor_taxa: isTaxaAtiva && novoValorTaxa ? parseFloat(novoValorTaxa) : 0,
     });
 
@@ -237,6 +246,7 @@ const Dividas = () => {
 
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
+    setNovoDocumentoFavorecido("");
     setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
@@ -244,6 +254,7 @@ const Dividas = () => {
   const handleCancelar = () => {
     setNovaDescricao(""); setNovoValorTotal(""); setNovaDataVencimento("");
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
+    setNovoDocumentoFavorecido("");
     setIsTaxaAtiva(false); setNovoValorTaxa("");
     setActiveTab("lista");
   };
@@ -262,6 +273,7 @@ const Dividas = () => {
       setEditParcelasPagas(divida.parcelas_pagas.toString());
       setEditCategoria(divida.categorias?.nome || "");
       setEditCredor(divida.credor);
+      setEditDocumentoFavorecido(divida.documento_favorecido || "");
       
       // Load existing reminder
       const reminder = await getReminderByDebtId(id);
@@ -301,6 +313,7 @@ const Dividas = () => {
       status,
       categoria_id: categoria?.id,
       credor: editCredor,
+      documento_favorecido: editDocumentoFavorecido.trim() || null,
     });
 
     // Handle reminder creation/update/deletion
@@ -327,6 +340,7 @@ const Dividas = () => {
     setEditParcelasPagas("");
     setEditCategoria("");
     setEditCredor("");
+    setEditDocumentoFavorecido("");
     setEditReminderHours(null);
     setExistingReminderId(null);
   };
@@ -335,6 +349,12 @@ const Dividas = () => {
   const handleAbrirModalPagamento = (divida: Divida) => {
     setDividaSelecionada(divida);
     setModalPagamentoAberto(true);
+  };
+
+  // Handler para o modal "Pagar via Divipay"
+  const handleAbrirModalDivipay = (divida: Divida) => {
+    setDividaDivipaySelecionada(divida);
+    setModalDivipayAberto(true);
   };
 
   const handlePagamentoSucesso = () => {
@@ -576,6 +596,10 @@ const Dividas = () => {
                               <Input id="edit-credor" value={editCredor} onChange={(e) => setEditCredor(e.target.value)} placeholder="Ex: Banco ABC" />
                             </div>
                             <div className="space-y-2">
+                              <Label htmlFor="edit-documento-favorecido">CPF/CNPJ ou Chave Pix</Label>
+                              <Input id="edit-documento-favorecido" value={editDocumentoFavorecido} onChange={(e) => setEditDocumentoFavorecido(e.target.value)} placeholder="Opcional — conciliação Divipay" />
+                            </div>
+                            <div className="space-y-2">
                               <Label htmlFor="edit-categoria">Categoria *</Label>
                               <select id="edit-categoria" value={editCategoria} onChange={(e) => setEditCategoria(e.target.value)}
                                 className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500">
@@ -703,15 +727,29 @@ const Dividas = () => {
                             </div>
                             <div className="w-[90px] flex justify-center">
                               {divida.status !== "quitada" && (
-                                <Button 
+                                <Button
                                   onClick={() => handleAbrirModalPagamento(divida)}
-                                  variant="outline" 
-                                  size="sm" 
+                                  variant="outline"
+                                  size="sm"
                                   className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white"
                                   title="Registrar Pagamento"
                                 >
                                   <DollarSign className="w-4 h-4 mr-1" />
                                   Pagar
+                                </Button>
+                              )}
+                            </div>
+                            <div className="w-[100px] flex justify-center">
+                              {divida.status !== "quitada" && (
+                                <Button
+                                  onClick={() => handleAbrirModalDivipay(divida)}
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 text-orange-500 border-orange-500 hover:bg-orange-500 hover:text-white"
+                                  title="Pagar via Divipay (baixa automática)"
+                                >
+                                  <Zap className="w-4 h-4 mr-1" />
+                                  Divipay
                                 </Button>
                               )}
                             </div>
@@ -798,6 +836,10 @@ const Dividas = () => {
                                 <div className="space-y-1.5">
                                   <Label htmlFor="edit-credor-mobile" className="text-xs">Credor *</Label>
                                   <Input id="edit-credor-mobile" value={editCredor} onChange={(e) => setEditCredor(e.target.value)} className="h-9" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-documento-mobile" className="text-xs">CPF/CNPJ ou Chave Pix</Label>
+                                  <Input id="edit-documento-mobile" value={editDocumentoFavorecido} onChange={(e) => setEditDocumentoFavorecido(e.target.value)} className="h-9" placeholder="Opcional — conciliação Divipay" />
                                 </div>
                                 <div className="space-y-1.5">
                                   <Label htmlFor="edit-categoria-mobile" className="text-xs">Categoria *</Label>
@@ -904,15 +946,27 @@ const Dividas = () => {
                                     </Button>
                                   )}
                                   {divida.status !== "quitada" && (
-                                    <Button 
+                                    <Button
                                       onClick={() => handleAbrirModalPagamento(divida)}
-                                      variant="outline" 
-                                      size="sm" 
+                                      variant="outline"
+                                      size="sm"
                                       className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white text-xs"
                                       title="Registrar Pagamento"
                                     >
                                       <DollarSign className="w-3.5 h-3.5 mr-1" />
                                       Pagar
+                                    </Button>
+                                  )}
+                                  {divida.status !== "quitada" && (
+                                    <Button
+                                      onClick={() => handleAbrirModalDivipay(divida)}
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 text-orange-500 border-orange-500 hover:bg-orange-500 hover:text-white text-xs"
+                                      title="Pagar via Divipay (baixa automática)"
+                                    >
+                                      <Zap className="w-3.5 h-3.5 mr-1" />
+                                      Divipay
                                     </Button>
                                   )}
                                 </div>
@@ -965,6 +1019,11 @@ const Dividas = () => {
                     <div className="space-y-2">
                       <Label htmlFor="credor">Credor *</Label>
                       <Input id="credor" placeholder="Ex: Banco ABC, Loja XYZ..." value={novoCredor} onChange={(e) => setNovoCredor(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="documento-favorecido">CPF/CNPJ ou Chave Pix do Favorecido</Label>
+                      <Input id="documento-favorecido" placeholder="Opcional — usado p/ conciliar pagamentos Divipay" value={novoDocumentoFavorecido} onChange={(e) => setNovoDocumentoFavorecido(e.target.value)} />
+                      <p className="text-xs text-muted-foreground">Com esse dado, pagamentos via Divipay baixam a dívida automaticamente.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="valor">Valor Total *</Label>
@@ -1170,6 +1229,14 @@ const Dividas = () => {
           open={modalPagamentoAberto}
           onOpenChange={setModalPagamentoAberto}
           onSuccess={handlePagamentoSucesso}
+        />
+
+        {/* Modal Pagar via Divipay */}
+        <PagarDividaDivipayModal
+          divida={dividaDivipaySelecionada}
+          open={modalDivipayAberto}
+          onOpenChange={setModalDivipayAberto}
+          onSuccess={refetchDividas}
         />
       </div>
     </DashboardLayout>
