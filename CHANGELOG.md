@@ -2,6 +2,47 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.26] - 2026-07-31
+
+### ✨ Novo
+- **ConciliacaoDivipayService.ts** — Serviço completo de conciliação Divipay em 3 camadas (523 linhas)
+- **conciliacaoMatcher.ts** — Engine de matching automático de saques vs dívidas
+- **conciliacaoMatcher.test.ts** — Testes unitários do matcher de conciliação
+- **useDivipayConciliacao.ts** — Hook de conciliação Divipay
+- **ConciliacoesPendentesCard.tsx** — Card de conciliações pendentes no painel
+- **PagarDividaDivipayModal.tsx** — Modal de pagamento de dívida via Divipay
+- **Migration** `55_conciliacao_divipay.sql` — Schema de conciliação
+- **Migration** `56_workspace_despesas_automaticas.sql` — Despesas automáticas por workspace
+- **Migration** `57_backfill_workspace_transacoes.sql` — Backfill de transações por workspace
+- **Script** `investigar-saques-divipay.py` — Diagnóstico de saques Divipay
+
+### 🔧 Melhorado
+- **Dashboard.tsx** — Abre no mês vigente por padrão (saúde financeira do mês)
+- **useEyemobileDashboard.ts** — Eyemobile PDV rápido e vendas PDV no workspace PJ
+- **useContasUsuario.ts** — Saldo Divipay ao vivo via `/api/withdraws`
+- **DivipayTransferenciasView** — Saques reais via `/api/withdraws`
+- **useDivipayTransferencias.ts** — Refactoring e melhorias
+- **DivipayService.ts** — Expansão do serviço
+- **divipay-api (Edge Function)** — Ajustes de endpoint
+- **divipay-webhook (Edge Function)** — Expansão do handler (+173 linhas)
+- **eyemobile-sync (Edge Function)** — Melhorias de sincronização
+- **Dividas.tsx** — Integração com conciliação Divipay
+- **DashboardLayout.tsx** — Ajustes de navegação
+- **supabase/types.ts** — Tipos atualizados (+78 linhas)
+- **useDateRangeFilter.ts** — Melhorias no filtro de datas
+- **docker-publish.yml** — Tag Docker atualizada para `heltonfraga/wallet:1.0.3`; branch gatilho corrigido para `master`
+
+### 🐛 Corrigido
+- Receitas consolidadas no Dashboard e vendas PDV no workspace PJ
+- Despesas Divipay aparecem no workspace ativo
+- Conciliação roda ao abrir o app sem duplicar dívidas
+- 7 falhas pré-existentes em `FinanceService` e `usePagamentosDivida`
+
+### 📊 Estatísticas
+- **29 arquivos alterados** | **+2.292 inserções** | **-353 remoções** | **8 commits**
+
+---
+
 ## [1.0.25] - 2026-07-30
 
 ### ✨ Novo
