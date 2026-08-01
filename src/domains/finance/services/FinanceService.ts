@@ -188,7 +188,6 @@ class FinanceService {
     try {
       logger.info('FinanceService', 'Criando dívida parcelada', { userId, totalParcelas, valorTotal });
 
-      const parentId = crypto.randomUUID();
       const valorParcela = Math.floor((valorTotal / totalParcelas) * 100) / 100;
       const base = new Date(`${dataVencimentoInicial}T12:00:00`);
       const diaBase = base.getDate();
@@ -223,14 +222,26 @@ class FinanceService {
           parcelas_pagas: 0,
           parcela_atual: i + 1,
           total_parcelas: totalParcelas,
-          parent_id: parentId,
           status: new Date(`${vencStr}T23:59:59`) < new Date() ? 'vencida' : 'pendente',
         };
       });
 
+      // parent_id tem FK para dividas(id): insere sem ele e vincula depois
+      // todas as parcelas à primeira (parent real existente).
       const { data, error } = await supabase.from('dividas').insert(rows).select('id');
       if (error) throw error;
-      return { id: String(data?.[0]?.id ?? '') };
+
+      const ids = (data ?? []).map((r) => String(r.id));
+      const parentId = ids[0];
+      if (parentId && ids.length > 0) {
+        const { error: linkError } = await supabase
+          .from('dividas')
+          .update({ parent_id: parentId })
+          .in('id', ids);
+        if (linkError) throw linkError;
+      }
+
+      return { id: String(parentId ?? '') };
     } catch (error) {
       logger.error('FinanceService', 'Erro ao criar dívida parcelada', { error, userId });
       throw error;
@@ -257,7 +268,6 @@ class FinanceService {
     try {
       logger.info('FinanceService', 'Criando transação parcelada', { userId, tipo, totalParcelas, valorTotal });
 
-      const parentId = crypto.randomUUID();
       const valorParcela = Math.floor((valorTotal / totalParcelas) * 100) / 100;
       const base = new Date(`${dataInicial}T12:00:00`);
       const diaBase = base.getDate();
@@ -283,13 +293,25 @@ class FinanceService {
           categoria_id: categoriaId || null,
           parcela_atual: i + 1,
           total_parcelas: totalParcelas,
-          parent_id: parentId,
         };
       });
 
+      // parent_id tem FK para transacoes(id): insere sem ele e vincula
+      // depois todas as parcelas à primeira (parent real existente).
       const { data, error } = await supabase.from('transacoes').insert(rows).select('id');
       if (error) throw error;
-      return { id: String(data?.[0]?.id ?? '') };
+
+      const ids = (data ?? []).map((r) => String(r.id));
+      const parentId = ids[0];
+      if (parentId && ids.length > 0) {
+        const { error: linkError } = await supabase
+          .from('transacoes')
+          .update({ parent_id: parentId })
+          .in('id', ids);
+        if (linkError) throw linkError;
+      }
+
+      return { id: String(parentId ?? '') };
     } catch (error) {
       logger.error('FinanceService', 'Erro ao criar transação parcelada', { error, userId });
       throw error;
