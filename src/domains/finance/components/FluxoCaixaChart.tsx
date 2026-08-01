@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useFluxoCaixaProjetado } from "@/domains/finance/hooks/useFluxoCaixaProjetado";
+import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Badge } from "@/shared/components/ui/badge";
@@ -12,17 +13,44 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, TrendingDown, DollarSign, Calendar, Sparkles } from "lucide-react";
+import { TrendingUp, TrendingDown, Sparkles } from "lucide-react";
+
+const formatarMoeda = (val: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(val);
 
 export const FluxoCaixaChart: React.FC = () => {
-  const [dias, setDias] = useState<30 | 60 | 90>(30);
-  const { pontos, saldoInicial, saldoFinal, loading } = useFluxoCaixaProjetado(dias);
+  const [dias, setDias] = useState<15 | 30 | 60 | 90>(30);
 
+  // 1. Somente contas de DINHEIRO REAL (exclui cartões de crédito)
+  const { contas, loading: loadingContas } = useContasUsuario();
+  const contasDinheiro = useMemo(
+    () => contas.filter((c) => c.tipo !== "cartao_credito"),
+    [contas]
+  );
+  const saldoRealAtual = useMemo(
+    () => contasDinheiro.reduce((sum, c) => sum + (Number(c.saldo_atual) || 0), 0),
+    [contasDinheiro]
+  );
+
+  // 2. Pontos de projeção do hook
+  const { pontos, loading: loadingPontos } = useFluxoCaixaProjetado(dias);
+
+  // 3. Ajuste do offset para que a projeção parta do saldo real das contas de dinheiro
+  const pontosCorrigidos = useMemo(() => {
+    if (pontos.length === 0) return [];
+    const saldoHookDia0 = pontos[0]?.saldoProjetado ?? 0;
+    const offset = saldoRealAtual - saldoHookDia0;
+    return pontos.map((p) => ({
+      ...p,
+      saldoProjetado: parseFloat((p.saldoProjetado + offset).toFixed(2)),
+    }));
+  }, [pontos, saldoRealAtual]);
+
+  const loading = loadingContas || loadingPontos;
+  const saldoInicial = pontosCorrigidos[0]?.saldoProjetado ?? saldoRealAtual;
+  const saldoFinal = pontosCorrigidos[pontosCorrigidos.length - 1]?.saldoProjetado ?? saldoRealAtual;
   const variacao = saldoFinal - saldoInicial;
   const variacaoPositiva = variacao >= 0;
-
-  const formatarMoeda = (val: number) =>
-    new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(val);
 
   return (
     <Card className="col-span-full border-border bg-card shadow-sm">
@@ -42,8 +70,16 @@ export const FluxoCaixaChart: React.FC = () => {
           </CardDescription>
         </div>
 
-        {/* Seletor de período (30, 60, 90 dias) */}
+        {/* Seletor de período (15, 30, 60, 90 dias) */}
         <div className="flex items-center gap-1 bg-muted p-1 rounded-lg self-stretch sm:self-auto justify-center">
+          <Button
+            size="sm"
+            variant={dias === 15 ? "default" : "ghost"}
+            className="text-xs h-7 px-3"
+            onClick={() => setDias(15)}
+          >
+            15 Dias
+          </Button>
           <Button
             size="sm"
             variant={dias === 30 ? "default" : "ghost"}
@@ -72,6 +108,23 @@ export const FluxoCaixaChart: React.FC = () => {
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* Pílulas de Origem das Contas Bancárias (Apenas Dinheiro Real) */}
+        {contasDinheiro.length > 0 && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {contasDinheiro.map((c) => (
+              <div
+                key={c.id}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-muted/40 border border-border/40 text-xs"
+              >
+                <span className="text-muted-foreground">{c.nome}</span>
+                <span className={`font-semibold ${Number(c.saldo_atual) >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {formatarMoeda(Number(c.saldo_atual) || 0)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Resumo visual rápido */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="p-3 bg-muted/40 rounded-lg border border-border">
@@ -94,7 +147,7 @@ export const FluxoCaixaChart: React.FC = () => {
               ) : (
                 <TrendingDown className="h-4 w-4 text-rose-500" />
               )}
-              <span className={`text-sm font-semibold ${variacaoPositiva ? "text-emerald-600" : "text-rose-600"}`}>
+              <span className={`text-sm font-semibold ${variacaoPositiva ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                 {variacaoPositiva ? "+" : ""}
                 {formatarMoeda(variacao)}
               </span>
@@ -110,7 +163,7 @@ export const FluxoCaixaChart: React.FC = () => {
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={pontos} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <AreaChart data={pontosCorrigidos} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorSaldo" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#f97316" stopOpacity={0.4} />
@@ -123,10 +176,10 @@ export const FluxoCaixaChart: React.FC = () => {
                   stroke="#888888"
                   fontSize={11}
                   tickLine={false}
-                  tickFormatter={(val) => `R$ ${val}`}
+                  tickFormatter={(val) => `R$ ${(val / 1000).toFixed(0)}k`}
                 />
                 <Tooltip
-                  content={({ active, payload, label }) => {
+                  content={({ active, payload }) => {
                     if (active && payload && payload.length) {
                       const data = payload[0].payload;
                       return (

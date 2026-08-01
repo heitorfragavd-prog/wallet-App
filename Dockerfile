@@ -13,8 +13,8 @@ RUN npm ci
 COPY . .
 
 # Build args for environment variables
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_SUPABASE_URL=https://placeholder.supabase.co
+ARG VITE_SUPABASE_ANON_KEY=placeholder-anon-key
 ARG VITE_APP_NAME=Wallet
 ARG VITE_APP_URL=https://wallet.cortexx.online
 ARG VITE_APP_ENVIRONMENT=production
