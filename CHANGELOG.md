@@ -2,6 +2,26 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.28] - 2026-08-01
+
+### ✨ Novo
+- **Módulo de Cardápio e Ficha Técnica** — Gestão de produtos, receitas, insumos e margem de lucro (`/cardapio`, `/cardapio/novo`, `/cardapio/:id`)
+- **Cálculo de Food Cost** — Cálculo automático do custo de produção por item e percentual de Food Cost (`useFoodCost`, `useFichaTecnica`, `useProdutosCardapio`)
+- **Controle de Validades** — Monitoramento e alertas de insumos/produtos próximos do vencimento (`/validades`, `useValidadeInsumos`)
+- **Hook useDRE** — Demonstrativo do Resultado do Exercício com dados reais e integração com DRE e Fluxo de Caixa
+- **Migration** `20250731_ficha_tecnica_validade.sql` — Schema completo para fichas técnicas, ingredientes e controle de validades
+
+### 🔧 Melhorado
+- **DashboardLayout.tsx** — Inclusão de atalhos para Cardápio e Validades na navegação
+- **App.tsx** — Rotas registradas para `/cardapio`, `/cardapio/novo`, `/cardapio/:id` e `/validades`
+- **FluxoCaixaChart.tsx** & **DRE.tsx** — Projeção avançada e refinamentos visuais
+- **Dockerfile** & **vite.config.ts** — Otimização de build e empacotamento
+
+### 📊 Estatísticas
+- **19 arquivos alterados** | **+2.214 inserções** | **-28 remoções**
+
+---
+
 ## [1.0.27] - 2026-07-31
 
 ### 🔧 Melhorado
