@@ -24,23 +24,37 @@ export interface ReceitasQueryParams {
   endDate?: string | null;
 }
 
+// O PostgREST/Supabase devolve NO MÁXIMO 1000 linhas por requisição
+// (max-rows do servidor), mesmo pedindo .limit(15000). Sem paginação,
+// meses com +1000 vendas vinham cortados numa fatia aleatória — foi isso
+// que derrubou o dinheiro do PDV (R$ 19,1 mil viravam ~R$ 2,5 mil).
+// Aqui paginamos de 1000 em 1000 com ORDER BY determinístico.
+const POSTGREST_PAGE_SIZE = 1000;
+
 async function fetchAllRows<T>(
   buildQuery: () => ReturnType<typeof supabase.from>,
   applyFilters: (q: any) => any,
   columns: string,
   maxRows: number = 2000
 ): Promise<T[]> {
+  const all: T[] = [];
   try {
-    const { data, error } = await applyFilters(buildQuery().select(columns)).limit(maxRows);
-    if (error) {
-      console.warn("Error fetching rows:", error.message);
-      return [];
+    for (let offset = 0; offset < maxRows; offset += POSTGREST_PAGE_SIZE) {
+      const { data, error } = await applyFilters(buildQuery().select(columns))
+        .order("data", { ascending: false })
+        .range(offset, offset + POSTGREST_PAGE_SIZE - 1);
+      if (error) {
+        console.warn("Error fetching rows:", error.message);
+        break; // devolve o que já conseguiu em vez de zerar o mês inteiro
+      }
+      const rows = (data as T[]) ?? [];
+      all.push(...rows);
+      if (rows.length < POSTGREST_PAGE_SIZE) break; // última página
     }
-    return (data as T[]) ?? [];
   } catch (err) {
     console.warn("Exception fetching rows:", err);
-    return [];
   }
+  return all;
 }
 
 
@@ -197,16 +211,19 @@ async function fetchReceitas(
     return query;
   };
 
-  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias (nome, cor, icone)";
-  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias (nome, cor, icone)";
+  // A tabela `receitas` tem DUAS FKs para `categorias` (categoria_id e
+  // subcategoria_id) — o embed sem dica (`categorias (...)`) falha com
+  // "more than one relationship" e as receitas manuais sumiam em silêncio.
+  const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
+  const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
 
   const buildReceitas = () => supabase.from("receitas");
   const buildTransacoes = () => supabase.from("transacoes");
 
   // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
-    fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 15000),
-    fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 15000),
+    fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 100000),
+    fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
   ]);
 
   const mappedReceitas = (receitasResp ?? []).map((r) => ({

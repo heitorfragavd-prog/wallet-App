@@ -92,7 +92,11 @@ const Dashboard = () => {
 
 
   // Iniciar com o mês atual por padrão (apenas na primeira vez)
-  const { transacoes, loading: loadingTransacoes } = useTransacoes();
+  // O filtro de data vai direto na query — sem baixar 60 mil linhas por mês.
+  const { transacoes, loading: loadingTransacoes } = useTransacoes({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
 
   // Receitas consolidadas — MESMA regra da tela Receitas:
   // dinheiro do PDV (Eyemobile) + entradas liquidadas da Divipay (valor líquido,

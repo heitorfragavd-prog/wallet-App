@@ -25,58 +25,62 @@ export interface Transacao {
   };
 }
 
-export const useTransacoes = () => {
+export interface TransacoesQueryParams {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+// O PostgREST devolve no máximo 1000 linhas por requisição (max-rows do
+// servidor). Sem paginação, meses cheios de vendas/despesas vinham cortados.
+const POSTGREST_PAGE_SIZE = 1000;
+const MAX_ROWS = 100000;
+
+async function fetchAllPages(buildQuery: () => any): Promise<any[]> {
+  const all: any[] = [];
+  for (let offset = 0; offset < MAX_ROWS; offset += POSTGREST_PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(offset, offset + POSTGREST_PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < POSTGREST_PAGE_SIZE) break;
+  }
+  return all;
+}
+
+export const useTransacoes = (params: TransacoesQueryParams = {}) => {
   const [transacoes, setTransacoes] = useState<Transacao[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();
+  const { startDate = null, endDate = null } = params;
 
   const fetchTransacoes = useCallback(async () => {
     setLoading(true);
     try {
-      let queryTransacoes = supabase
-        .from('transacoes')
-        .select(`
-          *,
-          categorias!categoria_id (nome, cor, icone)
-        `);
+      const CATEGORIAS_EMBED = `categorias!categoria_id (nome, cor, icone)`;
 
-      let queryReceitas = supabase
-        .from('receitas')
-        .select(`
-          *,
-          categorias!categoria_id (nome, cor, icone)
-        `);
+      const applyCommon = (query: any) => {
+        let q = query;
+        // Filtrar por Workspace ativo se existir
+        if (activeWorkspace) q = q.eq('workspace_id', activeWorkspace.id);
+        // Filtro de período no servidor: evita baixar 60 mil linhas
+        // para mostrar um único mês (Dashboard passa o dateRange).
+        if (startDate) q = q.gte('data', startDate);
+        if (endDate) q = q.lte('data', endDate);
+        return q.order('data', { ascending: false });
+      };
 
-      let queryDespesas = supabase
-        .from('despesas')
-        .select(`
-          *,
-          categorias!categoria_id (nome, cor, icone)
-        `);
-
-      // Filtrar por Workspace ativo se existir
-      if (activeWorkspace) {
-        queryTransacoes = queryTransacoes.eq('workspace_id', activeWorkspace.id);
-        queryReceitas = queryReceitas.eq('workspace_id', activeWorkspace.id);
-        queryDespesas = queryDespesas.eq('workspace_id', activeWorkspace.id);
-      }
-
-      const [transacoesResult, receitasResult, despesasResult] = await Promise.all([
-        queryTransacoes,
-        queryReceitas,
-        queryDespesas,
+      const [transacoesData, receitasData, despesasData] = await Promise.all([
+        fetchAllPages(() => applyCommon(supabase.from('transacoes').select(`*, ${CATEGORIAS_EMBED}`))),
+        fetchAllPages(() => applyCommon(supabase.from('receitas').select(`*, ${CATEGORIAS_EMBED}`))),
+        fetchAllPages(() => applyCommon(supabase.from('despesas').select(`*, ${CATEGORIAS_EMBED}`))),
       ]);
-
-      if (transacoesResult.error) throw transacoesResult.error;
-      if (receitasResult.error) throw receitasResult.error;
-      if (despesasResult.error) throw despesasResult.error;
 
       // Combinar todos os dados
       const allTransacoes = [
-        ...(transacoesResult.data || []).map(t => ({ ...t, tipo: t.tipo })),
-        ...(receitasResult.data || []).map(r => ({ ...r, tipo: 'receita' as const })),
-        ...(despesasResult.data || []).map(d => ({ ...d, tipo: 'despesa' as const }))
+        ...(transacoesData || []).map(t => ({ ...t, tipo: t.tipo })),
+        ...(receitasData || []).map(r => ({ ...r, tipo: 'receita' as const })),
+        ...(despesasData || []).map(d => ({ ...d, tipo: 'despesa' as const }))
       ];
 
       // Ordenar por data de criação (último cadastro primeiro)
@@ -94,7 +98,7 @@ export const useTransacoes = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeWorkspace, toast]);
+  }, [activeWorkspace, toast, startDate, endDate]);
 
   const createTransacao = async (
     transacao: Omit<Transacao, 'id' | 'user_id' | 'created_at' | 'updated_at' | 'categorias'> & { total_parcelas?: number }
