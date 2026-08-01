@@ -254,7 +254,7 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
-    pluggyTokenServerPlugin(),
+    mode === 'development' && pluggyTokenServerPlugin(),
     mode === 'development' && componentTagger(),
   ].filter(Boolean),
   resolve: {

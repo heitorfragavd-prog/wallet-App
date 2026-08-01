@@ -38,6 +38,10 @@ const EyemobilePDV        = lazyWithRetry(() => import("./pages/EyemobilePDV"));
 const Divipay             = lazyWithRetry(() => import("./pages/Divipay"));
 const DRE                 = lazyWithRetry(() => import("./pages/DRE"));
 const FluxoCaixa          = lazyWithRetry(() => import("./pages/FluxoCaixa"));
+const Cardapio            = lazyWithRetry(() => import("./pages/Cardapio"));
+const CardapioNovo        = lazyWithRetry(() => import("./pages/CardapioNovo"));
+const CardapioDetalhe     = lazyWithRetry(() => import("./pages/CardapioDetalhe"));
+const Validades           = lazyWithRetry(() => import("./pages/Validades"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -84,6 +88,10 @@ function App() {
                 <Route path="/dre"           element={<ProtectedRoute><DRE /></ProtectedRoute>} />
                 <Route path="/fluxo-caixa"   element={<ProtectedRoute><FluxoCaixa /></ProtectedRoute>} />
                 <Route path="/contas"        element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
+                <Route path="/cardapio"      element={<ProtectedRoute><Cardapio /></ProtectedRoute>} />
+                <Route path="/cardapio/novo" element={<ProtectedRoute><CardapioNovo /></ProtectedRoute>} />
+                <Route path="/cardapio/:id"  element={<ProtectedRoute><CardapioDetalhe /></ProtectedRoute>} />
+                <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
 
                 {/* Protegidas — somente admin */}
                 <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

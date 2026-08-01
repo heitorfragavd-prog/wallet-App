@@ -24,6 +24,8 @@ import {
   Building2,
   Store,
   Landmark,
+  ChefHat,
+  AlertTriangle,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -64,6 +66,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: BarChart3, label: "Relatorios", path: "/relatorios" },
     { icon: TrendingUp, label: "Fluxo de Caixa", path: "/fluxo-caixa" },
     { icon: FileText, label: "DRE Simplificada", path: "/dre" },
+    { icon: ChefHat, label: "Cardápio", path: "/cardapio" },
+    { icon: AlertTriangle, label: "Validades", path: "/validades" },
     { icon: Target, label: "Metas", path: "/metas" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },
     { icon: Car, label: "Veículos", path: "/veiculos" },

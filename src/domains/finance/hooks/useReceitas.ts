@@ -4,6 +4,7 @@ import { divipayService } from "@/domains/divipay/services/DivipayService";
 import type { DivipayMovement } from "@/domains/divipay/types";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Receita as ReceitaType, PaymentMethod } from "../types";
 
 
@@ -106,7 +107,7 @@ function isEyemobilePDVTransaction(t: { descricao?: string | null; observacoes?:
 
 // Busca TODAS as entradas digitais liquidadas da Divipay (com paginação),
 // usando o valor líquido — o que realmente cai na conta após as taxas.
-async function fetchDivipayReceitas(startDate?: string | null, endDate?: string | null): Promise<Receita[]> {
+async function fetchDivipayReceitas(startDate?: string | null, endDate?: string | null, workspaceId?: string | null): Promise<Receita[]> {
   const startDay = startDate ? startDate.split("T")[0] : `${new Date().getFullYear()}-01-01`;
   const endDay = endDate ? endDate.split("T")[0] : new Date().toISOString().split("T")[0];
 
@@ -180,6 +181,7 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
       return {
         id: `divipay-${m.id}`,
         user_id: "",
+        workspace_id: workspaceId || "",
         tipo: "receita",
         // Valor LÍQUIDO: já vem sem as taxas da Divipay — é o que realmente entra na conta
         valor: m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0),
@@ -200,7 +202,8 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
 
 async function fetchReceitas(
   params: ReceitasQueryParams = {},
-  options: { onDivipayError?: (message: string) => void } = {}
+  options: { onDivipayError?: (message: string) => void } = {},
+  workspaceId?: string | null
 ): Promise<Receita[]> {
   const { startDate, endDate } = params;
 
@@ -248,7 +251,7 @@ async function fetchReceitas(
   // 2. Entradas digitais liquidadas da Divipay (valor líquido, com paginação)
   let divipayReceitas: Receita[] = [];
   try {
-    divipayReceitas = await fetchDivipayReceitas(startDate, endDate);
+    divipayReceitas = await fetchDivipayReceitas(startDate, endDate, workspaceId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("useReceitas", "Não foi possível carregar entradas da Divipay", { error: message });
@@ -286,10 +289,12 @@ async function updateReceitaTags(receitaId: string, tagNames: string[]) {
 export const useReceitas = (params: ReceitasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
   const { startDate = null, endDate = null } = params;
+  const workspaceId = activeWorkspace?.id ?? null;
 
   const { data: receitas = [], isLoading: loading } = useQuery({
-    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate }],
+    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate, workspaceId }],
     queryFn: () =>
       fetchReceitas({ startDate, endDate }, {
         onDivipayError: (message) =>
@@ -298,7 +303,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
             description: `Pix/Crédito/Débito podem estar zerados. Motivo: ${message}`,
             variant: "destructive",
           }),
-      }),
+      }, workspaceId),
     // Keep results hot in cache for 10 min so re-clicking a date range is instant
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 30,
