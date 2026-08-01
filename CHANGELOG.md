@@ -2,6 +2,26 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.27] - 2026-07-31
+
+### 🔧 Melhorado
+- **docker-publish.yml** — Fallbacks de credenciais no login do Docker Hub (`DOCKER_TOKEN`, `DOCKER_PASSWORD`, `DOCKERHUB_PASSWORD`); username com fallback para `heltonfraga`
+- **useDivipayTransferencias.ts** — Histórico completo de saques Divipay (despesas desde 2025)
+- **ConciliacaoDivipayService.ts** — Ajustes no serviço de conciliação
+- **useReceitas.ts** — Receitas sem corte pelo limite de 1.000 linhas do PostgREST
+- **useTransacoes.ts** — Transações sem corte pelo limite de 1.000 linhas do PostgREST
+- **Dashboard.tsx** — Ajustes de exibição
+
+### 🐛 Corrigido
+- Histórico completo de saques Divipay truncado (despesas desde 2025)
+- Receitas e despesas cortadas pelo limite de 1.000 linhas do PostgREST
+- Pipeline CI/CD falha por `DOCKERHUB_TOKEN` não configurado como secret
+
+### 📊 Estatísticas
+- **6 arquivos alterados** | **+105 inserções** | **-64 remoções** | **4 commits**
+
+---
+
 ## [1.0.26] - 2026-07-31
 
 ### ✨ Novo
