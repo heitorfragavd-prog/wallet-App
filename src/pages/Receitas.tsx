@@ -58,6 +58,7 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
@@ -134,6 +135,25 @@ const Receitas = () => {
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
+  const { mutate: categorizarIA } = useCategorizacaoIA();
+
+  const handleDescricaoBlur = () => {
+    const desc = novaReceita.descricao;
+    const val = parseFloat(novaReceita.valor) || 0;
+    if (desc.length > 3) {
+      categorizarIA({ descricao: desc, valor: val, tipo: "receita" }, {
+        onSuccess: (result) => {
+          if (result && result.confianca > 0.85 && result.categoria) {
+            const match = categorias.find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
+            if (match) {
+              setNovaReceita((prev) => ({ ...prev, categoria: match.id }));
+              toast({ title: `Categorizado com IA: ${match.nome}` });
+            }
+          }
+        },
+      });
+    }
+  };
   const [visibleCount, setVisibleCount] = useState(100);
 
   const salvarReceita = async (e: React.FormEvent) => {
@@ -996,9 +1016,10 @@ const Receitas = () => {
                       <Label htmlFor="descricao">Descrição *</Label>
                       <Input
                         id="descricao"
-                        placeholder="Ex: Salário, Freelance, Aluguel..."
+                        placeholder="Ex: Salário, Projeto Freelance, Venda..."
                         value={novaReceita.descricao}
                         onChange={(e) => setNovaReceita({ ...novaReceita, descricao: e.target.value })}
+                        onBlur={handleDescricaoBlur}
                       />
                     </div>
 
