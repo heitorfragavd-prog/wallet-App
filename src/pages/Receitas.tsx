@@ -109,7 +109,7 @@ const Receitas = () => {
   const { categoriasReceita } = useCategorias();
 
   // ── Filtro de data
-    const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'today' });
 
   const { receitas, loading, createReceita, updateReceita, deleteReceita, getReceitaTags } = useReceitas({
     startDate: dateRange.startDate,
@@ -446,6 +446,26 @@ const Receitas = () => {
             </CardContent>
           </Card>
 
+          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Total Receitas</p>
+                  {loading ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-green-500/20">
+                  <DollarSign className="w-5 h-5 text-green-500" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
@@ -455,7 +475,7 @@ const Receitas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {mediaMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      R$ {mediaMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   )}
                 </div>
@@ -497,26 +517,6 @@ const Receitas = () => {
                 </div>
                 <div className="p-3 rounded-xl bg-orange-500/20">
                   <Tag className="w-5 h-5 text-orange-500" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Receitas</p>
-                  {loading ? (
-                    <Skeleton className="h-8 w-32" />
-                  ) : (
-                    <p className="text-2xl font-bold text-foreground">
-                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                    </p>
-                  )}
-                </div>
-                <div className="p-3 rounded-xl bg-green-500/20">
-                  <DollarSign className="w-5 h-5 text-green-500" />
                 </div>
               </div>
             </CardContent>
