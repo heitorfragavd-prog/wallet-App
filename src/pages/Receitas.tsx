@@ -59,6 +59,9 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
+import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
+import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
+import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
@@ -116,6 +119,12 @@ const Receitas = () => {
     endDate: dateRange.endDate,
   });
 
+  // v3.1: subcategorias, centros de custo e clientes
+  const { subcategorias } = useSubcategorias();
+  const { centrosCusto } = useCentrosCusto();
+  const { contatos } = useContatos();
+  const clientes = contatos.filter((c) => c.tipo === "cliente");
+
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaReceita, setNovaReceita] = useState({
@@ -127,6 +136,9 @@ const Receitas = () => {
     tipo: "variavel" as "fixa" | "variavel",
     metodo_pagamento: null as PaymentMethod | null,
     conta_id: null as string | null,
+    subcategoria_id: null as string | null,
+    centro_custo_id: null as string | null,
+    contato_id: null as string | null,
     observacoes: "",
     tags: [] as string[],
   });
@@ -179,9 +191,12 @@ const Receitas = () => {
         data: novaReceita.data,
         metodo_pagamento: novaReceita.metodo_pagamento,
         conta_id: novaReceita.conta_id,
+        subcategoria_id: novaReceita.subcategoria_id,
+        centro_custo_id: novaReceita.centro_custo_id,
+        contato_id: novaReceita.contato_id,
         observacoes: novaReceita.observacoes || null,
       });
-      
+
       toast({
         title: "Sucesso!",
         description: "Receita atualizada com sucesso",
@@ -195,9 +210,12 @@ const Receitas = () => {
         data: novaReceita.data,
         metodo_pagamento: novaReceita.metodo_pagamento,
         conta_id: novaReceita.conta_id,
+        subcategoria_id: novaReceita.subcategoria_id,
+        centro_custo_id: novaReceita.centro_custo_id,
+        contato_id: novaReceita.contato_id,
         observacoes: novaReceita.observacoes || null,
       });
-      
+
       toast({
         title: "Sucesso!",
         description: "Receita criada com sucesso",
@@ -205,15 +223,18 @@ const Receitas = () => {
     }
 
     // Limpar formulário
-    setNovaReceita({ 
+    setNovaReceita({
       id: null,
-      descricao: "", 
-      valor: "", 
-      categoria: "", 
-      data: "", 
+      descricao: "",
+      valor: "",
+      categoria: "",
+      data: "",
       tipo: "variavel",
       metodo_pagamento: null,
       conta_id: null,
+      subcategoria_id: null,
+      centro_custo_id: null,
+      contato_id: null,
       observacoes: "",
       tags: [],
     });
@@ -240,6 +261,9 @@ const Receitas = () => {
       tipo: "variavel",
       metodo_pagamento: receita.metodo_pagamento || null,
       conta_id: receita.conta_id || null,
+      subcategoria_id: (receita as { subcategoria_id?: string | null }).subcategoria_id || null,
+      centro_custo_id: (receita as { centro_custo_id?: string | null }).centro_custo_id || null,
+      contato_id: (receita as { contato_id?: string | null }).contato_id || null,
       observacoes: receita.observacoes || "",
       tags,
     });
@@ -248,15 +272,18 @@ const Receitas = () => {
   };
 
   const handleCancelarEdicao = () => {
-    setNovaReceita({ 
+    setNovaReceita({
       id: null,
-      descricao: "", 
-      valor: "", 
-      categoria: "", 
-      data: "", 
+      descricao: "",
+      valor: "",
+      categoria: "",
+      data: "",
       tipo: "variavel",
       metodo_pagamento: null,
       conta_id: null,
+      subcategoria_id: null,
+      centro_custo_id: null,
+      contato_id: null,
       observacoes: "",
       tags: [],
     });
@@ -1055,6 +1082,26 @@ const Receitas = () => {
                     </div>
 
                     <div className="space-y-2">
+                      <Label htmlFor="subcategoria">Subcategoria</Label>
+                      <select
+                        id="subcategoria"
+                        value={novaReceita.subcategoria_id || ""}
+                        onChange={(e) => setNovaReceita({ ...novaReceita, subcategoria_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-green-500"
+                      >
+                        <option value="">Nenhuma</option>
+                        {subcategorias
+                          .filter((s) => {
+                            const catId = categoriasReceita.find((c) => c.nome === novaReceita.categoria)?.id;
+                            return !catId || !s.categoria_id || s.categoria_id === catId;
+                          })
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>{s.nome}</option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
                       <Label htmlFor="data">Data *</Label>
                       <Input
                         id="data"
@@ -1106,6 +1153,36 @@ const Receitas = () => {
                         value={novaReceita.conta_id}
                         onChange={(accountId) => setNovaReceita({ ...novaReceita, conta_id: accountId })}
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="centro_custo">Centro de Custo</Label>
+                      <select
+                        id="centro_custo"
+                        value={novaReceita.centro_custo_id || ""}
+                        onChange={(e) => setNovaReceita({ ...novaReceita, centro_custo_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-green-500"
+                      >
+                        <option value="">Nenhum</option>
+                        {centrosCusto.filter((c) => c.ativo).map((c) => (
+                          <option key={c.id} value={c.id}>{c.nome}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="cliente">Cliente</Label>
+                      <select
+                        id="cliente"
+                        value={novaReceita.contato_id || ""}
+                        onChange={(e) => setNovaReceita({ ...novaReceita, contato_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-green-500"
+                      >
+                        <option value="">Nenhum</option>
+                        {clientes.map((c) => (
+                          <option key={c.id} value={c.id}>{c.nome}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="space-y-2 md:col-span-2">

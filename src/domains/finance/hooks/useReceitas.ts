@@ -10,6 +10,9 @@ import { Receita as ReceitaType, PaymentMethod } from "../types";
 
 export interface Receita extends Omit<ReceitaType, "tags" | "anexos"> {
   updated_at?: string;
+  subcategoria_id?: string | null;
+  centro_custo_id?: string | null;
+  contato_id?: string | null;
   categorias?: {
     nome: string;
     cor: string;

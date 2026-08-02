@@ -51,12 +51,29 @@ const normalizeStores = (stores: unknown): EyemobileStore[] => {
   }).filter((store) => store.id);
 };
 
+// Busca produtos/estoque AO VIVO (consulta leve, modo PRODUCTS) para o
+// bloco "Estoque crítico" mesmo quando as vendas vêm do cache local.
+async function fetchLiveProducts(): Promise<unknown[]> {
+  try {
+    const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
+      body: { mode: "PRODUCTS" },
+    });
+    if (error || !data) return [];
+    return Array.isArray(data.products) ? data.products : [];
+  } catch {
+    return [];
+  }
+}
+
 // Calcula KPIs locais a partir de transações salvas no banco
 async function buildLocalFallbackDashboard(
   filters: DashboardFilters,
 ): Promise<EyemobileDashboardResult> {
+  // Produtos ao vivo em paralelo com a leitura do banco (não bloqueia)
+  const productsPromise = fetchLiveProducts();
+
   // Busca paginada para superar limite de 1000 linhas do Supabase
-  const allTransacoes: { valor: number; created_at?: string; data?: string; metodo_pagamento?: string }[] = [];
+  const allTransacoes: { valor: number; created_at?: string; data?: string; metodo_pagamento?: string; itens?: unknown }[] = [];
   let page = 0;
   const pageSize = 1000;
   let fetchMore = true;
@@ -102,17 +119,20 @@ async function buildLocalFallbackDashboard(
   const totalRevenue = transacoes.reduce((acc, t) => acc + Number(t.valor), 0);
   const totalTransactions = transacoes.length;
 
-  // Mapear transações locais para formato de "sales" que o builder entende
+  // Mapear transações locais para formato de "sales" que o builder entende.
+  // Os itens da venda (Top 10) agora vêm da coluna `itens` gravada pelo sync.
   const sales = transacoes.map((t) => ({
     total: t.valor,
     time: t.created_at ?? t.data,
     transaction_pays: [{ pay_type_name: t.metodo_pagamento ?? "Desconhecido" }],
-    items: [],
+    items: Array.isArray(t.itens) ? t.itens : [],
   }));
+
+  const products = await productsPromise;
 
   const dashboard = buildEyemobileDashboard({
     sales,
-    products: [],
+    products,
     stores: [],
   });
 

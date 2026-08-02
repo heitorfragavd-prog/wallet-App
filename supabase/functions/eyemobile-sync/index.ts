@@ -255,6 +255,49 @@ serve(async (req) => {
       });
     }
 
+    // 1.5 Modo PRODUCTS: consulta leve só de produtos/estoque (1-2 chamadas
+    // de API). Usada pelo dashboard rápido para montar o "Estoque crítico"
+    // sem paginar todo o período de vendas.
+    if (mode === "PRODUCTS") {
+      if (!user_id) throw new Error("ID de usuário não especificado.");
+
+      const { data: pConfig, error: pConfigErr } = await supabaseAdmin
+        .from("eyemobile_config")
+        .select("access_key, secret_key, environment")
+        .eq("user_id", user_id)
+        .maybeSingle();
+
+      if (pConfigErr) throw pConfigErr;
+      if (!pConfig?.access_key || !pConfig?.secret_key) {
+        return new Response(JSON.stringify({ success: true, configured: false, products: [] }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const pBaseUrl = pConfig.environment === "staging"
+        ? "https://staging-api.eyemobile.com.br/v1"
+        : "https://api.eyemobile.com.br/v1";
+      const pHeaders = {
+        "X-EYEMOBILE-ACCESS-KEY": pConfig.access_key,
+        "X-EYEMOBILE-SECRET-KEY": pConfig.secret_key,
+        "Content-Type": "application/json",
+      };
+
+      const allProducts: unknown[] = [];
+      for (let page = 0; page < 10; page++) {
+        const resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, { headers: pHeaders });
+        if (!resp.ok) break;
+        const json = await resp.json();
+        const list = Array.isArray(json?.data) ? json.data : [];
+        allProducts.push(...list);
+        if (json?.has_more !== true || list.length === 0) break;
+      }
+
+      return new Response(JSON.stringify({ success: true, configured: true, products: allProducts }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     // 2. Batch Cron execution: if no user_id is specified and it is service role, sync all users
     if (!user_id && isServiceRole) {
       const { data: configs, error: fetchError } = await supabaseAdmin
@@ -740,7 +783,7 @@ async function syncUserEyemobile(
 
             const { data: batchExisting, error: searchErr } = await supabaseAdmin
               .from("transacoes")
-              .select("id, metodo_pagamento, observacoes")
+              .select("id, metodo_pagamento, observacoes, itens")
               .eq("user_id", user_id)
               .eq("tipo", "receita")
               .gte("data", safeMinDate)
@@ -755,7 +798,7 @@ async function syncUserEyemobile(
                 const match = obs.match(/Venda:\s*#(\d+)/i);
                 const sid = match ? match[1] : null;
                 if (sid) {
-                  existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento });
+                  existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
                 }
               }
             }
@@ -778,19 +821,27 @@ async function syncUserEyemobile(
             const mappedMethod = mapPaymentMethod(payTypeName);
 
             if (existingSales) {
-              // Already imported, check if it needs self-healing update
-              if (existingSales.metodo_pagamento === null && mappedMethod !== null) {
+              // Already imported — self-healing: completa campos que faltam
+              // (método de pagamento e/ou itens da venda p/ o Top 10).
+              const saleItens = Array.isArray(sale.transaction_items) ? sale.transaction_items : null;
+              const needsMetodo = existingSales.metodo_pagamento === null && mappedMethod !== null;
+              const needsItens = existingSales.itens == null && saleItens && saleItens.length > 0;
+
+              if (needsMetodo || needsItens) {
                 const payPart = payTypeName ? ` | Pagamento: ${payTypeName}` : "";
                 const obsValue = saleMarker + (storeName ? ` | Loja: ${storeName}` : "") + payPart;
+                const updatePayload: Record<string, unknown> = {
+                  created_at: sale.time || new Date().toISOString(),
+                  observacoes: obsValue,
+                };
+                if (needsMetodo) updatePayload.metodo_pagamento = mappedMethod;
+                if (needsItens) updatePayload.itens = saleItens;
+
                 const { error: updErr } = await supabaseAdmin
                   .from("transacoes")
-                  .update({
-                    metodo_pagamento: mappedMethod,
-                    created_at: sale.time || new Date().toISOString(),
-                    observacoes: obsValue
-                  })
+                  .update(updatePayload)
                   .eq("id", existingSales.id);
-                
+
                 if (updErr) {
                   console.error("Erro ao atualizar transação existente:", updErr);
                 }
@@ -810,6 +861,7 @@ async function syncUserEyemobile(
               categoria_id: config.default_categoria_receita_id || null,
               conta_id: config.default_conta_id || null,
               metodo_pagamento: mappedMethod,
+              itens: Array.isArray(sale.transaction_items) ? sale.transaction_items : null,
               observacoes: saleMarker + (storeName ? ` | Loja: ${storeName}` : "") + (payTypeName ? ` | Pagamento: ${payTypeName}` : ""),
             });
 

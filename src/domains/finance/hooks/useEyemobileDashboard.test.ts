@@ -37,8 +37,10 @@ describe("useEyemobileDashboard", () => {
     const { result } = renderHook(() => useEyemobileDashboard({ startDate: "2026-07-01", endDate: "2026-07-31" }), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    // NÃO chama a API ao vivo: dados locais são suficientes
-    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+    // NÃO chama a API ao vivo no modo DASHBOARD: dados locais são suficientes
+    // (uma consulta leve de produtos, modo PRODUCTS, é permitida)
+    expect(supabase.functions.invoke).not.toHaveBeenCalledWith("eyemobile-sync",
+      expect.objectContaining({ body: expect.objectContaining({ mode: "DASHBOARD" }) }));
     expect(result.current.data?.isLocalFallback).toBe(true);
     expect(result.current.data?.kpis.totalTransactions).toBe(1);
     expect(result.current.data?.kpis.totalRevenue).toBe(100);
@@ -72,7 +74,8 @@ describe("useEyemobileDashboard", () => {
     const { result } = renderHook(() => useEyemobileDashboard({ startDate: "2026-07-01", endDate: "2026-07-31" }), { wrapper });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(supabase.functions.invoke).not.toHaveBeenCalled(); // carga local
+    expect(supabase.functions.invoke).not.toHaveBeenCalledWith("eyemobile-sync",
+      expect.objectContaining({ body: expect.objectContaining({ mode: "DASHBOARD" }) })); // carga local
 
     const live = await result.current.syncLive();
     expect(supabase.functions.invoke).toHaveBeenCalledWith("eyemobile-sync", expect.objectContaining({
