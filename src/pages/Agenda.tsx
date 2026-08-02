@@ -78,13 +78,22 @@ const Agenda = () => {
   const isLoading = loadingSaidas || loadingReceitas;
 
   const compromissos = useMemo<Compromisso[]>(() => {
-    const recs: Compromisso[] = receitas.map((r) => ({
-      id: r.id,
+    // Receita consolidada por DIA: uma única linha com o valor total,
+    // em vez de listar cada venda individual do PDV/Divipay.
+    const receitaPorDia = new Map<string, { total: number; qtd: number }>();
+    for (const r of receitas) {
+      const dia = String(r.data).split("T")[0];
+      const acc = receitaPorDia.get(dia) ?? { total: 0, qtd: 0 };
+      acc.total += Number(r.valor);
+      acc.qtd += 1;
+      receitaPorDia.set(dia, acc);
+    }
+    const recs: Compromisso[] = [...receitaPorDia.entries()].map(([dia, { total, qtd }]) => ({
+      id: `receita-dia-${dia}`,
       tipo: "receita",
-      descricao: r.descricao || "Receita",
-      valor: Number(r.valor),
-      // Normaliza timestamp ISO (Divipay) para YYYY-MM-DD
-      data: String(r.data).split("T")[0],
+      descricao: `Receita do dia (${qtd} ${qtd === 1 ? "venda" : "vendas"})`,
+      valor: total,
+      data: dia,
     }));
     return [...recs, ...saidas];
   }, [receitas, saidas]);
