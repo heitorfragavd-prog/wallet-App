@@ -137,9 +137,14 @@ serve(async (req) => {
 
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.replace("Bearer ", "");
-    
-    // Check if the caller has service role authorization (e.g. Cron)
-    const isServiceRole = token === supabaseServiceKey;
+
+    // Check if the caller has service role authorization (e.g. Cron).
+    // Aceita também um segredo próprio (CRON_SECRET): após a rotação das
+    // chaves do Supabase (sb_secret_*), o env SUPABASE_SERVICE_ROLE_KEY nem
+    // sempre bate com o JWT legado que o cron envia, e o sync parava com 401.
+    const cronSecret = Deno.env.get("CRON_SECRET") || "";
+    const isServiceRole =
+      token === supabaseServiceKey || (cronSecret.length > 0 && token === cronSecret);
 
     let user_id: string | null = null;
     let requestBody: any = {};
