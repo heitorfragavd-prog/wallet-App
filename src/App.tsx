@@ -42,6 +42,9 @@ const Cardapio            = lazyWithRetry(() => import("./pages/Cardapio"));
 const CardapioNovo        = lazyWithRetry(() => import("./pages/CardapioNovo"));
 const CardapioDetalhe     = lazyWithRetry(() => import("./pages/CardapioDetalhe"));
 const Validades           = lazyWithRetry(() => import("./pages/Validades"));
+const Comparativo         = lazyWithRetry(() => import("./pages/Comparativo"));
+const Patrimonio          = lazyWithRetry(() => import("./pages/Patrimonio"));
+const IAChat              = lazyWithRetry(() => import("./pages/IAChat"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -92,6 +95,9 @@ function App() {
                 <Route path="/cardapio/novo" element={<ProtectedRoute><CardapioNovo /></ProtectedRoute>} />
                 <Route path="/cardapio/:id"  element={<ProtectedRoute><CardapioDetalhe /></ProtectedRoute>} />
                 <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
+                <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
+                <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
+                <Route path="/ia-chat"       element={<ProtectedRoute><IAChat /></ProtectedRoute>} />
 
                 {/* Protegidas — somente admin */}
                 <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

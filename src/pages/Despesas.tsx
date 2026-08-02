@@ -43,7 +43,8 @@ import {
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
-import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useDespesas, Despesa } from "@/domains/finance/hooks/useDespesas";
+import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
@@ -118,6 +119,25 @@ const Despesas = () => {
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
+  const { mutate: categorizarIA } = useCategorizacaoIA();
+
+  const handleDescricaoBlur = () => {
+    const desc = novaDespesa.descricao;
+    const val = parseFloat(novaDespesa.valor) || 0;
+    if (desc.length > 3) {
+      categorizarIA({ descricao: desc, valor: val, tipo: "despesa" }, {
+        onSuccess: (result) => {
+          if (result && result.confianca > 0.85 && result.categoria) {
+            const match = categorias.find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
+            if (match) {
+              setNovaDespesa((prev) => ({ ...prev, categoria: match.id }));
+              toast({ title: `Categorizado com IA: ${match.nome}` });
+            }
+          }
+        },
+      });
+    }
+  };
 
   const salvarDespesa = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -707,6 +727,7 @@ const Despesas = () => {
                         placeholder="Ex: Aluguel, Supermercado, Conta de Luz..."
                         value={novaDespesa.descricao}
                         onChange={(e) => setNovaDespesa({ ...novaDespesa, descricao: e.target.value })}
+                        onBlur={handleDescricaoBlur}
                       />
                     </div>
 

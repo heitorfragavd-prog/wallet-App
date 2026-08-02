@@ -137,9 +137,14 @@ serve(async (req) => {
 
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.replace("Bearer ", "");
-    
-    // Check if the caller has service role authorization (e.g. Cron)
-    const isServiceRole = token === supabaseServiceKey;
+
+    // Check if the caller has service role authorization (e.g. Cron).
+    // Aceita também um segredo próprio (CRON_SECRET): após a rotação das
+    // chaves do Supabase (sb_secret_*), o env SUPABASE_SERVICE_ROLE_KEY nem
+    // sempre bate com o JWT legado que o cron envia, e o sync parava com 401.
+    const cronSecret = Deno.env.get("CRON_SECRET") || "";
+    const isServiceRole =
+      token === supabaseServiceKey || (cronSecret.length > 0 && token === cronSecret);
 
     let user_id: string | null = null;
     let requestBody: any = {};
@@ -636,7 +641,14 @@ async function syncUserEyemobile(
         }
       }
 
-      let offset = typeof customOffset === "number" ? customOffset : (config.last_synced_offset || 0);
+      // O offset salvo (last_synced_offset) só faz sentido no modo HISTORY,
+      // que varre a API inteira sem filtro de data. Nos syncs incrementais
+      // (ALL/SALES com start_date), o conjunto já vem filtrado por data e um
+      // offset global grande (ex.: 66.900) ultrapassa o fim da lista — o sync
+      // rodava "com sucesso" sem trazer nenhuma venda.
+      let offset = typeof customOffset === "number"
+        ? customOffset
+        : (mode === "HISTORY" ? (config.last_synced_offset || 0) : 0);
       let limit = typeof customLimit === "number" ? customLimit : 100;
 
       // Se o offset for 0 e tivermos startStr, resolvemos o offset correspondente na API

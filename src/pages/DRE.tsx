@@ -4,7 +4,8 @@ import { useDRE } from "@/domains/finance/hooks/useDRE";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
-import { FileText, TrendingUp, TrendingDown, BarChart3, ChevronRight } from "lucide-react";
+import { FileText, TrendingUp, TrendingDown, BarChart3, ChevronRight, FileDown } from "lucide-react";
+import { useExportarRelatorios } from "@/domains/finance/hooks/useExportarRelatorios";
 import type { LinhaDRE } from "@/domains/finance/types/foodCost";
 
 const MESES = [
@@ -32,6 +33,7 @@ const DREPage: React.FC = () => {
   const { dre, loading } = useDRE(mes, ano);
 
   const anos = Array.from({ length: 5 }, (_, i) => hoje.getFullYear() - i);
+  const { exportarDRE_PDF } = useExportarRelatorios();
 
   return (
     <DashboardLayout>
@@ -68,6 +70,16 @@ const DREPage: React.FC = () => {
                 ))}
               </SelectContent>
             </Select>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => exportarDRE_PDF(dre, dre?.periodo || "")}
+              className="gap-2 text-xs"
+            >
+              <FileDown className="h-4 w-4" />
+              Exportar PDF
+            </Button>
           </div>
         </div>
 

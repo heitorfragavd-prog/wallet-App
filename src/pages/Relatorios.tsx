@@ -46,7 +46,8 @@ import {
   Legend,
   TooltipProps,
 } from "recharts";
-import { icons } from "lucide-react";
+import { icons, FileDown } from "lucide-react";
+import { useExportarRelatorios } from "@/domains/finance/hooks/useExportarRelatorios";
 import {
   TrendingUp,
   TrendingDown,
@@ -71,6 +72,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useMetas } from "@/domains/finance/hooks/useMetas";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
@@ -377,11 +379,52 @@ const metaStatusConfig: Record<string, { label: string; color: string }> = {
 
 // ── Componente principal ─────────────────────────────────────────────────────
 const Relatorios = () => {
+  const { exportarTransacoes_Excel } = useExportarRelatorios();
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
   const { toast } = useToast();
 
   // Hooks de dados
-  const { transacoes, loading } = useTransacoes();
+  // Busca APENAS o período selecionado + o mês anterior (necessário para a
+  // comparação "vs ant."). Antes era useReceitas() sem datas: o hook puxava o
+  // ANO INTEIRO da API Divipay — dezenas de requisições paralelas que falhavam
+  // e zeravam as receitas digitais do relatório (sobrava só dinheiro+manuais).
+  const rangeConsulta = useMemo(() => {
+    const end = dateRange.endDate ?? new Date().toISOString().split("T")[0];
+    if (!dateRange.startDate) return { startDate: null as string | null, endDate: end };
+    const d = new Date(`${dateRange.startDate}T12:00:00`);
+    d.setMonth(d.getMonth() - 1);
+    const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+    return { startDate: start, endDate: end };
+  }, [dateRange.startDate, dateRange.endDate]);
+
+  const { transacoes: transacoesBase, loading: loadingTransacoes } = useTransacoes(rangeConsulta);
+  const { receitas: receitasConsolidadas, loading: loadingReceitas } = useReceitas(rangeConsulta);
+
+  const transacoes = useMemo(() => {
+    // Despesas de useTransacoes
+    const despesasApenas = (transacoesBase || []).filter((t) => t.tipo === "despesa");
+
+    // Receitas puras e consolidadas de useReceitas (evita duplicar com a tabela transacoes)
+    const receitasApenas = (receitasConsolidadas || []).map((r) => ({
+      id: r.id,
+      user_id: r.user_id || "",
+      descricao: r.descricao || "Receita",
+      valor: Number(r.valor || 0),
+      tipo: "receita" as const,
+      data: r.data,
+      created_at: r.created_at || r.data,
+      categorias: r.categorias || { nome: "Vendas / Entradas", cor: "#10b981", icone: "DollarSign" },
+      metodo_pagamento: r.metodo_pagamento || "pix",
+      conta_id: r.conta_id,
+      observacoes: r.observacoes,
+    }));
+
+    return [...despesasApenas, ...receitasApenas].sort(
+      (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+    );
+  }, [transacoesBase, receitasConsolidadas]);
+
+  const loading = loadingTransacoes || loadingReceitas;
   const { metas } = useMetas();
   const { categorias } = useCategorias();
   const { contas } = useContasUsuario();
@@ -616,11 +659,22 @@ const Relatorios = () => {
               <p className="text-muted-foreground text-sm">{getPeriodoLabel()}</p>
             </div>
           </div>
-          <Button onClick={handleExportReport} variant="outline" className="gap-2 self-start sm:self-auto">
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Exportar CSV</span>
-            <span className="sm:hidden">CSV</span>
-          </Button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Button
+              onClick={() => exportarTransacoes_Excel(filteredTransactions, "Relatorio_Transacoes")}
+              variant="outline"
+              className="gap-2"
+            >
+              <FileDown className="w-4 h-4" />
+              <span className="hidden sm:inline">Exportar Excel</span>
+              <span className="sm:hidden">Excel</span>
+            </Button>
+            <Button onClick={handleExportReport} variant="outline" className="gap-2">
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">Exportar CSV</span>
+              <span className="sm:hidden">CSV</span>
+            </Button>
+          </div>
         </div>
 
         {/* ── FilterBar ───────────────────────────────────────────────── */}

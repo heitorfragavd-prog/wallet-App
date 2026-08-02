@@ -140,6 +140,9 @@ export const useDividas = (params: DividasQueryParams = {}) => {
           dataVencimentoInicial: divida.data_vencimento,
           credor: divida.credor,
           categoriaId: divida.categoria_id,
+          contaId: divida.conta_id,
+          documentoFavorecido: divida.documento_favorecido,
+          valorTaxa: divida.valor_taxa,
           totalParcelas: divida.parcelas,
         });
       }
