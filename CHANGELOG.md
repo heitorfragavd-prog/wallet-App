@@ -2,6 +2,24 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.30] - 2026-08-02
+
+### ✨ Novo
+- **v3.1 Core Features** — Subcategorias, transferências entre contas, centros de custo, gestão de contatos, conciliação avançada, calendário financeiro (agenda) e emissão de recibos (`0e299d7`)
+
+### 🔧 Melhorado
+- **PDV Eyemobile** — Fix no ranking Top 10 e controle de estoque, com suporte a coluna de itens, modo PRODUCTS e fallback local com produtos ao vivo (`0e299d7`)
+- **Assistente IA** — Respostas baseadas em dados reais consolidados usando `useReceitas` e `useDespesas` (suporte a vendas hoje/ontem/mês, despesas detalhadas, lucro líquido e saldo atual) (`560db7a`)
+
+### 🐛 Corrigido
+- **Agenda** — Receitas agora consolidadas por dia (1 linha com total) ao invés de listar cada venda individualmente (`9d831f3`)
+- **Agenda** — Integração com `useReceitas` para garantir mesma consolidação da tela de Receitas (lançamentos manuais + PDV em dinheiro + Divipay líquido) (`b8c5f77`)
+
+### 📊 Estatísticas
+- **4 commits na release 1.0.30**
+
+---
+
 ## [1.0.29] - 2026-08-02
 
 ### ✨ Novo
