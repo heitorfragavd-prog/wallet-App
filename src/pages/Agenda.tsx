@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { Calendar } from "@/shared/components/ui/calendar";
 import { Card, CardContent } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
@@ -24,28 +25,27 @@ const TIPO_CONFIG = {
   divida: { label: "Dívida", cor: "bg-amber-500", text: "text-amber-500", icon: PieChart },
 };
 
-async function fetchCompromissos(mes: string, workspaceId: string | null): Promise<Compromisso[]> {
+// Despesas e dívidas vêm direto das tabelas. As RECEITAS usam o hook
+// useReceitas (consolidação oficial: manuais + PDV dinheiro + Divipay
+// líquido) — a Agenda mostra exatamente o mesmo que a tela de Receitas.
+async function fetchDespesasEDividas(mes: string, workspaceId: string | null): Promise<Compromisso[]> {
   const [ano, m] = mes.split("-").map(Number);
   const startDate = `${mes}-01`;
   const endDate = new Date(ano, m, 0).toISOString().split("T")[0];
 
-  let receitasQ = supabase.from("receitas").select("id, descricao, valor, data").gte("data", startDate).lte("data", endDate);
   let despesasQ = supabase.from("despesas").select("id, descricao, valor, data").gte("data", startDate).lte("data", endDate);
   let dividasQ = supabase.from("dividas").select("id, descricao, credor, valor_restante, data_vencimento").gte("data_vencimento", startDate).lte("data_vencimento", endDate);
 
   if (workspaceId) {
-    receitasQ = receitasQ.eq("workspace_id", workspaceId);
     despesasQ = despesasQ.eq("workspace_id", workspaceId);
     dividasQ = dividasQ.eq("workspace_id", workspaceId);
   }
 
-  const [r, d, v] = await Promise.all([receitasQ, despesasQ, dividasQ]);
-  if (r.error) throw r.error;
+  const [d, v] = await Promise.all([despesasQ, dividasQ]);
   if (d.error) throw d.error;
   if (v.error) throw v.error;
 
   return [
-    ...(r.data ?? []).map((x): Compromisso => ({ id: x.id, tipo: "receita", descricao: x.descricao, valor: x.valor, data: x.data })),
     ...(d.data ?? []).map((x): Compromisso => ({ id: x.id, tipo: "despesa", descricao: x.descricao, valor: x.valor, data: x.data })),
     ...(v.data ?? []).map((x): Compromisso => ({
       id: x.id,
@@ -63,11 +63,31 @@ const Agenda = () => {
   const [dataSelecionada, setDataSelecionada] = useState<Date | undefined>(new Date());
   const [mesRef, setMesRef] = useState(new Date().toISOString().slice(0, 7));
 
-  const { data: compromissos = [], isLoading } = useQuery({
+  const { data: saidas = [], isLoading: loadingSaidas } = useQuery({
     queryKey: ["agenda-financeira", { mes: mesRef, workspaceId }],
-    queryFn: () => fetchCompromissos(mesRef, workspaceId),
+    queryFn: () => fetchDespesasEDividas(mesRef, workspaceId),
     staleTime: 1000 * 60 * 2,
   });
+
+  // Mesma consolidação da tela de Receitas (manuais + PDV dinheiro + Divipay)
+  const [ano, m] = mesRef.split("-").map(Number);
+  const mesStart = `${mesRef}-01`;
+  const mesEnd = new Date(ano, m, 0).toISOString().split("T")[0];
+  const { receitas, loading: loadingReceitas } = useReceitas({ startDate: mesStart, endDate: mesEnd });
+
+  const isLoading = loadingSaidas || loadingReceitas;
+
+  const compromissos = useMemo<Compromisso[]>(() => {
+    const recs: Compromisso[] = receitas.map((r) => ({
+      id: r.id,
+      tipo: "receita",
+      descricao: r.descricao || "Receita",
+      valor: Number(r.valor),
+      // Normaliza timestamp ISO (Divipay) para YYYY-MM-DD
+      data: String(r.data).split("T")[0],
+    }));
+    return [...recs, ...saidas];
+  }, [receitas, saidas]);
 
   const porDia = useMemo(() => {
     const map = new Map<string, Compromisso[]>();
