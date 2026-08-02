@@ -45,6 +45,9 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas, Despesa } from "@/domains/finance/hooks/useDespesas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
+import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
+import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
+import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
@@ -100,6 +103,12 @@ const Despesas = () => {
     endDate: dateRange.endDate,
   });
 
+  // v3.1: subcategorias, centros de custo e fornecedores
+  const { subcategorias } = useSubcategorias();
+  const { centrosCusto } = useCentrosCusto();
+  const { contatos } = useContatos();
+  const fornecedores = contatos.filter((c) => c.tipo === "fornecedor");
+
   const [activeTab, setActiveTab] = useState("lista");
 
   const [novaDespesa, setNovaDespesa] = useState({
@@ -111,6 +120,9 @@ const Despesas = () => {
     tipo: "variavel" as "fixa" | "variavel",
     metodo_pagamento: null as PaymentMethod | null,
     conta_id: null as string | null,
+    subcategoria_id: null as string | null,
+    centro_custo_id: null as string | null,
+    contato_id: null as string | null,
     observacoes: "",
     tags: [] as string[],
   });
@@ -162,9 +174,12 @@ const Despesas = () => {
         data: novaDespesa.data,
         metodo_pagamento: novaDespesa.metodo_pagamento,
         conta_id: novaDespesa.conta_id,
+        subcategoria_id: novaDespesa.subcategoria_id,
+        centro_custo_id: novaDespesa.centro_custo_id,
+        contato_id: novaDespesa.contato_id,
         observacoes: novaDespesa.observacoes || null,
       });
-      
+
       toast({
         title: "Sucesso!",
         description: "Despesa atualizada com sucesso",
@@ -178,9 +193,12 @@ const Despesas = () => {
         data: novaDespesa.data,
         metodo_pagamento: novaDespesa.metodo_pagamento,
         conta_id: novaDespesa.conta_id,
+        subcategoria_id: novaDespesa.subcategoria_id,
+        centro_custo_id: novaDespesa.centro_custo_id,
+        contato_id: novaDespesa.contato_id,
         observacoes: novaDespesa.observacoes || null,
       });
-      
+
       toast({
         title: "Sucesso!",
         description: "Despesa criada com sucesso",
@@ -188,15 +206,18 @@ const Despesas = () => {
     }
 
     // Limpar formulário
-    setNovaDespesa({ 
+    setNovaDespesa({
       id: null,
-      descricao: "", 
-      valor: "", 
-      categoria: "", 
-      data: "", 
+      descricao: "",
+      valor: "",
+      categoria: "",
+      data: "",
       tipo: "variavel",
       metodo_pagamento: null,
       conta_id: null,
+      subcategoria_id: null,
+      centro_custo_id: null,
+      contato_id: null,
       observacoes: "",
       tags: [],
     });
@@ -216,6 +237,9 @@ const Despesas = () => {
       tipo: "variavel",
       metodo_pagamento: despesa.metodo_pagamento || null,
       conta_id: despesa.conta_id || null,
+      subcategoria_id: (despesa as { subcategoria_id?: string | null }).subcategoria_id || null,
+      centro_custo_id: (despesa as { centro_custo_id?: string | null }).centro_custo_id || null,
+      contato_id: (despesa as { contato_id?: string | null }).contato_id || null,
       observacoes: despesa.observacoes || "",
       tags: (despesa.tags ?? []).map((t) => (typeof t === 'string' ? t : t.nome)),
     });
@@ -224,15 +248,18 @@ const Despesas = () => {
   };
 
   const handleCancelarEdicao = () => {
-    setNovaDespesa({ 
+    setNovaDespesa({
       id: null,
-      descricao: "", 
-      valor: "", 
-      categoria: "", 
-      data: "", 
+      descricao: "",
+      valor: "",
+      categoria: "",
+      data: "",
       tipo: "variavel",
       metodo_pagamento: null,
       conta_id: null,
+      subcategoria_id: null,
+      centro_custo_id: null,
+      contato_id: null,
       observacoes: "",
       tags: [],
     });
@@ -763,6 +790,26 @@ const Despesas = () => {
                     </div>
 
                     <div className="space-y-2">
+                      <Label htmlFor="subcategoria">Subcategoria</Label>
+                      <select
+                        id="subcategoria"
+                        value={novaDespesa.subcategoria_id || ""}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, subcategoria_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        <option value="">Nenhuma</option>
+                        {subcategorias
+                          .filter((s) => {
+                            const catId = categoriasDespesa.find((c) => c.nome === novaDespesa.categoria)?.id;
+                            return !catId || !s.categoria_id || s.categoria_id === catId;
+                          })
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>{s.nome}</option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
                       <Label htmlFor="data">Data *</Label>
                       <Input
                         id="data"
@@ -814,6 +861,36 @@ const Despesas = () => {
                         value={novaDespesa.conta_id}
                         onChange={(accountId) => setNovaDespesa({ ...novaDespesa, conta_id: accountId })}
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="centro_custo">Centro de Custo</Label>
+                      <select
+                        id="centro_custo"
+                        value={novaDespesa.centro_custo_id || ""}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, centro_custo_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        <option value="">Nenhum</option>
+                        {centrosCusto.filter((c) => c.ativo).map((c) => (
+                          <option key={c.id} value={c.id}>{c.nome}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="fornecedor">Fornecedor</Label>
+                      <select
+                        id="fornecedor"
+                        value={novaDespesa.contato_id || ""}
+                        onChange={(e) => setNovaDespesa({ ...novaDespesa, contato_id: e.target.value || null })}
+                        className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        <option value="">Nenhum</option>
+                        {fornecedores.map((f) => (
+                          <option key={f.id} value={f.id}>{f.nome}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="space-y-2 md:col-span-2">

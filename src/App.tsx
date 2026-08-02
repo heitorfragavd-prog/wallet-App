@@ -45,6 +45,13 @@ const Validades           = lazyWithRetry(() => import("./pages/Validades"));
 const Comparativo         = lazyWithRetry(() => import("./pages/Comparativo"));
 const Patrimonio          = lazyWithRetry(() => import("./pages/Patrimonio"));
 const IAChat              = lazyWithRetry(() => import("./pages/IAChat"));
+const Transferencias      = lazyWithRetry(() => import("./pages/Transferencias"));
+const Agenda              = lazyWithRetry(() => import("./pages/Agenda"));
+const Subcategorias       = lazyWithRetry(() => import("./pages/Subcategorias"));
+const CentrosCusto        = lazyWithRetry(() => import("./pages/CentrosCusto"));
+const Fornecedores        = lazyWithRetry(() => import("./pages/Fornecedores"));
+const Conciliacao         = lazyWithRetry(() => import("./pages/Conciliacao"));
+const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -98,6 +105,13 @@ function App() {
                 <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
                 <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
                 <Route path="/ia-chat"       element={<ProtectedRoute><IAChat /></ProtectedRoute>} />
+                <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
+                <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
+                <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
+                <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
+                <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
+                <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
+                <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
 
                 {/* Protegidas — somente admin */}
                 <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

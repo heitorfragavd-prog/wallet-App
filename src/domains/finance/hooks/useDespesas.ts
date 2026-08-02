@@ -8,6 +8,9 @@ import { Despesa as DespesaType, PaymentMethod } from "../types";
 export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
   updated_at?: string;
   workspace_id?: string;
+  subcategoria_id?: string | null;
+  centro_custo_id?: string | null;
+  contato_id?: string | null;
   categorias?: {
     nome: string;
     cor: string;

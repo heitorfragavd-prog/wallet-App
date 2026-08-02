@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { useAuth } from "@/domains/auth/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { useQuery } from "@tanstack/react-query";
+import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Card, CardContent } from "@/shared/components/ui/card";
@@ -13,23 +15,235 @@ interface Mensagem {
   timestamp: Date;
 }
 
+interface ContaSaldo {
+  nome: string;
+  saldo_atual: number;
+  tipo: string;
+}
+
 const formatCurrency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+const isoDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const dayKey = (data: unknown) => String(data || "").split("T")[0];
+
+const METODO_LABEL: Record<string, string> = {
+  dinheiro: "Dinheiro (PDV)",
+  pix: "Pix",
+  cartao_credito: "Cartão de Crédito",
+  cartao_debito: "Cartão de Débito",
+  boleto: "Boleto",
+  voucher: "Voucher/Vale",
+  transferencia: "Transferência",
+  outros: "Outros",
+};
+
+// Remove acentos e normaliza para casar intenções ("vendeu", "vendas", "faturamento"...)
+const norm = (s: string) =>
+  s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+type PeriodoId = "hoje" | "ontem" | "semana" | "mes" | "mes_passado";
+
+function detectarPeriodo(p: string, padrao: PeriodoId): PeriodoId {
+  if (p.includes("ontem")) return "ontem";
+  if (p.includes("hoje") || p.includes("dia de hoje")) return "hoje";
+  if (p.includes("semana")) return "semana";
+  if (p.includes("mes passado") || p.includes("mes anterior")) return "mes_passado";
+  if (p.includes("mes")) return "mes";
+  return padrao;
+}
+
+function filtroPeriodo(periodo: PeriodoId): { label: string; match: (dia: string) => boolean } {
+  const hoje = new Date();
+  const ontem = new Date(hoje);
+  ontem.setDate(ontem.getDate() - 1);
+  const seteDias = new Date(hoje);
+  seteDias.setDate(seteDias.getDate() - 6);
+
+  const mesAtual = isoDay(hoje).slice(0, 7);
+  const mesPassadoDate = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+  const mesPassado = isoDay(mesPassadoDate).slice(0, 7);
+
+  switch (periodo) {
+    case "hoje":
+      return { label: "hoje", match: (d) => d === isoDay(hoje) };
+    case "ontem":
+      return { label: "ontem", match: (d) => d === isoDay(ontem) };
+    case "semana":
+      return { label: "nos últimos 7 dias", match: (d) => d >= isoDay(seteDias) && d <= isoDay(hoje) };
+    case "mes_passado":
+      return { label: "no mês passado", match: (d) => d.startsWith(mesPassado) };
+    case "mes":
+    default:
+      return { label: "neste mês", match: (d) => d.startsWith(mesAtual) };
+  }
+}
+
+function somaPorMetodo(lista: Array<{ valor: number; metodo?: string | null }>): string {
+  const porMetodo = new Map<string, number>();
+  for (const item of lista) {
+    const m = METODO_LABEL[item.metodo || "outros"] ?? METODO_LABEL.outros;
+    porMetodo.set(m, (porMetodo.get(m) ?? 0) + Number(item.valor || 0));
+  }
+  return [...porMetodo.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([m, v]) => `  • ${m}: **${formatCurrency(v)}**`)
+    .join("\n");
+}
+
+interface DadosIA {
+  receitas: Array<{ valor: number; data: string; descricao?: string; metodo_pagamento?: string | null }>;
+  despesas: Array<{ valor: number; data: string; descricao?: string }>;
+  contas: ContaSaldo[];
+}
+
+// Motor de respostas com os MESMOS dados consolidados das telas
+// (Receitas = manual + PDV dinheiro + Divipay líquido; Despesas = manual + saques Divipay)
+function gerarRespostaIA(pergunta: string, dados: DadosIA): string {
+  const p = norm(pergunta);
+  const { receitas, despesas, contas } = dados;
+
+  const receitasComDia = receitas.map((r) => ({ ...r, dia: dayKey(r.data), valor: Number(r.valor || 0) }));
+  const despesasComDia = despesas.map((d) => ({ ...d, dia: dayKey(d.data), valor: Number(d.valor || 0) }));
+
+  const saldoTotal = contas
+    .filter((c) => c.tipo !== "cartao_credito")
+    .reduce((a, c) => a + Number(c.saldo_atual || 0), 0);
+
+  const filtroMes = filtroPeriodo("mes");
+  const filtroMesPassado = filtroPeriodo("mes_passado");
+  const receitasMes = receitasComDia.filter((r) => filtroMes.match(r.dia));
+  const despesasMes = despesasComDia.filter((d) => filtroMes.match(d.dia));
+  const totalReceitasMes = receitasMes.reduce((a, r) => a + r.valor, 0);
+  const totalDespesasMes = despesasMes.reduce((a, d) => a + d.valor, 0);
+  const totalReceitasMesPassado = receitasComDia.filter((r) => filtroMesPassado.match(r.dia)).reduce((a, r) => a + r.valor, 0);
+  const totalDespesasMesPassado = despesasComDia.filter((d) => filtroMesPassado.match(d.dia)).reduce((a, d) => a + d.valor, 0);
+
+  // ── META / PONTO DE EQUILÍBRIO ("quanto devo vender", "meta") ─────────────
+  if (p.includes("devo vender") || p.includes("meta") || p.includes("ponto de equilibrio")) {
+    const pontoEquilibrio = totalDespesasMes / 0.5735; // Simples 12,65% + CMV 30%
+    const metaLucro = (totalDespesasMes + 10000) / 0.5735;
+    return `🎯 **Meta de Vendas (base nas suas despesas reais deste mês):**
+
+- **Despesas do mês até agora:** ${formatCurrency(totalDespesasMes)}
+- 🛑 **Ponto de equilíbrio (venda mínima p/ não ter prejuízo):** **${formatCurrency(pontoEquilibrio)}**
+- 🚀 **Meta p/ lucrar ~R$ 10.000:** **${formatCurrency(metaLucro)}**
+- 📈 **Você já vendeu neste mês:** **${formatCurrency(totalReceitasMes)}**
+
+💡 ${totalReceitasMes >= pontoEquilibrio ? "✅ Você já passou do ponto de equilíbrio este mês!" : `Faltam **${formatCurrency(pontoEquilibrio - totalReceitasMes)}** em vendas para cobrir as despesas do mês.`}`;
+  }
+
+  // ── COMPRA / POSSO GASTAR ──────────────────────────────────────────────────
+  if (p.includes("comprar") || p.includes("posso gastar") || p.includes("posso comprar")) {
+    const matchValor = p.match(/\d+([.,]\d+)?/);
+    const valorCompra = matchValor ? parseFloat(matchValor[0].replace(",", ".")) : 0;
+    const saldoApos = saldoTotal - valorCompra;
+    const viavel = saldoApos > 2000;
+    return `🛍️ **Análise de compra${valorCompra ? ` de ${formatCurrency(valorCompra)}` : ""}:**
+
+- **Saldo real em contas:** ${formatCurrency(saldoTotal)}
+- **Saldo após a compra:** ${formatCurrency(saldoApos)}
+- **Avaliação:** ${viavel ? "✅ **COMPRA VIÁVEL**" : "⚠️ **ATENÇÃO AO CAIXA**"}
+
+${viavel ? "A compra não compromete sua reserva operacional." : "Recomendo adiar ou parcelar — o caixa ficaria abaixo do limite de segurança (R$ 2.000)."}`;
+  }
+
+  // ── SALDO / CONTAS ─────────────────────────────────────────────────────────
+  if (p.includes("saldo") || p.includes("conta") || p.includes("quanto tenho") || p.includes("caixa")) {
+    const detalhe = contas
+      .filter((c) => c.tipo !== "cartao_credito")
+      .map((c) => `  • **${c.nome}:** ${formatCurrency(Number(c.saldo_atual || 0))}`)
+      .join("\n");
+    return `💳 **Situação de caixa agora:**
+
+${detalhe || "  • Nenhuma conta cadastrada"}
+
+💰 **Total disponível:** **${formatCurrency(saldoTotal)}**`;
+  }
+
+  // ── LUCRO / RESULTADO ──────────────────────────────────────────────────────
+  if (p.includes("lucro") || p.includes("resultado") || p.includes("margem") || p.includes("sobrou")) {
+    const lucroMes = totalReceitasMes - totalDespesasMes;
+    const lucroMesPassado = totalReceitasMesPassado - totalDespesasMesPassado;
+    return `📈 **Resultado (visão de caixa):**
+
+**Este mês:**
+- Receitas: ${formatCurrency(totalReceitasMes)}
+- Despesas: ${formatCurrency(totalDespesasMes)}
+- 💰 **Saldo do mês: ${formatCurrency(lucroMes)}** ${lucroMes >= 0 ? "✅" : "🔴"}
+
+**Mês passado:** ${formatCurrency(lucroMesPassado)} (Receitas ${formatCurrency(totalReceitasMesPassado)} − Despesas ${formatCurrency(totalDespesasMesPassado)})
+
+💡 Valores reais das suas telas de Receitas e Despesas (PDV + Divipay + lançamentos manuais).`;
+  }
+
+  // ── DESPESAS / GASTOS ──────────────────────────────────────────────────────
+  if (p.includes("despesa") || p.includes("gasto") || p.includes("gastei") || p.includes("custo") || p.includes("paguei")) {
+    const periodo = detectarPeriodo(p, "mes");
+    const filtro = filtroPeriodo(periodo);
+    const lista = despesasComDia.filter((d) => filtro.match(d.dia));
+    const total = lista.reduce((a, d) => a + d.valor, 0);
+    const maiores = [...lista].sort((a, b) => b.valor - a.valor).slice(0, 3);
+    const top = maiores.length
+      ? `\n\n**Maiores gastos${filtro.label === "hoje" || filtro.label === "ontem" ? "" : " do período"}:**\n${maiores.map((d) => `  • ${d.descricao || "Despesa"}: **${formatCurrency(d.valor)}**`).join("\n")}`
+      : "";
+    return `📊 **Despesas ${filtro.label}:**
+
+- **Total:** **${formatCurrency(total)}** (${lista.length} ${lista.length === 1 ? "lançamento" : "lançamentos"})${top}
+
+💡 Pergunte também: *"quanto gastei no mês passado?"* ou *"qual meu lucro este mês?"*`;
+  }
+
+  // ── VENDAS / FATURAMENTO / RECEITAS ────────────────────────────────────────
+  if (p.includes("vend") || p.includes("fatur") || p.includes("receita") || p.includes("receb") || p.includes("entrou")) {
+    const periodo = detectarPeriodo(p, "hoje");
+    const filtro = filtroPeriodo(periodo);
+    const lista = receitasComDia.filter((r) => filtro.match(r.dia));
+    const total = lista.reduce((a, r) => a + r.valor, 0);
+    const detalheMetodos = somaPorMetodo(lista.map((r) => ({ valor: r.valor, metodo: r.metodo_pagamento })));
+    return `💵 **Vendas ${filtro.label}:**
+
+- **Total vendido:** **${formatCurrency(total)}**
+- **Quantidade de vendas/entradas:** ${lista.length}
+
+${detalheMetodos ? `**Por forma de pagamento:**\n${detalheMetodos}` : ""}
+
+💡 Pergunte também: *"quanto vendeu ontem?"*, *"quanto vendeu este mês?"* ou *"qual meu lucro este mês?"*`;
+  }
+
+  // ── VISÃO GERAL (fallback) ─────────────────────────────────────────────────
+  const filtroHoje = filtroPeriodo("hoje");
+  const vendasHoje = receitasComDia.filter((r) => filtroHoje.match(r.dia)).reduce((a, r) => a + r.valor, 0);
+  return `🤖 **Resumo rápido das suas finanças:**
+
+1. **Vendas de hoje:** **${formatCurrency(vendasHoje)}**
+2. **Vendas no mês:** **${formatCurrency(totalReceitasMes)}**
+3. **Despesas no mês:** **${formatCurrency(totalDespesasMes)}**
+4. **Saldo em contas:** **${formatCurrency(saldoTotal)}**
+
+Posso responder com seus dados reais, por exemplo:
+- *"Quanto vendeu hoje?"* / *"quanto vendeu ontem?"*
+- *"Quanto gastei este mês?"*
+- *"Qual meu lucro este mês?"*
+- *"Quanto tenho em conta?"*
+- *"Posso comprar algo de R$ 2.000?"*`;
+}
+
 export default function IAChat() {
-  const { user } = useAuth();
   const [mensagens, setMensagens] = useState<Mensagem[]>([
     {
       role: "assistant",
-      content: `Olá! Sou seu assistente de Inteligência Financeira IA.
+      content: `Olá! Sou seu assistente financeiro com acesso aos seus dados reais (PDV + Divipay + lançamentos).
 
-Posso te responder perguntas como:
-- *"Quanto devo vender este mês para ter lucro?"*
-- *"Quanto devo ter de lucro líquido este mês?"*
-- *"Com base nos dados antigos quanto devo ter de despesas este mês?"*
-- *"Posso comprar algo de R$ 2.000?"*
-
-O que você gostaria de saber?`,
+Pergunte coisas como:
+- *"Quanto vendeu hoje?"* ou *"quanto vendeu ontem?"*
+- *"Quanto vendeu este mês?"*
+- *"Quanto gastei este mês?"*
+- *"Qual meu lucro este mês?"*
+- *"Quanto tenho em conta?"*
+- *"Posso comprar algo de R$ 2.000?"*`,
       timestamp: new Date(),
     },
   ]);
@@ -37,196 +251,40 @@ O que você gostaria de saber?`,
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Janela de dados: últimos 3 meses + mês atual (suficiente p/ hoje, mês e mês passado)
+  const inicioJanela = useMemo(() => {
+    const d = new Date();
+    return isoDay(new Date(d.getFullYear(), d.getMonth() - 3, 1));
+  }, []);
+
+  const { receitas, loading: loadingReceitas } = useReceitas({ startDate: inicioJanela });
+  const { despesas, loading: loadingDespesas } = useDespesas({ startDate: inicioJanela });
+  const { data: contas = [], isLoading: loadingContas } = useQuery({
+    queryKey: ["ia-chat-contas"],
+    queryFn: async () => {
+      const { data } = await supabase.from("contas_usuario").select("nome, saldo_atual, tipo");
+      return (data ?? []) as ContaSaldo[];
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const dadosProntos = !loadingReceitas && !loadingDespesas && !loadingContas;
+
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [mensagens]);
 
-  // Motor de Inteligência Financeira Contextual e Preditivo
-  const gerarRespostaIA = async (pergunta: string): Promise<string> => {
-    const p = pergunta.toLowerCase();
-
-    // 1. Buscar Dados do Banco em Tempo Real
-    const [despesasResp, transDespesasResp, receitasResp, transReceitasResp, contasResp] = await Promise.all([
-      supabase.from("despesas").select("valor, data"),
-      supabase.from("transacoes").select("valor, data").eq("tipo", "despesa"),
-      supabase.from("receitas").select("valor, data"),
-      supabase.from("transacoes").select("valor, data").eq("tipo", "receita"),
-      supabase.from("contas_usuario").select("nome, saldo_atual, tipo"),
-    ]);
-
-    const despesasLista = [
-      ...(despesasResp.data || []).map((d) => Number(d.valor || 0)),
-      ...(transDespesasResp.data || []).map((t) => Number(t.valor || 0)),
-    ];
-    const totalDespesasHist = despesasLista.reduce((a, b) => a + b, 0);
-    const mediaDespesasMensal = despesasLista.length > 0 ? totalDespesasHist / 16 : 51916.96;
-
-    const receitasLista = [
-      ...(receitasResp.data || []).map((r) => Number(r.valor || 0)),
-      ...(transReceitasResp.data || []).map((t) => Number(t.valor || 0)),
-    ];
-    const totalReceitasJulho = (transReceitasResp.data || [])
-      .filter((t) => (t.data || "").startsWith("2026-07"))
-      .reduce((a, b) => a + Number(b.valor || 0), 0) + 23400; // ~R$ 111.700 em julho
-
-    const faturamentoHistoricoMedio = totalReceitasJulho > 0 ? totalReceitasJulho : 88900;
-
-    const contasDinheiro = (contasResp.data || []).filter((c) => c.tipo !== "cartao_credito");
-    const saldoTotalContas = contasDinheiro.reduce((a, c) => a + Number(c.saldo_atual || 0), 0);
-
-    // ── SCENARIO A: VENDAS / METAS DE FATURAMENTO ─────────────────────────────
-    if (
-      p.includes("vender") ||
-      p.includes("faturar") ||
-      p.includes("faturamento") ||
-      p.includes("venda") ||
-      p.includes("meta de venda")
-    ) {
-      // Cálculo do Ponto de Equilíbrio: Despesas / (1 - 0.1265 impostos - 0.30 cmv) = Despesas / 0.5735
-      const pontoEquilibrio = mediaDespesasMensal / 0.5735;
-      const metaLucrativa = (mediaDespesasMensal + 10000) / 0.5735;
-
-      return `🎯 **Análise de Vendas & Meta Operacional:**
-
-Para que sua empresa seja lucrativa este mês, analisamos suas despesas fixas/variáveis e a estrutura tributária da DRE (Simples 7% + PIS/COFINS 3.65% + ISS 2% = 12.65% e CMV estimado de 30%):
-
-- 🛑 **Ponto de Equilíbrio (Venda Mínima para não ter prejuízo):** **${formatCurrency(pontoEquilibrio)}**
-- 🚀 **Meta Sugerida de Vendas (para Lucro Líquido de ~R$ 10.000):** **${formatCurrency(metaLucrativa)}**
-- 📈 **Histórico de Vendas Mensal recente:** **${formatCurrency(faturamentoHistoricoMedio)}**
-
-💡 **Dica da IA:** Mantendo as vendas em torno de **${formatCurrency(metaLucrativa)}**, você cobre todas as despesas operacionais de **${formatCurrency(mediaDespesasMensal)}** e garante uma margem líquida positiva no final do mês.`;
-    }
-
-    // ── SCENARIO B: LUCRO LÍQUIDO ─────────────────────────────────────────────
-    if (
-      p.includes("lucro") ||
-      p.includes("lucro liquido") ||
-      p.includes("lucro líquido") ||
-      p.includes("margem") ||
-      p.includes("resultado")
-    ) {
-      const faturamentoBase = faturamentoHistoricoMedio;
-      const impostos = faturamentoBase * 0.1265;
-      const cmv = faturamentoBase * 0.30;
-      const despesasOp = mediaDespesasMensal;
-      const ebitda = faturamentoBase - impostos - cmv - despesasOp;
-      const irpj = ebitda > 0 ? ebitda * 0.15 : 0;
-      const lucroProjetado = ebitda - (faturamentoBase * 0.01) - irpj;
-
-      return `📈 **Projeção de Lucro Líquido (DRE Preditiva):**
-
-Considerando um faturamento de referência de **${formatCurrency(faturamentoBase)}**:
-
-- **Receita Bruta:** ${formatCurrency(faturamentoBase)}
-- **(-) Impostos (Simples/PIS/COFINS/ISS 12.65%):** -${formatCurrency(impostos)}
-- **(-) CMV (Custo de Mercadoria 30%):** -${formatCurrency(cmv)}
-- **(-) Despesas Operacionais (Média):** -${formatCurrency(despesasOp)}
-- ---------------------------------------------------
-- 💰 **Lucro Líquido Projetado:** **${formatCurrency(lucroProjetado)}** (Margem Líquida: **${((lucroProjetado / faturamentoBase) * 100).toFixed(1)}%**)
-
-💡 **Resumo da IA:** Se você mantiver as vendas em **${formatCurrency(faturamentoBase)}**, seu lucro líquido estimado no final do mês será de aproximadamente **${formatCurrency(lucroProjetado)}**.`;
-    }
-
-    // ── SCENARIO C: DESPESAS / GASTOS ─────────────────────────────────────────
-    if (
-      p.includes("despesa") ||
-      p.includes("gasto") ||
-      p.includes("custo") ||
-      p.includes("quanto devo ter de despesa")
-    ) {
-      return `📊 **Estimativa de Despesas Operacionais:**
-
-- **Média mensal de despesas (Histórico acumulado):** **${formatCurrency(mediaDespesasMensal)}**
-- **Maior foco de custos:** Transferências, Fornecedores e Folha Operacional.
-
-💡 **Recomendação da IA:** Com base no padrão dos meses anteriores, você deve planejar um orçamento mensal de despesas em torno de **${formatCurrency(mediaDespesasMensal)}**. Qualquer valor abaixo disso representará economia direta na sua margem líquida!`;
-    }
-
-    // ── SCENARIO D: COMPRAS / POSSO COMPRAR ───────────────────────────────────
-    if (
-      p.includes("comprar") ||
-      p.includes("posso gastar") ||
-      p.includes("gastar") ||
-      p.includes("posso comprar")
-    ) {
-      const matchValor = p.match(/\d+([\.,]\d+)?/);
-      const valorCompra = matchValor ? parseFloat(matchValor[0].replace(",", ".")) : 500;
-
-      const saldoAposCompra = saldoTotalContas - valorCompra;
-      const viavel = saldoAposCompra > 2000;
-
-      return `🛍️ **Análise de Viabilidade de Compra (R$ ${valorCompra.toLocaleString("pt-BR")}):**
-
-- **Saldo Real em Contas:** ${formatCurrency(saldoTotalContas)}
-- **Saldo restante pós-compra:** ${formatCurrency(saldoAposCompra)}
-- **Avaliação de Risco:** ${viavel ? "✅ **COMPRA VIÁVEL**" : "⚠️ **ATENÇÃO AO CAIXA**"}
-
-${
-  viavel
-    ? `Esta compra de ${formatCurrency(valorCompra)} não compromete sua reserva operacional imediata, mantendo seu saldo positivo.`
-    : `Recomendamos adiar ou parcelar a compra de ${formatCurrency(valorCompra)}, pois o saldo remanescente ficaria próximo do limite de segurança.`
-}`;
-    }
-
-    // ── SCENARIO E: SALDO E CONTAS ────────────────────────────────────────────
-    if (p.includes("saldo") || p.includes("conta") || p.includes("dinheiro")) {
-      const detalhe = contasDinheiro
-        .map((c) => `• **${c.nome}:** ${formatCurrency(Number(c.saldo_atual || 0))}`)
-        .join("\n");
-
-      return `💳 **Situação Atual de Caixa:**
-
-${detalhe || "• **Divipay / Bancos:** " + formatCurrency(saldoTotalContas)}
-
-- 💰 **Patrimônio em Dinheiro Real:** **${formatCurrency(saldoTotalContas)}**`;
-    }
-
-    // ── SCENARIO F: PERGUNTA GERAL EM LINGUAGEM NATURAL ────────────────────────
-    return `🤖 **Análise Consultiva da IA Financeira:**
-
-Para atender à sua dúvida "*${pergunta}*":
-
-1. **Faturamento de Referência:** ${formatCurrency(faturamentoHistoricoMedio)}/mês.
-2. **Orçamento Operacional Padrão:** ${formatCurrency(mediaDespesasMensal)}/mês.
-3. **Ponto de Equilíbrio para Lucro:** Vendas a partir de ${formatCurrency(mediaDespesasMensal / 0.5735)}.
-4. **Saldo Atual Consolidado:** ${formatCurrency(saldoTotalContas)}.
-
-Posso detalhar melhor alguma dessas métricas para você? Experimente perguntar: *"Quanto devo vender?"* ou *"Qual meu lucro projetado?"*.`;
-  };
-
   const handleEnviar = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !dadosProntos) return;
     const pergunta = input.trim();
     setInput("");
     setMensagens((prev) => [...prev, { role: "user", content: pergunta, timestamp: new Date() }]);
     setIsLoading(true);
 
-    try {
-      // 1. Tenta resposta OpenAI via Edge Function se disponível
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/assistente-financeiro`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ pergunta, userId: user?.id }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.resposta && !data.resposta.includes("Desculpe, ocorreu um erro")) {
-          setMensagens((prev) => [...prev, { role: "assistant", content: data.resposta, timestamp: new Date() }]);
-          setIsLoading(false);
-          return;
-        }
-      }
-    } catch {
-      // Segue para a IA Preditiva Dinâmica abaixo
-    }
-
-    // 2. Se a Edge Function não responder, ativa o Motor de IA Preditivo Contextualizado
-    const respostaIA = await gerarRespostaIA(pergunta);
-    setMensagens((prev) => [...prev, { role: "assistant", content: respostaIA, timestamp: new Date() }]);
+    // Pequeno delay para sensação de processamento
+    await new Promise((r) => setTimeout(r, 400));
+    const resposta = gerarRespostaIA(pergunta, { receitas, despesas, contas });
+    setMensagens((prev) => [...prev, { role: "assistant", content: resposta, timestamp: new Date() }]);
     setIsLoading(false);
   };
 
@@ -240,7 +298,7 @@ Posso detalhar melhor alguma dessas métricas para você? Experimente perguntar:
           </div>
           <div>
             <h1 className="text-2xl font-bold text-foreground">Assistente Financeiro IA</h1>
-            <p className="text-sm text-muted-foreground">Consultoria preditiva e análises inteligentes em tempo real</p>
+            <p className="text-sm text-muted-foreground">Respostas com seus dados reais — PDV, Divipay e lançamentos</p>
           </div>
         </div>
 
@@ -277,7 +335,7 @@ Posso detalhar melhor alguma dessas métricas para você? Experimente perguntar:
                   <Loader2 className="h-4 w-4 text-purple-400 animate-spin" />
                 </div>
                 <div className="bg-muted/60 rounded-2xl p-3.5 text-sm text-muted-foreground border border-border/30">
-                  Processando análise com IA...
+                  Analisando seus dados...
                 </div>
               </div>
             )}
@@ -289,10 +347,11 @@ Posso detalhar melhor alguma dessas métricas para você? Experimente perguntar:
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleEnviar()}
-              placeholder="Pergunte sobre vendas, lucro líquido, despesas..."
+              placeholder={dadosProntos ? "Pergunte: quanto vendeu hoje? qual meu lucro?" : "Carregando seus dados financeiros..."}
+              disabled={!dadosProntos}
               className="flex-1"
             />
-            <Button onClick={handleEnviar} disabled={isLoading} className="bg-purple-500 hover:bg-purple-600 text-white">
+            <Button onClick={handleEnviar} disabled={isLoading || !dadosProntos} className="bg-purple-500 hover:bg-purple-600 text-white">
               <Send className="h-4 w-4" />
             </Button>
           </div>
