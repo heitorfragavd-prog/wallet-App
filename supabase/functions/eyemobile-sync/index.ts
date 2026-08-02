@@ -641,7 +641,14 @@ async function syncUserEyemobile(
         }
       }
 
-      let offset = typeof customOffset === "number" ? customOffset : (config.last_synced_offset || 0);
+      // O offset salvo (last_synced_offset) só faz sentido no modo HISTORY,
+      // que varre a API inteira sem filtro de data. Nos syncs incrementais
+      // (ALL/SALES com start_date), o conjunto já vem filtrado por data e um
+      // offset global grande (ex.: 66.900) ultrapassa o fim da lista — o sync
+      // rodava "com sucesso" sem trazer nenhuma venda.
+      let offset = typeof customOffset === "number"
+        ? customOffset
+        : (mode === "HISTORY" ? (config.last_synced_offset || 0) : 0);
       let limit = typeof customLimit === "number" ? customLimit : 100;
 
       // Se o offset for 0 e tivermos startStr, resolvemos o offset correspondente na API
