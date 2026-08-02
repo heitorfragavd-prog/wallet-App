@@ -2,6 +2,24 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.29] - 2026-08-02
+
+### ✨ Novo
+- **Fluxo de Caixa** — Reformulação com visão Mensal e Diária (Previsto x Realizado) (`0e068e4`)
+
+### 🐛 Corrigido
+- `eyemobile-sync` — Offset global quebrava sync incremental (`db83101`)
+- `eyemobile-sync` — Aceitar `CRON_SECRET` para autenticação do cron (`6e05909`)
+- Parcelas de Dívida — `parent_id` com FK quebrava o insert de parcelas (`cec9fdb`)
+- Cadastro de dívidas parceladas no `FinanceService` (`createDebt`/`createTransaction`) (`529a897`)
+- Relatórios — Ausência de receita digital Divipay + cobertura de despesas estendida desde 2025 (`b8d951b`)
+- `Receitas.tsx` — Filtro padrão de data ajustado para 'hoje' e reordenação dos cards de métricas (`95c9534`)
+
+### 📊 Estatísticas
+- **7 commits na release 1.0.29**
+
+---
+
 ## [1.0.28] - 2026-08-01
 
 ### ✨ Novo
