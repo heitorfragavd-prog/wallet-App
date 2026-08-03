@@ -8,32 +8,91 @@ serve(async () => {
     auth: { persistSession: false },
   });
 
-  const hoje = new Date().toISOString().split("T")[0];
-  const amanha = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const hojeDate = new Date();
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
 
-  // Contas a vencer amanhã
-  const { data: contasAmanha } = await supabaseAdmin
+  const hoje = fmt(hojeDate);
+
+  const d1Date = new Date(Date.now() + 1 * 86400000);
+  const d1 = fmt(d1Date);
+
+  const d3Date = new Date(Date.now() + 3 * 86400000);
+  const d3 = fmt(d3Date);
+
+  // 1. Busca dívidas com vencimento em D+1 e D+3 (status pendente ou vencida)
+  const { data: dividasD1 } = await supabaseAdmin
+    .from("dividas")
+    .select("id, user_id, descricao, valor_total, data_vencimento")
+    .neq("status", "quitada")
+    .eq("data_vencimento", d1);
+
+  const { data: dividasD3 } = await supabaseAdmin
+    .from("dividas")
+    .select("id, user_id, descricao, valor_total, data_vencimento")
+    .neq("status", "quitada")
+    .eq("data_vencimento", d3);
+
+  // 2. Busca despesas a vencer hoje (D+0)
+  const { data: despesasHoje } = await supabaseAdmin
     .from("despesas")
-    .select("*, user_id")
-    .eq("data", amanha)
-    .eq("pago", false);
+    .select("id, user_id, descricao, valor, data")
+    .eq("pago", false)
+    .eq("data", hoje);
 
-  // Insumos vencendo
-  const { data: insumos } = await supabaseAdmin
-    .from("itens_mercado")
-    .select("*, user_id")
-    .lte("data_validade", amanha)
-    .gte("data_validade", hoje);
+  // Agrupa alertas por usuário
+  const userAlerts = new Map<string, string[]>();
 
-  // Enviar notificações
-  for (const conta of contasAmanha || []) {
-    await supabaseAdmin.functions.invoke("notificar-whatsapp", {
-      body: {
-        telefone: "+55...", // buscar do perfil do usuário
-        mensagem: `⏰ Lembrete: "${conta.descricao}" de R$ ${conta.valor} vence AMANHÃ!`,
-      },
-    });
+  const addAlert = (userId: string, msg: string) => {
+    if (!userAlerts.has(userId)) userAlerts.set(userId, []);
+    userAlerts.get(userId)!.push(msg);
+  };
+
+  (dividasD1 || []).forEach((d) => {
+    const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    addAlert(d.user_id, `⚠️ Dívida "${d.descricao || 'Dívida'}" (${val}) vence AMANHÃ!`);
+  });
+
+  (dividasD3 || []).forEach((d) => {
+    const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    addAlert(d.user_id, `📅 Lembrete: Dívida "${d.descricao || 'Dívida'}" (${val}) vence em 3 dias.`);
+  });
+
+  (despesasHoje || []).forEach((d) => {
+    const val = Number(d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    addAlert(d.user_id, `⏰ Conta "${d.descricao || 'Despesa'}" (${val}) vence HOJE!`);
+  });
+
+  let notificacoesDisparadas = 0;
+
+  // Dispara notificações push e Telegram para cada usuário afetado
+  for (const [userId, msgs] of userAlerts.entries()) {
+    const textoMensagem = msgs.join("\n");
+    const titulo = "🔔 Alerta de Compromissos Wallet";
+
+    // 1. Tenta enviar Push
+    try {
+      await supabaseAdmin.functions.invoke("enviar-push", {
+        body: { user_id: userId, titulo, mensagem: textoMensagem, url: "/dividas" },
+      });
+    } catch (e) {
+      console.warn("Erro ao invocar enviar-push:", e);
+    }
+
+    // 2. Tenta enviar Telegram
+    try {
+      const htmlTelegram = `🔔 <b>Alerta de Compromissos Wallet</b>\n\n` + msgs.join("\n\n");
+      await supabaseAdmin.functions.invoke("enviar-telegram", {
+        body: { user_id: userId, titulo, mensagem: htmlTelegram },
+      });
+    } catch (e) {
+      console.warn("Erro ao invocar enviar-telegram:", e);
+    }
+
+    notificacoesDisparadas++;
   }
 
-  return new Response("OK", { status: 200 });
+  return new Response(
+    JSON.stringify({ success: true, usuariosNotificados: notificacoesDisparadas }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 });

@@ -33,6 +33,7 @@ self.addEventListener("push", (event) => {
       badge: "/favicon.ico",
       tag: "wallet-notificacao",
       renotify: true,
+      requireInteraction: true,
       data: { url: dados.url },
     })
   );
