@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -51,6 +51,7 @@ import {
 import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useComprasFatura } from "@/domains/finance/hooks/useComprasFatura";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { useToast } from "@/shared/hooks/use-toast";
 import { format, addMonths, subMonths } from "date-fns";
@@ -123,114 +124,103 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const [filtroTag, setFiltroTag] = useState<string>("todas");
   const [busca, setBusca] = useState<string>("");
   const [mostrarCampoBusca, setMostrarCampoBusca] = useState<boolean>(false);
+  // Modo Fatura Completa: mostra TODOS os lançamentos do cartão (parcelas de meses anteriores incluídas)
+  const [modoFaturaCompleta, setModoFaturaCompleta] = useState<boolean>(true);
 
-  const { dividas } = useDividas();
-  const { despesas } = useDespesas();
+  const { createDivida } = useDividas();
 
   const mesAnoExtenso = format(dataRef, "MMMM 'de' yyyy", { locale: ptBR });
   const mesAnoCapitalizado = mesAnoExtenso.charAt(0).toUpperCase() + mesAnoExtenso.slice(1);
 
-  // Data de fechamento e vencimento formatados
-  const diaFech = cartao?.dia_fechamento || 1;
-  const diaVenc = cartao?.dia_vencimento || 10;
-  
-  const dataFechamentoStr = `${String(diaFech).padStart(2, "0")}/${String(dataRef.getMonth() + 1).padStart(2, "0")}/${String(dataRef.getFullYear()).slice(-2)}`;
-  const dataVencimentoStr = `${String(diaVenc).padStart(2, "0")}/${String(dataRef.getMonth() + 1).padStart(2, "0")}/${String(dataRef.getFullYear()).slice(-2)}`;
+  const mesFaturaNum = dataRef.getMonth() + 1;
+  const anoFaturaNum = dataRef.getFullYear();
+
+  // Busca lançamentos por PERÍODO DE FECHAMENTO (data_inicio a data_fechamento)
+  const { despesas: despesasFatura, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
+    cartaoId: cartao?.id,
+    mesFatura: mesFaturaNum,
+    anoFatura: anoFaturaNum,
+    cartaoInfo: cartao,
+  });
+
+  // Busca TODAS as despesas deste cartão (para modo Fatura Completa)
+  const { despesas: todasDespesasCartao, refetch: refetchDespesas } = useDespesas();
+
+  // Refetch automático ao abrir o modal para garantir dados frescos do Supabase
+  useEffect(() => {
+    if (open) {
+      refetchDespesas();
+      refetchFatura();
+    }
+  }, [open]);
+
+  const todasDoCartao = useMemo(() => {
+    if (!cartao) return [];
+    return todasDespesasCartao.filter((d: any) =>
+      d.conta_id === cartao.id ||
+      (d.metodo_pagamento === "cartao_credito" && !d.conta_id)
+    );
+  }, [todasDespesasCartao, cartao]);
+
+  // Fonte de dados: modo completo usa tudo, modo período usa o filtro
+  const fonteBase = modoFaturaCompleta ? todasDoCartao : despesasFatura;
+
+  // Datas formatadas para exibição
+  const dataFechamentoStr = periodo.data_fechamento
+    ? periodo.data_fechamento.split("-").reverse().join("/")
+    : "--/--/--";
+  const dataVencimentoStr = periodo.data_vencimento
+    ? periodo.data_vencimento.split("-").reverse().join("/")
+    : "--/--/--";
 
   // Categorias únicas para o dropdown
   const categoriasUnicas = useMemo(() => {
     const setCat = new Set<string>();
-    dividas.forEach((d) => { if (d.categorias?.nome) setCat.add(d.categorias.nome); });
-    despesas.forEach((d) => { if (d.categorias?.nome) setCat.add(d.categorias.nome); });
+    fonteBase.forEach((d: any) => { if (d.categorias?.nome) setCat.add(d.categorias.nome); });
     return Array.from(setCat).sort();
-  }, [dividas, despesas]);
+  }, [fonteBase]);
 
-  // Filtra lançamentos atrelados a este cartão
+  // Filtra lançamentos do período da fatura
   const lancamentos = useMemo(() => {
-    if (!cartao) return [];
+    if (!fonteBase) return [];
 
-    // 1. Dívidas parceladas ou compras no cartão
-    const divsDoCartao = dividas
-      .filter((d) => d.conta_id === cartao.id)
-      .map((d) => {
-        const dataVenc = new Date(d.data_vencimento);
-        const categoryInfo = getLucideCategoryInfo(d.categorias?.nome);
-        return {
-          id: d.id,
-          tipo: "divida",
-          isParcelado: d.parcelas > 1,
-          descricao: d.descricao,
-          categoria: d.categorias?.nome || "Compras Cartão",
-          valor: d.valor_restante,
-          data: d.data_vencimento,
-          dataFormatted: format(dataVenc, "dd/MM/yy"),
-          parcelaInfo: d.parcelas > 1 ? `Parcela ${d.parcelas_pagas + 1}/${d.parcelas}` : null,
-          status: d.status,
-          categoryInfo,
-        };
-      });
-
-    // 2. Despesas lançadas direto no cartão (por conta_id ou método de pagamento)
-    const despesasDoCartao = despesas
-      .filter((desp: any) => {
-        const ehFormaCartao = desp.metodo_pagamento === "cartao_credito" || desp.forma_pagamento === "cartao_credito";
-        if (desp.conta_id) {
-          return desp.conta_id === cartao.id;
-        }
-        return ehFormaCartao;
-      })
-      .map((desp: any) => {
-        const dataDesp = new Date(desp.data);
-        const categoryInfo = getLucideCategoryInfo(desp.categorias?.nome);
-        return {
-          id: desp.id,
-          tipo: "despesa",
-          isParcelado: false,
-          descricao: desp.descricao,
-          categoria: desp.categorias?.nome || "Despesa Cartão",
-          valor: desp.valor,
-          data: desp.data,
-          dataFormatted: format(dataDesp, "dd/MM/yy"),
-          parcelaInfo: null,
-          status: desp.pago ? "quitada" : "pendente",
-          categoryInfo,
-        };
-      });
-
-    let todos = [...divsDoCartao, ...despesasDoCartao];
-
-    // SOMENTE o mês da fatura selecionada: sem este filtro, a fatura de
-    // agosto listava parcelas de julho, setembro, outubro... (todas as
-    // parcelas futuras do cartão). Agora cada fatura mostra só o seu mês.
-    const mesRefKey = `${dataRef.getFullYear()}-${String(dataRef.getMonth() + 1).padStart(2, "0")}`;
-    todos = todos.filter((i) => String(i.data).startsWith(mesRefKey));
-
-    // Aplicar Filtro de Tipo
-    if (filtroTipo === "despesas") {
-      todos = todos.filter((i) => i.tipo === "despesa" || i.tipo === "divida");
-    } else if (filtroTipo === "fixos") {
-      todos = todos.filter((i) => !i.isParcelado);
-    } else if (filtroTipo === "parcelados") {
-      todos = todos.filter((i) => i.isParcelado);
-    }
+    let items = fonteBase.map((d: any) => {
+      const dataDesp = new Date(d.data + "T12:00:00");
+      const categoryInfo = getLucideCategoryInfo(d.categorias?.nome);
+      return {
+        id: d.id,
+        tipo: "despesa",
+        isParcelado: false,
+        descricao: d.descricao,
+        categoria: d.categorias?.nome || "Despesa Cartão",
+        valor: Number(d.valor || 0),
+        data: d.data,
+        dataFormatted: format(dataDesp, "dd/MM/yy"),
+        parcelaInfo: null,
+        status: d.pago ? "quitada" : "pendente",
+        categoryInfo,
+      };
+    });
 
     // Aplicar Filtro de Categoria
     if (filtroCategoria !== "todas") {
-      todos = todos.filter((i) => i.categoria.toLowerCase() === filtroCategoria.toLowerCase());
+      items = items.filter((i) => i.categoria.toLowerCase() === filtroCategoria.toLowerCase());
     }
 
     // Aplicar Busca Textual
     if (busca.trim()) {
-      todos = todos.filter((i) =>
+      items = items.filter((i) =>
         i.descricao.toLowerCase().includes(busca.toLowerCase()) ||
         i.categoria.toLowerCase().includes(busca.toLowerCase())
       );
     }
 
-    return todos.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
-  }, [cartao, dividas, despesas, filtroTipo, filtroCategoria, busca, dataRef]);
+    return items.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
+  }, [fonteBase, filtroCategoria, busca]);
 
-  const totalFatura = lancamentos.reduce((sum, item) => sum + Number(item.valor), 0);
+  const totalFatura = useMemo(() =>
+    lancamentos.reduce((acc, i) => acc + i.valor, 0)
+  , [lancamentos]);
 
   const handlePagarFatura = () => {
     toast({
@@ -239,40 +229,44 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     });
   };
 
+  const handleGerarDivida = async () => {
+    if (!cartao || totalFatura <= 0) return;
+    try {
+      await createDivida.mutateAsync({
+        descricao: `Fatura ${cartao.nome} - ${mesAnoCapitalizado}`,
+        valor_total: totalFatura,
+        valor_pago: 0,
+        valor_restante: totalFatura,
+        data_vencimento: periodo.data_vencimento,
+        status: "pendente",
+        credor: cartao.nome,
+        conta_id: cartao.id,
+        parcelas: 1,
+        parcelas_pagas: 0,
+      });
+      toast({
+        title: "Dívida criada! 💳",
+        description: `Fatura de ${mesAnoCapitalizado} (R$ ${totalFatura.toFixed(2)}) foi adicionada às suas Dívidas.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Erro ao gerar dívida",
+        description: err?.message || String(err),
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleImprimir = () => {
     window.print();
   };
 
-  // Seleção inteligente do mês da fatura ao abrir: se o mês atual estiver quase vazio e o mês anterior tiver lançamentos importados, abre o mês anterior!
+  // Reseta para a data atual ao abrir a fatura do cartão
   React.useEffect(() => {
     if (open && cartao) {
-      const hoje = new Date();
-      const mesAtualKey = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
-      const mesPassado = subMonths(hoje, 1);
-      const mesPassadoKey = `${mesPassado.getFullYear()}-${String(mesPassado.getMonth() + 1).padStart(2, "0")}`;
-
-      const countAtual = despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesAtualKey)).length +
-        dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesAtualKey)).length;
-
-      const countPassado = despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesPassadoKey)).length +
-        dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesPassadoKey)).length;
-
-      if (countAtual <= 2 && countPassado > 5) {
-        setDataRef(mesPassado);
-      } else {
-        setDataRef(hoje);
-      }
+      setDataRef(new Date());
     }
   }, [open, cartao?.id]);
-
-  // Seletor de atalho para fatura do mês anterior
-  const mesAnteriorDate = subMonths(dataRef, 1);
-  const mesAnteriorKey = `${mesAnteriorDate.getFullYear()}-${String(mesAnteriorDate.getMonth() + 1).padStart(2, "0")}`;
-  const countMesAnterior = useMemo(() => {
-    if (!cartao) return 0;
-    return despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesAnteriorKey)).length +
-      dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesAnteriorKey)).length;
-  }, [cartao, despesas, dividas, mesAnteriorKey]);
 
   if (!cartao) return null;
 
@@ -303,22 +297,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
           </Button>
         </div>
 
-        {/* Banner de atalho caso a fatura do mês anterior tenha lançamentos */}
-        {countMesAnterior > 0 && (
-          <div className="flex items-center justify-between p-3 rounded-xl border border-sky-500/30 bg-sky-500/10 text-xs">
-            <span className="text-sky-300 font-medium">
-              📄 <b>Fatura de {format(mesAnteriorDate, "MMMM", { locale: ptBR })}:</b> Contém <b>{countMesAnterior} lançamentos</b> cadastrados.
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setDataRef(mesAnteriorDate)}
-              className="h-7 text-xs border-sky-500/50 text-sky-300 hover:bg-sky-500/20"
-            >
-              Ver Fatura de {format(mesAnteriorDate, "MMMM", { locale: ptBR })}
-            </Button>
-          </div>
-        )}
+
 
         {/* Seletor de Mês (Navegação da Fatura estilo Organizze) */}
         <div className="flex items-center gap-3">
@@ -381,20 +360,30 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             <span className="text-xl font-extrabold text-rose-500">
               R$ -{totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
             </span>
-            <Button
-              onClick={handlePagarFatura}
-              className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase tracking-wider px-6 h-7 rounded-full shadow-sm"
-            >
-              PAGAR
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                onClick={handlePagarFatura}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase tracking-wider px-4 h-7 rounded-full shadow-sm"
+              >
+                PAGAR
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleGerarDivida}
+                className="border-sky-500/50 text-sky-400 hover:bg-sky-500/20 font-bold text-xs uppercase tracking-wider px-4 h-7 rounded-full shadow-sm"
+              >
+                GERAR DÍVIDA
+              </Button>
+            </div>
           </div>
         </div>
 
         {/* Seção de Lançamentos + Botão Adicionar + Barra de Filtros Estilo Organizze */}
         <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <h3 className="text-lg font-bold text-foreground">Lançamentos</h3>
+              <span className="text-xs text-muted-foreground font-medium">({lancamentos.length})</span>
               <button
                 type="button"
                 onClick={() => toast({ title: "Novo Lançamento", description: "Abre formulário de novo gasto no cartão." })}
@@ -402,6 +391,31 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
                 title="Adicionar lançamento no cartão"
               >
                 <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Toggle: Fatura Completa vs Período de Fechamento */}
+            <div className="flex items-center gap-1 bg-muted/40 rounded-full p-0.5 border border-border/50">
+              <button
+                type="button"
+                onClick={() => setModoFaturaCompleta(true)}
+                className={`text-[11px] font-semibold px-3 py-1 rounded-full transition-all ${
+                  modoFaturaCompleta
+                    ? "bg-orange-500 text-white shadow"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                📋 Fatura Completa
+              </button>
+              <button
+                type="button"
+                onClick={() => setModoFaturaCompleta(false)}
+                className={`text-[11px] font-semibold px-3 py-1 rounded-full transition-all ${
+                  !modoFaturaCompleta
+                    ? "bg-orange-500 text-white shadow"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                📅 Por Período
               </button>
             </div>
           </div>

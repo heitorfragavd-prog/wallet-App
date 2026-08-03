@@ -33,7 +33,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
 
   let despesasQuery = supabase
     .from("despesas")
-    .select("*, categorias!categoria_id (nome, cor, icone), despesa_tags (tags (id, nome, cor))");
+    .select("*, categorias(nome, cor, icone), despesa_tags (tags (id, nome, cor))");
 
   if (workspaceId) despesasQuery = despesasQuery.eq("workspace_id", workspaceId);
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
@@ -41,7 +41,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
 
   let transacoesQuery = supabase
     .from("transacoes")
-    .select("*, categorias!categoria_id (nome, cor, icone)")
+    .select("*, categorias(nome, cor, icone)")
     .eq("tipo", "despesa");
 
   if (workspaceId) transacoesQuery = transacoesQuery.eq("workspace_id", workspaceId);
@@ -110,9 +110,61 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       tagNames?: string[];
     }) => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
+      let faturaIdToLink = (despesa as any).fatura_id || null;
+
+      // Se for cartão de crédito e fatura_id não veio preenchido, calcula automaticamente por período de fechamento
+      if (!faturaIdToLink && despesa.conta_id) {
+        try {
+          const { data: contaObj } = await supabase
+            .from("contas_usuario")
+            .select("id, tipo, dia_fechamento, dia_vencimento")
+            .eq("id", despesa.conta_id)
+            .maybeSingle();
+
+          if (contaObj && contaObj.tipo === "cartao_credito") {
+            const { determinarFaturaParaData, calcularPeriodoFatura } = await import("./useFaturasCartao");
+            const { mes_fatura, ano_fatura } = determinarFaturaParaData(despesa.data, contaObj.dia_fechamento);
+
+            const { data: faturaExistente } = await supabase
+              .from("faturas_cartao")
+              .select("id")
+              .eq("cartao_id", contaObj.id)
+              .eq("mes_fatura", mes_fatura)
+              .eq("ano_fatura", ano_fatura)
+              .maybeSingle();
+
+            if (faturaExistente) {
+              faturaIdToLink = faturaExistente.id;
+            } else {
+              const periodo = calcularPeriodoFatura(contaObj, mes_fatura, ano_fatura);
+              const { data: novaFatura } = await supabase
+                .from("faturas_cartao")
+                .insert({
+                  user_id: userId,
+                  workspace_id: currentWorkspaceId || null,
+                  cartao_id: contaObj.id,
+                  mes_fatura,
+                  ano_fatura,
+                  data_inicio: periodo.data_inicio,
+                  data_fechamento: periodo.data_fechamento,
+                  data_vencimento: periodo.data_vencimento,
+                  valor_total: 0,
+                  status: "aberta",
+                })
+                .select("id")
+                .maybeSingle();
+
+              if (novaFatura) faturaIdToLink = novaFatura.id;
+            }
+          }
+        } catch (e) {
+          logger.warn("useDespesas", "Aviso ao calcular fatura automática:", String(e));
+        }
+      }
+
       const { data, error } = await supabase
         .from("despesas")
-        .insert([{ ...despesa, user_id: userId, workspace_id: currentWorkspaceId }])
+        .insert([{ ...despesa, fatura_id: faturaIdToLink, user_id: userId, workspace_id: currentWorkspaceId }])
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
