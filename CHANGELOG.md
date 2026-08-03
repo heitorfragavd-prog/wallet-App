@@ -2,6 +2,16 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.33] - 2026-08-03
+
+### ✨ Novo
+- **Faturas de Cartão** — Infraestrutura completa para compras na fatura e gestão de faturas de cartão de crédito (hooks `useComprasFatura`, `useFaturasCartao` e schema atualizado) (`72fe051`)
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.33**
+
+---
+
 ## [1.0.32] - 2026-08-03
 
 ### ✨ Novo
