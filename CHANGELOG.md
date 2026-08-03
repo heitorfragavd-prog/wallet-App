@@ -2,6 +2,20 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.31] - 2026-08-03
+
+### ✨ Novo
+- **Notificações** — Adicionadas configurações de notificações Push e integração com Telegram (`39193dc`)
+- **Agenda** — Criação de compromissos manuais com título, local, data, hora, lembrete e opção de repetição (`c7e0f1c`)
+
+### 🐛 Corrigido
+- **Fatura de Cartão** — Lançamentos agora são corretamente filtrados pelo mês da fatura selecionada, sem misturar parcelas de outros meses (`1dae809`)
+
+### 📊 Estatísticas
+- **3 commits na release 1.0.31**
+
+---
+
 ## [1.0.30] - 2026-08-02
 
 ### ✨ Novo
