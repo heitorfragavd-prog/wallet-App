@@ -57,6 +57,11 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
   const [itens, setItens] = useState<ItemExtratoComMatch[]>([]);
   const [itensSelecionados, setItensSelecionados] = useState<Set<number>>(new Set());
   const [carregando, setCarregando] = useState(false);
+  const [alocarNoMesFatura, setAlocarNoMesFatura] = useState(true);
+  const [mesFatura, setMesFatura] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   // Inicializa conta selecionada quando a lista carrega
   React.useEffect(() => {
@@ -196,25 +201,44 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           continue;
         }
 
+        const dataSegura = (() => {
+          if (!item.data) return new Date().toISOString().split("T")[0];
+          const parts = item.data.trim().split("-");
+          if (parts.length === 3 && parts[0].length === 4) {
+            let m = parseInt(parts[1], 10);
+            let d = parseInt(parts[2], 10);
+            if (m > 12 && d <= 12) {
+              return `${parts[0]}-${String(d).padStart(2, "0")}-${String(m).padStart(2, "0")}`;
+            }
+          }
+          return item.data;
+        })();
+
+        const dataFinal = (() => {
+          let baseData = dataSegura;
+          if (contaAlvo?.tipo === "cartao_credito" && alocarNoMesFatura && mesFatura) {
+            const parts = baseData.split("-");
+            const dia = parts[2] || "01";
+            baseData = `${mesFatura}-${dia.padStart(2, "0")}`;
+          }
+          return baseData;
+        })();
+
         if (item.tipo === "despesa") {
-          await createDespesa.mutateAsync({
-            despesa: {
-              descricao: item.descricao,
-              valor: item.valor,
-              data: item.data,
-              conta_id: contaIdSelecionada,
-              metodo_pagamento: contaAlvo?.tipo === "cartao_credito" ? "cartao_credito" : "pix",
-            },
+          await createDespesa({
+            descricao: item.descricao,
+            valor: item.valor,
+            data: dataFinal,
+            conta_id: contaIdSelecionada,
+            metodo_pagamento: contaAlvo?.tipo === "cartao_credito" ? "cartao_credito" : "pix",
           });
         } else {
-          await createReceita.mutateAsync({
-            receita: {
-              descricao: item.descricao,
-              valor: item.valor,
-              data: item.data,
-              conta_id: contaIdSelecionada,
-              metodo_pagamento: "pix",
-            },
+          await createReceita({
+            descricao: item.descricao,
+            valor: item.valor,
+            data: dataFinal,
+            conta_id: contaIdSelecionada,
+            metodo_pagamento: "pix",
           });
         }
         salvas++;
@@ -287,6 +311,36 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* Opção para Cartões de Crédito: Alocar no Mês da Fatura */}
+        {contas.find((c) => c.id === contaIdSelecionada)?.tipo === "cartao_credito" && (
+          <div className="p-3.5 rounded-xl border border-orange-500/30 bg-orange-500/10 space-y-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="alocarMesFatura"
+                checked={alocarNoMesFatura}
+                onChange={(e) => setAlocarNoMesFatura(e.target.checked)}
+                className="h-4 w-4 rounded border-orange-500 text-orange-500 focus:ring-orange-500 accent-orange-500"
+              />
+              <label htmlFor="alocarMesFatura" className="cursor-pointer text-xs font-semibold text-foreground">
+                Alocar lançamentos na fatura deste mês (inclui parcelas/compras antigas na fatura vigente)
+              </label>
+            </div>
+
+            {alocarNoMesFatura && (
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs text-muted-foreground">Mês da Fatura:</span>
+                <input
+                  type="month"
+                  value={mesFatura}
+                  onChange={(e) => setMesFatura(e.target.value)}
+                  className="h-8 px-2 rounded-lg border border-border bg-background text-xs font-medium focus:outline-none focus:ring-1 focus:ring-orange-500"
+                />
+              </div>
+            )}
           </div>
         )}
 

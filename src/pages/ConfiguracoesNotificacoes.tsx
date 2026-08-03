@@ -70,6 +70,42 @@ const ConfiguracoesNotificacoes = () => {
     try { await telegram.testarMensagem(); } finally { setTestandoTelegram(false); }
   };
 
+  const handleCriarDividaETestarCron = async () => {
+    setTestandoPush(true);
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) throw new Error("Usuário não autenticado");
+
+      const amanha = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+
+      // 1. Cria dívida de teste para amanhã
+      const { error: insertErr } = await supabase.from("dividas").insert({
+        user_id: user.id,
+        descricao: "Fatura Cartão - Teste Alerta Push",
+        credor: "Banco Teste",
+        valor_total: 250,
+        valor_pago: 0,
+        valor_restante: 250,
+        data_vencimento: amanha,
+        status: "pendente",
+      });
+
+      if (insertErr) {
+        console.warn("Aviso ao criar dívida de teste:", insertErr.message);
+      }
+
+      // 2. Dispara a Edge Function cron-notificacoes ou enviar-push direto
+      await supabase.functions.invoke("cron-notificacoes");
+
+      // 3. Fallback: dispara push direto com aviso de dívida
+      await push.testarPush();
+    } catch (err: any) {
+      console.error("Erro ao simular tarefa:", err);
+    } finally {
+      setTestandoPush(false);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="p-4 md:p-6 space-y-6 max-w-3xl mx-auto">
@@ -115,6 +151,10 @@ const ConfiguracoesNotificacoes = () => {
               <Button variant="outline" onClick={handleTestarPush} disabled={!push.isSubscribed || testandoPush}>
                 {testandoPush ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Send className="h-4 w-4 mr-1" />}
                 Testar notificação
+              </Button>
+              <Button onClick={handleCriarDividaETestarCron} disabled={testandoPush} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                {testandoPush ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Clock className="h-4 w-4 mr-1" />}
+                ⚡ Simular Tarefa D+1 & Testar Notificação
               </Button>
             </div>
             <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg p-3 space-y-1">

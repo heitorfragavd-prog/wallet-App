@@ -71,6 +71,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: PieChart, label: "Dívidas", path: "/dividas" },
     { icon: Calendar, label: "Agenda", path: "/agenda" },
     { icon: Bell, label: "Lembretes", path: "/lembretes" },
+    { icon: BellRing, label: "Notificações", path: "/configuracoes/notificacoes" },
     { icon: Tag, label: "Categorias", path: "/categorias" },
     { icon: ListTree, label: "Subcategorias", path: "/subcategorias" },
     { icon: Building, label: "Centros de Custo", path: "/centros-custo" },

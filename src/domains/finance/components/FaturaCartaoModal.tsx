@@ -243,6 +243,37 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     window.print();
   };
 
+  // Seleção inteligente do mês da fatura ao abrir: se o mês atual estiver quase vazio e o mês anterior tiver lançamentos importados, abre o mês anterior!
+  React.useEffect(() => {
+    if (open && cartao) {
+      const hoje = new Date();
+      const mesAtualKey = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+      const mesPassado = subMonths(hoje, 1);
+      const mesPassadoKey = `${mesPassado.getFullYear()}-${String(mesPassado.getMonth() + 1).padStart(2, "0")}`;
+
+      const countAtual = despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesAtualKey)).length +
+        dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesAtualKey)).length;
+
+      const countPassado = despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesPassadoKey)).length +
+        dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesPassadoKey)).length;
+
+      if (countAtual <= 2 && countPassado > 5) {
+        setDataRef(mesPassado);
+      } else {
+        setDataRef(hoje);
+      }
+    }
+  }, [open, cartao?.id]);
+
+  // Seletor de atalho para fatura do mês anterior
+  const mesAnteriorDate = subMonths(dataRef, 1);
+  const mesAnteriorKey = `${mesAnteriorDate.getFullYear()}-${String(mesAnteriorDate.getMonth() + 1).padStart(2, "0")}`;
+  const countMesAnterior = useMemo(() => {
+    if (!cartao) return 0;
+    return despesas.filter((d: any) => d.conta_id === cartao.id && String(d.data).startsWith(mesAnteriorKey)).length +
+      dividas.filter((d) => d.conta_id === cartao.id && String(d.data_vencimento).startsWith(mesAnteriorKey)).length;
+  }, [cartao, despesas, dividas, mesAnteriorKey]);
+
   if (!cartao) return null;
 
   return (
@@ -256,7 +287,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-xl font-bold text-foreground">{cartao.nome}</span>
                 <Badge className="bg-sky-500 text-white font-medium text-[11px] px-2.5 py-0.5 uppercase tracking-wide">
-                  Fatura Atual
+                  Fatura Cartão
                 </Badge>
               </div>
             </div>
@@ -271,6 +302,23 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             <Printer className="w-5 h-5" />
           </Button>
         </div>
+
+        {/* Banner de atalho caso a fatura do mês anterior tenha lançamentos */}
+        {countMesAnterior > 0 && (
+          <div className="flex items-center justify-between p-3 rounded-xl border border-sky-500/30 bg-sky-500/10 text-xs">
+            <span className="text-sky-300 font-medium">
+              📄 <b>Fatura de {format(mesAnteriorDate, "MMMM", { locale: ptBR })}:</b> Contém <b>{countMesAnterior} lançamentos</b> cadastrados.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setDataRef(mesAnteriorDate)}
+              className="h-7 text-xs border-sky-500/50 text-sky-300 hover:bg-sky-500/20"
+            >
+              Ver Fatura de {format(mesAnteriorDate, "MMMM", { locale: ptBR })}
+            </Button>
+          </div>
+        )}
 
         {/* Seletor de Mês (Navegação da Fatura estilo Organizze) */}
         <div className="flex items-center gap-3">

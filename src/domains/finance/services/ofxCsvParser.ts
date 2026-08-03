@@ -47,35 +47,86 @@ export function sugerirCategoriaPorDescricao(descricao: string): string {
 
 /**
  * Parseia a data do formato OFX (ex: 20260722120000[-3:BRT] -> 2026-07-22)
+ * Suporta formatos YYYYMMDD e YYYYDDMM (usado por Sicoob, Bradesco, Itaú em faturas)
  */
 function parseOfxDate(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split("T")[0];
   const clean = dateStr.trim().replace(/[^0-9]/g, "");
   if (clean.length >= 8) {
-    const ano = clean.substring(0, 4);
-    const mes = clean.substring(4, 6);
-    const dia = clean.substring(6, 8);
+    let ano = clean.substring(0, 4);
+    let p1 = clean.substring(4, 6);
+    let p2 = clean.substring(6, 8);
+
+    let num1 = parseInt(p1, 10);
+    let num2 = parseInt(p2, 10);
+
+    let mes = p1;
+    let dia = p2;
+
+    // Se a primeira parte (4..6) for > 12 e a segunda (6..8) <= 12, a data foi gravada como YYYYDDMM
+    if (num1 > 12 && num2 <= 12) {
+      dia = p1.padStart(2, "0");
+      mes = p2.padStart(2, "0");
+    } else {
+      mes = p1.padStart(2, "0");
+      dia = p2.padStart(2, "0");
+    }
+
+    // Trava de segurança: garante que mês seja entre 01 e 12
+    let mInt = parseInt(mes, 10);
+    if (isNaN(mInt) || mInt > 12 || mInt < 1) {
+      if (parseInt(dia, 10) <= 12 && parseInt(dia, 10) >= 1) {
+        const tmp = mes;
+        mes = dia;
+        dia = tmp;
+      } else {
+        mes = String(new Date().getMonth() + 1).padStart(2, "0");
+      }
+    }
+
+    let dInt = parseInt(dia, 10);
+    if (isNaN(dInt) || dInt > 31 || dInt < 1) {
+      dia = String(new Date().getDate()).padStart(2, "0");
+    }
+
     return `${ano}-${mes}-${dia}`;
   }
   return new Date().toISOString().split("T")[0];
 }
 
 /**
- * Converte data de string brasileira (DD/MM/YYYY) para ISO (YYYY-MM-DD)
+ * Converte data de string brasileira (DD/MM/YYYY ou YYYY-MM-DD) para ISO (YYYY-MM-DD)
  */
 function parseBrDateToIso(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split("T")[0];
   const parts = dateStr.trim().split(/[\/\-\.]/);
   if (parts.length === 3) {
-    let dia = parts[0].padStart(2, "0");
-    let mes = parts[1].padStart(2, "0");
-    let ano = parts[2];
-    if (ano.length === 2) ano = `20${ano}`;
-    
-    // Se a data já veio YYYY-MM-DD
-    if (parts[0].length === 4) {
-      return dateStr.trim();
+    let p1 = parts[0];
+    let p2 = parts[1];
+    let p3 = parts[2];
+
+    // Se a data já veio YYYY-MM-DD ou YYYY-DD-MM
+    if (p1.length === 4) {
+      let ano = p1;
+      let m = parseInt(p2, 10);
+      let d = parseInt(p3, 10);
+      if (m > 12 && d <= 12) {
+        return `${ano}-${p3.padStart(2, "0")}-${p2.padStart(2, "0")}`;
+      }
+      return `${ano}-${p2.padStart(2, "0")}-${p3.padStart(2, "0")}`;
     }
+
+    let dia = p1.padStart(2, "0");
+    let mes = p2.padStart(2, "0");
+    let ano = p3;
+    if (ano.length === 2) ano = `20${ano}`;
+
+    if (parseInt(mes, 10) > 12 && parseInt(dia, 10) <= 12) {
+      const tmp = mes;
+      mes = dia;
+      dia = tmp;
+    }
+
     return `${ano}-${mes}-${dia}`;
   }
   return new Date().toISOString().split("T")[0];

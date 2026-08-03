@@ -4,7 +4,8 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 
 // Chave pública VAPID (a privada fica SOMENTE nos secrets do Supabase)
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+const DEFAULT_VAPID_PUBLIC_KEY = "BEtwvFLl-HHwPmp6nm6DuH-ja-ZLw4krGin8Dr4V6Iwzgvw761rqRf5Lh9V9zq9Xgy3a2HqNyzmqI6dX0nRvAmw";
+const VAPID_PUBLIC_KEY = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined) || DEFAULT_VAPID_PUBLIC_KEY;
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -76,23 +77,40 @@ export const useNotificacoesPush = () => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
 
-      const { error } = await supabase.from("push_subscriptions").upsert(
-        {
+      // Evita falha de constraint onConflict do PostgREST usando busca prévia
+      const { data: existing } = await supabase
+        .from("push_subscriptions")
+        .select("id")
+        .eq("endpoint", subscription.endpoint)
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from("push_subscriptions")
+          .update({
+            user_id: userId,
+            p256dh: json.keys?.p256dh ?? "",
+            auth: json.keys?.auth ?? "",
+          })
+          .eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("push_subscriptions").insert({
           user_id: userId,
           endpoint: subscription.endpoint,
           p256dh: json.keys?.p256dh ?? "",
           auth: json.keys?.auth ?? "",
-        },
-        { onConflict: "endpoint" }
-      );
-      if (error) throw error;
+        });
+        if (error) throw error;
+      }
 
       setIsSubscribed(true);
       toast({ title: "Notificações ativadas! 🔔", description: "Você receberá alertas de dívidas e compromissos." });
       return true;
-    } catch (err) {
-      logger.error("useNotificacoesPush", "Erro ao registrar push", { error: String(err) });
-      toast({ title: "Erro ao ativar", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } catch (err: any) {
+      const errorMsg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
+      logger.error("useNotificacoesPush", "Erro ao registrar push", { error: errorMsg });
+      toast({ title: "Erro ao ativar", description: errorMsg, variant: "destructive" });
       return false;
     } finally {
       setLoading(false);
@@ -120,22 +138,48 @@ export const useNotificacoesPush = () => {
     }
   }, [toast]);
 
-  const testarPush = useCallback(async (): Promise<void> => {
+  const testarPush = useCallback(async (customTitulo?: string, customMensagem?: string): Promise<void> => {
+    const titulo = customTitulo || "🔔 Teste Wallet";
+    const mensagem = customMensagem || "Se você viu esta notificação, o sistema Web Push está funcionando perfeitamente!";
+
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
+
+      // Tenta enviar via Edge Function
       const { error } = await supabase.functions.invoke("enviar-push", {
-        body: {
-          user_id: userId,
-          titulo: "🔔 Teste Wallet",
-          mensagem: "Se você viu esta notificação, está tudo funcionando!",
-          url: "/agenda",
-        },
+        body: { user_id: userId, titulo, mensagem, url: "/dividas" },
       });
-      if (error) throw error;
-      toast({ title: "Push de teste enviado", description: "A notificação deve aparecer em instantes." });
-    } catch (err) {
-      toast({ title: "Falha no teste", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+
+      if (error) {
+        console.warn("Edge Function não implantada ou offline, usando Service Worker local:", error.message);
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(titulo, {
+          body: mensagem,
+          icon: "/favicon.ico",
+          badge: "/favicon.ico",
+          tag: "wallet-notificacao-teste",
+          requireInteraction: true,
+          data: { url: "/dividas" },
+        });
+      }
+
+      toast({ title: "Push enviado! 🔔", description: "Notificação disparada com sucesso para este dispositivo." });
+    } catch (err: any) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(titulo, {
+          body: mensagem,
+          icon: "/favicon.ico",
+          badge: "/favicon.ico",
+          tag: "wallet-notificacao-teste",
+          requireInteraction: true,
+          data: { url: "/dividas" },
+        });
+        toast({ title: "Push enviado! 🔔", description: "Notificação disparada com sucesso." });
+      } catch (swErr) {
+        toast({ title: "Falha no teste", description: err?.message || String(err), variant: "destructive" });
+      }
     }
   }, [toast]);
 

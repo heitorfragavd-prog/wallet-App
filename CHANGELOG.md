@@ -2,6 +2,20 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.32] - 2026-08-03
+
+### ✨ Novo
+- **Notificações e Alertas** — Infraestrutura completa de notificações Push e Telegram (webhook, disparos diretos e rotinas de cron) para faturas, dívidas e insumos (`1f82d6f`)
+- **Importação de Extrato** — Suporte robusto para arquivos OFX e CSV, garantindo a carga correta de transações (`1f82d6f`)
+
+### 🐛 Corrigido
+- **Fatura de Cartão** — Correções pontuais e tratamentos adicionais no modal de faturas e no parser de extrato (`1f82d6f`)
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.32**
+
+---
+
 ## [1.0.31] - 2026-08-03
 
 ### ✨ Novo
