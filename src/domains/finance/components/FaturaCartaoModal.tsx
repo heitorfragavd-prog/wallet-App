@@ -199,6 +199,12 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
 
     let todos = [...divsDoCartao, ...despesasDoCartao];
 
+    // SOMENTE o mês da fatura selecionada: sem este filtro, a fatura de
+    // agosto listava parcelas de julho, setembro, outubro... (todas as
+    // parcelas futuras do cartão). Agora cada fatura mostra só o seu mês.
+    const mesRefKey = `${dataRef.getFullYear()}-${String(dataRef.getMonth() + 1).padStart(2, "0")}`;
+    todos = todos.filter((i) => String(i.data).startsWith(mesRefKey));
+
     // Aplicar Filtro de Tipo
     if (filtroTipo === "despesas") {
       todos = todos.filter((i) => i.tipo === "despesa" || i.tipo === "divida");
@@ -222,7 +228,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     }
 
     return todos.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
-  }, [cartao, dividas, despesas, filtroTipo, filtroCategoria, busca]);
+  }, [cartao, dividas, despesas, filtroTipo, filtroCategoria, busca, dataRef]);
 
   const totalFatura = lancamentos.reduce((sum, item) => sum + Number(item.valor), 0);
 
