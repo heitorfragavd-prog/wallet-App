@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ProtectedRoute } from "./domains/auth/components/ProtectedRoute";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
@@ -52,6 +52,7 @@ const CentrosCusto        = lazyWithRetry(() => import("./pages/CentrosCusto"));
 const Fornecedores        = lazyWithRetry(() => import("./pages/Fornecedores"));
 const Conciliacao         = lazyWithRetry(() => import("./pages/Conciliacao"));
 const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
+const ConfiguracoesNotificacoes = lazyWithRetry(() => import("./pages/ConfiguracoesNotificacoes"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -68,6 +69,13 @@ const AdminWebhooks       = lazyWithRetry(() => import("./pages/AdminWebhooks"))
 
 // ── App ───────────────────────────────────────────────────────────
 function App() {
+  // Registra o Service Worker de notificações push (Web Push API)
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(console.error);
+    }
+  }, []);
+
   return (
     <Router>
       <ErrorBoundary context="App">
@@ -112,6 +120,7 @@ function App() {
                 <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
                 <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
                 <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
+                <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
 
                 {/* Protegidas — somente admin */}
                 <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />
