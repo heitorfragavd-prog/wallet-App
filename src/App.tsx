@@ -34,6 +34,8 @@ const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
 const IA                  = lazyWithRetry(() => import("./pages/IA"));
 const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
+const InvestimentoDetalhe = lazyWithRetry(() => import("./pages/InvestimentoDetalhe"));
+const MetaInvestimentoDetalhe = lazyWithRetry(() => import("./pages/MetaInvestimentoDetalhe"));
 const EyemobilePDV        = lazyWithRetry(() => import("./pages/EyemobilePDV"));
 const Divipay             = lazyWithRetry(() => import("./pages/Divipay"));
 const DRE                 = lazyWithRetry(() => import("./pages/DRE"));
@@ -106,6 +108,8 @@ function App() {
                 <Route path="/dre"           element={<ProtectedRoute><DRE /></ProtectedRoute>} />
                 <Route path="/fluxo-caixa"   element={<ProtectedRoute><FluxoCaixa /></ProtectedRoute>} />
                 <Route path="/contas"        element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
+                <Route path="/investimento/:id" element={<ProtectedRoute><InvestimentoDetalhe /></ProtectedRoute>} />
+                <Route path="/meta-investimento/:id" element={<ProtectedRoute><MetaInvestimentoDetalhe /></ProtectedRoute>} />
                 <Route path="/cardapio"      element={<ProtectedRoute><Cardapio /></ProtectedRoute>} />
                 <Route path="/cardapio/novo" element={<ProtectedRoute><CardapioNovo /></ProtectedRoute>} />
                 <Route path="/cardapio/:id"  element={<ProtectedRoute><CardapioDetalhe /></ProtectedRoute>} />
