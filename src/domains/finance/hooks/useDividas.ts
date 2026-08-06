@@ -83,7 +83,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
     )
     .order("data_vencimento", { ascending: true });
 
-  if (workspaceId) query = query.eq("workspace_id", workspaceId);
+  if (workspaceId) query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) query = query.gte("data_vencimento", startDate);
   if (endDate) query = query.lte("data_vencimento", endDate);
 
@@ -96,7 +96,7 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
       .select("*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor)")
       .order("data_vencimento", { ascending: true });
 
-    if (workspaceId) fallbackQuery = fallbackQuery.eq("workspace_id", workspaceId);
+    if (workspaceId) fallbackQuery = fallbackQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
     if (startDate) fallbackQuery = fallbackQuery.gte("data_vencimento", startDate);
     if (endDate) fallbackQuery = fallbackQuery.lte("data_vencimento", endDate);
 

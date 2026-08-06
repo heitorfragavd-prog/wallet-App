@@ -143,7 +143,18 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     cartaoInfo: cartao,
   });
 
-  // Busca TODAS as despesas deste cartão (para modo Fatura Completa)
+  // Busca fatura do Mês Anterior (mês - 1) conforme especificação do PDF
+  const mesAnteriorDate = subMonths(dataRef, 1);
+  const mesAnteriorNum = mesAnteriorDate.getMonth() + 1;
+  const anoAnteriorNum = mesAnteriorDate.getFullYear();
+
+  const { totalFatura: totalFaturaMesAnterior } = useComprasFatura({
+    cartaoId: cartao?.id,
+    mesFatura: mesAnteriorNum,
+    anoFatura: anoAnteriorNum,
+    cartaoInfo: cartao,
+  });
+
   const { despesas: todasDespesasCartao, refetch: refetchDespesas } = useDespesas();
 
   // Refetch automático ao abrir o modal para garantir dados frescos do Supabase
@@ -154,16 +165,8 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     }
   }, [open]);
 
-  const todasDoCartao = useMemo(() => {
-    if (!cartao) return [];
-    return todasDespesasCartao.filter((d: any) =>
-      d.conta_id === cartao.id ||
-      (d.metodo_pagamento === "cartao_credito" && !d.conta_id)
-    );
-  }, [todasDespesasCartao, cartao]);
-
-  // Fonte de dados: modo completo usa tudo, modo período usa o filtro
-  const fonteBase = modoFaturaCompleta ? todasDoCartao : despesasFatura;
+  // Fonte de dados: utiliza estritamente o filtro por período de fechamento da fatura
+  const fonteBase = despesasFatura;
 
   // Datas formatadas para exibição
   const dataFechamentoStr = periodo.data_fechamento
@@ -328,7 +331,9 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
           <div className="bg-muted/30 border border-border/50 rounded-2xl p-4 space-y-2 text-xs">
             <div className="flex items-center justify-between text-muted-foreground">
               <span>SALDO MÊS ANTERIOR</span>
-              <span className="font-semibold text-foreground">R$ 0,00</span>
+              <span className="font-semibold text-foreground">
+                R$ {totalFaturaMesAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </span>
             </div>
             <div className="flex items-center justify-between text-muted-foreground">
               <span>FATURA ATUAL</span>

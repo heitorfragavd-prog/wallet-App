@@ -376,6 +376,12 @@ serve(async (req) => {
         return jsonResponse({ success: true, data: { transacao, withdraw: data } }, 201)
       }
 
+      case 'getWithdraw': {
+        if (!params.id) return jsonResponse({ success: false, error: 'ID do saque é obrigatório' }, 400)
+        const data = await divipayFetch(cfg, divipayToken, `/api/withdraws/${params.id}`)
+        return jsonResponse({ success: true, data })
+      }
+
       case 'listWithdraws': {
         const data = await divipayFetch(cfg, divipayToken, '/api/withdraws', {
           query: { limit: params.limit ?? 50, offset: params.offset ?? 0 },

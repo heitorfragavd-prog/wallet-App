@@ -48,7 +48,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
 }) => {
   const { toast } = useToast();
   const { contas } = useContasUsuario();
-  const { createDespesa } = useDespesas();
+  const { despesas = [], createDespesa } = useDespesas();
   const { createReceita } = useReceitas();
   const { transacoes, refetch: refetchTransacoes } = useTransacoes();
 
@@ -93,8 +93,9 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
 
         // Algoritmo de Match (+/- 2 dias e valor exato)
         const itensProcessados: ItemExtratoComMatch[] = parsed.map((item, idx) => {
-          const matchEncontrado = transacoes.find((t) => {
-            const mesmoTipo = t.tipo === item.tipo;
+          const matchEncontrado = [...transacoes, ...despesas].find((t) => {
+            const tTipo = (t as any).tipo || "despesa";
+            const mesmoTipo = tTipo === item.tipo;
             const valorExato = Math.abs(Number(t.valor) - Number(item.valor)) < 0.01;
             const proximoEmDias = diferencaDias(t.data, item.data) <= 2;
             return mesmoTipo && valorExato && proximoEmDias;
@@ -154,8 +155,10 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
 
     try {
       // Atualiza o registro existente no Supabase marcando como conciliado
+      const isDespesa = !(item.match as any).tipo;
+      const table = isDespesa ? "despesas" : "transacoes";
       const { error } = await supabase
-        .from("transacoes")
+        .from(table)
         .update({ updated_at: new Date().toISOString() })
         .eq("id", item.match.id);
 
@@ -232,6 +235,40 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
             conta_id: contaIdSelecionada,
             metodo_pagamento: contaAlvo?.tipo === "cartao_credito" ? "cartao_credito" : "pix",
           });
+
+          // Se for cartão de crédito e a descrição contiver padrão de parcelas (ex: 01/03)
+          if (contaAlvo?.tipo === "cartao_credito") {
+            const regexParcela = /\b(\d+)\/(\d+)\b/;
+            const matchParcela = item.descricao.match(regexParcela);
+            if (matchParcela) {
+              const parcelaAtual = parseInt(matchParcela[1], 10);
+              const totalParcelas = parseInt(matchParcela[2], 10);
+              
+              if (!isNaN(parcelaAtual) && !isNaN(totalParcelas) && parcelaAtual > 0 && parcelaAtual < totalParcelas) {
+                // Gerar as parcelas restantes para os meses subsequentes
+                for (let p = parcelaAtual + 1; p <= totalParcelas; p++) {
+                  let novaDescricao = item.descricao;
+                  if (matchParcela[1].startsWith("0") && matchParcela[1].length > String(p).length) {
+                    novaDescricao = item.descricao.replace(regexParcela, `${String(p).padStart(matchParcela[1].length, "0")}/${matchParcela[2]}`);
+                  } else {
+                    novaDescricao = item.descricao.replace(regexParcela, `${p}/${matchParcela[2]}`);
+                  }
+
+                  const dataObj = new Date(dataFinal + "T12:00:00");
+                  const proximaData = new Date(dataObj.getFullYear(), dataObj.getMonth() + (p - parcelaAtual), dataObj.getDate());
+                  const proximaDataStr = proximaData.toISOString().split("T")[0];
+
+                  await createDespesa({
+                    descricao: novaDescricao,
+                    valor: item.valor,
+                    data: proximaDataStr,
+                    conta_id: contaIdSelecionada,
+                    metodo_pagamento: "cartao_credito",
+                  });
+                }
+              }
+            }
+          }
         } else {
           await createReceita({
             descricao: item.descricao,
@@ -252,10 +289,12 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
       setItens([]);
       setArquivoNome("");
       onOpenChange(false);
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Erro na importação de lançamentos:", err);
+      const errorMsg = err?.message || err?.details || (typeof err === "object" ? JSON.stringify(err) : String(err));
       toast({
         title: "Erro durante importação",
-        description: err instanceof Error ? err.message : "Erro ao salvar lançamentos.",
+        description: errorMsg || "Erro ao salvar lançamentos.",
         variant: "destructive",
       });
     } finally {

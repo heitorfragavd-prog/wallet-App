@@ -1,16 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ElementType } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
-import { Badge } from "@/shared/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -40,13 +38,22 @@ import {
   UploadCloud,
   ShieldCheck,
   TrendingUp,
+  Minus,
+  ArrowLeftRight,
+  Link as LinkIcon,
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { determinarFaturaParaData, calcularPeriodoFatura } from "@/domains/finance/hooks/useFaturasCartao";
+import { format } from "date-fns";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
 import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
+import { TransferenciaModal } from "@/domains/finance/components/TransferenciaModal";
+import { NovaDespesaModal } from "@/domains/finance/components/NovaDespesaModal";
+import { NovaReceitaModal } from "@/domains/finance/components/NovaReceitaModal";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/components/ui/tabs";
 import { InvestimentosView } from "@/domains/finance/components/InvestimentosView";
 
@@ -69,6 +76,7 @@ const TIPO_ICONS: Record<string, ElementType> = {
 export default function ContasCartoes() {
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas = [] } = useDividas();
+  const { despesas = [] } = useDespesas();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
@@ -77,6 +85,9 @@ export default function ContasCartoes() {
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
 
   const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
+  const [modalDespesaAberto, setModalDespesaAberto] = useState(false);
+  const [modalReceitaAberto, setModalReceitaAberto] = useState(false);
+  const [modalTransferenciaAberto, setModalTransferenciaAberto] = useState(false);
 
   // Modal Pluggy Open Finance com configuração limpa
   const [modalPluggyAberto, setModalPluggyAberto] = useState(false);
@@ -119,8 +130,8 @@ export default function ContasCartoes() {
     setContaEditando(conta);
     setNome(conta.nome);
     setTipo(conta.tipo);
-    setSaldoInicial(conta.saldo_inicial.toString());
-    setSaldoAtual(conta.saldo_atual.toString());
+    setSaldoInicial(conta.saldo_inicial?.toString() || "");
+    setSaldoAtual(conta.saldo_atual?.toString() || "");
     setLimiteCredito(conta.limite_credito?.toString() || "");
     setDiaFechamento(conta.dia_fechamento?.toString() || "");
     setDiaVencimento(conta.dia_vencimento?.toString() || "");
@@ -139,11 +150,11 @@ export default function ContasCartoes() {
     const payload = {
       nome,
       tipo,
-      saldo_inicial: parseFloat(saldoInicial) || 0,
-      saldo_atual: parseFloat(saldoAtual) || 0,
-      limite_credito: tipo === "cartao_credito" ? parseFloat(limiteCredito) || undefined : undefined,
-      dia_fechamento: tipo === "cartao_credito" ? parseInt(diaFechamento) || undefined : undefined,
-      dia_vencimento: tipo === "cartao_credito" ? parseInt(diaVencimento) || undefined : undefined,
+      saldo_inicial: Number(saldoInicial) || 0,
+      saldo_atual: Number(saldoAtual) || Number(saldoInicial) || 0,
+      limite_credito: tipo === "cartao_credito" ? Number(limiteCredito) || 0 : 0,
+      dia_fechamento: tipo === "cartao_credito" ? Number(diaFechamento) || undefined : undefined,
+      dia_vencimento: tipo === "cartao_credito" ? Number(diaVencimento) || undefined : undefined,
       cor,
     };
 
@@ -157,7 +168,32 @@ export default function ContasCartoes() {
     resetForm();
   };
 
-  const totalLimiteCredito = cartoesCredito.reduce((acc, c) => acc + (Number(c.limite_credito) || 0), 0);
+  // Cálculo consolidado de limite total, faturas/dívidas e limite disponível
+  const totalLimiteMaximo = cartoesCredito.reduce((acc, c) => acc + (Number(c.limite_credito) || 0), 0);
+
+  const totalUsadoGeralCartoes = cartoesCredito.reduce((acc, cartao) => {
+    const divCartao = dividas.filter((d) => d.conta_id === cartao.id && d.status !== "quitada");
+    const totDiv = divCartao.reduce((sum, d) => sum + Number(d.valor_restante || 0), 0);
+    
+    // Determinar o período da fatura atual baseado no dia de fechamento
+    const hojeStr = format(new Date(), "yyyy-MM-dd");
+    const { mes_fatura, ano_fatura } = determinarFaturaParaData(hojeStr, cartao.dia_fechamento);
+    const periodo = calcularPeriodoFatura(cartao, mes_fatura, ano_fatura);
+
+    const despCartao = despesas.filter(
+      (d: any) => {
+        const pertenceCartao =
+          d.conta_id === cartao.id ||
+          ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+        if (!pertenceCartao) return false;
+        return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
+      }
+    );
+    const totDesp = despCartao.reduce((sum, d) => sum + Number(d.valor || 0), 0);
+    return acc + totDiv + totDesp;
+  }, 0);
+
+  const totalLimiteDisponivelGeral = Math.max(0, totalLimiteMaximo - totalUsadoGeralCartoes);
 
   return (
     <DashboardLayout>
@@ -201,221 +237,360 @@ export default function ContasCartoes() {
         </div>
 
         <Tabs defaultValue="contas" className="w-full space-y-6">
-          <TabsList className="bg-[#0B132B] border border-[#1E2942] p-1 rounded-xl max-w-md">
-            <TabsTrigger value="contas" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white font-semibold">
-              <Building2 className="w-4 h-4 mr-2" />
-              Contas & Cartões
-            </TabsTrigger>
-            <TabsTrigger value="investimentos" className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white font-semibold">
-              <TrendingUp className="w-4 h-4 mr-2" />
-              Carteira de Investimentos
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <TabsList className="bg-[#0B132B] border border-[#1E2942] p-1 rounded-xl max-w-md">
+              <TabsTrigger value="contas" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white font-semibold">
+                <Building2 className="w-4 h-4 mr-2" />
+                Contas & Cartões
+              </TabsTrigger>
+              <TabsTrigger value="investimentos" className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white font-semibold">
+                <TrendingUp className="w-4 h-4 mr-2" />
+                Carteira de Investimentos
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Acesso rápido compacto e elegante no formato pílula */}
+            <div className="flex items-center gap-1.5 bg-[#0B132B] border border-[#1E2942] p-1.5 rounded-xl shadow-inner">
+              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider px-2 hidden lg:inline">
+                Acesso rápido
+              </span>
+
+              {/* DESPESA */}
+              <button
+                type="button"
+                onClick={() => setModalDespesaAberto(true)}
+                className="bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 font-extrabold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-95 group cursor-pointer"
+                title="Nova Despesa"
+              >
+                <div className="w-4 h-4 rounded-full border border-rose-400 flex items-center justify-center text-rose-400">
+                  <Minus className="w-2.5 h-2.5 stroke-[3]" />
+                </div>
+                <span className="tracking-wider">DESPESA</span>
+              </button>
+
+              {/* RECEITA */}
+              <button
+                type="button"
+                onClick={() => setModalReceitaAberto(true)}
+                className="bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-extrabold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-95 group cursor-pointer"
+                title="Nova Receita"
+              >
+                <div className="w-4 h-4 rounded-full border border-emerald-400 flex items-center justify-center text-emerald-400">
+                  <Plus className="w-2.5 h-2.5 stroke-[3]" />
+                </div>
+                <span className="tracking-wider">RECEITA</span>
+              </button>
+
+              {/* TRANSF. */}
+              <button
+                type="button"
+                onClick={() => setModalTransferenciaAberto(true)}
+                className="bg-slate-500/10 hover:bg-slate-500/20 border border-slate-500/30 text-slate-300 font-extrabold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-95 group cursor-pointer"
+                title="Transferência entre contas"
+              >
+                <div className="w-4 h-4 rounded-full border border-slate-400 flex items-center justify-center text-slate-300">
+                  <ArrowLeftRight className="w-2.5 h-2.5 stroke-[2.5]" />
+                </div>
+                <span className="tracking-wider">TRANSF.</span>
+              </button>
+
+              {/* IMPORTAR */}
+              <button
+                type="button"
+                onClick={() => setModalExtratoAberto(true)}
+                className="bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400 font-extrabold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-95 group cursor-pointer"
+                title="Importar Extrato (OFX/CSV)"
+              >
+                <div className="w-4 h-4 rounded-full border border-blue-400 flex items-center justify-center text-blue-400">
+                  <LinkIcon className="w-2.5 h-2.5 stroke-[2.5]" />
+                </div>
+                <span className="tracking-wider">IMPORTAR</span>
+              </button>
+            </div>
+          </div>
 
           <TabsContent value="contas" className="space-y-6 mt-0">
             {/* Stats Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Saldo Consolidado</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(saldoConsolidado)}
-                  </p>
-                </div>
-                <div className="bg-blue-500/20 p-2.5 rounded-xl text-blue-500">
-                  <Wallet className="w-5 h-5" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Limite de Crédito Total</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteCredito)}
-                  </p>
-                </div>
-                <div className="bg-purple-500/20 p-2.5 rounded-xl text-purple-500">
-                  <CreditCard className="w-5 h-5" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Total de Contas / Cartões</p>
-                  <p className="text-2xl font-bold text-foreground">{contas.length}</p>
-                </div>
-                <div className="bg-emerald-500/20 p-2.5 rounded-xl text-emerald-500">
-                  <Building2 className="w-5 h-5" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Lista de Contas */}
-        {loading ? (
-          <div className="py-12 text-center text-muted-foreground">Carregando contas...</div>
-        ) : contas.length === 0 ? (
-          <Card className="border-dashed border-2">
-            <CardContent className="py-12 text-center space-y-4">
-              <Building2 className="w-12 h-12 text-muted-foreground mx-auto" />
-              <div>
-                <h3 className="font-semibold text-lg">Nenhuma conta cadastrada</h3>
-                <p className="text-sm text-muted-foreground">
-                  Adicione suas contas bancárias, cartões de crédito ou carteira para começar.
-                </p>
-              </div>
-              <div className="flex justify-center gap-3">
-                <Button onClick={handleAbrirPluggy} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
-                  <ShieldCheck className="w-4 h-4 mr-2" />
-                  Conectar via Open Finance
-                </Button>
-                <Button onClick={handleAbrirCriar} variant="outline">
-                  Cadastrar Manualmente
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {contas.map((conta) => {
-              const isCartao = conta.tipo === "cartao_credito";
-              const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id && d.status !== "quitada");
-              const totalDividas = dividasVinculadas.reduce(
-                (acc, d) => acc + Number(d.valor_restante || 0),
-                0
-              );
-
-              return (
-                <Card
-                  key={conta.id}
-                  className="group bg-[#0B132B] border border-[#1E2942] hover:border-emerald-500/50 transition-all rounded-2xl shadow-md overflow-hidden"
-                >
-                  <CardHeader className="p-4 pb-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <BankLogoBadge nomeOuId={conta.nome} size="md" />
-                        <div>
-                          <CardTitle className="text-base font-bold text-foreground">{conta.nome}</CardTitle>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {TIPO_LABELS[conta.tipo] || conta.tipo}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                          onClick={() => handleAbrirEditar(conta)}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-600">
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Esta ação não poderá ser desfeita. Isso excluirá permanentemente a conta{" "}
-                                <strong>{conta.nome}</strong>.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => deleteConta(conta.id)}
-                                className="bg-rose-500 hover:bg-rose-600"
-                              >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
+              <Card className="border border-[#1E2942] bg-[#0B132B] rounded-2xl shadow-lg">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-400 font-medium">Saldo Consolidado</p>
+                      <p className="text-2xl font-black text-white tracking-tight mt-1">
+                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(saldoConsolidado)}
+                      </p>
                     </div>
-                  </CardHeader>
+                    <div className="bg-blue-600/20 border border-blue-500/30 p-2.5 rounded-xl text-blue-400">
+                      <Wallet className="w-5 h-5" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-                  <CardContent className="p-4 pt-0 space-y-3">
-                    {isCartao ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between pt-2 border-t border-border/20">
-                          <span className="text-sm text-muted-foreground">Limite Total</span>
-                          <span className="text-lg font-bold text-emerald-400">
-                            {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                              conta.limite_credito || 0
-                            )}
-                          </span>
+              <Card className="border border-[#1E2942] bg-[#0B132B] rounded-2xl shadow-lg">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-400 font-medium">Limite de Crédito Total</p>
+                      <p className="text-2xl font-black text-white tracking-tight mt-1">
+                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteMaximo)}
+                      </p>
+                      {totalUsadoGeralCartoes > 0 && (
+                        <p className="text-[11px] text-slate-400 font-medium mt-1">
+                          Disponível: <span className="text-emerald-400 font-bold">{new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteDisponivelGeral)}</span>
+                        </p>
+                      )}
+                    </div>
+                    <div className="bg-purple-600/20 border border-purple-500/30 p-2.5 rounded-xl text-purple-400">
+                      <CreditCard className="w-5 h-5" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border border-[#1E2942] bg-[#0B132B] rounded-2xl shadow-lg">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-400 font-medium">Total de Contas / Cartões</p>
+                      <p className="text-2xl font-black text-white tracking-tight mt-1">{contas.length}</p>
+                    </div>
+                    <div className="bg-emerald-600/20 border border-emerald-500/30 p-2.5 rounded-xl text-emerald-400">
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Lista de Contas */}
+            {loading ? (
+              <div className="py-12 text-center text-slate-400">Carregando contas...</div>
+            ) : contas.length === 0 ? (
+              <Card className="border-dashed border-2 border-[#1E2942] bg-[#0B132B] rounded-2xl">
+                <CardContent className="py-12 text-center space-y-4">
+                  <Building2 className="w-12 h-12 text-slate-400 mx-auto" />
+                  <div>
+                    <h3 className="font-semibold text-lg text-white">Nenhuma conta cadastrada</h3>
+                    <p className="text-sm text-slate-400">
+                      Adicione suas contas bancárias, cartões de crédito ou carteira para começar.
+                    </p>
+                  </div>
+                  <div className="flex justify-center gap-3">
+                    <Button onClick={handleAbrirPluggy} className="bg-emerald-500 hover:bg-emerald-600 font-semibold">
+                      <ShieldCheck className="w-4 h-4 mr-2" />
+                      Conectar via Open Finance
+                    </Button>
+                    <Button onClick={handleAbrirCriar} variant="outline">
+                      Cadastrar Manualmente
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {contas.map((conta) => {
+                  const Icon = TIPO_ICONS[conta.tipo] || Building2;
+                  const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id && d.status !== "quitada");
+                  const totalDividas = dividasVinculadas.reduce((acc, d) => acc + Number(d.valor_restante || 0), 0);
+
+                  let totalDespesasCartao = 0;
+                  if (conta.tipo === "cartao_credito") {
+                    // Determinar o período da fatura atual baseado no dia de fechamento do cartão
+                    const hojeStr = format(new Date(), "yyyy-MM-dd");
+                    const { mes_fatura, ano_fatura } = determinarFaturaParaData(hojeStr, conta.dia_fechamento);
+                    const periodo = calcularPeriodoFatura(conta, mes_fatura, ano_fatura);
+
+                    const despesasDoCartao = despesas.filter((d: any) => {
+                      const pertenceCartao =
+                        d.conta_id === conta.id ||
+                        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id));
+                      if (!pertenceCartao) return false;
+                      return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
+                    });
+                    totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+                  } else {
+                    const despesasDoCartao = despesas.filter(
+                      (d: any) =>
+                        d.conta_id === conta.id ||
+                        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id))
+                    );
+                    totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+                  }
+
+                  const totalFaturaUsado = totalDividas + totalDespesasCartao;
+                  const limiteTotal = Number(conta.limite_credito || 0);
+                  const limiteDisponivel = Math.max(0, limiteTotal - totalFaturaUsado);
+
+                  const bankColor = conta.cor || "#3B82F6";
+                  const pctUsado = limiteTotal > 0 ? Math.min(100, (totalFaturaUsado / limiteTotal) * 100) : 0;
+
+                  return (
+                    <div
+                      key={conta.id}
+                      className="relative border border-[#1E2942] bg-[#0B132B] rounded-[24px] overflow-hidden transition-all duration-300 hover:-translate-y-1 shadow-lg hover:shadow-2xl group p-5 space-y-4"
+                      style={{
+                        boxShadow: `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = bankColor + "66";
+                        e.currentTarget.style.boxShadow = `0 15px 35px -8px rgba(0,0,0,0.6), 0 0 0 1px ${bankColor}40, 0 0 25px -2px ${bankColor}2B`;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "#1E2942";
+                        e.currentTarget.style.boxShadow = `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`;
+                      }}
+                    >
+                      {/* Decorative gradient corner */}
+                      <div
+                        className="absolute -right-16 -top-16 w-36 h-36 rounded-full blur-3xl opacity-[0.06] transition-opacity group-hover:opacity-[0.12] pointer-events-none"
+                        style={{ backgroundColor: bankColor }}
+                      />
+
+                      <div className="flex items-center justify-between relative z-10">
+                        <div className="flex items-center gap-3">
+                          <BankLogoBadge bankName={conta.nome} className="w-10 h-10 shadow-md border border-[#1E2942]/60" />
+                          <div>
+                            <h3 className="font-bold text-white text-base tracking-tight">{conta.nome}</h3>
+                            <p className="text-xs text-slate-400 font-medium">{TIPO_LABELS[conta.tipo] || conta.tipo}</p>
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-2 text-xs pt-1 border-t border-border/20">
-                          <div>
-                            <p className="text-muted-foreground">Fechamento</p>
-                            <p className="font-semibold text-foreground">Dia {conta.dia_fechamento || "--"}</p>
-                          </div>
-                          <div>
-                            <p className="text-muted-foreground">Vencimento</p>
-                            <p className="font-semibold text-foreground">Dia {conta.dia_vencimento || "--"}</p>
-                          </div>
-                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleAbrirEditar(conta)}
+                            className="h-8 w-8 text-slate-400 hover:text-white hover:bg-[#1E2942]/60 rounded-lg"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
 
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleAbrirFatura(conta)}
-                          className="w-full mt-2 bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border border-emerald-800/30 font-medium h-9 rounded-xl"
-                        >
-                          Ver Fatura do Cartão
-                        </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent className="bg-[#0B132B] border-[#1E2942] text-white rounded-[24px]">
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
+                                <AlertDialogDescription className="text-slate-400">
+                                  Essa ação não poderá ser desfeita. A conta "{conta.nome}" será permanentemente removida.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="bg-transparent border-[#1E2942] text-white hover:bg-[#1E2942] rounded-xl">Cancelar</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => deleteConta(conta.id)}
+                                  className="bg-rose-500 hover:bg-rose-600 text-white rounded-xl"
+                                >
+                                  Excluir
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between pt-2 border-t border-border/20">
-                          <span className="text-sm text-muted-foreground">Saldo Atual</span>
-                          <span className="text-lg font-bold text-foreground">
-                            {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                              conta.saldo_atual
-                            )}
-                          </span>
-                        </div>
 
-                        {dividasVinculadas.length > 0 && (
-                          <div className="flex items-center justify-between text-xs text-rose-500 pt-2 border-t border-border/20">
-                            <span className="flex items-center gap-1.5">
-                              <CreditCard className="w-3.5 h-3.5" />
-                              {dividasVinculadas.length} dívida(s) vinculada(s)
+                      {conta.tipo === "cartao_credito" ? (
+                        <div className="space-y-3 pt-3 border-t border-[#1E2942] relative z-10">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-400 font-medium">Limite Total</span>
+                            <span className="font-extrabold text-emerald-400 text-base">
+                              {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(limiteTotal)}
                             </span>
-                            <span className="font-bold">
+                          </div>
+
+                          <div className="space-y-1.5 pt-1 border-t border-[#1E2942]/50">
+                            <div className="flex items-center justify-between text-[11px] text-slate-400">
+                              <span>Fatura Atual / Usado</span>
+                              <span className="font-bold text-rose-400 text-sm">
+                                {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalFaturaUsado)}
+                              </span>
+                            </div>
+                            {limiteTotal > 0 && (
+                              <div className="space-y-1">
+                                <div className="w-full h-2 bg-[#141E33] rounded-full overflow-hidden border border-[#1E2942]/40 p-[1px]">
+                                  <div
+                                    className="h-full rounded-full transition-all duration-500"
+                                    style={{
+                                      width: `${pctUsado}%`,
+                                      background: pctUsado > 80
+                                        ? "linear-gradient(90deg, #F43F5E, #BE123C)"
+                                        : pctUsado > 50
+                                          ? "linear-gradient(90deg, #EAB308, #CA8A04)"
+                                          : `linear-gradient(90deg, ${bankColor}, ${bankColor}CC)`
+                                    }}
+                                  />
+                                </div>
+                                <div className="flex justify-between text-[9px] text-slate-500 font-semibold px-0.5">
+                                  <span>{pctUsado.toFixed(0)}% usado</span>
+                                  <span>Disp: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(limiteDisponivel)}</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                            <div className="bg-[#141E33]/40 border border-[#1E2942]/60 rounded-xl p-2 text-center">
+                              <p className="text-[10px] text-slate-400 font-medium">Fechamento</p>
+                              <p className="font-bold text-slate-200 mt-0.5">Dia {conta.dia_fechamento || "--"}</p>
+                            </div>
+                            <div className="bg-[#141E33]/40 border border-[#1E2942]/60 rounded-xl p-2 text-center">
+                              <p className="text-[10px] text-slate-400 font-medium">Vencimento</p>
+                              <p className="font-bold text-slate-200 mt-0.5">Dia {conta.dia_vencimento || "--"}</p>
+                            </div>
+                          </div>
+
+                          <Button
+                            onClick={() => handleAbrirFatura(conta)}
+                            className="w-full mt-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-xs h-10 rounded-xl transition-all duration-300 shadow-md hover:shadow-indigo-500/10 active:scale-[0.98]"
+                          >
+                            Ver Fatura do Cartão
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 pt-3 border-t border-[#1E2942] relative z-10">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-400 font-medium">Saldo Disponível</span>
+                            <span className="text-xl font-black text-white tracking-tight">
                               {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                                totalDividas
+                                conta.saldo_atual || 0
                               )}
                             </span>
                           </div>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+
+                          {dividasVinculadas.length > 0 ? (
+                            <div className="bg-rose-500/5 border border-rose-500/15 rounded-xl p-2.5 flex items-center justify-between text-xs mt-1.5">
+                              <span className="flex items-center gap-1.5 text-rose-400 font-semibold">
+                                <CreditCard className="w-3.5 h-3.5 text-rose-400/80" />
+                                {dividasVinculadas.length} dívida(s)
+                              </span>
+                              <span className="font-extrabold text-rose-400">
+                                {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                                  totalDividas
+                                )}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="bg-[#141E33]/30 border border-[#1E2942]/40 rounded-xl p-2.5 flex items-center gap-2 text-[11px] text-slate-400 mt-1.5">
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Nenhuma dívida pendente
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="investimentos" className="space-y-6 mt-0">
@@ -552,12 +727,30 @@ export default function ContasCartoes() {
           onOpenChange={setModalExtratoAberto}
         />
 
-        {/* Modal Open Finance Pluggy (Iframe Isolado Sem Qualquer Lib Pluggy) */}
+        {/* Modal Open Finance Pluggy */}
         <PluggyConnectModal
           open={modalPluggyAberto}
           onOpenChange={setModalPluggyAberto}
           openWidgetDirectly={modalPluggyProps.openWidgetDirectly}
           initialConnectorId={modalPluggyProps.initialConnectorId}
+        />
+
+        {/* Modal de Transferência Entre Contas */}
+        <TransferenciaModal
+          isOpen={modalTransferenciaAberto}
+          onClose={() => setModalTransferenciaAberto(false)}
+        />
+
+        {/* Modal de Nova Despesa Rápida */}
+        <NovaDespesaModal
+          isOpen={modalDespesaAberto}
+          onClose={() => setModalDespesaAberto(false)}
+        />
+
+        {/* Modal de Nova Receita Rápida */}
+        <NovaReceitaModal
+          isOpen={modalReceitaAberto}
+          onClose={() => setModalReceitaAberto(false)}
         />
       </div>
     </DashboardLayout>

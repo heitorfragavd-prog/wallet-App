@@ -98,6 +98,8 @@ export interface DivipaySaque {
   status: string;
   lote?: string | null;
   createdAt?: string | null;
+  fileName?: string | null;
+  billetCode?: string | null;
 }
 
 export interface DivipayApiResponse<T = unknown> {

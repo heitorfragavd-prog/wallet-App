@@ -5,6 +5,7 @@ import { Eye, EyeOff, Info, ArrowRight, CreditCard as CreditCardIcon } from "luc
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { determinarFaturaParaData, calcularPeriodoFatura } from "@/domains/finance/hooks/useFaturasCartao";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
@@ -27,11 +28,22 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
   const mesAtualNome = format(new Date(), "MMMM", { locale: ptBR });
   const mesAtualCapitalizado = mesAtualNome.charAt(0).toUpperCase() + mesAtualNome.slice(1);
 
-  // Calcula total das faturas atuais dos cartões (dívidas + despesas diretas)
+  // Calcula total das faturas atuais dos cartões (dívidas + despesas diretas da fatura atual)
   const totalFaturasCartoes = cartoesCredito.reduce((acc, cartao) => {
     const dividasDoCartao = dividas.filter((d) => d.conta_id === cartao.id && d.status !== "quitada");
     const totalDivs = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0);
-    const despesasDoCartao = despesas.filter((d: any) => d.conta_id === cartao.id || ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id)));
+
+    const hojeStr = format(new Date(), "yyyy-MM-dd");
+    const { mes_fatura, ano_fatura } = determinarFaturaParaData(hojeStr, cartao.dia_fechamento);
+    const periodo = calcularPeriodoFatura(cartao, mes_fatura, ano_fatura);
+
+    const despesasDoCartao = despesas.filter((d: any) => {
+      const pertenceCartao =
+        d.conta_id === cartao.id ||
+        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+      if (!pertenceCartao) return false;
+      return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
+    });
     const totalDesp = despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
     return acc + totalDivs + totalDesp;
   }, 0);
@@ -183,9 +195,18 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                 const dividasDoCartao = dividas.filter(
                   (d) => d.conta_id === cartao.id && d.status !== "quitada"
                 );
-                const despesasDoCartao = despesas.filter(
-                  (d: any) => d.conta_id === cartao.id || ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id))
-                );
+                
+                const hojeStr = format(new Date(), "yyyy-MM-dd");
+                const { mes_fatura, ano_fatura } = determinarFaturaParaData(hojeStr, cartao.dia_fechamento);
+                const periodo = calcularPeriodoFatura(cartao, mes_fatura, ano_fatura);
+
+                const despesasDoCartao = despesas.filter((d: any) => {
+                  const pertenceCartao =
+                    d.conta_id === cartao.id ||
+                    ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+                  if (!pertenceCartao) return false;
+                  return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
+                });
                 const faturaAtual = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0) + despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
                 const limiteTotal = Number(cartao.limite_credito) || 0;
                 const limiteDisponivel = Math.max(0, limiteTotal - faturaAtual);

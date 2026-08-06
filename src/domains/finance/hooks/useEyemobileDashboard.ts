@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { buildEyemobileDashboard, type EyemobileDashboardData } from "@/domains/finance/services/eyemobileDashboard";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 // Converte data DD/MM/YYYY ou ISO para ISO YYYY-MM-DD
 function toISODate(dateStr: string): string {
@@ -68,6 +69,7 @@ async function fetchLiveProducts(): Promise<unknown[]> {
 // Calcula KPIs locais a partir de transações salvas no banco
 async function buildLocalFallbackDashboard(
   filters: DashboardFilters,
+  workspaceId?: string,
 ): Promise<EyemobileDashboardResult> {
   // Produtos ao vivo em paralelo com a leitura do banco (não bloqueia)
   const productsPromise = fetchLiveProducts();
@@ -81,13 +83,19 @@ async function buildLocalFallbackDashboard(
   let queryError: any = null;
   
   while (fetchMore) {
-    const { data, error } = await supabase
+    let q = supabase
       .from("transacoes")
       .select("*")
       .eq("tipo", "receita")
+      .like("descricao", "Venda Eyemobile %")
       .gte("data", filters.startDate)
-      .lte("data", filters.endDate)
-      .range(page * pageSize, (page + 1) * pageSize - 1);
+      .lte("data", filters.endDate);
+
+    if (workspaceId) {
+      q = q.eq("workspace_id", workspaceId);
+    }
+
+    const { data, error } = await q.range(page * pageSize, (page + 1) * pageSize - 1);
 
     if (error) {
       queryError = error;
@@ -151,10 +159,7 @@ async function buildLocalFallbackDashboard(
   };
 }
 
-// Busca AO VIVO na API Eyemobile via Edge Function (lento: pagina todo o
-// período na API). Usado apenas no botão "Sincronizar" ou quando não há
-// nenhum dado local no período.
-async function fetchLiveDashboard(filters: DashboardFilters): Promise<EyemobileDashboardResult> {
+async function fetchLiveDashboard(filters: DashboardFilters, workspaceId?: string): Promise<EyemobileDashboardResult> {
   const isoStartDate = toISODate(filters.startDate);
   const isoEndDate = toISODate(filters.endDate);
 
@@ -168,6 +173,7 @@ async function fetchLiveDashboard(filters: DashboardFilters): Promise<EyemobileD
         start_date: isoStartDate,
         end_date: isoEndDate,
         store_id: filters.storeId || undefined,
+        workspace_id: workspaceId,
       },
     });
     data = result.data as EyemobileSyncResponse | null;
@@ -180,7 +186,7 @@ async function fetchLiveDashboard(filters: DashboardFilters): Promise<EyemobileD
     console.warn("Edge Function Eyemobile indisponível, usando fallback local...", invokeError || data?.error);
 
     if (data?.configured || !data) {
-      return buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate });
+      return buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate }, workspaceId);
     }
 
     return {
@@ -200,24 +206,15 @@ async function fetchLiveDashboard(filters: DashboardFilters): Promise<EyemobileD
 }
 
 export function useEyemobileDashboard(filters: DashboardFilters) {
+  const { activeWorkspace } = useWorkspace();
   const qc = useQueryClient();
   const queryKey = ["eyemobile-dashboard", filters.startDate, filters.endDate, filters.storeId ?? "all"];
 
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<EyemobileDashboardResult> => {
-      const isoStartDate = toISODate(filters.startDate);
-      const isoEndDate = toISODate(filters.endDate);
-
-      // 1) RÁPIDO: vendas já sincronizadas no banco local (~1s).
-      const local = await buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate });
-      if (local.configured && (local.kpis?.totalTransactions ?? 0) > 0) {
-        return local;
-      }
-
-      // 2) Sem dados locais: primeira vez / período ainda não sincronizado —
-      //    busca ao vivo na API (mais lento, mas necessário).
-      return fetchLiveDashboard(filters);
+      // Sempre tenta buscar o faturamento ao vivo via Edge Function para fidelidade de dados
+      return fetchLiveDashboard(filters, activeWorkspace?.id);
     },
     // Cache quente por 10 min: trocar de tela e voltar é instantâneo
     staleTime: 1000 * 60 * 10,
@@ -226,8 +223,9 @@ export function useEyemobileDashboard(filters: DashboardFilters) {
 
   // Botão "Sincronizar": força busca ao vivo na API e atualiza o cache.
   const syncLive = async (): Promise<EyemobileDashboardResult> => {
-    const live = await fetchLiveDashboard(filters);
+    const live = await fetchLiveDashboard(filters, activeWorkspace?.id);
     qc.setQueryData(queryKey, live);
+    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard"] });
     return live;
   };
 

@@ -119,6 +119,49 @@ async function findDefaultWorkspace(supabaseAdmin: any, userId: string): Promise
   return data?.id ?? null
 }
 
+function normalizarDocumento(doc: string | null | undefined): string {
+  if (!doc) return "";
+  const digits = doc.replace(/\D/g, "");
+  if (/[a-zA-Z]/.test(doc)) return doc.trim().toLowerCase();
+  return digits;
+}
+
+function normalizarNome(nome: string | null | undefined): string {
+  return (nome ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nomesParecidos(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizarNome(a);
+  const nb = normalizarNome(b);
+  if (!na || !nb) return false;
+  if (na.length >= 4 && nb.includes(na)) return true;
+  if (nb.length >= 4 && na.includes(nb)) return true;
+
+  const tokensA = new Set(na.split(" ").filter((t) => t.length >= 3));
+  const tokensB = new Set(nb.split(" ").filter((t) => t.length >= 3));
+  if (tokensA.size === 0 || tokensB.size === 0) return false;
+  let comuns = 0;
+  for (const t of tokensA) if (tokensB.has(t)) comuns++;
+  const menor = Math.min(tokensA.size, tokensB.size);
+  return comuns / menor >= 0.6;
+}
+
+function diasEntre(a: string, b: string): number {
+  const da = new Date(a.length === 10 ? `${a}T12:00:00` : a);
+  const db = new Date(b.length === 10 ? `${b}T12:00:00` : b);
+  return Math.abs(da.getTime() - db.getTime()) / 86_400_000;
+}
+
+function valorBate(valorDivida: number, valorSaque: number): boolean {
+  return Math.abs(valorDivida - valorSaque) <= 1.0;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -345,31 +388,235 @@ serve(async (req) => {
             console.error('Dívida da metadata não encontrada:', dividaId)
           }
         } else {
-          // Saída sem vínculo com dívida: despesa com o valor transferido
-          const categoriaSaidaId = await findOrCreateCategoria(
-            supabaseAdmin, userId, 'Transferências e Saques Divipay', 'despesa', 'ArrowUpRight', '#f97316',
-          )
-          const { data: despesa, error: despesaError } = await supabaseAdmin
-            .from('despesas')
-            .insert({
-              user_id: userId,
-              categoria_id: categoriaSaidaId,
-              conta_id: contaId,
-              workspace_id: defaultWorkspaceId,
-              descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
-              valor: transacao.amount,
-              data: hoje,
-              observacoes: `Importado via Divipay API (divipay-saque:${externalId})`,
-              metodo_pagamento: 'pix',
-              status: 'pago',
-            })
-            .select('id')
-            .single()
+          // ── Motor de 3 camadas para CASH_OUT sem divida_id
+          const saqueFavorecidoNome = (typeof metadata.payerName === "string" && metadata.payerName) || transacao.recipient_key || null
+          const saqueFavorecidoDocumento = typeof metadata.document === "string" ? metadata.document : null
+          const saqueValor = Number(transacao.amount || 0)
+          const saqueData = transacao.created_at || hoje
 
-          if (despesaError) {
-            console.error('Erro ao criar despesa de cash-out:', despesaError)
+          // Busca dívidas em aberto
+          const { data: dividas } = await supabaseAdmin
+            .from('dividas')
+            .select('id, descricao, credor, documento_favorecido, valor_restante, data_vencimento, workspace_id')
+            .eq('user_id', userId)
+            .neq('status', 'quitada')
+            .gt('valor_restante', 0)
+
+          const openDebts = (dividas ?? []).map((d: any) => ({
+            id: d.id,
+            descricao: d.descricao,
+            credor: d.credor,
+            documento_favorecido: d.documento_favorecido,
+            valor_restante: Number(d.valor_restante),
+            data_vencimento: d.data_vencimento,
+            workspace_id: d.workspace_id,
+          }))
+
+          // Filtro inicial por valor e vencimento (janela de 45 dias)
+          const candidatas = openDebts
+            .filter((d) => valorBate(d.valor_restante, saqueValor))
+            .filter((d) => diasEntre(d.data_vencimento, saqueData) <= 45)
+
+          let matchResult: 
+            | { camada: "auto"; divida: any }
+            | { camada: "pendente"; dividaSugerida: any }
+            | { camada: "avulsa" } = { camada: "avulsa" }
+
+          if (candidatas.length > 0) {
+            const docSaque = normalizarDocumento(saqueFavorecidoDocumento)
+
+            // 1. auto: match exato por documento
+            if (docSaque.length >= 6) {
+              const porDocumento = candidatas.filter((d) => {
+                const docDivida = normalizarDocumento(d.documento_favorecido)
+                return docDivida.length >= 6 && docDivida === docSaque
+              })
+              if (porDocumento.length > 0) {
+                porDocumento.sort((a, b) => Math.abs(a.valor_restante - saqueValor) - Math.abs(b.valor_restante - saqueValor))
+                matchResult = { camada: "auto", divida: porDocumento[0] }
+              }
+            }
+
+            if (matchResult.camada === "avulsa") {
+              // Exclui dívidas com documento divergente
+              const semConflitoDoc = candidatas.filter((d) => {
+                const docDivida = normalizarDocumento(d.documento_favorecido)
+                if (docDivida.length >= 6 && docSaque.length >= 6) return docDivida === docSaque
+                return true // dívida sem documento: segue para análise de nome
+              })
+
+              if (semConflitoDoc.length > 0) {
+                // 2. pendente: valor bate, sugere a mais provável para confirmação manual
+                const porNome = semConflitoDoc.filter((d) => nomesParecidos(d.credor, saqueFavorecidoNome))
+                const pool = porNome.length > 0 ? porNome : semConflitoDoc
+                pool.sort((a, b) => Math.abs(a.valor_restante - saqueValor) - Math.abs(b.valor_restante - saqueValor))
+                matchResult = { camada: "pendente", dividaSugerida: pool[0] ?? null }
+              }
+            }
+          }
+
+          if (matchResult.camada === "auto") {
+            const matchedDivida = matchResult.divida
+            dividaWorkspaceId = matchedDivida.workspace_id ?? null
+            const valorBaixa = Math.min(saqueValor, Number(matchedDivida.valor_restante))
+
+            if (valorBaixa > 0) {
+              const { error: pagError } = await supabaseAdmin
+                .from('pagamentos_dividas')
+                .insert({
+                  divida_id: matchedDivida.id,
+                  user_id: userId,
+                  valor: valorBaixa,
+                  data_pagamento: saqueData.slice(0, 10),
+                  metodo_pagamento: 'pix',
+                  conta_id: contaId,
+                  observacoes: `Pago via Divipay (Pix Auto-Match) - ${externalId}`,
+                  divipay_external_id: externalId,
+                })
+
+              if (pagError && pagError.code !== '23505') {
+                console.error('Erro ao registrar pagamento da dívida:', pagError)
+              } else if (!pagError) {
+                // Get current debt to update accurately
+                const { data: dividaFresh } = await supabaseAdmin
+                  .from('dividas')
+                  .select('*')
+                  .eq('id', matchedDivida.id)
+                  .single()
+
+                if (dividaFresh) {
+                  const novoValorPago = Number(dividaFresh.valor_pago) + valorBaixa
+                  const novasParcelasPagas = Math.min(Number(dividaFresh.parcelas_pagas) + 1, Number(dividaFresh.parcelas))
+                  const todasPagas = novasParcelasPagas >= Number(dividaFresh.parcelas)
+                  const novoValorRestante = todasPagas
+                    ? 0
+                    : Math.max(0, Number(dividaFresh.valor_total) - novoValorPago)
+                  const novoStatus = todasPagas
+                    ? 'quitada'
+                    : new Date(dividaFresh.data_vencimento) < new Date()
+                      ? 'vencida'
+                      : 'pendente'
+
+                  let novaDataVencimento = dividaFresh.data_vencimento
+                  if (!todasPagas) {
+                    const venc = new Date(`${dividaFresh.data_vencimento}T00:00:00`)
+                    venc.setMonth(venc.getMonth() + 1)
+                    novaDataVencimento = venc.toISOString().split('T')[0]
+                  }
+
+                  await supabaseAdmin
+                    .from('dividas')
+                    .update({
+                      valor_pago: novoValorPago,
+                      valor_restante: novoValorRestante,
+                      parcelas_pagas: novasParcelasPagas,
+                      data_vencimento: novaDataVencimento,
+                      status: novoStatus,
+                    })
+                    .eq('id', matchedDivida.id)
+                }
+              }
+            }
+
+            // Registrar conciliação como conciliada
+            const metaType = metadata.paymentType
+            await supabaseAdmin.from('divipay_conciliacoes').upsert(
+              {
+                user_id: userId,
+                divipay_external_id: externalId,
+                tipo: typeof metaType === 'string' ? metaType : null,
+                favorecido_nome: saqueFavorecidoNome,
+                favorecido_documento: saqueFavorecidoDocumento,
+                valor: saqueValor,
+                taxa: effectiveFee ?? 0,
+                data_pagamento: transacao.created_at,
+                descricao: transacao.description,
+                status: 'conciliada',
+                divida_id: matchedDivida.id,
+                divida_sugerida_id: null,
+                despesa_id: null,
+              },
+              { onConflict: 'user_id,divipay_external_id' }
+            )
+
+            metadata.divida_id = matchedDivida.id
+            metadata.divida_baixada = true
+          } else if (matchResult.camada === "pendente") {
+            const suggestedDivida = matchResult.dividaSugerida
+            dividaWorkspaceId = suggestedDivida?.workspace_id ?? null
+
+            // Registrar conciliação como pendente
+            const metaType = metadata.paymentType
+            await supabaseAdmin.from('divipay_conciliacoes').upsert(
+              {
+                user_id: userId,
+                divipay_external_id: externalId,
+                tipo: typeof metaType === 'string' ? metaType : null,
+                favorecido_nome: saqueFavorecidoNome,
+                favorecido_documento: saqueFavorecidoDocumento,
+                valor: saqueValor,
+                taxa: effectiveFee ?? 0,
+                data_pagamento: transacao.created_at,
+                descricao: transacao.description,
+                status: 'pendente',
+                divida_id: null,
+                divida_sugerida_id: suggestedDivida?.id ?? null,
+                despesa_id: null,
+              },
+              { onConflict: 'user_id,divipay_external_id' }
+            )
+
+            metadata.divida_sugerida_id = suggestedDivida?.id ?? null
+            metadata.conciliacao_status = 'pendente'
+            // NENHUMA despesa avulsa é criada aqui para aguardar a decisão do usuário em /conciliacao
           } else {
-            metadata.despesa_id = despesa.id
+            // Camada 3: Despesa Avulsa
+            const categoriaSaidaId = await findOrCreateCategoria(
+              supabaseAdmin, userId, 'Transferências e Saques Divipay', 'despesa', 'ArrowUpRight', '#f97316',
+            )
+            const { data: despesa, error: despesaError } = await supabaseAdmin
+              .from('despesas')
+              .insert({
+                user_id: userId,
+                categoria_id: categoriaSaidaId,
+                conta_id: contaId,
+                workspace_id: defaultWorkspaceId,
+                descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
+                valor: transacao.amount,
+                data: hoje,
+                observacoes: `Importado via Divipay API (divipay-saque:${externalId})`,
+                metodo_pagamento: 'pix',
+                status: 'pago',
+              })
+              .select('id')
+              .single()
+
+            if (despesaError) {
+              console.error('Erro ao criar despesa de cash-out:', despesaError)
+            } else {
+              metadata.despesa_id = despesa.id
+
+              // Registrar conciliação como importada
+              const metaType = metadata.paymentType
+              await supabaseAdmin.from('divipay_conciliacoes').upsert(
+                {
+                  user_id: userId,
+                  divipay_external_id: externalId,
+                  tipo: typeof metaType === 'string' ? metaType : null,
+                  favorecido_nome: saqueFavorecidoNome,
+                  favorecido_documento: saqueFavorecidoDocumento,
+                  valor: saqueValor,
+                  taxa: effectiveFee ?? 0,
+                  data_pagamento: transacao.created_at,
+                  descricao: transacao.description,
+                  status: 'importada',
+                  divida_id: null,
+                  divida_sugerida_id: null,
+                  despesa_id: despesa.id,
+                },
+                { onConflict: 'user_id,divipay_external_id' }
+              )
+            }
           }
         }
 

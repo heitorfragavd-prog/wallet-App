@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -63,6 +63,8 @@ import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
 import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
 import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { supabase } from "@/integrations/supabase/client";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
 import { AccountSelector } from "@/domains/finance/components/AccountSelector";
@@ -110,13 +112,43 @@ const getPaymentMethodInfo = (method: string | null | undefined) => {
 const Receitas = () => {
   const { toast } = useToast();
   const { categoriasReceita } = useCategorias();
+  const { activeWorkspace } = useWorkspace();
 
   // ── Filtro de data
-  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'today' });
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'month' });
 
   const { receitas, loading, createReceita, updateReceita, deleteReceita, getReceitaTags } = useReceitas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
+  });
+ 
+  // Busca a receita do dia atual de forma independente (sempre do dia de hoje)
+  const hojeLocalStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const { receitas: receitasDeHoje } = useReceitas({
+    startDate: hojeLocalStr,
+    endDate: hojeLocalStr,
+  });
+
+  // Busca as receitas do mês completo correspondente ao período selecionado
+  const { startOfCurrentMonth, endOfCurrentMonth } = useMemo(() => {
+    const refDate = dateRange.startDate ? new Date(dateRange.startDate + "T12:00:00") : new Date();
+    const y = refDate.getFullYear();
+    const m = refDate.getMonth();
+    const start = new Date(y, m, 1);
+    const end = new Date(y, m + 1, 0);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return {
+      startOfCurrentMonth: fmt(start),
+      endOfCurrentMonth: fmt(end)
+    };
+  }, [dateRange.startDate]);
+
+  const { receitas: receitasDoMes } = useReceitas({
+    startDate: startOfCurrentMonth,
+    endDate: endOfCurrentMonth,
   });
 
   // v3.1: subcategorias, centros de custo e clientes
@@ -327,17 +359,13 @@ const Receitas = () => {
       grupos[dataKey].push(r);
     });
 
-    const total = receitas.reduce((sum, r) => sum + r.valor, 0);
-    const media = receitas.length > 0 ? total / Math.max(1, new Set(receitas.map(r => r.data.substring(0, 7))).size) : 0;
+    const total = receitasDoMes.reduce((sum, r) => sum + r.valor, 0);
+    const media = receitasDoMes.length > 0 ? total / Math.max(1, new Set(receitasDoMes.map(r => r.data.substring(0, 7))).size) : 0;
 
-    // Receitas do dia (comparação por data local, ignorando fuso horário)
-    // O Supabase retorna a data como YYYY-MM-DD; new Date('YYYY-MM-DD') vira
-    // UTC meia-noite, o que no Brasil (GMT-3) desloca um dia. Compensamos
-    // usando meio-dia local (igual a formatarDataRelativa) antes de comparar.
     const hoje = new Date();
     hoje.setHours(12, 0, 0, 0);
     const hojeStr = hoje.toISOString().split("T")[0]; // YYYY-MM-DD local
-    const receitasDoDia = receitas.filter((r) => {
+    const receitasDoDia = receitasDeHoje.filter((r) => {
       const dataStr = new Date(r.data.split("T")[0] + "T12:00:00").toISOString().split("T")[0];
       return dataStr === hojeStr;
     });
@@ -421,7 +449,7 @@ const Receitas = () => {
       hourlyData,
       totalFiltrado,
     };
-  }, [receitas, filtro, categoriaFiltro, visibleCount]);
+  }, [receitas, receitasDeHoje, receitasDoMes, filtro, categoriaFiltro, visibleCount]);
 
   const limparFiltros = () => {
     setFiltro("");
@@ -482,7 +510,7 @@ const Receitas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      R$ {totalFiltrado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   )}
                 </div>
@@ -521,7 +549,7 @@ const Receitas = () => {
                   {loading ? (
                     <Skeleton className="h-8 w-16" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">{receitas.length}</p>
+                    <p className="text-2xl font-bold text-foreground">{receitasFiltradas.length}</p>
                   )}
                 </div>
                 <div className="p-3 rounded-xl bg-purple-500/20">

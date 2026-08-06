@@ -135,6 +135,13 @@ serve(async (req) => {
       auth: { persistSession: false, autoRefreshToken: false }
     });
 
+    let requestBody: Record<string, unknown> = {};
+    try {
+      requestBody = await req.json();
+    } catch (_) {}
+
+
+
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.replace("Bearer ", "");
 
@@ -147,14 +154,8 @@ serve(async (req) => {
       token === supabaseServiceKey || (cronSecret.length > 0 && token === cronSecret);
 
     let user_id: string | null = null;
-    let requestBody: any = {};
-    try {
-      requestBody = await req.json();
-    } catch (_) {
-      // Empty body
-    }
 
-    const { mode, access_key, secret_key, environment, page, page_size, preview, end_date, store_id } = requestBody;
+    const { mode, access_key, secret_key, environment, page, page_size, preview, end_date, store_id } = requestBody as any;
 
     let customOffset: number | undefined = undefined;
     let customLimit: number | undefined = undefined;
@@ -614,31 +615,33 @@ async function syncUserEyemobile(
   // Workspace das vendas PDV: prefere o workspace empresarial (PJ) do usuário;
   // fallback para o workspace default. Sem isso as vendas ficavam órfãs e
   // sumiam do Dashboard/Transações quando um workspace estava ativo.
-  let syncWorkspaceId: string | null = null;
-  try {
-    const { data: wsPj } = await supabaseAdmin
-      .from("workspaces")
-      .select("id")
-      .eq("user_id", user_id)
-      .eq("tipo", "PJ")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (wsPj) {
-      syncWorkspaceId = wsPj.id;
-    } else {
-      const { data: wsDefault } = await supabaseAdmin
+  let syncWorkspaceId: string | null = requestBody.workspace_id || null;
+  if (!syncWorkspaceId) {
+    try {
+      const { data: wsPj } = await supabaseAdmin
         .from("workspaces")
         .select("id")
         .eq("user_id", user_id)
-        .eq("is_default", true)
+        .eq("tipo", "PJ")
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
-      syncWorkspaceId = wsDefault?.id ?? null;
+      if (wsPj) {
+        syncWorkspaceId = wsPj.id;
+      } else {
+        const { data: wsDefault } = await supabaseAdmin
+          .from("workspaces")
+          .select("id")
+          .eq("user_id", user_id)
+          .eq("is_default", true)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        syncWorkspaceId = wsDefault?.id ?? null;
+      }
+    } catch (wsErr) {
+      console.error("Não foi possível resolver o workspace do sync:", wsErr);
     }
-  } catch (wsErr) {
-    console.error("Não foi possível resolver o workspace do sync:", wsErr);
   }
 
   // 2. Sales Sync
@@ -657,7 +660,8 @@ async function syncUserEyemobile(
         const { count: dbCount } = await supabaseAdmin
           .from("transacoes")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", user_id);
+          .eq("user_id", user_id)
+          .eq("workspace_id", syncWorkspaceId);
           
         const totalPagesEstimated = Math.max(35, Math.ceil((dbCount || 0) / 100));
 
@@ -701,6 +705,7 @@ async function syncUserEyemobile(
             .from("transacoes")
             .select("id", { count: "exact", head: true })
             .eq("user_id", user_id)
+            .eq("workspace_id", syncWorkspaceId)
             .eq("tipo", "receita")
             .ilike("observacoes", "%Integrado via Eyemobile API.%");
 
@@ -708,6 +713,7 @@ async function syncUserEyemobile(
             .from("transacoes")
             .select("id", { count: "exact", head: true })
             .eq("user_id", user_id)
+            .eq("workspace_id", syncWorkspaceId)
             .eq("tipo", "receita")
             .ilike("observacoes", "%Integrado via Eyemobile API.%")
             .lt("data", startStr);
@@ -785,6 +791,7 @@ async function syncUserEyemobile(
               .from("transacoes")
               .select("id, metodo_pagamento, observacoes, itens")
               .eq("user_id", user_id)
+              .eq("workspace_id", syncWorkspaceId)
               .eq("tipo", "receita")
               .gte("data", safeMinDate)
               .lte("data", safeMaxDate)

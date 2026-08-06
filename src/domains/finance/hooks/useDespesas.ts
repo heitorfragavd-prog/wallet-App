@@ -30,12 +30,13 @@ export interface DespesasQueryParams {
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
   const { startDate, endDate, workspaceId } = params;
+  console.log("[fetchDespesas Hook Call]", { startDate, endDate, workspaceId });
 
   let despesasQuery = supabase
     .from("despesas")
-    .select("*, categorias(nome, cor, icone), despesa_tags (tags (id, nome, cor))");
+    .select("*, categorias!despesas_categoria_id_fkey(nome, cor, icone), despesa_tags (tags (id, nome, cor))");
 
-  if (workspaceId) despesasQuery = despesasQuery.eq("workspace_id", workspaceId);
+  if (workspaceId) despesasQuery = despesasQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
   if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
 
@@ -44,24 +45,38 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     .select("*, categorias(nome, cor, icone)")
     .eq("tipo", "despesa");
 
-  if (workspaceId) transacoesQuery = transacoesQuery.eq("workspace_id", workspaceId);
+  if (workspaceId) transacoesQuery = transacoesQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
   if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
 
-  const [despesasResp, transacoesResp] = await Promise.all([despesasQuery, transacoesQuery]);
+  try {
+    const [despesasResp, transacoesResp] = await Promise.all([
+      despesasQuery,
+      transacoesQuery
+    ]);
 
-  if (despesasResp.error) throw despesasResp.error;
-  if (transacoesResp.error) throw transacoesResp.error;
+    console.log("[fetchDespesas DB Success]", { 
+      despesasRawCount: despesasResp.data?.length || 0,
+      transacoesRawCount: transacoesResp.data?.length || 0 
+    });
 
-  const mappedDespesas = (despesasResp.data ?? []).map((d) => ({
-    ...d,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tags: (d as any).despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
-  }));
+    const mappedDespesas = (despesasResp.data ?? []).map((d) => ({
+      ...d,
+      tags: (d as any).despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
+    }));
 
-  return [...mappedDespesas, ...(transacoesResp.data ?? [])].sort(
-    (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
-  ) as Despesa[];
+    const mappedTransacoes = transacoesResp.data ?? [];
+
+    const res = [...mappedDespesas, ...mappedTransacoes].sort(
+      (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+    ) as Despesa[];
+
+    console.log("[fetchDespesas Hook Finish Success]", { finalCount: res.length });
+    return res;
+  } catch (err: any) {
+    console.error("[fetchDespesas Hook Exception]", err);
+    throw err;
+  }
 }
 
 // ─── Tag helpers ─────────────────────────────────────────────────

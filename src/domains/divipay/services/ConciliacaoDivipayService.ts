@@ -18,6 +18,7 @@ import {
   type DividaCandidata,
   type SaqueParaConciliar,
 } from "./conciliacaoMatcher";
+import { resolveBeneficiary } from "../utils";
 
 const COMPONENT = "ConciliacaoDivipayService";
 
@@ -259,14 +260,23 @@ export function mapearSaque(t: DivipayTransacao): SaqueParaConciliar | null {
   const externalId = t.external_id ?? (t.id.startsWith("api-") ? t.id.slice(4) : t.id);
   if (!externalId) return null;
   const meta = (t.metadata ?? {}) as Record<string, unknown>;
+  const isBoleto = typeof meta.paymentType === "string" ? meta.paymentType === "BILLET" : String(t.description || "").toLowerCase().includes("boleto");
+  const resolved = resolveBeneficiary(Number(t.amount || 0), t.description || "", isBoleto ? "Boleto" : "Pix");
+  
   return {
     externalId,
     tipo: typeof meta.paymentType === "string" ? meta.paymentType : null,
     favorecidoNome:
-      (typeof meta.payerName === "string" && meta.payerName) || t.recipient_key || null,
-    favorecidoDocumento: typeof meta.document === "string" ? meta.document : null,
+      (typeof meta.payerName === "string" && meta.payerName) ||
+      resolved.name ||
+      t.recipient_key ||
+      null,
+    favorecidoDocumento:
+      (typeof meta.document === "string" && meta.document && meta.document !== "---")
+        ? meta.document
+        : resolved.document || null,
     valor: Number(t.amount || 0),
-    taxa: Number(t.fee ?? meta.tax ?? 0),
+    taxa: Number(t.fee || meta.tax || 3.50),
     dataPagamento: t.created_at,
     descricao: t.description ?? null,
   };
