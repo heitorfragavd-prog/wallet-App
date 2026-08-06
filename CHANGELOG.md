@@ -2,6 +2,22 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.35] - 2026-08-06
+
+### ✨ Novo
+- **Módulo de Investimentos Completo** — Lançamento do módulo avançado de investimentos e patrimônio (`eb224a3`), contendo:
+  - Gestão de metas de investimento e depósitos vinculados.
+  - Alocação e rebalanceamento automático de carteira.
+  - Sugestões de depósitos inteligentes via Inteligência Artificial (`ia-deposito`).
+  - Atualização diária automatizada de cotações (`atualizar-cotacoes`).
+  - Alertas automatizados para variações de ativos (`cron-alertas-investimentos`).
+  - Proteção por senha adicional exclusiva para área de investimentos.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.35**
+
+---
+
 ## [1.0.34] - 2026-08-06
 
 ### ✨ Novo
