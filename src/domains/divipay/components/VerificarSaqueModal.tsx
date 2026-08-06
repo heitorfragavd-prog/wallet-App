@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,6 +8,9 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { Printer, Download } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+import jsPDF from "jspdf";
+import { getDueDateFromBoleto } from "../utils";
+
 
 export interface SaqueDetails {
   id: string;
@@ -45,15 +49,108 @@ export function VerificarSaqueModal({
   onOpenChange,
   saque,
 }: VerificarSaqueModalProps) {
+  const [copied, setCopied] = useState(false);
+
   const cliente = saque?.cliente || "49.683.323 Heitor Fraga de Oliveira";
   const documentoCliente = saque?.documentoCliente || "49.683.323/0001-16";
   const valorSaque = saque?.amount || 0;
   const taxa = saque?.tax || 3.50;
   const valorFinal = valorSaque + taxa;
-  const statusPagamento = saque?.status === "FINALIZADO" || saque?.status === "PAID" ? "Pago" : (saque?.status || "Pago");
+  const statusPagamento = saque?.status === "FINALIZADO" || saque?.status === "PAID" || saque?.status === "FINISHED" ? "Pago" : (saque?.status === "IN_PAYMENT" ? "Em pagamento" : (saque?.status || "Pago"));
   const chavePix = saque?.chavePix || "23890726000142";
   const idPagamento = saque?.idPagamento || "E81014060202607291908QDYvmCy218a";
   const pagoEm = saque?.pagoEm || "29/07/2026 16:09:22";
+
+  const isBoleto =
+    saque?.type === "Boleto" ||
+    saque?.type === "BILLET" ||
+    String(saque?.description || "").toLowerCase().includes("boleto");
+
+  const handleCopy = () => {
+    if (!saque?.billetCode) return;
+    navigator.clipboard.writeText(saque.billetCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const baixarComprovantePDF = () => {
+    const doc = new jsPDF();
+    doc.setFont("helvetica", "normal");
+
+    // Draw Header
+    doc.setFillColor(31, 41, 55); // Dark Slate background
+    doc.rect(0, 0, 210, 35, "F");
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("DiviPay", 14, 23);
+
+    doc.setTextColor(245, 158, 11); // Amber
+    doc.setFontSize(10);
+    doc.text("COMPROVANTE DE TRANSFERÊNCIA", 14, 30);
+
+    // Reset colors
+    doc.setTextColor(31, 41, 55);
+    doc.setFontSize(12);
+
+    // Draw details
+    let y = 50;
+    const drawRow = (label: string, value: string) => {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(156, 163, 175); // Light Gray
+      doc.text(label.toUpperCase(), 14, y);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+      doc.setTextColor(31, 41, 55);
+      doc.text(value, 14, y + 6);
+      y += 18;
+    };
+
+    drawRow("Cliente", cliente);
+    drawRow("Documento do Cliente", documentoCliente);
+    drawRow("Valor do Saque", formatCurrency(valorSaque));
+    drawRow("Valor da Taxa", formatCurrency(taxa));
+    drawRow("Valor Final", formatCurrency(valorFinal));
+    drawRow("Descrição", saque?.description || "Saque");
+
+    if (isBoleto) {
+      drawRow("Vencimento", getDueDateFromBoleto(saque?.billetCode || "", saque?.pagoEm || saque?.createdAt));
+      drawRow("Código do Boleto", saque?.billetCode || "---");
+    } else {
+      drawRow("Chave Pix", chavePix);
+      drawRow("ID do Pagamento", idPagamento);
+      drawRow("Pago em", pagoEm);
+    }
+
+    // Draw Quem Pagou & Quem Recebeu sections
+    y += 5;
+    doc.setDrawColor(229, 231, 235); // Light Gray border
+    doc.line(14, y, 196, y);
+    y += 10;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(156, 163, 175);
+    doc.text("DADOS DE PAGAMENTO", 14, y);
+    y += 10;
+
+    const pagadorNome = saque?.pagadorNome || "DIVI SERVIÇOS E TECNOLOGIA LTDA";
+    const pagadorCnpj = saque?.pagadorCnpj || "47.992.443/0001-70";
+    const recebedorNome = saque?.recebedorNome || (isBoleto ? "BRASNORTE DISTRIBUIDORA DE BEBIDAS LTDA" : saque?.name || "---");
+    const recebedorCnpj = saque?.recebedorCnpj || (isBoleto ? saque?.document || "---" : "---");
+
+    drawRow("Quem Pagou (Nome)", pagadorNome);
+    drawRow("Quem Pagou (CNPJ)", pagadorCnpj);
+    drawRow("Quem Recebeu (Nome)", recebedorNome);
+    if (recebedorCnpj !== "---") {
+      drawRow("Quem Recebeu (CPF/CNPJ)", recebedorCnpj);
+    }
+
+    doc.save(`comprovante_${saque?.id || "saque"}.pdf`);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -102,59 +199,98 @@ export function VerificarSaqueModal({
             <span className="font-medium text-gray-900 text-sm block">{saque?.description || "Gerson salgados"}</span>
           </div>
 
-          {/* Dados bancários */}
-          <div className="pt-2 border-t border-gray-100 space-y-2">
-            <h4 className="font-bold text-sm text-gray-900">Dados bancários</h4>
-            <div className="space-y-0.5">
-              <span className="text-[11px] text-gray-400 font-medium block">Chave Pix</span>
-              <span className="font-mono font-medium text-gray-900 text-xs block">{chavePix}</span>
+          {/* Dados bancários ou Dados Boleto */}
+          {isBoleto ? (
+            <div className="pt-2 border-t border-gray-100 space-y-3">
+              <h4 className="font-bold text-sm text-gray-900">Dados Boleto</h4>
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Data de Vencimento</span>
+                <span className="font-medium text-gray-900 text-sm block">
+                  {getDueDateFromBoleto(saque?.billetCode || "", saque?.pagoEm || saque?.createdAt)}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Boleto</span>
+                <span className="font-mono text-[11px] text-gray-800 block break-all bg-gray-50 p-2 rounded border border-gray-100 leading-relaxed">
+                  {saque?.billetCode || "---"}
+                </span>
+                {saque?.billetCode && (
+                  <Button
+                    variant="outline"
+                    onClick={handleCopy}
+                    className="w-full text-xs font-semibold py-1 h-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 border-emerald-200"
+                  >
+                    {copied ? "Copiado!" : "Copiar"}
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="pt-2 border-t border-gray-100 space-y-2">
+              <h4 className="font-bold text-sm text-gray-900">Dados bancários</h4>
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Chave Pix</span>
+                <span className="font-mono font-medium text-gray-900 text-xs block">{chavePix}</span>
+              </div>
+            </div>
+          )}
 
           {/* Comprovante */}
-          <div className="pt-2 border-t border-gray-100 space-y-3">
-            <h4 className="font-bold text-sm text-gray-900">Comprovante</h4>
-
-            {/* Ações Impressão & Download */}
-            <div className="flex items-center gap-2">
+          {isBoleto ? (
+            <div className="pt-2 border-t border-gray-100 space-y-2">
+              <h4 className="font-bold text-sm text-gray-900">Download do comprovante</h4>
               <Button
-                variant="outline"
-                size="icon"
-                onClick={() => window.print()}
-                className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
-                title="Imprimir comprovante"
+                onClick={baixarComprovantePDF}
+                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-xl text-xs h-10 shadow-sm transition-colors"
               >
-                <Printer className="w-3.5 h-3.5" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => alert("Comprovante baixado com sucesso.")}
-                className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
-                title="Baixar comprovante PDF"
-              >
-                <Download className="w-3.5 h-3.5" />
+                Download
               </Button>
             </div>
+          ) : (
+            <div className="pt-2 border-t border-gray-100 space-y-3">
+              <h4 className="font-bold text-sm text-gray-900">Comprovante</h4>
 
-            {/* Status Pagamento */}
-            <div className="space-y-0.5">
-              <span className="text-[11px] text-gray-400 font-medium block">Status Pagamento</span>
-              <span className="font-semibold text-gray-900 text-sm block">{statusPagamento}</span>
-            </div>
+              {/* Ações Impressão & Download */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => window.print()}
+                  className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                  title="Imprimir comprovante"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={baixarComprovantePDF}
+                  className="h-8 w-8 rounded-lg border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                  title="Baixar comprovante PDF"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </Button>
+              </div>
 
-            {/* Id de Pagamento */}
-            <div className="space-y-0.5">
-              <span className="text-[11px] text-gray-400 font-medium block">Id de Pagamento</span>
-              <span className="font-mono text-[11px] text-gray-600 block break-all">{idPagamento}</span>
-            </div>
+              {/* Status Pagamento */}
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Status Pagamento</span>
+                <span className="font-semibold text-gray-900 text-sm block">{statusPagamento}</span>
+              </div>
 
-            {/* Pago em */}
-            <div className="space-y-0.5">
-              <span className="text-[11px] text-gray-400 font-medium block">Pago em</span>
-              <span className="font-medium text-gray-900 text-xs block">{pagoEm}</span>
+              {/* Id de Pagamento */}
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Id de Pagamento</span>
+                <span className="font-mono text-[11px] text-gray-600 block break-all">{idPagamento}</span>
+              </div>
+
+              {/* Pago em */}
+              <div className="space-y-0.5">
+                <span className="text-[11px] text-gray-400 font-medium block">Pago em</span>
+                <span className="font-medium text-gray-900 text-xs block">{pagoEm}</span>
+              </div>
             </div>
-          </div>
+          )}
 
         </div>
 

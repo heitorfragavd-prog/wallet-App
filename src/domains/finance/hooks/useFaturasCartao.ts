@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -33,37 +34,41 @@ export interface PeriodoFaturaInfo {
  * para a fatura de um cartão em um mês/ano específico.
  */
 export function calcularPeriodoFatura(
-  cartao: { dia_fechamento?: number | null; dia_vencimento?: number | null },
+  cartao: { dia_fechamento?: number | null; dia_vencimento?: number | null } | number | null | undefined,
   mes: number,
   ano: number
 ): PeriodoFaturaInfo {
-  const diaFech = cartao.dia_fechamento && cartao.dia_fechamento > 0 && cartao.dia_fechamento <= 31 ? cartao.dia_fechamento : 22;
-  const diaVenc = cartao.dia_vencimento && cartao.dia_vencimento > 0 && cartao.dia_vencimento <= 31 ? cartao.dia_vencimento : 21;
+  let diaFech = 1;
+  let diaVenc = 10;
 
-  // Data de fechamento do mês da fatura (ex: 22/07/2026)
-  const maxFechCurrentMonth = new Date(ano, mes, 0).getDate();
-  const actualFechDay = Math.min(diaFech, maxFechCurrentMonth);
-  const dataFechamento = `${ano}-${String(mes).padStart(2, "0")}-${String(actualFechDay).padStart(2, "0")}`;
-
-  // Data de início = Fechamento do mês anterior (ex: 22/06/2026)
-  const prevMonthDate = new Date(ano, mes - 2, 1);
-  const prevAno = prevMonthDate.getFullYear();
-  const prevMes = prevMonthDate.getMonth() + 1;
-  const maxFechPrevMonth = new Date(prevAno, prevMes, 0).getDate();
-  const actualPrevFechDay = Math.min(diaFech, maxFechPrevMonth);
-  const dataInicio = `${prevAno}-${String(prevMes).padStart(2, "0")}-${String(actualPrevFechDay).padStart(2, "0")}`;
-
-  // Data de vencimento: se dia_vencimento <= dia_fechamento, o vencimento é no mês seguinte
-  let vencAno = ano;
-  let vencMes = mes;
-  if (diaVenc <= diaFech) {
-    const nextMonthDate = new Date(ano, mes, 1);
-    vencAno = nextMonthDate.getFullYear();
-    vencMes = nextMonthDate.getMonth() + 1;
+  if (typeof cartao === "number") {
+    diaFech = cartao > 0 && cartao <= 31 ? cartao : 1;
+  } else if (cartao && typeof cartao === "object") {
+    const rawFech = Number(cartao.dia_fechamento);
+    const rawVenc = Number(cartao.dia_vencimento);
+    if (!isNaN(rawFech) && rawFech > 0 && rawFech <= 31) {
+      diaFech = rawFech;
+    }
+    if (!isNaN(rawVenc) && rawVenc > 0 && rawVenc <= 31) {
+      diaVenc = rawVenc;
+    }
   }
-  const maxVencDay = new Date(vencAno, vencMes, 0).getDate();
-  const actualVencDay = Math.min(diaVenc, maxVencDay);
-  const dataVencimento = `${vencAno}-${String(vencMes).padStart(2, "0")}-${String(actualVencDay).padStart(2, "0")}`;
+
+  // Fatura do mês 'mes' (1-12) e ano 'ano':
+  // data_fechamento: 22/08/2026 (se mes=8, ano=2026, diaFech=22)
+  const fechDate = new Date(ano, mes - 1, diaFech);
+  const dataFechamento = format(fechDate, "yyyy-MM-dd");
+
+  // data_inicio: 22/07/2026 (mês anterior)
+  const inicioDate = new Date(ano, mes - 2, diaFech);
+  const dataInicio = format(inicioDate, "yyyy-MM-dd");
+
+  // data_vencimento: 21/09/2026 (se vencimento <= fechamento, mês seguinte)
+  let vencDate = new Date(ano, mes - 1, diaVenc);
+  if (diaVenc <= diaFech) {
+    vencDate = new Date(ano, mes, diaVenc);
+  }
+  const dataVencimento = format(vencDate, "yyyy-MM-dd");
 
   return {
     data_inicio: dataInicio,

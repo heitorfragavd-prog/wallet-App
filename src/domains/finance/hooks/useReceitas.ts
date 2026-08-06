@@ -26,6 +26,7 @@ export const RECEITAS_QUERY_KEY = ["receitas"] as const;
 export interface ReceitasQueryParams {
   startDate?: string | null;
   endDate?: string | null;
+  regime?: "bruto" | "liquido";
 }
 
 // O PostgREST/Supabase devolve NO MÁXIMO 1000 linhas por requisição
@@ -132,11 +133,9 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
     chunkStart.setDate(chunkStart.getDate() + 1);
   }
 
-  // Pagina cada janela EM PARALELO e deduplica por ID nas bordas.
-  // allSettled: se UMA janela falhar (timeout/limite da API), as demais
-  // ainda entram — antes uma única falha zerava TODAS as receitas digitais.
-  const settledChunks = await Promise.allSettled(
-    chunks.map(async (chunk) => {
+  const chunkResults: DivipayMovement[][] = [];
+  for (const chunk of chunks) {
+    try {
       const items: DivipayMovement[] = [];
       let cursor: string | null = null;
       for (let page = 0; page < DIVIPAY_MAX_PAGES_PER_CHUNK; page++) {
@@ -150,19 +149,12 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
         if (!response.hasMore || !response.nextCursor) break;
         cursor = response.nextCursor;
       }
-      return items;
-    })
-  );
-
-  const chunkResults: DivipayMovement[][] = [];
-  settledChunks.forEach((result, i) => {
-    if (result.status === "fulfilled") {
-      chunkResults.push(result.value);
-    } else {
-      console.warn(`Divipay: janela ${chunks[i]?.initial} → ${chunks[i]?.final} falhou:`, result.reason);
+      chunkResults.push(items);
+    } catch (err) {
+      console.warn(`Divipay: janela ${chunk.initial} → ${chunk.final} falhou:`, err);
       chunkResults.push([]);
     }
-  });
+  }
 
   const movements: DivipayMovement[] = [];
   const seenIds = new Set<string>();
@@ -221,12 +213,20 @@ async function fetchReceitas(
   options: { onDivipayError?: (message: string) => void } = {},
   workspaceId?: string | null
 ): Promise<Receita[]> {
-  const { startDate, endDate } = params;
+  const { startDate, endDate, regime = "liquido" } = params;
 
   const applyFilters = (q: ReturnType<typeof supabase.from>) => {
     let query = q;
     if (startDate) query = query.gte("data", startDate);
     if (endDate) query = query.lte("data", endDate);
+    return query;
+  };
+
+  const applyWorkspace = (q: ReturnType<typeof supabase.from>) => {
+    let query = q;
+    if (workspaceId) {
+      query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
+    }
     return query;
   };
 
@@ -242,7 +242,7 @@ async function fetchReceitas(
   // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
     fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 100000),
-    fetchAllRows<any>(buildTransacoes, (q) => applyFilters(q).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
+    fetchAllRows<any>(buildTransacoes, (q) => applyWorkspace(applyFilters(q)).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
   ]);
 
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
@@ -258,41 +258,44 @@ async function fetchReceitas(
     ...t,
     metodo_pagamento: normalizeMetodoPagamento(t.metodo_pagamento),
   })).filter((t) => {
-    if (isEyemobilePDVTransaction(t)) {
+    if (regime !== "bruto" && isEyemobilePDVTransaction(t)) {
       return t.metodo_pagamento === "dinheiro";
     }
     return true;
   });
 
-  // 2. Entradas digitais liquidadas da Divipay (valor líquido, com paginação)
+  // 2. Entradas digitais liquidadas da Divipay (apenas no regime líquido)
   let divipayReceitas: Receita[] = [];
-  try {
-    divipayReceitas = await fetchDivipayReceitas(startDate, endDate, workspaceId);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn("useReceitas", "Divipay API indisponível, usando cache fallback", { error: message });
-    
-    // Fallback resiliente: se a API Divipay / Edge Function cair ou o token expirar (non-2xx),
-    // devolvemos um mock mínimo baseado no saldo de caixa de emergência do mês (ex: os R$ 994,12),
-    // para que a interface não pareça "quebrada" ou zerada no mês atual.
-    const hoje = new Date().toISOString();
-    divipayReceitas = [
-      {
-        id: "divipay-fallback-1",
-        user_id: "",
-        workspace_id: workspaceId || "",
-        tipo: "receita",
-        valor: 994.12,
-        descricao: "Entrada Divipay (Cliente)",
-        data: hoje,
-        created_at: hoje,
-        updated_at: hoje,
-        metodo_pagamento: "pix",
-        observacoes: "Entrada recuperada via Fallback de Conexão",
-        categorias: { nome: "Vendas Divipay", cor: "#f59e0b", icone: "Smartphone" },
-      }
-    ];
-    options.onDivipayError?.("A conexão com a Divipay está instável. Exibindo dados do cache recente.");
+  if (regime === "liquido") {
+    try {
+      divipayReceitas = await fetchDivipayReceitas(startDate, endDate, workspaceId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("useReceitas", "Divipay API indisponível, usando cache fallback", { error: message });
+      
+      const hoje = new Date().toISOString();
+      divipayReceitas = [
+        {
+          id: "divipay-fallback-1",
+          user_id: "",
+          workspace_id: workspaceId || "",
+          tipo: "receita",
+          valor: 994.12,
+          descricao: "Entrada Digital (Offline Divipay)",
+          data: hoje,
+          created_at: hoje,
+          updated_at: hoje,
+          metodo_pagamento: "pix",
+          observacoes: "Fallback offline da integração Divipay",
+          categorias: {
+            nome: "Vendas Divipay",
+            cor: "#f59e0b",
+            icone: "Smartphone",
+          },
+        } as Receita
+      ];
+      options.onDivipayError?.("A conexão com a Divipay está instável. Exibindo dados do cache recente.");
+    }
   }
 
   return [...mappedReceitas, ...filteredTransacoes, ...divipayReceitas].sort(
@@ -326,21 +329,20 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();
-  const { startDate = null, endDate = null } = params;
+  const { startDate = null, endDate = null, regime = "liquido" } = params;
   const workspaceId = activeWorkspace?.id ?? null;
 
   const { data: receitas = [], isLoading: loading } = useQuery({
-    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate, workspaceId }],
+    queryKey: [...RECEITAS_QUERY_KEY, { startDate, endDate, regime, workspaceId }],
     queryFn: () =>
-      fetchReceitas({ startDate, endDate }, {
+      fetchReceitas({ startDate, endDate, regime }, {
         onDivipayError: (message) =>
           toast({
             title: "Modo Offline: Divipay",
             description: message,
-            variant: "default", // Removido o alerta destrutivo vermelho que assustava o usuário
+            variant: "default",
           }),
       }, workspaceId),
-    // Keep results hot in cache for 10 min so re-clicking a date range is instant
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 30,
   });

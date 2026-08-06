@@ -42,6 +42,13 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { supabase } from "@/integrations/supabase/client";
+import { getIconForCategoria, getIconNameForCategoria } from "@/shared/utils/categoriaIcons";
+
+// Componente para renderizar o ícone da categoria dinamicamente
+function IconCategoria({ categoria, className, style }: { categoria: { nome: string; tipo: "receita" | "despesa" }; className?: string; style?: React.CSSProperties }) {
+  const IconComponent = getIconForCategoria(categoria.nome, categoria.tipo);
+  return <IconComponent className={className} style={style} />;
+}
 
 const Categorias = () => {
   const { toast } = useToast();
@@ -83,21 +90,24 @@ const Categorias = () => {
   const temFiltrosAtivos = filtro !== "" || tipoFiltro !== "";
 
   const handleAdicionarCategoria = async () => {
-    if (!novoNome.trim()) {
-      toast({ title: "Erro", description: "Por favor, informe o nome da categoria.", variant: "destructive" });
-      return;
-    }
+      if (!novoNome.trim()) {
+        toast({ title: "Erro", description: "Por favor, informe o nome da categoria.", variant: "destructive" });
+        return;
+      }
 
-    await createCategoria({
-      nome: novoNome,
-      tipo: novoTipo,
-      cor: novaCor,
-      icone: "DollarSign",
-      parent_id: novoParentId || undefined,
-    });
-    setNovoNome(""); setNovoTipo("receita"); setNovaCor("#10B981"); setNovoParentId(""); setNovaDescricao("");
-    setActiveTab("lista");
-  };
+      // Sugere ícone automaticamente baseado no nome
+      const iconeSugerido = getIconNameForCategoria(novoNome, novoTipo);
+
+      await createCategoria({
+        nome: novoNome,
+        tipo: novoTipo,
+        cor: novaCor,
+        icone: iconeSugerido,
+        parent_id: novoParentId || undefined,
+      });
+      setNovoNome(""); setNovoTipo("receita"); setNovaCor("#10B981"); setNovoParentId(""); setNovaDescricao("");
+      setActiveTab("lista");
+    };
 
   const handleCancelar = () => {
     setNovoNome(""); setNovoTipo("receita"); setNovaCor("#10B981"); setNovaDescricao("");
@@ -276,13 +286,17 @@ const Categorias = () => {
                         categoriasFiltradas.map((categoria) => (
                           <TableRow key={categoria.id} className="group">
                             <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${categoria.cor}20` }}>
-                                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: categoria.cor }} />
-                                </div>
-                                <span className="font-medium">{categoria.nome}</span>
-                              </div>
-                            </TableCell>
+                                                          <div className="flex items-center gap-3">
+                                                            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${categoria.cor}20` }}>
+                                                              <IconCategoria
+                                                                categoria={categoria}
+                                                                className="w-4 h-4"
+                                                                style={{ color: categoria.cor }}
+                                                              />
+                                                            </div>
+                                                            <span className="font-medium">{categoria.nome}</span>
+                                                          </div>
+                                                        </TableCell>
                             <TableCell>
                               <Badge className={`${categoria.tipo === "receita" ? "bg-green-500/20 text-green-600 hover:bg-green-500/30" : "bg-red-500/20 text-red-600 hover:bg-red-500/30"} border-0`}>
                                 {categoria.tipo === "receita" ? "Receita" : "Despesa"}
@@ -354,10 +368,14 @@ const Categorias = () => {
                           <div key={categoria.id} className="p-4 rounded-xl border border-border hover:bg-muted/30 transition-colors">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${categoria.cor}20` }}>
-                                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: categoria.cor }} />
-                                </div>
-                                <div>
+                                                              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${categoria.cor}20` }}>
+                                                                <IconCategoria
+                                                                  categoria={categoria}
+                                                                  className="w-5 h-5"
+                                                                  style={{ color: categoria.cor }}
+                                                                />
+                                                              </div>
+                                                              <div>
                                   <p className="font-medium">{categoria.nome}</p>
                                   <Badge className={`${categoria.tipo === "receita" ? "bg-green-500/20 text-green-600" : "bg-red-500/20 text-red-600"} border-0 text-xs mt-1`}>
                                     {categoria.tipo === "receita" ? "Receita" : "Despesa"}

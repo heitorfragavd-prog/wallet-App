@@ -2,6 +2,15 @@ import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Badge } from "@/shared/components/ui/badge";
@@ -40,10 +49,12 @@ import {
   Tag,
   X,
   Receipt,
+  CalendarDays,
 } from "lucide-react";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas, Despesa } from "@/domains/finance/hooks/useDespesas";
+import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
 import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
@@ -99,6 +110,22 @@ const Despesas = () => {
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
 
   const { despesas, loading, createDespesa, updateDespesa, deleteDespesa } = useDespesas({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
+
+  // Get today's local date range (YYYY-MM-DD)
+  const hojeLocal = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  const { despesas: despesasDeHoje, loading: loadingHoje } = useDespesas({
+    startDate: hojeLocal,
+    endDate: hojeLocal,
+  });
+
+  const { dividas: todasDividas, loading: loadingDividas } = useDividas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
@@ -273,7 +300,19 @@ const Despesas = () => {
   };
 
   // Dados processados
-  const { despesasFiltradas, despesasAgrupadas, totalDespesas, mediaMensal } = useMemo(() => {
+  // Dados processados
+  const { 
+    despesasFiltradas, 
+    despesasAgrupadas, 
+    totalDespesas, 
+    mediaMensal,
+    categoriaList,
+    dailyData,
+    totalFiltrado,
+    totalDespesasDeHoje,
+    previstoParaPagar,
+    metodoList
+  } = useMemo(() => {
     const filtradas = despesas
       .filter((despesa) => {
         const matchDescricao = despesa.descricao.toLowerCase().includes(filtro.toLowerCase());
@@ -297,8 +336,110 @@ const Despesas = () => {
     const total = despesas.reduce((sum, d) => sum + d.valor, 0);
     const media = despesas.length > 0 ? total / Math.max(1, new Set(despesas.map(d => d.data.substring(0, 7))).size) : 0;
 
-    return { despesasFiltradas: filtradas, despesasAgrupadas: grupos, totalDespesas: total, mediaMensal: media };
-  }, [despesas, filtro, categoriaFiltro]);
+    const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
+
+    // Despesas de Hoje
+    const totalDespesasDeHoje = (despesasDeHoje ?? []).reduce((sum, d) => sum + (d.valor || 0), 0);
+
+    // Previsto para pagar (dívidas em aberto no período filtrado)
+    const previstoParaPagar = (todasDividas ?? [])
+      .filter((d) => d.status !== "quitada")
+      .reduce((sum, d) => sum + (d.valor_restante || 0), 0);
+
+    // 1. Distribuição por Categoria
+    const cores = [
+      "bg-red-500", "bg-orange-500", "bg-amber-500", "bg-yellow-500",
+      "bg-lime-500", "bg-emerald-500", "bg-cyan-500", "bg-sky-500",
+      "bg-blue-500", "bg-indigo-500", "bg-purple-500", "bg-fuchsia-500", "bg-pink-500", "bg-rose-500"
+    ];
+    const categoriaStats: { [key: string]: { label: string, valor: number, cor: string } } = {};
+    let corIndex = 0;
+
+    filtradas.forEach((d) => {
+      const catNome = d.categorias?.nome || "Sem Categoria";
+      if (!categoriaStats[catNome]) {
+        categoriaStats[catNome] = {
+          label: catNome,
+          valor: 0,
+          cor: cores[corIndex % cores.length]
+        };
+        corIndex++;
+      }
+      categoriaStats[catNome].valor += d.valor;
+    });
+
+    const categoriaList = Object.values(categoriaStats)
+      .map((item) => {
+        const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
+        return { ...item, porcentagem };
+      })
+      .sort((a, b) => b.valor - a.valor);
+
+    // 2. Distribuição por Meio de Pagamento
+    const metodoStats = {
+      pix: { label: "PIX", valor: 0, cor: "bg-emerald-500" },
+      boleto: { label: "BOLETO", valor: 0, cor: "bg-blue-500" },
+      credito: { label: "CARTÃO CRÉDITO", valor: 0, cor: "bg-purple-500" },
+      debito: { label: "CARTÃO DÉBITO", valor: 0, cor: "bg-cyan-500" },
+      dinheiro: { label: "DINHEIRO", valor: 0, cor: "bg-amber-500" },
+      outros: { label: "OUTROS", valor: 0, cor: "bg-slate-500" },
+    };
+
+    filtradas.forEach((d) => {
+      const metodo = String(d.metodo_pagamento ?? "").toLowerCase();
+      if (metodo === "pix") {
+        metodoStats.pix.valor += d.valor;
+      } else if (metodo === "boleto") {
+        metodoStats.boleto.valor += d.valor;
+      } else if (metodo === "cartao_credito") {
+        metodoStats.credito.valor += d.valor;
+      } else if (metodo === "cartao_debito") {
+        metodoStats.debito.valor += d.valor;
+      } else if (metodo === "dinheiro" || metodo === "especie" || metodo === "cash") {
+        metodoStats.dinheiro.valor += d.valor;
+      } else {
+        metodoStats.outros.valor += d.valor;
+      }
+    });
+
+    const metodoList = Object.values(metodoStats)
+      .map((item) => {
+        const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
+        return { ...item, porcentagem };
+      })
+      .sort((a, b) => b.valor - a.valor);
+
+    // 3. Fluxo por dia
+    const dailyMap = new Map<string, number>();
+    filtradas.forEach((d) => {
+      const dateStr = d.data.split("T")[0]; // YYYY-MM-DD
+      dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
+    });
+
+    const dailyData = Array.from(dailyMap.entries())
+      .map(([date, total]) => {
+        const [ano, mes, dia] = date.split("-");
+        return {
+          dateStr: `${dia}/${mes}`,
+          rawDate: date,
+          total
+        };
+      })
+      .sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+
+    return { 
+      despesasFiltradas: filtradas, 
+      despesasAgrupadas: grupos, 
+      totalDespesas: total, 
+      mediaMensal: media,
+      categoriaList,
+      dailyData,
+      totalFiltrado,
+      totalDespesasDeHoje,
+      previstoParaPagar,
+      metodoList
+    };
+  }, [despesas, despesasDeHoje, todasDividas, filtro, categoriaFiltro]);
 
   const limparFiltros = () => {
     setFiltro("");
@@ -328,17 +469,39 @@ const Despesas = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {/* Card: Despesas do Dia */}
+          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Despesas do Dia</p>
+                  {loadingHoje ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalDespesasDeHoje)}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-rose-500/20">
+                  <CalendarDays className="w-5 h-5 text-rose-500" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card: Valor Pago */}
           <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Despesas</p>
+                  <p className="text-sm text-muted-foreground">Valor Pago</p>
                   {loading ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalDespesas)}
                     </p>
                   )}
                 </div>
@@ -349,6 +512,28 @@ const Despesas = () => {
             </CardContent>
           </Card>
 
+          {/* Card: Previsto para Pagar */}
+          <Card className="border-0 bg-gradient-to-br from-amber-500/10 to-amber-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Previsto a Pagar</p>
+                  {loadingDividas ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <p className="text-2xl font-bold text-foreground">
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(previstoParaPagar)}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 rounded-xl bg-amber-500/20">
+                  <Receipt className="w-5 h-5 text-amber-500" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card: Média Mensal */}
           <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
@@ -358,7 +543,7 @@ const Despesas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {mediaMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(mediaMensal)}
                     </p>
                   )}
                 </div>
@@ -369,6 +554,7 @@ const Despesas = () => {
             </CardContent>
           </Card>
 
+          {/* Card: Total Registros */}
           <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
@@ -387,6 +573,7 @@ const Despesas = () => {
             </CardContent>
           </Card>
 
+          {/* Card: Categorias */}
           <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
@@ -479,6 +666,151 @@ const Despesas = () => {
                     </span>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+
+            {/* Performance de despesas da operação Dashboard */}
+            <Card className="border border-border/50 bg-card overflow-hidden">
+              <CardHeader className="pb-3 border-b border-border/50">
+                <CardTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+                  <TrendingDown className="w-4.5 h-4.5 text-red-500" />
+                  Análise e distribuição de despesas
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Distribuição por Categoria */}
+                  <div className="lg:col-span-4 space-y-4">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Distribuição por Categoria</h4>
+                      {totalFiltrado === 0 ? (
+                        <div className="h-[200px] flex items-center justify-center border border-dashed border-border rounded-xl text-muted-foreground text-sm">
+                          Sem despesas no período
+                        </div>
+                      ) : (
+                        <div className="space-y-3.5">
+                          {categoriaList.slice(0, 5).map((item) => (
+                            <div key={item.label} className="space-y-1.5">
+                              <div className="flex items-center justify-between text-xs sm:text-sm">
+                                <span className="font-medium text-foreground">{item.label}</span>
+                                <div className="space-x-2 text-right">
+                                  <span className="font-semibold text-foreground">
+                                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.valor)}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    ({item.porcentagem.toFixed(1)}%)
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${item.cor}`}
+                                  style={{ width: `${item.porcentagem}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Distribuição por Meio de Pagamento */}
+                  <div className="lg:col-span-4 space-y-4">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Meios de Pagamento</h4>
+                      {totalFiltrado === 0 ? (
+                        <div className="h-[200px] flex items-center justify-center border border-dashed border-border rounded-xl text-muted-foreground text-sm">
+                          Sem transações no período
+                        </div>
+                      ) : (
+                        <div className="space-y-3.5">
+                          {metodoList.map((item) => (
+                            <div key={item.label} className="space-y-1.5">
+                              <div className="flex items-center justify-between text-xs sm:text-sm">
+                                <span className="font-medium text-foreground">{item.label}</span>
+                                <div className="space-x-2 text-right">
+                                  <span className="font-semibold text-foreground">
+                                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.valor)}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    ({item.porcentagem.toFixed(1)}%)
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${item.cor}`}
+                                  style={{ width: `${item.porcentagem}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Gráfico por Dia */}
+                  <div className="lg:col-span-4 flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Histórico de Gastos por Dia</h4>
+                      <div className="h-[200px] w-full">
+                        {totalFiltrado === 0 ? (
+                          <div className="h-full flex items-center justify-center border border-dashed border-border rounded-xl text-muted-foreground text-sm">
+                            Sem dados de gastos no período
+                          </div>
+                        ) : (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={dailyData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="colorDespesasDays" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
+                                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="opacity-5" />
+                              <XAxis
+                                dataKey="dateStr"
+                                tick={{ fontSize: 10 }}
+                                tickLine={false}
+                                axisLine={false}
+                              />
+                              <YAxis
+                                tick={{ fontSize: 10 }}
+                                tickFormatter={(v) => `R$ ${v}`}
+                                tickLine={false}
+                                axisLine={false}
+                                width={55}
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  backgroundColor: "hsl(var(--background))",
+                                  border: "1px solid hsl(var(--border))",
+                                  borderRadius: "8px",
+                                  color: "hsl(var(--foreground))",
+                                  fontSize: "12px",
+                                }}
+                                formatter={(value: number) => [
+                                  `${new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)}`,
+                                  "Despesa",
+                                ]}
+                                labelStyle={{ fontWeight: "bold" }}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="total"
+                                stroke="#ef4444"
+                                fill="url(#colorDespesasDays)"
+                                strokeWidth={2}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

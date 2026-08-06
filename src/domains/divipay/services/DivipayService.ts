@@ -119,6 +119,25 @@ export class DivipayService {
     return this.invoke<{ transacao: DivipayTransacao; withdraw: unknown }>("createWithdraw", params as Record<string, unknown>);
   }
 
+  async getWithdraw(id: string): Promise<DivipaySaque> {
+    const data = await this.invoke<unknown>("getWithdraw", { id });
+    const r = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+    return {
+      id: String(r.id ?? ""),
+      name: r.name ? String(r.name) : null,
+      document: r.document ? String(r.document) : null,
+      description: r.description ? String(r.description) : null,
+      type: String(r.type ?? ""),
+      amount: this.toNumber(r.amount ?? r.valor ?? 0),
+      tax: this.toNumber(r.tax ?? r.taxa ?? r.fee ?? 0),
+      status: String(r.status ?? ""),
+      lote: r.lote ? String(r.lote) : null,
+      createdAt: r.createdAt ? String(r.createdAt) : r.created_at ? String(r.created_at) : r.date ? String(r.date) : null,
+      fileName: r.fileName ? String(r.fileName) : null,
+      billetCode: r.billetCode ? String(r.billetCode) : null,
+    };
+  }
+
   async listWithdraws(params?: { limit?: number; offset?: number }): Promise<{ items: DivipaySaque[]; hasMore: boolean }> {
     const data = await this.invoke<unknown>("listWithdraws", params as Record<string, unknown>);
     const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {};

@@ -36,22 +36,33 @@ export const useComprasFatura = ({
   const despesasFiltradas = useMemo(() => {
     if (!cartaoId || !todasDespesas) return [];
 
-    const mesKey = `${anoFatura}-${String(mesFatura).padStart(2, "0")}`;
-
-    return todasDespesas.filter((d: any) => {
+    const res = todasDespesas.filter((d: any) => {
       // Deve pertencer a este cartão (por conta_id ou método cartão_crédito)
       const pertenceCartao =
         d.conta_id === cartaoId ||
-        (d.metodo_pagamento === "cartao_credito" && !d.conta_id);
+        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartaoId));
       if (!pertenceCartao) return false;
 
-      // Dentro do período de fechamento (data_inicio a data_fechamento)
-      if (d.data >= periodo.data_inicio && d.data <= periodo.data_fechamento) return true;
-      // Ou com data no mês da fatura (ex: 2026-07-xx) — fallback p/ importações com alocarNoMesFatura
-      if (String(d.data).startsWith(mesKey)) return true;
-
-      return false;
+      // Filtro estrito do PDF: dataCompra > dataInicio && dataCompra <= dataFechamento
+      return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
     });
+
+    const uniqueAccountIds = Array.from(new Set(todasDespesas.map((d: any) => d.conta_id))).filter(Boolean);
+    const despesasDates = todasDespesas.slice(0, 5).map((d: any) => `${d.descricao}: data=${d.data}, conta=${d.conta_id}`);
+    console.log(
+      "[useComprasFatura Debug]",
+      JSON.stringify({
+        expectedCartaoId: cartaoId,
+        totalDespesasInDB: todasDespesas.length,
+        uniqueAccountIdsInDB: uniqueAccountIds,
+        sampleDespesas: despesasDates,
+        inicioPeriodo: periodo.data_inicio,
+        fechamentoPeriodo: periodo.data_fechamento,
+        filtradasCount: res.length,
+      }, null, 2)
+    );
+
+    return res;
   }, [cartaoId, todasDespesas, mesFatura, anoFatura, periodo.data_inicio, periodo.data_fechamento]);
 
   const totalFatura = despesasFiltradas.reduce((acc, d) => acc + (Number(d.valor) || 0), 0);

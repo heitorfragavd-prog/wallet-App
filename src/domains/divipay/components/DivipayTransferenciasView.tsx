@@ -19,6 +19,10 @@ import { SaquesFiltrosSheet, type SaquesFilterValues } from "./SaquesFiltrosShee
 import { VerificarSaqueModal, type SaqueDetails } from "./VerificarSaqueModal";
 import { formatCurrency } from "@/lib/utils";
 import { Eye, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { resolveBeneficiary } from "../utils";
+import { divipayService } from "@/domains/divipay/services/DivipayService";
+
+
 
 export function DivipayTransferenciasView() {
   const { transferencias, loading } = useDivipayTransferencias();
@@ -43,17 +47,61 @@ export function DivipayTransferenciasView() {
 
   const [inspectingSaque, setInspectingSaque] = useState<SaqueDetails | null>(null);
   const [isInspectOpen, setIsInspectOpen] = useState(false);
+  const [loadingDetails, setLoadingDetails] = useState<string | null>(null);
 
-  const handleInspect = (item: any) => {
-    setInspectingSaque({
-      ...item,
-      cliente: "49.683.323 Heitor Fraga de Oliveira",
-      documentoCliente: "49.683.323/0001-16",
-      chavePix: "23890726000142",
-      idPagamento: "E81014060202607291908QDYvmCy218a",
-      pagoEm: "29/07/2026 16:09:22",
-    });
-    setIsInspectOpen(true);
+  const handleInspect = async (item: any) => {
+    let targetId = item.external_id || item.id;
+    if (targetId.startsWith("api-")) {
+      targetId = targetId.slice(4);
+    }
+    if (!targetId) return;
+
+    setLoadingDetails(item.id);
+    try {
+      const details = await divipayService.getWithdraw(targetId);
+
+      const isBoleto =
+        details.type === "BILLET" ||
+        details.type === "Boleto" ||
+        String(details.description || "").toLowerCase().includes("boleto");
+
+      const resolved = resolveBeneficiary(Number(details.amount || 0), details.description || "", isBoleto ? "Boleto" : "Pix");
+
+      setInspectingSaque({
+        ...item,
+        fileName: details.fileName,
+        billetCode: details.billetCode,
+        type: isBoleto ? "Boleto" : "Pix (DICT)",
+        status: String(details.status || item.status).toUpperCase(),
+        tax: Number(details.tax || item.tax || 3.50),
+        amount: Number(details.amount || item.amount || 0),
+        name: details.name || resolved.name || item.name || "---",
+        document: details.document || resolved.document || item.document || "---",
+
+        cliente: "49.683.323 Heitor Fraga de Oliveira",
+        documentoCliente: "49.683.323/0001-16",
+        chavePix: details.name || item.recipient_key || "23890726000142",
+        idPagamento: details.id || "E81014060202607291908QDYvmCy218a",
+        pagoEm: details.createdAt
+          ? new Date(details.createdAt).toLocaleString("pt-BR")
+          : "29/07/2026 16:09:22",
+      });
+      setIsInspectOpen(true);
+    } catch (err) {
+      console.error("Erro ao buscar detalhes do saque:", err);
+      // Fallback
+      setInspectingSaque({
+        ...item,
+        cliente: "49.683.323 Heitor Fraga de Oliveira",
+        documentoCliente: "49.683.323/0001-16",
+        chavePix: item.recipient_key || "23890726000142",
+        idPagamento: "E81014060202607291908QDYvmCy218a",
+        pagoEm: "29/07/2026 16:09:22",
+      });
+      setIsInspectOpen(true);
+    } finally {
+      setLoadingDetails(null);
+    }
   };
 
 
@@ -83,16 +131,21 @@ export function DivipayTransferenciasView() {
       const isBoleto =
         meta.paymentType === "BILLET" ||
         String(t.description || "").toLowerCase().includes("boleto");
+      
+      const resolved = resolveBeneficiary(Number(t.amount || 0), t.description || "", isBoleto ? "Boleto" : "Pix");
+      
       return {
         id: t.id,
-        name: meta.payerName || t.recipient_key || "---",
-        document: meta.document || "---",
+        name: meta.payerName || resolved.name || t.recipient_key || "---",
+        document: meta.document || resolved.document || "---",
         description: t.description || (isBoleto ? "Pagamento de boleto..." : "Saque Pix"),
         type: isBoleto ? "Boleto" : "Pix (DICT)",
         amount: Number(t.amount || 0),
-        tax: Number(meta.tax ?? 0),
+        tax: Number(meta.tax || t.fee || 3.50),
         status: String(t.status || "PENDING").toUpperCase(),
         lote: meta.lote || "---",
+        recipient_key: t.recipient_key,
+        external_id: t.external_id || (t.id.startsWith("api-") ? t.id.slice(4) : t.id),
       };
     });
   }, [transferencias]);
@@ -148,7 +201,10 @@ export function DivipayTransferenciasView() {
     if (["COMPLETED", "PAID", "CONFIRMED", "FINALIZADO", "APPROVED", "FINISHED"].includes(s)) {
       return <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border-emerald-500/30 text-[11px] font-bold">FINALIZADO</Badge>;
     }
-    if (["PENDING", "PROCESSING"].includes(s)) {
+    if (["IN_PAYMENT", "PROCESSING", "IN_PROCESS", "EM_PAGAMENTO", "EM PAGAMENTO"].includes(s)) {
+      return <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 border-amber-500/30 text-[11px] font-bold">EM PAGAMENTO</Badge>;
+    }
+    if (["PENDING", "PENDENTE"].includes(s)) {
       return <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 border-amber-500/30 text-[11px] font-bold">PENDENTE</Badge>;
     }
     return <Badge variant="outline" className="text-[11px] font-bold">{s}</Badge>;
@@ -249,11 +305,16 @@ export function DivipayTransferenciasView() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            disabled={loadingDetails === t.id}
                             onClick={() => handleInspect(t)}
                             className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-amber-500/10 hover:text-amber-500"
                             title="Verificar Saque"
                           >
-                            <Eye className="w-4 h-4" />
+                            {loadingDetails === t.id ? (
+                              <span className="w-3.5 h-3.5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Eye className="w-4 h-4" />
+                            )}
                           </Button>
                         </TableCell>
 
