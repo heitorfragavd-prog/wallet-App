@@ -2,6 +2,25 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.34] - 2026-08-06
+
+### ✨ Novo
+- **Modais Unificados** — Criação de `NovaDespesaModal`, `NovaReceitaModal` e `TransferenciaModal` para unificar e simplificar o cadastro de lançamentos em todo o sistema (`2c1c439`)
+- **Utilitários e Ícones** — Adicionado `categoriaIcons.ts` e `utils.ts` no domínio Divipay para padronização visual e lógica (`2c1c439`)
+
+### 🔧 Melhorado
+- **Dashboard e Cartões** — Refatorações visuais e lógicas no `ContasCartoesDashboardWidget`, `ContasCartoes.tsx` e `BankLogoBadge.tsx` (`2c1c439`)
+- **Integrações** — Melhorias substanciais no `DivipayService`, `ConciliacaoDivipayService` e nas Edge Functions do `divipay-webhook` e `eyemobile-sync` (`2c1c439`)
+
+### 🐛 Corrigido
+- Ajustes finos nos hooks do domínio financeiro (`useDespesas`, `useReceitas`, `useFaturasCartao`, `useEyemobileDashboard`, `useComprasFatura`) (`2c1c439`)
+- Correções pontuais na renderização e importação de componentes modais (`VerificarSaqueModal`, `FaturaCartaoModal`, `ImportadorExtratoModal`) (`2c1c439`)
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.34**
+
+---
+
 ## [1.0.33] - 2026-08-03
 
 ### ✨ Novo
