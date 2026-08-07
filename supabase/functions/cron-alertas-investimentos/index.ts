@@ -13,6 +13,40 @@ serve(async () => {
     const { data: { users }, error: usersErr } = await supabaseAdmin.auth.admin.listUsers();
     if (usersErr) throw usersErr;
 
+    const enviarAlerta = async (userId: string, phone: string | undefined, titulo: string, mensagem: string) => {
+      let pushSuccess = false;
+      try {
+        const pushResp = await supabaseAdmin.functions.invoke("enviar-push", {
+          body: { user_id: userId, titulo, mensagem, url: "/contas" },
+        });
+        if (pushResp && pushResp.ok) {
+          const resJson = await pushResp.json();
+          if (resJson && resJson.success !== false) {
+            pushSuccess = true;
+          }
+        }
+      } catch (_) {}
+
+      if (!pushSuccess) {
+        // Telegram
+        try {
+          const htmlTelegram = `<b>${titulo}</b>\n\n${mensagem}`;
+          await supabaseAdmin.functions.invoke("enviar-telegram", {
+            body: { user_id: userId, titulo, mensagem: htmlTelegram },
+          });
+        } catch (_) {}
+
+        // WhatsApp
+        if (phone) {
+          try {
+            await supabaseAdmin.functions.invoke("notificar-whatsapp", {
+              body: { telefone: phone, mensagem: `${titulo}: ${mensagem}` },
+            });
+          } catch (_) {}
+        }
+      }
+    };
+
     const todayStr = new Date().toISOString().split("T")[0];
     let alertCount = 0;
 
@@ -33,12 +67,7 @@ serve(async () => {
           const ativoNome = prov.investimentos?.nome || "Ativo";
           const msg = `🎉 ${val} de ${ativoNome} caíram na sua conta!`;
 
-          // Enviar Push
-          try {
-            await supabaseAdmin.functions.invoke("enviar-push", {
-              body: { user_id: userId, titulo: "🔔 Dividendo Recebido!", mensagem: msg, url: "/contas" },
-            });
-          } catch (_) {}
+          await enviarAlerta(userId, user.phone, "🎉 Dividendo Recebido!", msg);
 
           // Atualizar status para 'recebido'
           await supabaseAdmin
@@ -87,11 +116,7 @@ serve(async () => {
 
             if (diff > limitDev) {
               const msg = `⚠️ Sua carteira desviou ${diff.toFixed(0)}% da meta de alocação de RF (Meta: ${meta.alocacao_fixa}%). Rebalanceamento sugerido!`;
-              try {
-                await supabaseAdmin.functions.invoke("enviar-push", {
-                  body: { user_id: userId, titulo: "⚖️ Rebalanceamento Sugerido", mensagem: msg, url: "/contas" },
-                });
-              } catch (_) {}
+              await enviarAlerta(userId, user.phone, "⚖️ Rebalanceamento Sugerido", msg);
               alertCount++;
             }
           }
@@ -103,6 +128,16 @@ serve(async () => {
       const hoje = new Date();
       const amanha = new Date(hoje.getTime() + 86400000);
       if (hoje.getMonth() !== amanha.getMonth()) {
+        const { data: config } = await supabaseAdmin
+          .from("configuracoes_investimentos")
+          .select("sweep_caixa_minimo")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        const sweepMinimo = config?.sweep_caixa_minimo !== undefined && config?.sweep_caixa_minimo !== null
+          ? Number(config.sweep_caixa_minimo)
+          : 2000;
+
         // Buscar saldo do usuário de contas ou simular sobra
         const { data: contas } = await supabaseAdmin
           .from("contas_usuario")
@@ -111,16 +146,12 @@ serve(async () => {
 
         const totalSaldo = (contas || []).reduce((sum, c) => sum + Number(c.saldo_atual || 0), 0);
 
-        // Se o saldo for maior que 2000, sugere investir o excedente
-        if (totalSaldo > 2000) {
-          const sobra = totalSaldo - 2000;
+        // Se o saldo for maior que o valor mínimo configurado, sugere investir o excedente
+        if (totalSaldo > sweepMinimo) {
+          const sobra = totalSaldo - sweepMinimo;
           const valSobra = sobra.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const msg = `💰 Você tem ${valSobra} sobrando em conta este mês. Que tal investir esse valor em suas metas?`;
-          try {
-            await supabaseAdmin.functions.invoke("enviar-push", {
-              body: { user_id: userId, titulo: "💸 Sugestão de Investimento", mensagem: msg, url: "/contas" },
-            });
-          } catch (_) {}
+          await enviarAlerta(userId, user.phone, "💸 Sugestão de Investimento", msg);
           alertCount++;
         }
       }

@@ -41,10 +41,12 @@ import {
   Minus,
   ArrowLeftRight,
   Link as LinkIcon,
+  Lock,
 } from "lucide-react";
 import { useContasUsuario, ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useInvestimentos } from "@/domains/finance/hooks/useInvestimentos";
 import { determinarFaturaParaData, calcularPeriodoFatura } from "@/domains/finance/hooks/useFaturasCartao";
 import { format } from "date-fns";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
@@ -56,6 +58,8 @@ import { NovaDespesaModal } from "@/domains/finance/components/NovaDespesaModal"
 import { NovaReceitaModal } from "@/domains/finance/components/NovaReceitaModal";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/components/ui/tabs";
 import { InvestimentosView } from "@/domains/finance/components/InvestimentosView";
+import { useSenhaInvestimentos } from "@/domains/finance/hooks/useSenhaInvestimentos";
+import { InvestimentoSenhaModal } from "@/domains/finance/components/InvestimentoSenhaModal";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -77,9 +81,16 @@ export default function ContasCartoes() {
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas = [] } = useDividas();
   const { despesas = [] } = useDespesas();
+  const { investimentos = [] } = useInvestimentos();
+  const { isLocked, hasPassword } = useSenhaInvestimentos();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
+
+  const [activeTab, setActiveTab] = useState("contas");
+  const [openNovoAtivo, setOpenNovoAtivo] = useState(false);
+  const [preSelectedContaId, setPreSelectedContaId] = useState<string | undefined>(undefined);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
 
   const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
@@ -236,7 +247,7 @@ export default function ContasCartoes() {
           </div>
         </div>
 
-        <Tabs defaultValue="contas" className="w-full space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <TabsList className="bg-[#0B132B] border border-[#1E2942] p-1 rounded-xl max-w-md">
               <TabsTrigger value="contas" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white font-semibold">
@@ -584,6 +595,94 @@ export default function ContasCartoes() {
                               Nenhuma dívida pendente
                             </div>
                           )}
+                          {(() => {
+                            const investimentosDaConta = investimentos.filter(
+                              (inv) => inv.conta_id === conta.id
+                            );
+                            const totalInvestidoDaConta = investimentosDaConta.reduce(
+                              (acc, inv) => acc + Number(inv.valor_atual || 0),
+                              0
+                            );
+
+                            if (investimentosDaConta.length === 0) return null;
+
+                            return (
+                              <div className="mt-3 pt-3 border-t border-[#1E2942]/60">
+                                <p className="text-xs font-semibold text-emerald-400 mb-2 flex items-center justify-between">
+                                  <span className="flex items-center gap-1">💰 Investimentos vinculados</span>
+                                  {isLocked && (
+                                    <span 
+                                      className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer hover:bg-amber-500/20"
+                                      onClick={() => setShowUnlockModal(true)}
+                                    >
+                                      <Lock className="w-2.5 h-2.5 animate-pulse" /> Bloqueado
+                                    </span>
+                                  )}
+                                </p>
+                                <div className="space-y-1">
+                                  {investimentosDaConta.map((inv) => (
+                                    <div key={inv.id} className="flex justify-between text-xs">
+                                      <span className="text-slate-300">{inv.nome}</span>
+                                      <span className="text-slate-200 font-mono">
+                                        {isLocked ? (
+                                          <span 
+                                            className="text-slate-500 cursor-pointer hover:text-slate-300 font-sans text-[10px] bg-[#1E2942]/50 px-1.5 py-0.5 rounded border border-[#1E2942]"
+                                            onClick={() => setShowUnlockModal(true)}
+                                          >
+                                            •••••
+                                          </span>
+                                        ) : (
+                                          new Intl.NumberFormat("pt-BR", {
+                                            style: "currency",
+                                            currency: "BRL",
+                                          }).format(inv.valor_atual || 0)
+                                        )}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="flex justify-between text-xs font-bold mt-2 pt-2 border-t border-[#1E2942]/40">
+                                  <span className="text-slate-400">Total investido</span>
+                                  <span className="text-emerald-400 font-mono">
+                                    {isLocked ? (
+                                      <span 
+                                        className="text-slate-500 cursor-pointer hover:text-slate-300 font-sans text-[10px] bg-[#1E2942]/50 px-1.5 py-0.5 rounded border border-[#1E2942]"
+                                        onClick={() => setShowUnlockModal(true)}
+                                      >
+                                        •••••
+                                      </span>
+                                    ) : (
+                                      new Intl.NumberFormat("pt-BR", {
+                                        style: "currency",
+                                        currency: "BRL",
+                                      }).format(totalInvestidoDaConta)
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2 mt-3">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="flex-1 text-xs border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 h-8 rounded-xl font-bold"
+                                    onClick={() => setActiveTab("investimentos")}
+                                  >
+                                    Ver na Carteira
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    className="flex-1 text-xs bg-emerald-600 hover:bg-emerald-500 text-white h-8 rounded-xl font-bold flex items-center justify-center gap-1"
+                                    onClick={() => {
+                                      setPreSelectedContaId(conta.id);
+                                      setOpenNovoAtivo(true);
+                                      setActiveTab("investimentos");
+                                    }}
+                                  >
+                                    <Plus className="w-3.5 h-3.5" /> Novo Ativo
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -594,7 +693,14 @@ export default function ContasCartoes() {
           </TabsContent>
 
           <TabsContent value="investimentos" className="space-y-6 mt-0">
-            <InvestimentosView />
+            <InvestimentosView
+              initialOpenNovoAtivo={openNovoAtivo}
+              initialContaId={preSelectedContaId}
+              onCloseNovoAtivo={() => {
+                setOpenNovoAtivo(false);
+                setPreSelectedContaId(undefined);
+              }}
+            />
           </TabsContent>
         </Tabs>
 
@@ -752,6 +858,13 @@ export default function ContasCartoes() {
           isOpen={modalReceitaAberto}
           onClose={() => setModalReceitaAberto(false)}
         />
+
+        {showUnlockModal && (
+          <InvestimentoSenhaModal 
+            onSuccess={() => setShowUnlockModal(false)} 
+            onClose={() => setShowUnlockModal(false)}
+          />
+        )}
       </div>
     </DashboardLayout>
   );

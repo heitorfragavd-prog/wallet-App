@@ -50,24 +50,29 @@ const ICONES_ESTATICOS: Record<string, string> = {
 <path d="M49.3069 96.2292C49.7781 96.9023 50.3838 97.4408 51.1242 97.9119C52.8742 98.9215 54.9607 98.8542 56.6433 97.9119C57.3837 97.5081 57.9895 96.9023 58.4606 96.1619L85.7198 49.0473H68.1527L39.5475 48.98L30.7976 64.1913L49.3069 96.2292Z" />
 
 </svg>`,
+  pagbank: `<svg viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="54" cy="54" r="46" stroke="#1D2A44" stroke-width="8" fill="none" />
+    <circle cx="46" cy="54" r="28" fill="#29E5DE" />
+    <circle cx="70" cy="66" r="18" fill="#FFEB00" stroke="#1D2A44" stroke-width="5" />
+  </svg>`,
 };
 
 export function mapearNomeParaSlug(nome: string): BancoSlug | null {
-  const n = (nome || "").toLowerCase();
+  const n = (nome || "").toLowerCase().replace(/\s+/g, "");
   if (n.includes("nu") || n.includes("nubank")) return "nubank";
   if (n.includes("itaú") || n.includes("itau")) return "itau";
   if (n.includes("bradesco")) return "bradesco";
   if (n.includes("caixa") || n.includes("cef")) return "caixa";
-  if (n.includes("banco do brasil") || n.includes("bb")) return "bancodobrasil";
+  if (n.includes("bancodobrasil") || n.includes("bb")) return "bancodobrasil";
   if (n.includes("inter")) return "inter";
   if (n.includes("santander")) return "santander";
   if (n.includes("sicredi")) return "sicredi";
   if (n.includes("sicoob")) return "sicoob";
   if (n.includes("btg")) return "btg";
-  if (n.includes("picpay") || n.includes("pic pay")) return "picpay";
+  if (n.includes("picpay")) return "picpay";
   if (n.includes("c6")) return "c6";
   if (n.includes("xp")) return "xp";
-  if (n.includes("mercado pago") || n.includes("mercadopago")) return "mercadopago";
+  if (n.includes("mercadopago")) return "mercadopago";
   if (n.includes("pagbank") || n.includes("pagseguro")) return "pagbank";
   if (n.includes("cora")) return "cora";
   if (n.includes("infinite")) return "infinitepay";

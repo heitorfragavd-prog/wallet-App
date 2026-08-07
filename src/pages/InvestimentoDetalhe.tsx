@@ -30,15 +30,17 @@ import {
 } from "lucide-react";
 import { useInvestimentos, calcularIR, calcularPrecoMedio, calcularRentabilidadeReal } from "../domains/finance/hooks/useInvestimentos";
 import { useDepositosInvestimento } from "../domains/finance/hooks/useDepositosInvestimento";
-import { useProjecaoInvestimentos } from "../domains/finance/hooks/useProjecaoInvestimentos";
+import { useProjecaoInvestimentos, obterTaxaRealAnual } from "../domains/finance/hooks/useProjecaoInvestimentos";
 import { useProventosEsperados } from "../domains/finance/hooks/useProventosEsperados";
 import { useMetasInvestimento } from "../domains/finance/hooks/useMetasInvestimento";
+import { useContasUsuario } from "../domains/finance/hooks/useContasUsuario";
 import { format } from "date-fns";
 
 export default function InvestimentoDetalhe() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
+  const { contas } = useContasUsuario();
   const { investimentos, updateInvestimento, deleteInvestimento } = useInvestimentos();
   const { depositos, deleteDeposito, createDeposito } = useDepositosInvestimento(id);
   const { proventos, createProvento, deleteProvento } = useProventosEsperados();
@@ -55,6 +57,8 @@ export default function InvestimentoDetalhe() {
   const [taxaRef, setTaxaRef] = useState(inv?.taxa_referencia || "CDI");
   const [codigoB3, setCodigoB3] = useState(inv?.codigo_b3 || "");
   const [metaId, setMetaId] = useState(inv?.meta_id || "nenhuma");
+  const [cnpjInstituicao, setCnpjInstituicao] = useState(inv?.cnpj_instituicao || "");
+  const [contaId, setContaId] = useState(inv?.conta_id || "nenhuma");
 
   // State for new expectation provento form
   const [novoProv, setNovoProv] = useState({
@@ -84,13 +88,14 @@ export default function InvestimentoDetalhe() {
 
   const precoMedio = calcularPrecoMedio(depositos);
 
-  // Projeção Rápida
   const ipcaDefault = 4.5;
-  const projecoes1m = projetar(totalValorAtual, inv.taxa_rendimento_anual, 1, 0, true, true, ipcaDefault)[0];
-  const projecoes3m = projetar(totalValorAtual, inv.taxa_rendimento_anual, 3, 0, true, true, ipcaDefault)[2];
-  const projecoes6m = projetar(totalValorAtual, inv.taxa_rendimento_anual, 6, 0, true, true, ipcaDefault)[5];
-  const projecoes1a = projetar(totalValorAtual, inv.taxa_rendimento_anual, 12, 0, true, true, ipcaDefault)[11];
-  const projecoes5a = projetar(totalValorAtual, inv.taxa_rendimento_anual, 60, 0, true, true, ipcaDefault)[59];
+  const taxaReal = obterTaxaRealAnual(inv.taxa_rendimento_anual, inv.taxa_referencia, ipcaDefault);
+  const todasProjecoes = projetar(totalValorAtual, taxaReal, 60, 0, true, true, ipcaDefault);
+  const projecoes1m = todasProjecoes[0];
+  const projecoes3m = todasProjecoes[2];
+  const projecoes6m = todasProjecoes[5];
+  const projecoes1a = todasProjecoes[11];
+  const projecoes5a = todasProjecoes[59];
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(val);
@@ -106,6 +111,8 @@ export default function InvestimentoDetalhe() {
       taxa_referencia: taxaRef,
       codigo_b3: codigoB3 || undefined,
       meta_id: metaId === "nenhuma" ? undefined : metaId,
+      cnpj_instituicao: cnpjInstituicao || undefined,
+      conta_id: contaId === "nenhuma" ? undefined : contaId,
     });
   };
 
@@ -229,9 +236,17 @@ export default function InvestimentoDetalhe() {
                   <span className="text-slate-400">Data de Início</span>
                   <span className="font-bold text-slate-200">{inv.data_inicio}</span>
                 </div>
-                <div className="flex justify-between items-center py-2">
+                <div className="flex justify-between items-center py-2 border-b border-[#1E2942]/60">
                   <span className="text-slate-400">Data de Vencimento</span>
                   <span className="font-bold text-slate-200">{inv.data_vencimento || "Sem vencimento (Liquidez Diária)"}</span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-[#1E2942]/60">
+                  <span className="text-slate-400">Conta Bancária Vinculada</span>
+                  <span className="font-bold text-slate-200">{inv.contas_usuario?.nome || "Não vinculada"}</span>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-slate-400">CNPJ da Instituição</span>
+                  <span className="font-bold text-slate-200">{inv.cnpj_instituicao || "Não informado"}</span>
                 </div>
               </CardContent>
             </Card>
@@ -475,11 +490,13 @@ export default function InvestimentoDetalhe() {
                     </div>
 
                     <div className="space-y-1">
-                      <Label className="text-[10px] font-semibold text-slate-300">Rendimento Contratado (% a.a.)</Label>
+                      <Label className="text-[10px] font-semibold text-slate-300">
+                        Rendimento Contratado {taxaRef.trim().toUpperCase() === "CDI" ? "(% do CDI)" : "(% a.a.)"}
+                      </Label>
                       <Input
                         type="number"
                         step="0.01"
-                        placeholder="10"
+                        placeholder={taxaRef.trim().toUpperCase() === "CDI" ? "120" : "10"}
                         className="bg-[#1C2541]/50 border-[#1E2942] h-9"
                         value={taxaRendimento}
                         onChange={(e) => setTaxaRendimento(e.target.value)}
@@ -518,6 +535,33 @@ export default function InvestimentoDetalhe() {
                           {metas.map((m) => (
                             <SelectItem key={m.id} value={m.id} className="text-foreground">
                               {m.nome}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] font-semibold text-slate-300">CNPJ da Instituição (para IR)</Label>
+                      <Input
+                        placeholder="00.000.000/0001-00"
+                        className="bg-[#1C2541]/50 border-[#1E2942] h-9"
+                        value={cnpjInstituicao}
+                        onChange={(e) => setCnpjInstituicao(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] font-semibold text-slate-300">Conta Bancária Vinculada</Label>
+                      <Select value={contaId} onValueChange={setContaId}>
+                        <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942] h-9">
+                          <SelectValue placeholder="Selecione uma conta..." />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#0B132B] border-[#1E2942]">
+                          <SelectItem value="nenhuma">Sem conta vinculada</SelectItem>
+                          {contas?.map((c) => (
+                            <SelectItem key={c.id} value={c.id} className="text-foreground">
+                              {c.nome} ({c.banco})
                             </SelectItem>
                           ))}
                         </SelectContent>

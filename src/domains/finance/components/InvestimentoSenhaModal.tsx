@@ -14,9 +14,10 @@ import { useSenhaInvestimentos } from "../hooks/useSenhaInvestimentos";
 
 interface InvestimentoSenhaModalProps {
   onSuccess: () => void;
+  onClose?: () => void;
 }
 
-export const InvestimentoSenhaModal: React.FC<InvestimentoSenhaModalProps> = ({ onSuccess }) => {
+export const InvestimentoSenhaModal: React.FC<InvestimentoSenhaModalProps> = ({ onSuccess, onClose }) => {
   const { hasPassword, loading, cadastrarSenha, validarSenha, tentativasRestantes } = useSenhaInvestimentos();
   const [senha, setSenha] = useState("");
   const [confirmarSenha, setConfirmarSenha] = useState("");
@@ -77,7 +78,7 @@ export const InvestimentoSenhaModal: React.FC<InvestimentoSenhaModalProps> = ({ 
   const isCadastro = hasPassword === false;
 
   return (
-    <Dialog open={true}>
+    <Dialog open={true} onOpenChange={(open) => { if (!open && onClose) onClose(); }}>
       <DialogContent 
         className="sm:max-w-[400px] bg-[#0B132B]/95 backdrop-blur-xl border border-[#1E2942] text-foreground rounded-3xl"
         onPointerDownOutside={(e) => e.preventDefault()}

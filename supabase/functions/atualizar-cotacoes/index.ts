@@ -17,6 +17,8 @@ const CRYPTO_MAP: Record<string, string> = {
   "DOGE": "dogecoin",
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -42,6 +44,7 @@ serve(async (req) => {
     const today = new Date().toISOString().split("T")[0];
 
     for (const inv of (invs || [])) {
+      await delay(200);
       const ticker = inv.codigo_b3!.trim().toUpperCase();
       let precoAtual = 0;
       let source = "";

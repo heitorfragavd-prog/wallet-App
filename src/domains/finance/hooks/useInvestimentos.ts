@@ -20,6 +20,9 @@ export interface Investimento {
   ativo: boolean;
   meta_id?: string;
   codigo_b3?: string;
+  cnpj_instituicao?: string;
+  conta_id?: string;
+  contas_usuario?: { nome: string; } | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -61,7 +64,7 @@ export function useInvestimentos() {
 
       const { data, error } = await supabase
         .from("investimentos")
-        .select("*")
+        .select("*, contas_usuario:conta_id (nome)")
         .eq("workspace_id", workspaceId)
         .order("nome", { ascending: true });
 
