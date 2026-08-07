@@ -2,6 +2,29 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.36] - 2026-08-07
+
+### ✨ Novo
+- **Simuladores de Investimento** — Novo `SimuladorJurosCompostosCard` e `SimuladorRentabilidadeCard` com hooks dedicados (`useSimuladorJurosCompostos`, `useSimuladorRentabilidade`) para projeção de rentabilidade e juros compostos.
+- **Migração de melhorias** — Schema atualizado com migração `20250806_investimentos_melhorias.sql` para suportar novos campos e índices.
+
+### 🔧 Melhorado
+- **InvestimentosView** — Refatoração completa com novas funcionalidades de projeção e simulação.
+- **Projeção de Investimentos** — Hook `useProjecaoInvestimentos` aprimorado com cálculos mais precisos.
+- **Cron Alertas Investimentos** — Edge Function otimizada com melhor tratamento de erros e performance.
+- **Eyemobile Sync** — Sincronização histórica aprimorada (modo HISTORY sem parâmetro `start`, maxPages 100).
+- **Atualizar Cotações** — Pequenas otimizações na Edge Function.
+- **Componentes** — Ajustes em `InvestimentoSenhaModal`, `InvestimentoDetalhe`, `MetaInvestimentoDetalhe`, `ContasCartoes`, `BankLogoBadge`.
+
+### 🐛 Corrigido
+- Configurações de investimentos — Correção no hook `useConfiguracoesInvestimentos`.
+- Hook `useInvestimentos` — Ajustes pontuais.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.36**
+
+---
+
 ## [1.0.35] - 2026-08-06
 
 ### ✨ Novo
