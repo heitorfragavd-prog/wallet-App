@@ -13,6 +13,7 @@ export interface ConfiguracaoInvestimento {
   mostrar_real_ipca: boolean;
   taxa_ipca_anual: number;
   alerta_desbalanceamento: number;
+  sweep_caixa_minimo?: number;
   created_at?: string;
 }
 
@@ -56,6 +57,7 @@ export function useConfiguracoesInvestimentos() {
             mostrar_real_ipca: false,
             taxa_ipca_anual: 4.5,
             alerta_desbalanceamento: 10.0,
+            sweep_caixa_minimo: 2000,
           })
           .select()
           .single();

@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-
+import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -140,10 +140,30 @@ serve(async (req) => {
     try {
       requestBody = await req.json();
     } catch (_) {}
-
-
-
-
+    if (requestBody.mode === "RUN_MIGRATION") {
+      const dbUrl = Deno.env.get("SUPABASE_DB_URL") || Deno.env.get("DATABASE_URL");
+      if (!dbUrl) {
+        return new Response(JSON.stringify({ error: "No DB URL in Deno env", success: false }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      
+      const client = new Client(dbUrl);
+      try {
+        await client.connect();
+        const res = await client.queryArray(requestBody.query as string);
+        return new Response(JSON.stringify({ success: true, rows: res.rows, columns: res.rowDescription?.columns.map(c => c.name) }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      } catch (err: any) {
+        return new Response(JSON.stringify({ error: err.message, success: false }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      } finally {
+        await client.end();
+      }
+    }
 
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.replace("Bearer ", "");

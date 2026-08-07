@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
@@ -55,9 +55,12 @@ export default function MetaInvestimentoDetalhe() {
   const totalAtualMeta = linkedInvs.reduce((sum, inv) => sum + Number(inv.valor_atual || 0), 0);
 
   // Sync / update meta current balance in database if it differs
-  if (meta.valor_atual !== totalAtualMeta) {
-    void updateMeta.mutate({ id: meta.id, valor_atual: totalAtualMeta });
-  }
+  useEffect(() => {
+    if (meta && meta.valor_atual !== totalAtualMeta) {
+      updateMeta.mutate({ id: meta.id, valor_atual: totalAtualMeta });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta?.id, totalAtualMeta]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(val);

@@ -53,8 +53,25 @@ export function projetar(
   return projecoes;
 }
 
+export function obterTaxaRealAnual(
+  taxaRendimento: number,
+  taxaReferencia?: string,
+  ipcaAnual: number = 4.5,
+  cdiAnual: number = 10.5
+): number {
+  const ref = (taxaReferencia || "").trim().toUpperCase();
+  if (ref === "CDI") {
+    const pct = taxaRendimento <= 2.5 ? taxaRendimento * 100 : taxaRendimento;
+    return (pct / 100) * cdiAnual;
+  }
+  if (ref === "IPCA") {
+    return taxaRendimento + ipcaAnual;
+  }
+  return taxaRendimento;
+}
+
 export function projetarPatrimonioTotal(
-  investimentos: Array<{ valor_atual: number; taxa_rendimento_anual: number }>,
+  investimentos: Array<{ valor_atual: number; taxa_rendimento_anual: number; taxa_referencia?: string }>,
   meses: number,
   aporteMensalTotal: number,
   taxaIpcaAnual: number = 4.5
@@ -63,9 +80,10 @@ export function projetarPatrimonioTotal(
   if (n === 0) return [];
 
   const aporteIndividual = aporteMensalTotal / n;
-  const resultadosPorAtivo = investimentos.map((inv) =>
-    projetar(inv.valor_atual, inv.taxa_rendimento_anual, meses, aporteIndividual, false, false, taxaIpcaAnual)
-  );
+  const resultadosPorAtivo = investimentos.map((inv) => {
+    const taxaReal = obterTaxaRealAnual(inv.taxa_rendimento_anual, inv.taxa_referencia, taxaIpcaAnual);
+    return projetar(inv.valor_atual, taxaReal, meses, aporteIndividual, false, false, taxaIpcaAnual);
+  });
 
   const resultadoTotal: Array<{ mes: number; valorBruto: number }> = [];
   for (let m = 0; m < meses; m++) {

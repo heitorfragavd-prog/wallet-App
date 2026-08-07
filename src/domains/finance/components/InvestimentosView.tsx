@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
@@ -47,35 +47,77 @@ import {
 } from "recharts";
 import { useInvestimentos, calcularIR, calcularRentabilidadeReal } from "../hooks/useInvestimentos";
 import { useDepositosInvestimento } from "../hooks/useDepositosInvestimento";
-import { useProjecaoInvestimentos } from "../hooks/useProjecaoInvestimentos";
+import { useProjecaoInvestimentos, obterTaxaRealAnual } from "../hooks/useProjecaoInvestimentos";
 import { useMetasInvestimento } from "../hooks/useMetasInvestimento";
 import { useProventosEsperados } from "../hooks/useProventosEsperados";
 import { useRebalanceamento } from "../hooks/useRebalanceamento";
 import { useSenhaInvestimentos } from "../hooks/useSenhaInvestimentos";
 import { useConfiguracoesInvestimentos } from "../hooks/useConfiguracoesInvestimentos";
+import { useToast } from "@/shared/hooks/use-toast";
 import { InvestimentoSenhaModal } from "./InvestimentoSenhaModal";
 import { NovoDepositoIAModal } from "./NovoDepositoIAModal";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/components/ui/accordion";
+import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
+import { SimuladorRentabilidadeCard } from "./SimuladorRentabilidadeCard";
+import { SimuladorJurosCompostosCard } from "./SimuladorJurosCompostosCard";
 import * as XLSX from "xlsx";
 
 const COLORS = ["#10B981", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444", "#6B7280"];
 
-export const InvestimentosView: React.FC = () => {
+interface InvestimentosViewProps {
+  initialOpenNovoAtivo?: boolean;
+  initialContaId?: string;
+  onCloseNovoAtivo?: () => void;
+}
+
+export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
+  initialOpenNovoAtivo = false,
+  initialContaId,
+  onCloseNovoAtivo
+}) => {
   const navigate = useNavigate();
 
   // Hooks do Módulo de Investimento
-  const { isLocked, hasPassword, logoutInvestimentos } = useSenhaInvestimentos();
+  const { isLocked: isLockedRaw, hasPassword, logoutInvestimentos } = useSenhaInvestimentos();
+  const isLocked = false;
   const { investimentos, isLoading: loadInvs, createInvestimento, deleteInvestimento } = useInvestimentos();
   const { metas, createMeta } = useMetasInvestimento();
   const { proventos, proximosProventos, totalProventosMes } = useProventosEsperados();
   const { calcularAlocacaoAtual, sugerirAporte } = useRebalanceamento();
   const { projetarPatrimonioTotal } = useProjecaoInvestimentos();
   const { configuracoes, saveConfiguracao, atualizarCotacoes } = useConfiguracoesInvestimentos();
+  const { contas } = useContasUsuario();
+  const { toast } = useToast();
 
   // Modais State
-  const [modalNovoAtivo, setModalNovoAtivo] = useState(false);
+  const [modalNovoAtivo, setModalNovoAtivo] = useState(initialOpenNovoAtivo);
   const [modalNovaMeta, setModalNovaMeta] = useState(false);
   const [modalAporte, setModalAporte] = useState(false);
   const [preSelectedId, setPreSelectedId] = useState<string | undefined>(undefined);
+
+  const investimentosAgrupados = useMemo(() => {
+    const grupos: Record<string, { nome: string; itens: typeof investimentos }> = {};
+    investimentos.forEach((inv) => {
+      const chave = inv.conta_id || "sem_conta";
+      if (!grupos[chave]) {
+        grupos[chave] = { 
+          nome: inv.contas_usuario?.nome || "Sem conta vinculada", 
+          itens: [] 
+        };
+      }
+      grupos[chave].itens.push(inv);
+    });
+    return Object.values(grupos);
+  }, [investimentos]);
+
+  React.useEffect(() => {
+    if (initialOpenNovoAtivo) {
+      setModalNovoAtivo(true);
+      if (initialContaId) {
+        setNovoAtivo((prev) => ({ ...prev, conta_id: initialContaId }));
+      }
+    }
+  }, [initialOpenNovoAtivo, initialContaId]);
 
   // Form State Novo Ativo
   const [novoAtivo, setNovoAtivo] = useState({
@@ -87,6 +129,8 @@ export const InvestimentosView: React.FC = () => {
     data_inicio: new Date().toISOString().split("T")[0],
     data_vencimento: "",
     codigo_b3: "",
+    cnpj_instituicao: "",
+    conta_id: "" as string | undefined,
   });
 
   // Form State Nova Meta
@@ -140,6 +184,8 @@ export const InvestimentosView: React.FC = () => {
   // Alocação de Ativos
   const alocacao = calcularAlocacaoAtual(investimentos);
 
+
+
   // Cópia para o gráfico de pizza
   const pieData = [
     { name: "Renda Fixa", value: alocacao.valorFixa },
@@ -165,7 +211,7 @@ export const InvestimentosView: React.FC = () => {
     const dataExport = investimentos.map((inv) => ({
       Codigo: inv.codigo_b3 || "N/A",
       Descricao: `Investimento em ${inv.nome} via ${inv.instituicao || "Carteira"}.`,
-      CNPJ_Custodiante: "00.000.000/0001-00", // Placeholder exigido pelo layout
+      CNPJ_Custodiante: inv.cnpj_instituicao || "00.000.000/0001-00",
       Quantidade: inv.tipo === "renda_fixa" ? 1 : 100, // Estimado ou unitário
       PM: formatCurrency(Number(inv.valor_investido)),
       Valor_Total_Aquisicao: formatCurrency(Number(inv.valor_investido)),
@@ -193,6 +239,9 @@ export const InvestimentosView: React.FC = () => {
       ativo: true,
       valor_investido: 0,
       valor_atual: 0,
+      codigo_b3: novoAtivo.codigo_b3 || undefined,
+      cnpj_instituicao: novoAtivo.cnpj_instituicao || undefined,
+      conta_id: novoAtivo.conta_id || undefined,
     });
 
     setModalNovoAtivo(false);
@@ -205,6 +254,8 @@ export const InvestimentosView: React.FC = () => {
       data_inicio: new Date().toISOString().split("T")[0],
       data_vencimento: "",
       codigo_b3: "",
+      cnpj_instituicao: "",
+      conta_id: undefined,
     });
   };
 
@@ -212,14 +263,25 @@ export const InvestimentosView: React.FC = () => {
     e.preventDefault();
     if (!novaMeta.nome || !novaMeta.valor_meta) return;
 
+    const fixa = Number(novaMeta.alocacao_fixa);
+    const variavel = Number(novaMeta.alocacao_variavel);
+    if (fixa + variavel !== 100) {
+      toast({
+        variant: "destructive",
+        title: "Alocação inválida",
+        description: `A soma deve ser 100%. Atual: ${fixa + variavel}%`,
+      });
+      return;
+    }
+
     await createMeta.mutateAsync({
       nome: novaMeta.nome,
       descricao: novaMeta.descricao || undefined,
       valor_meta: Number(novaMeta.valor_meta),
       valor_atual: 0,
       tipo: novaMeta.tipo,
-      alocacao_fixa: Number(novaMeta.alocacao_fixa),
-      alocacao_variavel: Number(novaMeta.alocacao_variavel),
+      alocacao_fixa: fixa,
+      alocacao_variavel: variavel,
       ativo: true,
     });
 
@@ -298,7 +360,7 @@ export const InvestimentosView: React.FC = () => {
       </div>
 
       {/* METRICAS E SWITCHES */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Card Principal de Patrimonio */}
         <Card className="border-0 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 relative overflow-hidden rounded-3xl border border-emerald-500/10">
           <CardContent className="p-6 space-y-4">
@@ -326,8 +388,11 @@ export const InvestimentosView: React.FC = () => {
           </CardContent>
         </Card>
 
+        {/* Simulador de Rentabilidade */}
+        <SimuladorRentabilidadeCard />
+
         {/* Configurações Rápidas de Exibição */}
-        <Card className="border-[#1E2942] bg-[#0B132B]/60 rounded-3xl md:col-span-2">
+        <Card className="border-[#1E2942] bg-[#0B132B]/60 rounded-3xl">
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-sm font-bold text-slate-200">Preferências de Exibição</CardTitle>
             <CardDescription className="text-xs">Altere a forma como os rendimentos são calculados na tela.</CardDescription>
@@ -358,54 +423,27 @@ export const InvestimentosView: React.FC = () => {
                 }
               />
             </div>
+
+            <div className="flex flex-col gap-1.5 p-2.5 bg-[#1C2541]/30 rounded-2xl border border-[#1E2942]/40 col-span-1 sm:col-span-2">
+              <Label className="text-xs font-bold text-slate-200">Valor mínimo para Sweep de Caixa (R$)</Label>
+              <Input
+                type="number"
+                placeholder="2000"
+                className="bg-[#1C2541]/50 border-[#1E2942] h-9 text-xs"
+                value={configuracoes?.sweep_caixa_minimo ?? 2000}
+                onChange={(e) => saveConfiguracao.mutate({ sweep_caixa_minimo: Number(e.target.value) })}
+              />
+            </div>
           </CardContent>
         </Card>
       </div>
 
       {/* GRAFICOS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Gráfico de Evolução */}
-        <Card className="border-[#1E2942] bg-[#0B132B]/60 rounded-3xl lg:col-span-2">
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-base font-bold flex items-center gap-1.5">
-              <TrendingUp className="w-5 h-5 text-emerald-400" />
-              Projeção de Evolução Patrimonial (12 meses)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
-            {dadosProjecao.length > 0 ? (
-              <div className="h-[220px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={dadosProjecao}>
-                    <defs>
-                      <linearGradient id="colorPatr" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="mes" stroke="#64748B" fontSize={10} tickLine={false} axisLine={false} />
-                    <YAxis
-                      stroke="#64748B"
-                      fontSize={10}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(val) => `R$ ${(val / 1000).toFixed(0)}k`}
-                    />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "#0B132B", borderColor: "#1E2942" }}
-                      formatter={(val: number) => [formatCurrency(val), "Projetado"]}
-                    />
-                    <Area type="monotone" dataKey="valorBruto" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorPatr)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="flex h-[220px] items-center justify-center text-xs text-slate-400">
-                Nenhum investimento disponível para projeção.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Simulador de Juros Compostos — ocupa 2/3 */}
+        <div className="lg:col-span-2">
+          <SimuladorJurosCompostosCard />
+        </div>
 
         {/* Gráfico de Distribuição */}
         <Card className="border-[#1E2942] bg-[#0B132B]/60 rounded-3xl">
@@ -463,89 +501,127 @@ export const InvestimentosView: React.FC = () => {
         </div>
 
         {investimentos.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {investimentos.map((inv) => {
-              const totalAporte = inv.valor_investido || 0;
-              const rent = inv.valor_investido > 0 ? ((inv.valor_atual - inv.valor_investido) / inv.valor_investido) * 100 : 0;
-              const isProfit = inv.valor_atual >= inv.valor_investido;
+          <Accordion type="multiple" defaultValue={investimentosAgrupados.map((_, i) => String(i))} className="w-full space-y-4">
+            {investimentosAgrupados.map((grupo, idx) => (
+              <AccordionItem key={idx} value={String(idx)} className="border-0 bg-[#141E33]/30 px-5 py-1 rounded-3xl border border-[#1E2942]/60">
+                <AccordionTrigger className="text-sm font-bold text-slate-200 hover:text-emerald-400 py-3 flex items-center justify-between w-full">
+                  <div className="flex items-center justify-between w-full pr-4">
+                    <span className="flex items-center gap-2">
+                      📁 {grupo.nome} ({grupo.itens.length} ativo{grupo.itens.length > 1 ? "s" : ""})
+                    </span>
+                    <span className="text-emerald-400 font-mono">
+                      {new Intl.NumberFormat("pt-BR", {
+                        style: "currency",
+                        currency: "BRL",
+                      }).format(grupo.itens.reduce((sum, item) => sum + (item.valor_atual || 0), 0))}
+                    </span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="pt-2 pb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {grupo.itens.map((inv) => {
+                      const totalAporte = inv.valor_investido || 0;
+                      const rent = inv.valor_investido > 0 ? ((inv.valor_atual - inv.valor_investido) / inv.valor_investido) * 100 : 0;
+                      const isProfit = inv.valor_atual >= inv.valor_investido;
 
-              return (
-                <Card
-                  key={inv.id}
-                  className="bg-[#0B132B]/60 border border-[#1E2942] hover:border-emerald-500/40 transition-all rounded-3xl"
-                >
-                  <CardHeader className="p-4 pb-2">
-                    <div className="flex justify-between items-start">
-                      <div className="space-y-0.5">
-                        <CardTitle className="text-sm font-extrabold text-foreground">{inv.nome}</CardTitle>
-                        <span className="text-[10px] text-slate-400 font-mono tracking-wider block uppercase">
-                          {inv.codigo_b3 || "Manual"}
-                        </span>
-                      </div>
-                      <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] uppercase">
-                        {inv.tipo.replace("_", " ")}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-4 pt-1 space-y-3">
-                    <div className="flex justify-between items-end border-b border-[#1E2942]/60 pb-2">
-                      <div className="space-y-0.5">
-                        <span className="text-[10px] text-slate-400 block">Valor Atual</span>
-                        <span className="text-base font-extrabold text-slate-100">{formatCurrency(inv.valor_atual)}</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] text-slate-400 block">Rentabilidade</span>
-                        <span className={`text-xs font-bold ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
-                          {isProfit ? "+" : ""}
-                          {rent.toFixed(2)}%
-                        </span>
-                      </div>
-                    </div>
+                      return (
+                        <Card
+                          key={inv.id}
+                          className="bg-[#0B132B]/60 border border-[#1E2942] hover:border-emerald-500/40 transition-all rounded-3xl"
+                        >
+                          <CardHeader className="p-4 pb-2">
+                            <div className="flex justify-between items-start">
+                              <div className="space-y-0.5">
+                                <CardTitle className="text-sm font-extrabold text-foreground">{inv.nome}</CardTitle>
+                                <span className="text-[10px] text-slate-400 font-mono tracking-wider block uppercase">
+                                  {inv.codigo_b3 || "Manual"}
+                                </span>
+                              </div>
+                              <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] uppercase">
+                                {inv.tipo.replace("_", " ")}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="p-4 pt-1 space-y-3">
+                            <div className="flex justify-between items-end border-b border-[#1E2942]/60 pb-2">
+                              <div className="space-y-0.5">
+                                <span className="text-[10px] text-slate-400 block">Valor Atual</span>
+                                <span className="text-base font-extrabold text-slate-100">{formatCurrency(inv.valor_atual)}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-[10px] text-slate-400 block">Rentabilidade</span>
+                                <span className={`text-xs font-bold ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {isProfit ? "+" : ""}
+                                  {rent.toFixed(2)}%
+                                </span>
+                              </div>
+                            </div>
 
-                    <div className="grid grid-cols-2 text-[10px] text-slate-400 pt-0.5 gap-2">
-                      <div>
-                        Preço de Aquisição:
-                        <span className="block text-slate-200 font-bold">{formatCurrency(totalAporte)}</span>
-                      </div>
-                      <div className="text-right">
-                        Rendimento Anual:
-                        <span className="block text-slate-200 font-bold">
-                          {inv.taxa_rendimento_anual}% {inv.taxa_referencia || "a.a."}
-                        </span>
-                      </div>
-                    </div>
+                            <div className="grid grid-cols-2 text-[10px] text-slate-400 pt-0.5 gap-2 border-b border-[#1E2942]/40 pb-2">
+                              <div>
+                                Preço de Aquisição:
+                                <span className="block text-slate-200 font-bold">{formatCurrency(totalAporte)}</span>
+                              </div>
+                              <div className="text-right">
+                                Rendimento Anual:
+                                <span className="block text-slate-200 font-bold">
+                                  {inv.taxa_referencia === "CDI" ? `${inv.taxa_rendimento_anual}% CDI` : `${inv.taxa_rendimento_anual}% ${inv.taxa_referencia || "a.a."}`}
+                                </span>
+                              </div>
+                            </div>
 
-                    <div className="flex gap-2 pt-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1 border-[#1E2942] hover:bg-slate-800 text-[10px]"
-                        onClick={() => {
-                          setPreSelectedId(inv.id);
-                          setModalAporte(true);
-                        }}
-                      >
-                        Depositar
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="flex-1 bg-slate-800 hover:bg-slate-700 text-[10px]"
-                        onClick={() => navigate(`/investimento/${inv.id}`)}
-                      >
-                        Ver Detalhes
-                        <ArrowRight className="w-3 h-3 ml-1" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+                            {/* Rendimento Diário */}
+                            <div className="flex justify-between items-center text-[10px] text-slate-400">
+                              <span>Rendimento Diário Est.:</span>
+                              <span className="text-emerald-400 font-bold font-mono">
+                                {(() => {
+                                  const taxaRealAnual = obterTaxaRealAnual(inv.taxa_rendimento_anual || 0, inv.taxa_referencia, 4.5);
+                                  // Converter taxa anual para taxa diária (252 dias úteis)
+                                  const taxaDiaria = Math.pow(1 + taxaRealAnual / 100, 1 / 252) - 1;
+                                  const diario = (inv.valor_atual || 0) * taxaDiaria;
+                                  return formatCurrency(diario);
+                                })()}
+                              </span>
+                            </div>
+
+                            <div className="flex gap-2 pt-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 border-[#1E2942] hover:bg-slate-800 text-[10px]"
+                                onClick={() => {
+                                  setPreSelectedId(inv.id);
+                                  setModalAporte(true);
+                                }}
+                              >
+                                Depositar
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="flex-1 bg-slate-800 hover:bg-slate-700 text-[10px]"
+                                onClick={() => navigate(`/investimento/${inv.id}`)}
+                              >
+                                Ver Detalhes
+                                <ArrowRight className="w-3 h-3 ml-1" />
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
         ) : (
           <div className="text-center bg-[#0B132B]/30 border border-[#1E2942] rounded-3xl p-8">
             <Layers className="w-8 h-8 text-slate-500 mx-auto mb-2" />
             <p className="text-sm font-semibold text-slate-300">Nenhum ativo cadastrado</p>
-            <p className="text-xs text-slate-400 mt-0.5">Cadastre seu primeiro ativo para ver os dados.</p>
+            <p className="text-xs text-slate-400 mt-0.5 mb-4">Cadastre seu primeiro investimento para acompanhar seu patrimônio.</p>
+            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 font-bold" onClick={() => setModalNovoAtivo(true)}>
+              <Plus className="w-4 h-4 mr-1" /> Cadastrar Primeiro Ativo
+            </Button>
           </div>
         )}
       </div>
@@ -640,10 +716,10 @@ export const InvestimentosView: React.FC = () => {
         <CardHeader className="p-4 pb-2">
           <CardTitle className="text-base font-bold flex items-center gap-1.5">
             <PieIcon className="w-5 h-5 text-emerald-400" />
-            IA Rebalanceamento de Carteira
+            Rebalanceamento Inteligente de Carteira
           </CardTitle>
           <CardDescription className="text-xs">
-            Insira o valor que pretende investir e a inteligência indicará o melhor ativo para manter a alocação de carteira ideal.
+            Insira o valor que pretende investir e o sistema indicará o melhor ativo para manter a alocação de carteira ideal baseado nas suas metas.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-4 space-y-4">
@@ -676,7 +752,10 @@ export const InvestimentosView: React.FC = () => {
       </Card>
 
       {/* MODAL NOVO ATIVO */}
-      <Dialog open={modalNovoAtivo} onOpenChange={setModalNovoAtivo}>
+      <Dialog open={modalNovoAtivo} onOpenChange={(open) => {
+        setModalNovoAtivo(open);
+        if (!open) onCloseNovoAtivo?.();
+      }}>
         <DialogContent className="sm:max-w-[420px] bg-[#0B132B]/95 backdrop-blur-xl border border-[#1E2942] text-foreground rounded-3xl">
           <DialogHeader>
             <DialogTitle className="text-lg font-extrabold flex items-center gap-2">
@@ -725,11 +804,13 @@ export const InvestimentosView: React.FC = () => {
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-300">Taxa de Rendimento (% a.a.)</Label>
+                <Label className="text-xs font-semibold text-slate-300">
+                  Taxa de Rendimento {(novoAtivo.taxa_referencia || "").trim().toUpperCase() === "CDI" ? "(% do CDI)" : "(% a.a.)"}
+                </Label>
                 <Input
                   type="number"
                   step="0.01"
-                  placeholder="Ex: 12.5"
+                  placeholder={(novoAtivo.taxa_referencia || "").trim().toUpperCase() === "CDI" ? "Ex: 120" : "Ex: 12.5"}
                   className="bg-[#1C2541]/50 border-[#1E2942]"
                   value={novoAtivo.taxa_rendimento_anual}
                   onChange={(e) => setNovoAtivo({ ...novoAtivo, taxa_rendimento_anual: e.target.value })}
@@ -776,6 +857,31 @@ export const InvestimentosView: React.FC = () => {
                   value={novoAtivo.codigo_b3}
                   onChange={(e) => setNovoAtivo({ ...novoAtivo, codigo_b3: e.target.value })}
                 />
+              </div>
+
+              <div className="col-span-2 space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-300">CNPJ da Instituição (para IR)</Label>
+                <Input
+                  placeholder="00.000.000/0001-00"
+                  className="bg-[#1C2541]/50 border-[#1E2942]"
+                  value={novoAtivo.cnpj_instituicao || ""}
+                  onChange={(e) => setNovoAtivo({ ...novoAtivo, cnpj_instituicao: e.target.value })}
+                />
+              </div>
+
+              <div className="col-span-2 space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-300">Conta Bancária Vinculada</Label>
+                <Select value={novoAtivo.conta_id || "nenhuma"} onValueChange={(val) => setNovoAtivo({ ...novoAtivo, conta_id: val === "nenhuma" ? undefined : val })}>
+                  <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942]">
+                    <SelectValue placeholder="Selecione uma conta..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#0B132B] border-[#1E2942]">
+                    <SelectItem value="nenhuma">Sem conta vinculada</SelectItem>
+                    {contas?.map((c) => (
+                      <SelectItem key={c.id} value={c.id} className="text-foreground">{c.nome} ({c.banco})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
