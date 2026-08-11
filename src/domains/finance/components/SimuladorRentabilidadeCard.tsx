@@ -11,8 +11,19 @@ const PERIODOS = [
   { label: "5 anos", meses: 60 },
 ];
 
-export function SimuladorRentabilidadeCard() {
-  const { periodoMeses, setPeriodoMeses, resultado } = useSimuladorRentabilidade();
+interface SimuladorRentabilidadeCardProps {
+  selectedAssetIds?: string[];
+  simulatedValues?: Record<string, number>;
+}
+
+export function SimuladorRentabilidadeCard({
+  selectedAssetIds,
+  simulatedValues,
+}: SimuladorRentabilidadeCardProps) {
+  const { periodoMeses, setPeriodoMeses, resultado } = useSimuladorRentabilidade(
+    selectedAssetIds,
+    simulatedValues
+  );
 
   if (!resultado) return null;
 
