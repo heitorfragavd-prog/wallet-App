@@ -55,6 +55,7 @@ const Fornecedores        = lazyWithRetry(() => import("./pages/Fornecedores"));
 const Conciliacao         = lazyWithRetry(() => import("./pages/Conciliacao"));
 const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
 const ConfiguracoesNotificacoes = lazyWithRetry(() => import("./pages/ConfiguracoesNotificacoes"));
+const PDVPage             = lazyWithRetry(() => import("./pages/PDVPage"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -125,6 +126,7 @@ function App() {
                 <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
                 <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
                 <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
+                <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
 
                 {/* Protegidas — somente admin */}
                 <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

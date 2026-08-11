@@ -2,6 +2,25 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.37] - 2026-08-11
+
+### ✨ Novo
+- **Módulo PDV (Ponto de Venda)** — Novo PDV nativo (`/pdv`) com layout limpo e intuitivo:
+  - Adição de produtos via grade de imagens e barra de pesquisa rápida.
+  - Sidebar para configuração de operações e modo de venda.
+  - Carrinho de compras em tempo real com hook `usePDVCart`.
+  - Atalhos de teclado avançados via `usePDVHotkeys`.
+  - Pagamentos e operações integradas com `pdvActionService`.
+
+### 🔧 Melhorado
+- **Investimentos e Simuladores** — Componentes e hooks otimizados, incluindo correções nos simuladores de rentabilidade e no `InvestimentosView`.
+- **Eyemobile Sync** — Tratamentos adicionais no job de sincronização na Edge Function.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.37**
+
+---
+
 ## [1.0.36] - 2026-08-07
 
 ### ✨ Novo

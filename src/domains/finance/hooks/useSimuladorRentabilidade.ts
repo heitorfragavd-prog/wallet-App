@@ -3,7 +3,10 @@ import { useInvestimentos, calcularIR, calcularRentabilidadeReal } from "./useIn
 import { useConfiguracoesInvestimentos } from "./useConfiguracoesInvestimentos";
 import { obterTaxaRealAnual } from "./useProjecaoInvestimentos";
 
-export function useSimuladorRentabilidade() {
+export function useSimuladorRentabilidade(
+  selectedAssetIds?: string[],
+  simulatedValues?: Record<string, number>
+) {
   const { investimentos } = useInvestimentos();
   const { configuracoes } = useConfiguracoesInvestimentos();
 
@@ -12,16 +15,53 @@ export function useSimuladorRentabilidade() {
   const resultado = useMemo(() => {
     if (!investimentos || investimentos.length === 0) return null;
 
-    const totalAtual = investimentos.reduce((s, i) => s + (i.valor_atual || 0), 0);
-    if (totalAtual === 0) return null;
+    const filteredInvestimentos = selectedAssetIds
+      ? investimentos.filter((i) => selectedAssetIds.includes(i.id))
+      : investimentos;
+
+    if (filteredInvestimentos.length === 0) {
+      return {
+        totalAtual: 0,
+        valorBruto: 0,
+        rendimento: 0,
+        ir: 0,
+        valorLiquido: 0,
+        valorReal: 0,
+        aliquotaIR: 0,
+        taxaMediaAnual: 0,
+      };
+    }
+
+    const totalAtual = filteredInvestimentos.reduce((s, i) => {
+      const val = (simulatedValues && simulatedValues[i.id] !== undefined)
+        ? simulatedValues[i.id]
+        : (i.valor_atual || 0);
+      return s + val;
+    }, 0);
+
+    if (totalAtual === 0) {
+      return {
+        totalAtual: 0,
+        valorBruto: 0,
+        rendimento: 0,
+        ir: 0,
+        valorLiquido: 0,
+        valorReal: 0,
+        aliquotaIR: 0,
+        taxaMediaAnual: 0,
+      };
+    }
 
     const ipcaAnual = configuracoes?.taxa_ipca_anual || 4.5;
 
     // Calcular taxa média ponderada anual usando taxa real indexada
-    const somaPesosTaxas = investimentos.reduce(
+    const somaPesosTaxas = filteredInvestimentos.reduce(
       (s, i) => {
+        const val = (simulatedValues && simulatedValues[i.id] !== undefined)
+          ? simulatedValues[i.id]
+          : (i.valor_atual || 0);
         const taxaReal = obterTaxaRealAnual(i.taxa_rendimento_anual || 0, i.taxa_referencia, ipcaAnual);
-        return s + (i.valor_atual || 0) * (taxaReal / 100);
+        return s + val * (taxaReal / 100);
       },
       0
     );
@@ -47,7 +87,8 @@ export function useSimuladorRentabilidade() {
       aliquotaIR: aliquota * 100,
       taxaMediaAnual: taxaMediaAnual * 100,
     };
-  }, [investimentos, configuracoes, periodoMeses]);
+  }, [investimentos, configuracoes, periodoMeses, selectedAssetIds, simulatedValues]);
 
   return { periodoMeses, setPeriodoMeses, resultado };
 }
+

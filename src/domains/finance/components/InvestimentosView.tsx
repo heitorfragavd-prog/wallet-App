@@ -95,6 +95,55 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
   const [modalAporte, setModalAporte] = useState(false);
   const [preSelectedId, setPreSelectedId] = useState<string | undefined>(undefined);
 
+  // Estado para seleção de ativos no simulador
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [simulatedValues, setSimulatedValues] = useState<Record<string, number>>({});
+
+  // Efeito para carregar e sincronizar investimentos inicialmente no simulador
+  React.useEffect(() => {
+    if (investimentos && investimentos.length > 0) {
+      setSimulatedValues((prev) => {
+        const next = { ...prev };
+        let updated = false;
+        investimentos.forEach((i) => {
+          if (next[i.id] === undefined) {
+            next[i.id] = i.valor_atual || 0;
+            updated = true;
+          }
+        });
+        return updated ? next : prev;
+      });
+
+      setSelectedAssetIds((prev) => {
+        const next = [...prev];
+        let updated = false;
+        investimentos.forEach((i) => {
+          if (!next.includes(i.id)) {
+            next.push(i.id);
+            updated = true;
+          }
+        });
+        return updated ? next : prev;
+      });
+    }
+  }, [investimentos]);
+
+  const handleCheckboxChange = (id: string, checked: boolean) => {
+    if (checked) {
+      setSelectedAssetIds((prev) => [...prev, id]);
+      if (simulatedValues[id] === undefined) {
+        const inv = investimentos.find((i) => i.id === id);
+        setSimulatedValues((prev) => ({ ...prev, [id]: inv?.valor_atual || 0 }));
+      }
+    } else {
+      setSelectedAssetIds((prev) => prev.filter((item) => item !== id));
+    }
+  };
+
+  const handleValChange = (id: string, value: number) => {
+    setSimulatedValues((prev) => ({ ...prev, [id]: value }));
+  };
+
   const investimentosAgrupados = useMemo(() => {
     const grupos: Record<string, { nome: string; itens: typeof investimentos }> = {};
     investimentos.forEach((inv) => {
@@ -389,7 +438,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
         </Card>
 
         {/* Simulador de Rentabilidade */}
-        <SimuladorRentabilidadeCard />
+        <SimuladorRentabilidadeCard selectedAssetIds={selectedAssetIds} simulatedValues={simulatedValues} />
 
         {/* Configurações Rápidas de Exibição */}
         <Card className="border-[#1E2942] bg-[#0B132B]/60 rounded-3xl">
@@ -524,6 +573,9 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
                       const rent = inv.valor_investido > 0 ? ((inv.valor_atual - inv.valor_investido) / inv.valor_investido) * 100 : 0;
                       const isProfit = inv.valor_atual >= inv.valor_investido;
 
+                      const isSelected = selectedAssetIds.includes(inv.id);
+                      const simulatedVal = simulatedValues[inv.id] !== undefined ? simulatedValues[inv.id] : (inv.valor_atual || 0);
+
                       return (
                         <Card
                           key={inv.id}
@@ -582,6 +634,34 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
                                   return formatCurrency(diario);
                                 })()}
                               </span>
+                            </div>
+
+                            {/* Simulador de Ativo */}
+                            <div className="pt-2 border-t border-[#1E2942]/40 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  id={`sim-check-${inv.id}`}
+                                  checked={isSelected}
+                                  onChange={(e) => handleCheckboxChange(inv.id, e.target.checked)}
+                                  className="w-3.5 h-3.5 rounded border-[#1E2942] text-emerald-500 focus:ring-emerald-500/20 accent-emerald-500 bg-[#0B132B] cursor-pointer"
+                                />
+                                <label htmlFor={`sim-check-${inv.id}`} className="text-[10px] text-slate-300 font-semibold cursor-pointer select-none">
+                                  Simular no Painel
+                                </label>
+                              </div>
+                              {isSelected && (
+                                <div className="space-y-1">
+                                  <span className="text-[9px] text-slate-400 block">Valor Simulado (R$)</span>
+                                  <Input
+                                    type="number"
+                                    value={simulatedVal === 0 ? "" : simulatedVal}
+                                    onChange={(e) => handleValChange(inv.id, parseFloat(e.target.value) || 0)}
+                                    className="h-7 text-xs bg-[#0B132B]/85 border-[#1E2942] text-slate-200 focus-visible:ring-emerald-500/30 focus-visible:border-emerald-500/50 rounded-xl"
+                                    placeholder="Valor para simulação"
+                                  />
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex gap-2 pt-2">

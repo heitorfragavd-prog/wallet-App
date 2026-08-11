@@ -279,6 +279,151 @@ serve(async (req) => {
       });
     }
 
+    // 1.2 Modo CREATE_ORDER: cria um pedido/comanda na nuvem do Eyemobile
+    if (mode === "CREATE_ORDER") {
+      if (!user_id) throw new Error("ID de usuário não especificado.");
+
+      const { data: pConfig, error: pConfigErr } = await supabaseAdmin
+        .from("eyemobile_config")
+        .select("access_key, secret_key, environment")
+        .eq("user_id", user_id)
+        .maybeSingle();
+
+      if (pConfigErr) throw pConfigErr;
+      if (!pConfig?.access_key || !pConfig?.secret_key) {
+        throw new Error("Chave de acesso (Access Key) e Chave secreta (Secret Key) do Eyemobile não configuradas.");
+      }
+
+      const pBaseUrl = pConfig.environment === "staging"
+        ? "https://staging-api.eyemobile.com.br/v1"
+        : "https://api.eyemobile.com.br/v1";
+      const pHeaders = {
+        "X-EYEMOBILE-ACCESS-KEY": pConfig.access_key,
+        "X-EYEMOBILE-SECRET-KEY": pConfig.secret_key,
+        "Content-Type": "application/json",
+      };
+
+      // 1. Resolve point_id dynamically (handles event point relationship ID vs point ID)
+      let resolvedPointId = String(requestBody.point_id);
+      try {
+        const pointsResp = await fetch(`${pBaseUrl}/events/${requestBody.event_id}/points?limit=100&offset=0`, { headers: pHeaders });
+        if (pointsResp.ok) {
+          const pointsData = await pointsResp.json();
+          const match = pointsData?.data?.find((d: any) => String(d.id) === resolvedPointId || String(d.point?.id) === resolvedPointId);
+          if (match && match.point?.id) {
+            resolvedPointId = String(match.point.id);
+            console.log(`[Eyemobile API] Resolved point_id from relationship ID: ${requestBody.point_id} -> ${resolvedPointId}`);
+          }
+        }
+      } catch (e: any) {
+        console.warn("[Eyemobile API] Failed to resolve point_id dynamically:", e.message);
+      }
+
+      // 2. Fetch product group/measure mapping and fallback group
+      const productGroupMap: Record<string, string> = {};
+      const productMeasureMap: Record<string, number> = {};
+      let fallbackGroupId = "211934"; // Default OUTROS group for tenant
+      try {
+        // Get fallback group from first available product group
+        const groupsResp = await fetch(`${pBaseUrl}/product_groups?limit=100&offset=0`, { headers: pHeaders });
+        if (groupsResp.ok) {
+          const groupsData = await groupsResp.json();
+          const firstGroup = groupsData?.data?.[0]?.id;
+          if (firstGroup) {
+            fallbackGroupId = String(firstGroup);
+          }
+        }
+
+        // Get active menu to query products mapping
+        const menusResp = await fetch(`${pBaseUrl}/menus?limit=100&offset=0`, { headers: pHeaders });
+        if (menusResp.ok) {
+          const menusData = await menusResp.json();
+          const menuId = menusData?.data?.[0]?.id;
+          if (menuId) {
+            for (const offset of [0, 100]) {
+              const menuProdsResp = await fetch(`${pBaseUrl}/menus/${menuId}/products?limit=100&offset=${offset}`, { headers: pHeaders });
+              if (menuProdsResp.ok) {
+                const menuProdsData = await menuProdsResp.json();
+                const items = menuProdsData?.data || [];
+                for (const item of items) {
+                  const pId = item.product?.id;
+                  const gId = item.product_group_id;
+                  const meas = item.measure ?? item.product?.measure ?? 1;
+                  if (pId && gId) {
+                    productGroupMap[String(pId)] = String(gId);
+                    productMeasureMap[String(pId)] = Number(meas);
+                  }
+                }
+                if (items.length < 100) break;
+              } else {
+                break;
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("[Eyemobile API] Failed to resolve product groups dynamically:", e.message);
+      }
+
+      // 3. Construct Order Body matching Eyemobile schema validation
+      const orderBody: any = {
+        event_id: String(requestBody.event_id),
+        point_id: resolvedPointId,
+        delivery_type: requestBody.delivery_type ?? 1,
+        reference_key: requestBody.reference_key ?? `TXN-${Date.now()}`,
+        comment: requestBody.comment ?? "Pedido enviado do PDV",
+        order_items: (requestBody.order_items || []).map((item: any) => {
+          const pId = String(item.product_id);
+          const gId = productGroupMap[pId] || fallbackGroupId;
+          const meas = productMeasureMap[pId] || (item.measure && item.measure > 0 ? Number(item.measure) : 1);
+          return {
+            product_id: pId,
+            product_group_id: gId,
+            measure: meas,
+            price: Number(item.price),
+            quantity: Number(item.quantity),
+            comment: item.comment || ""
+          };
+        })
+      };
+
+      // Add customer identification satisfying the root 'oneOf' constraints
+      if (requestBody.customer_id) {
+        orderBody.customer_id = String(requestBody.customer_id);
+      } else {
+        orderBody.name = requestBody.name ? String(requestBody.name) : "Consumidor Final";
+        orderBody.document = requestBody.document ? String(requestBody.document) : "99999999999";
+      }
+
+      if (requestBody.phone) orderBody.phone = String(requestBody.phone);
+
+      console.log("[Eyemobile API] Criando pedido no URL:", `${pBaseUrl}/orders`, JSON.stringify(orderBody));
+
+      const resp = await fetch(`${pBaseUrl}/orders`, {
+        method: "POST",
+        headers: pHeaders,
+        body: JSON.stringify(orderBody)
+      });
+
+      const rawText = await resp.text();
+      console.log("[Eyemobile API] Resposta status:", resp.status, "body:", rawText);
+
+      if (!resp.ok) {
+        throw new Error(`Erro na API do Eyemobile (Código ${resp.status}): ${rawText}`);
+      }
+
+      let orderData = {};
+      try {
+        orderData = JSON.parse(rawText);
+      } catch {
+        orderData = { raw: rawText };
+      }
+
+      return new Response(JSON.stringify({ success: true, order: orderData }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     // 1.5 Modo PRODUCTS: consulta leve só de produtos/estoque (1-2 chamadas
     // de API). Usada pelo dashboard rápido para montar o "Estoque crítico"
     // sem paginar todo o período de vendas.
