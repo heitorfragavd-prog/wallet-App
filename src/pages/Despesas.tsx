@@ -120,11 +120,6 @@ const Despesas = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }, []);
 
-  const { despesas: despesasDeHoje, loading: loadingHoje } = useDespesas({
-    startDate: hojeLocal,
-    endDate: hojeLocal,
-  });
-
   const { dividas: todasDividas, loading: loadingDividas } = useDividas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
@@ -158,6 +153,7 @@ const Despesas = () => {
 
   const [filtro, setFiltro] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("");
+  const [visibleCount, setVisibleCount] = useState(20);
   const { mutate: categorizarIA } = useCategorizacaoIA();
 
   const handleDescricaoBlur = () => {
@@ -167,7 +163,7 @@ const Despesas = () => {
       categorizarIA({ descricao: desc, valor: val, tipo: "despesa" }, {
         onSuccess: (result) => {
           if (result && result.confianca > 0.85 && result.categoria) {
-            const match = categorias.find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
+            const match = categoriasDespesa.find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
             if (match) {
               setNovaDespesa((prev) => ({ ...prev, categoria: match.id }));
               toast({ title: `Categorizado com IA: ${match.nome}` });
@@ -300,7 +296,6 @@ const Despesas = () => {
   };
 
   // Dados processados
-  // Dados processados
   const { 
     despesasFiltradas, 
     despesasAgrupadas, 
@@ -339,7 +334,9 @@ const Despesas = () => {
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
 
     // Despesas de Hoje
-    const totalDespesasDeHoje = (despesasDeHoje ?? []).reduce((sum, d) => sum + (d.valor || 0), 0);
+    const totalDespesasDeHoje = despesas
+      .filter((d) => d.data === hojeLocal)
+      .reduce((sum, d) => sum + (d.valor || 0), 0);
 
     // Previsto para pagar (dívidas em aberto no período filtrado)
     const previstoParaPagar = (todasDividas ?? [])
@@ -356,7 +353,7 @@ const Despesas = () => {
     let corIndex = 0;
 
     filtradas.forEach((d) => {
-      const catNome = d.categorias?.nome || "Sem Categoria";
+      const catNome = d.categorias?.nome?.trim() || "Sem Categoria";
       if (!categoriaStats[catNome]) {
         categoriaStats[catNome] = {
           label: catNome,
@@ -368,12 +365,25 @@ const Despesas = () => {
       categoriaStats[catNome].valor += d.valor;
     });
 
-    const categoriaList = Object.values(categoriaStats)
+    const rawCategoriaList = Object.values(categoriaStats)
       .map((item) => {
         const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
         return { ...item, porcentagem };
       })
       .sort((a, b) => b.valor - a.valor);
+
+    const limit = 5;
+    const categoriaList = rawCategoriaList.length > limit 
+      ? [
+          ...rawCategoriaList.slice(0, limit - 1),
+          {
+            label: "Outras",
+            valor: rawCategoriaList.slice(limit - 1).reduce((sum, c) => sum + c.valor, 0),
+            porcentagem: rawCategoriaList.slice(limit - 1).reduce((sum, c) => sum + c.porcentagem, 0),
+            cor: "bg-slate-400"
+          }
+        ]
+      : rawCategoriaList;
 
     // 2. Distribuição por Meio de Pagamento
     const metodoStats = {
@@ -425,7 +435,8 @@ const Despesas = () => {
           total
         };
       })
-      .sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+      .sort((a, b) => a.rawDate.localeCompare(b.rawDate))
+      .slice(-30);
 
     return { 
       despesasFiltradas: filtradas, 
@@ -439,7 +450,18 @@ const Despesas = () => {
       previstoParaPagar,
       metodoList
     };
-  }, [despesas, despesasDeHoje, todasDividas, filtro, categoriaFiltro]);
+  }, [despesas, todasDividas, filtro, categoriaFiltro, hojeLocal]);
+
+  // Agrupar apenas as despesas visíveis para a lista mobile
+  const despesasAgrupadasVisiveis = useMemo(() => {
+    const grupos: { [key: string]: Despesa[] } = {};
+    despesasFiltradas.slice(0, visibleCount).forEach((d) => {
+      const dataKey = formatarDataRelativa(d.data);
+      if (!grupos[dataKey]) grupos[dataKey] = [];
+      grupos[dataKey].push(d);
+    });
+    return grupos;
+  }, [despesasFiltradas, visibleCount]);
 
   const limparFiltros = () => {
     setFiltro("");
@@ -476,7 +498,7 @@ const Despesas = () => {
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">Despesas do Dia</p>
-                  {loadingHoje ? (
+                  {loading ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
@@ -496,12 +518,16 @@ const Despesas = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Valor Pago</p>
+                  <p className="text-sm text-muted-foreground">
+                    {temFiltrosAtivos ? "Valor Filtrado" : "Valor Pago"}
+                  </p>
                   {loading ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalDespesas)}
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                        temFiltrosAtivos ? totalFiltrado : totalDespesas
+                      )}
                     </p>
                   )}
                 </div>
@@ -762,7 +788,7 @@ const Despesas = () => {
                           </div>
                         ) : (
                           <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={dailyData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                            <AreaChart data={dailyData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
                               <defs>
                                 <linearGradient id="colorDespesasDays" x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
@@ -814,248 +840,270 @@ const Despesas = () => {
               </CardContent>
             </Card>
 
-            {/* Lista Desktop */}
-            <div className="hidden md:block">
+            {/* Resumo rápido acima da lista */}
+            <div className="flex items-center justify-between px-1">
+              <p className="text-sm text-muted-foreground">
+                {despesasFiltradas.length} despesa{despesasFiltradas.length !== 1 ? "s" : ""} encontrada{despesasFiltradas.length !== 1 ? "s" : ""}
+                {totalFiltrado > 0 && (
+                  <span className="ml-1 font-semibold text-foreground">
+                    · Total: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalFiltrado)}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            {loading ? (
               <Card>
-                <CardContent className="p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead className="font-semibold">Descrição</TableHead>
-                        <TableHead className="font-semibold">Categoria</TableHead>
-                        <TableHead className="font-semibold">Método</TableHead>
-                        <TableHead className="font-semibold">Data</TableHead>
-                        <TableHead className="font-semibold text-right">Valor</TableHead>
-                        <TableHead className="font-semibold text-center w-24">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {loading ? (
-                        [...Array(5)].map((_, i) => (
-                          <TableRow key={i}>
-                            <TableCell><Skeleton className="h-5 w-40" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-20" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-24" /></TableCell>
-                            <TableCell><Skeleton className="h-5 w-20 ml-auto" /></TableCell>
-                            <TableCell><Skeleton className="h-8 w-16 mx-auto" /></TableCell>
-                          </TableRow>
-                        ))
-                      ) : despesasFiltradas.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                            <Wallet className="w-10 h-10 mx-auto mb-2 opacity-20" />
-                            Nenhuma despesa encontrada
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        despesasFiltradas.map((despesa) => (
-                          <TableRow key={despesa.id} className="group">
-                            <TableCell>
-                              <div className="flex items-start gap-3">
-                                <div className="p-2 rounded-lg bg-red-500/10 shrink-0 mt-0.5">
-                                  <ArrowDownRight className="w-4 h-4 text-red-500" />
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="font-medium">{despesa.descricao}</span>
-                                  {despesa.observacoes && (
-                                    <p className="text-xs text-muted-foreground italic line-clamp-1">{despesa.observacoes}</p>
-                                  )}
-                                  {despesa.tags && despesa.tags.length > 0 && (
-                                    <div className="flex flex-wrap gap-1">
-                                      {despesa.tags.map((tag) => (
-                                        <span
-                                          key={tag.id}
-                                          className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
-                                          style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
-                                        >
-                                          {tag.nome}
-                                        </span>
-                                      ))}
+                <CardContent className="p-4 space-y-4">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <Skeleton className="w-10 h-10 rounded-lg" />
+                      <div className="flex-1 space-y-2">
+                        <Skeleton className="h-4 w-3/4" />
+                        <Skeleton className="h-3 w-1/2" />
+                      </div>
+                      <Skeleton className="h-5 w-20" />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : despesasFiltradas.length === 0 ? (
+              <div className="text-center py-12 space-y-4 bg-card border border-border rounded-xl">
+                <Wallet className="w-12 h-12 mx-auto text-muted-foreground/30" />
+                <div>
+                  <p className="text-lg font-semibold text-foreground">Nenhuma despesa encontrada</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {temFiltrosAtivos 
+                      ? "Tente ajustar os filtros de data ou categoria."
+                      : "Cadastre sua primeira despesa para começar a acompanhar seus gastos."}
+                  </p>
+                </div>
+                {!temFiltrosAtivos && (
+                  <Button onClick={() => setActiveTab("adicionar")} className="bg-red-500 hover:bg-red-600">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Adicionar Primeira Despesa
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* Lista Desktop */}
+                <div className="hidden md:block">
+                  <Card>
+                    <CardContent className="p-0">
+                      <ScrollArea className="h-[420px]">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-card z-10 shadow-sm">
+                            <TableRow className="hover:bg-transparent">
+                              <TableHead className="font-semibold">Descrição</TableHead>
+                              <TableHead className="font-semibold">Categoria</TableHead>
+                              <TableHead className="font-semibold">Método</TableHead>
+                              <TableHead className="font-semibold">Data</TableHead>
+                              <TableHead className="font-semibold text-right">Valor</TableHead>
+                              <TableHead className="font-semibold text-center w-24">Ações</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {despesasFiltradas.map((despesa) => (
+                              <TableRow key={despesa.id} className="group">
+                                <TableCell>
+                                  <div className="flex items-start gap-3">
+                                    <div className="p-2 rounded-lg bg-red-500/10 shrink-0 mt-0.5">
+                                      <ArrowDownRight className="w-4 h-4 text-red-500" />
                                     </div>
+                                    <div className="space-y-1">
+                                      <span className="font-medium">{despesa.descricao}</span>
+                                      {despesa.observacoes && (
+                                        <p className="text-xs text-muted-foreground italic line-clamp-1">{despesa.observacoes}</p>
+                                      )}
+                                      {despesa.tags && despesa.tags.length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                          {despesa.tags.map((tag) => (
+                                            <span
+                                              key={tag.id}
+                                              className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                              style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                            >
+                                              {tag.nome}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="secondary" className="font-normal">
+                                    {despesa.categorias?.nome || "Sem categoria"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  {despesa.metodo_pagamento ? (
+                                    <Badge variant="outline" className="font-normal text-xs bg-muted/20 border-muted">
+                                      {formatarMetodoPagamento(despesa.metodo_pagamento)}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">—</span>
                                   )}
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="secondary" className="font-normal">
-                                {despesa.categorias?.nome || "Sem categoria"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {despesa.metodo_pagamento ? (
-                                <Badge variant="outline" className="font-normal text-xs bg-muted/20 border-muted">
-                                  {formatarMetodoPagamento(despesa.metodo_pagamento)}
-                                </Badge>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">—</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {formatarData(despesa.data)}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <span className="font-semibold text-red-500">
-                                -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                              </span>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEditarDespesa(despesa)}
-                                  className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Button>
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
+                                </TableCell>
+                                <TableCell className="text-muted-foreground">
+                                  {formatarData(despesa.data)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <span className="font-semibold text-red-500">
+                                    -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  </span>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                      onClick={() => handleEditarDespesa(despesa)}
+                                      className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
                                     >
-                                      <Trash2 className="w-4 h-4" />
+                                      <Edit className="w-4 h-4" />
                                     </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        Tem certeza que deseja excluir a despesa "{despesa.descricao}"? Esta ação não pode ser desfeita.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                      <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500 hover:bg-red-600">
-                                        Excluir
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </div>
+                                    <AlertDialog>
+                                      <AlertDialogTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                      </AlertDialogTrigger>
+                                      <AlertDialogContent>
+                                        <AlertDialogHeader>
+                                          <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                                          <AlertDialogDescription>
+                                            Tem certeza que deseja excluir a despesa "{despesa.descricao}"? Esta ação não pode ser desfeita.
+                                          </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                          <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                          <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500 hover:bg-red-600">
+                                            Excluir
+                                          </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                      </AlertDialogContent>
+                                    </AlertDialog>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </div>
 
-            {/* Lista Mobile - Agrupada por data */}
-            <div className="md:hidden">
-              <Card>
-                <CardContent className="p-4">
-                  <ScrollArea className="h-[500px]">
-                    {loading ? (
-                      <div className="space-y-4">
-                        {[...Array(4)].map((_, i) => (
-                          <div key={i} className="flex items-center gap-3">
-                            <Skeleton className="w-10 h-10 rounded-lg" />
-                            <div className="flex-1 space-y-2">
-                              <Skeleton className="h-4 w-3/4" />
-                              <Skeleton className="h-3 w-1/2" />
-                            </div>
-                            <Skeleton className="h-5 w-20" />
-                          </div>
-                        ))}
-                      </div>
-                    ) : Object.keys(despesasAgrupadas).length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                        <Wallet className="w-10 h-10 mb-2 opacity-20" />
-                        <p className="text-sm">Nenhuma despesa encontrada</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-6">
-                        {Object.entries(despesasAgrupadas).map(([data, items]) => (
-                          <div key={data}>
-                            <div className="flex items-center gap-2 mb-3">
-                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{data}</span>
-                              <div className="flex-1 h-px bg-border" />
-                            </div>
-                            <div className="space-y-2">
-                              {items.map((despesa) => (
-                                <div key={despesa.id} className="flex gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
-                                  <div className="p-2 rounded-lg bg-red-500/10 shrink-0">
-                                    <ArrowDownRight className="w-4 h-4 text-red-500" />
-                                  </div>
-                                  <div className="flex-1 min-w-0 space-y-2">
-                                    <p className="font-medium text-foreground truncate">{despesa.descricao}</p>
-                                    {despesa.observacoes && (
-                                      <p className="text-xs text-muted-foreground italic line-clamp-2">{despesa.observacoes}</p>
-                                    )}
-                                    {despesa.tags && despesa.tags.length > 0 && (
-                                      <div className="flex flex-wrap gap-1">
-                                        {despesa.tags.map((tag) => (
-                                          <span
-                                            key={tag.id}
-                                            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
-                                            style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
-                                          >
-                                            {tag.nome}
-                                          </span>
-                                        ))}
+                {/* Lista Mobile - Agrupada por data */}
+                <div className="md:hidden">
+                  <Card>
+                    <CardContent className="p-4">
+                      <ScrollArea className="h-[500px]">
+                        <div className="space-y-6">
+                          {Object.entries(despesasAgrupadasVisiveis).map(([data, items]) => (
+                            <div key={data}>
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{data}</span>
+                                <div className="flex-1 h-px bg-border" />
+                              </div>
+                              <div className="space-y-2">
+                                {items.map((despesa) => (
+                                  <div key={despesa.id} className="flex gap-3 p-3 rounded-xl hover:bg-muted/50 transition-colors">
+                                    <div className="p-2 rounded-lg bg-red-500/10 shrink-0">
+                                      <ArrowDownRight className="w-4 h-4 text-red-500" />
+                                    </div>
+                                    <div className="flex-1 min-w-0 space-y-2">
+                                      <p className="font-medium text-foreground truncate">{despesa.descricao}</p>
+                                      {despesa.observacoes && (
+                                        <p className="text-xs text-muted-foreground italic line-clamp-2">{despesa.observacoes}</p>
+                                      )}
+                                      {despesa.tags && despesa.tags.length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                          {despesa.tags.map((tag) => (
+                                            <span
+                                              key={tag.id}
+                                              className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                                              style={{ backgroundColor: tag.cor ? `${tag.cor}20` : '#6b728020', color: tag.cor || '#6b7280' }}
+                                            >
+                                              {tag.nome}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                      <div className="flex flex-col gap-2">
+                                        <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
+                                          {despesa.categorias?.nome || "Sem categoria"}
+                                        </Badge>
+                                        <span className="text-xs text-muted-foreground">{formatarData(despesa.data)}</span>
                                       </div>
-                                    )}
-                                    <div className="flex flex-col gap-2">
-                                      <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0 w-fit">
-                                        {despesa.categorias?.nome || "Sem categoria"}
-                                      </Badge>
-                                      <span className="text-xs text-muted-foreground">{formatarData(despesa.data)}</span>
-                                    </div>
-                                    <div className="font-semibold text-red-500">
-                                      -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => handleEditarDespesa(despesa)}
-                                        className="h-11 w-11 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
-                                      >
-                                        <Edit className="w-4 h-4" />
-                                      </Button>
-                                      <AlertDialog>
-                                        <AlertDialogTrigger asChild>
-                                          <Button 
-                                            variant="ghost" 
-                                            size="sm" 
-                                            className="h-11 w-11 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                                          >
-                                            <Trash2 className="w-4 h-4" />
-                                          </Button>
-                                        </AlertDialogTrigger>
-                                        <AlertDialogContent>
-                                          <AlertDialogHeader>
-                                            <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-                                            <AlertDialogDescription>
-                                              Tem certeza que deseja excluir "{despesa.descricao}"?
-                                            </AlertDialogDescription>
-                                          </AlertDialogHeader>
-                                          <AlertDialogFooter>
-                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                            <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500">
-                                              Excluir
-                                            </AlertDialogAction>
-                                          </AlertDialogFooter>
-                                        </AlertDialogContent>
-                                      </AlertDialog>
+                                      <div className="font-semibold text-red-500">
+                                        -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => handleEditarDespesa(despesa)}
+                                          className="h-11 w-11 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10"
+                                        >
+                                          <Edit className="w-4 h-4" />
+                                        </Button>
+                                        <AlertDialog>
+                                          <AlertDialogTrigger asChild>
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-11 w-11 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                            >
+                                              <Trash2 className="w-4 h-4" />
+                                            </Button>
+                                          </AlertDialogTrigger>
+                                          <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                              <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                                              <AlertDialogDescription>
+                                                Tem certeza que deseja excluir "{despesa.descricao}"?
+                                              </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                              <AlertDialogAction onClick={() => handleExcluirDespesa(despesa.id)} className="bg-red-500">
+                                                Excluir
+                                              </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                          </AlertDialogContent>
+                                        </AlertDialog>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              ))}
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-            </div>
+                          ))}
+                        </div>
+                        {visibleCount < despesasFiltradas.length && (
+                          <Button
+                            variant="outline"
+                            className="w-full mt-4"
+                            onClick={() => setVisibleCount((prev) => prev + 20)}
+                          >
+                            Carregar mais ({despesasFiltradas.length - visibleCount} restantes)
+                          </Button>
+                        )}
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </div>
+              </>
+            )}
+
+
           </TabsContent>
 
 

@@ -60,12 +60,24 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       transacoesRawCount: transacoesResp.data?.length || 0 
     });
 
-    const mappedDespesas = (despesasResp.data ?? []).map((d) => ({
-      ...d,
-      tags: (d as any).despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
-    }));
+    // Normaliza despesas: garante que categorias seja objeto
+    const mappedDespesas = (despesasResp.data ?? []).map((d: any) => {
+      const cat = d.categorias;
+      return {
+        ...d,
+        tags: d.despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
+        categorias: Array.isArray(cat) ? (cat[0] ?? null) : cat,
+      };
+    });
 
-    const mappedTransacoes = transacoesResp.data ?? [];
+    // Normaliza transacoes: garante que categorias seja objeto
+    const mappedTransacoes = (transacoesResp.data ?? []).map((d: any) => {
+      const cat = d.categorias;
+      return {
+        ...d,
+        categorias: Array.isArray(cat) ? (cat[0] ?? null) : cat,
+      };
+    });
 
     const res = [...mappedDespesas, ...mappedTransacoes].sort(
       (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
@@ -100,6 +112,9 @@ async function updateDespesaTags(despesaId: string, tagNames: string[]) {
 
 // ─── Hook ─────────────────────────────────────────────────────
 export const useDespesas = (params: DespesasQueryParams = {}) => {
+  if (typeof window !== "undefined") {
+    (window as any).supabase = supabase;
+  }
   const qc = useQueryClient();
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();

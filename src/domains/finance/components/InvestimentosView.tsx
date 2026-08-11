@@ -78,8 +78,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
   const navigate = useNavigate();
 
   // Hooks do Módulo de Investimento
-  const { isLocked: isLockedRaw, hasPassword, logoutInvestimentos } = useSenhaInvestimentos();
-  const isLocked = false;
+  const { isLocked, hasPassword, logoutInvestimentos } = useSenhaInvestimentos();
   const { investimentos, isLoading: loadInvs, createInvestimento, deleteInvestimento } = useInvestimentos();
   const { metas, createMeta } = useMetasInvestimento();
   const { proventos, proximosProventos, totalProventosMes } = useProventosEsperados();

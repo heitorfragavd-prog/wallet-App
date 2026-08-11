@@ -2,6 +2,19 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.38] - 2026-08-11
+
+### 🔧 Melhorado
+- **Módulo PDV** — Ajustes na grade de produtos (`PDVProductGrid`) e finalização de pagamentos (`PDVPaymentModal`), e na página principal (`PDVPage`).
+- **Investimentos** — Refinamentos no `InvestimentosView`.
+- **Despesas** — Ajustes na listagem e processamento (`useDespesas`, `Despesas.tsx`).
+- **Integrações** — Atualizações no `ConciliacaoDivipayService` e `eyemobile-sync` para maior resiliência de sincronização.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.38**
+
+---
+
 ## [1.0.37] - 2026-08-11
 
 ### ✨ Novo
