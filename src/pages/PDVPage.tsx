@@ -169,6 +169,9 @@ const PDVPage: React.FC = () => {
             name: String(p.name ?? "Produto sem nome").trim(),
             price: Number(p.default_price ?? p.price ?? 0),
             category: cat,
+            image: p.image
+              ? (p.image.startsWith("http") ? p.image : `https://images.eyemobile.com.br/products/96x96/${p.image}`)
+              : undefined,
           };
         });
         setProducts(mapped);
@@ -338,7 +341,17 @@ const PDVPage: React.FC = () => {
     <div className="h-screen w-screen flex bg-[#0a0e1a] text-white overflow-hidden font-sans">
       
       {/* 1. BARRA LATERAL ESQUERDA */}
-      <PDVSidebar activeTab={activeTab} onTabChange={setActiveTab} disabled={!isCaixaAberto} />
+      <PDVSidebar 
+        activeTab={activeTab} 
+        onTabChange={(tab) => {
+          if (tab === "sincronizar") {
+            handleSincronizar();
+          } else {
+            setActiveTab(tab);
+          }
+        }} 
+        disabled={!isCaixaAberto} 
+      />
 
       {/* 2. ÁREA CENTRAL */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">

@@ -8,6 +8,7 @@ export interface PDVProduct {
   price: number;
   category: string;
   icon?: React.ReactNode;
+  image?: string;
 }
 
 const CATEGORIES = [
@@ -133,8 +134,27 @@ export const PDVProductGrid: React.FC<Props> = ({
                 onClick={() => onAddToCart(product)}
                 className="group flex flex-col items-center p-4 bg-[#1C2541]/40 border border-[#1E2942]/60 rounded-2xl hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all active:scale-95 text-left relative"
               >
-                <div className="w-14 h-14 rounded-xl bg-slate-800/60 flex items-center justify-center text-emerald-400 mb-3 group-hover:bg-emerald-500/10 transition-colors">
-                  {icon}
+                <div className="w-14 h-14 rounded-xl bg-slate-800/60 flex items-center justify-center text-emerald-400 mb-3 group-hover:bg-emerald-500/10 transition-colors overflow-hidden">
+                  {product.image ? (
+                    <img
+                      src={product.image}
+                      alt={product.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const placeholder = parent.querySelector(".image-fallback");
+                          if (placeholder) {
+                            placeholder.classList.remove("hidden");
+                          }
+                        }
+                      }}
+                    />
+                  ) : null}
+                  <div className={`image-fallback ${product.image ? "hidden" : ""}`}>
+                    {icon}
+                  </div>
                 </div>
                 <p className="text-xs font-semibold text-slate-200 text-center leading-tight mb-2 h-8 line-clamp-2">
                   {product.name}

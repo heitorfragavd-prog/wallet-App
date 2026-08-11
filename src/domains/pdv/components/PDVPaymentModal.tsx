@@ -18,6 +18,8 @@ export const PDVPaymentModal: React.FC<Props> = ({ open, onClose, total, items, 
   const [payments, setPayments] = useState<Array<{ method: string; amount: number; transactionId?: string }>>([]);
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [customAmount, setCustomAmount] = useState<string>("");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const { toast } = useToast();
   const fmt = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -35,6 +37,8 @@ export const PDVPaymentModal: React.FC<Props> = ({ open, onClose, total, items, 
       setPayments([]);
       setAmountPaid(0);
       setCustomAmount(total.toFixed(2));
+      setIsRegistering(false);
+      setErrorMsg("");
     }
   }, [open, total]);
 
@@ -44,7 +48,7 @@ export const PDVPaymentModal: React.FC<Props> = ({ open, onClose, total, items, 
     }
   }, [remaining, open]);
 
-  const handleMachine = async (m: "credit" | "debit" | "pix") => {
+  const handleMachine = (m: "credit" | "debit" | "pix") => {
     const payAmount = parseFloat(customAmount) || 0;
     if (payAmount <= 0 || payAmount > remaining) {
       toast({
@@ -57,40 +61,101 @@ export const PDVPaymentModal: React.FC<Props> = ({ open, onClose, total, items, 
 
     setMethod(m);
     setStep("processing");
+  };
+
+  const confirmMachinePayment = async () => {
+    const payAmount = parseFloat(customAmount) || 0;
+    setIsRegistering(true);
+    setErrorMsg("");
     try {
       const res = await pdvActionService.sendToMachine({
         amount: payAmount,
         items: items.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity, price: i.price })),
-        paymentMethod: m,
+        paymentMethod: method,
       });
 
       if (res.success) {
-        const newPayments = [...payments, { method: m, amount: payAmount, transactionId: res.transactionId }];
+        const newPayments = [...payments, { method, amount: payAmount, transactionId: res.transactionId }];
         const newAmountPaid = amountPaid + payAmount;
         setPayments(newPayments);
         setAmountPaid(newAmountPaid);
+        setIsRegistering(false);
 
         const newRemaining = Math.max(0, total - newAmountPaid);
         if (newRemaining <= 0.01) {
           setStep("success");
-          toast({ title: "Venda Concluída!", description: "Pagamento total recebido com sucesso." });
+          toast({ title: "Venda Concluída!", description: "Pedido registrado com sucesso no Eyemobile." });
           setTimeout(() => {
             onSuccess(newPayments);
             onClose();
           }, 2000);
         } else {
           setStep("method");
-          toast({ title: "Pagamento parcial aprovado!", description: `${fmt(payAmount)} recebidos no ${m === "pix" ? "Pix" : m === "credit" ? "Crédito" : "Débito"}.` });
+          toast({ title: "Pagamento parcial registrado!", description: `${fmt(payAmount)} registrados no ${method === "pix" ? "Pix" : method === "credit" ? "Crédito" : "Débito"}.` });
         }
       } else {
+        setIsRegistering(false);
         setStep("failed");
-        toast({ title: "Pagamento recusado", description: res.message, variant: "destructive" });
+        setErrorMsg(res.message || "Erro desconhecido ao registrar o pedido.");
+        toast({ title: "Erro ao registrar venda", description: res.message, variant: "destructive" });
       }
     } catch {
+      setIsRegistering(false);
       setStep("failed");
-      toast({ title: "Erro na maquininha", description: "Não foi possível comunicar com a maquininha.", variant: "destructive" });
+      setErrorMsg("Erro de comunicação com o servidor.");
+      toast({ title: "Erro na integração", description: "Não foi possível registrar o pedido no Eyemobile.", variant: "destructive" });
     }
   };
+
+  const forceConfirmLocal = () => {
+    const payAmount = parseFloat(customAmount) || 0;
+    const newPayments = [...payments, { method, amount: payAmount, transactionId: `LOCAL-${Date.now()}` }];
+    const newAmountPaid = amountPaid + payAmount;
+    setPayments(newPayments);
+    setAmountPaid(newAmountPaid);
+
+    toast({ title: "Aprovação Local", description: "Venda concluída apenas no sistema local." });
+
+    const newRemaining = Math.max(0, total - newAmountPaid);
+    if (newRemaining <= 0.01) {
+      setStep("success");
+      setTimeout(() => {
+        onSuccess(newPayments);
+        onClose();
+      }, 1500);
+    } else {
+      setStep("method");
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!open) return;
+      if (step === "processing") {
+        if (e.key === "F4") {
+          e.preventDefault();
+          if (!isRegistering) {
+            confirmMachinePayment();
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setStep("method");
+        }
+      } else if (step === "cash") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setStep("method");
+        }
+      } else if (step === "method") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, step, customAmount, method, amountPaid, payments, items, isRegistering]);
 
   const handleCash = () => {
     const payAmount = parseFloat(customAmount) || 0;
@@ -225,26 +290,66 @@ export const PDVPaymentModal: React.FC<Props> = ({ open, onClose, total, items, 
         )}
         {step === "processing" && (
           <div className="p-8 flex flex-col items-center text-center space-y-5">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 animate-pulse"><Loader2 className="w-8 h-8 text-emerald-400 animate-spin" /></div>
-            <div><h3 className="text-lg font-bold text-white">Cobrança em Andamento</h3><p className="text-sm text-slate-400 mt-1">Aguardando leitura do cartão ou QR Code Pix na maquininha...</p></div>
-            <div className="bg-[#1C2541]/50 rounded-xl px-6 py-3 border border-[#1E2942]"><p className="text-[10px] text-slate-400 uppercase">Valor</p><p className="text-xl font-extrabold text-emerald-400">{fmt(parseFloat(customAmount) || 0)}</p></div>
-            <Button variant="outline" className="border-rose-500/30 text-rose-400 hover:bg-rose-500/10" onClick={() => setStep("method")}><X className="w-4 h-4 mr-2" />Cancelar</Button>
+            {isRegistering ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 animate-pulse">
+                  <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Sincronizando com Eyemobile</h3>
+                  <p className="text-sm text-slate-400 mt-1">Registrando a venda e atualizando o estoque...</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-amber-500/10 flex items-center justify-center border border-amber-500/20 animate-pulse">
+                  <CreditCard className="w-8 h-8 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Aguardando Pagamento</h3>
+                  <p className="text-sm text-slate-400 mt-1 leading-relaxed">
+                    Passe o valor de <strong className="text-emerald-400 font-mono text-base">{fmt(parseFloat(customAmount) || 0)}</strong> no {method === "pix" ? "PIX" : method === "credit" ? "Crédito" : "Débito"} na maquininha física.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 w-full pt-2">
+                  <Button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold h-11 rounded-xl shadow-lg shadow-emerald-500/20 active:scale-[0.98]" onClick={confirmMachinePayment}>
+                    <CheckCircle2 className="w-4 h-4 mr-2" />[F4] Confirmar Pagamento Aprovado
+                  </Button>
+                  <Button variant="outline" className="w-full border-rose-500/30 text-rose-400 hover:bg-rose-500/10 h-11 rounded-xl" onClick={() => setStep("method")}>
+                    <X className="w-4 h-4 mr-2" />[ESC] Cancelar
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         )}
         {step === "success" && (
           <div className="p-8 flex flex-col items-center text-center space-y-5">
             <div className="w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30"><CheckCircle2 className="w-8 h-8 text-emerald-400" /></div>
-            <div><h3 className="text-lg font-bold text-emerald-400">Venda Concluída!</h3><p className="text-sm text-slate-400 mt-1">Pagamentos processados com sucesso.</p></div>
+            <div><h3 className="text-lg font-bold text-emerald-400">Venda Concluída!</h3><p className="text-sm text-slate-400 mt-1">Pedido registrado com sucesso no Eyemobile.</p></div>
             <p className="text-xs text-slate-500">Preparando próxima venda...</p>
           </div>
         )}
         {step === "failed" && (
           <div className="p-8 flex flex-col items-center text-center space-y-5">
             <div className="w-16 h-16 rounded-full bg-rose-500/10 flex items-center justify-center border border-rose-500/20"><X className="w-8 h-8 text-rose-400" /></div>
-            <div><h3 className="text-lg font-bold text-rose-400">Pagamento Recusado</h3><p className="text-sm text-slate-400 mt-1">A transação não foi aprovada na maquininha.</p></div>
-            <div className="flex gap-3">
-              <Button className="bg-emerald-600 hover:bg-emerald-500" onClick={() => handleMachine(method)}><RotateCcw className="w-4 h-4 mr-2" />Tentar Novamente</Button>
-              <Button variant="outline" className="border-[#1E2942]" onClick={() => setStep("method")}>Outra Forma</Button>
+            <div>
+              <h3 className="text-lg font-bold text-rose-400">Falha ao Registrar</h3>
+              <p className="text-sm text-slate-400 mt-1">
+                O pagamento foi feito, mas o registro no Eyemobile falhou:
+                <span className="block font-mono text-xs text-rose-300 mt-1">{errorMsg}</span>
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 w-full pt-2">
+              <Button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold h-11 rounded-xl" onClick={confirmMachinePayment}>
+                <RotateCcw className="w-4 h-4 mr-2" />Tentar Registrar Novamente
+              </Button>
+              <Button variant="outline" className="w-full border-amber-500/30 text-amber-400 hover:bg-amber-500/10 h-11 rounded-xl" onClick={forceConfirmLocal}>
+                Forçar Aprovação Local
+              </Button>
+              <Button variant="ghost" className="text-slate-400 hover:bg-slate-800 h-11 rounded-xl" onClick={() => setStep("method")}>
+                Voltar
+              </Button>
             </div>
           </div>
         )}

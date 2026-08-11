@@ -86,7 +86,24 @@ async function findContaDivipay(userId: string): Promise<string | null> {
  * sem ele (webhook/fallback), cai no workspace default do usuário.
  */
 async function resolveWorkspaceId(userId: string, workspaceId?: string | null): Promise<string | null> {
+  // Sempre prioriza o workspace PJ do usuário para transações Divipay (corporate/PJ),
+  // mesmo que o client envie outro workspace (evitando misturar gastos PJ no PF pessoal).
+  try {
+    const { data: wsPj } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("tipo", "PJ")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (wsPj) return wsPj.id;
+  } catch (err) {
+    console.error("Erro ao resolver workspace PJ para Divipay:", err);
+  }
+
   if (workspaceId) return workspaceId;
+
   const { data } = await supabase
     .from("workspaces")
     .select("id")
@@ -143,6 +160,176 @@ async function criarDespesaTaxa(
   return data.id;
 }
 
+function normalizarTexto(texto: string): string {
+  return (texto || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function sugerirCategoria(descricao: string): string {
+  const desc = normalizarTexto(descricao);
+  
+  if (
+    desc.includes("alimentacao") ||
+    desc.includes("comida") ||
+    desc.includes("almoco") ||
+    desc.includes("jantar") ||
+    desc.includes("lanche") ||
+    desc.includes("restaurante") ||
+    desc.includes("mercado") ||
+    desc.includes("supermercado") ||
+    desc.includes("padaria") ||
+    desc.includes("biscoito") ||
+    desc.includes("biacoito") ||
+    desc.includes("salgado") ||
+    desc.includes("coca") ||
+    desc.includes("bebida") ||
+    desc.includes("churrasco") ||
+    desc.includes("fruta") ||
+    desc.includes("acougue") ||
+    desc.includes("panificadora")
+  ) {
+    return "Alimentação";
+  }
+
+  if (
+    desc.includes("transporte") ||
+    desc.includes("passagem") ||
+    desc.includes("uber") ||
+    desc.includes("99pop") ||
+    desc.includes("taxi") ||
+    desc.includes("combustivel") ||
+    desc.includes("posto") ||
+    desc.includes("gasolina") ||
+    desc.includes("diesel") ||
+    desc.includes("etanol") ||
+    desc.includes("pedagio") ||
+    desc.includes("viagem")
+  ) {
+    return "Transporte";
+  }
+
+  if (
+    desc.includes("tecnologia") ||
+    desc.includes("software") ||
+    desc.includes("licenca") ||
+    desc.includes("aws") ||
+    desc.includes("google") ||
+    desc.includes("microsoft") ||
+    desc.includes("hosting") ||
+    desc.includes("hospedagem") ||
+    desc.includes("internet") ||
+    desc.includes("conexao") ||
+    desc.includes("provedor") ||
+    desc.includes("computador") ||
+    desc.includes("celular") ||
+    desc.includes("robo")
+  ) {
+    return "Tecnologia";
+  }
+
+  if (
+    desc.includes("servico") ||
+    desc.includes("consultoria") ||
+    desc.includes("honorarios") ||
+    desc.includes("limpeza") ||
+    desc.includes("reforma") ||
+    desc.includes("manutencao") ||
+    desc.includes("pintura") ||
+    desc.includes("advogado") ||
+    desc.includes("contador") ||
+    desc.includes("consorcio") ||
+    desc.includes("viviane") ||
+    desc.includes("kenia") ||
+    desc.includes("folguista") ||
+    desc.includes("colaborador") ||
+    desc.includes("funcionario") ||
+    desc.includes("acerto") ||
+    desc.includes("vale") ||
+    desc.includes("comissao") ||
+    desc.includes("salario") ||
+    desc.includes("13o") ||
+    desc.includes("decimo")
+  ) {
+    return "Serviços";
+  }
+
+  if (
+    desc.includes("aluguel") ||
+    desc.includes("condominio") ||
+    desc.includes("energia") ||
+    desc.includes("copel") ||
+    desc.includes("sanepar") ||
+    desc.includes("luz") ||
+    desc.includes("agua") ||
+    desc.includes("gas") ||
+    desc.includes("iptu")
+  ) {
+    return "Moradia";
+  }
+
+  if (
+    desc.includes("saude") ||
+    desc.includes("farmacia") ||
+    desc.includes("drogaria") ||
+    desc.includes("medico") ||
+    desc.includes("hospital") ||
+    desc.includes("clinica") ||
+    desc.includes("exame") ||
+    desc.includes("remedio")
+  ) {
+    return "Saúde";
+  }
+
+  if (
+    desc.includes("lazer") ||
+    desc.includes("cinema") ||
+    desc.includes("show") ||
+    desc.includes("teatro") ||
+    desc.includes("spotify") ||
+    desc.includes("netflix") ||
+    desc.includes("prime") ||
+    desc.includes("streaming") ||
+    desc.includes("jogo") ||
+    desc.includes("games") ||
+    desc.includes("cigarro") ||
+    desc.includes("cerveja") ||
+    desc.includes("bar") ||
+    desc.includes("pub")
+  ) {
+    return "Lazer";
+  }
+
+  if (
+    desc.includes("taxa") ||
+    desc.includes("tarifa") ||
+    desc.includes("mensalidade") ||
+    desc.includes("juros") ||
+    desc.includes("multa") ||
+    desc.includes("anuidade")
+  ) {
+    return "Taxas Divipay / Tarifas Bancárias";
+  }
+
+  return "Transferências e Saques Divipay";
+}
+
+function sugerirMetodoPagamento(tipo: string, descricao: string): string {
+  const desc = normalizarTexto(descricao);
+  if (tipo === "BILLET" || desc.includes("boleto") || desc.includes("consorcio")) {
+    return "boleto";
+  }
+  // Como são importações do Divipay (conta corrente/checking), transações descritas como cartão são cartao_debito
+  if (desc.includes("cartao")) {
+    return "cartao_debito";
+  }
+  if (desc.includes("dinheiro") || desc.includes("especie") || desc.includes("cash")) {
+    return "dinheiro";
+  }
+  return "pix";
+}
+
 async function criarDespesaAvulsa(
   userId: string,
   saque: SaqueParaConciliar,
@@ -152,19 +339,35 @@ async function criarDespesaAvulsa(
   const existente = await despesaJaExiste(userId, marcador);
   if (existente) return existente;
 
-  const tipoLegivel = saque.tipo === "BILLET" ? "Pagamento de boleto" : "Pagamento Pix";
+  const descEfetiva = saque.descricao || (saque.tipo === "BILLET" ? "Pagamento de boleto" : "Pagamento Pix") + ` Divipay - ${saque.favorecidoNome ?? "favorecido"}`;
+  const catSugerida = sugerirCategoria(descEfetiva);
+  
+  let icone = "ArrowUpRight";
+  let cor = "#f97316";
+  if (catSugerida === "Alimentação") { icone = "Utensils"; cor = "#10b981"; }
+  else if (catSugerida === "Transporte") { icone = "Car"; cor = "#3b82f6"; }
+  else if (catSugerida === "Moradia") { icone = "Home"; cor = "#6366f1"; }
+  else if (catSugerida === "Saúde") { icone = "Heart"; cor = "#ec4899"; }
+  else if (catSugerida === "Lazer") { icone = "Smile"; cor = "#f59e0b"; }
+  else if (catSugerida === "Tecnologia") { icone = "Cpu"; cor = "#8b5cf6"; }
+  else if (catSugerida === "Serviços") { icone = "Briefcase"; cor = "#06b6d4"; }
+  else if (catSugerida === "Taxas Divipay / Tarifas Bancárias") { icone = "Percent"; cor = "#ef4444"; }
+
+  const categoriaId = await findOrCreateCategoria(userId, catSugerida, icone, cor);
+  const metodoPagamento = sugerirMetodoPagamento(saque.tipo, descEfetiva);
+
   const { data, error } = await supabase
     .from("despesas")
     .insert({
       user_id: userId,
-      categoria_id: await findOrCreateCategoria(userId, CATEGORIA_SAQUES, "ArrowUpRight", "#f97316"),
+      categoria_id: categoriaId,
       conta_id: await findContaDivipay(userId),
       workspace_id: await resolveWorkspaceId(userId, workspaceId),
-      descricao: saque.descricao || `${tipoLegivel} Divipay - ${saque.favorecidoNome ?? "favorecido"}`,
+      descricao: descEfetiva,
       valor: saque.valor,
       data: saque.dataPagamento.slice(0, 10),
       observacoes: `Importado via Divipay API (${marcador})`,
-      metodo_pagamento: "pix",
+      metodo_pagamento: metodoPagamento,
       status: "pago",
     })
     .select("id")

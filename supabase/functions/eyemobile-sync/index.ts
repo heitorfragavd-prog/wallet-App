@@ -780,35 +780,41 @@ async function syncUserEyemobile(
   let processedCount = 0;
   const syncErrors: string[] = [];
 
-  // Workspace das vendas PDV: prefere o workspace empresarial (PJ) do usuário;
-  // fallback para o workspace default. Sem isso as vendas ficavam órfãs e
-  // sumiam do Dashboard/Transações quando um workspace estava ativo.
-  let syncWorkspaceId: string | null = requestBody.workspace_id || null;
+  // Sempre prioriza o workspace PJ do usuário para as vendas do PDV, mesmo que o client envie outro workspace (evitando misturar vendas no PF)
+  let syncWorkspaceId: string | null = null;
+  try {
+    const { data: wsPj } = await supabaseAdmin
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", user_id)
+      .eq("tipo", "PJ")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (wsPj) {
+      syncWorkspaceId = wsPj.id;
+    }
+  } catch (wsErr) {
+    console.error("Não foi possível resolver o workspace PJ do sync:", wsErr);
+  }
+
+  if (!syncWorkspaceId) {
+    syncWorkspaceId = requestBody.workspace_id || null;
+  }
+
   if (!syncWorkspaceId) {
     try {
-      const { data: wsPj } = await supabaseAdmin
+      const { data: wsDefault } = await supabaseAdmin
         .from("workspaces")
         .select("id")
         .eq("user_id", user_id)
-        .eq("tipo", "PJ")
+        .eq("is_default", true)
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
-      if (wsPj) {
-        syncWorkspaceId = wsPj.id;
-      } else {
-        const { data: wsDefault } = await supabaseAdmin
-          .from("workspaces")
-          .select("id")
-          .eq("user_id", user_id)
-          .eq("is_default", true)
-          .order("created_at", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        syncWorkspaceId = wsDefault?.id ?? null;
-      }
+      syncWorkspaceId = wsDefault?.id ?? null;
     } catch (wsErr) {
-      console.error("Não foi possível resolver o workspace do sync:", wsErr);
+      console.error("Não foi possível resolver o workspace default do sync:", wsErr);
     }
   }
 
