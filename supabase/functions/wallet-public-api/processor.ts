@@ -55,10 +55,15 @@ function addExifOrientation(base64Str: string, orientation = 8): string {
     if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) return base64Str;
 
     const exifHeader = new Uint8Array([
-      0xFF, 0xE1, 0x00, 0x1E,
+      0xFF, 0xE1,
+      0x00, 0x20,
       0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
-      0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,
-      0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
+      0x49, 0x49,
+      0x2A, 0x00,
+      0x08, 0x00, 0x00, 0x00,
+      0x01, 0x00,
+      0x12, 0x01, 0x03, 0x00,
+      0x01, 0x00, 0x00, 0x00,
       orientation, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00
     ]);
@@ -154,7 +159,34 @@ Retorne estritamente um JSON no seguinte formato:
 
     if (data.document_type === "nota_fiscal") {
       const nf = data.nf_data || {};
-      
+
+      const validacaoNF = validarDadosNF(nf);
+      if (!validacaoNF.valido) {
+        console.warn("[processDocument] Validação de dados da NF falhou:", validacaoNF);
+
+        try {
+          await supabase.from("ia_leitura_erros").insert({
+            user_id: ctx.userId,
+            motivo: validacaoNF.motivo || "Dados de NF suspeitos",
+            campos_suspeitos: validacaoNF.camposSuspeitos || [],
+            raw_analysis: data,
+            channel_type: ctx.channelType
+          });
+        } catch (logErr) {
+          console.error("[processDocument ia_leitura_erros NF Error]", logErr);
+        }
+
+        return `⚠️ *Não consegui ler a nota fiscal direito*\n\n` +
+               `*Problema:* ${validacaoNF.motivo || "Dados de leitura inconsistentes"}\n\n` +
+               `💡 *Como tirar a foto corretamente:*\n` +
+               `1️⃣ Segure o celular *em pé* (vertical)\n` +
+               `2️⃣ Coloque a NF sobre uma mesa plana\n` +
+               `3️⃣ Certifique-se de que a luz está boa (sem sombras)\n` +
+               `4️⃣ O documento deve ocupar a maior parte da foto\n` +
+               `5️⃣ Evite enviar deitado (horizontal)\n\n` +
+               `Envie a foto novamente em pé que vou conseguir ler todos os dados! 📸`;
+      }
+
       // Salvar na tabela ia_analysis_results como pendente para confirmação
       const { data: saved, error: insertError } = await supabase.from("ia_analysis_results").insert({
         user_id: ctx.userId,
@@ -175,11 +207,11 @@ Retorne estritamente um JSON no seguinte formato:
         return `✅ Nota Fiscal de ${nf.fornecedor || "Fornecedor"} processada (R$ ${(nf.valor || 0).toFixed(2)}). Digite /confirmar para salvar.`;
       } else {
         return `📄 *Nota Fiscal Detectada*\n` +
-               `- **Fornecedor:** ${nf.fornecedor || "Não identificado"}\n` +
-               `- **Valor:** R$ ${(nf.valor || 0).toFixed(2)}\n` +
-               `- **Data:** ${nf.data || "Não identificada"}\n` +
-               `- **Ações Pendentes:** Atualizar custo Eyemobile, Adicionar ao estoque e Lançar despesa.\n\n` +
-               `Digite **/confirmar** para efetivar o lançamento.`;
+               `- *Fornecedor:* ${nf.fornecedor || "Não identificado"}\n` +
+               `- *Valor:* R$ ${(nf.valor || 0).toFixed(2)}\n` +
+               `- *Data:* ${nf.data || "Não identificada"}\n` +
+               `- *Ações Pendentes:* Atualizar custo Eyemobile, Adicionar ao estoque e Lançar despesa.\n\n` +
+               `Digite */confirmar* para efetivar o lançamento.`;
       }
     } else if (data.document_type === "boleto") {
       const bol = data.boleto_data || {};
@@ -234,14 +266,14 @@ Retorne estritamente um JSON no seguinte formato:
         return `✅ Boleto de ${bol.credor || "Credor"} processado (R$ ${(bol.valor_total || 0).toFixed(2)}). Digite /confirmar para salvar.`;
       } else {
         let textMsg = `📑 *Boleto Bancário Detectado*\n` +
-               `- **Credor:** ${bol.credor || "Não identificado"}\n` +
-               `- **Valor:** R$ ${(bol.valor_total || 0).toFixed(2)}\n` +
-               `- **Vencimento:** ${bol.data_vencimento || "Não identificado"}\n` +
-               `- **Linha Digitável:** \`${bol.linha_digitavel || "Não identificada"}\`\n\n`;
+               `- *Credor:* ${bol.credor || "Não identificado"}\n` +
+               `- *Valor:* R$ ${(bol.valor_total || 0).toFixed(2)}\n` +
+               `- *Vencimento:* ${bol.data_vencimento || "Não identificado"}\n` +
+               `- *Linha Digitável:* \`${bol.linha_digitavel || "Não identificada"}\`\n\n`;
         if (bol.pix_copia_cola) {
           textMsg += `⚡ *Pix Copia e Cola:* \`${bol.pix_copia_cola}\`\n\n`;
         }
-        textMsg += `Digite **/confirmar** para cadastrar esta dívida pendente.`;
+        textMsg += `Digite */confirmar* para cadastrar esta dívida pendente.`;
         return textMsg;
       }
     }
@@ -262,11 +294,11 @@ async function processCommand(commandText: string, ctx: ProcessMessageContext, s
   if (cmd === "/start") {
     return `Olá, ${ctx.nomeExibicao || "usuário"}! Bem-vindo ao Wallet AI. 🤖💼\n\n` +
            `Aqui estão os comandos que você pode utilizar comigo:\n` +
-           `- **Nota Fiscal**: Envie uma foto da NF ou use o comando /nf\n` +
-           `- **Boleto**: Envie uma foto do boleto ou use o comando /boleto\n` +
-           `- **Fechamento de Caixa**: /fechamento <valor> (calcula a diferença do dia)\n` +
-           `- **Conferir caixa retroativo**: /conferir <data YYYY-MM-DD> <valor>\n` +
-           `- **Confirmar lançamento**: /confirmar (para salvar no banco a NF/Boleto recém-enviado)\n\n` +
+           `- *Nota Fiscal*: Envie uma foto da NF ou use o comando /nf\n` +
+           `- *Boleto*: Envie uma foto do boleto ou use o comando /boleto\n` +
+           `- *Fechamento de Caixa*: /fechamento <valor> (calcula a diferença do dia)\n` +
+           `- *Conferir caixa retroativo*: /conferir <data YYYY-MM-DD> <valor>\n` +
+           `- *Confirmar lançamento*: /confirmar (para salvar no banco a NF/Boleto recém-enviado)\n\n` +
            `No chat privado, você também pode me fazer perguntas financeiras diretamente!`;
   }
 
@@ -324,11 +356,11 @@ async function processCommand(commandText: string, ctx: ProcessMessageContext, s
     const diferenca = valorRelatado - esperado;
 
     if (Math.abs(diferenca) <= 0.01) {
-      return `✅ *Fechamento batera perfeito!*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}`;
+      return `✅ *Fechamento bateu perfeito!*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}`;
     } else if (diferenca < 0) {
-      return `⚠️ *Diferença de Caixa (FURO)*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}\n- **Furo:** R$ ${Math.abs(diferenca).toFixed(2)} faltantes!`;
+      return `⚠️ *Diferença de Caixa (FURO)*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}\n- *Furo:* R$ ${Math.abs(diferenca).toFixed(2)} faltantes!`;
     } else {
-      return `📊 *Diferença de Caixa (SOBRA)*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}\n- **Sobra:** R$ ${diferenca.toFixed(2)} a mais!`;
+      return `📊 *Diferença de Caixa (SOBRA)*\n- Data: ${dataTurno}\n- Vendas Eyemobile: R$ ${totalVendas.toFixed(2)}\n- Saques Divipay: R$ ${totalSaques.toFixed(2)}\n- Saldo Esperado: R$ ${esperado.toFixed(2)}\n- Relatado: R$ ${valorRelatado.toFixed(2)}\n- *Sobra:* R$ ${diferenca.toFixed(2)} a mais!`;
     }
   }
 
@@ -339,6 +371,7 @@ async function processCommand(commandText: string, ctx: ProcessMessageContext, s
       .select("*")
       .eq("user_id", ctx.userId)
       .eq("status", "pendente")
+      .or(`workspace_id.eq.${ctx.workspaceId},workspace_id.is.null`)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -638,5 +671,48 @@ function validarDadosBoleto(bol: any): { valido: boolean; motivo?: string; campo
     return { valido: false, motivo: erros.join("; "), camposSuspeitos };
   }
   
+  return { valido: true };
+}
+
+// ─── 🛡️ FUNÇÃO DE VALIDAÇÃO DE SANIDADE DOS DADOS DA NOTA FISCAL ─────────────────
+function validarDadosNF(nf: any): { valido: boolean; motivo?: string; camposSuspeitos?: string[] } {
+  const erros: string[] = [];
+  const camposSuspeitos: string[] = [];
+
+  const valor = Number(nf.valor || nf.valor_total || nf.amount || 0);
+  if (valor <= 0) {
+    erros.push("Valor zerado ou não identificado");
+    camposSuspeitos.push("valor");
+  }
+  if (valor > 1000000) {
+    erros.push("Valor excessivamente alto (acima de R$ 1.000.000)");
+    camposSuspeitos.push("valor");
+  }
+
+  const data = nf.data || nf.data_emissao || "";
+  const dataObj = new Date(data);
+  const hoje = new Date();
+  const doisAnosAtras = new Date(hoje.getFullYear() - 2, hoje.getMonth(), hoje.getDate());
+  const umAnoFrente = new Date(hoje.getFullYear() + 1, hoje.getMonth(), hoje.getDate());
+
+  if (!data || isNaN(dataObj.getTime()) || dataObj < doisAnosAtras || dataObj > umAnoFrente) {
+    erros.push("Data fora do intervalo esperado");
+    camposSuspeitos.push("data");
+  }
+
+  const fornecedor = String(nf.fornecedor || nf.razao_social || "").trim();
+  if (!fornecedor || fornecedor.length < 3) {
+    erros.push("Fornecedor não identificado com clareza");
+    camposSuspeitos.push("fornecedor");
+  }
+
+  if (camposSuspeitos.length >= 2) {
+    return { valido: false, motivo: erros.join("; "), camposSuspeitos };
+  }
+
+  if (camposSuspeitos.includes("valor")) {
+    return { valido: false, motivo: erros.join("; "), camposSuspeitos };
+  }
+
   return { valido: true };
 }

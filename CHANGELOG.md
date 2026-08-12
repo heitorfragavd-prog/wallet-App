@@ -2,6 +2,20 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.40] - 2026-08-12
+
+### Corrigido
+- **wallet-public-api**: Corrige 7 bugs criticos na edge function de processamento de documentos
+  - Cria tabela `ia_leitura_erros` para log de falhas de leitura da IA
+  - Remove auto-pairing inseguro do Telegram (agora envia instrucoes de vinculo)
+  - Corrige cabecalho EXIF (`0x0020`) para evitar corrupcao de imagens JPEG
+  - Corrige formatacao Markdown (`*` em vez de `**`) para compatibilidade com Telegram
+  - Adiciona filtro de `workspace_id` no comando `/confirmar`
+  - Trunca mensagens do Telegram em 4096 caracteres (limite da API)
+  - Adiciona `validarDadosNF()` para validar sanidade de Notas Fiscais
+
+---
+
 ## [1.0.39] - 2026-08-12
 
 ### ✨ Novo

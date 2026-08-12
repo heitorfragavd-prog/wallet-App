@@ -4,13 +4,16 @@ export async function sendToTelegram(
   botToken: string
 ): Promise<boolean> {
   try {
+    const MAX_LENGTH = 4096;
+    const truncated = text.length > MAX_LENGTH ? text.substring(0, MAX_LENGTH - 3) + "..." : text;
+
     const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: text,
+        text: truncated,
         parse_mode: "Markdown",
       }),
     });

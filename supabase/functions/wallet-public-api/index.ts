@@ -98,37 +98,22 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       if (!mapping) {
-        console.warn(`[Telegram Webhook] Mapeamento não encontrado para Chat ID: ${chatId}. Auto-vinculando ao usuário principal...`);
+        console.warn(`[Telegram Webhook] Mapeamento não encontrado para Chat ID: ${chatId}. Enviando instruções de vínculo...`);
         
-        // Buscar o usuário admin/principal do sistema
-        const { data: defaultUser } = await supabase
-          .from("ia_configuracoes")
-          .select("user_id")
-          .limit(1)
-          .maybeSingle();
+        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `👋 *Olá!*\n\nPara usar o bot da Wallet, vincule sua conta primeiro:\n\n1️⃣ Abra o app Wallet\n2️⃣ Vá em *Configurações* → *Notificações*\n3️⃣ Clique em *Conectar Telegram*\n4️⃣ Envie /start aqui novamente\n\nSeu ID do chat: \`${chatId}\``,
+            parse_mode: "Markdown",
+          }),
+        }).catch(() => {});
 
-        const targetUserId = defaultUser?.user_id || "0adfbd4b-bc98-48c4-8f3b-e22ee5c317c0";
-
-        // Auto-criar mapeamento para permitir resposta imediata
-        const { data: newMapping } = await supabase
-          .from("channel_mappings")
-          .insert({
-            user_id: targetUserId,
-            channel_type: "telegram",
-            channel_id: chatId,
-            nome_exibicao: message.from?.first_name || "Usuário Telegram",
-            access_level: "admin",
-            is_active: true
-          })
-          .select("*")
-          .maybeSingle();
-
-        mapping = newMapping || {
-          user_id: targetUserId,
-          workspace_id: null,
-          access_level: "admin",
-          nome_exibicao: message.from?.first_name || "Usuário Telegram"
-        };
+        return new Response(JSON.stringify({ success: true, message: "User not mapped, instructions sent" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+        });
       }
 
       // RETORNAR HTTP 200 OK IMEDIATAMENTE ANTES DE CHAMAR A OPENAI
