@@ -36,6 +36,7 @@ export interface FluxoCaixaBucket {
   despesaRealizada: number;
   saldoPrevisto: number;
   saldoRealizado: number;
+  saldoProjetado?: number | null;
   receitasPorCategoria: Record<string, number>;
   despesasPorCategoria: Record<string, number>;
 }
@@ -274,6 +275,50 @@ export function useFluxoCaixaData(modo: FluxoCaixaModo, ano: number, mes: number
       b.saldoPrevisto = parseFloat(acumPrev.toFixed(2));
     }
 
+    // Projeção: 15 dias após o último bucket real
+    const ultimoBucket = buckets[buckets.length - 1];
+    const projecao: FluxoCaixaBucket[] = [];
+    if (ultimoBucket) {
+      const saldoBase = ultimoBucket.saldoRealizado;
+      const mediaReceita = buckets.slice(-15).reduce((s, b) => s + (b.receitaRealizada || 0), 0) / Math.min(buckets.length, 15);
+      
+      for (let i = 1; i <= 15; i++) {
+        const data = new Date();
+        data.setDate(data.getDate() + i);
+        const dataStr = data.toISOString().split("T")[0];
+        
+        // Recorrentes diárias
+        const recDiarias = recorrentes?.filter(r => r.ativo && r.tipo_transacao === "despesa").reduce((s, r) => {
+          const v = Number(r.valor);
+          return s + (r.recorrencia === "diaria" ? v : r.recorrencia === "semanal" ? v/7 : r.recorrencia === "mensal" ? v/30 : v/365);
+        }, 0) || 0;
+        
+        // Dívidas a vencer neste dia
+        const divDia = dividas?.filter(d => d.status !== "quitada" && d.data_vencimento === dataStr).reduce((s, d) => {
+          return s + (d.parcelas > 1 ? Number(d.valor_total) / d.parcelas : Number(d.valor_restante));
+        }, 0) || 0;
+        
+        projecao.push({
+          chave: `proj-${dataStr}`,
+          rotulo: `${String(data.getDate()).padStart(2,"0")}/${String(data.getMonth()+1).padStart(2,"0")}`,
+          dataInicio: dataStr,
+          dataFim: dataStr,
+          futuro: true,
+          receitaPrevista: 0,
+          receitaRealizada: 0,
+          despesaPrevista: 0,
+          despesaRealizada: 0,
+          saldoPrevisto: parseFloat((saldoBase + (mediaReceita * i) - (recDiarias * i) - divDia).toFixed(2)),
+          saldoRealizado: 0,
+          saldoProjetado: parseFloat((saldoBase + (mediaReceita * i) - (recDiarias * i) - divDia).toFixed(2)),
+          receitasPorCategoria: {},
+          despesasPorCategoria: {},
+        });
+      }
+    }
+
+    const chartData = [...buckets, ...projecao];
+
     const categoriasReceita = Array.from(
       new Set(buckets.flatMap((b) => Object.keys(b.receitasPorCategoria)))
     ).sort();
@@ -282,7 +327,7 @@ export function useFluxoCaixaData(modo: FluxoCaixaModo, ano: number, mes: number
     ).sort();
 
     return {
-      buckets,
+      buckets: chartData,
       categoriasReceita,
       categoriasDespesa,
       saldoInicial: parseFloat(saldoInicial.toFixed(2)),

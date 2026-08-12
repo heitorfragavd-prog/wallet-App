@@ -225,6 +225,7 @@ const FluxoCaixaPage: React.FC = () => {
                   <Line type="monotone" dataKey="receitaRealizada" name="Receita" stroke="#22c55e" dot={false} strokeWidth={2} />
                   <Line type="monotone" dataKey="saldoPrevisto" name="Saldo Previsto" stroke="#9ca3af" strokeDasharray="5 5" dot={false} strokeWidth={1.5} />
                   <Line type="monotone" dataKey="saldoRealizado" name="Saldo Realizado" stroke="#6366f1" dot={false} strokeWidth={2.5} />
+                  <Line type="monotone" dataKey="saldoProjetado" name="Saldo Projetado" stroke="#a855f7" strokeWidth={2} strokeDasharray="5 5" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             )}
