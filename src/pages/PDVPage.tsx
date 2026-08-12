@@ -170,7 +170,7 @@ const PDVPage: React.FC = () => {
             price: Number(p.default_price ?? p.price ?? 0),
             category: cat,
             image: p.image
-              ? (p.image.startsWith("http") ? p.image : `https://images.eyemobile.com.br/products/96x96/${p.image}`)
+              ? (p.image.startsWith("http") ? p.image : `https://images.eyemobile.com.br/products/512x512/${p.image}`)
               : undefined,
           };
         });

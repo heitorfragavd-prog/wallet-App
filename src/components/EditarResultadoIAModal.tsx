@@ -5,7 +5,7 @@ import { Label } from "@/shared/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/shared/components/ui/dialog";
 import { Edit } from "lucide-react";
-import { AnalysisResult } from "@/hooks/useIAAnalysis";
+import { AnalysisResult } from "@/domains/ia/hooks/useIAAnalysis";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 
 interface EditarResultadoIAModalProps {

@@ -170,6 +170,12 @@ class FinanceService {
     documentoFavorecido?: string | null;
     valorTaxa?: number;
     totalParcelas: number;
+    metodoPagamentoEsperado?: string | null;
+    chavePix?: string | null;
+    pixCopiaCola?: string | null;
+    codigoBarras?: string | null;
+    linhaDigitavel?: string | null;
+    contaBancaria?: any;
   }): Promise<{ id: string }> {
     const {
       userId,
@@ -183,6 +189,12 @@ class FinanceService {
       documentoFavorecido,
       valorTaxa,
       totalParcelas,
+      metodoPagamentoEsperado,
+      chavePix,
+      pixCopiaCola,
+      codigoBarras,
+      linhaDigitavel,
+      contaBancaria,
     } = params;
 
     try {
@@ -223,6 +235,12 @@ class FinanceService {
           parcela_atual: i + 1,
           total_parcelas: totalParcelas,
           status: new Date(`${vencStr}T23:59:59`) < new Date() ? 'vencida' : 'pendente',
+          metodo_pagamento_esperado: metodoPagamentoEsperado || 'pix',
+          chave_pix: chavePix || null,
+          pix_copia_cola: pixCopiaCola || null,
+          codigo_barras: codigoBarras || null,
+          linha_digitavel: linhaDigitavel || null,
+          conta_bancaria: contaBancaria || null,
         };
       });
 

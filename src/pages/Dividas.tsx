@@ -85,6 +85,26 @@ const DiasVencimentoBadge = ({ dataVencimento, status }: { dataVencimento: strin
   return <span className="text-xs text-muted-foreground">{dias}d</span>;
 };
 
+const getMetodoPagamentoBadge = (metodo: string | undefined | null) => {
+  if (!metodo) return null;
+  const labels: Record<string, string> = {
+    pix: "🔑 Pix",
+    boleto: "📄 Boleto",
+    transferencia: "🏦 Transf.",
+    cartao_credito: "💳 C. Crédito",
+    cartao_debito: "💳 C. Débito",
+    dinheiro: "💵 Dinheiro",
+    outros: "❓ Outro",
+  };
+  const label = labels[metodo] || metodo;
+  return (
+    <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4.5 border-rose-500/20 text-rose-400 bg-rose-500/5 select-none font-medium">
+      {label}
+    </Badge>
+  );
+};
+
+
 // Ícones e labels para métodos de pagamento
 const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
   pix: Smartphone,
@@ -150,6 +170,18 @@ const Dividas = () => {
   const [isTaxaAtiva, setIsTaxaAtiva] = useState(false);
   const [novoValorTaxa, setNovoValorTaxa] = useState("");
 
+  // Novos campos de pagamento para nova dívida
+  const [novoMetodoPagamento, setNovoMetodoPagamento] = useState<string>("pix");
+  const [novaChavePix, setNovaChavePix] = useState("");
+  const [novoPixCopiaCola, setNovoPixCopiaCola] = useState("");
+  const [novoCodigoBarras, setNovoCodigoBarras] = useState("");
+  const [novaLinhaDigitavel, setNovaLinhaDigitavel] = useState("");
+  const [novoBanco, setNovoBanco] = useState("");
+  const [novaAgencia, setNovaAgencia] = useState("");
+  const [novaConta, setNovaConta] = useState("");
+  const [novoTitular, setNovoTitular] = useState("");
+  const [novoTipoConta, setNovoTipoConta] = useState<"corrente" | "poupanca">("corrente");
+
   // Estados para edição inline
   const [editDescricao, setEditDescricao] = useState("");
   const [editValorTotal, setEditValorTotal] = useState("");
@@ -162,6 +194,18 @@ const Dividas = () => {
   const [editDocumentoFavorecido, setEditDocumentoFavorecido] = useState("");
   const [editReminderHours, setEditReminderHours] = useState<number | null>(null);
   const [existingReminderId, setExistingReminderId] = useState<string | null>(null);
+
+  // Novos campos de pagamento para edição
+  const [editMetodoPagamento, setEditMetodoPagamento] = useState<string>("pix");
+  const [editChavePix, setEditChavePix] = useState("");
+  const [editPixCopiaCola, setEditPixCopiaCola] = useState("");
+  const [editCodigoBarras, setEditCodigoBarras] = useState("");
+  const [editLinhaDigitavel, setEditLinhaDigitavel] = useState("");
+  const [editBanco, setEditBanco] = useState("");
+  const [editAgencia, setEditAgencia] = useState("");
+  const [editConta, setEditConta] = useState("");
+  const [editTitular, setEditTitular] = useState("");
+  const [editTipoConta, setEditTipoConta] = useState<"corrente" | "poupanca">("corrente");
 
   // Dados processados
   const { dividasFiltradas, totalDividas, dividasVencidas, dividasPendentes, dividasQuitadas, categorias, totalPago, progressoGeral } = useMemo(() => {
@@ -223,6 +267,14 @@ const Dividas = () => {
       return;
     }
 
+    const contaBancariaJson = novoMetodoPagamento === "transferencia" && novoBanco ? {
+      banco: novoBanco,
+      agencia: novaAgencia,
+      conta: novaConta,
+      titular: novoTitular,
+      tipo: novoTipoConta
+    } : null;
+
     const categoria = categoriasDespesa.find((c) => c.nome === novaCategoria);
     const result = await createDivida({
       descricao: novaDescricao,
@@ -238,6 +290,12 @@ const Dividas = () => {
       credor: novoCredor,
       documento_favorecido: novoDocumentoFavorecido.trim() || null,
       valor_taxa: isTaxaAtiva && novoValorTaxa ? parseFloat(novoValorTaxa) : 0,
+      metodo_pagamento_esperado: novoMetodoPagamento as any,
+      chave_pix: novoMetodoPagamento === "pix" ? novaChavePix : null,
+      pix_copia_cola: novoMetodoPagamento === "pix" ? novoPixCopiaCola : null,
+      codigo_barras: novoMetodoPagamento === "boleto" ? novoCodigoBarras : null,
+      linha_digitavel: novoMetodoPagamento === "boleto" ? novaLinhaDigitavel : null,
+      conta_bancaria: contaBancariaJson,
     });
 
     if (result?.id && novoReminderHours !== null && novoReminderHours > 0) {
@@ -248,6 +306,9 @@ const Dividas = () => {
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
     setNovoDocumentoFavorecido("");
     setIsTaxaAtiva(false); setNovoValorTaxa("");
+    setNovoMetodoPagamento("pix"); setNovaChavePix(""); setNovoPixCopiaCola("");
+    setNovoCodigoBarras(""); setNovaLinhaDigitavel("");
+    setNovoBanco(""); setNovaAgencia(""); setNovaConta(""); setNovoTitular(""); setNovoTipoConta("corrente");
     setActiveTab("lista");
   };
 
@@ -256,6 +317,9 @@ const Dividas = () => {
     setNovasParcelas(""); setNovaCategoria(""); setNovoCredor(""); setNovaContaId(""); setNovoReminderHours(null);
     setNovoDocumentoFavorecido("");
     setIsTaxaAtiva(false); setNovoValorTaxa("");
+    setNovoMetodoPagamento("pix"); setNovaChavePix(""); setNovoPixCopiaCola("");
+    setNovoCodigoBarras(""); setNovaLinhaDigitavel("");
+    setNovoBanco(""); setNovaAgencia(""); setNovaConta(""); setNovoTitular(""); setNovoTipoConta("corrente");
     setActiveTab("lista");
   };
 
@@ -275,6 +339,26 @@ const Dividas = () => {
       setEditCredor(divida.credor);
       setEditDocumentoFavorecido(divida.documento_favorecido || "");
       
+      setEditMetodoPagamento(divida.metodo_pagamento_esperado || "pix");
+      setEditChavePix(divida.chave_pix || "");
+      setEditPixCopiaCola(divida.pix_copia_cola || "");
+      setEditCodigoBarras(divida.codigo_barras || "");
+      setEditLinhaDigitavel(divida.linha_digitavel || "");
+      const cb = divida.conta_bancaria as any;
+      if (cb) {
+        setEditBanco(cb.banco || "");
+        setEditAgencia(cb.agencia || "");
+        setEditConta(cb.conta || "");
+        setEditTitular(cb.titular || "");
+        setEditTipoConta(cb.tipo || "corrente");
+      } else {
+        setEditBanco("");
+        setEditAgencia("");
+        setEditConta("");
+        setEditTitular("");
+        setEditTipoConta("corrente");
+      }
+
       // Load existing reminder
       const reminder = await getReminderByDebtId(id);
       if (reminder) {
@@ -302,6 +386,14 @@ const Dividas = () => {
     const status = parcelasPagasNum >= parcelasNum ? 'quitada' : 
                    new Date(editDataVencimento) < new Date() ? 'vencida' : 'pendente';
 
+    const contaBancariaJson = editMetodoPagamento === "transferencia" && editBanco ? {
+      banco: editBanco,
+      agencia: editAgencia,
+      conta: editConta,
+      titular: editTitular,
+      tipo: editTipoConta
+    } : null;
+
     await updateDivida(id, {
       descricao: editDescricao,
       valor_total: valorTotalNum,
@@ -314,6 +406,12 @@ const Dividas = () => {
       categoria_id: categoria?.id,
       credor: editCredor,
       documento_favorecido: editDocumentoFavorecido.trim() || null,
+      metodo_pagamento_esperado: editMetodoPagamento as any,
+      chave_pix: editMetodoPagamento === "pix" ? editChavePix : null,
+      pix_copia_cola: editMetodoPagamento === "pix" ? editPixCopiaCola : null,
+      codigo_barras: editMetodoPagamento === "boleto" ? editCodigoBarras : null,
+      linha_digitavel: editMetodoPagamento === "boleto" ? editLinhaDigitavel : null,
+      conta_bancaria: contaBancariaJson,
     });
 
     // Handle reminder creation/update/deletion
@@ -328,6 +426,7 @@ const Dividas = () => {
     }
 
     setDividaEditando(null);
+    handleCancelarEdicao();
   };
 
   const handleCancelarEdicao = () => {
@@ -343,6 +442,16 @@ const Dividas = () => {
     setEditDocumentoFavorecido("");
     setEditReminderHours(null);
     setExistingReminderId(null);
+    setEditMetodoPagamento("pix");
+    setEditChavePix("");
+    setEditPixCopiaCola("");
+    setEditCodigoBarras("");
+    setEditLinhaDigitavel("");
+    setEditBanco("");
+    setEditAgencia("");
+    setEditConta("");
+    setEditTitular("");
+    setEditTipoConta("corrente");
   };
 
   // Handlers para o modal de pagamento
@@ -656,6 +765,133 @@ const Dividas = () => {
                               <ReminderSelector value={editReminderHours} onChange={setEditReminderHours} />
                             </div>
                           </div>
+
+                          <div className="space-y-4 border rounded-lg p-4 bg-muted/20 mt-4">
+                            <h4 className="text-sm font-semibold text-rose-500">Dados de Pagamento (Opcional)</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label htmlFor="edit-metodo-pagamento">Método de Pagamento Esperado</Label>
+                                <select
+                                  id="edit-metodo-pagamento"
+                                  value={editMetodoPagamento}
+                                  onChange={(e) => setEditMetodoPagamento(e.target.value)}
+                                  className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                >
+                                  <option value="pix">🔑 Pix</option>
+                                  <option value="boleto">📄 Boleto</option>
+                                  <option value="transferencia">🏦 Transferência Bancária</option>
+                                  <option value="cartao_credito">💳 Cartão de Crédito</option>
+                                  <option value="cartao_debito">💳 Cartão de Débito</option>
+                                  <option value="dinheiro">💵 Dinheiro</option>
+                                  <option value="outros">❓ Outros</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            {editMetodoPagamento === "pix" && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
+                                <div className="space-y-2">
+                                  <Label htmlFor="edit-chave-pix">Chave Pix</Label>
+                                  <Input
+                                    id="edit-chave-pix"
+                                    placeholder="CPF, CNPJ, Celular, E-mail ou Chave Aleatória"
+                                    value={editChavePix}
+                                    onChange={(e) => setEditChavePix(e.target.value)}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="edit-pix-copia-cola">Pix Copia e Cola (Código QR)</Label>
+                                  <textarea
+                                    id="edit-pix-copia-cola"
+                                    placeholder="Código longo para pagamento copia e cola"
+                                    value={editPixCopiaCola}
+                                    onChange={(e) => setEditPixCopiaCola(e.target.value)}
+                                    className="w-full min-h-[40px] h-10 px-3 py-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {editMetodoPagamento === "boleto" && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
+                                <div className="space-y-2">
+                                  <Label htmlFor="edit-codigo-barras">Código de Barras</Label>
+                                  <Input
+                                    id="edit-codigo-barras"
+                                    placeholder="Somente números"
+                                    value={editCodigoBarras}
+                                    onChange={(e) => setEditCodigoBarras(e.target.value)}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="edit-linha-digitavel">Linha Digitável</Label>
+                                  <Input
+                                    id="edit-linha-digitavel"
+                                    placeholder="Linha digitável do boleto"
+                                    value={editLinhaDigitavel}
+                                    onChange={(e) => setEditLinhaDigitavel(e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {editMetodoPagamento === "transferencia" && (
+                              <div className="space-y-4 pt-2 border-t border-border/30">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  <div className="space-y-2">
+                                    <Label htmlFor="edit-banco">Banco</Label>
+                                    <Input
+                                      id="edit-banco"
+                                      placeholder="Nome do banco ou código"
+                                      value={editBanco}
+                                      onChange={(e) => setEditBanco(e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label htmlFor="edit-agencia">Agência</Label>
+                                    <Input
+                                      id="edit-agencia"
+                                      placeholder="Ex: 0001"
+                                      value={editAgencia}
+                                      onChange={(e) => setEditAgencia(e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label htmlFor="edit-conta-bancaria">Conta</Label>
+                                    <Input
+                                      id="edit-conta-bancaria"
+                                      placeholder="Ex: 12345-6"
+                                      value={editConta}
+                                      onChange={(e) => setEditConta(e.target.value)}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="space-y-2">
+                                    <Label htmlFor="edit-titular">Titular da Conta</Label>
+                                    <Input
+                                      id="edit-titular"
+                                      placeholder="Nome completo / Razão Social"
+                                      value={editTitular}
+                                      onChange={(e) => setEditTitular(e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label htmlFor="edit-tipo-conta">Tipo de Conta</Label>
+                                    <select
+                                      id="edit-tipo-conta"
+                                      value={editTipoConta}
+                                      onChange={(e) => setEditTipoConta(e.target.value as any)}
+                                      className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                    >
+                                      <option value="corrente">Conta Corrente</option>
+                                      <option value="poupanca">Conta Poupança</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ) : (
                         // Visualização normal com grid fixo
@@ -671,6 +907,7 @@ const Dividas = () => {
                               <p className="font-medium">{divida.descricao}</p>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</span>
+                                {getMetodoPagamentoBadge(divida.metodo_pagamento_esperado)}
                                 {divida.contas_usuario && (
                                   <div className="flex items-center gap-1">
                                     <BankLogoBadge nomeOuId={divida.contas_usuario.nome} size="sm" className="w-5 h-5 text-[8px]" />
@@ -895,6 +1132,136 @@ const Dividas = () => {
                                   <Label htmlFor="edit-reminder-mobile" className="text-xs">Lembrete</Label>
                                   <ReminderSelector value={editReminderHours} onChange={setEditReminderHours} />
                                 </div>
+
+                                <div className="space-y-3 border rounded-lg p-3 bg-muted/20 mt-3 text-xs">
+                                  <h4 className="text-xs font-semibold text-rose-500">Dados de Pagamento (Opcional)</h4>
+                                  <div className="space-y-1.5">
+                                    <Label htmlFor="edit-metodo-pagamento-mobile" className="text-xs">Método de Pagamento Esperado</Label>
+                                    <select
+                                      id="edit-metodo-pagamento-mobile"
+                                      value={editMetodoPagamento}
+                                      onChange={(e) => setEditMetodoPagamento(e.target.value)}
+                                      className="w-full h-9 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                    >
+                                      <option value="pix">🔑 Pix</option>
+                                      <option value="boleto">📄 Boleto</option>
+                                      <option value="transferencia">🏦 Transferência Bancária</option>
+                                      <option value="cartao_credito">💳 Cartão de Crédito</option>
+                                      <option value="cartao_debito">💳 Cartão de Débito</option>
+                                      <option value="dinheiro">💵 Dinheiro</option>
+                                      <option value="outros">❓ Outros</option>
+                                    </select>
+                                  </div>
+
+                                  {editMetodoPagamento === "pix" && (
+                                    <div className="space-y-3 pt-2 border-t border-border/30">
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-chave-pix-mobile" className="text-xs">Chave Pix</Label>
+                                        <Input
+                                          id="edit-chave-pix-mobile"
+                                          placeholder="CPF, CNPJ, Celular, E-mail..."
+                                          value={editChavePix}
+                                          onChange={(e) => setEditChavePix(e.target.value)}
+                                          className="h-9"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-pix-copia-cola-mobile" className="text-xs">Pix Copia e Cola</Label>
+                                        <textarea
+                                          id="edit-pix-copia-cola-mobile"
+                                          placeholder="Código QR"
+                                          value={editPixCopiaCola}
+                                          onChange={(e) => setEditPixCopiaCola(e.target.value)}
+                                          className="w-full min-h-[40px] h-9 px-3 py-1.5 text-xs border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {editMetodoPagamento === "boleto" && (
+                                    <div className="space-y-3 pt-2 border-t border-border/30">
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-codigo-barras-mobile" className="text-xs">Código de Barras</Label>
+                                        <Input
+                                          id="edit-codigo-barras-mobile"
+                                          placeholder="Somente números"
+                                          value={editCodigoBarras}
+                                          onChange={(e) => setEditCodigoBarras(e.target.value)}
+                                          className="h-9"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-linha-digitavel-mobile" className="text-xs">Linha Digitável</Label>
+                                        <Input
+                                          id="edit-linha-digitavel-mobile"
+                                          placeholder="Linha digitável"
+                                          value={editLinhaDigitavel}
+                                          onChange={(e) => setEditLinhaDigitavel(e.target.value)}
+                                          className="h-9"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {editMetodoPagamento === "transferencia" && (
+                                    <div className="space-y-3 pt-2 border-t border-border/30">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div className="space-y-1.5">
+                                          <Label htmlFor="edit-banco-mobile" className="text-xs">Banco</Label>
+                                          <Input
+                                            id="edit-banco-mobile"
+                                            placeholder="Banco"
+                                            value={editBanco}
+                                            onChange={(e) => setEditBanco(e.target.value)}
+                                            className="h-9"
+                                          />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                          <Label htmlFor="edit-agencia-mobile" className="text-xs">Agência</Label>
+                                          <Input
+                                            id="edit-agencia-mobile"
+                                            placeholder="Agência"
+                                            value={editAgencia}
+                                            onChange={(e) => setEditAgencia(e.target.value)}
+                                            className="h-9"
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-conta-bancaria-mobile" className="text-xs">Conta</Label>
+                                        <Input
+                                          id="edit-conta-bancaria-mobile"
+                                          placeholder="Conta"
+                                          value={editConta}
+                                          onChange={(e) => setEditConta(e.target.value)}
+                                          className="h-9"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-titular-mobile" className="text-xs">Titular</Label>
+                                        <Input
+                                          id="edit-titular-mobile"
+                                          placeholder="Titular"
+                                          value={editTitular}
+                                          onChange={(e) => setEditTitular(e.target.value)}
+                                          className="h-9"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <Label htmlFor="edit-tipo-conta-mobile" className="text-xs">Tipo</Label>
+                                        <select
+                                          id="edit-tipo-conta-mobile"
+                                          value={editTipoConta}
+                                          onChange={(e) => setEditTipoConta(e.target.value as any)}
+                                          className="w-full h-9 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                        >
+                                          <option value="corrente">Corrente</option>
+                                          <option value="poupanca">Poupança</option>
+                                        </select>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           ) : (
@@ -906,7 +1273,10 @@ const Dividas = () => {
                                     <CreditCard className={`w-4 h-4 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
                                   </div>
                                   <div>
-                                    <p className="font-medium">{divida.descricao}</p>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <p className="font-medium">{divida.descricao}</p>
+                                      {getMetodoPagamentoBadge(divida.metodo_pagamento_esperado)}
+                                    </div>
                                     <p className="text-xs text-muted-foreground">{divida.credor}</p>
                                   </div>
                                 </div>
@@ -1083,6 +1453,133 @@ const Dividas = () => {
                       <ReminderSelector value={novoReminderHours} onChange={setNovoReminderHours} />
                       <p className="text-xs text-muted-foreground">Configure um lembrete para ser notificado antes do vencimento</p>
                     </div>
+                    <div className="space-y-4 md:col-span-2 border rounded-lg p-4 bg-muted/20">
+                      <h4 className="text-sm font-semibold text-rose-500">Dados de Pagamento (Opcional)</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="metodo-pagamento">Método de Pagamento Esperado</Label>
+                          <select
+                            id="metodo-pagamento"
+                            value={novoMetodoPagamento}
+                            onChange={(e) => setNovoMetodoPagamento(e.target.value)}
+                            className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                          >
+                            <option value="pix">🔑 Pix</option>
+                            <option value="boleto">📄 Boleto</option>
+                            <option value="transferencia">🏦 Transferência Bancária</option>
+                            <option value="cartao_credito">💳 Cartão de Crédito</option>
+                            <option value="cartao_debito">💳 Cartão de Débito</option>
+                            <option value="dinheiro">💵 Dinheiro</option>
+                            <option value="outros">❓ Outros</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {novoMetodoPagamento === "pix" && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
+                          <div className="space-y-2">
+                            <Label htmlFor="chave-pix">Chave Pix</Label>
+                            <Input
+                              id="chave-pix"
+                              placeholder="CPF, CNPJ, Celular, E-mail ou Chave Aleatória"
+                              value={novaChavePix}
+                              onChange={(e) => setNovaChavePix(e.target.value)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="pix-copia-cola">Pix Copia e Cola (Código QR)</Label>
+                            <textarea
+                              id="pix-copia-cola"
+                              placeholder="Código longo para pagamento copia e cola"
+                              value={novoPixCopiaCola}
+                              onChange={(e) => setNovoPixCopiaCola(e.target.value)}
+                              className="w-full min-h-[40px] h-10 px-3 py-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {novoMetodoPagamento === "boleto" && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
+                          <div className="space-y-2">
+                            <Label htmlFor="codigo-barras">Código de Barras</Label>
+                            <Input
+                              id="codigo-barras"
+                              placeholder="Somente números"
+                              value={novoCodigoBarras}
+                              onChange={(e) => setNovoCodigoBarras(e.target.value)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="linha-digitavel">Linha Digitável</Label>
+                            <Input
+                              id="linha-digitavel"
+                              placeholder="Linha digitável do boleto"
+                              value={novaLinhaDigitavel}
+                              onChange={(e) => setNovaLinhaDigitavel(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {novoMetodoPagamento === "transferencia" && (
+                        <div className="space-y-4 pt-2 border-t border-border/30">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="banco">Banco</Label>
+                              <Input
+                                id="banco"
+                                placeholder="Nome do banco ou código"
+                                value={novoBanco}
+                                onChange={(e) => setNovoBanco(e.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="agencia">Agência</Label>
+                              <Input
+                                id="agencia"
+                                placeholder="Ex: 0001"
+                                value={novaAgencia}
+                                onChange={(e) => setNovaAgencia(e.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="conta-bancaria">Conta</Label>
+                              <Input
+                                id="conta-bancaria"
+                                placeholder="Ex: 12345-6"
+                                value={novaConta}
+                                onChange={(e) => setNovaConta(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="titular">Titular da Conta</Label>
+                              <Input
+                                id="titular"
+                                placeholder="Nome completo / Razão Social"
+                                value={novoTitular}
+                                onChange={(e) => setNovoTitular(e.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="tipo-conta">Tipo de Conta</Label>
+                              <select
+                                id="tipo-conta"
+                                value={novoTipoConta}
+                                onChange={(e) => setNovoTipoConta(e.target.value as any)}
+                                className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
+                              >
+                                <option value="corrente">Conta Corrente</option>
+                                <option value="poupanca">Conta Poupança</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="space-y-4 md:col-span-2 border rounded-lg p-4 bg-muted/30">
                       <div className="flex items-center space-x-2">
                         <Checkbox 

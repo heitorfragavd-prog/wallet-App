@@ -30,7 +30,6 @@ export interface DespesasQueryParams {
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
   const { startDate, endDate, workspaceId } = params;
-  console.log("[fetchDespesas Hook Call]", { startDate, endDate, workspaceId });
 
   let despesasQuery = supabase
     .from("despesas")
@@ -55,10 +54,6 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       transacoesQuery
     ]);
 
-    console.log("[fetchDespesas DB Success]", { 
-      despesasRawCount: despesasResp.data?.length || 0,
-      transacoesRawCount: transacoesResp.data?.length || 0 
-    });
 
     // Normaliza despesas: garante que categorias seja objeto
     const mappedDespesas = (despesasResp.data ?? []).map((d: any) => {
@@ -83,7 +78,6 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
     ) as Despesa[];
 
-    console.log("[fetchDespesas Hook Finish Success]", { finalCount: res.length });
     return res;
   } catch (err: any) {
     console.error("[fetchDespesas Hook Exception]", err);
