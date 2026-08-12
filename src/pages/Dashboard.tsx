@@ -45,6 +45,8 @@ import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao"
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
 import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTransactions";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { usePontoEquilibrio } from "@/domains/finance/hooks/usePontoEquilibrio";
+import { useBurnRate } from "@/domains/finance/hooks/useBurnRate";
 
 
 // Função para formatar a data corretamente
@@ -97,6 +99,9 @@ const Dashboard = () => {
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
+
+  const { pontoEquilibrio, vendasHoje, percentual: percentualPontoEquilibrio } = usePontoEquilibrio();
+  const { burnRate, runway, saldoAtual: saldoAtualBurn } = useBurnRate();
 
   // Receitas consolidadas — MESMA regra da tela Receitas:
   // dinheiro do PDV (Eyemobile) + entradas liquidadas da Divipay (valor líquido,
@@ -402,7 +407,7 @@ const Dashboard = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Receitas */}
           <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
             <CardContent className="p-5">
@@ -488,6 +493,68 @@ const Dashboard = () => {
                   </>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Ponto de Equilíbrio Diário */}
+          <Card className="border-border/40 bg-card/60 backdrop-blur-sm">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-muted-foreground">Ponto de Equilíbrio Hoje</p>
+                <div className={`text-lg font-bold ${percentualPontoEquilibrio >= 100 ? "text-emerald-400" : "text-amber-400"}`}>
+                  {percentualPontoEquilibrio.toFixed(0)}%
+                </div>
+              </div>
+              <p className="text-2xl font-bold text-foreground">
+                R$ {pontoEquilibrio.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </p>
+              <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${Math.min(percentualPontoEquilibrio, 100)}%`,
+                    backgroundColor: percentualPontoEquilibrio >= 100 ? "#22c55e" : "#f59e0b",
+                  }}
+                />
+              </div>
+              <p className="text-xs mt-2 text-muted-foreground">
+                {percentualPontoEquilibrio >= 100
+                  ? "✅ Já pagou as contas de hoje!"
+                  : `Faltam R$ ${Math.max(0, pontoEquilibrio - vendasHoje).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} para lucrar.`}
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Runway (Dias de Caixa) */}
+          <Card className="border-border/40 bg-card/60 backdrop-blur-sm">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-muted-foreground">Runway (Dias de Caixa)</p>
+                <p className="text-xs text-muted-foreground">
+                  Burn: R$ {burnRate.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/dia
+                </p>
+              </div>
+              <p className={`text-2xl font-bold ${runway <= 7 ? "text-red-400" : runway <= 15 ? "text-amber-400" : "text-emerald-400"}`}>
+                {runway.toFixed(0)} dias
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Saldo: R$ {saldoAtualBurn.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </p>
+              {runway <= 7 && (
+                <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
+                  ⚠️ Runway crítico. Acaba em {runway.toFixed(0)} dias se nada entrar.
+                </div>
+              )}
+              {runway > 7 && runway <= 15 && (
+                <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-400">
+                  ⚡ Atenção: {runway.toFixed(0)} dias. Meta: 30 dias.
+                </div>
+              )}
+              {runway > 15 && (
+                <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-400">
+                  ✅ Caixa saudável. {runway.toFixed(0)} dias de reserva.
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
