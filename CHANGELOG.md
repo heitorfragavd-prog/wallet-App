@@ -2,6 +2,26 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.39] - 2026-08-12
+
+### ✨ Novo
+- **Módulo IA Unificado** — Migração e reestruturação dos recursos de Inteligência Artificial para o domínio `ia`, centralizando chat financeiro, análise e o novo `UploadInteligente` na página `/ia`.
+- **API Pública Wallet** — Nova Edge Function `wallet-public-api` para integração externa com processamento de mídia.
+- **Eyemobile e Divipay** — Migrações de banco (`51.eyemobile_produtos`, `52.channel_mappings`) para suporte a novos recursos e melhorias no pagamento de dívidas do Divipay.
+
+### 🔧 Melhorado
+- **Hooks e Serviços Financeiros** — Refatorações nos hooks `useDespesas`, `useDividas` e `FinanceService`.
+- **Chat Financeiro** — Atualizações na Edge Function `openai-proxy` e no hook `useChatFinanceiro`.
+- **PDV** — Ajustes menores no `PDVProductGrid`.
+
+### 🗑️ Removido
+- **Hooks e Páginas Antigas de IA** — Arquivos em `src/hooks/useIA*`, `src/pages/IA.tsx` e `IAChat.tsx` foram removidos e substituídos pelo novo módulo nativo.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.39**
+
+---
+
 ## [1.0.38] - 2026-08-11
 
 ### 🔧 Melhorado
