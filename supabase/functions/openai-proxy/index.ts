@@ -306,6 +306,96 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "analisar_documento",
+      description: "Analisa uma imagem ou PDF de documento financeiro (Nota Fiscal ou Boleto) e extrai dados estruturados em JSON. Use quando o usuário enviar qualquer imagem de documento.",
+      parameters: {
+        type: "object",
+        properties: {
+          image_base64: { type: "string", description: "Documento em base64" },
+          tipo_suspeito: { type: "string", enum: ["nota_fiscal", "boleto", "desconhecido"] },
+        },
+        required: ["image_base64"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "atualizar_custo_produto_eyemobile",
+      description: "Atualiza o custo de um produto no Eyemobile PDV e adiciona quantidade ao estoque. Use após analisar uma NF de compra.",
+      parameters: {
+        type: "object",
+        properties: {
+          produto_id: { type: "string" },
+          produto_nome: { type: "string" },
+          codigo_barras: { type: "string" },
+          novo_custo: { type: "number" },
+          quantidade_estoque: { type: "number" },
+        },
+        required: ["novo_custo"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cadastrar_despesa_nf",
+      description: "Cadastra uma despesa no sistema a partir dos dados de uma Nota Fiscal de compra.",
+      parameters: {
+        type: "object",
+        properties: {
+          descricao: { type: "string" },
+          valor: { type: "number" },
+          data: { type: "string" },
+          categoria_nome: { type: "string" },
+          fornecedor: { type: "string" },
+          metodo_pagamento: { type: "string", enum: ["pix", "boleto", "cartao_credito", "cartao_debito", "dinheiro", "outros"] },
+          numero_nf: { type: "string" },
+        },
+        required: ["descricao", "valor", "data"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cadastrar_divida_boleto",
+      description: "Cadastra uma nova dívida no sistema a partir dos dados de um boleto analisado.",
+      parameters: {
+        type: "object",
+        properties: {
+          descricao: { type: "string" },
+          valor_total: { type: "number" },
+          credor: { type: "string" },
+          data_vencimento: { type: "string" },
+          codigo_barras: { type: "string" },
+          linha_digitavel: { type: "string" },
+          pix_copia_cola: { type: "string" },
+          parcelas: { type: "number" },
+          categoria_nome: { type: "string" },
+        },
+        required: ["descricao", "valor_total", "data_vencimento"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "validar_fechamento_caixa",
+      description: "Analisa o valor relatado pelo funcionário no fechamento de turno e cruza com as vendas registradas no Eyemobile PDV e transferências para encontrar furos de caixa.",
+      parameters: {
+        type: "object",
+        properties: {
+          valor_relatado: { type: "number" },
+          turno_data: { type: "string", description: "Data do turno a validar (YYYY-MM-DD)" },
+        },
+        required: ["valor_relatado", "turno_data"],
+      },
+    },
+  },
 ];
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -694,6 +784,176 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       if (error) return { error: error.message };
       return { sucesso: true };
     }
+    case "analisar_documento": {
+      return { acao: "analisar_imagem", tipo: args.tipo_suspeito || "desconhecido", mensagem: "Analisando documento..." };
+    }
+    case "atualizar_custo_produto_eyemobile": {
+      const { produto_id, produto_nome, codigo_barras, novo_custo, quantidade_estoque } = args as Record<string, unknown>;
+      let foundProduct: any = null;
+
+      // 1. Buscar por codigo_barras
+      if (codigo_barras) {
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("codigo_barras", codigo_barras).maybeSingle();
+        if (data) foundProduct = data;
+      }
+
+      // 2. Buscar por produto_id
+      if (!foundProduct && produto_id) {
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("produto_id", produto_id).maybeSingle();
+        if (data) foundProduct = data;
+      }
+
+      // 3. Buscar por nome
+      if (!foundProduct && produto_nome) {
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).ilike("nome", `%${produto_nome}%`).limit(1).maybeSingle();
+        if (data) foundProduct = data;
+      }
+
+      if (foundProduct) {
+        const { data: updated, error } = await supabase
+          .from("eyemobile_produtos")
+          .update({
+            custo: Number(novo_custo),
+            estoque: Number(quantidade_estoque ?? foundProduct.estoque ?? 0),
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", foundProduct.id)
+          .select("*")
+          .single();
+        if (error) return { error: error.message };
+        return { sucesso: true, produto: updated };
+      }
+
+      // Se não encontrar, retornar erro com sugestão de cadastro
+      return {
+        error: `Produto "${produto_nome || codigo_barras || 'desconhecido'}" não localizado na tabela de produtos do Eyemobile.`,
+        sugerir_cadastro: true,
+        dados: { nome: produto_nome || "", codigo_barras: codigo_barras || "", custo: novo_custo, estoque: quantidade_estoque }
+      };
+    }
+    case "cadastrar_despesa_nf": {
+      const { descricao, valor, data, categoria_nome, fornecedor, metodo_pagamento, numero_nf } = args as Record<string, unknown>;
+      let categoriaId: string | null = null;
+      if (categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa");
+      }
+      const { data: result, error } = await supabase
+        .from("despesas")
+        .insert({
+          user_id: userId,
+          descricao: descricao,
+          valor: Number(valor),
+          data: data,
+          categoria_id: categoriaId || null,
+          metodo_pagamento: metodo_pagamento || null,
+          observacoes: `Nota Fiscal nº ${numero_nf || ""}. Fornecedor: ${fornecedor || ""}.`
+        })
+        .select("id,descricao,valor,data")
+        .single();
+      if (error) return { error: error.message };
+      return { sucesso: true, despesa: result };
+    }
+    case "cadastrar_divida_boleto": {
+      const { descricao, valor_total, credor, data_vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_nome } = args as Record<string, unknown>;
+      let categoriaId: string | null = null;
+      if (categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa");
+      }
+      const obsParts = [
+        `Boleto.`,
+        linha_digitavel ? `Linha digitável: ${linha_digitavel}` : null,
+        codigo_barras ? `Código de barras: ${codigo_barras}` : null,
+        pix_copia_cola ? `Pix Copia e Cola: ${pix_copia_cola}` : null,
+        categoria_nome ? `Categoria sugerida: ${categoria_nome}` : null
+      ].filter(Boolean);
+
+      const { data: result, error } = await supabase
+        .from("dividas")
+        .insert({
+          user_id: userId,
+          descricao,
+          valor_total: Number(valor_total),
+          valor_restante: Number(valor_total),
+          valor_pago: 0,
+          credor: credor || null,
+          data_vencimento,
+          parcelas: Number(parcelas || 1),
+          parcelas_pagas: 0,
+          status: "pendente",
+          observacoes: obsParts.join(" | "),
+          categoria_id: categoriaId || null,
+          metodo_pagamento_esperado: "boleto",
+          codigo_barras: codigo_barras || null,
+          linha_digitavel: linha_digitavel || null,
+          pix_copia_cola: pix_copia_cola || null,
+        })
+        .select("id,descricao,valor_total,status")
+        .single();
+      if (error) return { error: error.message };
+      return { sucesso: true, divida: result };
+    }
+    case "validar_fechamento_caixa": {
+      const { valor_relatado, turno_data } = args as Record<string, unknown>;
+      
+      // Buscar o workspace default do usuário
+      const { data: defaultWs } = await supabase.from("workspaces").select("id").eq("user_id", userId).eq("is_default", true).maybeSingle();
+      const wsId = defaultWs?.id || null;
+
+      // Buscar vendas do dia no Eyemobile
+      let queryVendas = supabase
+        .from("transacoes")
+        .select("valor")
+        .eq("user_id", userId)
+        .eq("tipo", "receita")
+        .eq("data", turno_data as string);
+      if (wsId) queryVendas = queryVendas.eq("workspace_id", wsId);
+      
+      const { data: vendas, error: errV } = await queryVendas;
+      if (errV) return { error: errV.message };
+      const totalVendas = (vendas || []).reduce((sum, v) => sum + Number(v.valor || 0), 0);
+
+      // Buscar saques/transferências Divipay do dia
+      let querySaques = supabase
+        .from("transacoes")
+        .select("valor")
+        .eq("user_id", userId)
+        .eq("tipo", "despesa")
+        .eq("data", turno_data as string)
+        .ilike("descricao", "%divipay%");
+      if (wsId) querySaques = querySaques.eq("workspace_id", wsId);
+
+      const { data: saques, error: errS } = await querySaques;
+      if (errS) return { error: errS.message };
+      const totalSaques = (saques || []).reduce((sum, s) => sum + Number(s.valor || 0), 0);
+
+      const esperado = totalVendas - totalSaques;
+      const relatado = Number(valor_relatado);
+      const diferenca = relatado - esperado;
+      
+      let status = "exato";
+      let msg = `Fechamento exato! O saldo bateu com o esperado de R$ ${esperado.toFixed(2)}.`;
+
+      if (diferenca < -0.01) {
+        status = "furo";
+        msg = `Atenção: Furo de caixa detectado! Faltam R$ ${Math.abs(diferenca).toFixed(2)} no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`;
+      } else if (diferenca > 0.01) {
+        status = "sobra";
+        msg = `Aviso: Sobra de caixa detectada! R$ ${diferenca.toFixed(2)} a mais no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`;
+      }
+
+      return {
+        sucesso: true,
+        dados: {
+          total_vendas_pdv: totalVendas,
+          total_saques_divipay: totalSaques,
+          saldo_esperado: esperado,
+          saldo_relatado: relatado,
+          diferenca,
+          status,
+          mensagem: msg
+        }
+      };
+    }
     default:
       return { error: `Ferramenta desconhecida: ${name}` };
   }
@@ -743,7 +1003,15 @@ Deno.serve(async (req: Request) => {
     const response = await fetch(OPENAI_API_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: body.model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: body.max_tokens || 2000, temperature: body.temperature ?? 0.4 }),
+      body: JSON.stringify({
+        model: body.model,
+        messages,
+        tools: TOOLS,
+        tool_choice: "auto",
+        max_tokens: body.max_tokens || 2000,
+        temperature: body.temperature ?? 0.4,
+        response_format: body.response_format || undefined
+      }),
     });
 
     const data = await response.json();

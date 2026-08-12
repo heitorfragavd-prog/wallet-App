@@ -33,6 +33,12 @@ export interface Divida {
   credor: string;
   valor_taxa?: number;
   documento_favorecido?: string | null;
+  metodo_pagamento_esperado?: "pix" | "boleto" | "transferencia" | "cartao_credito" | "cartao_debito" | "dinheiro" | "outros";
+  chave_pix?: string | null;
+  pix_copia_cola?: string | null;
+  codigo_barras?: string | null;
+  linha_digitavel?: string | null;
+  conta_bancaria?: { banco?: string; agencia?: string; conta?: string; titular?: string; tipo?: "corrente" | "poupanca"; } | null;
   created_at: string;
   updated_at: string;
   categorias?: {
@@ -144,6 +150,12 @@ export const useDividas = (params: DividasQueryParams = {}) => {
           documentoFavorecido: divida.documento_favorecido,
           valorTaxa: divida.valor_taxa,
           totalParcelas: divida.parcelas,
+          metodoPagamentoEsperado: divida.metodo_pagamento_esperado,
+          chavePix: divida.chave_pix,
+          pixCopiaCola: divida.pix_copia_cola,
+          codigoBarras: divida.codigo_barras,
+          linhaDigitavel: divida.linha_digitavel,
+          contaBancaria: divida.conta_bancaria,
         });
       }
 

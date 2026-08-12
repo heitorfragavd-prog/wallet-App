@@ -57,10 +57,13 @@ export interface CreatePixChargeResult {
 
 export interface CreateWithdrawParams {
   amount: number;
-  keyPix: string;
+  keyPix?: string;
   consultId?: string | null;
   description?: string;
+  type?: "DICT" | "BILLET";
+  billetCode?: string;
 }
+
 
 export interface PixKeyValidationResult {
   valid: boolean;

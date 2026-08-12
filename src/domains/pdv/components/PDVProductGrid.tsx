@@ -129,17 +129,19 @@ export const PDVProductGrid: React.FC<Props> = ({
           {filtered.map((product) => {
             const icon = getProductIcon(product.category, product.name);
             return (
-              <button
+              <div
                 key={product.id}
                 onClick={() => onAddToCart(product)}
-                className="group flex flex-col items-center p-4 bg-[#1C2541]/40 border border-[#1E2942]/60 rounded-2xl hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all active:scale-95 text-left relative"
+                role="button"
+                tabIndex={0}
+                className="group flex flex-col items-stretch p-0 bg-[#1C2541]/40 border border-[#1E2942]/60 rounded-2xl hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all active:scale-95 text-left relative overflow-hidden cursor-pointer select-none h-44 sm:h-48"
               >
-                <div className="w-14 h-14 rounded-xl bg-slate-800/60 flex items-center justify-center text-emerald-400 mb-3 group-hover:bg-emerald-500/10 transition-colors overflow-hidden">
+                <div className="w-full h-24 sm:h-28 bg-slate-800/60 flex items-center justify-center text-emerald-400 group-hover:bg-emerald-500/10 transition-colors border-b border-[#1E2942]/60 relative overflow-hidden shrink-0">
                   {product.image ? (
                     <img
                       src={product.image}
                       alt={product.name}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain p-1"
                       onError={(e) => {
                         e.currentTarget.style.display = "none";
                         const parent = e.currentTarget.parentElement;
@@ -156,18 +158,20 @@ export const PDVProductGrid: React.FC<Props> = ({
                     {icon}
                   </div>
                 </div>
-                <p className="text-xs font-semibold text-slate-200 text-center leading-tight mb-2 h-8 line-clamp-2">
-                  {product.name}
-                </p>
-                <p className="text-sm font-extrabold text-emerald-400">
-                  {product.price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                </p>
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="p-3 flex flex-col items-start gap-1">
+                  <p className="text-[11px] sm:text-xs font-bold text-slate-200 leading-tight line-clamp-2 h-8">
+                    {product.name}
+                  </p>
+                  <p className="text-xs sm:text-sm font-extrabold text-emerald-400">
+                    {product.price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  </p>
+                </div>
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                   <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center">
                     <Plus className="w-3.5 h-3.5 text-white" />
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

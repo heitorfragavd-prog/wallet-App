@@ -961,26 +961,40 @@ async function syncUserEyemobile(
             const safeMinDate = minDateObj.toISOString().split("T")[0];
             const safeMaxDate = maxDateObj.toISOString().split("T")[0];
 
-            const { data: batchExisting, error: searchErr } = await supabaseAdmin
-              .from("transacoes")
-              .select("id, metodo_pagamento, observacoes, itens")
-              .eq("user_id", user_id)
-              .eq("workspace_id", syncWorkspaceId)
-              .eq("tipo", "receita")
-              .gte("data", safeMinDate)
-              .lte("data", safeMaxDate)
-              .ilike("observacoes", "%Integrado via Eyemobile API. Venda: #%");
+            // Paginated lookup: PostgREST returns at most 1000 rows per request.
+            // Without pagination, syncs on busy days missed older records and re-inserted them.
+            const BATCH_PAGE_SIZE = 1000;
+            let batchOffset = 0;
+            let batchHasMore = true;
+            while (batchHasMore) {
+              const { data: batchExisting, error: searchErr } = await supabaseAdmin
+                .from("transacoes")
+                .select("id, metodo_pagamento, observacoes, itens")
+                .eq("user_id", user_id)
+                .eq("workspace_id", syncWorkspaceId)
+                .eq("tipo", "receita")
+                .gte("data", safeMinDate)
+                .lte("data", safeMaxDate)
+                .ilike("observacoes", "%Integrado via Eyemobile API. Venda: #%")
+                .range(batchOffset, batchOffset + BATCH_PAGE_SIZE - 1);
 
-            if (searchErr) {
-              console.error("Erro ao buscar transações em lote:", searchErr);
-            } else if (batchExisting && Array.isArray(batchExisting)) {
-              for (const es of batchExisting) {
-                const obs = es.observacoes || "";
-                const match = obs.match(/Venda:\s*#(\d+)/i);
-                const sid = match ? match[1] : null;
-                if (sid) {
-                  existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
+              if (searchErr) {
+                console.error("Erro ao buscar transações em lote:", searchErr);
+                break;
+              }
+              if (batchExisting && Array.isArray(batchExisting)) {
+                for (const es of batchExisting) {
+                  const obs = es.observacoes || "";
+                  const match = obs.match(/Venda:\s*#(\d+)/i);
+                  const sid = match ? match[1] : null;
+                  if (sid) {
+                    existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
+                  }
                 }
+                batchHasMore = batchExisting.length >= BATCH_PAGE_SIZE;
+                batchOffset += BATCH_PAGE_SIZE;
+              } else {
+                batchHasMore = false;
               }
             }
           }

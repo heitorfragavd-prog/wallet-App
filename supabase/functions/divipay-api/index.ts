@@ -340,16 +340,29 @@ serve(async (req) => {
         if (!amount || amount <= 0) {
           return jsonResponse({ success: false, error: 'Valor (amount) inválido' }, 400)
         }
-        if (!params.keyPix) return jsonResponse({ success: false, error: 'Chave Pix (keyPix) é obrigatória' }, 400)
+
+        const isBillet = params.type === 'BILLET'
+        if (!isBillet && !params.keyPix) {
+          return jsonResponse({ success: false, error: 'Chave Pix (keyPix) é obrigatória para transferências Pix' }, 400)
+        }
+        if (isBillet && !params.billetCode) {
+          return jsonResponse({ success: false, error: 'Código do boleto (billetCode) é obrigatório' }, 400)
+        }
+
+        const body = isBillet ? {
+          type: 'BILLET',
+          amount,
+          billetCode: params.billetCode,
+        } : {
+          type: 'DICT',
+          amount,
+          keyPix: params.keyPix,
+          consultId: params.consultId,
+        }
 
         const data = await divipayFetch(cfg, divipayToken, '/api/withdraws', {
           method: 'POST',
-          body: {
-            type: 'DICT',
-            amount,
-            keyPix: params.keyPix,
-            consultId: params.consultId,
-          },
+          body,
         })
 
         const { data: transacao } = await supabaseAdmin
@@ -360,8 +373,8 @@ serve(async (req) => {
             amount,
             type: 'CASH_OUT',
             status: 'PENDING',
-            description: params.description ?? `Transferência Pix para ${params.keyPix}`,
-            recipient_key: params.keyPix,
+            description: params.description ?? (isBillet ? `Pagamento Boleto` : `Transferência Pix para ${params.keyPix}`),
+            recipient_key: isBillet ? (params.billetCode || '') : (params.keyPix || ''),
             metadata: {
               withdrawResponse: data,
               // Quando o pagamento é de uma dívida, o divida_id viaja na metadata

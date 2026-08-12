@@ -186,7 +186,7 @@ const Despesas = () => {
       return;
     }
 
-    const categoria = categoriasDespesa.find((c) => c.nome === novaDespesa.categoria);
+    const categoria = categoriasDespesa.find((c) => c.id === novaDespesa.categoria || c.nome === novaDespesa.categoria);
 
     if (modoEdicao && novaDespesa.id) {
       // Atualizar despesa existente
@@ -249,13 +249,13 @@ const Despesas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
+  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categoria_id?: string | null; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
     // Preencher formulário com dados da despesa
     setNovaDespesa({
       id: despesa.id,
       descricao: despesa.descricao,
       valor: despesa.valor.toString(),
-      categoria: despesa.categorias?.nome || "",
+      categoria: despesa.categoria_id || "",
       data: despesa.data,
       tipo: "variavel",
       metodo_pagamento: despesa.metodo_pagamento || null,

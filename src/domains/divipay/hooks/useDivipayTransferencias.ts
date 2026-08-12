@@ -101,14 +101,15 @@ export function useDivipayTransferencias() {
   });
 
   const createTransferencia = useMutation({
-    mutationFn: async (params: CreateWithdrawParams & { keyPix: string }) => {
+    mutationFn: async (params: CreateWithdrawParams) => {
       const { transacao } = await divipayService.createWithdraw(params);
       return transacao;
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       qc.invalidateQueries({ queryKey: DIVIPAY_TRANSFERENCIAS_QUERY_KEY });
       qc.invalidateQueries({ queryKey: ["divipay-dashboard"] });
-      toast({ title: "Transferência criada", description: "Saque Pix criado com sucesso." });
+      const msg = variables.type === "BILLET" ? "Pagamento de boleto agendado/criado." : "Saque Pix criado com sucesso.";
+      toast({ title: "Transferência criada", description: msg });
     },
     onError: (error: Error) => {
       logger.error("useDivipayTransferencias", "Erro ao criar transferência", { error: error.message });
@@ -126,7 +127,7 @@ export function useDivipayTransferencias() {
     validateKey: (key: string) => validateKey.mutateAsync(key),
     validatedKey: validateKey.data ?? null,
     isValidatingKey: validateKey.isPending,
-    createTransferencia: (params: CreateWithdrawParams & { keyPix: string }) => createTransferencia.mutateAsync(params),
+    createTransferencia: (params: CreateWithdrawParams) => createTransferencia.mutateAsync(params),
     isCreating: createTransferencia.isPending,
     resetValidation: () => validateKey.reset(),
     refetch: () => qc.invalidateQueries({ queryKey: DIVIPAY_TRANSFERENCIAS_QUERY_KEY }),

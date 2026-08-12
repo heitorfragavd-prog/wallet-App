@@ -31,7 +31,7 @@ const Metas               = lazyWithRetry(() => import("./pages/Metas"));
 const Mercado             = lazyWithRetry(() => import("./pages/Mercado"));
 const Veiculos            = lazyWithRetry(() => import("./pages/Veiculos"));
 const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
-const IA                  = lazyWithRetry(() => import("./pages/IA"));
+const IAPage              = lazyWithRetry(() => import("./pages/IAPage"));
 const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
 const InvestimentoDetalhe = lazyWithRetry(() => import("./pages/InvestimentoDetalhe"));
@@ -46,7 +46,6 @@ const CardapioDetalhe     = lazyWithRetry(() => import("./pages/CardapioDetalhe"
 const Validades           = lazyWithRetry(() => import("./pages/Validades"));
 const Comparativo         = lazyWithRetry(() => import("./pages/Comparativo"));
 const Patrimonio          = lazyWithRetry(() => import("./pages/Patrimonio"));
-const IAChat              = lazyWithRetry(() => import("./pages/IAChat"));
 const Transferencias      = lazyWithRetry(() => import("./pages/Transferencias"));
 const Agenda              = lazyWithRetry(() => import("./pages/Agenda"));
 const Subcategorias       = lazyWithRetry(() => import("./pages/Subcategorias"));
@@ -102,7 +101,7 @@ function App() {
                 <Route path="/mercado"    element={<ProtectedRoute><Mercado /></ProtectedRoute>} />
                 <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
                 <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
-                <Route path="/ia"         element={<ProtectedRoute><IA /></ProtectedRoute>} />
+                <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
                 <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
                 <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
                 <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
@@ -117,7 +116,7 @@ function App() {
                 <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
                 <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
                 <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
-                <Route path="/ia-chat"       element={<ProtectedRoute><IAChat /></ProtectedRoute>} />
+                <Route path="/ia-chat"       element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
                 <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
                 <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
                 <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
