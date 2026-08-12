@@ -2,6 +2,20 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.41] - 2026-08-12
+
+### ✨ Novo
+- **Indicadores de Fluxo de Caixa** — Novos hooks `useBurnRate` e `usePontoEquilibrio` para cálculo de métricas de saúde financeira.
+
+### 🔧 Melhorado
+- **Dashboard e Fluxo de Caixa** — Ajustes na renderização de dados de caixa e no painel principal.
+- **Cardápio** — Melhorias na exibição e layout da página de Cardápio.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.41**
+
+---
+
 ## [1.0.40] - 2026-08-12
 
 ### Corrigido
