@@ -127,31 +127,61 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
     // Buscar/criar categorias automáticas
     const categoriaTransporteId = await getOrCreateCategoria("Transporte Funcionário", activeWorkspace.id, "despesa");
     const categoriaMetaId = totais.totalMeta > 0 ? await getOrCreateCategoria("Meta/Bônus", activeWorkspace.id, "despesa") : null;
+    const dataHoje = new Date().toISOString().split("T")[0];
 
-    // 1. Salvar acerto na colaborador_custos
-    const { error: custoError } = await supabase.from("colaborador_custos").insert({
-      colaborador_id: colaboradorId,
-      tipo: "acerto_transporte",
-      valor: totais.totalTransferir,
-      data: new Date().toISOString().split("T")[0],
-      descricao: `Acerto semanal transporte - ${dias.filter(d => d.foiTrabalhar).map(d => d.dia).join(", ")} (${totais.diasTrabalhados} dias)`,
-      lancado_na_despesa: true,
-    });
+    // 1. Inserções em colaborador_custos (Granularidade: acerto_transporte, transporte_diferenca, premio)
+    const custosInserts = [];
 
-    if (custoError) {
-      setLoading(false);
-      toast({ title: "Erro", description: custoError.message, variant: "destructive" });
-      return;
+    if (totais.totalPassagem > 0) {
+      custosInserts.push({
+        colaborador_id: colaboradorId,
+        tipo: "acerto_transporte",
+        valor: totais.totalPassagem,
+        data: dataHoje,
+        descricao: `Passagem de ônibus (${totais.diasTrabalhados} dias)`,
+        lancado_na_despesa: true,
+      });
     }
 
-    // 2. Criar transação de TRANSPORTE
+    if (totais.totalDiferenca > 0) {
+      custosInserts.push({
+        colaborador_id: colaboradorId,
+        tipo: "transporte_diferenca",
+        valor: totais.totalDiferenca,
+        data: dataHoje,
+        descricao: `Diferença Uber (${totais.diasTrabalhados} dias)`,
+        lancado_na_despesa: true,
+      });
+    }
+
+    if (totais.totalMeta > 0) {
+      custosInserts.push({
+        colaborador_id: colaboradorId,
+        tipo: "premio",
+        valor: totais.totalMeta,
+        data: dataHoje,
+        descricao: `Meta/Bônus semanal`,
+        lancado_na_despesa: true,
+      });
+    }
+
+    if (custosInserts.length > 0) {
+      const { error: custoError } = await supabase.from("colaborador_custos").insert(custosInserts);
+      if (custoError) {
+        setLoading(false);
+        toast({ title: "Erro", description: custoError.message, variant: "destructive" });
+        return;
+      }
+    }
+
+    // 2. Criar transação de TRANSPORTE na tabela transacoes
     const valorTransporte = totais.totalDiferenca + totais.totalPassagem;
     if (valorTransporte > 0) {
       await supabase.from("transacoes").insert({
         workspace_id: activeWorkspace.id,
         tipo: "despesa",
         valor: valorTransporte,
-        data: new Date().toISOString().split("T")[0],
+        data: dataHoje,
         descricao: `Transporte semanal - ${colaboradorNome} (${dias[0].data} a ${dias[6].data}) | Uber: ${formatCurrency(totais.totalUberReal)} | Passagem: ${formatCurrency(totais.totalPassagem)} | Diferença: ${formatCurrency(totais.totalDiferenca)}`,
         categoria_id: categoriaTransporteId,
         centro_custo_id: null,
@@ -160,13 +190,13 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
       });
     }
 
-    // 3. Criar transação de META (só se houver)
+    // 3. Criar transação de META na tabela transacoes (se houver)
     if (totais.totalMeta > 0 && categoriaMetaId) {
       await supabase.from("transacoes").insert({
         workspace_id: activeWorkspace.id,
         tipo: "despesa",
         valor: totais.totalMeta,
-        data: new Date().toISOString().split("T")[0],
+        data: dataHoje,
         descricao: `Meta semanal - ${colaboradorNome} (${dias[0].data} a ${dias[6].data})`,
         categoria_id: categoriaMetaId,
         centro_custo_id: null,

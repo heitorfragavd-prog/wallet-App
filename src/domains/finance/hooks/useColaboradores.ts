@@ -13,6 +13,7 @@ export interface Colaborador {
   data_demissao: string | null;
   salario_bruto: number;
   vale_transporte: number;
+  vale_transporte_diario?: number;
   vale_refeicao: number;
   outros_beneficios: number;
   status: string;

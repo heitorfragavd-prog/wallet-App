@@ -30,7 +30,7 @@ export default function EquipeDetalhePage() {
   const colaborador = todos?.find(c => c.id === id) || null;
   const { data: custos } = useColaboradorCustos(id || null, mesRef);
   const { data: presencas } = useColaboradorPresencas(id || null, mesRef);
-  const calc = useColaboradorCalculos(colaborador, custos ?? [], presencas ?? []);
+  const calc = useColaboradorCalculos(colaborador, custos ?? [], presencas ?? [], mesRef);
 
   if (!colaborador) {
     return (
@@ -143,7 +143,24 @@ export default function EquipeDetalhePage() {
               <AccordionContent>
                 <div className="space-y-2 pb-4">
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Salário Bruto</span><span className="text-foreground">{formatCurrency(calc.salarioBruto)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Vale Transporte</span><span className="text-foreground">{formatCurrency(calc.valeTransporte)}</span></div>
+                  <div className="space-y-1 py-1 border-y border-border/20 my-1">
+                    <div className="flex justify-between text-sm font-medium">
+                      <span className="text-foreground">Vale Transporte (Total)</span>
+                      <span className="text-emerald-400">{formatCurrency(calc.valeTransporte)}</span>
+                    </div>
+                    <div className="pl-3 space-y-0.5 text-xs text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>├─ Base ({calc.diasUteisMes} dias úteis × {formatCurrency(calc.valeTransporteDiario)})</span>
+                        <span className="text-foreground">{formatCurrency(calc.valeTransporteBase)}</span>
+                      </div>
+                      {calc.valeTransporteAcertos > 0 && (
+                        <div className="flex justify-between text-amber-400">
+                          <span>└─ Acertos Lançados (Uber / Passagem / Dif.)</span>
+                          <span>+{formatCurrency(calc.valeTransporteAcertos)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Vale Refeição</span><span className="text-foreground">{formatCurrency(calc.valeRefeicao)}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Outros Benefícios</span><span className="text-foreground">{formatCurrency(calc.outrosBeneficios)}</span></div>
                   {custos && custos.length > 0 && (
