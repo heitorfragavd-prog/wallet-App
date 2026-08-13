@@ -79,6 +79,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: ListTree, label: "Subcategorias", path: "/subcategorias" },
     { icon: Building, label: "Centros de Custo", path: "/centros-custo" },
     { icon: Users, label: "Fornecedores", path: "/fornecedores" },
+    { icon: Users, label: "Equipe", path: "/equipe" },
     { icon: CheckCircle, label: "Conciliação", path: "/conciliacao" },
     { icon: Receipt, label: "Recibos", path: "/recibos" },
     { icon: BarChart3, label: "Relatorios", path: "/relatorios" },

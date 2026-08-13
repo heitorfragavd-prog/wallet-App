@@ -51,6 +51,11 @@ const Agenda              = lazyWithRetry(() => import("./pages/Agenda"));
 const Subcategorias       = lazyWithRetry(() => import("./pages/Subcategorias"));
 const CentrosCusto        = lazyWithRetry(() => import("./pages/CentrosCusto"));
 const Fornecedores        = lazyWithRetry(() => import("./pages/Fornecedores"));
+const EquipePage          = lazyWithRetry(() => import("./pages/Equipe"));
+const EquipeDetalhePage   = lazyWithRetry(() => import("./pages/EquipeDetalhe"));
+const EquipeNovoPage      = lazyWithRetry(() => import("./pages/EquipeNovo"));
+const EquipeEditarPage    = lazyWithRetry(() => import("./pages/EquipeEditar"));
+const EquipeCustoNovoPage = lazyWithRetry(() => import("./pages/EquipeCustoNovo"));
 const Conciliacao         = lazyWithRetry(() => import("./pages/Conciliacao"));
 const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
 const ConfiguracoesNotificacoes = lazyWithRetry(() => import("./pages/ConfiguracoesNotificacoes"));
@@ -122,6 +127,11 @@ function App() {
                 <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
                 <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
                 <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
+                <Route path="/equipe"        element={<ProtectedRoute><EquipePage /></ProtectedRoute>} />
+                <Route path="/equipe/novo"   element={<ProtectedRoute><EquipeNovoPage /></ProtectedRoute>} />
+                <Route path="/equipe/:id"    element={<ProtectedRoute><EquipeDetalhePage /></ProtectedRoute>} />
+                <Route path="/equipe/:id/editar" element={<ProtectedRoute><EquipeEditarPage /></ProtectedRoute>} />
+                <Route path="/equipe/:id/custo/novo" element={<ProtectedRoute><EquipeCustoNovoPage /></ProtectedRoute>} />
                 <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
                 <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
                 <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
