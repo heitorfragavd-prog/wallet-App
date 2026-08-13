@@ -283,15 +283,14 @@ export function useFluxoCaixaData(modo: FluxoCaixaModo, ano: number, mes: number
       const mediaReceita = buckets.slice(-15).reduce((s, b) => s + (b.receitaRealizada || 0), 0) / Math.min(buckets.length, 15);
       
       for (let i = 1; i <= 15; i++) {
-        const data = new Date();
-        data.setDate(data.getDate() + i);
-        const dataStr = data.toISOString().split("T")[0];
+        const data = new Date(hoje);
+        data.setDate(hoje.getDate() + i);
+        const dataStr = fmtLocal(data); // ← USA fmtLocal (ja existe no arquivo) para evitar timezone bug
         
-        // Recorrentes diárias
-        const recDiarias = recorrentes?.filter(r => r.ativo && r.tipo_transacao === "despesa").reduce((s, r) => {
-          const v = Number(r.valor);
-          return s + (r.recorrencia === "diaria" ? v : r.recorrencia === "semanal" ? v/7 : r.recorrencia === "mensal" ? v/30 : v/365);
-        }, 0) || 0;
+        // CORRECAO: usar recorrenteOcorreEm (ja existe no arquivo) em vez de media estatistica
+        const recDia = recorrentes?.filter(r => 
+          r.ativo && r.tipo_transacao === "despesa" && recorrenteOcorreEm(r, data, dataStr)
+        ).reduce((s, r) => s + Number(r.valor), 0) || 0;
         
         // Dívidas a vencer neste dia
         const divDia = dividas?.filter(d => d.status !== "quitada" && d.data_vencimento === dataStr).reduce((s, d) => {
@@ -306,11 +305,11 @@ export function useFluxoCaixaData(modo: FluxoCaixaModo, ano: number, mes: number
           futuro: true,
           receitaPrevista: 0,
           receitaRealizada: 0,
-          despesaPrevista: 0,
+          despesaPrevista: recDia + divDia,
           despesaRealizada: 0,
-          saldoPrevisto: parseFloat((saldoBase + (mediaReceita * i) - (recDiarias * i) - divDia).toFixed(2)),
+          saldoPrevisto: parseFloat((saldoBase + (mediaReceita * i) - recDia - divDia).toFixed(2)),
           saldoRealizado: 0,
-          saldoProjetado: parseFloat((saldoBase + (mediaReceita * i) - (recDiarias * i) - divDia).toFixed(2)),
+          saldoProjetado: parseFloat((saldoBase + (mediaReceita * i) - recDia - divDia).toFixed(2)),
           receitasPorCategoria: {},
           despesasPorCategoria: {},
         });
