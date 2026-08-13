@@ -2,6 +2,20 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.43] - 2026-08-13
+
+### 🔧 Corrigido & Melhorado
+- **Módulo de Equipe:**
+  - Adicionado suporte a `vale_transporte_diario` no cadastro de colaboradores.
+  - Ajustes no cálculo de Acerto Semanal (`useColaboradorCalculos`, `AcertoSemanal`).
+  - Atualizações nos formulários de criação, edição e detalhe de equipe (`EquipeNovo`, `EquipeEditar`, `EquipeDetalhe`).
+- **Banco de Dados:** Novas migrations (`58_vale_transporte_diario.sql`, `59_acerto_semanal_corrigido.sql`) para incluir novos campos e corrigir lógicas de cálculo no banco.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.43**
+
+---
+
 ## [1.0.42] - 2026-08-13
 
 ### ✨ Novo

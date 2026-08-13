@@ -25,6 +25,7 @@ export default function EquipeNovoPage() {
     cargo: "",
     salario_bruto: "",
     vale_transporte: "0",
+    vale_transporte_diario: "0",
     vale_refeicao: "0",
     outros_beneficios: "0",
     data_admissao: new Date().toISOString().split("T")[0],
@@ -68,6 +69,7 @@ export default function EquipeNovoPage() {
       cargo: form.cargo || null,
       salario_bruto: Number(form.salario_bruto) || 0,
       vale_transporte: Number(form.vale_transporte) || 0,
+      vale_transporte_diario: Number(form.vale_transporte_diario) || 0,
       vale_refeicao: Number(form.vale_refeicao) || 0,
       outros_beneficios: Number(form.outros_beneficios) || 0,
       data_admissao: form.data_admissao || null,
@@ -162,17 +164,21 @@ export default function EquipeNovoPage() {
             </div>
 
             {form.tipo !== "folguista" && (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div className="space-y-2">
-                  <Label>Vale Transporte</Label>
+                  <Label>VT Mensal Fixo (R$)</Label>
                   <Input type="number" value={form.vale_transporte} onChange={e => setForm({ ...form, vale_transporte: e.target.value })} placeholder="0,00" />
+                </div>
+                <div className="space-y-2">
+                  <Label>VT Diário (Uber/Ônibus)</Label>
+                  <Input type="number" value={form.vale_transporte_diario} onChange={e => setForm({ ...form, vale_transporte_diario: e.target.value })} placeholder="12,00" />
                 </div>
                 <div className="space-y-2">
                   <Label>Vale Refeição</Label>
                   <Input type="number" value={form.vale_refeicao} onChange={e => setForm({ ...form, vale_refeicao: e.target.value })} placeholder="0,00" />
                 </div>
                 <div className="space-y-2">
-                  <Label>Outros</Label>
+                  <Label>Outros Benefícios</Label>
                   <Input type="number" value={form.outros_beneficios} onChange={e => setForm({ ...form, outros_beneficios: e.target.value })} placeholder="0,00" />
                 </div>
               </div>
