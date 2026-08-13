@@ -2,6 +2,25 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.42] - 2026-08-13
+
+### ✨ Novo
+- **Módulo de Equipe** — Novo sistema de gestão de equipe e colaboradores, incluindo:
+  - Listagem, criação e edição de colaboradores (`Equipe.tsx`, `EquipeNovo.tsx`, `EquipeEditar.tsx`).
+  - Lançamento de custos, presenças e adiantamentos (`EquipeCustoNovo.tsx`, `EquipeDetalhe.tsx`).
+  - Hooks especializados para cálculos complexos e gestão de estado (`useColaboradores`, `useColaboradorCustos`, `useColaboradorPresencas`, `useColaboradorCalculos`).
+  - Aba de **Acerto Semanal** para consolidação de salários e pagamentos (`AcertoSemanal.tsx`).
+- **Banco de Dados** — Nova migration `54.equipe.sql` para suportar a estrutura do módulo de equipe.
+
+### 🔧 Melhorado
+- **Dashboard e Layout** — Ajustes de navegação no `DashboardLayout.tsx` e melhorias nos hooks de `BurnRate`, `PontoEquilibrio` e `FluxoCaixaData`.
+- **Componentes Compartilhados** — Pequenas atualizações visuais no componente `Avatar`.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.42**
+
+---
+
 ## [1.0.41] - 2026-08-12
 
 ### ✨ Novo
