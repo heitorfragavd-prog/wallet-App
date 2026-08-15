@@ -338,7 +338,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             <div className="flex items-center justify-between text-muted-foreground">
               <span>FATURA ATUAL</span>
               <span className="font-semibold text-rose-500">
-                R$ -{totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                R$ {totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex items-center justify-between text-muted-foreground pt-1 border-t border-border/40">
@@ -363,7 +363,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
               VALOR DA FATURA
             </span>
             <span className="text-xl font-extrabold text-rose-500">
-              R$ -{totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              R$ {totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
             </span>
             <div className="flex gap-2">
               <Button
@@ -589,7 +589,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
 
                       <div className="flex items-center gap-2 text-right">
                         <span className="font-bold text-sm text-foreground whitespace-nowrap">
-                          R$ -{Number(item.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          R$ {Number(item.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                         </span>
                         <ChevronDown className="w-4 h-4 text-muted-foreground/40" />
                       </div>

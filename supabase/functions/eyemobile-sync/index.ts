@@ -676,7 +676,7 @@ async function fetchDashboardData(
   } else {
     // Busca paralela em lotes de 10 páginas para cobrir o período rapidamente
     let currentOffset = offset;
-    const batchSize = 10;
+    const batchSize = 10; // Voltou de 20 para 10
     const maxPages = 80; // Suporta até 8.000 vendas por período no dashboard
     let pagesFetched = 0;
 

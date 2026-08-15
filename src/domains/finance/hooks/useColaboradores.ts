@@ -19,6 +19,21 @@ export interface Colaborador {
   status: string;
   dias_experiencia: number;
   carga_horaria_semanal: number;
+  cpf?: string | null;
+  rg?: string | null;
+  data_nascimento?: string | null;
+  telefone?: string | null;
+  email?: string | null;
+  endereco?: string | null;
+  contato_emergencia_1?: string | null;
+  contato_emergencia_2?: string | null;
+  pix_tipo?: string | null;
+  pix_chave?: string | null;
+  banco_nome?: string | null;
+  banco_agencia?: string | null;
+  banco_conta?: string | null;
+  linha_onibus?: string | null;
+  valor_passagem?: number | null;
   created_at: string;
 }
 

@@ -127,7 +127,11 @@ export const useDividas = (params: DividasQueryParams = {}) => {
   const { data: dividas = [], isLoading: loading } = useQuery({
     queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
     queryFn: () => fetchDividas({ startDate, endDate, workspaceId: currentWorkspaceId }),
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 10,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 1,
   });
 
   const createDivida = useMutation({

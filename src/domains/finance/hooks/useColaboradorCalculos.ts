@@ -62,12 +62,17 @@ export function useColaboradorCalculos(
       }
     }
 
+    const isSocio = colaborador.tipo === "socio";
+    const isFolguista = colaborador.tipo === "folguista";
+    const temEncargos = !isSocio && !isFolguista; // só funcionário CLT tem encargos
+
     const salario = Number(colaborador.salario_bruto) || 0;
     const vtFixo = Number(colaborador.vale_transporte) || 0;
     const vtDiario = Number(colaborador.vale_transporte_diario) || 0;
 
-    // Base do VT: ou VT Mensal Fixo ou (VT Diário × Dias Úteis)
-    const vtBase = vtFixo > 0 ? vtFixo : vtDiario * diasUteis;
+    // FOLGUISTAS e SÓCIOS: NÃO possuem base mensal fixa automática de VT de 26 dias!
+    // Folguistas só recebem transporte nos dias efetivamente contratados/lançados.
+    const vtBase = (isFolguista || isSocio) ? 0 : (vtFixo > 0 ? vtFixo : vtDiario * diasUteis);
 
     // Somar acertos semanais reais lançados em custos
     const tiposAcertoTransporte = ["acerto_transporte", "passagem_semanal", "uber_semanal", "transporte_diferenca"];
@@ -75,34 +80,47 @@ export function useColaboradorCalculos(
       .filter(c => tiposAcertoTransporte.includes(c.tipo))
       .reduce((s, c) => s + Number(c.valor), 0);
 
-    // Vale Transporte Total = Base + Acertos
+    // Vale Transporte Total
     const vtTotal = vtBase + vtAcertos;
 
     const vr = Number(colaborador.vale_refeicao) || 0;
     const outros = Number(colaborador.outros_beneficios) || 0;
-    const isSocio = colaborador.tipo === "socio";
-    const isFolguista = colaborador.tipo === "folguista";
-    const temEncargos = !isSocio && !isFolguista; // só funcionário tem encargos
 
-    // SÓCIOS e FOLGUISTAS: não têm encargos trabalhistas
-    // FUNCIONÁRIOS: têm INSS, FGTS, 13º, férias
+    // Encargos trabalhistas (SÓ para funcionário CLT)
     const inssEmpresa = temEncargos ? salario * 0.20 : 0;
     const fgts = temEncargos ? salario * 0.08 : 0;
     const decimoTerceiroProvisao = temEncargos ? salario / 12 : 0;
     const feriasProvisao = temEncargos ? (salario / 12) * 1.3333 : 0;
 
-    // Custos variáveis do mês (excluindo os acertos de transporte já somados no VT Total)
+    // Custos variáveis do mês
     const custosVariaveisNaoTransporte = custos
       .filter(c => !tiposAcertoTransporte.includes(c.tipo))
       .reduce((s, c) => s + Number(c.valor), 0);
 
     const custosVariaveisTotal = custos.reduce((s, c) => s + Number(c.valor), 0);
 
-    // Custo real mensal = Salário + Encargos + VT Total + VR + Outros + Custos Variáveis Outros
-    const custoRealMensal = salario + inssEmpresa + fgts + decimoTerceiroProvisao + feriasProvisao + vtTotal + vr + outros + custosVariaveisNaoTransporte;
+    // CUSTO REAL MENSAL:
+    // - FOLGUISTA: Custa APENAS o que for efetivamente pago/lançado no mês em colaborador_custos (diárias + transportes reais)
+    // - SÓCIO: Pró-labore + retiradas
+    // - FUNCIONÁRIO: Salário + Encargos + VT + VR + Outros + Variáveis
+    let custoRealMensal = 0;
+    if (isFolguista) {
+      custoRealMensal = custosVariaveisTotal;
+    } else if (isSocio) {
+      custoRealMensal = salario + custosVariaveisTotal;
+    } else {
+      custoRealMensal = salario + inssEmpresa + fgts + decimoTerceiroProvisao + feriasProvisao + vtTotal + vr + outros + custosVariaveisNaoTransporte;
+    }
 
-    // Custo por dia e por hora (considerando 6 dias de trabalho por semana)
-    const custoPorDia = custoRealMensal / (diasUteis || 26);
+    // CUSTO POR DIA:
+    // - FOLGUISTA: Valor da diária configurada (salario ou vtDiario) ou média do pago pelos dias contratados
+    let custoPorDia = 0;
+    if (isFolguista) {
+      custoPorDia = salario > 0 ? salario : (vtDiario > 0 ? vtDiario : (custosVariaveisTotal > 0 ? custosVariaveisTotal : 0));
+    } else {
+      custoPorDia = custoRealMensal / (diasUteis || 26);
+    }
+
     const custoPorHora = colaborador.carga_horaria_semanal > 0 ? custoPorDia / (colaborador.carga_horaria_semanal / 6) : 0;
 
     // Reserva para rescisão (SÓ para funcionários)

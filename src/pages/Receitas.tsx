@@ -58,6 +58,7 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { useMediaMensalReceitas } from "@/domains/finance/hooks/useMediaMensalReceitas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
 import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
@@ -121,6 +122,8 @@ const Receitas = () => {
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
+
+  const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalReceitas();
  
   // Busca a receita do dia atual de forma independente (sempre do dia de hoje)
   const hojeLocalStr = (() => {
@@ -333,7 +336,6 @@ const Receitas = () => {
     receitasFiltradas, 
     receitasAgrupadas, 
     totalReceitas, 
-    mediaMensal, 
     totalReceitasDoDia,
     metodoList,
     hourlyData,
@@ -443,7 +445,6 @@ const Receitas = () => {
       receitasFiltradas: filtradas,
       receitasAgrupadas: grupos,
       totalReceitas: total,
-      mediaMensal: media,
       totalReceitasDoDia,
       metodoList,
       hourlyData,
@@ -525,12 +526,12 @@ const Receitas = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Média Mensal</p>
-                  {loading ? (
+                  <p className="text-sm text-muted-foreground">Média Mensal (6 Meses)</p>
+                  {loadingMedia ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {mediaMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      R$ {mediaMensalCalculada.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   )}
                 </div>
