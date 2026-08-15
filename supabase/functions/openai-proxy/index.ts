@@ -973,15 +973,19 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-  const jwt = authHeader.replace("Bearer ", "");
-  const payload = JSON.parse(atob(jwt.split(".")[1]));
-  const userId = payload.sub;
-  if (!userId) {
-    return new Response(JSON.stringify({ error: "Invalid token" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  const token = authHeader.replace("Bearer ", "").trim();
+  const authClient = createClient(supabaseUrl, supabaseAnonKey);
+  const { data: { user }, error: authError } = await authClient.auth.getUser(token);
+
+  if (authError || !user) {
+    return new Response(JSON.stringify({ error: "Invalid token or expired session" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
   }
+
+  const userId = user.id;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");

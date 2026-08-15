@@ -104,6 +104,9 @@ export function getLucideCategoryInfo(categoriaNome?: string): CategoryIconInfo 
   return { icon: Tag, colorBg: "bg-gray-500", colorText: "text-gray-500" };
 }
 
+import { calcularPeriodoFatura } from "@/domains/finance/hooks/useFaturasCartao";
+import { useFaturaCartao } from "@/domains/finance/hooks/useFaturaCartao";
+
 interface FaturaCartaoModalProps {
   cartao: ContaUsuario | null;
   open: boolean;
@@ -118,13 +121,12 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const { toast } = useToast();
   const [dataRef, setDataRef] = useState<Date>(new Date());
   
-  // Estados da Barra de Filtros Organizze
+  // Estados da Barra de Filtros
   const [filtroTipo, setFiltroTipo] = useState<string>("todos");
   const [filtroCategoria, setFiltroCategoria] = useState<string>("todas");
   const [filtroTag, setFiltroTag] = useState<string>("todas");
   const [busca, setBusca] = useState<string>("");
   const [mostrarCampoBusca, setMostrarCampoBusca] = useState<boolean>(false);
-  // Modo Fatura Completa: mostra TODOS os lançamentos do cartão (parcelas de meses anteriores incluídas)
   const [modoFaturaCompleta, setModoFaturaCompleta] = useState<boolean>(true);
 
   const { createDivida } = useDividas();
@@ -134,47 +136,60 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
 
   const mesFaturaNum = dataRef.getMonth() + 1;
   const anoFaturaNum = dataRef.getFullYear();
+  const mesReferenciaStr = `${anoFaturaNum}-${String(mesFaturaNum).padStart(2, "0")}`;
 
-  // Busca lançamentos por PERÍODO DE FECHAMENTO (data_inicio a data_fechamento)
-  const { despesas: despesasFatura, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
+  // 1. Hook Único Centralizado para Fatura Oficial & Transações
+  const {
+    data: faturaData,
+    refetch: refetchFatura
+  } = useFaturaCartao({
     cartaoId: cartao?.id,
-    mesFatura: mesFaturaNum,
-    anoFatura: anoFaturaNum,
-    cartaoInfo: cartao,
+    mesReferencia: mesReferenciaStr,
   });
 
-  // Busca fatura do Mês Anterior (mês - 1) conforme especificação do PDF
+  const transacoesFatura = faturaData?.transacoes || [];
+  const importacao = faturaData?.importacao || null;
+  const totalLancamentos = faturaData?.totalLancamentos || 0;
+  const totalFatura = faturaData?.totalFatura || 0;
+  const ajustesFatura = faturaData?.ajustesFatura || 0;
+
+  // 2. Busca fatura do Mês Anterior (mês - 1)
   const mesAnteriorDate = subMonths(dataRef, 1);
-  const mesAnteriorNum = mesAnteriorDate.getMonth() + 1;
-  const anoAnteriorNum = mesAnteriorDate.getFullYear();
+  const mesAnteriorRefStr = `${mesAnteriorDate.getFullYear()}-${String(mesAnteriorDate.getMonth() + 1).padStart(2, "0")}`;
 
-  const { totalFatura: totalFaturaMesAnterior } = useComprasFatura({
+  const { data: faturaMesAnteriorData, refetch: refetchMesAnterior } = useFaturaCartao({
     cartaoId: cartao?.id,
-    mesFatura: mesAnteriorNum,
-    anoFatura: anoAnteriorNum,
-    cartaoInfo: cartao,
+    mesReferencia: mesAnteriorRefStr,
   });
 
-  const { despesas: todasDespesasCartao, refetch: refetchDespesas } = useDespesas();
+  const totalFaturaMesAnterior = faturaMesAnteriorData?.totalFatura || 0;
 
   // Refetch automático ao abrir o modal para garantir dados frescos do Supabase
   useEffect(() => {
     if (open) {
-      refetchDespesas();
       refetchFatura();
+      refetchMesAnterior();
     }
   }, [open]);
 
-  // Fonte de dados: utiliza estritamente o filtro por período de fechamento da fatura
-  const fonteBase = despesasFatura;
+  // Período de datas padrão
+  const periodo = calcularPeriodoFatura(cartao || {}, mesFaturaNum, anoFaturaNum);
 
   // Datas formatadas para exibição
-  const dataFechamentoStr = periodo.data_fechamento
-    ? periodo.data_fechamento.split("-").reverse().join("/")
-    : "--/--/--";
-  const dataVencimentoStr = periodo.data_vencimento
-    ? periodo.data_vencimento.split("-").reverse().join("/")
-    : "--/--/--";
+  const dataFechamentoStr = cartao?.data_fechamento
+    ? format(new Date(cartao.data_fechamento + "T00:00:00"), "dd/MM/yyyy")
+    : periodo.data_fechamento
+      ? periodo.data_fechamento.split("-").reverse().join("/")
+      : "--/--/--";
+
+  const dataVencimentoStr = cartao?.data_vencimento
+    ? format(new Date(cartao.data_vencimento + "T00:00:00"), "dd/MM/yyyy")
+    : periodo.data_vencimento
+      ? periodo.data_vencimento.split("-").reverse().join("/")
+      : "--/--/--";
+
+  // Fonte de dados: utiliza estritamente o hook useFaturaCartao
+  const fonteBase = transacoesFatura || [];
 
   // Categorias únicas para o dropdown
   const categoriasUnicas = useMemo(() => {
@@ -200,7 +215,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         data: d.data,
         dataFormatted: format(dataDesp, "dd/MM/yy"),
         parcelaInfo: null,
-        status: d.pago ? "quitada" : "pendente",
+        status: "pendente",
         categoryInfo,
       };
     });
@@ -221,7 +236,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     return items.sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
   }, [fonteBase, filtroCategoria, busca]);
 
-  const totalFatura = useMemo(() =>
+  const totalLancamentosFiltrados = useMemo(() =>
     lancamentos.reduce((acc, i) => acc + i.valor, 0)
   , [lancamentos]);
 
@@ -336,11 +351,19 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
               </span>
             </div>
             <div className="flex items-center justify-between text-muted-foreground">
-              <span>FATURA ATUAL</span>
-              <span className="font-semibold text-rose-500">
-                R$ {totalFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              <span>TOTAL LANÇAMENTOS</span>
+              <span className="font-semibold text-foreground">
+                R$ {totalLancamentos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </span>
             </div>
+            {ajustesFatura > 0 && (
+              <div className="flex items-center justify-between text-muted-foreground text-[11px]">
+                <span>ENCARGOS / AJUSTES</span>
+                <span className="font-semibold text-sky-400">
+                  + R$ {ajustesFatura.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-between text-muted-foreground pt-1 border-t border-border/40">
               <span>FECHAMENTO</span>
               <span className="font-semibold text-sky-500">{dataFechamentoStr}</span>

@@ -37,6 +37,11 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
   const {
     transacoes,
     valorTotalFatura,
+    totalLancamentos,
+    totalFaturaOficial,
+    totalFaturaCalculado,
+    ajustesEncargos,
+    diferencaNaoExplicada,
     bancoDetectado,
     isAnalisando,
     isExtraindoPDF,
@@ -52,10 +57,13 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
     limpar,
   } = useImportarFatura();
 
+  const [confirmarDiferenca, setConfirmarDiferenca] = useState(false);
+
   const handleClose = () => {
     limpar();
     setStep("config");
     setTextoFatura("");
+    setConfirmarDiferenca(false);
     onClose();
   };
 
@@ -81,24 +89,29 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
   };
 
   const handleImportar = async () => {
-    const selecionadas = transacoes.filter((t) => t.selecionada && !t.isDuplicada);
-    if (selecionadas.length === 0) return;
-
+    if (selecionadasCount === 0) return;
     setIsImporting(true);
     try {
-      await importar(contaId, mesReferencia, vencimento, selecionadas);
+      await importar(
+        contaId,
+        mesReferencia,
+        vencimento,
+        transacoes,
+        {
+          totalFatura: totalFaturaCalculado,
+          totalLancamentos: totalLancamentos,
+          ajustes: ajustesEncargos,
+        }
+      );
       handleClose();
     } catch (err) {
-      console.error(err);
+      console.error("Erro ao importar:", err);
     } finally {
       setIsImporting(false);
     }
   };
 
-  const selecionadasCount = transacoes.filter((t) => t.selecionada && !t.isDuplicada).length;
-  const totalValorSelecionado = transacoes
-    .filter((t) => t.selecionada && !t.isDuplicada)
-    .reduce((acc, t) => acc + t.valor, 0);
+  const selecionadasCount = transacoes.filter((t) => t.selecionada).length;
 
   const getBancoBadgeColor = (banco: string) => {
     switch (banco) {
@@ -114,43 +127,39 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => (!open ? handleClose() : null)}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl border-border/60 bg-card p-6 shadow-2xl">
-        <DialogHeader className="border-b border-border/40 pb-4">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-[#0B132B] border-[#1E2942] text-foreground">
+        <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
               <CreditCard className="w-5 h-5" />
             </div>
             <div>
-              <DialogTitle className="text-lg font-bold">Importar Fatura de Cartão 2.0</DialogTitle>
+              <DialogTitle className="text-lg font-bold text-foreground">
+                Importar Fatura de Cartão 2.0 (Atômica & Segura)
+              </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
-                Suporta faturas Sicoob, Nubank e Itaú via Upload de PDF ou Recorte de Texto.
+                Importação com integridade transacional, validação de total oficial e bloqueio de duplicatas.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         {step === "config" ? (
-          <div className="space-y-5 pt-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-1.5 sm:col-span-1">
+          <div className="space-y-4 pt-4 text-xs">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Cartão de Crédito *</Label>
                 <Select value={contaId} onValueChange={setContaId}>
-                  <SelectTrigger className="h-10 text-xs rounded-xl bg-background border-border/60">
+                  <SelectTrigger className="text-xs rounded-xl bg-background border-border/60">
                     <SelectValue placeholder="Selecione o cartão" />
                   </SelectTrigger>
                   <SelectContent>
-                    {cartoes.length === 0 ? (
-                      <SelectItem value="none" disabled>
-                        Nenhum cartão cadastrado
+                    {cartoes.map((c) => (
+                      <SelectItem key={c.id} value={c.id} className="text-xs">
+                        {c.nome}
                       </SelectItem>
-                    ) : (
-                      cartoes.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.nome}
-                        </SelectItem>
-                      ))
-                    )}
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -161,7 +170,7 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
                   type="month"
                   value={mesReferencia}
                   onChange={(e) => setMesReferencia(e.target.value)}
-                  className="h-10 text-xs rounded-xl bg-background border-border/60"
+                  className="text-xs rounded-xl bg-background border-border/60"
                 />
               </div>
 
@@ -171,46 +180,45 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
                   type="date"
                   value={vencimento}
                   onChange={(e) => setVencimento(e.target.value)}
-                  className="h-10 text-xs rounded-xl bg-background border-border/60"
+                  className="text-xs rounded-xl bg-background border-border/60"
                 />
               </div>
             </div>
 
-            {/* Opções de Entrada: Upload PDF ou Cole o Texto */}
-            <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <Label className="text-xs font-semibold">Conteúdo da Fatura (PDF ou Texto) *</Label>
-                <div className="relative">
-                  <Input
-                    type="file"
-                    accept=".pdf"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    id="pdf-file-upload"
-                  />
-                  <Label
-                    htmlFor="pdf-file-upload"
-                    className="inline-flex items-center gap-1.5 text-xs text-amber-500 hover:text-amber-600 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-3 py-1.5 rounded-lg cursor-pointer transition-colors font-medium"
-                  >
-                    {isExtraindoPDF ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Extraindo PDF...
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="w-3.5 h-3.5" /> Upload de Arquivo PDF
-                      </>
-                    )}
-                  </Label>
-                </div>
+            <div className="space-y-1.5 pt-1">
+              <Label className="text-xs font-semibold flex items-center justify-between">
+                <span>Upload de Arquivo PDF (Extração Automática)</span>
+                <span className="text-[11px] text-muted-foreground font-normal">Sicoob, Nubank, Itaú</span>
+              </Label>
+              <div className="flex items-center gap-3">
+                <Input
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileUpload}
+                  disabled={isExtraindoPDF}
+                  className="text-xs file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500/10 file:text-amber-500 hover:file:bg-amber-500/20 bg-background border-border/60 cursor-pointer"
+                />
+                {isExtraindoPDF && (
+                  <span className="flex items-center gap-1.5 text-xs text-amber-500 font-medium">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Extraindo PDF...
+                  </span>
+                )}
               </div>
+            </div>
 
-              <Textarea
-                rows={9}
+            <div className="space-y-1.5 pt-1">
+              <Label className="text-xs font-semibold flex items-center justify-between">
+                <span>Texto da Fatura (ou texto extraído do PDF acima) *</span>
+                <span className="text-[11px] text-muted-foreground font-normal">
+                  {textoFatura.length > 0 ? `${textoFatura.length} caracteres` : "Aguardando entrada"}
+                </span>
+              </Label>
+              <textarea
+                rows={7}
                 value={textoFatura}
                 onChange={(e) => setTextoFatura(e.target.value)}
-                placeholder={`Cole o texto extraído do PDF da fatura ou faça upload do arquivo PDF acima.\n\nExemplos Suportados:\n- Sicoob: 04/06 | Shopee*KIMI PENG ELE 03/03 | 103,55\n- Nubank: 04 JUN Shopee*KIMI PENG ELE 03/03 R$ 103,55\n- Itaú: 04/06 SHOPEE*KIMI PENG ELE 03/03 103,55`}
-                className="text-xs font-mono rounded-xl bg-background border-border/60 leading-relaxed"
+                placeholder={`Cole o texto extraído do PDF da fatura ou faça upload do arquivo PDF acima.`}
+                className="text-xs font-mono rounded-xl bg-background border-border/60 leading-relaxed w-full p-2.5"
               />
             </div>
 
@@ -230,50 +238,90 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
           </div>
         ) : (
           <div className="space-y-4 pt-4">
-            {/* Barra de Ações Rápidas & Banco Detectado */}
-            <div className="flex flex-col gap-2.5 bg-muted/40 p-3.5 rounded-xl border border-border/50 text-xs">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <Badge variant="outline" className={`capitalize font-bold text-[11px] px-2.5 py-0.5 ${getBancoBadgeColor(bancoDetectado)}`}>
-                    Banco: {bancoDetectado}
-                  </Badge>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowDebugText(!showDebugText)}
-                    className="text-[11px] h-7 gap-1 text-muted-foreground hover:text-foreground"
-                  >
-                    <FileText className="w-3 h-3" /> {showDebugText ? "Ocultar Texto" : "Ver Texto Extraído"}
-                  </Button>
-                </div>
-                <div className="text-amber-500 font-semibold bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-lg text-xs">
-                  Valor Total da Fatura: <strong>{formatCurrency(valorTotalFatura)}</strong>
-                </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-2xl bg-muted/30 border border-border/60 text-xs">
+              <div className="bg-background/60 p-2.5 rounded-xl border border-border/40">
+                <span className="text-[10px] text-muted-foreground font-medium block">Lançamentos selecionados</span>
+                <span className="font-bold text-foreground text-sm mt-0.5 block">
+                  {formatCurrency(totalLancamentos)}
+                </span>
+                <span className="text-[9px] text-slate-400 font-mono">
+                  {selecionadasCount} de {transacoes.length} itens
+                </span>
               </div>
 
-              <div className="flex items-center justify-between gap-3 flex-wrap pt-1 border-t border-border/30">
-                <span className="text-muted-foreground">
-                  <strong className="text-foreground">{selecionadasCount}</strong> de <strong>{transacoes.length}</strong> selecionadas (Total Selecionado: <strong className="text-foreground">{formatCurrency(totalValorSelecionado)}</strong>)
+              <div className="bg-background/60 p-2.5 rounded-xl border border-border/40">
+                <span className="text-[10px] text-muted-foreground font-medium block">Total oficial da fatura</span>
+                <span className="font-bold text-amber-500 text-sm mt-0.5 block">
+                  {totalFaturaOficial !== null ? formatCurrency(totalFaturaOficial) : formatCurrency(totalFaturaCalculado)}
                 </span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button variant="outline" size="sm" onClick={selecionarTodas} className="text-xs h-8 rounded-lg">
-                    Selecionar Todas
+                <span className="text-[9px] text-slate-400">
+                  {totalFaturaOficial !== null ? "Linha oficial do PDF" : "Calculado por soma"}
+                </span>
+              </div>
+
+              <div className="bg-background/60 p-2.5 rounded-xl border border-border/40">
+                <span className="text-[10px] text-muted-foreground font-medium block">Ajustes / encargos</span>
+                <span className="font-bold text-sky-400 text-sm mt-0.5 block">
+                  {formatCurrency(ajustesEncargos)}
+                </span>
+                <span className="text-[9px] text-slate-400">Proteção/taxas</span>
+              </div>
+
+              <div className={`p-2.5 rounded-xl border ${diferencaNaoExplicada > 0.01 ? "bg-rose-500/10 border-rose-500/30 text-rose-400" : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"}`}>
+                <span className="text-[10px] opacity-80 font-medium block">Diferença não explicada</span>
+                <span className="font-bold text-sm mt-0.5 block">
+                  {formatCurrency(diferencaNaoExplicada)}
+                </span>
+                <span className="text-[9px] opacity-80">
+                  {diferencaNaoExplicada <= 0.01 ? "100% Conciliado" : "Requer Atenção"}
+                </span>
+              </div>
+            </div>
+
+            {diferencaNaoExplicada > 0.01 && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300">
+                <span>
+                  ⚠️ Há uma diferença de <strong>{formatCurrency(diferencaNaoExplicada)}</strong> entre o total oficial e a soma dos lançamentos.
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer shrink-0 font-medium">
+                  <Checkbox checked={confirmarDiferenca} onCheckedChange={(v) => setConfirmarDiferenca(!!v)} />
+                  <span>Estou ciente</span>
+                </label>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-3 flex-wrap bg-muted/40 p-2.5 rounded-xl border border-border/50 text-xs">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <Badge variant="outline" className={`capitalize font-bold text-[11px] px-2.5 py-0.5 ${getBancoBadgeColor(bancoDetectado)}`}>
+                  Banco: {bancoDetectado}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDebugText(!showDebugText)}
+                  className="text-[11px] h-7 gap-1 text-muted-foreground hover:text-foreground"
+                >
+                  <FileText className="w-3 h-3" /> {showDebugText ? "Ocultar Texto" : "Ver Texto Extraído"}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button variant="outline" size="sm" onClick={selecionarTodas} className="text-xs h-8 rounded-lg">
+                  Selecionar Todas
+                </Button>
+                <Button variant="outline" size="sm" onClick={desselecionarDuplicadas} className="text-xs h-8 rounded-lg">
+                  Desselecionar Duplicadas
+                </Button>
+                {transacoes.some((t) => t.isDuplicada) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => analisar(textoFatura, contaId, mesReferencia, vencimento, true)}
+                    className="text-xs h-8 rounded-lg border-amber-500/50 text-amber-500 hover:bg-amber-500/10 font-semibold gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Ignorar Duplicatas
                   </Button>
-                  <Button variant="outline" size="sm" onClick={desselecionarDuplicadas} className="text-xs h-8 rounded-lg">
-                    Desselecionar Duplicadas
-                  </Button>
-                  {transacoes.some((t) => t.isDuplicada) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => analisar(textoFatura, contaId, mesReferencia, vencimento, true)}
-                      className="text-xs h-8 rounded-lg border-amber-500/50 text-amber-500 hover:bg-amber-500/10 font-semibold gap-1.5"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Importar Mesmo Assim (Ignorar Duplicatas)
-                    </Button>
-                  )}
-                </div>
+                )}
               </div>
             </div>
 

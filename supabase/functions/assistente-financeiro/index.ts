@@ -10,9 +10,25 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { pergunta, userId } = await req.json();
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Token de autorização não fornecido ou inválido." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const token = authHeader.replace("Bearer ", "").trim();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const authClient = createClient(supabaseUrl, supabaseAnonKey);
+    const { data: { user }, error: authError } = await authClient.auth.getUser(token);
+
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Sessão inválida ou expirada." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const userId = user.id;
+    const { pergunta } = await req.json();
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
     });

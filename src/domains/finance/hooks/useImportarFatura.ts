@@ -51,7 +51,20 @@ function sugerirCategoria(descricao: string): string | undefined {
   return undefined;
 }
 
-// ========== HASH ==========
+// ========== HASH SHA-256 PARA BYTES ORIGINAIS DO PDF ==========
+export async function calcularHashArrayBuffer(buffer: ArrayBuffer): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function calcularHashStringSHA256(str: string): Promise<string> {
+  const enc = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", enc);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function hashString(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -71,8 +84,9 @@ function hashTransacoes(transacoes: TransacaoParseada[]): string {
 }
 
 // ========== EXTRACAO DE PDF ==========
-export async function extrairTextoDoPDF(file: File): Promise<string> {
+export async function extrairTextoDoPDF(file: File): Promise<{ texto: string; hashBytes: string }> {
   const arrayBuffer = await file.arrayBuffer();
+  const hashBytes = await calcularHashArrayBuffer(arrayBuffer);
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let textoCompleto = "";
 
@@ -83,7 +97,7 @@ export async function extrairTextoDoPDF(file: File): Promise<string> {
     textoCompleto += textItems + "\n";
   }
 
-  return textoCompleto;
+  return { texto: textoCompleto, hashBytes };
 }
 
 // ========== DETECCAO DE BANCO ==========
@@ -390,6 +404,71 @@ export function parsearFatura(texto: string, anoFatura: number): { banco: BancoD
   }
 }
 
+export interface TotaisFaturaExtraidos {
+  totalFaturaOficial: number | null;
+  ajustesEncargos: number;
+}
+
+export function extrairTotalDaFatura(texto: string): TotaisFaturaExtraidos {
+  let totalFaturaOficial: number | null = null;
+  let ajustesEncargos = 0;
+
+  // 1. Procurar linha explícita "Total da Fatura" ou "Total da Fatura: R$ 16.053,77" ou "TOTAL DA FATURA 16.053,77"
+  const matchTotalFatura = texto.match(/Total\s+da\s+Fatura[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i) ||
+                           texto.match(/Valor\s+Total\s+da\s+Fatura[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i) ||
+                           texto.match(/Total\s+a\s+Pagar[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i);
+
+  if (matchTotalFatura) {
+    const rawVal = matchTotalFatura[1].replace(/\./g, "").replace(",", ".");
+    totalFaturaOficial = parseFloat(rawVal);
+  }
+
+  // 2. Extrair encargos/proteção/ajustes conhecidos (ex: "PROTEÇÃO PERDA OU ROUBO 3,20")
+  const matchProtecao = texto.match(/PROTE[ÇC][ÃA]O\s+PERDA\s+OU\s+ROUBO[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i);
+  if (matchProtecao) {
+    const val = parseFloat(matchProtecao[1].replace(/\./g, "").replace(",", "."));
+    if (!isNaN(val)) ajustesEncargos += val;
+  }
+
+  const matchEncargos = texto.match(/ENCARGOS[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i);
+  if (matchEncargos) {
+    const val = parseFloat(matchEncargos[1].replace(/\./g, "").replace(",", "."));
+    if (!isNaN(val)) ajustesEncargos += val;
+  }
+
+  const matchIof = texto.match(/IOF[:\s]+(?:R\$\s*)?([\d\.]+,\d{2})/i);
+  if (matchIof) {
+    const val = parseFloat(matchIof[1].replace(/\./g, "").replace(",", "."));
+    if (!isNaN(val)) ajustesEncargos += val;
+  }
+
+  return { totalFaturaOficial, ajustesEncargos };
+}
+
+export async function gerarHashLinha(
+  data: string,
+  descricao: string,
+  valor: number,
+  parcelaAtual?: number,
+  totalParcelas?: number,
+  numeroLinha?: number
+): Promise<string> {
+  const normDesc = (descricao || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const raw = `${data}|${normDesc}|${valor.toFixed(2)}|${parcelaAtual || 1}|${totalParcelas || 1}|${numeroLinha || 0}`;
+  const msgBuffer = new TextEncoder().encode(raw);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function gerarHashDocumento(texto: string, transacoes: any[]): Promise<string> {
+  const lineHashes = transacoes.map(t => t.hash_importacao || `${t.data}-${t.descricao}-${t.valor}`).join(";");
+  const msgBuffer = new TextEncoder().encode(lineHashes || texto.slice(0, 1000));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function extrairDatasDaFatura(texto: string): { fechamento: string | null; vencimento: string | null; diaFechamento: number | null; diaVencimento: number | null } {
   let fechamento: string | null = null;
   let vencimento: string | null = null;
@@ -424,6 +503,9 @@ export function useImportarFatura() {
   const [bancoDetectado, setBancoDetectado] = useState<BancoDetectado>("desconhecido");
   const [isAnalisando, setIsAnalisando] = useState(false);
   const [isExtraindoPDF, setIsExtraindoPDF] = useState(false);
+  const [totalFaturaOficial, setTotalFaturaOficial] = useState<number | null>(null);
+  const [ajustesEncargos, setAjustesEncargos] = useState<number>(0);
+  const [hashDocumento, setHashDocumento] = useState<string>("");
   
   const cartoesQuery = useQuery({
     queryKey: ["contas-cartoes"],
@@ -454,7 +536,8 @@ export function useImportarFatura() {
   const extrairPDF = useCallback(async (file: File): Promise<string> => {
     setIsExtraindoPDF(true);
     try {
-      const texto = await extrairTextoDoPDF(file);
+      const { texto, hashBytes } = await extrairTextoDoPDF(file);
+      setHashDocumento(hashBytes);
       return texto;
     } catch (err) {
       toast({ title: "Erro ao ler PDF", description: "Não foi possível extrair o texto do PDF.", variant: "destructive" });
@@ -486,6 +569,11 @@ export function useImportarFatura() {
         }
       }
 
+      // Extrair totais oficiais da fatura e encargos
+      const { totalFaturaOficial: totOficial, ajustesEncargos: ajustes } = extrairTotalDaFatura(texto);
+      setTotalFaturaOficial(totOficial);
+      setAjustesEncargos(ajustes);
+
       const anoFatura = parseInt(mesReferencia.split("-")[0]);
       const { banco, transacoes: parseadas } = parsearFatura(texto, anoFatura);
       setBancoDetectado(banco);
@@ -493,7 +581,7 @@ export function useImportarFatura() {
       if (parseadas.length === 0) {
         toast({
           title: "Nenhuma transação encontrada",
-          description: "Não foi possível extrair automaticamente. Tente:\n1. Copiar e colar o texto manualmente (Ctrl+A, Ctrl+C no PDF, Ctrl+V aqui)\n2. Verificar se o PDF não está protegido contra cópia\n3. Verificar se o banco está na lista suportada (Sicoob, Nubank, Itaú)",
+          description: "Não foi possível extrair automaticamente. Tente colar o texto manualmente ou verificar se o banco é suportado.",
           variant: "default",
         });
         setTransacoes([]);
@@ -505,31 +593,60 @@ export function useImportarFatura() {
         categoriasMap.set(cat.nome.toUpperCase(), cat.id);
       }
       
-      const parseadasComCat = parseadas.map(t => {
-        if (t.categoria_sugerida) {
-          const catId = categoriasMap.get(t.categoria_sugerida.toUpperCase());
-          if (catId) {
-            return { ...t, categoria_id: catId, categoria_nome: t.categoria_sugerida };
+      // Calcular Hashes de cada linha
+      const parseadasComHashes = await Promise.all(
+        parseadas.map(async (t, index) => {
+          const numeroLinha = index + 1;
+          const hashLinha = await gerarHashLinha(
+            t.data,
+            t.descricao,
+            t.valor,
+            t.parcela_atual,
+            t.total_parcelas,
+            numeroLinha
+          );
+
+          let catId = t.categoria_id;
+          let catNome = t.categoria_nome;
+
+          if (t.categoria_sugerida) {
+            const idEncontrado = categoriasMap.get(t.categoria_sugerida.toUpperCase());
+            if (idEncontrado) {
+              catId = idEncontrado;
+              catNome = t.categoria_sugerida;
+            }
           }
-        }
-        return t;
-      });
+
+          return {
+            ...t,
+            categoria_id: catId,
+            categoria_nome: catNome,
+            numero_linha: numeroLinha,
+            hash_importacao: hashLinha,
+          };
+        })
+      );
+
+      const docHash = await gerarHashDocumento(texto, parseadasComHashes);
+      setHashDocumento(docHash);
       
       let comStatus = [];
 
       if (ignorarDuplicatas) {
-        comStatus = parseadasComCat.map(t => ({ ...t, isDuplicada: false, selecionada: true }));
+        comStatus = parseadasComHashes.map(t => ({ ...t, isDuplicada: false, selecionada: true }));
       } else {
         const { data: existentes } = await supabase
           .from("transacoes")
-          .select("descricao, valor, data, parcela_atual, total_parcelas")
+          .select("descricao, valor, data, parcela_atual, total_parcelas, hash_importacao")
           .eq("tipo", "despesa")
           .or(`cartao_id.eq.${contaId},conta_id.eq.${contaId}`)
-          .gte("data", `${anoFatura}-01-01`)
-          .lte("data", `${anoFatura}-12-31`);
+          .eq("mes_referencia", mesReferencia);
         
-        comStatus = parseadasComCat.map(t => {
+        comStatus = parseadasComHashes.map(t => {
           const duplicada = existentes?.some(e => {
+            if (e.hash_importacao && t.hash_importacao) {
+              return e.hash_importacao === t.hash_importacao;
+            }
             const mesmaDesc = e.descricao?.toLowerCase().includes(t.descricao.toLowerCase()) || 
                              t.descricao.toLowerCase().includes(e.descricao?.toLowerCase() || "");
             const mesmoValor = Math.abs(e.valor - t.valor) < 0.01;
@@ -554,61 +671,103 @@ export function useImportarFatura() {
     }
   }, [toast, categoriasQuery.data]);
   
-  const importar = useCallback(async (contaId: string, mesReferencia: string, vencimento: string, transacoesSelecionadas: TransacaoParseada[]) => {
+  const importar = useCallback(async (
+    contaId: string,
+    mesReferencia: string,
+    vencimento: string,
+    transacoesSelecionadas: TransacaoParseada[],
+    totais?: { totalFatura?: number; totalLancamentos?: number; ajustes?: number }
+  ) => {
     try {
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Não autenticado");
       
-      let criadas = 0;
-      
-      for (const t of transacoesSelecionadas) {
-        if (!t.selecionada) continue;
-        
-        const { error } = await supabase.from("transacoes").insert({
-          user_id: user.id,
-          workspace_id: activeWorkspace?.id || null,
-          tipo: "despesa",
-          descricao: t.total_parcelas && t.total_parcelas > 1 
-            ? `${t.descricao} (${t.parcela_atual}/${t.total_parcelas})`
-            : t.descricao,
-          valor: t.valor,
-          data: t.data,
-          mes_referencia: mesReferencia,
-          categoria_id: t.categoria_id || null,
-          cartao_id: contaId,
-          conta_id: contaId,
-          metodo_pagamento: "cartao_credito",
-          parcela_atual: t.parcela_atual,
-          total_parcelas: t.total_parcelas,
-        });
-        
-        if (error) throw error;
-        criadas++;
+      const payloadTransacoes = await Promise.all(
+        transacoesSelecionadas
+          .filter(t => t.selecionada)
+          .map(async (t, idx) => {
+            const linhaNum = idx + 1;
+            const hashLinha = await calcularHashStringSHA256(
+              `${t.data}|${t.descricao.trim()}|${Number(t.valor).toFixed(2)}|${t.parcela_atual || 1}|${t.total_parcelas || 1}|${linhaNum}`
+            );
+            return {
+              data: t.data,
+              descricao: t.descricao.trim(),
+              valor: t.valor, // Estritamente o valor mensal da parcela exibido no PDF
+              categoria_id: t.categoria_id || null,
+              parcela_atual: t.parcela_atual || null,
+              total_parcelas: t.total_parcelas || null,
+              numero_linha: linhaNum,
+              hash_importacao: hashLinha,
+            };
+          })
+      );
+
+      if (payloadTransacoes.length === 0) {
+        throw new Error("Nenhuma transação selecionada para importação.");
       }
-      
-      const hash = hashTransacoes(transacoes);
-      await supabase.from("fatura_cartao_importacoes").insert({
-        user_id: user.id,
-        workspace_id: activeWorkspace?.id || null,
-        conta_id: contaId,
-        mes_referencia: mesReferencia,
-        vencimento: vencimento || null,
-        hash_transacoes: hash,
-        transacoes_criadas: criadas,
-      });
-      
+
+      const totalLanc = totais?.totalLancamentos ?? payloadTransacoes.reduce((acc, t) => acc + Number(t.valor), 0);
+      const totalFat = totais?.totalFatura ?? (totalFaturaOficial || (totalLanc + (totais?.ajustes || ajustesEncargos)));
+      const ajusFat = totais?.ajustes ?? ajustesEncargos;
+
+      // 1. Tentar executar via Edge Function importar-fatura
+      let rpcData: any = null;
+      try {
+        const { data: edgeData, error: edgeError } = await supabase.functions.invoke("importar-fatura", {
+          body: {
+            workspace_id: activeWorkspace?.id || null,
+            cartao_id: contaId,
+            mes_referencia: mesReferencia,
+            vencimento: vencimento || null,
+            total_lancamentos: totalLanc,
+            total_fatura: totalFat,
+            ajustes_fatura: ajusFat,
+            hash_documento: hashDocumento || null,
+            transacoes: payloadTransacoes,
+          },
+        });
+
+        if (edgeError) {
+          throw edgeError;
+        }
+        rpcData = edgeData;
+      } catch (edgeCallErr) {
+        console.warn("[useImportarFatura] Edge Function indisponível, executando RPC direta com segurança:", edgeCallErr);
+        
+        // 2. Fallback seguro para RPC direta com PostgreSQL Security Definer & RLS
+        const { data: directRpcData, error: directRpcError } = await supabase.rpc("importar_fatura_atomica", {
+          p_workspace_id: activeWorkspace?.id || null,
+          p_cartao_id: contaId,
+          p_mes_referencia: mesReferencia,
+          p_vencimento: vencimento || null,
+          p_total_lancamentos: totalLanc,
+          p_total_fatura: totalFat,
+          p_ajustes_fatura: ajusFat,
+          p_hash_documento: hashDocumento || null,
+          p_transacoes: payloadTransacoes,
+        });
+
+        if (directRpcError) throw directRpcError;
+        rpcData = directRpcData;
+      }
+
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
       await qc.invalidateQueries({ queryKey: ["despesas"] });
+      await qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
+      await qc.invalidateQueries({ queryKey: ["contas_usuario"] });
+      await qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
       
-      toast({ title: "Importação concluída!", description: `${criadas} transações criadas.` });
+      const criadas = rpcData?.transacoes_criadas || payloadTransacoes.length;
+      toast({ title: "Importação atômica concluída com sucesso!", description: `${criadas} transações criadas e vinculadas à fatura.` });
       setTransacoes([]);
       setBancoDetectado("desconhecido");
       return criadas;
-    } catch (err) {
-      toast({ title: "Erro ao importar", description: err instanceof Error ? err.message : "Erro desconhecido", variant: "destructive" });
+    } catch (err: any) {
+      toast({ title: "Erro ao importar fatura", description: err instanceof Error ? err.message : (err?.error || "Erro desconhecido"), variant: "destructive" });
       throw err;
     }
-  }, [toast, activeWorkspace, qc, transacoes]);
+  }, [toast, activeWorkspace, qc, totalFaturaOficial, ajustesEncargos, hashDocumento]);
   
   const toggleSelecao = useCallback((id: string) => {
     setTransacoes(prev => prev.map(t => t.id === id ? { ...t, selecionada: !t.selecionada } : t));
@@ -625,10 +784,21 @@ export function useImportarFatura() {
   const desselecionarDuplicadas = useCallback(() => {
     setTransacoes(prev => prev.map(t => t.isDuplicada ? { ...t, selecionada: false } : t));
   }, []);
+
+  const totalLancamentos = transacoes.filter(t => t.selecionada).reduce((acc, t) => acc + t.valor, 0);
+  const totalFaturaCalculado = totalFaturaOficial ?? (totalLancamentos + ajustesEncargos);
+  const diferencaNaoExplicada = totalFaturaOficial !== null
+    ? Math.abs(totalFaturaOficial - (totalLancamentos + ajustesEncargos))
+    : 0;
   
   return {
     transacoes,
     valorTotalFatura: transacoes.reduce((acc, t) => acc + t.valor, 0),
+    totalLancamentos,
+    totalFaturaOficial,
+    totalFaturaCalculado,
+    ajustesEncargos,
+    diferencaNaoExplicada,
     bancoDetectado,
     isAnalisando,
     isExtraindoPDF,
@@ -643,6 +813,12 @@ export function useImportarFatura() {
     setCategoria,
     selecionarTodas,
     desselecionarDuplicadas,
-    limpar: () => { setTransacoes([]); setBancoDetectado("desconhecido"); },
+    limpar: () => {
+      setTransacoes([]);
+      setBancoDetectado("desconhecido");
+      setTotalFaturaOficial(null);
+      setAjustesEncargos(0);
+      setHashDocumento("");
+    },
   };
 }

@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import type { ElementType } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
@@ -79,16 +81,38 @@ const TIPO_ICONS: Record<string, ElementType> = {
 };
 
 export default function ContasCartoes() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas = [] } = useDividas();
   const { despesas = [] } = useDespesas();
   const { investimentos = [] } = useInvestimentos();
   const { isLocked, hasPassword } = useSenhaInvestimentos();
 
+  const { data: faturasImportadas = [] } = useQuery({
+    queryKey: ["faturas-cartao-todas"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("fatura_cartao_importacoes")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
   const [modalAberto, setModalAberto] = useState(false);
   const [contaEditando, setContaEditando] = useState<ContaUsuario | null>(null);
 
-  const [activeTab, setActiveTab] = useState("contas");
+  const [activeTab, setActiveTab] = useState(tabParam || "contas");
+
+  useEffect(() => {
+    if (tabParam && (tabParam === "contas" || tabParam === "investimentos")) {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
   const [openNovoAtivo, setOpenNovoAtivo] = useState(false);
   const [preSelectedContaId, setPreSelectedContaId] = useState<string | undefined>(undefined);
   const [showUnlockModal, setShowUnlockModal] = useState(false);
@@ -425,13 +449,35 @@ export default function ContasCartoes() {
                   const Icon = TIPO_ICONS[conta.tipo] || Building2;
                   const dividasVinculadas = dividas.filter((d) => d.conta_id === conta.id && d.status !== "quitada");
                   const totalDividas = dividasVinculadas.reduce((acc, d) => acc + Number(d.valor_restante || 0), 0);
-
                   let totalDespesasCartao = 0;
+                  let ajustesFaturaConta = 0;
+                  let totalOficialFaturaConta = 0;
+
                   if (conta.tipo === "cartao_credito") {
-                    // Determinar o período da fatura atual baseado no dia de fechamento do cartão
                     const hojeStr = format(new Date(), "yyyy-MM-dd");
-                    const { mes_fatura, ano_fatura } = determinarFaturaParaData(hojeStr, conta.dia_fechamento);
+                    let mes_fatura = 8;
+                    let ano_fatura = 2026;
+
+                    if (conta.data_fechamento) {
+                      const parts = conta.data_fechamento.split("-");
+                      ano_fatura = parseInt(parts[0]);
+                      mes_fatura = parseInt(parts[1]);
+                    } else if (conta.data_vencimento) {
+                      const parts = conta.data_vencimento.split("-");
+                      ano_fatura = parseInt(parts[0]);
+                      mes_fatura = parseInt(parts[1]);
+                    } else {
+                      const det = determinarFaturaParaData(hojeStr, conta.dia_fechamento);
+                      mes_fatura = det.mes_fatura;
+                      ano_fatura = det.ano_fatura;
+                    }
+
                     const periodo = calcularPeriodoFatura(conta, mes_fatura, ano_fatura);
+                    const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
+
+                    const temTransacoesComMesRef = despesas.some(
+                      (d: any) => (d.conta_id === conta.id || d.cartao_id === conta.id) && d.mes_referencia === mesRefAtual
+                    );
 
                     const despesasDoCartao = despesas.filter((d: any) => {
                       const pertenceCartao =
@@ -440,7 +486,10 @@ export default function ContasCartoes() {
                         ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id));
                       if (!pertenceCartao) return false;
 
-                      const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
+                      if (temTransacoesComMesRef) {
+                        return d.mes_referencia === mesRefAtual;
+                      }
+
                       if (d.mes_referencia) {
                         return d.mes_referencia === mesRefAtual;
                       }
@@ -448,93 +497,101 @@ export default function ContasCartoes() {
                       return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
                     });
                     totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
-                  } else {
-                    const despesasDoCartao = despesas.filter(
-                      (d: any) =>
-                        d.conta_id === conta.id ||
-                        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id))
+
+                    // Buscar importação oficial correspondente ao cartão e competência
+                    const impFatura = faturasImportadas.find(
+                      (f: any) => f.conta_id === conta.id && f.mes_referencia === mesRefAtual
                     );
-                    totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+
+                    ajustesFaturaConta = impFatura?.ajustes_fatura ? Number(impFatura.ajustes_fatura) : 0;
+                    totalOficialFaturaConta = impFatura?.total_fatura !== undefined && impFatura?.total_fatura !== null
+                      ? Number(impFatura.total_fatura)
+                      : (totalDespesasCartao + ajustesFaturaConta);
+                  } else {
+                    const despesasDaConta = despesas.filter(
+                      (d: any) => d.conta_id === conta.id
+                    );
+                    totalDespesasCartao = despesasDaConta.reduce((acc, d) => acc + Number(d.valor || 0), 0);
                   }
 
-                  const totalFaturaUsado = totalDividas + totalDespesasCartao;
+                  const totalFaturaUsado = totalDividas + (conta.tipo === "cartao_credito" ? totalOficialFaturaConta : totalDespesasCartao);
                   const limiteTotal = Number(conta.limite_credito || 0);
                   const limiteDisponivel = Math.max(0, limiteTotal - totalFaturaUsado);
 
                   const bankColor = conta.cor || "#3B82F6";
                   const pctUsado = limiteTotal > 0 ? Math.min(100, (totalFaturaUsado / limiteTotal) * 100) : 0;
 
-                  return (
-                    <div
-                      key={conta.id}
-                      className="relative border border-[#1E2942] bg-[#0B132B] rounded-[24px] overflow-hidden transition-all duration-300 hover:-translate-y-1 shadow-lg hover:shadow-2xl group p-5 space-y-4"
-                      style={{
-                        boxShadow: `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = bankColor + "66";
-                        e.currentTarget.style.boxShadow = `0 15px 35px -8px rgba(0,0,0,0.6), 0 0 0 1px ${bankColor}40, 0 0 25px -2px ${bankColor}2B`;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = "#1E2942";
-                        e.currentTarget.style.boxShadow = `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`;
-                      }}
-                    >
-                      {/* Decorative gradient corner */}
+                    return (
                       <div
-                        className="absolute -right-16 -top-16 w-36 h-36 rounded-full blur-3xl opacity-[0.06] transition-opacity group-hover:opacity-[0.12] pointer-events-none"
-                        style={{ backgroundColor: bankColor }}
-                      />
+                        key={conta.id}
+                        className="relative border border-[#1E2942] bg-[#0B132B] rounded-[24px] overflow-hidden transition-all duration-300 hover:-translate-y-1 shadow-lg hover:shadow-2xl group p-5 space-y-4"
+                        style={{
+                          boxShadow: `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = bankColor + "66";
+                          e.currentTarget.style.boxShadow = `0 15px 35px -8px rgba(0,0,0,0.6), 0 0 0 1px ${bankColor}40, 0 0 25px -2px ${bankColor}2B`;
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = "#1E2942";
+                          e.currentTarget.style.boxShadow = `0 10px 30px -10px rgba(0,0,0,0.5), 0 0 0 1px rgba(30, 41, 66, 0.8), 0 0 20px -5px ${bankColor}1A`;
+                        }}
+                      >
+                        {/* Decorative gradient corner */}
+                        <div
+                          className="absolute -right-16 -top-16 w-36 h-36 rounded-full blur-3xl opacity-[0.06] transition-opacity group-hover:opacity-[0.12] pointer-events-none"
+                          style={{ backgroundColor: bankColor }}
+                        />
 
-                      <div className="flex items-center justify-between relative z-10">
-                        <div className="flex items-center gap-3">
-                          <BankLogoBadge bankName={conta.nome} className="w-10 h-10 shadow-md border border-[#1E2942]/60" />
-                          <div>
-                            <h3 className="font-bold text-white text-base tracking-tight">{conta.nome}</h3>
-                            <p className="text-xs text-slate-400 font-medium">{TIPO_LABELS[conta.tipo] || conta.tipo}</p>
+                        <div className="flex items-center justify-between relative z-10">
+                          <div className="flex items-center gap-3">
+                            <BankLogoBadge bankName={conta.nome} className="w-10 h-10 shadow-md border border-[#1E2942]/60" />
+                            <div>
+                              <h3 className="font-bold text-white text-base tracking-tight">{conta.nome}</h3>
+                              <p className="text-xs text-slate-400 font-medium">{TIPO_LABELS[conta.tipo] || conta.tipo}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleAbrirEditar(conta)}
+                              className="h-8 w-8 text-slate-400 hover:text-white hover:bg-[#1E2942]/60 rounded-lg"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent className="bg-[#0B132B] border-[#1E2942] text-white rounded-[24px]">
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
+                                  <AlertDialogDescription className="text-slate-400">
+                                    Essa ação não poderá ser desfeita. A conta "{conta.nome}" será permanentemente removida.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel className="bg-transparent border-[#1E2942] text-white hover:bg-[#1E2942] rounded-xl">Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => deleteConta(conta.id)}
+                                    className="bg-rose-500 hover:bg-rose-600 text-white rounded-xl"
+                                  >
+                                    Excluir
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleAbrirEditar(conta)}
-                            className="h-8 w-8 text-slate-400 hover:text-white hover:bg-[#1E2942]/60 rounded-lg"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent className="bg-[#0B132B] border-[#1E2942] text-white rounded-[24px]">
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Excluir conta?</AlertDialogTitle>
-                                <AlertDialogDescription className="text-slate-400">
-                                  Essa ação não poderá ser desfeita. A conta "{conta.nome}" será permanentemente removida.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel className="bg-transparent border-[#1E2942] text-white hover:bg-[#1E2942] rounded-xl">Cancelar</AlertDialogCancel>
-                                <AlertDialogAction
-                                  onClick={() => deleteConta(conta.id)}
-                                  className="bg-rose-500 hover:bg-rose-600 text-white rounded-xl"
-                                >
-                                  Excluir
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
-                      </div>
 
                       {conta.tipo === "cartao_credito" ? (
                         <div className="space-y-3 pt-3 border-t border-[#1E2942] relative z-10">
@@ -547,11 +604,17 @@ export default function ContasCartoes() {
 
                           <div className="space-y-1.5 pt-1 border-t border-[#1E2942]/50">
                             <div className="flex items-center justify-between text-[11px] text-slate-400">
-                              <span>Fatura Atual / Usado</span>
+                              <span>Fatura Atual</span>
                               <span className="font-bold text-rose-400 text-sm">
                                 {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalFaturaUsado)}
                               </span>
                             </div>
+                            {ajustesFaturaConta > 0 && (
+                              <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                                <span>Lançamentos: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalDespesasCartao)}</span>
+                                <span className="text-sky-400 font-semibold">+ Ajustes: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(ajustesFaturaConta)}</span>
+                              </div>
+                            )}
                             {limiteTotal > 0 && (
                               <div className="space-y-1">
                                 <div className="w-full h-2 bg-[#141E33] rounded-full overflow-hidden border border-[#1E2942]/40 p-[1px]">
