@@ -47,6 +47,7 @@ serve(async (req) => {
       cartao_id,
       mes_referencia,
       vencimento,
+      fechamento,
       total_lancamentos,
       total_fatura,
       ajustes_fatura,
@@ -72,6 +73,7 @@ serve(async (req) => {
       p_ajustes_fatura: ajustes_fatura || 0,
       p_hash_documento: hash_documento || null,
       p_transacoes: transacoes,
+      p_fechamento: fechamento || null,
     });
 
     if (rpcError) {

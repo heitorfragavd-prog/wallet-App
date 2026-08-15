@@ -507,6 +507,9 @@ export function useImportarFatura() {
   const [ajustesEncargos, setAjustesEncargos] = useState<number>(0);
   const [hashDocumento, setHashDocumento] = useState<string>("");
   
+  const [dataFechamentoExtraida, setDataFechamentoExtraida] = useState<string | null>(null);
+  const [dataVencimentoExtraida, setDataVencimentoExtraida] = useState<string | null>(null);
+  
   const cartoesQuery = useQuery({
     queryKey: ["contas-cartoes"],
     queryFn: async () => {
@@ -550,24 +553,10 @@ export function useImportarFatura() {
   const analisar = useCallback(async (texto: string, contaId: string, mesReferencia: string, vencimento: string, ignorarDuplicatas = false) => {
     setIsAnalisando(true);
     try {
-      // Extrair e atualizar datas de fechamento / vencimento no cartão
-      const { fechamento: fechamentoExtraido, vencimento: vencimentoExtraido, diaFechamento, diaVencimento } = extrairDatasDaFatura(texto);
-      
-      if (contaId) {
-        const updateData: Record<string, any> = {};
-        if (fechamentoExtraido) updateData.data_fechamento = fechamentoExtraido;
-        if (diaFechamento) updateData.dia_fechamento = diaFechamento;
-        
-        if (vencimentoExtraido || vencimento) updateData.data_vencimento = vencimentoExtraido || vencimento;
-        if (diaVencimento) updateData.dia_vencimento = diaVencimento;
-        
-        if (Object.keys(updateData).length > 0) {
-          await supabase.from("contas_usuario").update(updateData).eq("id", contaId);
-          await qc.invalidateQueries({ queryKey: ["contas_usuario"] });
-          await qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
-          await qc.invalidateQueries({ queryKey: ["contas"] });
-        }
-      }
+      // Extrair datas de fechamento / vencimento da fatura (sem mutar banco antes de importar)
+      const { fechamento: fechamentoExtraido, vencimento: vencimentoExtraido } = extrairDatasDaFatura(texto);
+      setDataFechamentoExtraida(fechamentoExtraido || null);
+      setDataVencimentoExtraida(vencimentoExtraido || null);
 
       // Extrair totais oficiais da fatura e encargos
       const { totalFaturaOficial: totOficial, ajustesEncargos: ajustes } = extrairTotalDaFatura(texto);
@@ -593,17 +582,12 @@ export function useImportarFatura() {
         categoriasMap.set(cat.nome.toUpperCase(), cat.id);
       }
       
-      // Calcular Hashes de cada linha
+      // Calcular Hashes de cada linha preservando numeroLinha original do PDF
       const parseadasComHashes = await Promise.all(
         parseadas.map(async (t, index) => {
           const numeroLinha = index + 1;
-          const hashLinha = await gerarHashLinha(
-            t.data,
-            t.descricao,
-            t.valor,
-            t.parcela_atual,
-            t.total_parcelas,
-            numeroLinha
+          const hashLinha = await calcularHashStringSHA256(
+            `${t.data}|${t.descricao.trim()}|${Number(t.valor).toFixed(2)}|${t.parcela_atual || 1}|${t.total_parcelas || 1}|${numeroLinha}`
           );
 
           let catId = t.categoria_id;
@@ -627,8 +611,11 @@ export function useImportarFatura() {
         })
       );
 
-      const docHash = await gerarHashDocumento(texto, parseadasComHashes);
-      setHashDocumento(docHash);
+      // Preservar hash SHA-256 do arquivo original se já calculado; caso contrário, gerar
+      setHashDocumento(prev => {
+        if (prev && prev.length === 64) return prev;
+        return "";
+      });
       
       let comStatus = [];
 
@@ -639,7 +626,7 @@ export function useImportarFatura() {
           .from("transacoes")
           .select("descricao, valor, data, parcela_atual, total_parcelas, hash_importacao")
           .eq("tipo", "despesa")
-          .or(`cartao_id.eq.${contaId},conta_id.eq.${contaId}`)
+          .eq("cartao_id", contaId)
           .eq("mes_referencia", mesReferencia);
         
         comStatus = parseadasComHashes.map(t => {
@@ -682,18 +669,21 @@ export function useImportarFatura() {
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Não autenticado");
       
+      // Preservar numero_linha original da fatura (não reindexar para 1..N ao desmarcar)
       const payloadTransacoes = await Promise.all(
         transacoesSelecionadas
           .filter(t => t.selecionada)
-          .map(async (t, idx) => {
-            const linhaNum = idx + 1;
-            const hashLinha = await calcularHashStringSHA256(
-              `${t.data}|${t.descricao.trim()}|${Number(t.valor).toFixed(2)}|${t.parcela_atual || 1}|${t.total_parcelas || 1}|${linhaNum}`
-            );
+          .map(async (t) => {
+            const linhaNum = t.numero_linha || 1;
+            const hashLinha = t.hash_importacao && t.hash_importacao.length === 64
+              ? t.hash_importacao
+              : await calcularHashStringSHA256(
+                  `${t.data}|${t.descricao.trim()}|${Number(t.valor).toFixed(2)}|${t.parcela_atual || 1}|${t.total_parcelas || 1}|${linhaNum}`
+                );
             return {
               data: t.data,
               descricao: t.descricao.trim(),
-              valor: t.valor, // Estritamente o valor mensal da parcela exibido no PDF
+              valor: t.valor,
               categoria_id: t.categoria_id || null,
               parcela_atual: t.parcela_atual || null,
               total_parcelas: t.total_parcelas || null,
@@ -719,7 +709,8 @@ export function useImportarFatura() {
             workspace_id: activeWorkspace?.id || null,
             cartao_id: contaId,
             mes_referencia: mesReferencia,
-            vencimento: vencimento || null,
+            vencimento: vencimento || dataVencimentoExtraida || null,
+            fechamento: dataFechamentoExtraida || null,
             total_lancamentos: totalLanc,
             total_fatura: totalFat,
             ajustes_fatura: ajusFat,
@@ -740,12 +731,13 @@ export function useImportarFatura() {
           p_workspace_id: activeWorkspace?.id || null,
           p_cartao_id: contaId,
           p_mes_referencia: mesReferencia,
-          p_vencimento: vencimento || null,
+          p_vencimento: vencimento || dataVencimentoExtraida || null,
           p_total_lancamentos: totalLanc,
           p_total_fatura: totalFat,
           p_ajustes_fatura: ajusFat,
           p_hash_documento: hashDocumento || null,
           p_transacoes: payloadTransacoes,
+          p_fechamento: dataFechamentoExtraida || null,
         });
 
         if (directRpcError) throw directRpcError;
