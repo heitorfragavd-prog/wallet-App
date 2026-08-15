@@ -208,7 +208,7 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
     });
 }
 
-async function fetchReceitas(
+export async function fetchReceitas(
   params: ReceitasQueryParams = {},
   options: { onDivipayError?: (message: string) => void } = {},
   workspaceId?: string | null

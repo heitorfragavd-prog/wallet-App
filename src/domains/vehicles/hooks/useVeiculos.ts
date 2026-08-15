@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export interface Veiculo {
   id: string;
@@ -17,41 +18,35 @@ export interface Veiculo {
   updated_at?: string;
 }
 
+const fetchVeiculosData = async () => {
+  const { data, error } = await supabase
+    .from('veiculos')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    logger.error('useVeiculos', 'Erro ao buscar veículos', { error: error.message });
+    throw error;
+  }
+  return (data || []) as Veiculo[];
+};
+
 export const useVeiculos = () => {
-  const [veiculos, setVeiculos] = useState<Veiculo[]>([]);
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const qc = useQueryClient();
 
-  const fetchVeiculos = useCallback(async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('veiculos')
-        .select('*')
-        .order('created_at', { ascending: false });
+  const queryKey = ["veiculos", activeWorkspace?.id];
 
-      if (error) {
-        logger.error('useVeiculos', 'Erro ao buscar veículos', { error: error.message });
-        toast({
-          title: "Erro",
-          description: "Erro ao carregar veículos",
-          variant: "destructive"
-        });
-        return;
-      }
-
-      setVeiculos(data || []);
-    } catch (error) {
-      logger.error('useVeiculos', 'Erro ao carregar veículos', { error: error instanceof Error ? error.message : String(error) });
-      toast({
-        title: "Erro",
-        description: "Erro ao carregar veículos",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [toast]);
+  const query = useQuery({
+    queryKey,
+    queryFn: fetchVeiculosData,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 10,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 1,
+  });
 
   const adicionarVeiculo = async (novoVeiculo: Omit<Veiculo, 'id'>) => {
     try {
@@ -65,14 +60,12 @@ export const useVeiculos = () => {
         return;
       }
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('veiculos')
         .insert([{
           ...novoVeiculo,
           user_id: user.id
-        }])
-        .select()
-        .single();
+        }]);
 
       if (error) {
         logger.error('useVeiculos', 'Erro ao adicionar veículo', { error: error.message });
@@ -84,7 +77,7 @@ export const useVeiculos = () => {
         return;
       }
 
-      setVeiculos(prev => [data, ...prev]);
+      await qc.invalidateQueries({ queryKey: ["veiculos"] });
       toast({
         title: "Sucesso",
         description: "Veículo adicionado com sucesso!"
@@ -123,7 +116,7 @@ export const useVeiculos = () => {
         return;
       }
 
-      setVeiculos(prev => prev.map(v => v.id === veiculoEditado.id ? veiculoEditado : v));
+      await qc.invalidateQueries({ queryKey: ["veiculos"] });
       toast({
         title: "Sucesso",
         description: "Veículo editado com sucesso!"
@@ -153,7 +146,7 @@ export const useVeiculos = () => {
         return;
       }
 
-      setVeiculos(prev => prev.filter(v => v.id !== id));
+      await qc.invalidateQueries({ queryKey: ["veiculos"] });
       toast({
         title: "Sucesso",
         description: "Veículo excluído com sucesso!"
@@ -183,7 +176,7 @@ export const useVeiculos = () => {
         return;
       }
 
-      setVeiculos(prev => prev.map(v => v.id === id ? { ...v, quilometragem: novaQuilometragem } : v));
+      await qc.invalidateQueries({ queryKey: ["veiculos"] });
       toast({
         title: "Sucesso",
         description: "Quilometragem atualizada com sucesso!"
@@ -196,17 +189,13 @@ export const useVeiculos = () => {
     }
   };
 
-  useEffect(() => {
-    fetchVeiculos();
-  }, [fetchVeiculos]);
-
   return {
-    veiculos,
-    loading,
+    veiculos: query.data ?? [],
+    loading: query.isLoading,
     adicionarVeiculo,
     editarVeiculo,
     excluirVeiculo,
     atualizarQuilometragem,
-    refetch: fetchVeiculos
+    refetch: () => qc.invalidateQueries({ queryKey: ["veiculos"] })
   };
 };

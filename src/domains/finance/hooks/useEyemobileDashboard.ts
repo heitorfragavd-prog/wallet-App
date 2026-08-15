@@ -2,20 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { buildEyemobileDashboard, type EyemobileDashboardData } from "@/domains/finance/services/eyemobileDashboard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useRef } from "react";
 
-// Converte data DD/MM/YYYY ou ISO para ISO YYYY-MM-DD
 function toISODate(dateStr: string): string {
- if (!dateStr) return dateStr;
- // Se já está no formato ISO (YYYY-MM-DD), retorna como está
- if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
- // Tenta converter DD/MM/YYYY
-   const parts = dateStr.split(/[/-]/);
- if (parts.length === 3 && parts[2].length === 4) {
-   const [day, month, year] = parts;
-   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
- }
- // Fallback: retorna string original
- return dateStr;
+  if (!dateStr) return dateStr;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const parts = dateStr.split(/[\/\-]/);
+  if (parts.length === 3 && parts[2].length === 4) {
+    const [day, month, year] = parts;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  return dateStr;
 }
 
 export interface EyemobileStore {
@@ -46,14 +43,17 @@ interface EyemobileSyncResponse {
 
 const normalizeStores = (stores: unknown): EyemobileStore[] => {
   const raw = Array.isArray(stores) ? stores : (stores as { data?: unknown[] })?.data ?? [];
-  return raw.map((store) => {
-    const value = store as Record<string, unknown>;
-    return { id: String(value.id ?? value.store_id ?? ""), name: String(value.name ?? value.store_name ?? "Loja sem nome") };
-  }).filter((store) => store.id);
+  return raw
+    .map((store) => {
+      const value = store as Record<string, unknown>;
+      return {
+        id: String(value.id ?? value.store_id ?? ""),
+        name: String(value.name ?? value.store_name ?? "Loja sem nome"),
+      };
+    })
+    .filter((store) => store.id);
 };
 
-// Busca produtos/estoque AO VIVO (consulta leve, modo PRODUCTS) para o
-// bloco "Estoque crítico" mesmo quando as vendas vêm do cache local.
 async function fetchLiveProducts(): Promise<unknown[]> {
   try {
     const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -66,56 +66,29 @@ async function fetchLiveProducts(): Promise<unknown[]> {
   }
 }
 
-// Calcula KPIs locais a partir de transações salvas no banco
 async function buildLocalFallbackDashboard(
   filters: DashboardFilters,
   workspaceId?: string,
 ): Promise<EyemobileDashboardResult> {
-  // Produtos ao vivo em paralelo com a leitura do banco (não bloqueia)
   const productsPromise = fetchLiveProducts();
 
-  // Busca paginada para superar limite de 1000 linhas do Supabase
-  const allTransacoes: { valor: number; created_at?: string; data?: string; metodo_pagamento?: string; itens?: unknown }[] = [];
-  let page = 0;
-  const pageSize = 1000;
-  let fetchMore = true;
+  let query = supabase
+    .from("transacoes")
+    .select("*")
+    .eq("tipo", "receita")
+    .like("descricao", "Venda Eyemobile %")
+    .gte("data", filters.startDate)
+    .lte("data", filters.endDate)
+    .order("data", { ascending: false })
+    .limit(2000);
 
-  let queryError: any = null;
-  
-  while (fetchMore) {
-    let q = supabase
-      .from("transacoes")
-      .select("*")
-      .eq("tipo", "receita")
-      .like("descricao", "Venda Eyemobile %")
-      .gte("data", filters.startDate)
-      .lte("data", filters.endDate);
-
-    if (workspaceId) {
-      q = q.eq("workspace_id", workspaceId);
-    }
-
-    const { data, error } = await q.range(page * pageSize, (page + 1) * pageSize - 1);
-
-    if (error) {
-      queryError = error;
-      fetchMore = false;
-    } else if (!data || data.length === 0) {
-      fetchMore = false;
-    } else {
-      allTransacoes.push(...data);
-      if (data.length < pageSize) {
-        fetchMore = false;
-      } else {
-        page++;
-      }
-    }
+  if (workspaceId) {
+    query = query.eq("workspace_id", workspaceId);
   }
 
-  const transacoes = allTransacoes;
+  const { data: transacoes, error: queryError } = await query;
 
   if (queryError || !transacoes?.length) {
-    // Sem dados locais — retorna estrutura vazia para o componente decidir como exibir
     return {
       configured: false,
       stores: [],
@@ -127,8 +100,6 @@ async function buildLocalFallbackDashboard(
   const totalRevenue = transacoes.reduce((acc, t) => acc + Number(t.valor), 0);
   const totalTransactions = transacoes.length;
 
-  // Mapear transações locais para formato de "sales" que o builder entende.
-  // Os itens da venda (Top 10) agora vêm da coluna `itens` gravada pelo sync.
   const sales = transacoes.map((t) => ({
     total: t.valor,
     time: t.created_at ?? t.data,
@@ -145,7 +116,7 @@ async function buildLocalFallbackDashboard(
   });
 
   return {
-    configured: true, // temos dados locais
+    configured: true,
     stores: [],
     isLocalFallback: true,
     ...dashboard,
@@ -159,7 +130,10 @@ async function buildLocalFallbackDashboard(
   };
 }
 
-async function fetchLiveDashboard(filters: DashboardFilters, workspaceId?: string): Promise<EyemobileDashboardResult> {
+async function fetchLiveDashboard(
+  filters: DashboardFilters,
+  workspaceId?: string,
+): Promise<EyemobileDashboardResult> {
   const isoStartDate = toISODate(filters.startDate);
   const isoEndDate = toISODate(filters.endDate);
 
@@ -183,17 +157,18 @@ async function fetchLiveDashboard(filters: DashboardFilters, workspaceId?: strin
   }
 
   if (invokeError || data?.success === false) {
-    console.warn("Edge Function Eyemobile indisponível, usando fallback local...", invokeError || data?.error);
-
+    console.warn("Edge Function indisponivel, usando fallback local...", invokeError || data?.error);
     if (data?.configured || !data) {
-      return buildLocalFallbackDashboard({ ...filters, startDate: isoStartDate, endDate: isoEndDate }, workspaceId);
+      return buildLocalFallbackDashboard(
+        { ...filters, startDate: isoStartDate, endDate: isoEndDate },
+        workspaceId,
+      );
     }
-
     return {
       configured: false,
       stores: [],
       isLocalFallback: true,
-      ...buildEyemobileDashboard({ sales: [], products: [], stores: [] })
+      ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
     };
   }
 
@@ -208,24 +183,41 @@ async function fetchLiveDashboard(filters: DashboardFilters, workspaceId?: strin
 export function useEyemobileDashboard(filters: DashboardFilters) {
   const { activeWorkspace } = useWorkspace();
   const qc = useQueryClient();
-  const queryKey = ["eyemobile-dashboard", filters.startDate, filters.endDate, filters.storeId ?? "all"];
+  const queryKey = [
+    "eyemobile-dashboard",
+    filters.startDate,
+    filters.endDate,
+    filters.storeId ?? "all",
+  ];
+
+  const lastValidResult = useRef<EyemobileDashboardResult | null>(null);
 
   const query = useQuery({
     queryKey,
     queryFn: async (): Promise<EyemobileDashboardResult> => {
-      // Sempre tenta buscar o faturamento ao vivo via Edge Function para fidelidade de dados
-      return fetchLiveDashboard(filters, activeWorkspace?.id);
+      const result = await fetchLiveDashboard(filters, activeWorkspace?.id);
+      if (result.configured) {
+        lastValidResult.current = result;
+      }
+      return result;
     },
-    // Cache quente por 10 min: trocar de tela e voltar é instantâneo
-    staleTime: 1000 * 60 * 10,
-    gcTime: 1000 * 60 * 30,
+    staleTime: 1000 * 60 * 30,
+    gcTime: 1000 * 60 * 60,
+    placeholderData: () => {
+      const cached = qc.getQueryData<EyemobileDashboardResult>(queryKey);
+      if (cached) return cached;
+      return lastValidResult.current ?? undefined;
+    },
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 1,
+    retryDelay: 2000,
   });
 
-  // Botão "Sincronizar": força busca ao vivo na API e atualiza o cache.
   const syncLive = async (): Promise<EyemobileDashboardResult> => {
+    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard"] });
     const live = await fetchLiveDashboard(filters, activeWorkspace?.id);
     qc.setQueryData(queryKey, live);
-    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard"] });
     return live;
   };
 

@@ -14,6 +14,8 @@ export interface ContaUsuario {
   limite_credito?: number;
   dia_fechamento?: number;
   dia_vencimento?: number;
+  data_fechamento?: string;
+  data_vencimento?: string;
   cor?: string;
   created_at: string;
 }

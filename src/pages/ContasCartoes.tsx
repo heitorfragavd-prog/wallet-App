@@ -52,6 +52,7 @@ import { format } from "date-fns";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
 import { FaturaCartaoModal } from "@/domains/finance/components/FaturaCartaoModal";
 import { ImportadorExtratoModal } from "@/domains/finance/components/ImportadorExtratoModal";
+import { ImportarFaturaModal } from "@/domains/finance/components/ImportarFaturaModal";
 import { PluggyConnectModal } from "@/domains/finance/components/PluggyConnectModal";
 import { TransferenciaModal } from "@/domains/finance/components/TransferenciaModal";
 import { NovaDespesaModal } from "@/domains/finance/components/NovaDespesaModal";
@@ -94,6 +95,7 @@ export default function ContasCartoes() {
 
   const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
+  const [modalFaturaTextoAberto, setModalFaturaTextoAberto] = useState(false);
 
   const [modalExtratoAberto, setModalExtratoAberto] = useState(false);
   const [modalDespesaAberto, setModalDespesaAberto] = useState(false);
@@ -195,8 +197,15 @@ export default function ContasCartoes() {
       (d: any) => {
         const pertenceCartao =
           d.conta_id === cartao.id ||
+          d.cartao_id === cartao.id ||
           ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
         if (!pertenceCartao) return false;
+
+        const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
+        if (d.mes_referencia) {
+          return d.mes_referencia === mesRefAtual;
+        }
+
         return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
       }
     );
@@ -239,6 +248,17 @@ export default function ContasCartoes() {
               <UploadCloud className="w-4 h-4 mr-2" />
               Importar Extrato (OFX/CSV)
             </Button>
+
+            {cartoesCredito.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => setModalFaturaTextoAberto(true)}
+                className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10 font-semibold"
+              >
+                <CreditCard className="w-4 h-4 mr-2" />
+                Importar Fatura Cartão
+              </Button>
+            )}
 
             <Button onClick={handleAbrirCriar} className="bg-blue-500 hover:bg-blue-600 font-semibold">
               <Plus className="w-4 h-4 mr-2" />
@@ -416,8 +436,15 @@ export default function ContasCartoes() {
                     const despesasDoCartao = despesas.filter((d: any) => {
                       const pertenceCartao =
                         d.conta_id === conta.id ||
+                        d.cartao_id === conta.id ||
                         ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id));
                       if (!pertenceCartao) return false;
+
+                      const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
+                      if (d.mes_referencia) {
+                        return d.mes_referencia === mesRefAtual;
+                      }
+
                       return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
                     });
                     totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
@@ -551,11 +578,23 @@ export default function ContasCartoes() {
                           <div className="grid grid-cols-2 gap-2 text-xs pt-1">
                             <div className="bg-[#141E33]/40 border border-[#1E2942]/60 rounded-xl p-2 text-center">
                               <p className="text-[10px] text-slate-400 font-medium">Fechamento</p>
-                              <p className="font-bold text-slate-200 mt-0.5">Dia {conta.dia_fechamento || "--"}</p>
+                              <p className="font-bold text-slate-200 mt-0.5">
+                                {conta.data_fechamento
+                                  ? format(new Date(conta.data_fechamento + "T00:00:00"), "dd/MM/yyyy")
+                                  : conta.dia_fechamento
+                                    ? `Dia ${conta.dia_fechamento}`
+                                    : "Dia --"}
+                              </p>
                             </div>
                             <div className="bg-[#141E33]/40 border border-[#1E2942]/60 rounded-xl p-2 text-center">
                               <p className="text-[10px] text-slate-400 font-medium">Vencimento</p>
-                              <p className="font-bold text-slate-200 mt-0.5">Dia {conta.dia_vencimento || "--"}</p>
+                              <p className="font-bold text-slate-200 mt-0.5">
+                                {conta.data_vencimento
+                                  ? format(new Date(conta.data_vencimento + "T00:00:00"), "dd/MM/yyyy")
+                                  : conta.dia_vencimento
+                                    ? `Dia ${conta.dia_vencimento}`
+                                    : "Dia --"}
+                              </p>
                             </div>
                           </div>
 
@@ -857,6 +896,11 @@ export default function ContasCartoes() {
         <NovaReceitaModal
           isOpen={modalReceitaAberto}
           onClose={() => setModalReceitaAberto(false)}
+        />
+
+        <ImportarFaturaModal
+          isOpen={modalFaturaTextoAberto}
+          onClose={() => setModalFaturaTextoAberto(false)}
         />
 
         {showUnlockModal && (

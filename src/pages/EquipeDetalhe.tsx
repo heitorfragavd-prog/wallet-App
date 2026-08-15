@@ -14,6 +14,7 @@ import { Progress } from "@/shared/components/ui/progress";
 import { ArrowLeft, Plus, Wallet, Pencil } from "lucide-react";
 
 import AcertoSemanal from "@/domains/finance/components/AcertoSemanal";
+import EscalaFolguista from "@/domains/finance/components/EscalaFolguista";
 
 const formatCurrency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -115,21 +116,101 @@ export default function EquipeDetalhePage() {
         )}
 
         {isFolguista && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Valor Fixo Mensal</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(calc.salarioBruto)}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Valor por Dia</p>
-                <p className="text-2xl font-bold text-sky-400">{formatCurrency(calc.custoPorDia)}</p>
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Card className="bg-card/60 border-border/40">
+                <CardContent className="p-4">
+                  <p className="text-sm text-muted-foreground">Custo Pago no Mês</p>
+                  <p className="text-2xl font-bold text-sky-400">{formatCurrency(calc.custoRealMensal)}</p>
+                  <p className="text-xs text-muted-foreground">Soma de diárias/acertos efetuados</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-card/60 border-border/40">
+                <CardContent className="p-4">
+                  <p className="text-sm text-muted-foreground">Valor da Diária Combinada</p>
+                  <p className="text-2xl font-bold text-foreground">
+                    {formatCurrency(colaborador.salario_bruto > 0 ? colaborador.salario_bruto : (colaborador.vale_transporte_diario || 100))}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Pago somente quando contratado</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <EscalaFolguista
+              colaboradorId={colaborador.id}
+              colaboradorNome={colaborador.nome}
+              valorDiariaPadrao={colaborador.salario_bruto > 0 ? colaborador.salario_bruto : 100}
+              mesRef={mesRef}
+            />
           </div>
         )}
+
+        {/* Ficha Cadastral & Dados Bancários */}
+        <Card className="bg-card/60 border-border/40">
+          <CardContent className="p-4 sm:p-5 space-y-4">
+            <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-primary" /> Ficha Cadastral & Dados Bancários
+            </h3>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">CPF</p>
+                <p className="font-medium text-foreground">{colaborador.cpf || "Não informado"}</p>
+              </div>
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Identidade / RG</p>
+                <p className="font-medium text-foreground">{colaborador.rg || "Não informado"}</p>
+              </div>
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Telefone</p>
+                <p className="font-medium text-foreground">{colaborador.telefone || "Não informado"}</p>
+              </div>
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">E-mail</p>
+                <p className="font-medium text-foreground truncate">{colaborador.email || "Não informado"}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Endereço Completo</p>
+                <p className="font-medium text-foreground">{colaborador.endereco || "Não informado"}</p>
+              </div>
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Linhas de Ônibus</p>
+                <p className="font-medium text-sky-400">{colaborador.linha_onibus || "Não informado"}</p>
+              </div>
+            </div>
+
+            {/* Contatos de Emergência */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm pt-1 border-t border-border/20">
+              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <p className="text-xs text-amber-400 font-medium">Telefone de Emergência 1</p>
+                <p className="font-medium text-foreground">{colaborador.contato_emergencia_1 || "Não informado"}</p>
+              </div>
+              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <p className="text-xs text-amber-400 font-medium">Telefone de Emergência 2</p>
+                <p className="font-medium text-foreground">{colaborador.contato_emergencia_2 || "Não informado"}</p>
+              </div>
+            </div>
+
+            {/* Dados Bancários / PIX */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm pt-1 border-t border-border/20">
+              <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Chave PIX</p>
+                <p className="font-bold text-emerald-400 font-mono">
+                  {colaborador.pix_chave ? `${colaborador.pix_chave} (${colaborador.pix_tipo || 'Chave'})` : "Não cadastrado"}
+                </p>
+              </div>
+              <div className="p-2.5 bg-muted/20 rounded-lg">
+                <p className="text-xs text-muted-foreground">Preço da Passagem de Ônibus</p>
+                <p className="font-bold text-foreground">
+                  {formatCurrency(colaborador.valor_passagem ? Number(colaborador.valor_passagem) : 6.25)}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {!isSocio && !isFolguista && (
           <Accordion type="multiple" defaultValue={["custos", "provisoes"]} className="space-y-2">

@@ -54,6 +54,7 @@ import {
 import { useToast } from "@/shared/hooks/use-toast";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas, Despesa } from "@/domains/finance/hooks/useDespesas";
+import { useMediaMensalDespesas } from "@/domains/finance/hooks/useMediaMensalDespesas";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
@@ -107,12 +108,14 @@ const Despesas = () => {
   const { categoriasDespesa } = useCategorias();
 
   // ── Filtro de data ────────────────────────────────────────────
-  const { dateRange, setRange, clearFilter } = useDateRangeFilter();
+  const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: "month" });
 
   const { despesas, loading, createDespesa, updateDespesa, deleteDespesa } = useDespesas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
+
+  const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalDespesas();
 
   // Get today's local date range (YYYY-MM-DD)
   const hojeLocal = useMemo(() => {
@@ -300,7 +303,6 @@ const Despesas = () => {
     despesasFiltradas, 
     despesasAgrupadas, 
     totalDespesas, 
-    mediaMensal,
     categoriaList,
     dailyData,
     totalFiltrado,
@@ -442,7 +444,6 @@ const Despesas = () => {
       despesasFiltradas: filtradas, 
       despesasAgrupadas: grupos, 
       totalDespesas: total, 
-      mediaMensal: media,
       categoriaList,
       dailyData,
       totalFiltrado,
@@ -559,17 +560,17 @@ const Despesas = () => {
             </CardContent>
           </Card>
 
-          {/* Card: Média Mensal */}
+          {/* Card: Média Mensal (Últimos 6 meses) */}
           <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Média Mensal</p>
-                  {loading ? (
+                  <p className="text-sm text-muted-foreground">Média Mensal (6 Meses)</p>
+                  {loadingMedia ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(mediaMensal)}
+                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(mediaMensalCalculada)}
                     </p>
                   )}
                 </div>

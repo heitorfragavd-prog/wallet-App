@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { calcularPeriodoFatura, PeriodoFaturaInfo } from "./useFaturasCartao";
 import { useDespesas, Despesa } from "./useDespesas";
 
@@ -15,9 +14,6 @@ export interface ComprasFaturaResult {
 /**
  * Hook que filtra despesas já carregadas pelo useDespesas
  * para exibir somente as que pertencem à fatura de um mês/ano específico.
- *
- * Funciona sem precisar da tabela faturas_cartao — usa apenas o mês
- * e o período de fechamento do cartão para filtrar no frontend.
  */
 export const useComprasFatura = ({
   cartaoId,
@@ -36,33 +32,29 @@ export const useComprasFatura = ({
   const despesasFiltradas = useMemo(() => {
     if (!cartaoId || !todasDespesas) return [];
 
-    const res = todasDespesas.filter((d: any) => {
-      // Deve pertencer a este cartão (por conta_id ou método cartão_crédito)
+    const mesRefEsperado = `${anoFatura}-${String(mesFatura).padStart(2, "0")}`;
+
+    return todasDespesas.filter((d: any) => {
+      // 1. Deve ser despesa com valor positivo
+      if (d.tipo && d.tipo !== "despesa") return false;
+      if (Number(d.valor) <= 0) return false;
+
+      // 2. Deve pertencer a este cartão (por cartao_id ou conta_id)
       const pertenceCartao =
+        d.cartao_id === cartaoId ||
         d.conta_id === cartaoId ||
         ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartaoId));
+
       if (!pertenceCartao) return false;
 
-      // Filtro estrito do PDF: dataCompra > dataInicio && dataCompra <= dataFechamento
+      // 3. Se tiver mes_referencia (ex: "2026-08"), confere com anoFatura e mesFatura da fatura visualizada
+      if (d.mes_referencia) {
+        return d.mes_referencia === mesRefEsperado;
+      }
+
+      // 4. Filtro por período de datas fallback
       return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
     });
-
-    const uniqueAccountIds = Array.from(new Set(todasDespesas.map((d: any) => d.conta_id))).filter(Boolean);
-    const despesasDates = todasDespesas.slice(0, 5).map((d: any) => `${d.descricao}: data=${d.data}, conta=${d.conta_id}`);
-    console.log(
-      "[useComprasFatura Debug]",
-      JSON.stringify({
-        expectedCartaoId: cartaoId,
-        totalDespesasInDB: todasDespesas.length,
-        uniqueAccountIdsInDB: uniqueAccountIds,
-        sampleDespesas: despesasDates,
-        inicioPeriodo: periodo.data_inicio,
-        fechamentoPeriodo: periodo.data_fechamento,
-        filtradasCount: res.length,
-      }, null, 2)
-    );
-
-    return res;
   }, [cartaoId, todasDespesas, mesFatura, anoFatura, periodo.data_inicio, periodo.data_fechamento]);
 
   const totalFatura = despesasFiltradas.reduce((acc, d) => acc + (Number(d.valor) || 0), 0);

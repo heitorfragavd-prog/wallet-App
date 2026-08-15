@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AlertTriangle, Banknote, CreditCard, LayoutDashboard, RefreshCw, ShoppingCart, Ticket, TrendingUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
@@ -12,7 +12,11 @@ import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useEyemobileDashboard } from "@/domains/eyemobile/hooks/useEyemobileDashboard";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
-const today = new Date().toISOString().slice(0, 10);
+const getLocalDateString = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const today = getLocalDateString();
 const monthStart = `${today.slice(0, 8)}01`;
 const currency = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -37,35 +41,25 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
   const { createItemMercado } = useItensMercado();
   const dashboardQuery = useEyemobileDashboard({ startDate, endDate, storeId: storeId === "all" ? undefined : storeId });
   const dashboard = dashboardQuery.data;
-  const dashboardHojeQuery = useEyemobileDashboard({
-    startDate: today,
-    endDate: today,
-    storeId: storeId === "all" ? undefined : storeId
-  });
   const [isSyncing, setIsSyncing] = useState(false);
-
-  // Auto sync on mount
-  useEffect(() => {
-    const autoSync = async () => {
-      setIsSyncing(true);
-      try {
-        await dashboardQuery.syncLive();
-      } catch (e) {
-        console.error("Auto sync on mount failed:", e);
-      } finally {
-        setIsSyncing(false);
-      }
-    };
-    autoSync();
-  }, []);
 
   // Estados de paginacao do Estoque Critico (10 itens padrao)
   const [stockItemsPerPage, setStockItemsPerPage] = useState<number>(10);
   const [stockCurrentPage, setStockCurrentPage] = useState<number>(1);
 
+  const totalHoje = useMemo(() => {
+    if (!dashboard?.salesByHour) return 0;
+    const horaAtual = new Date().getHours();
+    return dashboard.salesByHour
+      .filter((h) => {
+        const hourNum = parseInt(h.hour);
+        return hourNum <= horaAtual && hourNum >= 5;
+      })
+      .reduce((acc, h) => acc + h.frontCashier + h.otherOrigins, 0);
+  }, [dashboard?.salesByHour]);
+
   const metrics = useMemo(() => {
     if (!dashboard) return [];
-    const totalHoje = dashboardHojeQuery.data?.kpis.totalRevenue || 0;
     return [
       { label: "Receita do dia", value: currency(totalHoje), icon: TrendingUp, className: "text-amber-500 bg-amber-500/10" },
       { label: "Receita total", value: currency(dashboard.kpis.totalRevenue), icon: TrendingUp, className: "text-emerald-500 bg-emerald-500/10" },
@@ -73,7 +67,7 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
       { label: "Ticket médio por pessoa", value: currency(dashboard.kpis.averageTicket), icon: CreditCard, className: "text-violet-500 bg-violet-500/10" },
       { label: "Frente de caixa", value: currency(dashboard.kpis.frontCashierRevenue), icon: Banknote, className: "text-orange-500 bg-orange-500/10" },
     ];
-  }, [dashboard, dashboardHojeQuery.data]);
+  }, [dashboard, totalHoje]);
 
   // Lista paginada de Estoque Critico
   const criticalStockList = useMemo(() => dashboard?.criticalStock ?? [], [dashboard]);
@@ -366,4 +360,4 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
       </Card>
     </>)}
   </div>);
-}
+}

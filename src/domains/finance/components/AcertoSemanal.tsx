@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/shared/components/ui/button";
@@ -6,7 +6,7 @@ import { Input } from "@/shared/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { useToast } from "@/shared/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
-import { Calculator, CreditCard } from "lucide-react";
+import { Calculator, CreditCard, QrCode } from "lucide-react";
 
 interface DiaSemana {
   dia: string;
@@ -25,7 +25,6 @@ interface AcertoSemanalProps {
 
 const DIAS_DA_SEMANA = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
 const UBER_FIXO = 12.00;
-const PASSAGEM_FIXA = 6.25;
 
 async function getOrCreateCategoria(nome: string, workspaceId: string, tipo: "despesa" | "receita"): Promise<string | null> {
   const { data: existente } = await supabase
@@ -55,6 +54,28 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();
   const [loading, setLoading] = useState(false);
+  const [colabInfo, setColabInfo] = useState<{ valor_passagem: number | null; pix_chave: string | null; pix_tipo: string | null } | null>(null);
+
+  useEffect(() => {
+    async function fetchInfo() {
+      if (!colaboradorId) return;
+      const { data } = await supabase
+        .from("colaboradores")
+        .select("valor_passagem, pix_chave, pix_tipo")
+        .eq("id", colaboradorId)
+        .maybeSingle();
+      if (data) {
+        setColabInfo({
+          valor_passagem: data.valor_passagem !== null ? Number(data.valor_passagem) : null,
+          pix_chave: data.pix_chave || null,
+          pix_tipo: data.pix_tipo || null,
+        });
+      }
+    }
+    fetchInfo();
+  }, [colaboradorId]);
+
+  const passagemFixa = colabInfo?.valor_passagem && colabInfo.valor_passagem > 0 ? colabInfo.valor_passagem : 6.25;
 
   const hoje = new Date();
   const diaSemana = hoje.getDay();
@@ -62,20 +83,22 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
   const segunda = new Date(hoje);
   segunda.setDate(hoje.getDate() + diffSegunda);
 
-  const [dias, setDias] = useState<DiaSemana[]>(() => {
-    return DIAS_DA_SEMANA.map((nome, i) => {
+  const [dias, setDias] = useState<DiaSemana[]>([]);
+
+  useEffect(() => {
+    setDias(DIAS_DA_SEMANA.map((nome, i) => {
       const data = new Date(segunda);
       data.setDate(segunda.getDate() + i);
       return {
         dia: nome,
         data: data.toISOString().split("T")[0],
-        foiTrabalhar: i < 5,
-        uberReal: 0,
-        passagem: PASSAGEM_FIXA,
+        foiTrabalhar: i < 6, // Segunda a Sábado (6 dias)
+        uberReal: UBER_FIXO, // Padrão R$ 12,00
+        passagem: passagemFixa,
         meta: 0,
       };
-    });
-  });
+    }));
+  }, [passagemFixa]);
 
   const atualizarDia = (index: number, campo: keyof DiaSemana, valor: any) => {
     const novos = [...dias];
@@ -109,7 +132,7 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
       totalDiferenca,
       totalMeta,
       diasTrabalhados,
-      totalTransferir: totalDiferenca + totalPassagem + totalMeta,
+      totalTransferir: totalUberFixo + totalPassagem + totalDiferenca + totalMeta,
     };
   }, [dias]);
 
@@ -128,8 +151,9 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
     const categoriaTransporteId = await getOrCreateCategoria("Transporte Funcionário", activeWorkspace.id, "despesa");
     const categoriaMetaId = totais.totalMeta > 0 ? await getOrCreateCategoria("Meta/Bônus", activeWorkspace.id, "despesa") : null;
     const dataHoje = new Date().toISOString().split("T")[0];
+    const pixInfoStr = colabInfo?.pix_chave ? ` | PIX (${colabInfo.pix_tipo || 'Chave'}): ${colabInfo.pix_chave}` : "";
 
-    // 1. Inserções em colaborador_custos (Granularidade: acerto_transporte, transporte_diferenca, premio)
+    // 1. Inserções em colaborador_custos
     const custosInserts = [];
 
     if (totais.totalPassagem > 0) {
@@ -138,7 +162,18 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
         tipo: "acerto_transporte",
         valor: totais.totalPassagem,
         data: dataHoje,
-        descricao: `Passagem de ônibus (${totais.diasTrabalhados} dias)`,
+        descricao: `Passagem de ônibus (${totais.diasTrabalhados} dias × ${formatCurrency(passagemFixa)})`,
+        lancado_na_despesa: true,
+      });
+    }
+
+    if (totais.totalUberFixo > 0) {
+      custosInserts.push({
+        colaborador_id: colaboradorId,
+        tipo: "uber_semanal",
+        valor: totais.totalUberFixo,
+        data: dataHoje,
+        descricao: `Uber Fixo Base (${totais.diasTrabalhados} dias × R$ ${UBER_FIXO.toFixed(2)})`,
         lancado_na_despesa: true,
       });
     }
@@ -175,14 +210,14 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
     }
 
     // 2. Criar transação de TRANSPORTE na tabela transacoes
-    const valorTransporte = totais.totalDiferenca + totais.totalPassagem;
+    const valorTransporte = totais.totalUberFixo + totais.totalPassagem + totais.totalDiferenca;
     if (valorTransporte > 0) {
       await supabase.from("transacoes").insert({
         workspace_id: activeWorkspace.id,
         tipo: "despesa",
         valor: valorTransporte,
         data: dataHoje,
-        descricao: `Transporte semanal - ${colaboradorNome} (${dias[0].data} a ${dias[6].data}) | Uber: ${formatCurrency(totais.totalUberReal)} | Passagem: ${formatCurrency(totais.totalPassagem)} | Diferença: ${formatCurrency(totais.totalDiferenca)}`,
+        descricao: `Transporte semanal - ${colaboradorNome}${pixInfoStr} (${dias[0]?.data} a ${dias[5]?.data}) | Uber: ${formatCurrency(totais.totalUberReal)} | Passagem: ${formatCurrency(totais.totalPassagem)} | Diferença: ${formatCurrency(totais.totalDiferenca)}`,
         categoria_id: categoriaTransporteId,
         centro_custo_id: null,
         conta_id: null,
@@ -197,7 +232,7 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
         tipo: "despesa",
         valor: totais.totalMeta,
         data: dataHoje,
-        descricao: `Meta semanal - ${colaboradorNome} (${dias[0].data} a ${dias[6].data})`,
+        descricao: `Meta semanal - ${colaboradorNome}${pixInfoStr} (${dias[0]?.data} a ${dias[5]?.data})`,
         categoria_id: categoriaMetaId,
         centro_custo_id: null,
         conta_id: null,
@@ -208,21 +243,26 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
     setLoading(false);
     toast({ 
       title: "Acerto gerado!", 
-      description: totais.totalMeta > 0 
-        ? `2 transações criadas: Transporte (${formatCurrency(valorTransporte)}) + Meta (${formatCurrency(totais.totalMeta)})`
-        : `Transferir ${formatCurrency(totais.totalTransferir)} na segunda-feira. Uma taxa só!`,
+      description: `Transferir ${formatCurrency(totais.totalTransferir)} para ${colaboradorNome}${colabInfo?.pix_chave ? ` (PIX: ${colabInfo.pix_chave})` : ""}`,
     });
   };
 
   return (
     <Card className="bg-card/60 border-border/40">
       <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2">
-          <Calculator className="h-5 w-5 text-primary" />
-          Acerto Semanal de Transporte
+        <CardTitle className="text-lg flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <Calculator className="h-5 w-5 text-primary" />
+            Acerto Semanal de Transporte
+          </span>
+          {colabInfo?.pix_chave && (
+            <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full flex items-center gap-1 font-mono">
+              <QrCode className="h-3.5 w-3.5" /> PIX: {colabInfo.pix_chave}
+            </span>
+          )}
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          Uber fixo antecipado: R$ {UBER_FIXO.toFixed(2)}/dia | Passagem: R$ {PASSAGEM_FIXA.toFixed(2)}/volta
+          Uber fixo: R$ {UBER_FIXO.toFixed(2)}/dia | Passagem: R$ {passagemFixa.toFixed(2)}/volta | Total dia: R$ {(UBER_FIXO + passagemFixa).toFixed(2)}
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -270,7 +310,7 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
             <p className="text-lg font-bold text-foreground">{formatCurrency(totais.totalUberReal)}</p>
           </div>
           <div className="p-3 bg-muted/30 rounded-lg">
-            <p className="text-xs text-muted-foreground">Uber Fixo (já depositado)</p>
+            <p className="text-xs text-muted-foreground">Uber Fixo (base)</p>
             <p className="text-lg font-bold text-muted-foreground">{formatCurrency(totais.totalUberFixo)}</p>
           </div>
           <div className="p-3 bg-muted/30 rounded-lg">
@@ -286,15 +326,30 @@ export default function AcertoSemanal({ colaboradorId, colaboradorNome, salarioB
         <div className="p-4 bg-primary/10 border border-primary/30 rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <div>
-              <p className="text-sm text-primary font-medium">Total a transferir na 2ª feira</p>
+              <p className="text-sm text-primary font-medium">Total a transferir na 2ª feira (semana anterior)</p>
+              {colabInfo?.pix_chave && (
+                <p className="text-xs text-emerald-400 font-mono mt-0.5">
+                  Chave PIX: {colabInfo.pix_chave} ({colabInfo.pix_tipo || 'Chave'})
+                </p>
+              )}
             </div>
             <p className="text-2xl sm:text-3xl font-bold text-primary shrink-0">{formatCurrency(totais.totalTransferir)}</p>
           </div>
           <div className="space-y-1 text-xs text-muted-foreground pt-1 border-t border-primary/20">
             <div className="flex justify-between">
-              <span>🚗 Transporte (Diferença + Passagem)</span>
-              <span className="font-medium text-foreground">{formatCurrency(totais.totalDiferenca + totais.totalPassagem)}</span>
+              <span>🚗 Uber Fixo ({totais.diasTrabalhados} dias × R$ {UBER_FIXO.toFixed(2)})</span>
+              <span className="font-medium text-foreground">{formatCurrency(totais.totalUberFixo)}</span>
             </div>
+            <div className="flex justify-between">
+              <span>🚌 Passagem ({totais.diasTrabalhados} dias × {formatCurrency(passagemFixa)})</span>
+              <span className="font-medium text-foreground">{formatCurrency(totais.totalPassagem)}</span>
+            </div>
+            {totais.totalDiferenca > 0 && (
+              <div className="flex justify-between">
+                <span>📈 Diferença Uber (extra)</span>
+                <span className="font-medium text-amber-400">{formatCurrency(totais.totalDiferenca)}</span>
+              </div>
+            )}
             {totais.totalMeta > 0 && (
               <div className="flex justify-between">
                 <span>🎯 Meta/Bônus</span>
