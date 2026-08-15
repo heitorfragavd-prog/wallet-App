@@ -2,6 +2,29 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.44] - 2026-08-15
+
+### ✨ Novo
+- **Módulo de Equipe:**
+  - Adicionado suporte a `EscalaFolguista` para gestão de turnos de folguistas.
+  - Implementado sistema de contatos de emergência para colaboradores.
+- **Faturas e Cartões:**
+  - Novo modal `ImportarFaturaModal` para upload e importação de faturas de cartão de crédito.
+  - Ajustes de datas de fechamento de faturas nas contas.
+- **Eyemobile Cache:** Nova tabela de cache para otimizar dashboards do Eyemobile (`63_eyemobile_cache.sql`).
+- **Métricas:** Novos hooks de médias mensais (`useMediaMensalDespesas`, `useMediaMensalReceitas`).
+- **Banco de Dados:** Várias novas migrations (ficha técnica, contatos, escalas, faturas e cache).
+
+### 🔧 Corrigido & Melhorado
+- Atualizações em dependências (`package.json`, `package-lock.json`).
+- Refatoração de múltiplos hooks de domínio financeiro e veículos (`useDividas`, `useTransacoes`, `useMetas`, `useVeiculos`).
+- Melhorias nas telas `ContasCartoes`, `Despesas`, `Receitas`, e refinamentos do `AcertoSemanal` e `EquipeDetalhe`.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.44**
+
+---
+
 ## [1.0.43] - 2026-08-13
 
 ### 🔧 Corrigido & Melhorado
