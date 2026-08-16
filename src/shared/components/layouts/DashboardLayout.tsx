@@ -88,7 +88,6 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: ChefHat, label: "Cardápio", path: "/cardapio" },
     { icon: AlertTriangle, label: "Validades", path: "/validades" },
     { icon: Target, label: "Metas", path: "/metas" },
-    { icon: BarChart3, label: "Comparativo", path: "/comparativo" },
     { icon: Wallet, label: "Patrimônio", path: "/patrimonio" },
     { icon: Brain, label: "Inteligência Artificial", path: "/ia" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },

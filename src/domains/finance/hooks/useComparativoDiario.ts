@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { fetchReceitas } from "@/domains/finance/hooks/useReceitas";
-import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface DailyPoint {
@@ -56,15 +55,14 @@ async function fetchAllQueryRows<T>(buildQuery: () => any): Promise<T[]> {
     for (let offset = 0; offset < 50000; offset += PAGE_SIZE) {
       const { data, error } = await buildQuery().range(offset, offset + PAGE_SIZE - 1);
       if (error) {
-        console.warn("Erro ao buscar registros:", error.message);
-        break;
+        throw new Error(error.message);
       }
       const rows = (data as T[]) ?? [];
       all.push(...rows);
       if (rows.length < PAGE_SIZE) break;
     }
   } catch (e) {
-    console.warn("Excecao na busca:", e);
+    throw e instanceof Error ? e : new Error("Não foi possível carregar os dados do comparativo diário");
   }
   return all;
 }
@@ -108,7 +106,7 @@ export function useComparativoDiario({ monthsCount = 6, selectedDay }: UseCompar
       const applyWorkspaceFilter = (q: any) => {
         let query = q;
         if (workspaceId) {
-          query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
+          query = query.eq("workspace_id", workspaceId);
         }
         return query.gte("data", startStr).lte("data", `${endStr}T23:59:59`);
       };
