@@ -115,6 +115,7 @@ const formatCurrency = (value: number) =>
 import type { DateRange } from "@/shared/components/DateRangePicker/DateRangePicker";
 import { useSearchParams } from "react-router-dom";
 import { ComparativosView } from "@/domains/finance/components/comparativos/ComparativosView";
+import { EquipeReport } from "@/domains/finance/components/equipe/EquipeReport";
 
 interface FilterParams {
   dateRange: DateRange;
@@ -382,7 +383,7 @@ const metaStatusConfig: Record<string, { label: string; color: string }> = {
 // ── Componente principal ─────────────────────────────────────────────────────
 const Relatorios = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const validTabs = new Set(["overview", "comparativos", "categories", "transactions", "dividas", "metas", "recorrentes"]);
+  const validTabs = new Set(["overview", "comparativos", "equipe", "categories", "transactions", "dividas", "metas", "recorrentes"]);
   const requestedTab = searchParams.get("aba") ?? "overview";
   const activeTab = validTabs.has(requestedTab) ? requestedTab : "overview";
   const changeTab = (value: string) => {
@@ -671,6 +672,7 @@ const Relatorios = () => {
             <TabsList className="flex-wrap h-auto gap-1 p-1">
               <TabsTrigger value="overview">Visão Geral</TabsTrigger>
               <TabsTrigger value="comparativos">Comparativos</TabsTrigger>
+              <TabsTrigger value="equipe">Equipe</TabsTrigger>
               <TabsTrigger value="categories">Categorias</TabsTrigger>
               <TabsTrigger value="transactions">Transações</TabsTrigger>
               <TabsTrigger value="dividas">Dívidas</TabsTrigger>
@@ -678,6 +680,25 @@ const Relatorios = () => {
               <TabsTrigger value="recorrentes">Recorrentes</TabsTrigger>
             </TabsList>
             <TabsContent value="comparativos" className="space-y-4"><ComparativosView /></TabsContent>
+          </Tabs>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (activeTab === "equipe") {
+    return (
+      <DashboardLayout>
+        <div className="space-y-4 p-4 md:p-6">
+          <div className="flex items-center gap-4">
+            <div className="rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 p-3 shadow-lg shadow-cyan-500/20"><BarChart3 className="h-6 w-6 text-white" /></div>
+            <div><h1 className="text-2xl font-bold">Relatórios</h1><p className="text-sm text-muted-foreground">Custos classificados da equipe</p></div>
+          </div>
+          <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
+            <TabsList className="h-auto flex-wrap gap-1 p-1">
+              <TabsTrigger value="overview">Visão Geral</TabsTrigger><TabsTrigger value="comparativos">Comparativos</TabsTrigger><TabsTrigger value="equipe">Equipe</TabsTrigger><TabsTrigger value="categories">Categorias</TabsTrigger><TabsTrigger value="transactions">Transações</TabsTrigger><TabsTrigger value="dividas">Dívidas</TabsTrigger><TabsTrigger value="metas">Metas</TabsTrigger><TabsTrigger value="recorrentes">Recorrentes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="equipe"><EquipeReport startDate={dateRange.startDate} endDate={dateRange.endDate} /></TabsContent>
           </Tabs>
         </div>
       </DashboardLayout>
@@ -1074,6 +1095,7 @@ const Relatorios = () => {
           <TabsList className="flex-wrap h-auto gap-1 p-1">
             <TabsTrigger value="overview" className="text-xs sm:text-sm">Visão Geral</TabsTrigger>
             <TabsTrigger value="comparativos" className="text-xs sm:text-sm">Comparativos</TabsTrigger>
+            <TabsTrigger value="equipe" className="text-xs sm:text-sm">Equipe</TabsTrigger>
             <TabsTrigger value="categories" className="text-xs sm:text-sm">Categorias</TabsTrigger>
             <TabsTrigger value="transactions" className="text-xs sm:text-sm">
               Transações
