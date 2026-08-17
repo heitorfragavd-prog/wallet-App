@@ -51,7 +51,7 @@ export function useComparativoPeriodos(quantidadeMeses: number = 6) {
         const applyFilter = (q: any) => {
           let query = q;
           if (workspaceId) {
-            query = query.eq("workspace_id", workspaceId);
+            query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
           }
           return query.gte("data", startDate).lte("data", endDate);
         };

@@ -106,7 +106,7 @@ export function useComparativoDiario({ monthsCount = 6, selectedDay }: UseCompar
       const applyWorkspaceFilter = (q: any) => {
         let query = q;
         if (workspaceId) {
-          query = query.eq("workspace_id", workspaceId);
+          query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
         }
         return query.gte("data", startStr).lte("data", `${endStr}T23:59:59`);
       };
