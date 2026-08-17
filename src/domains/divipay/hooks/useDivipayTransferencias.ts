@@ -51,7 +51,7 @@ async function fetchTransferencias(): Promise<DivipayTransacao[]> {
         amount: Number(w.amount || 0),
         fee: Number(w.tax || 0),
         description: w.description || (w.type === "BILLET" ? "Pagamento de boleto" : "Saque Pix"),
-        recipient_key: w.name || null,
+        recipient_key: w.document || null,
         created_at: w.createdAt || new Date().toISOString(),
         updated_at: w.createdAt || new Date().toISOString(),
         pix_copy_paste: null,
@@ -92,7 +92,7 @@ export function useDivipayTransferencias() {
 
   const validateKey = useMutation({
     mutationFn: async (key: string) => {
-      logger.info("useDivipayTransferencias", "Validando chave Pix", { key });
+      logger.info("useDivipayTransferencias", "Validando chave Pix");
       return divipayService.validatePixKey(key);
     },
     onError: (error: Error) => {

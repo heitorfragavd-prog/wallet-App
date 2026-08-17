@@ -9,6 +9,10 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import {
+  matchEquipePayment,
+  type EquipePaymentCandidate,
+} from '../_shared/equipe-conciliacao.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -320,8 +324,116 @@ serve(async (req) => {
       } else if (transacao.type === 'CASH_OUT') {
         const dividaId = typeof metadata.divida_id === 'string' ? metadata.divida_id : null
         let dividaWorkspaceId: string | null = null
+        let equipeHandled = false
 
-        if (dividaId) {
+        const acertoIdInformado = typeof metadata.acerto_id === 'string' ? metadata.acerto_id : null
+        const pagamentoId = typeof metadata.pagamento_id === 'string' ? metadata.pagamento_id : null
+        const workspaceId = typeof metadata.workspace_id === 'string'
+          ? metadata.workspace_id
+          : defaultWorkspaceId
+        const saqueData = transacao.created_at || hoje
+        const recipientPix =
+          (typeof transacao.recipient_key === 'string' && transacao.recipient_key) ||
+          (typeof metadata.keyPix === 'string' && metadata.keyPix) ||
+          (typeof metadata.document === 'string' && metadata.document) ||
+          null
+
+        let equipeMatch:
+          | { kind: 'none' }
+          | { kind: 'matched'; acertoId: string }
+          | { kind: 'ambiguous'; acertoIds: string[] } = { kind: 'none' }
+
+        if (acertoIdInformado) {
+          equipeMatch = { kind: 'matched', acertoId: acertoIdInformado }
+        } else if (workspaceId && recipientPix) {
+          const { data: acertos, error: acertosError } = await supabaseAdmin
+            .from('colaborador_acertos')
+            .select('id, pix_chave_snapshot, valor_total, vencimento, status')
+            .eq('workspace_id', workspaceId)
+            .in('status', ['pendente', 'processando'])
+
+          if (acertosError) throw acertosError
+
+          const candidatos: EquipePaymentCandidate[] = (acertos ?? []).map((acerto: any) => ({
+            id: acerto.id,
+            pix: acerto.pix_chave_snapshot,
+            valorCentavos: Math.round(Number(acerto.valor_total) * 100),
+            vencimento: acerto.vencimento,
+            status: acerto.status,
+          }))
+          equipeMatch = matchEquipePayment(
+            {
+              pix: recipientPix,
+              valorCentavos: Math.round(Number(transacao.amount) * 100),
+              data: saqueData,
+            },
+            candidatos,
+          )
+        }
+
+        if (equipeMatch.kind === 'matched') {
+          const { error: equipeError } = await supabaseAdmin.rpc('confirmar_pagamento_acerto', {
+            p_acerto_id: equipeMatch.acertoId,
+            p_divipay_external_id: externalId,
+            p_pagamento_id: pagamentoId,
+            p_origem: acertoIdInformado ? 'wallet_divipay' : 'divipay_externo',
+            p_valor: Number(transacao.amount),
+            p_taxa: Number(effectiveFee ?? 0),
+            p_comprovante_url: null,
+          })
+          if (equipeError) throw equipeError
+
+          await supabaseAdmin.from('divipay_conciliacoes').upsert(
+            {
+              user_id: userId,
+              divipay_external_id: externalId,
+              tipo: 'DICT',
+              favorecido_nome: null,
+              favorecido_documento: recipientPix,
+              valor: Number(transacao.amount),
+              taxa: Number(effectiveFee ?? 0),
+              data_pagamento: saqueData,
+              descricao: 'Pagamento de acerto da equipe',
+              status: 'conciliada',
+              divida_id: null,
+              divida_sugerida_id: null,
+              despesa_id: null,
+            },
+            { onConflict: 'user_id,divipay_external_id' },
+          )
+
+          metadata.acerto_id = equipeMatch.acertoId
+          metadata.acerto_baixado = true
+          dividaWorkspaceId = workspaceId
+          equipeHandled = true
+        } else if (equipeMatch.kind === 'ambiguous') {
+          await supabaseAdmin.from('divipay_conciliacoes').upsert(
+            {
+              user_id: userId,
+              divipay_external_id: externalId,
+              tipo: 'DICT',
+              favorecido_nome: null,
+              favorecido_documento: recipientPix,
+              valor: Number(transacao.amount),
+              taxa: Number(effectiveFee ?? 0),
+              data_pagamento: saqueData,
+              descricao: 'Pagamento com mais de um acerto possível da equipe',
+              status: 'pendente',
+              divida_id: null,
+              divida_sugerida_id: null,
+              despesa_id: null,
+            },
+            { onConflict: 'user_id,divipay_external_id' },
+          )
+          metadata.conciliacao_status = 'pendente_equipe'
+          metadata.acertos_candidatos = equipeMatch.acertoIds
+          dividaWorkspaceId = workspaceId
+          equipeHandled = true
+        }
+
+        if (equipeHandled) {
+          // Acerto da equipe já baixado ou separado para revisão; não vira dívida/despesa avulsa.
+        } else if (dividaId) {
           // ── Baixa direta na dívida (pagamento iniciado pelo botão "Pagar via Divipay")
           // O trigger sync_pagamento_divida_to_despesa cria a despesa automaticamente.
           const { data: divida } = await supabaseAdmin

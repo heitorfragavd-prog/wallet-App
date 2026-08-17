@@ -19,6 +19,10 @@ import {
   type SaqueParaConciliar,
 } from "./conciliacaoMatcher";
 import { resolveBeneficiary } from "../utils";
+import {
+  matchEquipePayment,
+  type EquipePaymentCandidate,
+} from "../../../../supabase/functions/_shared/equipe-conciliacao";
 
 const COMPONENT = "ConciliacaoDivipayService";
 
@@ -519,6 +523,29 @@ export class ConciliacaoDivipayService {
     const userId = await requireUserId();
     const wsId = await resolveWorkspaceId(userId, workspaceId);
 
+    const { data: equipeRows, error: equipeError } = wsId
+      ? await supabase
+          .from("colaborador_acertos" as never)
+          .select("id, pix_chave_snapshot, valor_total, vencimento, status")
+          .eq("workspace_id", wsId)
+          .in("status", ["pendente", "processando"])
+      : { data: [], error: null };
+    if (equipeError) throw equipeError;
+
+    const equipeCandidatos: EquipePaymentCandidate[] = ((equipeRows ?? []) as unknown as Array<{
+      id: string;
+      pix_chave_snapshot: string | null;
+      valor_total: number;
+      vencimento: string;
+      status: string;
+    }>).map((acerto) => ({
+      id: acerto.id,
+      pix: acerto.pix_chave_snapshot,
+      valorCentavos: Math.round(Number(acerto.valor_total) * 100),
+      vencimento: acerto.vencimento,
+      status: acerto.status,
+    }));
+
     // O que já foi processado/importado antes (paginado: o PostgREST corta
     // em 1000 linhas por requisição — sem isso, com o histórico completo,
     // a anti-duplicidade falharia e criaria despesas em dobro)
@@ -587,6 +614,53 @@ export class ConciliacaoDivipayService {
           dividaId: typeof localMeta.divida_id === "string" ? localMeta.divida_id : null,
         });
         resumo.ignorados++;
+        continue;
+      }
+
+      const acertoIdInformado = typeof localMeta.acerto_id === "string" ? localMeta.acerto_id : null;
+      const equipeMatch = acertoIdInformado
+        ? ({ kind: "matched", acertoId: acertoIdInformado } as const)
+        : matchEquipePayment(
+            {
+              pix: saque.favorecidoDocumento || t.recipient_key,
+              valorCentavos: Math.round(saque.valor * 100),
+              data: saque.dataPagamento,
+            },
+            equipeCandidatos,
+          );
+
+      if (equipeMatch.kind === "matched") {
+        const { error } = await supabase.rpc("confirmar_pagamento_acerto" as never, {
+          p_acerto_id: equipeMatch.acertoId,
+          p_divipay_external_id: saque.externalId,
+          p_pagamento_id: typeof localMeta.pagamento_id === "string" ? localMeta.pagamento_id : null,
+          p_origem: acertoIdInformado ? "wallet_divipay" : "divipay_externo",
+          p_valor: saque.valor,
+          p_taxa: saque.taxa,
+          p_comprovante_url: null,
+        } as never);
+        if (error) throw error;
+
+        await criarDespesaTaxa(userId, saque, wsId);
+        await this.registrarConciliacao(userId, {
+          ...saque,
+          descricao: "Pagamento de acerto da equipe",
+        }, "conciliada");
+
+        const candidatoBaixado = equipeCandidatos.find((item) => item.id === equipeMatch.acertoId);
+        if (candidatoBaixado) candidatoBaixado.status = "pago";
+        resumo.processados++;
+        resumo.conciliadasAuto++;
+        continue;
+      }
+
+      if (equipeMatch.kind === "ambiguous") {
+        await this.registrarConciliacao(userId, {
+          ...saque,
+          descricao: "Pagamento com mais de um acerto possível da equipe",
+        }, "pendente");
+        resumo.processados++;
+        resumo.pendentes++;
         continue;
       }
 
