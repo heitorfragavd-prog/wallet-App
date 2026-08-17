@@ -62,6 +62,7 @@ export interface CreateWithdrawParams {
   description?: string;
   type?: "DICT" | "BILLET";
   billetCode?: string;
+  metadata?: Record<string, unknown>;
 }
 
 

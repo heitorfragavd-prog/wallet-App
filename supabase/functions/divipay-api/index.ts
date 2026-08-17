@@ -349,6 +349,40 @@ serve(async (req) => {
           return jsonResponse({ success: false, error: 'Código do boleto (billetCode) é obrigatório' }, 400)
         }
 
+        const requestMetadata = params.metadata && typeof params.metadata === 'object'
+          ? params.metadata as Record<string, unknown>
+          : {}
+        const idempotencyKey = typeof requestMetadata.idempotency_key === 'string'
+          ? requestMetadata.idempotency_key.trim()
+          : ''
+
+        if (idempotencyKey) {
+          const { data: existing, error: existingError } = await supabaseAdmin
+            .from('divipay_transacoes')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('type', 'CASH_OUT')
+            .contains('metadata', { idempotency_key: idempotencyKey })
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (existingError) throw existingError
+          if (existing) {
+            const existingMetadata = existing.metadata && typeof existing.metadata === 'object'
+              ? existing.metadata as Record<string, unknown>
+              : {}
+            return jsonResponse({
+              success: true,
+              data: {
+                transacao: existing,
+                withdraw: existingMetadata.withdrawResponse ?? null,
+                reused: true,
+              },
+            })
+          }
+        }
+
         const body = isBillet ? {
           type: 'BILLET',
           amount,
@@ -365,7 +399,7 @@ serve(async (req) => {
           body,
         })
 
-        const { data: transacao } = await supabaseAdmin
+        const { data: transacao, error: transactionError } = await supabaseAdmin
           .from('divipay_transacoes')
           .insert({
             user_id: user.id,
@@ -380,11 +414,13 @@ serve(async (req) => {
               // Quando o pagamento é de uma dívida, o divida_id viaja na metadata
               // para o webhook dar baixa direta na dívida ao confirmar o saque.
               ...(params.dividaId ? { divida_id: String(params.dividaId) } : {}),
-              ...(params.metadata && typeof params.metadata === 'object' ? params.metadata : {}),
+              ...requestMetadata,
             },
           })
           .select()
           .single()
+
+        if (transactionError) throw transactionError
 
         return jsonResponse({ success: true, data: { transacao, withdraw: data } }, 201)
       }
