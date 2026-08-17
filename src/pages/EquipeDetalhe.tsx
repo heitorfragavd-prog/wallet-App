@@ -1,380 +1,114 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
+import { ArrowLeft, Banknote, BriefcaseBusiness, CalendarDays, CircleDollarSign, Clock3, Pencil, Plus, ShieldAlert, UserRound } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
+
+import { AcertoPaymentDialog } from "@/domains/finance/components/equipe/AcertoPaymentDialog";
+import { AcertoSemanalFolguista } from "@/domains/finance/components/equipe/AcertoSemanalFolguista";
+import { AcertoSemanalFuncionario } from "@/domains/finance/components/equipe/AcertoSemanalFuncionario";
+import { SensitiveValue } from "@/domains/finance/components/equipe/SensitiveValue";
+import { SettlementStatusBadge } from "@/domains/finance/components/equipe/SettlementStatusBadge";
+import { useColaboradorCalculos } from "@/domains/finance/hooks/useColaboradorCalculos";
 import { useColaboradorCustos } from "@/domains/finance/hooks/useColaboradorCustos";
 import { useColaboradorPresencas } from "@/domains/finance/hooks/useColaboradorPresencas";
-import { useColaboradorCalculos } from "@/domains/finance/hooks/useColaboradorCalculos";
-import { Card, CardContent } from "@/shared/components/ui/card";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/components/ui/accordion";
+import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
+import { type EquipeAcerto, useEquipeAcertos } from "@/domains/finance/hooks/useEquipeAcertos";
+import { maskBankAccount, maskCpf, maskPixKey } from "@/domains/finance/services/equipePrivacy";
+import { Avatar, AvatarFallback, AvatarImage } from "@/shared/components/ui/avatar";
 import { Badge } from "@/shared/components/ui/badge";
 import { Button } from "@/shared/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/shared/components/ui/avatar";
-import { Progress } from "@/shared/components/ui/progress";
-import { ArrowLeft, Plus, Wallet, Pencil } from "lucide-react";
+import { Card, CardContent } from "@/shared/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
+import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 
-import { AcertoSemanalFuncionario } from "@/domains/finance/components/equipe/AcertoSemanalFuncionario";
-import { AcertoSemanalFolguista } from "@/domains/finance/components/equipe/AcertoSemanalFolguista";
+const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const labels = { socio: "Sócio", funcionario: "Funcionário", folguista: "Folguista" } as const;
 
-const formatCurrency = (v: number) =>
-  v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+function formatDate(value: string): string {
+  const [year, month, day] = value.slice(0, 10).split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function genericMask(value: string | null | undefined, visible = 4): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "Não informado";
+  return `${"*".repeat(Math.max(4, trimmed.length - visible))}${trimmed.slice(-visible)}`;
+}
+
+function MetricCard({ label, value, detail, icon: Icon, tone = "text-primary" }: { label: string; value: string; detail: string; icon: typeof Banknote; tone?: string }) {
+  return <Card className="border-border/50 bg-card/70"><CardContent className="flex items-start justify-between gap-3 p-4"><div><p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-2 text-xl font-bold ${tone}`}>{value}</p><p className="mt-1 text-xs text-muted-foreground">{detail}</p></div><Icon className={`h-5 w-5 ${tone}`} /></CardContent></Card>;
+}
 
 export default function EquipeDetalhePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [mesRef, setMesRef] = useState(() => {
-    const hoje = new Date();
-    return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
-  });
+  const monthRef = new Date().toISOString().slice(0, 7);
+  const { data: colaboradores, isLoading } = useColaboradores();
+  const colaborador = colaboradores?.find((item) => item.id === id) ?? null;
+  const { data: custos = [] } = useColaboradorCustos(id || null, monthRef);
+  const { data: presencas = [] } = useColaboradorPresencas(id || null, monthRef);
+  const acertosQuery = useEquipeAcertos(id || null);
+  const calc = useColaboradorCalculos(colaborador, custos, presencas, monthRef);
+  const [paymentAcerto, setPaymentAcerto] = useState<EquipeAcerto | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
 
-  const { data: todos } = useColaboradores();
-  const colaborador = todos?.find(c => c.id === id) || null;
-  const { data: custos } = useColaboradorCustos(id || null, mesRef);
-  const { data: presencas } = useColaboradorPresencas(id || null, mesRef);
-  const calc = useColaboradorCalculos(colaborador, custos ?? [], presencas ?? [], mesRef);
-
-  if (!colaborador) {
-    return (
-      <DashboardLayout>
-        <div className="p-8 text-center text-muted-foreground">Colaborador não encontrado.</div>
-      </DashboardLayout>
-    );
-  }
+  if (isLoading) return <DashboardLayout><div className="mx-auto max-w-6xl p-6"><div className="h-72 animate-pulse rounded-2xl bg-muted/30" /></div></DashboardLayout>;
+  if (!colaborador) return <DashboardLayout><div className="mx-auto max-w-3xl p-10 text-center"><ShieldAlert className="mx-auto h-10 w-10 text-muted-foreground" /><h1 className="mt-3 text-lg font-semibold">Perfil não encontrado ou sem permissão</h1><Button className="mt-4" variant="outline" onClick={() => navigate("/equipe")}>Voltar para Equipe</Button></div></DashboardLayout>;
 
   const isSocio = colaborador.tipo === "socio";
   const isFolguista = colaborador.tipo === "folguista";
+  const acertos = acertosQuery.data ?? [];
+  const primaryAmount = isSocio ? Number(colaborador.valor_pro_labore) || Number(colaborador.salario_bruto) : isFolguista ? Number(colaborador.valor_diaria) || 0 : Number(colaborador.salario_bruto) || 0;
 
   return (
     <DashboardLayout>
-      <div className="p-4 sm:p-6 space-y-6 max-w-4xl mx-auto">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/equipe")}><ArrowLeft className="h-5 w-5" /></Button>
-          <Avatar className="h-16 w-16 border border-border/50 shrink-0">
-            <AvatarImage src={colaborador.foto_url || undefined} className="object-cover" style={{ objectPosition: colaborador.foto_posicao || "50% 15%" }} />
-            <AvatarFallback className="bg-primary/20 text-primary text-xl font-bold">
-              {colaborador.nome.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-2xl font-bold text-foreground truncate">{colaborador.nome}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant="outline" className={isSocio ? "border-purple-500/30 text-purple-400" : "border-blue-500/30 text-blue-400"}>
-                {isSocio ? "Sócio" : "Funcionário"}
-              </Badge>
-              <span className="text-sm text-muted-foreground">{colaborador.cargo}</span>
-              {colaborador.status === "experiencia" && (
-                <Badge className="bg-amber-500/20 text-amber-400">Em experiência</Badge>
-              )}
-            </div>
+      <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
+        <header className="relative overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-primary/5 p-5">
+          <div className="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-primary/10 blur-3xl" />
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
+            <Button aria-label="Voltar" variant="ghost" size="icon" onClick={() => navigate("/equipe")}><ArrowLeft className="h-5 w-5" /></Button>
+            <Avatar className="h-16 w-16 border border-border/70"><AvatarImage src={colaborador.foto_url || undefined} className="object-cover" style={{ objectPosition: colaborador.foto_posicao || "50% 15%" }} /><AvatarFallback className="bg-primary/15 text-xl font-bold text-primary">{colaborador.nome.split(" ").map((name) => name[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
+            <div className="min-w-0 flex-1"><h1 className="truncate text-2xl font-bold">{colaborador.nome}</h1><div className="mt-2 flex flex-wrap items-center gap-2"><Badge variant="outline">{labels[colaborador.tipo]}</Badge><span className="text-sm text-muted-foreground">{colaborador.cargo || "Cargo não informado"}</span>{colaborador.status === "experiencia" && <Badge className="bg-amber-500/15 text-amber-300">Em experiência</Badge>}</div></div>
+            <Button variant="outline" onClick={() => navigate(`/equipe/${id}/editar`)}><Pencil className="mr-2 h-4 w-4" />Editar perfil</Button>
           </div>
-          <Button variant="outline" size="sm" onClick={() => navigate(`/equipe/${id}/editar`)}>
-            <Pencil className="h-4 w-4 mr-2" /> Editar
-          </Button>
-        </div>
+        </header>
 
-        {!isSocio && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Custo Real Mensal</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(calc.custoRealMensal)}</p>
-                <p className="text-xs text-muted-foreground">vs salário: {formatCurrency(calc.salarioBruto)}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Custo por Dia</p>
-                <p className="text-2xl font-bold text-emerald-400">{formatCurrency(calc.custoPorDia)}</p>
-                <p className="text-xs text-muted-foreground">{calc.diasTrabalhados} dias trabalhados</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Reserva Rescisão</p>
-                <p className="text-2xl font-bold text-red-400">{formatCurrency(calc.reservaRescisao)}</p>
-                <p className="text-xs text-muted-foreground">Custo para demitir HOJE</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">
+          <div className="overflow-x-auto"><TabsList className="h-auto min-w-max justify-start bg-muted/30 p-1"><TabsTrigger value="overview" onClick={() => setActiveTab("overview")}>Visão geral</TabsTrigger><TabsTrigger value="settlements" onClick={() => setActiveTab("settlements")}>Acertos</TabsTrigger><TabsTrigger value="schedules" onClick={() => setActiveTab("schedules")}>Escalas</TabsTrigger><TabsTrigger value="finance" onClick={() => setActiveTab("finance")}>Financeiro</TabsTrigger><TabsTrigger value="personal" onClick={() => setActiveTab("personal")}>Dados pessoais</TabsTrigger></TabsList></div>
 
-        {isSocio && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Pró-labore Mensal</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(calc.salarioBruto)}</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card/60 border-border/40">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Retirada Total</p>
-                <p className="text-2xl font-bold text-purple-400">{formatCurrency(calc.custoRealMensal)}</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {isFolguista && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Card className="bg-card/60 border-border/40">
-                <CardContent className="p-4">
-                  <p className="text-sm text-muted-foreground">Custo Pago no Mês</p>
-                  <p className="text-2xl font-bold text-sky-400">{formatCurrency(calc.custoRealMensal)}</p>
-                  <p className="text-xs text-muted-foreground">Soma de diárias/acertos efetuados</p>
-                </CardContent>
-              </Card>
-              <Card className="bg-card/60 border-border/40">
-                <CardContent className="p-4">
-                  <p className="text-sm text-muted-foreground">Valor da Diária Combinada</p>
-                  <p className="text-2xl font-bold text-foreground">
-                    {formatCurrency(colaborador.salario_bruto > 0 ? colaborador.salario_bruto : (colaborador.vale_transporte_diario || 100))}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Pago somente quando contratado</p>
-                </CardContent>
-              </Card>
+          <TabsContent value="overview" className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <MetricCard label={isSocio ? "Pró-labore" : isFolguista ? "Diária combinada" : "Salário base"} value={money.format(primaryAmount)} detail={isSocio ? `Pagamento dia ${colaborador.dia_pagamento || 16}` : isFolguista ? "Sem encargos automáticos" : "Vencimento no 5º dia útil"} icon={Banknote} />
+              <MetricCard label="Custo estimado" value={money.format(calc.custoRealMensal)} detail="Mesma regra usada no painel" icon={CircleDollarSign} tone="text-emerald-400" />
+              <MetricCard label="Custo por dia" value={money.format(calc.custoPorDia)} detail={isFolguista ? "Valor por escala" : `${calc.diasUteisMes} dias de referência`} icon={Clock3} tone="text-sky-400" />
             </div>
+            {calc.diasParaFimExperiencia !== null && calc.diasParaFimExperiencia <= 15 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300"><strong>Contrato de experiência:</strong> faltam {calc.diasParaFimExperiencia} dias para a decisão.</div>}
+            <Card className="border-border/50 bg-card/70"><CardContent className="grid gap-4 p-5 sm:grid-cols-2"><div><p className="text-xs text-muted-foreground">Admissão</p><p className="mt-1 font-medium">{colaborador.data_admissao ? formatDate(colaborador.data_admissao) : "Não informada"}</p></div><div><p className="text-xs text-muted-foreground">Status</p><p className="mt-1 font-medium capitalize">{colaborador.status || "Ativo"}</p></div><div><p className="text-xs text-muted-foreground">Pix</p><p className={colaborador.pix_chave ? "mt-1 text-emerald-400" : "mt-1 text-amber-400"}>{colaborador.pix_chave ? "Cadastrado e protegido" : "Pendente"}</p></div><div><p className="text-xs text-muted-foreground">Obrigações abertas</p><p className="mt-1 font-medium">{acertos.filter((item) => ["pendente", "processando", "falhou"].includes(item.status)).length}</p></div></CardContent></Card>
+          </TabsContent>
 
-            <AcertoSemanalFolguista
-              colaboradorId={colaborador.id}
-              colaboradorNome={colaborador.nome}
-              valorDiaria={colaborador.valor_diaria || colaborador.salario_bruto || 100}
-            />
-          </div>
-        )}
+          <TabsContent value="settlements" className="space-y-3">
+            {acertos.length === 0 ? <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">Nenhum acerto gerado.</div> : acertos.map((acerto) => (
+              <Card key={acerto.id} className="border-border/50 bg-card/70"><CardContent className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><p className="font-semibold">{formatDate(acerto.periodo_inicio)} a {formatDate(acerto.periodo_fim)}</p><SettlementStatusBadge status={acerto.status} /></div><p className="mt-1 text-sm text-muted-foreground">Vence em {formatDate(acerto.vencimento)}</p></div><p className="text-xl font-bold text-primary">{money.format(Number(acerto.valor_total))}</p></div><div className="my-4 space-y-2 border-y border-border/40 py-3">{acerto.colaborador_acerto_itens.map((item) => <div className="flex justify-between gap-3 text-sm" key={item.id}><span className="text-muted-foreground">{item.descricao}</span><span>{money.format(Number(item.valor))}</span></div>)}</div>{["pendente", "falhou"].includes(acerto.status) && <Button className="w-full sm:w-auto" onClick={() => setPaymentAcerto(acerto)}>Revisar e pagar</Button>}{acerto.status === "processando" && <p className="text-sm text-sky-400">Aguardando confirmação do Divipay.</p>}</CardContent></Card>
+            ))}
+          </TabsContent>
 
-        {/* Ficha Cadastral & Dados Bancários */}
-        <Card className="bg-card/60 border-border/40">
-          <CardContent className="p-4 sm:p-5 space-y-4">
-            <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-              <Pencil className="h-4 w-4 text-primary" /> Ficha Cadastral & Dados Bancários
-            </h3>
+          <TabsContent value="schedules" className="space-y-4">
+            {isSocio ? <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">Sócios não usam escala semanal.</div> : isFolguista ? <AcertoSemanalFolguista colaboradorId={colaborador.id} colaboradorNome={colaborador.nome} valorDiaria={Number(colaborador.valor_diaria) || 100} /> : <AcertoSemanalFuncionario colaboradorId={colaborador.id} colaboradorNome={colaborador.nome} valorPassagem={Number(colaborador.valor_passagem) || 6.25} />}
+          </TabsContent>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">CPF</p>
-                <p className="font-medium text-foreground">{colaborador.cpf || "Não informado"}</p>
-              </div>
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Identidade / RG</p>
-                <p className="font-medium text-foreground">{colaborador.rg || "Não informado"}</p>
-              </div>
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Telefone</p>
-                <p className="font-medium text-foreground">{colaborador.telefone || "Não informado"}</p>
-              </div>
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">E-mail</p>
-                <p className="font-medium text-foreground truncate">{colaborador.email || "Não informado"}</p>
-              </div>
-            </div>
+          <TabsContent value="finance" className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><MetricCard label="Base mensal" value={money.format(primaryAmount)} detail={labels[colaborador.tipo]} icon={BriefcaseBusiness} /><MetricCard label="Transporte" value={money.format(calc.valeTransporte)} detail="Acertos agrupados" icon={CalendarDays} tone="text-sky-400" /><MetricCard label="Benefícios" value={money.format(calc.valeRefeicao + calc.outrosBeneficios)} detail="Refeição e outros" icon={Plus} tone="text-violet-400" /><MetricCard label="Total estimado" value={money.format(calc.custoRealMensal)} detail="Sem taxa Divipay" icon={CircleDollarSign} tone="text-emerald-400" /></div>
+            {!isSocio && !isFolguista && <Card className="border-border/50 bg-card/70"><CardContent className="space-y-2 p-5 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">INSS patronal</span><span>{money.format(calc.inssEmpresa)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">FGTS</span><span>{money.format(calc.fgts)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">13º provisionado</span><span>{money.format(calc.decimoTerceiroProvisao)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Férias provisionadas</span><span>{money.format(calc.feriasProvisao)}</span></div></CardContent></Card>}
+            <Button onClick={() => navigate(`/equipe/${id}/custo/novo`)}><Plus className="mr-2 h-4 w-4" />Lançar vale ou ajuste</Button>
+          </TabsContent>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Endereço Completo</p>
-                <p className="font-medium text-foreground">{colaborador.endereco || "Não informado"}</p>
-              </div>
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Linhas de Ônibus</p>
-                <p className="font-medium text-sky-400">{colaborador.linha_onibus || "Não informado"}</p>
-              </div>
-            </div>
-
-            {/* Contatos de Emergência */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm pt-1 border-t border-border/20">
-              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                <p className="text-xs text-amber-400 font-medium">Telefone de Emergência 1</p>
-                <p className="font-medium text-foreground">{colaborador.contato_emergencia_1 || "Não informado"}</p>
-              </div>
-              <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                <p className="text-xs text-amber-400 font-medium">Telefone de Emergência 2</p>
-                <p className="font-medium text-foreground">{colaborador.contato_emergencia_2 || "Não informado"}</p>
-              </div>
-            </div>
-
-            {/* Dados Bancários / PIX */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm pt-1 border-t border-border/20">
-              <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Chave PIX</p>
-                <p className="font-bold text-emerald-400 font-mono">
-                  {colaborador.pix_chave ? `${colaborador.pix_chave} (${colaborador.pix_tipo || 'Chave'})` : "Não cadastrado"}
-                </p>
-              </div>
-              <div className="p-2.5 bg-muted/20 rounded-lg">
-                <p className="text-xs text-muted-foreground">Preço da Passagem de Ônibus</p>
-                <p className="font-bold text-foreground">
-                  {formatCurrency(colaborador.valor_passagem ? Number(colaborador.valor_passagem) : 6.25)}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {!isSocio && !isFolguista && (
-          <Accordion type="multiple" defaultValue={["custos", "provisoes"]} className="space-y-2">
-            <AccordionItem value="custos" className="border-border/40 bg-card/60 rounded-lg px-4">
-              <AccordionTrigger className="text-foreground hover:no-underline">
-                <span className="flex items-center gap-2">
-                  <Wallet className="h-4 w-4 text-muted-foreground" />
-                  Custos do Mês ({formatCurrency(calc.custosVariaveis)} em variáveis)
-                </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-2 pb-4">
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Salário Bruto</span><span className="text-foreground">{formatCurrency(calc.salarioBruto)}</span></div>
-                  <div className="space-y-1 py-1 border-y border-border/20 my-1">
-                    <div className="flex justify-between text-sm font-medium">
-                      <span className="text-foreground">Vale Transporte (Total)</span>
-                      <span className="text-emerald-400">{formatCurrency(calc.valeTransporte)}</span>
-                    </div>
-                    <div className="pl-3 space-y-0.5 text-xs text-muted-foreground">
-                      <div className="flex justify-between">
-                        <span>├─ Base ({calc.diasUteisMes} dias úteis × {formatCurrency(calc.valeTransporteDiario)})</span>
-                        <span className="text-foreground">{formatCurrency(calc.valeTransporteBase)}</span>
-                      </div>
-                      {calc.valeTransporteAcertos > 0 && (
-                        <div className="flex justify-between text-amber-400">
-                          <span>└─ Acertos Lançados (Uber / Passagem / Dif.)</span>
-                          <span>+{formatCurrency(calc.valeTransporteAcertos)}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Vale Refeição</span><span className="text-foreground">{formatCurrency(calc.valeRefeicao)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Outros Benefícios</span><span className="text-foreground">{formatCurrency(calc.outrosBeneficios)}</span></div>
-                  {custos && custos.length > 0 && (
-                    <div className="border-t border-border/30 pt-2 mt-2">
-                      <p className="text-xs text-muted-foreground mb-2">Custos Variáveis Lançados:</p>
-                      {custos.map(c => (
-                        <div key={c.id} className="flex justify-between text-sm py-1">
-                          <span className="text-muted-foreground">{c.tipo} {c.descricao ? `(${c.descricao})` : ""}</span>
-                          <span className={c.tipo === "desconto" ? "text-red-400" : "text-foreground"}>{formatCurrency(c.valor)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="border-t border-border/30 pt-2 mt-2 flex justify-between font-medium">
-                    <span className="text-foreground">Total Variável</span>
-                    <span className="text-emerald-400">{formatCurrency(calc.custosVariaveis)}</span>
-                  </div>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="provisoes" className="border-border/40 bg-card/60 rounded-lg px-4">
-              <AccordionTrigger className="text-foreground hover:no-underline">
-                <span className="flex items-center gap-2">
-                  <Wallet className="h-4 w-4 text-muted-foreground" />
-                  Provisões Trabalhistas (Passivo Oculto)
-                </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-2 pb-4">
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">INSS Patronal (20%)</span><span className="text-foreground">{formatCurrency(calc.inssEmpresa)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">FGTS (8%)</span><span className="text-foreground">{formatCurrency(calc.fgts)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">13º Provisão (1/12)</span><span className="text-foreground">{formatCurrency(calc.decimoTerceiroProvisao)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Férias + 1/3 Provisão (1/12)</span><span className="text-foreground">{formatCurrency(calc.feriasProvisao)}</span></div>
-                  <div className="border-t border-border/30 pt-2 mt-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Custo se assinar carteira</span>
-                      <span className="text-amber-400 font-medium">{formatCurrency(calc.custoSeAssinarCarteira)}</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Diferença: +{formatCurrency(calc.custoSeAssinarCarteira - calc.salarioBruto)} em relação ao salário bruto
-                    </p>
-                  </div>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="rescisao" className="border-border/40 bg-card/60 rounded-lg px-4">
-              <AccordionTrigger className="text-foreground hover:no-underline">
-                <span className="flex items-center gap-2 text-red-400">
-                  <Wallet className="h-4 w-4" />
-                  Reserva para Rescisão ({formatCurrency(calc.reservaRescisao)})
-                </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-2 pb-4">
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">FGTS Acumulado</span><span className="text-foreground">{formatCurrency(calc.fgts * (calc.diasTrabalhados > 0 ? Math.max(1, Math.floor(calc.diasTrabalhados / 30)) : 1))}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Multa FGTS (40%)</span><span className="text-foreground">{formatCurrency(calc.multaFgtsRescisao)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Aviso Prévio (1 salário)</span><span className="text-foreground">{formatCurrency(calc.salarioBruto)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Férias Vencidas Proporcional</span><span className="text-foreground">{formatCurrency(calc.feriasProvisao * (calc.diasTrabalhados > 0 ? Math.max(1, Math.floor(calc.diasTrabalhados / 30)) : 1))}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">13º Vencido Proporcional</span><span className="text-foreground">{formatCurrency(calc.decimoTerceiroProvisao * (calc.diasTrabalhados > 0 ? Math.max(1, Math.floor(calc.diasTrabalhados / 30)) : 1))}</span></div>
-                  <div className="border-t border-border/30 pt-2 mt-2 flex justify-between font-medium">
-                    <span className="text-red-400">TOTAL RESERVA</span>
-                    <span className="text-red-400">{formatCurrency(calc.reservaRescisao)}</span>
-                  </div>
-                  <p className="text-xs text-red-400/70 mt-2">
-                    ⚠️ Esse é o valor que você precisa ter guardado HOJE se for demitir este colaborador.
-                  </p>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="presenca" className="border-border/40 bg-card/60 rounded-lg px-4">
-              <AccordionTrigger className="text-foreground hover:no-underline">
-                <span className="flex items-center gap-2">
-                  <Wallet className="h-4 w-4 text-muted-foreground" />
-                  Presença ({calc.diasTrabalhados} dias · {calc.diasFaltas} faltas)
-                </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-2 pb-4">
-                  <div className="flex justify-between text-sm mb-2">
-                    <span className="text-muted-foreground">Taxa de Presença</span>
-                    <span className={calc.percentualFaltas > 10 ? "text-red-400" : "text-emerald-400"}>{(100 - calc.percentualFaltas).toFixed(0)}%</span>
-                  </div>
-                  <Progress value={100 - calc.percentualFaltas} className="h-2" />
-                  <div className="grid grid-cols-3 gap-2 mt-3">
-                    <div className="text-center p-2 bg-emerald-500/10 rounded-lg">
-                      <p className="text-lg font-bold text-emerald-400">{calc.diasTrabalhados}</p>
-                      <p className="text-xs text-muted-foreground">Presente</p>
-                    </div>
-                    <div className="text-center p-2 bg-red-500/10 rounded-lg">
-                      <p className="text-lg font-bold text-red-400">{calc.diasFaltas}</p>
-                      <p className="text-xs text-muted-foreground">Faltas</p>
-                    </div>
-                    <div className="text-center p-2 bg-amber-500/10 rounded-lg">
-                      <p className="text-lg font-bold text-amber-400">{calc.diasAtrasos}</p>
-                      <p className="text-xs text-muted-foreground">Atrasos</p>
-                    </div>
-                  </div>
-                  {calc.diasFaltas > 0 && (
-                    <p className="text-xs text-red-400 mt-2">
-                      💸 Custo das faltas: {formatCurrency(calc.diasFaltas * calc.custoPorDia)} (salário pago + folguista)
-                    </p>
-                  )}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        )}
-
-        {!isSocio && calc.diasParaFimExperiencia !== null && calc.diasParaFimExperiencia <= 15 && (
-          <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-            <p className="text-sm text-amber-400 font-medium">
-              ⚡ ATENÇÃO: Faltam {calc.diasParaFimExperiencia} dias para o fim do contrato de experiência de {colaborador.nome}.
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Decida: efetivar (custo sobe para {formatCurrency(calc.custoSeAssinarCarteira)}) ou dispensar (custo: {formatCurrency(calc.reservaRescisao)}).
-            </p>
-          </div>
-        )}
-
-        {!isSocio && !isFolguista && (
-          <AcertoSemanalFuncionario
-            colaboradorId={colaborador.id}
-            colaboradorNome={colaborador.nome}
-            valorPassagem={colaborador.valor_passagem ? Number(colaborador.valor_passagem) : 6.25}
-          />
-        )}
-
-        <div className="flex gap-2 flex-wrap">
-          <Button onClick={() => navigate(`/equipe/${id}/custo/novo`)}><Plus className="h-4 w-4 mr-1" /> Lançar Vale/Adiantamento</Button>
-        </div>
+          <TabsContent value="personal" className="space-y-4">
+            <Card className="border-border/50 bg-card/70"><CardContent className="p-5"><div className="mb-4 flex items-center gap-2"><UserRound className="h-5 w-5 text-primary" /><h2 className="font-semibold">Dados pessoais protegidos</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><SensitiveValue label="CPF" value={colaborador.cpf} maskedValue={maskCpf(colaborador.cpf)} /><SensitiveValue label="RG" value={colaborador.rg} maskedValue={genericMask(colaborador.rg, 3)} /><SensitiveValue label="Telefone" value={colaborador.telefone} maskedValue={genericMask(colaborador.telefone, 4)} /><SensitiveValue label="Endereço" value={colaborador.endereco} maskedValue="•••• endereço protegido" /><SensitiveValue label="Contato de emergência 1" value={colaborador.contato_emergencia_1} maskedValue={genericMask(colaborador.contato_emergencia_1, 4)} /><SensitiveValue label="Contato de emergência 2" value={colaborador.contato_emergencia_2} maskedValue={genericMask(colaborador.contato_emergencia_2, 4)} /></div></CardContent></Card>
+            <Card className="border-border/50 bg-card/70"><CardContent className="p-5"><div className="mb-4 flex items-center gap-2"><Banknote className="h-5 w-5 text-emerald-400" /><h2 className="font-semibold">Pagamento e dados bancários</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><SensitiveValue label="Chave Pix" value={colaborador.pix_chave} maskedValue={maskPixKey(colaborador.pix_chave, colaborador.pix_tipo || "aleatoria")} /><SensitiveValue label="Conta bancária" value={colaborador.banco_conta} maskedValue={maskBankAccount(colaborador.banco_conta)} /><SensitiveValue label="Agência bancária" value={colaborador.banco_agencia} maskedValue={genericMask(colaborador.banco_agencia, 2)} /></div><p className="mt-3 text-sm text-muted-foreground">{colaborador.banco_nome || "Banco não informado"}</p></CardContent></Card>
+          </TabsContent>
+        </Tabs>
       </div>
+
+      {paymentAcerto && <AcertoPaymentDialog open={Boolean(paymentAcerto)} onOpenChange={(open) => { if (!open) setPaymentAcerto(null); }} acerto={paymentAcerto} colaboradorNome={colaborador.nome} pixTipo={colaborador.pix_tipo || undefined} />}
     </DashboardLayout>
   );
 }
