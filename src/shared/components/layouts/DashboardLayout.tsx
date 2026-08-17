@@ -35,6 +35,7 @@ import {
   BellRing,
   MonitorPlay,
   Brain,
+  GitCompare,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -82,7 +83,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: Users, label: "Equipe", path: "/equipe" },
     { icon: CheckCircle, label: "Conciliação", path: "/conciliacao" },
     { icon: Receipt, label: "Recibos", path: "/recibos" },
-    { icon: BarChart3, label: "Relatorios", path: "/relatorios" },
+    { icon: BarChart3, label: "Relatórios", path: "/relatorios" },
+    { icon: GitCompare, label: "Comparativo", path: "/comparativo" },
     { icon: TrendingUp, label: "Fluxo de Caixa", path: "/fluxo-caixa" },
     { icon: FileText, label: "DRE Simplificada", path: "/dre" },
     { icon: ChefHat, label: "Cardápio", path: "/cardapio" },
