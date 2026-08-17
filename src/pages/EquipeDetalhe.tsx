@@ -13,8 +13,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/shared/components/ui/avat
 import { Progress } from "@/shared/components/ui/progress";
 import { ArrowLeft, Plus, Wallet, Pencil } from "lucide-react";
 
-import AcertoSemanal from "@/domains/finance/components/AcertoSemanal";
-import EscalaFolguista from "@/domains/finance/components/EscalaFolguista";
+import { AcertoSemanalFuncionario } from "@/domains/finance/components/equipe/AcertoSemanalFuncionario";
+import { AcertoSemanalFolguista } from "@/domains/finance/components/equipe/AcertoSemanalFolguista";
 
 const formatCurrency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -136,11 +136,10 @@ export default function EquipeDetalhePage() {
               </Card>
             </div>
 
-            <EscalaFolguista
+            <AcertoSemanalFolguista
               colaboradorId={colaborador.id}
               colaboradorNome={colaborador.nome}
-              valorDiariaPadrao={colaborador.salario_bruto > 0 ? colaborador.salario_bruto : 100}
-              mesRef={mesRef}
+              valorDiaria={colaborador.valor_diaria || colaborador.salario_bruto || 100}
             />
           </div>
         )}
@@ -365,10 +364,10 @@ export default function EquipeDetalhePage() {
         )}
 
         {!isSocio && !isFolguista && (
-          <AcertoSemanal
+          <AcertoSemanalFuncionario
             colaboradorId={colaborador.id}
             colaboradorNome={colaborador.nome}
-            salarioBruto={colaborador.salario_bruto}
+            valorPassagem={colaborador.valor_passagem ? Number(colaborador.valor_passagem) : 6.25}
           />
         )}
 
