@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(42);
+select plan(56);
 
 select has_table('public', 'workspace_members', 'workspace_members existe');
 select has_table('public', 'colaborador_acertos', 'colaborador_acertos existe');
@@ -298,6 +298,73 @@ select results_eq(
   $$select count(*)::bigint from public.colaborador_pagamentos$$,
   $$values (0::bigint)$$,
   'Outro workspace nao enxerga pagamentos da equipe A'
+);
+
+reset role;
+select has_table('public', 'equipe_feriados', 'Tabela de feriados por workspace existe');
+select has_function('public', 'equipe_quinto_dia_util', array['date', 'uuid'], 'Calculador do quinto dia util existe');
+select has_function('public', 'gerar_obrigacoes_mensais_equipe', array['date'], 'RPC mensal idempotente existe');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000a001', true);
+select lives_ok(
+  $$insert into public.equipe_feriados (workspace_id, data, nome) values ('00000000-0000-0000-0000-00000000b001', '2026-09-07', 'Independencia')$$,
+  'Administrador cadastra feriado somente no proprio workspace'
+);
+select results_eq(
+  $$select public.equipe_quinto_dia_util('2026-09-01', '00000000-0000-0000-0000-00000000b001')$$,
+  $$values ('2026-09-08'::date)$$,
+  'Salario vence no quinto dia util considerando feriado'
+);
+select results_eq(
+  $$select public.gerar_obrigacoes_mensais_equipe('2026-09-01')$$,
+  $$values (1)$$,
+  'Usuario gera somente a obrigacao mensal do workspace acessivel'
+);
+select results_eq(
+  $$select count(*)::bigint from public.colaborador_acertos where workspace_id = '00000000-0000-0000-0000-00000000b002' and periodo_inicio = '2026-09-01'$$,
+  $$values (0::bigint)$$,
+  'Geracao autenticada nao atravessa workspace'
+);
+select results_eq(
+  $$select vencimento from public.colaborador_acertos where tipo = 'salario' and periodo_inicio = '2026-09-01'$$,
+  $$values ('2026-09-08'::date)$$,
+  'Obrigacao de salario usa o quinto dia util'
+);
+select results_eq(
+  $$select natureza, valor from public.colaborador_acerto_itens where natureza = 'salario' and valor = 2000$$,
+  $$values ('salario'::text, 2000::numeric)$$,
+  'Salario permanece classificado separadamente no ledger'
+);
+select results_eq(
+  $$select public.gerar_obrigacoes_mensais_equipe('2026-09-01')$$,
+  $$values (0)$$,
+  'Reexecucao mensal nao duplica obrigacoes'
+);
+select lives_ok(
+  $$
+    insert into public.colaboradores (
+      id, workspace_id, user_id, nome, tipo, valor_pro_labore, dia_pagamento, status
+    ) values
+      ('00000000-0000-0000-0000-00000000c010', '00000000-0000-0000-0000-00000000b001', '00000000-0000-0000-0000-00000000a001', 'Heitor Fraga', 'socio', 5000, 16, 'ativo'),
+      ('00000000-0000-0000-0000-00000000c011', '00000000-0000-0000-0000-00000000b001', '00000000-0000-0000-0000-00000000a001', 'Viviane Teotonio', 'socio', 5000, 25, 'ativo')
+  $$,
+  'Socios possuem dias individuais de pro labore'
+);
+select results_eq(
+  $$select public.gerar_obrigacoes_mensais_equipe('2026-10-01')$$,
+  $$values (3)$$,
+  'Mes seguinte gera um salario e dois pro labores'
+);
+select results_eq(
+  $$select vencimento from public.colaborador_acertos where colaborador_id = '00000000-0000-0000-0000-00000000c010' and periodo_inicio = '2026-10-01'$$,
+  $$values ('2026-10-16'::date)$$,
+  'Pro labore do Heitor vence dia 16'
+);
+select results_eq(
+  $$select vencimento from public.colaborador_acertos where colaborador_id = '00000000-0000-0000-0000-00000000c011' and periodo_inicio = '2026-10-01'$$,
+  $$values ('2026-10-25'::date)$$,
+  'Pro labore da Viviane vence dia 25'
 );
 
 reset role;

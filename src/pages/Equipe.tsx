@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
+import { useEquipeObrigacoesMensais } from "@/domains/finance/hooks/useEquipeObrigacoesMensais";
 import { Card, CardContent } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Button } from "@/shared/components/ui/button";
@@ -12,9 +13,10 @@ const formatCurrency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export default function EquipePage() {
+  useEquipeObrigacoesMensais();
   const { data: colaboradores, isLoading } = useColaboradores();
   const navigate = useNavigate();
-  const [filtroTipo, setFiltroTipo] = useState<"todos" | "socio" | "funcionario">("todos");
+  const [filtroTipo, setFiltroTipo] = useState<"todos" | "socio" | "funcionario" | "folguista">("todos");
 
   const filtrados = colaboradores?.filter(c => filtroTipo === "todos" || c.tipo === filtroTipo) ?? [];
   const socios = filtrados.filter(c => c.tipo === "socio");
