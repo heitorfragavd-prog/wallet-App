@@ -981,6 +981,83 @@ revoke all on function public.registrar_falha_pagamento(uuid, text) from public;
 grant execute on function public.registrar_falha_pagamento(uuid, text)
   to authenticated, service_role;
 
+create or replace function public.registrar_escala_folguista(
+  p_colaborador_id uuid,
+  p_data date,
+  p_turno text,
+  p_valor_diaria numeric,
+  p_bateu_meta boolean,
+  p_valor_meta numeric,
+  p_observacao text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_colaborador record;
+  v_escala_id uuid;
+  v_valor_total numeric(12,2);
+begin
+  select c.* into v_colaborador
+  from public.colaboradores c
+  where c.id = p_colaborador_id
+  for update;
+
+  if not found then
+    raise exception 'Colaborador nao encontrado' using errcode = 'P0002';
+  end if;
+
+  if not public.tem_acesso_workspace(v_colaborador.workspace_id) then
+    raise exception 'Acesso negado ao workspace' using errcode = '42501';
+  end if;
+
+  if v_colaborador.tipo <> 'folguista' then
+    raise exception 'Somente folguista pode receber escala de diaria' using errcode = '22023';
+  end if;
+
+  if v_colaborador.status = 'demitido' then
+    raise exception 'Folguista desligado nao pode receber escala' using errcode = '22023';
+  end if;
+
+  if p_data is null or nullif(btrim(p_turno), '') is null then
+    raise exception 'Data e turno sao obrigatorios' using errcode = '22023';
+  end if;
+
+  if coalesce(p_valor_diaria, -1) < 0 or coalesce(p_valor_meta, -1) < 0 then
+    raise exception 'Valores da escala nao podem ser negativos' using errcode = '22023';
+  end if;
+
+  v_valor_total := p_valor_diaria + case when coalesce(p_bateu_meta, false) then p_valor_meta else 0 end;
+  if v_valor_total <= 0 then
+    raise exception 'Total da escala deve ser maior que zero' using errcode = '22023';
+  end if;
+
+  insert into public.colaborador_escalas (
+    colaborador_id, workspace_id, data, turno, valor_diaria,
+    bateu_meta, valor_meta, valor_total, observacao, status
+  ) values (
+    p_colaborador_id,
+    v_colaborador.workspace_id,
+    p_data,
+    left(btrim(p_turno), 50),
+    p_valor_diaria,
+    coalesce(p_bateu_meta, false),
+    p_valor_meta,
+    v_valor_total,
+    nullif(left(btrim(coalesce(p_observacao, '')), 500), ''),
+    'programada'
+  ) returning id into v_escala_id;
+
+  return v_escala_id;
+end;
+$$;
+
+revoke all on function public.registrar_escala_folguista(uuid, date, text, numeric, boolean, numeric, text) from public;
+grant execute on function public.registrar_escala_folguista(uuid, date, text, numeric, boolean, numeric, text)
+  to authenticated, service_role;
+
 create or replace function public.confirmar_pagamento_acerto(
   p_acerto_id uuid,
   p_divipay_external_id text,

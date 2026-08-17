@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(38);
+select plan(42);
 
 select has_table('public', 'workspace_members', 'workspace_members existe');
 select has_table('public', 'colaborador_acertos', 'colaborador_acertos existe');
@@ -18,6 +18,11 @@ select has_function(
   'public', 'confirmar_pagamento_acerto',
   array['uuid', 'text', 'uuid', 'text', 'numeric', 'numeric', 'text'],
   'RPC de confirmacao de pagamento existe'
+);
+select has_function(
+  'public', 'registrar_escala_folguista',
+  array['uuid', 'date', 'text', 'numeric', 'boolean', 'numeric', 'text'],
+  'RPC atomica de registro de escala existe'
 );
 
 select is(
@@ -266,6 +271,26 @@ select results_eq(
   $$select count(*)::bigint from public.colaborador_pagamentos$$,
   $$values (2::bigint)$$,
   'Webhook repetido nao duplica pagamento'
+);
+
+select lives_ok(
+  $$
+    select public.cancelar_escala_e_recalcular_acerto(
+      '00000000-0000-0000-0000-00000000d001',
+      'Folguista desmarcou depois da quitacao'
+    )
+  $$,
+  'Cancelamento depois do pagamento preserva o historico'
+);
+select results_eq(
+  $$select status from public.colaborador_acertos limit 1$$,
+  $$values ('ajustado'::text)$$,
+  'Acerto pago passa a ajustado sem reabrir a divida'
+);
+select results_eq(
+  $$select valor from public.colaborador_ajustes limit 1$$,
+  $$values ((-100)::numeric)$$,
+  'Cancelamento pago gera credito negativo para o proximo acerto'
 );
 
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000a002', true);
