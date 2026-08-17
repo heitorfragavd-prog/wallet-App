@@ -1,5 +1,6 @@
 -- Centro de RH e Financeiro da Equipe
 -- Ledger atomico, isolamento por workspace e pagamentos idempotentes.
+-- Nome timestampado para publicação pela Supabase CLI atual.
 
 create or replace function public.normalizar_chave_pix(p_chave text)
 returns text

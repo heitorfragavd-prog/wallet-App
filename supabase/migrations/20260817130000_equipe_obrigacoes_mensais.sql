@@ -1,4 +1,5 @@
 -- Obrigações mensais da Equipe: salários no 5º dia útil e pró-labore em dia configurável.
+-- Nome timestampado para publicação pela Supabase CLI atual.
 
 create table if not exists public.equipe_feriados (
   id uuid primary key default gen_random_uuid(),
