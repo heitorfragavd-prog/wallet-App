@@ -29,3 +29,7 @@ dist-ssr
 
 # Vite timestamp files
 vite.config.ts.timestamp-*.mjs
+
+# Local Superpowers worktrees and visual brainstorming sessions
+.worktrees/
+.superpowers/
