@@ -60,7 +60,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { SimuladorRentabilidadeCard } from "./SimuladorRentabilidadeCard";
 import { SimuladorJurosCompostosCard } from "./SimuladorJurosCompostosCard";
-import * as XLSX from "xlsx";
+import { downloadSpreadsheet } from "@/shared/utils/spreadsheetExport";
 
 const COLORS = ["#10B981", "#3B82F6", "#8B5CF6", "#F59E0B", "#EF4444", "#6B7280"];
 
@@ -266,10 +266,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
       Valor_Atual: formatCurrency(Number(inv.valor_atual)),
     }));
 
-    const ws = XLSX.utils.json_to_sheet(dataExport);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Bens e Direitos");
-    XLSX.writeFile(wb, `Declaracao_IR_Bens_${new Date().getFullYear()}.xlsx`);
+    downloadSpreadsheet([{ name: "Bens e Direitos", rows: dataExport }], `Declaracao_IR_Bens_${new Date().getFullYear()}.xls`);
   };
 
   const handleCadastrarAtivo = async (e: React.FormEvent) => {

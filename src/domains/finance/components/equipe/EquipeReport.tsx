@@ -27,7 +27,9 @@ export function EquipeReport({ startDate, endDate }: { startDate?: string | null
     queryKey: ["equipe-relatorio", activeWorkspace?.id, startDate, endDate],
     enabled: !!activeWorkspace?.id,
     queryFn: async () => {
-      const client = supabase as any;
+      const client = supabase as unknown as {
+        from: (table: string) => ReturnType<typeof supabase.from>;
+      };
       let acertosQuery = client.from("colaborador_acertos").select("id").eq("workspace_id", activeWorkspace!.id).neq("status", "cancelado");
       if (startDate) acertosQuery = acertosQuery.gte("periodo_fim", startDate);
       if (endDate) acertosQuery = acertosQuery.lte("periodo_inicio", endDate);
