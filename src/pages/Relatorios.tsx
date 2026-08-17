@@ -113,6 +113,8 @@ const formatCurrency = (value: number) =>
 
 // ── Hook principal de dados ─────────────────────────────────────────────────
 import type { DateRange } from "@/shared/components/DateRangePicker/DateRangePicker";
+import { useSearchParams } from "react-router-dom";
+import { ComparativosView } from "@/domains/finance/components/comparativos/ComparativosView";
 
 interface FilterParams {
   dateRange: DateRange;
@@ -379,6 +381,16 @@ const metaStatusConfig: Record<string, { label: string; color: string }> = {
 
 // ── Componente principal ─────────────────────────────────────────────────────
 const Relatorios = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const validTabs = new Set(["overview", "comparativos", "categories", "transactions", "dividas", "metas", "recorrentes"]);
+  const requestedTab = searchParams.get("aba") ?? "overview";
+  const activeTab = validTabs.has(requestedTab) ? requestedTab : "overview";
+  const changeTab = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("aba", value);
+    if (value === "comparativos" && !["completa", "diaria", "mensal"].includes(next.get("visao") ?? "")) next.set("visao", "completa");
+    setSearchParams(next);
+  };
   const { exportarTransacoes_Excel } = useExportarRelatorios();
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
   const { toast } = useToast();
@@ -645,6 +657,33 @@ const Relatorios = () => {
   const totalTxPages = Math.ceil(filteredTransactions.length / TX_PAGE_SIZE);
 
   // ── JSX ───────────────────────────────────────────────────────────────
+  if (activeTab === "comparativos") {
+    return (
+      <DashboardLayout>
+        <div className="p-4 md:p-6 space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl p-3 shadow-lg shadow-cyan-500/20">
+              <BarChart3 className="w-6 h-6 text-white" />
+            </div>
+            <div><h1 className="text-2xl font-bold text-foreground">Relatórios</h1><p className="text-muted-foreground text-sm">Central de comparativos</p></div>
+          </div>
+          <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
+            <TabsList className="flex-wrap h-auto gap-1 p-1">
+              <TabsTrigger value="overview">Visão Geral</TabsTrigger>
+              <TabsTrigger value="comparativos">Comparativos</TabsTrigger>
+              <TabsTrigger value="categories">Categorias</TabsTrigger>
+              <TabsTrigger value="transactions">Transações</TabsTrigger>
+              <TabsTrigger value="dividas">Dívidas</TabsTrigger>
+              <TabsTrigger value="metas">Metas</TabsTrigger>
+              <TabsTrigger value="recorrentes">Recorrentes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="comparativos" className="space-y-4"><ComparativosView /></TabsContent>
+          </Tabs>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
       <div className="p-4 md:p-6 space-y-4">
@@ -1031,9 +1070,10 @@ const Relatorios = () => {
         </div>
 
         {/* ── Tabs ────────────────────────────────────────────────────── */}
-        <Tabs defaultValue="overview" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
           <TabsList className="flex-wrap h-auto gap-1 p-1">
             <TabsTrigger value="overview" className="text-xs sm:text-sm">Visão Geral</TabsTrigger>
+            <TabsTrigger value="comparativos" className="text-xs sm:text-sm">Comparativos</TabsTrigger>
             <TabsTrigger value="categories" className="text-xs sm:text-sm">Categorias</TabsTrigger>
             <TabsTrigger value="transactions" className="text-xs sm:text-sm">
               Transações
