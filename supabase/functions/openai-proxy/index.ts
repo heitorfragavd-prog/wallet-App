@@ -363,8 +363,11 @@ async function consultarSaidasCaixaPeriodo(
     (colaboradores || []).forEach((c: any) => colabMap.set(c.id, c.nome));
     const colabIds = Array.from(colabMap.keys());
 
-    // 2. Busca paralela nas 4 fontes de saídas
-    const [despRes, txRes, custosRes, pagDividasRes] = await Promise.all([
+    // 2. Busca paralela nas 4 fontes de saídas no banco e DiviPay API
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const [despRes, txRes, custosRes, pagDividasRes, diviResp] = await Promise.all([
       supabase
         .from("despesas")
         .select("id,descricao,valor,data,metodo_pagamento,categoria_id,created_at")
@@ -392,6 +395,22 @@ async function consultarSaidasCaixaPeriodo(
         .eq("user_id", userId)
         .gte("data_pagamento", startDate)
         .lte("data_pagamento", endDate),
+      fetch(`${supabaseUrl}/functions/v1/divipay-api`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "listWithdraws",
+          user_id: userId,
+          limit: 100,
+          offset: 0,
+        }),
+      }).then(r => r.ok ? r.json() : { data: [] }).catch(err => {
+        console.warn("[consultarSaidasCaixaPeriodo] Erro DiviPay API:", err.message);
+        return { data: [] };
+      }),
     ]);
 
     const itens: any[] = [];
@@ -425,6 +444,40 @@ async function consultarSaidasCaixaPeriodo(
           categoria: t.categoria_id ? (catMap.get(t.categoria_id) || "Transações") : "Transações",
           metodo_pagamento: t.metodo_pagamento || "Outros",
           data: t.data,
+        });
+      }
+    }
+
+    // Processa Saídas / Saques da DiviPay em tempo real
+    const rawDivi = diviResp?.data || [];
+    const divipayList = Array.isArray(rawDivi) ? rawDivi : (rawDivi.items || []);
+    for (const w of divipayList) {
+      const status = String(w.status || "").toUpperCase();
+      if (status && ["PENDING", "FAILED", "ERROR", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED", "REFUNDED"].includes(status)) {
+        continue;
+      }
+      const val = Number(w.amount || w.valor || 0);
+      const dataStr = toSaoPauloDate(w.createdAt || w.created_at || w.date || "");
+      if (dataStr < startDate || dataStr > endDate) {
+        continue;
+      }
+      const isBoleto = w.type === "BILLET" || String(w.description || "").toLowerCase().includes("boleto");
+      const desc = w.description || (isBoleto ? "Pagamento de boleto" : "Saque Pix");
+      const fav = w.name || "";
+      const descFinal = (fav && !desc.includes(fav)) ? `${desc} - ${fav}` : desc;
+      const isProLabore = descFinal.toLowerCase().includes("heitor") || descFinal.toLowerCase().includes("pro-labore") || descFinal.toLowerCase().includes("pró-labore");
+      const tipoSaida = isProLabore ? "Pró-labore" : (isBoleto ? "Pagamento de Boleto" : "Transferência / Saque Divipay");
+
+      const chave = `${dataStr}_${val}_${descFinal.toLowerCase()}`;
+      if (!chavesUnicas.has(chave)) {
+        chavesUnicas.add(chave);
+        itens.push({
+          tipo_saida: tipoSaida,
+          descricao: descFinal,
+          valor: val,
+          categoria: isProLabore ? "Equipe / Sócios" : "Transferências e Saques Divipay",
+          metodo_pagamento: isBoleto ? "Boleto" : "Pix",
+          data: dataStr,
         });
       }
     }
