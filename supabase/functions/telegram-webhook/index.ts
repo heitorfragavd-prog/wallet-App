@@ -370,7 +370,8 @@ serve(async (req) => {
           `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
           `💰 Valor: <b>${valFmt}</b>\n` +
           `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
-          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas!</i>`
+          `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
+          `<i>Você receberá avisos no aplicativo Wallet e no Telegram no dia do vencimento.</i>`
         );
         return new Response("OK", { status: 200, headers: corsHeaders });
       } else if (isNao) {
