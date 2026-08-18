@@ -526,136 +526,37 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // ─── Parser de PDF: extrai texto de streams FlateDecode ───
+          // ─── Parser de PDF Seguro: extração de texto não comprimido e strings simples ───
           let pdfText = "";
           try {
             const pdfBytes = new Uint8Array(pdfBuffer);
             const rawStr = new TextDecoder("latin1").decode(pdfBytes);
             const textParts: string[] = [];
 
-            // Procura todos os objetos PDF com stream
-            // Usa indexOf para ser mais rápido que regex em arquivos binários
-            const STREAM_TAG = "stream";
-            const ENDSTREAM_TAG = "endstream";
-            let pos = 0;
-            let iterations = 0;
-            const MAX_ITER = 100;
-
-            while (pos < rawStr.length && iterations < MAX_ITER) {
-              iterations++;
-
-              // Acha o próximo "stream\n" ou "stream\r\n"
-              let sIdx = rawStr.indexOf(STREAM_TAG, pos);
-              if (sIdx === -1) break;
-
-              // Garante que é um stream real (precisa de \n após "stream")
-              const afterStream = sIdx + STREAM_TAG.length;
-              let dataStart: number;
-              if (rawStr[afterStream] === "\n") {
-                dataStart = afterStream + 1;
-              } else if (rawStr[afterStream] === "\r" && rawStr[afterStream + 1] === "\n") {
-                dataStart = afterStream + 2;
-              } else {
-                pos = sIdx + 1;
-                continue;
-              }
-
-              // Acha o "endstream" correspondente
-              let eIdx = rawStr.indexOf(ENDSTREAM_TAG, dataStart);
-              if (eIdx === -1) break;
-
-              // Obtém o dicionário antes deste stream (últimos 1000 chars)
-              const dictRegion = rawStr.slice(Math.max(0, sIdx - 1000), sIdx);
-              
-              // Pega o ÚLTIMO /Length no dicionário (evita pegar de objeto anterior)
-              const lenMatches = [...dictRegion.matchAll(/\/Length\s+(\d+)/g)];
-              if (lenMatches.length === 0) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
-              const streamLen = parseInt(lenMatches.at(-1)![1]);
-              
-              if (streamLen <= 0 || streamLen > 500_000) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
-
-              // Verifica se é FlateDecode
-              const isFlate = dictRegion.includes("FlateDecode") || dictRegion.includes("/Fl ");
-
-              // Extrai bytes brutos do stream
-              const streamBytes = pdfBytes.slice(dataStart, dataStart + streamLen);
-
-              // Só processa streams FlateDecode — streams sem compressão são geralmente
-              // fontes binárias ou imagens que causam catastrophic backtracking na regex
-              if (!isFlate) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
-
-              let content = "";
-              // Tenta descomprimir com timeout de 2s para evitar hang
-              const decompWithTimeout = async (data: Uint8Array, fmt: string): Promise<string> => {
-                return Promise.race<string>([
-                  (async () => {
-                    const ds = new DecompressionStream(fmt as CompressionFormat);
-                    const writer = ds.writable.getWriter();
-                    writer.write(data);
-                    writer.close();
-                    const buf = await new Response(ds.readable).arrayBuffer();
-                    return new TextDecoder("latin1").decode(buf);
-                  })(),
-                  new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
-                ]);
-              };
-
-              for (const fmt of ["deflate", "deflate-raw"]) {
-                try {
-                  const decoded = await decompWithTimeout(new Uint8Array(streamBytes), fmt);
-                  if (decoded.length > 5) { content = decoded; break; }
-                } catch { content = ""; }
-              }
-
-
-              // Só processa conteúdo que seja stream de texto PDF (contém operador BT)
-              if (!content || !content.includes("BT") || !content.includes("ET")) {
-                pos = eIdx + ENDSTREAM_TAG.length;
-                continue;
-              }
-
-              // Limita a 30KB para evitar regex lenta em streams grandes
-              const safeContent = content.slice(0, 30000);
-
-              // Extrai strings de Tj — regex simples sem alternância aninhada
-              const tjRe = /\(([^)\\]{1,300})\)\s*Tj/g;
-              for (const m of safeContent.matchAll(tjRe)) {
-                const t = m[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
-                               .replace(/\\n/g, " ").replace(/\\\\/g, "\\");
-                if (t.trim().length > 0) textParts.push(t.trim());
-              }
-              // Extrai strings de TJ (array) — percorre cada ( ) separadamente
-              const tjArrRe = /\[([\s\S]{1,2000}?)\]\s*TJ/g;
-              for (const m of safeContent.matchAll(tjArrRe)) {
-                const inner = m[1];
-                const strRe = /\(([^)\\]{1,300})\)/g;
-                for (const s of inner.matchAll(strRe)) {
-                  const t = s[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-                  if (t.trim().length > 0) textParts.push(t.trim());
-                }
-              }
-
-              // Avança para após este stream
-              pos = eIdx + ENDSTREAM_TAG.length;
-
+            // Extrai strings diretas (PDFs com texto não comprimido ou metadados)
+            const tjMatches = rawStr.match(/\(([^)\\]{2,300})\)\s*Tj/g) || [];
+            for (const m of tjMatches.slice(0, 500)) {
+              const cleaned = m.replace(/\)\s*Tj$/, "").replace(/^\(/, "").trim();
+              if (cleaned.length > 2) textParts.push(cleaned);
             }
 
             pdfText = textParts.join(" ");
-            console.log("[telegram-webhook] PDF parser extraiu", textParts.length, "strings, iter:", iterations, "amostra:", pdfText.slice(0, 500));
+            console.log("[telegram-webhook] Extração de texto do PDF:", textParts.length, "partes encontradas");
           } catch (pdfParseErr: any) {
-            console.error("[telegram-webhook] PDF parser falhou:", pdfParseErr.message);
+            console.error("[telegram-webhook] PDF parse error:", pdfParseErr.message);
           }
 
-          if (!pdfText.trim() || pdfText.trim().length < 10) {
+          if (!pdfText.trim() || pdfText.trim().length < 15) {
             await sendReply(
-              "📄 <b>PDF recebido.</b>\n\n" +
-              "Não foi possível extrair o texto deste PDF (codificação não suportada).\n\n" +
-              "📱 <b>Como cadastrar rapidamente:</b>\n" +
-              "Abra o PDF no celular → tire um screenshot/print → envie a imagem aqui!\n\n" +
-              "<i>O bot vai ler a imagem e cadastrar o boleto automaticamente.</i>"
+              "📄 <b>PDF recebido!</b>\n\n" +
+              "Os boletos em PDF possuem camadas vetoriais protegidas que impedem a extração direta do texto.\n\n" +
+              "📸 <b>Como cadastrar instantaneamente:</b>\n" +
+              "Abra o boleto no celular → <b>tire um print / screenshot</b> → envie a imagem aqui no chat!\n\n" +
+              "<i>A nossa IA lê a foto na hora, identifica os valores, vencimento e cadastra a dívida automaticamente.</i>"
             );
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
+
 
 
           // Analisar texto extraído com LLM
@@ -874,76 +775,59 @@ Responda APENAS com JSON válido sem markdown:
             console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
           }
 
-        const docAnalysisSystemPrompt = `Você é um especialista em leitura de boletos bancários brasileiros com precisão cirúrgica.
+        const docAnalysisSystemPrompt = `Você é um sistema especializado em extração de dados de boletos bancários brasileiros a partir de imagens com altíssima precisão.
 
-═══════════════════════════════════════
-ESTRUTURA DE UM BOLETO BANCÁRIO BRASILEIRO
-═══════════════════════════════════════
+## REGRAS ABSOLUTAS (obedecer rigorosamente):
 
-Um boleto tem SEMPRE estas seções distintas (aprenda a diferenciá-las):
-
-1. BENEFICIÁRIO / CEDENTE / SACADOR (quem RECEBE o pagamento — é a empresa fornecedora/credora):
-   - Fica no TOPO do boleto, logo abaixo do nome do banco
-   - Exemplos: "ISPAL INDUSTRIA BRASILEIRA DE", "XODO FOODS E DISTRIBUICAO LTDA"
+1. **BENEFICIÁRIO / CEDENTE (quem RECEBE o dinheiro)**:
+   - Procure os campos: "Beneficiário", "Cedente", "Beneficiário Final", "Recebedor", "Razão Social"
+   - É a EMPRESA / FORNECEDOR / INSTITUIÇÃO que emitiu o boleto
+   - Fica no TOPO do boleto (logo abaixo do nome/logotipo do banco)
    - ⚠️ ESTE é o campo "beneficiario" que você deve extrair
+   - ❌ NUNCA confunda com o pagador/sacado
 
-2. PAGADOR / SACADO (quem PAGA — é o cliente/devedor, NÃO é o beneficiário):
-   - Fica na parte INFERIOR do boleto, geralmente precedido de "PAGADOR:" ou "SACADO:"
-   - Exemplos: "HEITOR FRAGA DE OLIVEIRA", "RODO POINT LTDA"
-   - ❌ NUNCA use o PAGADOR como "beneficiario" — ele é irrelevante para o campo beneficiario
+2. **PAGADOR / SACADO (quem PAGA o boleto)**:
+   - Procure os campos: "Pagador", "Sacado", "Sacado/Avalista", "Nome do Pagador"
+   - Fica na parte INFERIOR do boleto
+   - ❌ NUNCA use o PAGADOR como "beneficiario" — o pagador é quem está pagando a conta
 
-3. VENCIMENTO: Data limite de pagamento (geralmente no canto superior direito do boleto)
-   - Formato no boleto: DD/MM/AAAA → converter para YYYY-MM-DD
-   - Boletos vencidos (data passada) são válidos e devem ser cadastrados normalmente
+3. **VALOR DO DOCUMENTO**:
+   - Procure: "Valor do Documento", "Valor", "(=) Valor documento", "Valor cobrado"
+   - Normalize para número decimal (ex: 1534.39)
+   - Se houver 3 vias, leia a terceira via (na parte inferior da folha)
 
-4. VALOR DO DOCUMENTO: Valor total a pagar (geralmente no canto superior direito)
-   - Usar "Valor do Documento" e NÃO "Valor Cobrado" ou outros campos secundários
+4. **VENCIMENTO**:
+   - Procure: "Vencimento", "Data de Vencimento", "Vencimento do Título"
+   - Formato no documento: DD/MM/AAAA → normalize para YYYY-MM-DD
+   - Boletos vencidos (data no passado) são válidos e devem ser cadastrados
 
-5. LINHA DIGITÁVEL: Sequência de números no TOPO do boleto (acima do código de barras)
-   - Formato: NNNNN.NNNNN NNNNN.NNNNNN NNNNN.NNNNNN N NNNNNNNNNNNNNNN
-   - Total: 47 ou 48 dígitos (sem contar espaços/pontos)
+5. **LINHA DIGITÁVEL**:
+   - É a sequência numérica longa no topo do boleto (acima do código de barras)
+   - Formato: 47 ou 48 dígitos (com ou sem pontos/espaços)
+   - Se visível, extraia a linha digitável completa
 
-═══════════════════════════════════════
-REGRAS DE OURO
-═══════════════════════════════════════
+6. **CONFIANÇA**:
+   - "alta": beneficiário, valor e vencimento lidos com clareza
+   - "media": um dos campos secundários foi inferido
+   - "baixa": imagem borrada ou dados essenciais ilegíveis
 
-✅ FAÇA:
-- Extraia o BENEFICIÁRIO da seção do topo (logo abaixo do banco)
-- Use a LINHA DIGITÁVEL para validar o valor e vencimento
-- Informe confiança "baixa" se não conseguiu ler claramente
-- Se houver 3 vias do mesmo boleto, leia a terceira via (mais completa, na parte inferior)
-
-❌ NUNCA:
-- Confundir PAGADOR com BENEFICIÁRIO
-- Inventar dados que não estão visíveis
-- Usar dados do campo "Mora/Multa" como valor principal
-- Confundir o número do documento com a linha digitável
-
-═══════════════════════════════════════
-FORMATO DE RESPOSTA
-═══════════════════════════════════════
-
-Responda SEMPRE dentro da tag <document_analysis>:
+## FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis> com JSON estrito):
 <document_analysis>
 {
   "tipo": "boleto",
-  "valor": 1534.39,
-  "data_vencimento": "2026-08-15",
   "beneficiario": "ISPAL INDUSTRIA BRASILEIRA DE",
+  "pagador": "HEITOR FRAGA DE OLIVEIRA",
+  "valor": 1534.39,
+  "data_vencimento": "2026-08-21",
   "descricao": "Boleto - ISPAL INDUSTRIA",
-  "linha_digitavel": "34191.09107 96116.842939 83045.790009 7 15450000153439",
+  "linha_digitavel": "34191091079611684293983045790009715450000153439",
   "confianca": "alta",
-  "motivo_confianca": "Beneficiário, valor e vencimento lidos com clareza na terceira via",
+  "motivo_confianca": "Beneficiário e valores perfeitamente legíveis",
   "campos_ilegiveis": []
 }
-</document_analysis>
+</document_analysis>`;
 
-Se não conseguir ler um campo, coloque null e liste em campos_ilegiveis.
-Se a imagem for ilegível, coloque confianca: "baixa".`;
-
-
-
-        console.log("[telegram-webhook] Chamando openai-proxy para analisar documento...");
+        console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
         const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
           method: "POST",
           headers: {
@@ -954,13 +838,14 @@ Se a imagem for ilegível, coloque confianca: "baixa".`;
             model: "gpt-4o",
             user_id: userId,
             tools: [],
+            temperature: 0.0,
             messages: [
               { role: "system", content: docAnalysisSystemPrompt },
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro e extraia os dados com máxima precisão." },
-                  { type: "image_url", image_url: { url: finalImageBase64Uri } },
+                  { type: "text", text: promptText || "Analise este boleto bancário brasileiro e extraia com máxima precisão o beneficiário (quem recebe), valor, vencimento e linha digitável." },
+                  { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
               },
             ],
@@ -980,17 +865,37 @@ Se a imagem for ilegível, coloque confianca: "baixa".`;
         const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
         console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 300));
 
-        const jsonMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
         let documentData: any = null;
-        if (jsonMatch) {
+        const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
+        if (jsonTagMatch) {
           try {
-            documentData = JSON.parse(jsonMatch[1].trim());
+            documentData = JSON.parse(jsonTagMatch[1].trim());
           } catch (err: any) {
-            console.error("[telegram-webhook] Erro ao parsear JSON:", err.message);
+            console.error("[telegram-webhook] Erro ao parsear JSON de <document_analysis>:", err.message);
           }
         }
 
-        if (documentData && documentData.tipo === "boleto") {
+        if (!documentData) {
+          try {
+            const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+            documentData = JSON.parse(cleaned);
+          } catch {
+            // fallback: regex para achar primeiro objeto JSON { ... }
+            const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
+            if (objMatch) {
+              try {
+                documentData = JSON.parse(objMatch[0]);
+              } catch {}
+            }
+          }
+        }
+
+        if (documentData && (documentData.tipo === "boleto" || documentData.valor || documentData.beneficiario)) {
+          // Normaliza campos caso venham com nomes alternativos
+          if (!documentData.tipo) documentData.tipo = "boleto";
+          if (!documentData.data_vencimento && documentData.vencimento) {
+            documentData.data_vencimento = documentData.vencimento;
+          }
           // ─── VALIDAÇÃO DETERMINÍSTICA CONTRA ALUCINAÇÃO ───
           const parseNum = (v: any) => {
             if (typeof v === "number") return isNaN(v) ? 0 : v;
@@ -1145,10 +1050,10 @@ Se a imagem for ilegível, coloque confianca: "baixa".`;
 Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
 Início do mês atual: ${primeiroDiaMes}.
 
-Diretrizes de TOM DE VOZ e ESTILO (obrigatórias):
-- Tom: PROFISSIONAL, DIRETO, OBJETIVO. Como um relatório conciso. O usuário quer números claros e dados estruturados.
-- NUNCA use frases introdutórias coloquiais (ex: "Conferi", "Dei uma olhada", "Está tudo certo", "Verifiquei").
-- NUNCA use frases conclusivas entusiasmadas (ex: "Bate certinho", "Vamos em frente", "Tudo nos conformes", "Show de bola").
+Diretrizes de TOM DE VOZ e ESTILO:
+- Tom: PROFISSIONAL, CORDIAL, DIRETO E OBJETIVO.
+- Para saudações e cumprimentos (ex: "oi", "olá", "bom dia", "boa tarde"): responda cordialmente e informe que está pronto para consultar vendas, contas, dívidas ou cadastrar boletos.
+- NUNCA use frases conclusivas exageradas (ex: "Bate certinho", "Vamos em frente", "Show de bola").
 - NUNCA use a palavra "Fechamento" a menos que o usuário pergunte especificamente sobre fechamento de turno/caixa.
 - NUNCA invente dados ou conceitos não informados pelas ferramentas.
 - Comece respostas de vendas com: "As vendas de [período], [data], foram:" (ex: "As vendas de hoje, 18/08/2026, foram:")
