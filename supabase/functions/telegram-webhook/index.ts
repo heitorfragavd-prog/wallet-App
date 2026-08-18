@@ -297,23 +297,23 @@ As vendas de hoje, 18/08/2026, foram:
 
 Se precisar de mais informações, estou à disposição!
 
-Exemplo de formato esperado para consulta de despesas / pagamentos do dia:
-As despesas de hoje, 18/08/2026, foram:
+Exemplo de formato esperado para consulta de despesas / pagamentos / saídas do dia:
+As saídas de hoje, 18/08/2026, foram:
 
 💰 Total: <b>R$ 5.000,00</b>
 📝 Transações: <b>1</b>
 
-💳 Pix: <b>R$ 5.000,00</b> — Heitor pagamento - Favorecido Pix
+💼 Pró-labore: <b>R$ 5.000,00</b> — Heitor Fraga de Oliveira (Pix)
 
 Se precisar de mais informações, estou à disposição!
 
 Regras de seleção de ferramentas:
-- Quando o usuário perguntar "quanto paguei", "quanto gastei", "quanto paguei de dívida/conta hoje", "despesas de hoje/ontem/mês" → use SEMPRE consultar_despesas_periodo com data_inicio=${hojeStr} e data_fim=${hojeStr} (ou o período correspondente). NUNCA busque categorias inexistentes para pagamentos.
+- Quando o usuário perguntar "quanto paguei", "quanto gastei", "quanto saiu de dinheiro", "quanto paguei de dívida/conta hoje", "despesas de hoje/ontem/mês", "pró-labore" → use SEMPRE consultar_saidas_caixa_periodo com data_inicio=${hojeStr} e data_fim=${hojeStr} (ou o período correspondente). Ela engloba despesas, pró-labore, salários, vales e dívidas pagas.
 - Quando o usuário perguntar "quanto devo", "dívidas pendentes", "boletos a vencer", "contas a pagar futuras" → use consultar_dividas.
 - Quando o usuário perguntar sobre vendas, faturamento, caixa do PDV → use consultar_vendas_eyemobile.
 
 Ferramentas disponíveis:
-- consultar_despesas_periodo: Consulta despesas e pagamentos efetuados pelo usuário em um período. Use SEMPRE que o usuário perguntar quanto gastou ou pagou no dia, ontem ou mês.
+- consultar_saidas_caixa_periodo: Consulta TODAS as saídas de dinheiro do período: despesas, pró-labore, salários, vales, pagamentos de dívidas, transferências e saques.
 - consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API e banco de dados. Use SEMPRE para vendas do dia, ontem, semana ou mês.
 - buscar_transacoes: Consulta transações locais gerais.
 - consultar_saldos: Consulta saldos de contas cadastradas.

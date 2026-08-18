@@ -56,8 +56,8 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "consultar_despesas_periodo",
-      description: "Consulta despesas (gastos, pagamentos efetuados, contas pagas, saques) do usuário para um dia ou período específico. Use SEMPRE que o usuário perguntar quanto gastou, quanto pagou hoje/ontem/no mês, ou total de despesas pagas. Retorna total pago, quantidade de transações, agrupamento por método de pagamento e lista das despesas. NÃO use para dívidas pendentes a pagar no futuro (use consultar_dividas para dívidas pendentes).",
+      name: "consultar_saidas_caixa_periodo",
+      description: "Consulta TODAS as saídas de dinheiro do período: despesas, pagamentos de pró-labore, salários de funcionários, vales, pagamentos de dívidas, transferências e saques. Use SEMPRE que o usuário perguntar 'quanto paguei', 'quanto gastei', 'quanto saiu de dinheiro', 'despesas de hoje/ontem/mês' ou 'pró-labore'.",
       parameters: {
         type: "object",
         properties: {
@@ -67,7 +67,28 @@ const TOOLS = [
           },
           data_fim: {
             type: "string",
-            description: "Data de fim no formato YYYY-MM-DD. Se for um único dia, informe a mesma data do início.",
+            description: "Data de fim no formato YYYY-MM-DD.",
+          },
+        },
+        required: ["data_inicio", "data_fim"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_despesas_periodo",
+      description: "Consulta despesas e todas as saídas de caixa do usuário para um dia ou período específico. Retorna total pago, quantidade de transações, agrupamento por método e lista das saídas (despesas, pró-labore, salários).",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: {
+            type: "string",
+            description: "Data de início no formato YYYY-MM-DD.",
+          },
+          data_fim: {
+            type: "string",
+            description: "Data de fim no formato YYYY-MM-DD.",
           },
         },
         required: ["data_inicio", "data_fim"],
@@ -314,8 +335,8 @@ async function consultarVendasEyemobile(
   }
 }
 
-/** Consulta despesas e pagamentos efetuados pelo usuário em um período específico */
-async function consultarDespesasPeriodo(
+/** Consulta TODAS as saídas de dinheiro do período: despesas, pró-labore, salários de equipe, pagamentos de dívidas e transferências */
+async function consultarSaidasCaixaPeriodo(
   supabase: any,
   userId: string,
   dataInicio: string,
@@ -324,34 +345,145 @@ async function consultarDespesasPeriodo(
   const startDate = dataInicio || getHojeBrasil();
   const endDate = dataFim || startDate;
 
-  console.log("[consultarDespesasPeriodo] ===== INÍCIO =====");
-  console.log("[consultarDespesasPeriodo] userId:", userId);
-  console.log("[consultarDespesasPeriodo] data_inicio:", startDate, "data_fim:", endDate);
+  console.log("[consultarSaidasCaixaPeriodo] ===== INÍCIO =====");
+  console.log("[consultarSaidasCaixaPeriodo] userId:", userId);
+  console.log("[consultarSaidasCaixaPeriodo] data_inicio:", startDate, "data_fim:", endDate);
 
   try {
-    const [despesas, { data: categorias }] = await Promise.all([
-      fetchAllTransacoes(supabase, userId, {
-        dataInicio: startDate,
-        dataFim: endDate,
-        tipo: "despesa",
-      }),
+    // 1. Categorias e Colaboradores para mapear nomes
+    const [{ data: categorias }, { data: colaboradores }] = await Promise.all([
       supabase.from("categorias").select("id,nome").eq("user_id", userId),
+      supabase.from("colaboradores").select("id,nome"),
     ]);
 
     const catMap = new Map<string, string>();
     (categorias || []).forEach((c: any) => catMap.set(c.id, c.nome));
 
-    console.log("[consultarDespesasPeriodo] Despesas count (unificado despesas + transacoes):", despesas.length, "para o período", startDate, "a", endDate);
-    console.log("[consultarDespesasPeriodo] Primeiros 3 registros:", JSON.stringify(despesas.slice(0, 3)));
+    const colabMap = new Map<string, string>();
+    (colaboradores || []).forEach((c: any) => colabMap.set(c.id, c.nome));
+    const colabIds = Array.from(colabMap.keys());
 
-    const totalDespesas = despesas.reduce((sum, d) => sum + Number(d.valor || 0), 0);
-    const qtd = despesas.length;
-    const ticketMedio = qtd > 0 ? totalDespesas / qtd : 0;
+    // 2. Busca paralela nas 4 fontes de saídas
+    const [despRes, txRes, custosRes, pagDividasRes] = await Promise.all([
+      supabase
+        .from("despesas")
+        .select("id,descricao,valor,data,metodo_pagamento,categoria_id,created_at")
+        .eq("user_id", userId)
+        .gte("data", startDate)
+        .lte("data", endDate),
+      supabase
+        .from("transacoes")
+        .select("id,descricao,valor,data,metodo_pagamento,categoria_id,tipo,created_at")
+        .eq("user_id", userId)
+        .eq("tipo", "despesa")
+        .gte("data", startDate)
+        .lte("data", endDate),
+      colabIds.length > 0
+        ? supabase
+            .from("colaborador_custos")
+            .select("id,colaborador_id,tipo,valor,data,descricao,lancado_na_despesa")
+            .in("colaborador_id", colabIds)
+            .gte("data", startDate)
+            .lte("data", endDate)
+        : Promise.resolve({ data: [], error: null }),
+      supabase
+        .from("pagamentos_dividas")
+        .select("id,divida_id,valor,data_pagamento,metodo_pagamento,observacoes,created_at,dividas(descricao,credor)")
+        .eq("user_id", userId)
+        .gte("data_pagamento", startDate)
+        .lte("data_pagamento", endDate),
+    ]);
 
-    const metodos: Record<string, number> = {};
-    for (const d of despesas) {
-      const m = d.metodo_pagamento || "outros";
-      metodos[m] = (metodos[m] || 0) + Number(d.valor || 0);
+    const itens: any[] = [];
+    const chavesUnicas = new Set<string>();
+
+    // Processa Despesas tradicionais
+    for (const d of despRes.data || []) {
+      const val = Number(d.valor || 0);
+      const chave = `${d.data}_${val}_${(d.descricao || "").trim().toLowerCase()}`;
+      chavesUnicas.add(chave);
+      itens.push({
+        tipo_saida: "Despesa",
+        descricao: d.descricao || "Sem descrição",
+        valor: val,
+        categoria: d.categoria_id ? (catMap.get(d.categoria_id) || "Despesas") : "Despesas",
+        metodo_pagamento: d.metodo_pagamento || "Outros",
+        data: d.data,
+      });
+    }
+
+    // Processa Transações de Despesa
+    for (const t of txRes.data || []) {
+      const val = Number(t.valor || 0);
+      const chave = `${t.data}_${val}_${(t.descricao || "").trim().toLowerCase()}`;
+      if (!chavesUnicas.has(chave)) {
+        chavesUnicas.add(chave);
+        itens.push({
+          tipo_saida: "Despesa",
+          descricao: t.descricao || "Sem descrição",
+          valor: val,
+          categoria: t.categoria_id ? (catMap.get(t.categoria_id) || "Transações") : "Transações",
+          metodo_pagamento: t.metodo_pagamento || "Outros",
+          data: t.data,
+        });
+      }
+    }
+
+    // Processa Custos de Colaborador (Pró-labore de sócio, Salários, Vales)
+    for (const c of custosRes.data || []) {
+      const val = Number(c.valor || 0);
+      const nomeColab = colabMap.get(c.colaborador_id) || "Colaborador";
+      const isProLabore = (c.tipo || "").toLowerCase().includes("pro") || (c.descricao || "").toLowerCase().includes("pro");
+      const tipoFormatado = isProLabore ? "Pró-labore" : "Pagamento de Equipe";
+      const descCompleta = c.descricao ? `${c.descricao} (${nomeColab})` : `${tipoFormatado} — ${nomeColab}`;
+      const chave = `${c.data}_${val}_${descCompleta.toLowerCase()}`;
+      if (!chavesUnicas.has(chave) && !c.lancado_na_despesa) {
+        chavesUnicas.add(chave);
+        itens.push({
+          tipo_saida: tipoFormatado,
+          descricao: descCompleta,
+          valor: val,
+          categoria: "Equipe / Sócios",
+          metodo_pagamento: "Pix / Transferência",
+          data: c.data,
+        });
+      }
+    }
+
+    // Processa Pagamentos de Dívidas e Boletos
+    for (const pd of pagDividasRes.data || []) {
+      const val = Number(pd.valor || 0);
+      const descDivida = (pd as any).dividas?.descricao || "Pagamento de Dívida";
+      const credor = (pd as any).dividas?.credor ? ` (${(pd as any).dividas.credor})` : "";
+      const descCompleta = `${descDivida}${credor}`;
+      const chave = `${pd.data_pagamento}_${val}_${descCompleta.toLowerCase()}`;
+      if (!chavesUnicas.has(chave)) {
+        chavesUnicas.add(chave);
+        itens.push({
+          tipo_saida: "Pagamento de Dívida",
+          descricao: descCompleta,
+          valor: val,
+          categoria: "Dívidas e Boletos",
+          metodo_pagamento: pd.metodo_pagamento || "Pix / Boleto",
+          data: pd.data_pagamento,
+        });
+      }
+    }
+
+    itens.sort((a, b) => (b.data || "").localeCompare(a.data || ""));
+
+    console.log("[consultarSaidasCaixaPeriodo] Total de saídas encontradas:", itens.length, "para o período", startDate, "a", endDate);
+    console.log("[consultarSaidasCaixaPeriodo] Primeiros 3 registros:", JSON.stringify(itens.slice(0, 3)));
+
+    const totalSaidas = itens.reduce((sum, item) => sum + item.valor, 0);
+    const qtd = itens.length;
+    const ticketMedio = qtd > 0 ? totalSaidas / qtd : 0;
+
+    const porTipo: Record<string, number> = {};
+    const porMetodo: Record<string, number> = {};
+    for (const item of itens) {
+      porTipo[item.tipo_saida] = (porTipo[item.tipo_saida] || 0) + item.valor;
+      porMetodo[item.metodo_pagamento] = (porMetodo[item.metodo_pagamento] || 0) + item.valor;
     }
 
     const dataFormatada = startDate === endDate 
@@ -362,26 +494,22 @@ async function consultarDespesasPeriodo(
       periodo: dataFormatada,
       data_inicio: startDate,
       data_fim: endDate,
-      total_despesas: totalDespesas,
+      total_saidas: totalSaidas,
+      total_despesas: totalSaidas,
       quantidade_transacoes: qtd,
       ticket_medio: ticketMedio,
-      despesas_por_metodo: metodos,
-      transacoes: despesas.slice(0, 30).map(d => ({
-        descricao: d.descricao,
-        valor: Number(d.valor || 0),
-        categoria: d.categoria_id ? (catMap.get(d.categoria_id) || "Sem categoria") : "Sem categoria",
-        metodo_pagamento: d.metodo_pagamento || "outros",
-        data: d.data
-      })),
-      observacao: `Despesas / pagamentos em ${dataFormatada}: Total de R$ ${totalDespesas.toFixed(2)} em ${qtd} transações.`
+      saidas_por_tipo: porTipo,
+      despesas_por_metodo: porMetodo,
+      transacoes: itens.slice(0, 30),
+      observacao: `Total de saídas de caixa em ${dataFormatada}: R$ ${totalSaidas.toFixed(2)} em ${qtd} lançamentos.`
     };
 
-    console.log("[consultarDespesasPeriodo] Resultado:", JSON.stringify(resultado));
+    console.log("[consultarSaidasCaixaPeriodo] Resultado:", JSON.stringify(resultado));
     return resultado;
   } catch (err: any) {
-    console.error("[consultarDespesasPeriodo] EXCEPTION:", err.message);
+    console.error("[consultarSaidasCaixaPeriodo] EXCEPTION:", err.message);
     return {
-      erro: "Erro ao consultar despesas do período.",
+      erro: "Erro ao consultar saídas de caixa do período.",
       detalhe: err.message
     };
   }
@@ -394,10 +522,11 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       const targetEnd = (args.data_fim as string) || (args.data as string) || targetStart;
       return await consultarVendasEyemobile(supabase, userId, targetStart, targetEnd);
     }
+    case "consultar_saidas_caixa_periodo":
     case "consultar_despesas_periodo": {
       const targetStart = (args.data_inicio as string) || (args.data as string) || getHojeBrasil();
       const targetEnd = (args.data_fim as string) || (args.data as string) || targetStart;
-      return await consultarDespesasPeriodo(supabase, userId, targetStart, targetEnd);
+      return await consultarSaidasCaixaPeriodo(supabase, userId, targetStart, targetEnd);
     }
     case "buscar_transacoes": {
       let categoriaId = args.categoria_id as string | undefined;
