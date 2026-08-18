@@ -119,6 +119,7 @@ const TOOLS = [
   { type: "function", function: { name: "atualizar_custo_produto_eyemobile", description: "Atualiza o custo de um produto no Eyemobile PDV e adiciona quantidade ao estoque. Use após analisar uma NF de compra.", parameters: { type: "object", properties: { produto_id: { type: "string" }, produto_nome: { type: "string" }, codigo_barras: { type: "string" }, novo_custo: { type: "number" }, quantidade_estoque: { type: "number" } }, required: ["novo_custo"] } } },
   { type: "function", function: { name: "cadastrar_despesa_nf", description: "Cadastra uma despesa no sistema a partir dos dados de uma Nota Fiscal de compra.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor: { type: "number" }, data: { type: "string" }, categoria_nome: { type: "string" }, fornecedor: { type: "string" }, metodo_pagamento: { type: "string", enum: ["pix", "boleto", "cartao_credito", "cartao_debito", "dinheiro", "outros"] }, numero_nf: { type: "string" } }, required: ["descricao", "valor", "data"] } } },
   { type: "function", function: { name: "cadastrar_divida_boleto", description: "Cadastra uma nova dívida no sistema a partir dos dados de um boleto analisado.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string" }, codigo_barras: { type: "string" }, linha_digitavel: { type: "string" }, pix_copia_cola: { type: "string" }, parcelas: { type: "number" }, categoria_nome: { type: "string" } }, required: ["descricao", "valor_total", "data_vencimento"] } } },
+  { type: "function", function: { name: "cadastrar_boleto", description: "Cadastra um boleto como dívida pendente no sistema. Recebe: valor, vencimento (YYYY-MM-DD), beneficiario (ou credor), descricao (opcional), linha_digitavel (opcional), codigo_barras (opcional).", parameters: { type: "object", properties: { valor: { type: "number", description: "Valor do boleto em reais" }, vencimento: { type: "string", description: "Data de vencimento YYYY-MM-DD" }, beneficiario: { type: "string", description: "Nome do beneficiário ou credor" }, descricao: { type: "string", description: "Descrição do boleto/dívida" }, linha_digitavel: { type: "string", description: "Linha digitável do boleto (opcional)" }, codigo_barras: { type: "string", description: "Código de barras do boleto (opcional)" } }, required: ["valor", "vencimento", "beneficiario"] } } },
   { type: "function", function: { name: "validar_fechamento_caixa", description: "Analisa o valor relatado pelo funcionário no fechamento de turno e cruza com as vendas registradas no Eyemobile PDV e transferências para encontrar furos de caixa.", parameters: { type: "object", properties: { valor_relatado: { type: "number" }, turno_data: { type: "string", description: "Data do turno a validar (YYYY-MM-DD)" } }, required: ["valor_relatado", "turno_data"] } } },
 ];
 
@@ -687,7 +688,49 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       return { error: `Produto "${produto_nome || codigo_barras || 'desconhecido'}" não localizado na tabela de produtos do Eyemobile.`, sugerir_cadastro: true, dados: { nome: produto_nome || "", codigo_barras: codigo_barras || "", custo: novo_custo, estoque: quantidade_estoque } };
     }
     case "cadastrar_despesa_nf": { const { descricao, valor, data, categoria_nome, fornecedor, metodo_pagamento, numero_nf } = args as Record<string, unknown>; let categoriaId: string | null = null; if (categoria_nome) { categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa"); } const { data: result, error } = await supabase.from("despesas").insert({ user_id: userId, descricao: descricao, valor: Number(valor), data: data, categoria_id: categoriaId || null, metodo_pagamento: metodo_pagamento || null, observacoes: `Nota Fiscal nº ${numero_nf || ""}. Fornecedor: ${fornecedor || ""}.` }).select("id,descricao,valor,data").single(); if (error) return { error: error.message }; return { sucesso: true, despesa: result }; }
-    case "cadastrar_divida_boleto": { const { descricao, valor_total, credor, data_vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_nome } = args as Record<string, unknown>; let categoriaId: string | null = null; if (categoria_nome) { categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa"); } const obsParts = [`Boleto.`, linha_digitavel ? `Linha digitável: ${linha_digitavel}` : null, codigo_barras ? `Código de barras: ${codigo_barras}` : null, pix_copia_cola ? `Pix Copia e Cola: ${pix_copia_cola}` : null, categoria_nome ? `Categoria sugerida: ${categoria_nome}` : null].filter(Boolean); const { data: result, error } = await supabase.from("dividas").insert({ user_id: userId, descricao, valor_total: Number(valor_total), valor_restante: Number(valor_total), valor_pago: 0, credor: credor || null, data_vencimento, parcelas: Number(parcelas || 1), parcelas_pagas: 0, status: "pendente", observacoes: obsParts.join(" | "), categoria_id: categoriaId || null, metodo_pagamento_esperado: "boleto", codigo_barras: codigo_barras || null, linha_digitavel: linha_digitavel || null, pix_copia_cola: pix_copia_cola || null }).select("id,descricao,valor_total,status").single(); if (error) return { error: error.message }; return { sucesso: true, divida: result }; }
+    case "cadastrar_boleto":
+    case "cadastrar_divida_boleto": {
+      const { descricao, valor_total, valor, credor, beneficiario, data_vencimento, vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_nome } = args as Record<string, unknown>;
+      const val = Number(valor_total ?? valor ?? 0);
+      const dtVenc = (data_vencimento ?? vencimento) as string;
+      const benef = (credor ?? beneficiario ?? "Beneficiário Boleto") as string;
+      const desc = (descricao as string) || `Boleto - ${benef}`;
+      let categoriaId: string | null = null;
+      if (categoria_nome) {
+        categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa");
+      }
+      const obsParts = [
+        `Boleto.`,
+        linha_digitavel ? `Linha digitável: ${linha_digitavel}` : null,
+        codigo_barras ? `Código de barras: ${codigo_barras}` : null,
+        pix_copia_cola ? `Pix Copia e Cola: ${pix_copia_cola}` : null,
+        categoria_nome ? `Categoria sugerida: ${categoria_nome}` : null
+      ].filter(Boolean);
+      const { data: result, error } = await supabase
+        .from("dividas")
+        .insert({
+          user_id: userId,
+          descricao: desc,
+          valor_total: val,
+          valor_restante: val,
+          valor_pago: 0,
+          credor: benef,
+          data_vencimento: dtVenc,
+          parcelas: Number(parcelas || 1),
+          parcelas_pagas: 0,
+          status: "pendente",
+          observacoes: obsParts.join(" | "),
+          categoria_id: categoriaId || null,
+          metodo_pagamento_esperado: "boleto",
+          codigo_barras: codigo_barras || null,
+          linha_digitavel: linha_digitavel || null,
+          pix_copia_cola: pix_copia_cola || null
+        })
+        .select("id,descricao,valor_total,status,data_vencimento,credor")
+        .single();
+      if (error) return { error: error.message };
+      return { sucesso: true, mensagem: `Boleto cadastrado com sucesso como dívida pendente!`, divida: result };
+    }
     case "validar_fechamento_caixa": {
       const { valor_relatado, turno_data } = args as Record<string, unknown>;
       const { data: defaultWs } = await supabase.from("workspaces").select("id").eq("user_id", userId).eq("is_default", true).maybeSingle();

@@ -255,7 +255,48 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // ─── CASO 3: Mensagem natural -> Encaminha para o OpenAI Proxy ───
+    // ─── CASO 3: Mensagem natural / Foto / Documento -> Encaminha para o OpenAI Proxy ───
+    const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
+    const hasDoc = !!message.document;
+    const caption = (message.caption || "").trim();
+    const promptText = (message.text || caption || "").trim();
+
+    let imageBase64Uri: string | null = null;
+    if (hasPhoto || hasDoc) {
+      try {
+        const fileId = hasPhoto
+          ? message.photo[message.photo.length - 1].file_id
+          : message.document.file_id;
+
+        console.log("[telegram-webhook] Baixando arquivo/imagem do Telegram:", fileId);
+        const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
+        if (getFileResp.ok) {
+          const fileInfo = await getFileResp.json();
+          const filePath = fileInfo?.result?.file_path;
+          if (filePath) {
+            console.log("[telegram-webhook] Baixando binário de:", filePath);
+            const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+            if (fileDownloadResp.ok) {
+              const arrayBuffer = await fileDownloadResp.arrayBuffer();
+              const uint8 = new Uint8Array(arrayBuffer);
+              let binary = "";
+              const len = uint8.byteLength;
+              for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(uint8[i]);
+              }
+              const b64 = btoa(binary);
+              const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
+              const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
+              imageBase64Uri = `data:${mime};base64,${b64}`;
+              console.log("[telegram-webhook] Documento/Imagem convertido para base64 com sucesso! Mime:", mime, "tamanho:", b64.length);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error("[telegram-webhook] Falha ao baixar arquivo do Telegram:", err.message);
+      }
+    }
+
     const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
     const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
     const mesAtual = nowSp.getMonth() + 1;
@@ -264,65 +305,75 @@ serve(async (req) => {
 
     console.log("[telegram-webhook] Data servidor (UTC):", new Date().toISOString());
     console.log("[telegram-webhook] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
-    console.log("[telegram-webhook] hojeStr enviado:", hojeStr, "primeiroDiaMes:", primeiroDiaMes);
+    console.log("[telegram-webhook] hojeStr enviado:", hojeStr, "primeiroDiaMes:", primeiroDiaMes, "hasImage:", !!imageBase64Uri);
 
     const systemPrompt = `Você é o assistente financeiro inteligente do Wallet App integrado ao Telegram.
 Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
 Início do mês atual: ${primeiroDiaMes}.
 
 Diretrizes de TOM DE VOZ e ESTILO (obrigatórias):
-- Tom: PROFISSIONAL, DIRETO, OBJETIVO. Como um relatório de vendas conciso. O usuário quer números claros, não conversa.
+- Tom: PROFISSIONAL, DIRETO, OBJETIVO. Como um relatório conciso. O usuário quer números claros e dados estruturados.
 - NUNCA use frases introdutórias coloquiais (ex: "Conferi", "Dei uma olhada", "Está tudo certo", "Verifiquei").
 - NUNCA use frases conclusivas entusiasmadas (ex: "Bate certinho", "Vamos em frente", "Tudo nos conformes", "Show de bola").
 - NUNCA use a palavra "Fechamento" a menos que o usuário pergunte especificamente sobre fechamento de turno/caixa.
 - NUNCA invente dados ou conceitos não informados pelas ferramentas.
-- Comece respostas de vendas com: "As vendas de [período], [data], foram:" (ex: "As vendas de hoje, 18/08/2026, foram:")
-- Termine respostas de vendas com: "Se precisar de mais informações, estou à disposição!"
 - Formatação: use negrito em HTML (<b>valor</b>) nos valores e números.
-- Use emojis como marcadores temáticos em blocos separados por linhas em branco:
-  • Métodos de pagamento: 💰 Dinheiro, 💳 Débito, 💳 Crédito, 📲 Pix, 🎫 Voucher
-  • Métricas: 📈 Total de vendas, 🛒 Transações, 💵 Ticket médio
+- Use emojis como marcadores temáticos em blocos organizados.
 
-Exemplo de formato esperado para consulta de vendas:
-As vendas de hoje, 18/08/2026, foram:
-
-💰 Dinheiro: <b>R$ 177,60</b>
-💳 Débito: <b>R$ 266,10</b>
-💳 Crédito: <b>R$ 47,30</b>
-📲 Pix: <b>R$ 302,10</b>
-
-📈 Total de vendas: <b>R$ 793,10</b>
-🛒 Transações: <b>62</b>
-💵 Ticket médio: <b>R$ 12,79</b>
-
-Se precisar de mais informações, estou à disposição!
-
-Exemplo de formato esperado para consulta de despesas / pagamentos / saídas do dia:
-As saídas de hoje, 18/08/2026, foram:
-
-💰 Total: <b>R$ 5.000,00</b>
-📝 Transações: <b>1</b>
-
-💼 Pró-labore: <b>R$ 5.000,00</b> — Heitor Fraga de Oliveira (Pix)
-
-Se precisar de mais informações, estou à disposição!
+Instruções para Processamento de Imagens e Documentos (Boletos, NF, Comprovantes):
+- Quando o usuário enviar uma imagem/foto ou documento:
+  1. Analise o documento visualmente e extraia: tipo (Boleto, Nota Fiscal, Comprovante Pix), valor total, data de vencimento (YYYY-MM-DD), beneficiário/credor e linha digitável / código de barras.
+  2. Se for um Boleto Bancário:
+     • Chame IMEDIATAMENTE a ferramenta 'cadastrar_boleto' (ou 'cadastrar_divida_boleto') passando os dados extraídos (valor, vencimento, beneficiario, descricao, linha_digitavel).
+     • Confirme o cadastro na resposta com formato:
+       📄 <b>Boleto Cadastrado com Sucesso!</b>
+       
+       🏢 Beneficiário: <b>[Nome]</b>
+       💰 Valor: <b>R$ [Valor]</b>
+       🗓️ Vencimento: <b>[DD/MM/AAAA]</b>
+       🔢 Linha digitável: <code>[Linha digitável]</code>
+       
+       <i>O boleto foi registrado como dívida pendente e já consta na sua Agenda Financeira!</i>
+  3. Se for uma Nota Fiscal de compra de mercadoria:
+     • Chame 'cadastrar_despesa_nf' para registrar como despesa.
+  4. Se for um Comprovante de Pagamento efetuado:
+     • Informe os dados da transferência/Pix realizado.
 
 Regras de seleção de ferramentas:
-- Quando o usuário perguntar "quanto paguei", "quanto gastei", "quanto saiu de dinheiro", "quanto paguei de dívida/conta hoje", "despesas de hoje/ontem/mês", "pró-labore" → use SEMPRE consultar_saidas_caixa_periodo com data_inicio=${hojeStr} e data_fim=${hojeStr} (ou o período correspondente). Ela engloba despesas, pró-labore, salários, vales e dívidas pagas.
-- Quando o usuário perguntar "quanto devo", "dívidas pendentes", "boletos a vencer", "contas a pagar futuras" → use consultar_dividas.
+- Quando o usuário perguntar "quanto paguei", "quanto gastei", "quanto saiu de dinheiro", "quanto paguei de dívida/conta hoje", "despesas de hoje/ontem/mês", "pró-labore" → use SEMPRE consultar_saidas_caixa_periodo com data_inicio=${hojeStr} e data_fim=${hojeStr}.
+- Quando o usuário perguntar "quanto devo", "dívidas pendentes", "boletos a vencer" → use consultar_dividas.
 - Quando o usuário perguntar sobre vendas, faturamento, caixa do PDV → use consultar_vendas_eyemobile.
+- Quando o usuário enviar foto de boleto/documento → use cadastrar_boleto ou cadastrar_despesa_nf.
 
 Ferramentas disponíveis:
+- cadastrar_boleto: Cadastra um boleto como dívida no sistema. Recebe: valor, vencimento (YYYY-MM-DD), beneficiario, descricao, linha_digitavel.
+- cadastrar_despesa_nf: Cadastra despesa a partir de Nota Fiscal.
 - consultar_saidas_caixa_periodo: Consulta TODAS as saídas de dinheiro do período: despesas, pró-labore, salários, vales, pagamentos de dívidas, transferências e saques.
-- consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API e banco de dados. Use SEMPRE para vendas do dia, ontem, semana ou mês.
+- consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API e banco de dados.
 - buscar_transacoes: Consulta transações locais gerais.
 - consultar_saldos: Consulta saldos de contas cadastradas.
 - consultar_dividas: Consulta dívidas pendentes e futuras a vencer.
 - consultar_resumo_mensal: Consulta resumo financeiro mensal consolidado (ano=${anoAtual}, mes=${mesAtual}).`;
 
+    let userContent: any = promptText;
+    if (imageBase64Uri) {
+      userContent = [
+        {
+          type: "text",
+          text: promptText || "Analise esta imagem de documento financeiro. Se for um boleto bancário, extraia o valor, a data de vencimento, o beneficiário/credor e a linha digitável, e use a ferramenta cadastrar_boleto para cadastrá-lo como dívida pendente. Se for nota fiscal, use cadastrar_despesa_nf.",
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: imageBase64Uri,
+          },
+        },
+      ];
+    }
+
     const aiMessages = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: text },
+      { role: "user", content: userContent },
     ];
 
     try {
