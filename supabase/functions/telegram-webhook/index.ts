@@ -297,35 +297,65 @@ serve(async (req) => {
     }
 
     // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Confirmação de Propostas Pendentes) ───
+    const respLower = text.toLowerCase().trim();
+    const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
+    const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
+
     const { data: conversaAtiva } = await supabase
       .from("telegram_conversas")
       .select("estado, proposta_id")
-      .eq("user_id", userId)
       .eq("chat_id", chatId)
       .maybeSingle();
 
-    if (text && conversaAtiva?.estado === "aguardando_confirmacao_boleto" && conversaAtiva.proposta_id) {
-      const respLower = text.toLowerCase().trim();
-      const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar"].includes(respLower);
-      const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
+    if (text && (isSim || isNao)) {
+      let proposta: any = null;
 
-      if (isSim) {
-        const { data: proposta } = await supabase
+      if (conversaAtiva?.proposta_id) {
+        const { data: propById } = await supabase
           .from("telegram_propostas")
           .select("*")
           .eq("id", conversaAtiva.proposta_id)
           .eq("user_id", userId)
           .maybeSingle();
 
+        if (propById && propById.status === "pendente") {
+          proposta = propById;
+        }
+      }
+
+      // Fallback resiliente: se não encontrou por conversaAtiva, busca a última proposta pendente deste chat
+      if (!proposta) {
+        const { data: lastProp } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("chat_id", chatId)
+          .eq("user_id", userId)
+          .eq("status", "pendente")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (lastProp) {
+          proposta = lastProp;
+        }
+      }
+
+      if (isSim) {
         if (!proposta || proposta.status !== "pendente") {
-          await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
-          await sendReply("❌ <b>Proposta não encontrada ou já processada.</b>\n\nEnvie a foto do boleto novamente se desejar cadastrar.");
+          await supabase.from("telegram_conversas").upsert(
+            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+            { onConflict: "chat_id" }
+          );
+          await sendReply("❌ <b>Nenhuma proposta pendente encontrada.</b>\n\nEnvie a foto do boleto novamente se desejar cadastrar.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         if (new Date(proposta.expires_at) < new Date()) {
           await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
-          await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+          await supabase.from("telegram_conversas").upsert(
+            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+            { onConflict: "chat_id" }
+          );
           await sendReply("⏰ <b>A proposta expirou.</b>\n\nEnvie a foto do boleto novamente para gerar uma nova proposta.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -404,7 +434,10 @@ serve(async (req) => {
         }
 
         await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-        await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
 
         const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
         const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
@@ -416,12 +449,17 @@ serve(async (req) => {
           `💰 Valor: <b>${valFmt}</b>\n` +
           `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
           `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
-          `<i>Você receberá avisos no aplicativo Wallet e no Telegram no dia do vencimento.</i>`
+          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
         );
         return new Response("OK", { status: 200, headers: corsHeaders });
       } else if (isNao) {
-        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", conversaAtiva.proposta_id);
-        await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+        if (proposta) {
+          await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
+        }
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
         await sendReply("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
@@ -717,15 +755,23 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
             .single();
 
           if (!errProp && propostaSalva) {
-            await supabase.from("telegram_conversas").upsert({
-              user_id: userId,
-              chat_id: chatId,
-              estado: "aguardando_confirmacao_boleto",
-              proposta_id: propostaSalva.id,
-              updated_at: new Date().toISOString(),
-            });
+            const { error: errConv } = await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "aguardando_confirmacao_boleto",
+                proposta_id: propostaSalva.id,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
+
+            if (errConv) {
+              console.error("[telegram-webhook] Erro ao salvar estado da conversa:", errConv.message);
+            }
 
             const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+            const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
 
             let mensagemProposta =
@@ -733,7 +779,7 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
               `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
               (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
               `💰 Valor: <b>${valFmt}</b>\n` +
-              `📅 Vencimento: <b>${vencFmt}</b>\n` +
+              `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
               (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
 
             mensagemProposta +=
