@@ -505,6 +505,19 @@ serve(async (req) => {
         }
 
         const filePath = fileInfo.result.file_path;
+        const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
+        const docMime = (message.document?.mime_type || "").toLowerCase();
+
+        if (ext === "pdf" || docMime.includes("pdf")) {
+          console.log("[telegram-webhook] Documento PDF recebido:", filePath, docMime);
+          await sendReply(
+            "📄 <b>Envio de PDF detectado:</b>\n\n" +
+            "O processamento automático no Telegram funciona com <b>fotos / imagens</b> (JPEG ou PNG).\n\n" +
+            "📸 <i>Por favor, tire uma foto do boleto com a câmera ou envie um print/screenshot da tela para cadastrar instantaneamente!</i>"
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         console.log("[telegram-webhook] Baixando binário de:", filePath);
         const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
         if (!fileDownloadResp.ok) {
@@ -524,13 +537,11 @@ serve(async (req) => {
         const b64 = base64Encode(new Uint8Array(arrayBuffer));
         console.log("[telegram-webhook] Base64 gerado com sucesso! Tamanho:", b64.length);
 
-        const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
-        const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
+        const mime = ext === "png" ? "image/png" : "image/jpeg";
         let finalImageBase64Uri = `data:${mime};base64,${b64}`;
 
         // ─── PRÉ-PROCESSAMENTO: Detecção e Rotação Física da Imagem via ImageScript ───
-        if (mime !== "application/pdf") {
-          try {
+        try {
             console.log("[telegram-webhook] Iniciando decodificação de imagem com ImageScript...");
             const decodedImage = await Image.decode(new Uint8Array(arrayBuffer));
             console.log(`[telegram-webhook] Dimensões da foto: ${decodedImage.width}x${decodedImage.height}`);
@@ -600,7 +611,6 @@ serve(async (req) => {
           } catch (imgErr: any) {
             console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
           }
-        }
 
         const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental de altíssima precisão.
 
