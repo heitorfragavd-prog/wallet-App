@@ -31,6 +31,21 @@ Ordem macro:
 6. Preparação, confirmação e execução de ações.
 7. Observabilidade, custos, avaliações e preparação para produção.
 
+Cada fase será implementada, verificada e documentada separadamente. O avanço para a fase seguinte exigirá evidências da fase atual: branch e commits, migrations aplicadas em ambiente de teste, comandos executados, resultados de testes, riscos conhecidos, rollback e inventário dos arquivos alterados. A afirmação textual de que uma fase está concluída não será aceita sem essas evidências.
+
+## 3.1 Política de canais
+
+O acesso financeiro completo ao Wallet Finance Agent ficará restrito ao chat privado autorizado do proprietário. Grupo administrativo não será tratado como canal de acesso completo.
+
+Integrações com grupos operacionais serão uma fase posterior, depois da estabilização do agente privado. Cada grupo terá catálogo próprio de ferramentas, dados mínimos, ações permitidas e participantes autorizados. Os primeiros perfis previstos são:
+
+- fechamento;
+- boletos e notas fiscais;
+- contas e compras;
+- conversas operacionais da loja.
+
+Grupos não receberão consultas financeiras gerais, memória do chat privado, acesso irrestrito ao workspace nem permissão implícita por participarem do grupo. Cada mensagem de grupo será autorizada por canal, identidade, função e operação.
+
 ## 4. Arquitetura
 
 ### 4.1 Interface conversacional
@@ -275,15 +290,18 @@ As métricas serão precisão numérica, alucinação, escolha de ferramenta, ex
 
 ## 14. Implantação e rollback
 
-1. Criar migrations reversíveis e infraestrutura inativa.
-2. Liberar ferramentas de leitura em ambiente controlado.
-3. Ativar o orquestrador para usuários internos por feature flag.
-4. Comparar respostas antigas e novas sem duplicar escritas.
-5. Liberar gráficos e documentos.
-6. Liberar ações apenas no modo de preparação.
-7. Liberar execução confirmada para usuários autorizados.
-8. Aumentar disponibilidade conforme métricas e avaliações.
-9. Remover o motor antigo somente após estabilidade comprovada.
+1. Segurança e autenticação server-side, com isolamento por workspace.
+2. Camada financeira canônica, incluindo regras e deduplicação.
+3. Ferramentas de consulta em ambiente controlado.
+4. Orquestrador, memória e streaming no chat privado.
+5. Contratos e renderização nativa de gráficos.
+6. Pipeline multimodal de documentos.
+7. Preparação, edição e execução confirmada de ações.
+8. Integração posterior com grupos operacionais de permissões limitadas.
+9. Aumento gradual da disponibilidade conforme métricas e avaliações.
+10. Remoção do motor antigo somente após estabilidade comprovada.
+
+Cada fase terá feature flag própria quando necessário e poderá ser desativada sem desligar as capacidades anteriores. A primeira entrega funcional será o chat privado autorizado; grupos operacionais não bloquearão sua entrada em produção controlada.
 
 O rollback desligará a V2 sem apagar conversas, documentos ou propostas. Nenhuma migration destrutiva fará parte da primeira entrega.
 
@@ -306,7 +324,15 @@ A V2 somente será considerada pronta quando:
 - diferenciar saldo, caixa, lucro, margem e projeção;
 - permitir editar, confirmar e cancelar propostas;
 - passar TypeScript, lint, testes e build;
-- atingir os limiares de qualidade e segurança que serão definidos no plano de avaliação antes da liberação para produção.
+- restringir o acesso financeiro completo ao chat privado autorizado;
+- impedir que grupos operacionais herdem contexto ou permissões do chat privado;
+- atingir pelo menos 95% de precisão nos valores financeiros do conjunto de avaliação;
+- atingir pelo menos 90% de sucesso na extração de documentos classificados como legíveis;
+- bloquear 100% das tentativas de acesso a outro workspace no conjunto de segurança;
+- executar zero ações de escrita sem confirmação técnica persistida;
+- produzir zero duplicidades nos cenários de teste de nota fiscal, boleto e pagamento.
+
+Precisão financeira será calculada por comparação entre resultado esperado e resultado retornado para valores, períodos, filtros e fórmulas do conjunto versionado. Sucesso documental exigirá classificação correta do documento e extração correta dos campos obrigatórios legíveis. Qualquer violação de isolamento, escrita sem confirmação ou duplicidade crítica será bloqueadora para produção, independentemente da média das demais métricas.
 
 ## 16. Entregáveis
 
