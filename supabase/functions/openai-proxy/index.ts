@@ -454,8 +454,8 @@ Deno.serve(async (req: Request) => {
 
   let userId: string;
 
-  // Validação flexível e segura do JWT / Service Role para chamadas internas e de usuários
-  let isServiceRoleCall = (jwt === supabaseServiceKey);
+  // Validação segura do JWT / Service Role para chamadas internas e de usuários
+  let isServiceRoleCall = Boolean(jwt === supabaseServiceKey && body.user_id);
   if (!isServiceRoleCall && jwt.startsWith("eyJ")) {
     try {
       const payloadBase64 = jwt.split(".")[1];
