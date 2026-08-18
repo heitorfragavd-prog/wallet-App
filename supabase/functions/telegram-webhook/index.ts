@@ -255,6 +255,89 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
+    // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Confirmação de Propostas Pendentes) ───
+    const { data: conversaAtiva } = await supabase
+      .from("telegram_conversas")
+      .select("estado, proposta_id")
+      .eq("user_id", userId)
+      .eq("chat_id", chatId)
+      .maybeSingle();
+
+    if (text && conversaAtiva?.estado === "aguardando_confirmacao_boleto" && conversaAtiva.proposta_id) {
+      const respLower = text.toLowerCase().trim();
+      const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar"].includes(respLower);
+      const isNao = ["não", "nao", "n", "no", "cancelar", "cancela"].includes(respLower);
+
+      if (isSim) {
+        const { data: proposta } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", conversaAtiva.proposta_id)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (!proposta || proposta.status !== "pendente") {
+          await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+          await sendReply("❌ <b>Proposta não encontrada ou já processada.</b>\n\nEnvie a foto do boleto novamente se desejar cadastrar.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (new Date(proposta.expires_at) < new Date()) {
+          await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
+          await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+          await sendReply("⏰ <b>A proposta expirou.</b>\n\nEnvie a foto do boleto novamente para gerar uma nova proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const dados = typeof proposta.dados === "string" ? JSON.parse(proposta.dados) : proposta.dados;
+        const { data: dividaInserida, error: errDivida } = await supabase
+          .from("dividas")
+          .insert({
+            user_id: userId,
+            descricao: dados.descricao || `Boleto - ${dados.credor || "Credor"}`,
+            valor_total: Number(dados.valor_total || 0),
+            valor_restante: Number(dados.valor_restante || dados.valor_total || 0),
+            valor_pago: 0,
+            data_vencimento: dados.data_vencimento || null,
+            credor: dados.credor || null,
+            status: "pendente",
+            observacoes: dados.observacoes || null,
+            linha_digitavel: dados.linha_digitavel || null,
+            codigo_barras: dados.codigo_barras || null,
+            metodo_pagamento_esperado: "boleto",
+          })
+          .select("id,descricao,valor_total,data_vencimento,credor")
+          .single();
+
+        if (errDivida) {
+          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message);
+          await sendReply("❌ <b>Erro ao cadastrar boleto no banco de dados.</b> Tente novamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
+        await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+
+        const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+        const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
+
+        await sendReply(
+          `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
+          `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
+          `💰 Valor: <b>${valFmt}</b>\n` +
+          `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
+          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas!</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      } else if (isNao) {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", conversaAtiva.proposta_id);
+        await supabase.from("telegram_conversas").upsert({ user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null });
+        await sendReply("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+      // Se não foi SIM nem NÃO, mas enviou uma nova foto ou comando, o fluxo prossegue abaixo e limpa o estado antigo.
+    }
+
     // ─── CASO 3: Mensagem natural / Foto / Documento -> Encaminha para o OpenAI Proxy ───
     const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
     const hasDoc = !!message.document;
@@ -307,6 +390,164 @@ serve(async (req) => {
     console.log("[telegram-webhook] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
     console.log("[telegram-webhook] hojeStr enviado:", hojeStr, "primeiroDiaMes:", primeiroDiaMes, "hasImage:", !!imageBase64Uri);
 
+    // Se é uma imagem/documento, analisar estruturadamente para preparar a proposta
+    if (imageBase64Uri) {
+      const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise de documentos e boletos.
+Analise a imagem enviada e identifique se é: boleto, nota fiscal, comprovante ou outro documento.
+
+Se for BOLETO:
+- Extraia com precisão: valor em reais, data de vencimento (YYYY-MM-DD), beneficiário/credor/emissor, descrição do boleto, e linha digitável / código de barras (se legível).
+- Responda SEMPRE incluindo o JSON estruturado dentro da tag <document_analysis> da seguinte forma:
+<document_analysis>
+{
+  "tipo": "boleto",
+  "valor": 123.45,
+  "data_vencimento": "YYYY-MM-DD",
+  "beneficiario": "Nome do Beneficiário",
+  "descricao": "Boleto - Nome",
+  "linha_digitavel": "12345.67890 12345.678901 12345.678901 1 12345678901234",
+  "confianca": "alta"
+}
+</document_analysis>
+
+Se for NOTA FISCAL ou COMPROVANTE:
+<document_analysis>
+{
+  "tipo": "nota_fiscal",
+  "valor": 123.45,
+  "data": "YYYY-MM-DD",
+  "beneficiario": "Fornecedor",
+  "confianca": "alta"
+}
+</document_analysis>
+
+Se a imagem não for legível ou não for documento financeiro:
+<document_analysis>
+{
+  "tipo": "desconhecido",
+  "confianca": "baixa"
+}
+</document_analysis>`;
+
+      try {
+        const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${supabaseServiceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            user_id: userId,
+            messages: [
+              { role: "system", content: docAnalysisSystemPrompt },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: promptText || "Analise este documento financeiro e extraia os dados." },
+                  { type: "image_url", image_url: { url: imageBase64Uri } },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (aiDocResponse.ok) {
+          const aiDocJson = await aiDocResponse.json();
+          const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
+          console.log("[telegram-webhook] Análise de documento retornada:", docAnalysisText.slice(0, 300));
+
+          const jsonMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
+          let documentData: any = null;
+          if (jsonMatch) {
+            try {
+              documentData = JSON.parse(jsonMatch[1].trim());
+            } catch (err: any) {
+              console.error("[telegram-webhook] Erro ao parsear JSON da análise:", err.message);
+            }
+          }
+
+          if (documentData && documentData.tipo === "boleto" && Number(documentData.valor) > 0) {
+            const valor = Number(documentData.valor) || 0;
+            const vencimento = documentData.data_vencimento || hojeStr;
+            const beneficiario = documentData.beneficiario || "Beneficiário Boleto";
+            const descricao = documentData.descricao || `Boleto - ${beneficiario}`;
+            const linhaDigitavel = documentData.linha_digitavel || "";
+
+            const { data: propostaSalva, error: errProp } = await supabase
+              .from("telegram_propostas")
+              .insert({
+                user_id: userId,
+                chat_id: chatId,
+                tipo: "cadastrar_divida",
+                dados: {
+                  descricao,
+                  valor_total: valor,
+                  valor_restante: valor,
+                  data_vencimento: vencimento,
+                  credor: beneficiario,
+                  status: "pendente",
+                  observacoes: linhaDigitavel ? `Linha digitável: ${linhaDigitavel}` : "Extraído de boleto via Telegram",
+                  linha_digitavel: linhaDigitavel || null,
+                },
+                resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${vencimento}`,
+                status: "pendente",
+                expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+              })
+              .select("id")
+              .single();
+
+            if (!errProp && propostaSalva) {
+              await supabase.from("telegram_conversas").upsert({
+                user_id: userId,
+                chat_id: chatId,
+                estado: "aguardando_confirmacao_boleto",
+                proposta_id: propostaSalva.id,
+                updated_at: new Date().toISOString(),
+              });
+
+              const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+              const vencFmt = vencimento.split("T")[0].split("-").reverse().join("/");
+
+              const mensagemProposta =
+                `📄 <b>Boleto identificado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                `💰 Valor: <b>${valFmt}</b>\n` +
+                `📅 Vencimento: <b>${vencFmt}</b>\n` +
+                (linhaDigitavel ? `🔢 Linha digitável: <code>${linhaDigitavel}</code>\n` : "") +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
+                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+              await sendReply(mensagemProposta);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+          } else if (documentData && documentData.tipo !== "desconhecido" && documentData.confianca !== "baixa") {
+            const valFmt = Number(documentData.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+            const dtFmt = documentData.data || documentData.data_vencimento || "Não identificada";
+            await sendReply(
+              `📄 <b>Documento identificado: ${String(documentData.tipo).toUpperCase()}</b>\n\n` +
+              `💰 Valor: <b>${valFmt}</b>\n` +
+              `📅 Data: <b>${dtFmt}</b>\n` +
+              `🏢 Beneficiário / Fornecedor: <b>${documentData.beneficiario || "Não identificado"}</b>\n\n` +
+              `<i>Para notas fiscais ou comprovantes, você também pode registrar diretamente no aplicativo Wallet!</i>`
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          } else {
+            await sendReply(
+              `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
+              `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        }
+      } catch (err: any) {
+        console.error("[telegram-webhook] Erro ao processar documento:", err.message);
+      }
+    }
+
+    // ─── CONSULTAS GERAIS DE TEXTO (Vendas, Despesas, Saídas, Dívidas, Saldos) ───
     const systemPrompt = `Você é o assistente financeiro inteligente do Wallet App integrado ao Telegram.
 Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
 Início do mês atual: ${primeiroDiaMes}.
@@ -317,36 +558,45 @@ Diretrizes de TOM DE VOZ e ESTILO (obrigatórias):
 - NUNCA use frases conclusivas entusiasmadas (ex: "Bate certinho", "Vamos em frente", "Tudo nos conformes", "Show de bola").
 - NUNCA use a palavra "Fechamento" a menos que o usuário pergunte especificamente sobre fechamento de turno/caixa.
 - NUNCA invente dados ou conceitos não informados pelas ferramentas.
+- Comece respostas de vendas com: "As vendas de [período], [data], foram:" (ex: "As vendas de hoje, 18/08/2026, foram:")
+- Termine respostas de vendas com: "Se precisar de mais informações, estou à disposição!"
 - Formatação: use negrito em HTML (<b>valor</b>) nos valores e números.
-- Use emojis como marcadores temáticos em blocos organizados.
+- Use emojis como marcadores temáticos em blocos organizados:
+  • Métodos de pagamento: 💰 Dinheiro, 💳 Débito, 💳 Crédito, 📲 Pix, 🎫 Voucher
+  • Métricas: 📈 Total de vendas, 🛒 Transações, 💵 Ticket médio
 
-Instruções para Processamento de Imagens e Documentos (Boletos, NF, Comprovantes):
-- Quando o usuário enviar uma imagem/foto ou documento:
-  1. Analise o documento visualmente e extraia: tipo (Boleto, Nota Fiscal, Comprovante Pix), valor total, data de vencimento (YYYY-MM-DD), beneficiário/credor e linha digitável / código de barras.
-  2. Se for um Boleto Bancário:
-     • Chame IMEDIATAMENTE a ferramenta 'cadastrar_boleto' (ou 'cadastrar_divida_boleto') passando os dados extraídos (valor, vencimento, beneficiario, descricao, linha_digitavel).
-     • Confirme o cadastro na resposta com formato:
-       📄 <b>Boleto Cadastrado com Sucesso!</b>
-       
-       🏢 Beneficiário: <b>[Nome]</b>
-       💰 Valor: <b>R$ [Valor]</b>
-       🗓️ Vencimento: <b>[DD/MM/AAAA]</b>
-       🔢 Linha digitável: <code>[Linha digitável]</code>
-       
-       <i>O boleto foi registrado como dívida pendente e já consta na sua Agenda Financeira!</i>
-  3. Se for uma Nota Fiscal de compra de mercadoria:
-     • Chame 'cadastrar_despesa_nf' para registrar como despesa.
-  4. Se for um Comprovante de Pagamento efetuado:
-     • Informe os dados da transferência/Pix realizado.
+Exemplo de formato esperado para consulta de vendas:
+As vendas de hoje, 18/08/2026, foram:
+
+💰 Dinheiro: <b>R$ 177,60</b>
+💳 Débito: <b>R$ 266,10</b>
+💳 Crédito: <b>R$ 47,30</b>
+📲 Pix: <b>R$ 302,10</b>
+
+📈 Total de vendas: <b>R$ 793,10</b>
+🛒 Transações: <b>62</b>
+💵 Ticket médio: <b>R$ 12,79</b>
+
+Se precisar de mais informações, estou à disposição!
+
+Exemplo de formato esperado para consulta de despesas / pagamentos / saídas do dia:
+As saídas de hoje, 18/08/2026, foram:
+
+💰 Total: <b>R$ 5.000,00</b>
+📝 Transações: <b>1</b>
+
+💼 Pró-labore: <b>R$ 5.000,00</b> — Heitor Fraga de Oliveira (Pix)
+
+Se precisar de mais informações, estou à disposição!
 
 Regras de seleção de ferramentas:
 - Quando o usuário perguntar "quanto paguei", "quanto gastei", "quanto saiu de dinheiro", "quanto paguei de dívida/conta hoje", "despesas de hoje/ontem/mês", "pró-labore" → use SEMPRE consultar_saidas_caixa_periodo com data_inicio=${hojeStr} e data_fim=${hojeStr}.
 - Quando o usuário perguntar "quanto devo", "dívidas pendentes", "boletos a vencer" → use consultar_dividas.
 - Quando o usuário perguntar sobre vendas, faturamento, caixa do PDV → use consultar_vendas_eyemobile.
-- Quando o usuário enviar foto de boleto/documento → use cadastrar_boleto ou cadastrar_despesa_nf.
 
 Ferramentas disponíveis:
-- cadastrar_boleto: Cadastra um boleto como dívida no sistema. Recebe: valor, vencimento (YYYY-MM-DD), beneficiario, descricao, linha_digitavel.
+- cadastrar_divida: Cadastra uma nova dívida ou financiamento no sistema.
+- cadastrar_boleto: Cadastra um boleto como dívida no sistema.
 - cadastrar_despesa_nf: Cadastra despesa a partir de Nota Fiscal.
 - consultar_saidas_caixa_periodo: Consulta TODAS as saídas de dinheiro do período: despesas, pró-labore, salários, vales, pagamentos de dívidas, transferências e saques.
 - consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API e banco de dados.
@@ -355,25 +605,9 @@ Ferramentas disponíveis:
 - consultar_dividas: Consulta dívidas pendentes e futuras a vencer.
 - consultar_resumo_mensal: Consulta resumo financeiro mensal consolidado (ano=${anoAtual}, mes=${mesAtual}).`;
 
-    let userContent: any = promptText;
-    if (imageBase64Uri) {
-      userContent = [
-        {
-          type: "text",
-          text: promptText || "Analise esta imagem de documento financeiro. Se for um boleto bancário, extraia o valor, a data de vencimento, o beneficiário/credor e a linha digitável, e use a ferramenta cadastrar_boleto para cadastrá-lo como dívida pendente. Se for nota fiscal, use cadastrar_despesa_nf.",
-        },
-        {
-          type: "image_url",
-          image_url: {
-            url: imageBase64Uri,
-          },
-        },
-      ];
-    }
-
     const aiMessages = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userContent },
+      { role: "user", content: promptText },
     ];
 
     try {
@@ -397,12 +631,9 @@ Ferramentas disponíveis:
         const aiJson = await aiResponse.json();
         const replyContent = aiJson.choices?.[0]?.message?.content;
         console.log("[telegram-webhook] Resposta da IA:", (replyContent || "SEM CONTEÚDO").slice(0, 300));
-        console.log("[telegram-webhook] aiJson keys:", Object.keys(aiJson));
         if (replyContent) {
           await sendReply(replyContent);
           return new Response("OK", { status: 200, headers: corsHeaders });
-        } else {
-          console.log("[telegram-webhook] AVISO: replyContent vazio/null. aiJson.choices:", JSON.stringify(aiJson.choices || []).slice(0, 500));
         }
       } else {
         const errorBody = await aiResponse.text();
