@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -338,65 +339,65 @@ serve(async (req) => {
       // Se não foi SIM nem NÃO, mas enviou uma nova foto ou comando, o fluxo prossegue abaixo e limpa o estado antigo.
     }
 
-    // ─── CASO 3: Mensagem natural / Foto / Documento -> Encaminha para o OpenAI Proxy ───
+    // ─── CASO 3: Mensagem com Foto / Documento ───
     const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
     const hasDoc = !!message.document;
     const caption = (message.caption || "").trim();
     const promptText = (message.text || caption || "").trim();
 
-    let imageBase64Uri: string | null = null;
     if (hasPhoto || hasDoc) {
+      console.log("[telegram-webhook] ===== INÍCIO PROCESSAMENTO DE IMAGEM =====");
       try {
         const fileId = hasPhoto
           ? message.photo[message.photo.length - 1].file_id
           : message.document.file_id;
 
-        console.log("[telegram-webhook] Baixando arquivo/imagem do Telegram:", fileId);
-        const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
-        if (getFileResp.ok) {
-          const fileInfo = await getFileResp.json();
-          const filePath = fileInfo?.result?.file_path;
-          if (filePath) {
-            console.log("[telegram-webhook] Baixando binário de:", filePath);
-            const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
-            if (fileDownloadResp.ok) {
-              const arrayBuffer = await fileDownloadResp.arrayBuffer();
-              const uint8 = new Uint8Array(arrayBuffer);
-              let binary = "";
-              const len = uint8.byteLength;
-              for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(uint8[i]);
-              }
-              const b64 = btoa(binary);
-              const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
-              const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
-              imageBase64Uri = `data:${mime};base64,${b64}`;
-              console.log("[telegram-webhook] Documento/Imagem convertido para base64 com sucesso! Mime:", mime, "tamanho:", b64.length);
-            }
-          }
+        console.log("[telegram-webhook] fileId:", fileId, "hasBotToken:", !!telegramBotToken);
+        if (!telegramBotToken) {
+          await sendReply("❌ Token do bot do Telegram não configurado no servidor.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
-      } catch (err: any) {
-        console.error("[telegram-webhook] Falha ao baixar arquivo do Telegram:", err.message);
-      }
-    }
 
-    const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-    const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
-    const mesAtual = nowSp.getMonth() + 1;
-    const anoAtual = nowSp.getFullYear();
-    const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
+        console.log("[telegram-webhook] Chamando Telegram getFile para fileId:", fileId);
+        const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
+        const fileInfo = await getFileResp.json();
+        console.log("[telegram-webhook] getFile response ok:", fileInfo?.ok);
 
-    console.log("[telegram-webhook] Data servidor (UTC):", new Date().toISOString());
-    console.log("[telegram-webhook] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
-    console.log("[telegram-webhook] hojeStr enviado:", hojeStr, "primeiroDiaMes:", primeiroDiaMes, "hasImage:", !!imageBase64Uri);
+        if (!fileInfo?.ok || !fileInfo?.result?.file_path) {
+          console.error("[telegram-webhook] getFile falhou:", JSON.stringify(fileInfo));
+          await sendReply("❌ Não foi possível baixar a imagem do Telegram. Tente enviar novamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
 
-    // Se é uma imagem/documento, analisar estruturadamente para preparar a proposta
-    if (imageBase64Uri) {
-      const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise de documentos e boletos.
-Analise a imagem enviada e identifique se é: boleto, nota fiscal, comprovante ou outro documento.
+        const filePath = fileInfo.result.file_path;
+        console.log("[telegram-webhook] Baixando binário de:", filePath);
+        const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+        if (!fileDownloadResp.ok) {
+          console.error("[telegram-webhook] download binário falhou com status:", fileDownloadResp.status);
+          await sendReply("❌ Erro ao transferir o arquivo do Telegram. Tente novamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
 
-Se for BOLETO:
-- Extraia com precisão: valor em reais, data de vencimento (YYYY-MM-DD), beneficiário/credor/emissor, descrição do boleto, e linha digitável / código de barras (se legível).
+        const arrayBuffer = await fileDownloadResp.arrayBuffer();
+        console.log("[telegram-webhook] Tamanho do buffer baixado:", arrayBuffer.byteLength, "bytes");
+
+        if (arrayBuffer.byteLength > 20 * 1024 * 1024) {
+          await sendReply("📷 Imagem muito grande (limite de 20MB). Envie uma foto menor ou com resolução padrão.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const b64 = base64Encode(new Uint8Array(arrayBuffer));
+        console.log("[telegram-webhook] Base64 gerado com sucesso! Tamanho:", b64.length);
+
+        const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
+        const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
+        const imageBase64Uri = `data:${mime};base64,${b64}`;
+
+        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise de documentos e boletos bancários.
+Analise a imagem enviada com atenção aos dados financeiros.
+
+Se for BOLETO BANCÁRIO:
+- Extraia com máxima precisão: valor em reais (número decimal), data de vencimento (YYYY-MM-DD), beneficiário/credor/emissor, descrição do boleto, e linha digitável / código de barras (se legível).
 - Responda SEMPRE incluindo o JSON estruturado dentro da tag <document_analysis> da seguinte forma:
 <document_analysis>
 {
@@ -429,7 +430,7 @@ Se a imagem não for legível ou não for documento financeiro:
 }
 </document_analysis>`;
 
-      try {
+        console.log("[telegram-webhook] Chamando openai-proxy para analisar documento...");
         const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
           method: "POST",
           headers: {
@@ -452,98 +453,111 @@ Se a imagem não for legível ou não for documento financeiro:
           }),
         });
 
-        if (aiDocResponse.ok) {
-          const aiDocJson = await aiDocResponse.json();
-          const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
-          console.log("[telegram-webhook] Análise de documento retornada:", docAnalysisText.slice(0, 300));
+        console.log("[telegram-webhook] openai-proxy doc status:", aiDocResponse.status);
 
-          const jsonMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
-          let documentData: any = null;
-          if (jsonMatch) {
-            try {
-              documentData = JSON.parse(jsonMatch[1].trim());
-            } catch (err: any) {
-              console.error("[telegram-webhook] Erro ao parsear JSON da análise:", err.message);
-            }
-          }
+        if (!aiDocResponse.ok) {
+          const errText = await aiDocResponse.text();
+          console.error("[telegram-webhook] openai-proxy falhou na análise de doc:", errText);
+          await sendReply("❌ Erro ao analisar a imagem com a IA. Detalhe: " + errText.slice(0, 100));
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
 
-          if (documentData && documentData.tipo === "boleto" && Number(documentData.valor) > 0) {
-            const valor = Number(documentData.valor) || 0;
-            const vencimento = documentData.data_vencimento || hojeStr;
-            const beneficiario = documentData.beneficiario || "Beneficiário Boleto";
-            const descricao = documentData.descricao || `Boleto - ${beneficiario}`;
-            const linhaDigitavel = documentData.linha_digitavel || "";
+        const aiDocJson = await aiDocResponse.json();
+        const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
+        console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 300));
 
-            const { data: propostaSalva, error: errProp } = await supabase
-              .from("telegram_propostas")
-              .insert({
-                user_id: userId,
-                chat_id: chatId,
-                tipo: "cadastrar_divida",
-                dados: {
-                  descricao,
-                  valor_total: valor,
-                  valor_restante: valor,
-                  data_vencimento: vencimento,
-                  credor: beneficiario,
-                  status: "pendente",
-                  observacoes: linhaDigitavel ? `Linha digitável: ${linhaDigitavel}` : "Extraído de boleto via Telegram",
-                  linha_digitavel: linhaDigitavel || null,
-                },
-                resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${vencimento}`,
-                status: "pendente",
-                expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-              })
-              .select("id")
-              .single();
-
-            if (!errProp && propostaSalva) {
-              await supabase.from("telegram_conversas").upsert({
-                user_id: userId,
-                chat_id: chatId,
-                estado: "aguardando_confirmacao_boleto",
-                proposta_id: propostaSalva.id,
-                updated_at: new Date().toISOString(),
-              });
-
-              const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-              const vencFmt = vencimento.split("T")[0].split("-").reverse().join("/");
-
-              const mensagemProposta =
-                `📄 <b>Boleto identificado!</b>\n\n` +
-                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
-                `💰 Valor: <b>${valFmt}</b>\n` +
-                `📅 Vencimento: <b>${vencFmt}</b>\n` +
-                (linhaDigitavel ? `🔢 Linha digitável: <code>${linhaDigitavel}</code>\n` : "") +
-                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
-
-              await sendReply(mensagemProposta);
-              return new Response("OK", { status: 200, headers: corsHeaders });
-            }
-          } else if (documentData && documentData.tipo !== "desconhecido" && documentData.confianca !== "baixa") {
-            const valFmt = Number(documentData.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-            const dtFmt = documentData.data || documentData.data_vencimento || "Não identificada";
-            await sendReply(
-              `📄 <b>Documento identificado: ${String(documentData.tipo).toUpperCase()}</b>\n\n` +
-              `💰 Valor: <b>${valFmt}</b>\n` +
-              `📅 Data: <b>${dtFmt}</b>\n` +
-              `🏢 Beneficiário / Fornecedor: <b>${documentData.beneficiario || "Não identificado"}</b>\n\n` +
-              `<i>Para notas fiscais ou comprovantes, você também pode registrar diretamente no aplicativo Wallet!</i>`
-            );
-            return new Response("OK", { status: 200, headers: corsHeaders });
-          } else {
-            await sendReply(
-              `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
-              `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
-            );
-            return new Response("OK", { status: 200, headers: corsHeaders });
+        const jsonMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
+        let documentData: any = null;
+        if (jsonMatch) {
+          try {
+            documentData = JSON.parse(jsonMatch[1].trim());
+          } catch (err: any) {
+            console.error("[telegram-webhook] Erro ao parsear JSON:", err.message);
           }
         }
-      } catch (err: any) {
-        console.error("[telegram-webhook] Erro ao processar documento:", err.message);
+
+        if (documentData && documentData.tipo === "boleto" && Number(documentData.valor) > 0) {
+          const valor = Number(documentData.valor) || 0;
+          const vencimento = documentData.data_vencimento || hojeStr;
+          const beneficiario = documentData.beneficiario || "Beneficiário Boleto";
+          const descricao = documentData.descricao || `Boleto - ${beneficiario}`;
+          const linhaDigitavel = documentData.linha_digitavel || "";
+
+          const { data: propostaSalva, error: errProp } = await supabase
+            .from("telegram_propostas")
+            .insert({
+              user_id: userId,
+              chat_id: chatId,
+              tipo: "cadastrar_divida",
+              dados: {
+                descricao,
+                valor_total: valor,
+                valor_restante: valor,
+                data_vencimento: vencimento,
+                credor: beneficiario,
+                status: "pendente",
+                observacoes: linhaDigitavel ? `Linha digitável: ${linhaDigitavel}` : "Extraído de boleto via Telegram",
+                linha_digitavel: linhaDigitavel || null,
+              },
+              resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${vencimento}`,
+              status: "pendente",
+              expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+            })
+            .select("id")
+            .single();
+
+          if (!errProp && propostaSalva) {
+            await supabase.from("telegram_conversas").upsert({
+              user_id: userId,
+              chat_id: chatId,
+              estado: "aguardando_confirmacao_boleto",
+              proposta_id: propostaSalva.id,
+              updated_at: new Date().toISOString(),
+            });
+
+            const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+            const vencFmt = vencimento.split("T")[0].split("-").reverse().join("/");
+
+            const mensagemProposta =
+              `📄 <b>Boleto identificado!</b>\n\n` +
+              `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+              `💰 Valor: <b>${valFmt}</b>\n` +
+              `📅 Vencimento: <b>${vencFmt}</b>\n` +
+              (linhaDigitavel ? `🔢 Linha digitável: <code>${linhaDigitavel}</code>\n` : "") +
+              `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+              `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
+              `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+              `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+            await sendReply(mensagemProposta);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          } else {
+            console.error("[telegram-webhook] Erro ao salvar proposta:", errProp?.message);
+            await sendReply("❌ Erro ao registrar a proposta do boleto. Tente novamente.");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        } else if (documentData && documentData.tipo !== "desconhecido" && documentData.confianca !== "baixa") {
+          const valFmt = Number(documentData.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+          const dtFmt = documentData.data || documentData.data_vencimento || "Não identificada";
+          await sendReply(
+            `📄 <b>Documento identificado: ${String(documentData.tipo).toUpperCase()}</b>\n\n` +
+            `💰 Valor: <b>${valFmt}</b>\n` +
+            `📅 Data: <b>${dtFmt}</b>\n` +
+            `🏢 Beneficiário / Fornecedor: <b>${documentData.beneficiario || "Não identificado"}</b>\n\n` +
+            `<i>Para notas fiscais ou comprovantes, você também pode registrar diretamente no aplicativo Wallet!</i>`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        } else {
+          await sendReply(
+            `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
+            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } catch (imgErr: any) {
+        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErr.message, imgErr.stack);
+        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErr.message);
+        return new Response("OK", { status: 200, headers: corsHeaders });
       }
     }
 

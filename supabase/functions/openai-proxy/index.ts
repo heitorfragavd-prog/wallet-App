@@ -825,14 +825,15 @@ Deno.serve(async (req: Request) => {
   const MAX_ITERATIONS = 8;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const response = await fetch(OPENAI_API_URL, {
+    let modelToUse = body.model || "gpt-4o-mini";
+    let response = await fetch(OPENAI_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: body.model || "gpt-4o-mini",
+        model: modelToUse,
         messages,
         tools: TOOLS,
         tool_choice: "auto",
@@ -842,7 +843,32 @@ Deno.serve(async (req: Request) => {
       }),
     });
 
-    const data = await response.json();
+    let data = await response.json();
+    if (!response.ok && (modelToUse === "gpt-4o-mini" || modelToUse.includes("mini"))) {
+      const errStr = JSON.stringify(data);
+      if (errStr.includes("vision") || errStr.includes("image") || response.status === 400) {
+        console.warn("[openai-proxy] Retentando com gpt-4o devido a erro no mini:", errStr.slice(0, 300));
+        modelToUse = "gpt-4o";
+        response = await fetch(OPENAI_API_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openaiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: modelToUse,
+            messages,
+            tools: TOOLS,
+            tool_choice: "auto",
+            max_tokens: body.max_tokens || 2000,
+            temperature: body.temperature ?? 0.3,
+            response_format: body.response_format || undefined,
+          }),
+        });
+        data = await response.json();
+      }
+    }
+
     if (!response.ok) {
       console.error("[openai-proxy] OpenAI retornou erro:", response.status, JSON.stringify(data).slice(0, 500));
       return new Response(JSON.stringify(data), { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
