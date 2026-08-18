@@ -325,7 +325,8 @@ async function consultarDespesasPeriodo(
   const endDate = dataFim || startDate;
 
   console.log("[consultarDespesasPeriodo] ===== INÍCIO =====");
-  console.log("[consultarDespesasPeriodo] userId=", userId, "startDate=", startDate, "endDate=", endDate);
+  console.log("[consultarDespesasPeriodo] userId:", userId);
+  console.log("[consultarDespesasPeriodo] data_inicio:", startDate, "data_fim:", endDate);
 
   try {
     const [despesas, { data: categorias }] = await Promise.all([
@@ -340,7 +341,8 @@ async function consultarDespesasPeriodo(
     const catMap = new Map<string, string>();
     (categorias || []).forEach((c: any) => catMap.set(c.id, c.nome));
 
-    console.log("[consultarDespesasPeriodo] Despesas encontradas:", despesas.length, "para o período", startDate, "a", endDate);
+    console.log("[consultarDespesasPeriodo] Despesas count (unificado despesas + transacoes):", despesas.length, "para o período", startDate, "a", endDate);
+    console.log("[consultarDespesasPeriodo] Primeiros 3 registros:", JSON.stringify(despesas.slice(0, 3)));
 
     const totalDespesas = despesas.reduce((sum, d) => sum + Number(d.valor || 0), 0);
     const qtd = despesas.length;
