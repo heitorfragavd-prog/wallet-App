@@ -202,11 +202,11 @@ async function reextrairBeneficiarioDoDocumento(
   const promptCorrecao = `Você errou na extração anterior do beneficiário do boleto. O nome "${tentativaAtual}" está INCORRETO.
 
 REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
-1. Se "${tentativaAtual}" for um BANCO ou COOPERATIVA (ex: Sicoob, Bradesco, Itaú, Cooperativa de Crédito...) → PROCURE na VIA INFERIOR (Ficha de Compensação) pelo campo "Beneficiário:" ou no TOPO pelo texto "RECEBEMOS de [EMPRESA]".
-2. Se "${tentativaAtual}" for uma PESSOA FÍSICA → ela é o PAGADOR, NÃO o beneficiário. O beneficiário é a EMPRESA FORNECEDORA que emitiu a cobrança.
-3. O BENEFICIÁRIO É SEMPRE UMA EMPRESA / RAZÃO SOCIAL (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL IND BRAS DE BEBIDAS SA", "SELLPACK DISTRIBUIDORA LTDA").
+1. No TOPO DO BOLETO (Canhoto Superior), procure o texto "RECEBEMOS DE:" -> O NOME LOGO APÓS É A EMPRESA BENEFICIÁRIA (ex: "Brasnorte Distribuidora de Bebidas Ltda").
+2. Se "${tentativaAtual}" for um BANCO ou COOPERATIVA (ex: Sicoob, Bradesco, Itaú...) -> IGNORE O BANCO e procure a empresa fornecedora.
+3. Se "${tentativaAtual}" for uma PESSOA FÍSICA (ex: "Viviane...") -> ela é o PAGADOR/SACADO. NUNCA use como beneficiário.
 4. Responda APENAS com o JSON:
-{"beneficiario": "NOME COMPLETO DA EMPRESA FORNECEDORA"}`;
+{"beneficiario": "NOME DA EMPRESA FORNECEDORA"}`;
 
   try {
     const resp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
@@ -249,6 +249,29 @@ REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
   }
   return null;
 }
+
+// ─── DECODIFICADOR DETERMINÍSTICO FEBRABAN DA LINHA DIGITÁVEL ───
+function parseLinhaDigitavelFebraban(linha: string): { valor: number | null; vencimento: string | null } {
+  const digits = (linha || "").replace(/\D/g, "");
+  if (digits.length !== 47) return { valor: null, vencimento: null };
+
+  const campo5 = digits.slice(33);
+  const fatorStr = campo5.slice(0, 4);
+  const valorStr = campo5.slice(4);
+
+  const valorCentavos = parseInt(valorStr, 10);
+  const valor = !isNaN(valorCentavos) && valorCentavos > 0 ? valorCentavos / 100 : null;
+
+  const fator = parseInt(fatorStr, 10);
+  let vencimento: string | null = null;
+  if (!isNaN(fator) && fator > 1000) {
+    const baseDate = new Date(Date.UTC(2025, 1, 22)); // 2025-02-22 (novo ciclo FEBRABAN)
+    const vencDate = new Date(baseDate.getTime() + (fator - 1000) * 86400000);
+    vencimento = vencDate.toISOString().split("T")[0];
+  }
+  return { valor, vencimento };
+}
+
 
 
 
@@ -1077,45 +1100,35 @@ serve(async (req) => {
 
         const docAnalysisSystemPrompt = `Você é um extrator especialista em boletos bancários brasileiros com precisão cirúrgica.
 
-══════════════════════════════════════════════════
-REGRA CRÍTICA — BENEFICIÁRIO (QUEM RECEBE) vs PAGADOR (QUEM PAGA)
-══════════════════════════════════════════════════
+LAYOUT E ANATOMIA DO BOLETO:
+1. TOPO (Canhoto Superior):
+   - Procure "RECEBEMOS DE:" -> O NOME LOGO APÓS É A EMPRESA BENEFICIÁRIA (ex: "Brasnorte Distribuidora de Bebidas Ltda").
+   - "DATA VENCIMENTO:" -> Data de vencimento no canhoto.
+   - "VALOR DO DOCUMENTO:" -> Valor do documento no canhoto.
+   - "SACADO:" -> É o cliente/pagador (ex: Viviane...). NUNCA use como beneficiário!
 
-1. **BENEFICIÁRIO / CEDENTE (quem RECEBE o pagamento — é o FORNECEDOR / CREDOR)**:
-   - É SEMPRE uma EMPRESA / RAZÃO SOCIAL (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL IND BRAS DE BEBIDAS SA", "ISPAL INDUSTRIA BRASILEIRA DE")
-   - Em boletos SICOOB/Itaú/Bradesco, procure: "RECEBEMOS de", "Beneficiário:", "Cedente:", "Beneficiário Final:", "Razão Social"
-   - Fica no TOPO ou MEIO do boleto (logo abaixo ou ao lado do logo do banco)
-   - ⚠️ ESTE é o campo "beneficiario" que você DEVE extrair!
+2. MEIO E INFERIOR (Recibo do Pagador e Ficha de Compensação):
+   - "Beneficiário:" -> Razão Social da Empresa (ex: "Brasnorte Distribuidora de Bebidas").
+   - "Vencimento" -> Data limite para pagamento (ex: 22/07/2026). NUNCA use a "Data do Documento".
+   - "Valor Documento" -> Valor a pagar (ex: 1053.58).
+   - "Pagador:" -> Pessoa que paga a conta (ex: Viviane Cristina Teotonio Siqueira).
+   - "Linha Digitável" -> Sequência de 47 dígitos no topo da via (ex: 75691.31191 01052.814538 53620.600014 6 15150000105358).
 
-2. **PAGADOR / SACADO (quem PAGA a conta — é o CLIENTE / DEVEDOR)**:
-   - Geralmente é uma PESSOA FÍSICA com nome completo em destaque (ex: "VIVIANE CRISTINA TEOTONIO SIQUEIRA", "HEITOR FRAGA DE OLIVEIRA") ou a empresa compradora
-   - Fica na parte INFERIOR do boleto, precedido por "Pagador:", "Sacado:", "Nome do Pagador"
-   - ❌ NUNCA use o PAGADOR/SACADO como "beneficiario". O pagador é quem está pagando a conta!
+REGRAS:
+- O beneficiário SEMPRE é uma EMPRESA/FORNECEDOR (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL IND BRAS DE BEBIDAS", "SELLPACK DISTRIBUIDORA").
+- NUNCA use o PAGADOR (pessoa física) ou o BANCO (Sicoob, Cooperativa) como beneficiário.
 
-3. **VALOR DO DOCUMENTO**:
-   - Procure: "Valor do Documento", "(=) Valor documento", "Valor cobrado"
-   - Normalize para número decimal (ex: 1053.59)
-
-4. **VENCIMENTO**:
-   - Formato no boleto: DD/MM/AAAA → normalize para YYYY-MM-DD (ex: 2026-07-22)
-   - Boletos com data no passado (vencidos) são válidos e devem ser cadastrados
-
-5. **LINHA DIGITÁVEL**:
-   - Sequência numérica de 47 ou 48 dígitos (com ou sem pontuação)
-
-## FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis> com JSON estrito):
+FORMATO DE RESPOSTA (JSON estrito em tag <document_analysis>):
 <document_analysis>
 {
   "tipo": "boleto",
   "beneficiario": "Brasnorte Distribuidora de Bebidas Ltda",
   "pagador": "Viviane Cristina Teotonio Siqueira",
-  "valor": 1053.59,
+  "valor": 1053.58,
   "data_vencimento": "2026-07-22",
   "descricao": "Boleto - Brasnorte",
-  "linha_digitavel": "75691311910105281435836206000140150000105359",
-  "confianca": "alta",
-  "motivo_confianca": "Beneficiário empresarial identificado com clareza",
-  "campos_ilegiveis": []
+  "linha_digitavel": "75691.31191 01052.814538 53620.600014 6 15150000105358",
+  "confianca": "alta"
 }
 </document_analysis>`;
 
@@ -1136,7 +1149,7 @@ REGRA CRÍTICA — BENEFICIÁRIO (QUEM RECEBE) vs PAGADOR (QUEM PAGA)
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este boleto bancário brasileiro e extraia com máxima precisão o beneficiário (quem recebe), valor, vencimento e linha digitável." },
+                  { type: "text", text: promptText || "Analise esta foto de boleto bancário brasileiro. No topo (canhoto), procure 'RECEBEMOS DE:' para extrair a empresa beneficiária. Leia com máxima atenção a linha digitável, valor e vencimento." },
                   { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
               },
@@ -1208,10 +1221,23 @@ REGRA CRÍTICA — BENEFICIÁRIO (QUEM RECEBE) vs PAGADOR (QUEM PAGA)
             return null;
           };
 
-          const valor = parseNum(documentData.valor);
-          const dataVencimento = parseDt(documentData.data_vencimento);
+          let valor = parseNum(documentData.valor);
+          let dataVencimento = parseDt(documentData.data_vencimento);
           let beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
+
+          // ─── BLINDAGEM MATEMÁTICA FEBRABAN VIA LINHA DIGITÁVEL ───
+          if (linhaDigitavel) {
+            const febraban = parseLinhaDigitavelFebraban(linhaDigitavel);
+            if (febraban.valor && febraban.valor > 0) {
+              console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${febraban.valor}`);
+              valor = febraban.valor;
+            }
+            if (febraban.vencimento) {
+              console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${febraban.vencimento}`);
+              dataVencimento = febraban.vencimento;
+            }
+          }
 
           // ─── AUTO-CORREÇÃO: Detecta se o beneficiário foi confundido com Banco ou Pagador ───
           if (beneficiario && (isNomeDeBanco(beneficiario) || isPessoaFisicaProvavel(beneficiario))) {
