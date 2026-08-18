@@ -535,13 +535,18 @@ serve(async (req) => {
       respLower.includes("boletos a pagar");
 
     if (isConsultaDividas) {
-      const { data: dividas } = await supabase
+      const { data: dividas, error: errDiv } = await supabase
         .from("dividas")
-        .select("*")
+        .select("id, descricao, status, valor_total, valor_restante, data_vencimento, credor")
         .eq("user_id", userId)
-        .eq("paga", false)
+        .neq("status", "quitada")
+        .neq("status", "paga")
         .order("data_vencimento", { ascending: true })
         .limit(20);
+
+      if (errDiv) {
+        console.error("[telegram-webhook] Erro ao consultar dívidas:", errDiv.message);
+      }
 
       if (!dividas || dividas.length === 0) {
         await sendReply("🎉 <b>Nenhuma dívida pendente encontrada!</b> Você está em dia.");
@@ -550,7 +555,7 @@ serve(async (req) => {
         let msg = "💳 <b>Suas Dívidas Pendentes:</b>\n\n";
 
         dividas.forEach((d: any) => {
-          const valor = Number(d.valor_restante || d.valor_total || d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+          const valor = Number(d.valor_restante || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
           let atrasoText = "";
           let statusEmoji = "🟢";
@@ -567,13 +572,13 @@ serve(async (req) => {
             }
           }
 
-          msg += `${statusEmoji} <b>${d.nome || d.descricao || "Dívida"}</b>\n`;
+          msg += `${statusEmoji} <b>${d.descricao || "Dívida"}</b>\n`;
           msg += `   💰 ${valor} | 🗓️ Vence: <b>${venc}</b>${atrasoText}\n`;
           if (d.credor) msg += `   🏢 Beneficiário: ${d.credor}\n`;
           msg += "\n";
         });
 
-        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || d.valor || 0), 0);
+        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
         msg += `📊 <b>Total devido:</b> <b>${totalDevido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n\n`;
         msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
