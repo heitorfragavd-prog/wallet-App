@@ -84,7 +84,7 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: linkToken.telegram_chat_id,
-            text: "✅ <b>Conta Wallet vinculada com sucesso!</b>\n\nVocê receberá alertas de dívidas e lembretes por aqui.\n\nUse os comandos:\n/dividas - Listar pendências\n/saldo - Saldo acumulado\n/ajuda - Menu de comandos",
+            text: "✅ <b>Conta Wallet vinculada com sucesso!</b>\n\nAgora você pode perguntar sobre suas vendas, saldos ou lançamentos direto por aqui!\n\nExemplos:\n• <i>Quanto vendeu hoje?</i>\n• <i>Qual meu saldo?</i>\n• /dividas - Listar pendências\n• /saldo - Resumo consolidado",
             parse_mode: "HTML",
           }),
         }).catch(() => {});
@@ -149,7 +149,7 @@ serve(async (req) => {
 
     if (!usuarioTg) {
       await sendReply(
-        `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnve o comando /start para gerar seu código de vínculo.`
+        `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
       );
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
@@ -171,7 +171,7 @@ serve(async (req) => {
       } else {
         let msg = "💳 <b>Suas Dívidas Pendentes:</b>\n\n";
         dividas.forEach((d, idx) => {
-          const valor = Number(d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+          const valor = Number(d.valor || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
           msg += `${idx + 1}. <b>${d.nome || d.descricao || "Dívida"}</b>\n   💰 ${valor} | 🗓️ Vence: ${venc}\n\n`;
         });
@@ -202,13 +202,66 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // Comando /ajuda ou padrão
+    // Comando /ajuda
+    if (text.startsWith("/ajuda")) {
+      await sendReply(
+        `🤖 <b>Comandos do Bot Wallet:</b>\n\n` +
+        `/dividas - Lista suas dívidas pendentes\n` +
+        `/saldo - Exibe o saldo consolidado\n` +
+        `/start - Gerar código de vínculo\n` +
+        `/ajuda - Ver este menu de comandos\n\n` +
+        `💬 <i>Você também pode conversar naturalmente! Exemplos:</i>\n` +
+        `• <i>"Quanto vendeu hoje?"</i>\n` +
+        `• <i>"Qual o resumo do mês?"</i>\n` +
+        `• <i>"Cadastre uma despesa de R$ 50 de almoço"</i>`
+      );
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── CASO 3: Mensagem natural -> Encaminha para o OpenAI Proxy ───
+    const systemPrompt = `Você é o assistente financeiro do Wallet App integrado ao Telegram.
+Responda de forma concisa, educada, clara e direta em português do Brasil.
+Use formatação HTML simples suportada pelo Telegram (<b>, <i>, <code>).
+Sempre use valores monetários em formato Real (ex: R$ 1.234,56).
+Quando o usuário perguntar quanto vendeu hoje, vendas do PDV, faturamento ou dados de vendas da loja, use SEMPRE a ferramenta consultar_vendas_eyemobile.
+Para perguntas sobre dívidas, contas, saldos ou lançamentos, use as ferramentas disponíveis.`;
+
+    const aiMessages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: text },
+    ];
+
+    try {
+      const aiResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${supabaseServiceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          user_id: userId,
+          messages: aiMessages,
+        }),
+      });
+
+      if (aiResponse.ok) {
+        const aiJson = await aiResponse.json();
+        const replyContent = aiJson.choices?.[0]?.message?.content;
+        if (replyContent) {
+          await sendReply(replyContent);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+    } catch (aiErr: any) {
+      console.error("[telegram-webhook] Erro ao consultar openai-proxy:", aiErr.message);
+    }
+
+    // Fallback se a IA não retornar resposta
     await sendReply(
-      `🤖 <b>Comandos do Bot Wallet:</b>\n\n` +
-      `/dividas - Lista suas dívidas pendentes\n` +
-      `/saldo - Exibe o saldo consolidado\n` +
-      `/start - Gerar código de vínculo\n` +
-      `/ajuda - Ver este menu`
+      `🤖 <b>Assistente Wallet:</b>\n\n` +
+      `Não consegui processar sua consulta no momento.\n\n` +
+      `Use /ajuda para ver os comandos disponíveis ou tente perguntar de outra forma (ex: <i>"Quanto vendeu hoje?"</i>).`
     );
 
     return new Response("OK", { status: 200, headers: corsHeaders });
