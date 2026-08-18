@@ -397,12 +397,84 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
+    // Comando /ensinar ou /alias
+    if (text.startsWith("/ensinar") || text.startsWith("/alias")) {
+      const paramStr = text.replace(/^(\/ensinar|\/alias)\s*/i, "").trim();
+      const parts = paramStr.split(/=|->|para|:|\s{2,}/i).map((p) => p.trim()).filter(Boolean);
+
+      if (parts.length < 2) {
+        await sendReply(
+          `🎓 <b>Como ensinar o Bot a associar Fornecedor com Categoria:</b>\n\n` +
+          `Envie no formato:\n` +
+          `<code>/ensinar Nome do Fornecedor = Nome da Categoria</code>\n\n` +
+          `<b>Exemplos:</b>\n` +
+          `• <code>/ensinar Sellpack = Descartáveis</code>\n` +
+          `• <code>/ensinar Brasnorte = Ambev</code>\n` +
+          `• <code>/ensinar SPAL = Coca-Cola</code>\n` +
+          `• <code>/ensinar Xodó Foods = Xodó</code>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const fornecedorTerm = parts[0];
+      const categoriaAlvoTerm = parts[1];
+
+      // Busca a categoria informada
+      const { data: categorias } = await supabase
+        .from("categorias")
+        .select("id,nome,aliases")
+        .eq("user_id", userId);
+
+      const normalize = (s: string) =>
+        s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+      const catAlvoNorm = normalize(categoriaAlvoTerm);
+
+      const catEncontrada = (categorias || []).find((c: any) => {
+        const cNorm = normalize(c.nome);
+        return cNorm === catAlvoNorm || cNorm.includes(catAlvoNorm) || catAlvoNorm.includes(cNorm);
+      });
+
+      if (!catEncontrada) {
+        const nomesDisponiveis = (categorias || []).map((c: any) => `• ${c.nome}`).join("\n");
+        await sendReply(
+          `❌ <b>Categoria "${categoriaAlvoTerm}" não encontrada.</b>\n\n` +
+          `<b>Suas categorias disponíveis:</b>\n${nomesDisponiveis || "Nenhuma categoria cadastrada"}`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // 1. Atualiza aliases da categoria
+      const currentAliases = (catEncontrada.aliases || "").split(",").map((a: string) => a.trim()).filter(Boolean);
+      const novoAliasNorm = normalize(fornecedorTerm);
+      if (!currentAliases.includes(novoAliasNorm)) {
+        currentAliases.push(novoAliasNorm);
+      }
+      const updatedAliasesStr = currentAliases.join(",");
+
+      await supabase
+        .from("categorias")
+        .update({ aliases: updatedAliasesStr })
+        .eq("id", catEncontrada.id);
+
+      // 2. Salva no cache de credor
+      await salvarCacheCategoria(supabase, userId, fornecedorTerm, catEncontrada.id);
+
+      await sendReply(
+        `✅ <b>Associação aprendida com sucesso!</b>\n\n` +
+        `🏢 Fornecedor: <b>${fornecedorTerm}</b>\n` +
+        `🏷️ Categoria vinculada: <b>${catEncontrada.nome}</b>\n\n` +
+        `<i>A partir de agora, qualquer boleto ou lançamento de "${fornecedorTerm}" será categorizado como "${catEncontrada.nome}" automaticamente!</i>`
+      );
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // Comando /ajuda
     if (text.startsWith("/ajuda")) {
       await sendReply(
         `🤖 <b>Comandos do Bot Wallet:</b>\n\n` +
         `/dividas - Lista suas dívidas pendentes\n` +
         `/saldo - Exibe o saldo consolidado\n` +
+        `/ensinar - Ensinar vínculo de fornecedor com categoria\n` +
         `/start - Gerar código de vínculo\n` +
         `/ajuda - Ver este menu de comandos\n\n` +
         `💬 <i>Você também pode conversar naturalmente! Exemplos:</i>\n` +
