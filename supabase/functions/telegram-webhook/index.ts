@@ -272,6 +272,71 @@ function parseLinhaDigitavelFebraban(linha: string): { valor: number | null; ven
   return { valor, vencimento };
 }
 
+// ─── VALIDAÇÃO DETERMINÍSTICA ANTI-ALUCINAÇÃO DE BOLETOS ───
+function isDataValida(ano: number, mes: number, dia: number): boolean {
+  if (isNaN(ano) || isNaN(mes) || isNaN(dia) || mes < 1 || mes > 12 || dia < 1 || dia > 31) return false;
+  const d = new Date(Date.UTC(ano, mes - 1, dia));
+  return d.getUTCFullYear() === ano && d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia;
+}
+
+function validarExtracaoBoleto(data: {
+  beneficiario?: string | null;
+  valor?: number | null;
+  data_vencimento?: string | null;
+  linha_digitavel?: string | null;
+}): { valido: boolean; motivo?: string } {
+  // 1. Beneficiário não pode ser vazio, muito curto ou genérico
+  const benef = String(data.beneficiario || "").trim();
+  const benefLower = benef.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (
+    !benef ||
+    benef.length < 4 ||
+    benefLower.includes("nao identificado") ||
+    benefLower.includes("desconhecido") ||
+    benefLower.includes("ilegivel") ||
+    benefLower === "beneficiario" ||
+    benefLower === "empresa"
+  ) {
+    return { valido: false, motivo: "Beneficiário/Cedente não identificado com clareza na imagem" };
+  }
+
+  // 2. Valor deve ser positivo e razoável
+  const valor = Number(data.valor || 0);
+  if (isNaN(valor) || valor <= 0 || valor > 10000000) {
+    return { valido: false, motivo: "Valor do documento ilegível ou não identificado" };
+  }
+
+  // 3. Data de vencimento deve existir e ser uma data real do calendário (evita 29/02 em ano não-bissexto)
+  const vencStr = String(data.data_vencimento || "").trim();
+  if (!vencStr || !/^\d{4}-\d{2}-\d{2}/.test(vencStr)) {
+    return { valido: false, motivo: "Data de vencimento ilegível ou ausente" };
+  }
+
+  const [ano, mes, dia] = vencStr.split("T")[0].split("-").map(Number);
+  if (!isDataValida(ano, mes, dia)) {
+    return { valido: false, motivo: `Data de vencimento inválida (${dia.toString().padStart(2, "0")}/${mes.toString().padStart(2, "0")}/${ano})` };
+  }
+
+  // 4. Data não pode estar fora do intervalo razoável (-10 anos a +5 anos)
+  const vencDate = new Date(Date.UTC(ano, mes - 1, dia));
+  const hoje = new Date();
+  const cincoAnosFuturo = new Date(Date.UTC(hoje.getFullYear() + 5, hoje.getMonth(), hoje.getDate()));
+  const dezAnosAtras = new Date(Date.UTC(hoje.getFullYear() - 10, hoje.getMonth(), hoje.getDate()));
+
+  if (vencDate > cincoAnosFuturo || vencDate < dezAnosAtras) {
+    return { valido: false, motivo: "Data de vencimento fora do intervalo esperado" };
+  }
+
+  // 5. Linha digitável (se fornecida, deve ter 47 ou 48 dígitos)
+  const linha = String(data.linha_digitavel || "").replace(/\D/g, "");
+  if (linha.length > 0 && linha.length !== 47 && linha.length !== 48) {
+    return { valido: false, motivo: "Linha digitável incompleta ou com dígitos faltantes" };
+  }
+
+  return { valido: true };
+}
+
+
 
 
 
@@ -459,25 +524,58 @@ serve(async (req) => {
     const anoAtual = nowSp.getFullYear();
     const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
 
-    // Comando /dividas
-    if (text.startsWith("/dividas")) {
+    // Comando /dividas (e consultas comuns de dívidas por texto)
+    const isConsultaDividas =
+      text.startsWith("/dividas") ||
+      respLower.includes("quanto devo") ||
+      respLower.includes("dividas pendentes") ||
+      respLower.includes("minhas dividas") ||
+      respLower.includes("contas a pagar") ||
+      respLower.includes("boletos a pagar");
+
+    if (isConsultaDividas) {
       const { data: dividas } = await supabase
         .from("dividas")
         .select("*")
         .eq("user_id", userId)
         .eq("paga", false)
         .order("data_vencimento", { ascending: true })
-        .limit(10);
+        .limit(20);
 
       if (!dividas || dividas.length === 0) {
-        await sendReply("🎉 <b>Nenhuma dívida pendente encontrada!</b> Parabéns!");
+        await sendReply("🎉 <b>Nenhuma dívida pendente encontrada!</b> Você está em dia.");
       } else {
+        const hojeObj = new Date(hojeStr);
         let msg = "💳 <b>Suas Dívidas Pendentes:</b>\n\n";
-        dividas.forEach((d, idx) => {
-          const valor = Number(d.valor || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+        dividas.forEach((d: any) => {
+          const valor = Number(d.valor_restante || d.valor_total || d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
-          msg += `${idx + 1}. <b>${d.nome || d.descricao || "Dívida"}</b>\n   💰 ${valor} | 🗓️ Vence: ${venc}\n\n`;
+          let atrasoText = "";
+          let statusEmoji = "🟢";
+
+          if (d.data_vencimento) {
+            const vDate = new Date(d.data_vencimento.split("T")[0]);
+            const diffDays = Math.floor((hojeObj.getTime() - vDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays > 0) {
+              statusEmoji = "🔴";
+              atrasoText = ` <i>(⚠️ ${diffDays} ${diffDays === 1 ? "dia" : "dias"} de atraso)</i>`;
+            } else if (diffDays >= -3) {
+              statusEmoji = "🟡";
+              atrasoText = ` <i>(vence em breve)</i>`;
+            }
+          }
+
+          msg += `${statusEmoji} <b>${d.nome || d.descricao || "Dívida"}</b>\n`;
+          msg += `   💰 ${valor} | 🗓️ Vence: <b>${venc}</b>${atrasoText}\n`;
+          if (d.credor) msg += `   🏢 Beneficiário: ${d.credor}\n`;
+          msg += "\n";
         });
+
+        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || d.valor || 0), 0);
+        msg += `📊 <b>Total devido:</b> <b>${totalDevido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n\n`;
+        msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
+
         await sendReply(msg);
       }
       return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1256,23 +1354,25 @@ FORMATO DE RESPOSTA (JSON estrito em tag <document_analysis>):
             }
           }
 
-          const camposIlegiveis: string[] = Array.isArray(documentData.campos_ilegiveis) ? [...documentData.campos_ilegiveis] : [];
-          const isConfiancaBaixa = (documentData.confianca === "baixa" && (valor <= 0 || !dataVencimento)) || camposIlegiveis.length >= 3;
+          // ─── VALIDAÇÃO RIGOROSA ANTI-ALUCINAÇÃO ───
+          const validacao = validarExtracaoBoleto({
+            beneficiario,
+            valor,
+            data_vencimento: dataVencimento,
+            linha_digitavel: linhaDigitavel,
+          });
 
-          if (isConfiancaBaixa) {
-            const listaCampos = camposIlegiveis.length > 0
-              ? camposIlegiveis.map(c => `• <b>${c}</b>`).join("\n")
-              : "• <b>Valor ou data de vencimento ilegíveis</b>";
-
-            const msgRecusa =
-              `📄 <b>Não foi possível analisar o boleto com segurança.</b>\n\n` +
-              `⚠️ <b>A imagem está muito borrada, cortada ou com iluminação insuficiente.</b>\n\n` +
-              `❌ <b>Campos não identificados com precisão:</b>\n` +
-              `${listaCampos}\n\n` +
-              `📸 <b>Dica para envio:</b>\n` +
-              `Envie uma foto nítida e bem iluminada enquadrando todo o código de barras e valores.`;
-
-            await sendReply(msgRecusa);
+          if (!validacao.valido) {
+            console.warn("[telegram-webhook] Boleto rejeitado pela validação anti-alucinação:", validacao.motivo);
+            await sendReply(
+              `📄 <b>Não foi possível ler o boleto com segurança.</b>\n\n` +
+              `⚠️ <b>Motivo:</b> ${validacao.motivo}\n\n` +
+              `📸 <b>Por favor, envie uma nova foto:</b>\n` +
+              `• Enquadre todo o boleto na vertical (não de lado)\n` +
+              `• Certifique-se de que o código de barras e valores estão visíveis\n` +
+              `• Tire a foto em um local bem iluminado\n` +
+              `• Evite sombras fortes, reflexos e borrões`
+            );
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
