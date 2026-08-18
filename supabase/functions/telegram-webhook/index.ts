@@ -585,18 +585,28 @@ serve(async (req) => {
               if (!isFlate) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
 
               let content = "";
-              // Tenta descomprimir: zlib (deflate) primeiro, depois deflate-raw
+              // Tenta descomprimir com timeout de 2s para evitar hang
+              const decompWithTimeout = async (data: Uint8Array, fmt: string): Promise<string> => {
+                return Promise.race<string>([
+                  (async () => {
+                    const ds = new DecompressionStream(fmt as CompressionFormat);
+                    const writer = ds.writable.getWriter();
+                    writer.write(data);
+                    writer.close();
+                    const buf = await new Response(ds.readable).arrayBuffer();
+                    return new TextDecoder("latin1").decode(buf);
+                  })(),
+                  new Promise<string>((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
+                ]);
+              };
+
               for (const fmt of ["deflate", "deflate-raw"]) {
                 try {
-                  const ds = new DecompressionStream(fmt as CompressionFormat);
-                  const writer = ds.writable.getWriter();
-                  writer.write(new Uint8Array(streamBytes));
-                  writer.close();
-                  const buf = await new Response(ds.readable).arrayBuffer();
-                  content = new TextDecoder("latin1").decode(buf);
-                  if (content.length > 5) break;
+                  const decoded = await decompWithTimeout(new Uint8Array(streamBytes), fmt);
+                  if (decoded.length > 5) { content = decoded; break; }
                 } catch { content = ""; }
               }
+
 
               // Só processa conteúdo que seja stream de texto PDF (contém operador BT)
               if (!content || !content.includes("BT") || !content.includes("ET")) {
