@@ -526,119 +526,116 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // ─── Parser binário de PDF: localiza streams, descomprime FlateDecode, extrai texto ───
+          // ─── Parser de PDF: extrai texto de streams FlateDecode ───
           let pdfText = "";
           try {
             const pdfBytes = new Uint8Array(pdfBuffer);
+            const rawStr = new TextDecoder("latin1").decode(pdfBytes);
             const textParts: string[] = [];
 
-            // Helper: descomprime FlateDecode (zlib) usando a API nativa do Deno Edge
-            async function decompressFlate(data: Uint8Array): Promise<Uint8Array | null> {
-              for (const fmt of ["deflate", "deflate-raw"] as CompressionFormat[]) {
-                try {
-                  const ds = new DecompressionStream(fmt);
-                  const writer = ds.writable.getWriter();
-                  writer.write(data);
-                  writer.close();
-                  const buf = await new Response(ds.readable).arrayBuffer();
-                  return new Uint8Array(buf);
-                } catch { /* tenta próximo formato */ }
-              }
-              return null;
-            }
+            // Procura todos os objetos PDF com stream
+            // Usa indexOf para ser mais rápido que regex em arquivos binários
+            const STREAM_TAG = "stream";
+            const ENDSTREAM_TAG = "endstream";
+            let pos = 0;
+            let iterations = 0;
+            const MAX_ITER = 100;
 
-            // Marcadores binários de "stream"
-            const STREAM_MARKER = new Uint8Array([115, 116, 114, 101, 97, 109]); // "stream"
+            while (pos < rawStr.length && iterations < MAX_ITER) {
+              iterations++;
 
-            let scanPos = 0;
-            let streamsProcessed = 0;
+              // Acha o próximo "stream\n" ou "stream\r\n"
+              let sIdx = rawStr.indexOf(STREAM_TAG, pos);
+              if (sIdx === -1) break;
 
-            while (scanPos < pdfBytes.length - 20 && streamsProcessed < 50) {
-              // Localiza próximo "stream"
-              let foundAt = -1;
-              outer: for (let i = scanPos; i < pdfBytes.length - STREAM_MARKER.length - 2; i++) {
-                let match = true;
-                for (let j = 0; j < STREAM_MARKER.length; j++) {
-                  if (pdfBytes[i + j] !== STREAM_MARKER[j]) { match = false; break; }
-                }
-                if (match) { foundAt = i; break outer; }
-              }
-
-              if (foundAt === -1) break;
-
-              // Determina onde começa o conteúdo (após \n ou \r\n)
-              const afterMarker = foundAt + STREAM_MARKER.length;
+              // Garante que é um stream real (precisa de \n após "stream")
+              const afterStream = sIdx + STREAM_TAG.length;
               let dataStart: number;
-              if (pdfBytes[afterMarker] === 10) {
-                dataStart = afterMarker + 1;
-              } else if (pdfBytes[afterMarker] === 13 && pdfBytes[afterMarker + 1] === 10) {
-                dataStart = afterMarker + 2;
+              if (rawStr[afterStream] === "\n") {
+                dataStart = afterStream + 1;
+              } else if (rawStr[afterStream] === "\r" && rawStr[afterStream + 1] === "\n") {
+                dataStart = afterStream + 2;
               } else {
-                scanPos = foundAt + 1;
+                pos = sIdx + 1;
                 continue;
               }
 
-              // Lê o dicionário antes deste stream para obter /Length e /Filter
-              const dictStart = Math.max(0, foundAt - 800);
-              const dictStr = new TextDecoder("latin1").decode(pdfBytes.slice(dictStart, foundAt));
+              // Acha o "endstream" correspondente
+              let eIdx = rawStr.indexOf(ENDSTREAM_TAG, dataStart);
+              if (eIdx === -1) break;
 
-              const lenMatch = dictStr.match(/\/Length\s+(\d+)/);
-              if (!lenMatch) { scanPos = dataStart; continue; }
-              const streamLen = parseInt(lenMatch[1]);
-              if (streamLen <= 0 || streamLen > 2_000_000) { scanPos = dataStart; continue; }
+              // Obtém o dicionário antes deste stream (últimos 1000 chars)
+              const dictRegion = rawStr.slice(Math.max(0, sIdx - 1000), sIdx);
+              
+              // Pega o ÚLTIMO /Length no dicionário (evita pegar de objeto anterior)
+              const lenMatches = [...dictRegion.matchAll(/\/Length\s+(\d+)/g)];
+              if (lenMatches.length === 0) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
+              const streamLen = parseInt(lenMatches.at(-1)![1]);
+              
+              if (streamLen <= 0 || streamLen > 500_000) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
 
-              const isFlate = dictStr.includes("FlateDecode") || /\/Filter\s*\/Fl[\s>]/.test(dictStr);
+              // Verifica se é FlateDecode
+              const isFlate = dictRegion.includes("FlateDecode") || dictRegion.includes("/Fl ");
 
-              // Extrai os bytes brutos do stream
+              // Extrai bytes brutos do stream
               const streamBytes = pdfBytes.slice(dataStart, dataStart + streamLen);
 
               let content = "";
               if (isFlate) {
-                const decompressed = await decompressFlate(streamBytes);
-                if (decompressed) {
-                  content = new TextDecoder("latin1").decode(decompressed);
+                // Tenta descomprimir: zlib (deflate) primeiro, depois deflate-raw
+                for (const fmt of ["deflate", "deflate-raw"]) {
+                  try {
+                    const ds = new DecompressionStream(fmt as CompressionFormat);
+                    const writer = ds.writable.getWriter();
+                    writer.write(new Uint8Array(streamBytes));
+                    writer.close();
+                    const buf = await new Response(ds.readable).arrayBuffer();
+                    content = new TextDecoder("latin1").decode(buf);
+                    if (content.length > 10) break; // sucesso
+                  } catch { content = ""; }
                 }
               } else {
                 content = new TextDecoder("latin1").decode(streamBytes);
               }
 
-              if (content) {
-                // Extrai strings de operadores Tj (texto literal)
-                for (const m of content.matchAll(/\(([^)\\]{0,300}(?:\\.[^)\\]{0,300})*)\)\s*(?:Tj|'|")/g)) {
+              if (content && content.length > 5) {
+                // Extrai strings de operadores Tj
+                for (const m of content.matchAll(/\(([^)\\]{0,400}(?:\\.[^)\\]{0,400})*)\)\s*(?:Tj|'|")/g)) {
                   const t = m[1]
                     .replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
-                    .replace(/\\n/g, " ").replace(/\\r/g, "").replace(/\\\\/g, "\\")
-                    .replace(/\\([()\\])/g, "$1");
-                  if (t.trim()) textParts.push(t.trim());
+                    .replace(/\\n/g, " ").replace(/\\r/g, "").replace(/\\\\/g, "\\");
+                  if (t.trim().length > 1) textParts.push(t.trim());
                 }
-                // Extrai strings de operadores TJ (array de strings)
+                // Extrai strings de operadores TJ (array)
                 for (const m of content.matchAll(/\[([\s\S]*?)\]\s*TJ/g)) {
-                  for (const s of m[1].matchAll(/\(([^)\\]{0,300})\)/g)) {
+                  for (const s of m[1].matchAll(/\(([^)\\]{0,400})\)/g)) {
                     const t = s[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-                    if (t.trim()) textParts.push(t.trim());
+                    if (t.trim().length > 1) textParts.push(t.trim());
                   }
                 }
-                streamsProcessed++;
               }
 
-              scanPos = dataStart + streamLen;
+              // Avança para após este stream
+              pos = dataStart + streamLen;
             }
 
             pdfText = textParts.join(" ");
-            console.log("[telegram-webhook] PDF parser nativo extraiu", textParts.length, "strings, amostra:", pdfText.slice(0, 400));
+            console.log("[telegram-webhook] PDF parser extraiu", textParts.length, "strings, iter:", iterations, "amostra:", pdfText.slice(0, 500));
           } catch (pdfParseErr: any) {
-            console.error("[telegram-webhook] PDF parser nativo falhou:", pdfParseErr.message);
+            console.error("[telegram-webhook] PDF parser falhou:", pdfParseErr.message);
           }
 
           if (!pdfText.trim() || pdfText.trim().length < 10) {
-            // Último recurso: informa e pede screenshot
             await sendReply(
-              "📄 <b>PDF recebido, mas não foi possível extrair o texto automaticamente.</b>\n\n" +
-              "Este tipo de PDF usa codificação não suportada.\n\n" +
-              "📸 <i>Tire um screenshot/print do PDF aberto no celular e envie como imagem — o bot vai ler instantaneamente!</i>"
+              "📄 <b>PDF recebido.</b>\n\n" +
+              "Não foi possível extrair o texto deste PDF (codificação não suportada).\n\n" +
+              "📱 <b>Como cadastrar rapidamente:</b>\n" +
+              "Abra o PDF no celular → tire um screenshot/print → envie a imagem aqui!\n\n" +
+              "<i>O bot vai ler a imagem e cadastrar o boleto automaticamente.</i>"
             );
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
+
 
           // Analisar texto extraído com LLM
           console.log("[telegram-webhook] Enviando texto do PDF para análise...");
