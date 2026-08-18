@@ -137,6 +137,20 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataIn
 }
 
 /** Consulta vendas do PDV Eyemobile via Edge Function eyemobile-sync em tempo real */
+/** Converte timestamp ISO para data local America/Sao_Paulo (yyyy-MM-dd) */
+function toSaoPauloDate(isoTimestamp: string): string {
+  try {
+    const date = new Date(isoTimestamp);
+    const spDate = new Date(date.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const y = spDate.getFullYear();
+    const m = String(spDate.getMonth() + 1).padStart(2, "0");
+    const d = String(spDate.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  } catch {
+    return String(isoTimestamp || "").split("T")[0];
+  }
+}
+
 /** Consulta vendas do PDV Eyemobile via Edge Function / API e banco de dados */
 async function consultarVendasEyemobile(
   supabase: any,
@@ -149,9 +163,11 @@ async function consultarVendasEyemobile(
 
   console.log("[consultarVendasEyemobile] ===== INÍCIO =====");
   console.log("[consultarVendasEyemobile] userId=", userId, "startDate=", startDate, "endDate=", endDate);
+  console.log("[consultarVendasEyemobile] Data atual servidor (UTC):", new Date().toISOString());
+  console.log("[consultarVendasEyemobile] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
 
   try {
-    // 1. Busca primeiro as transações registradas no banco para o período
+    // 1. Busca primeiro as transações registradas no banco para o período (já convertidas em horário de Brasília)
     const { data: dbTxs, error: dbErr } = await supabase
       .from("transacoes")
       .select("valor, data, metodo_pagamento, descricao, created_at, observacoes")
@@ -165,7 +181,7 @@ async function consultarVendasEyemobile(
     }
 
     const localTxs = dbTxs || [];
-    console.log("[consultarVendasEyemobile] Transações locais encontradas:", localTxs.length);
+    console.log("[consultarVendasEyemobile] Transações locais encontradas:", localTxs.length, "para o período", startDate, "a", endDate);
 
     // 2. Busca configuração do Eyemobile para tentar atualizar via API em tempo real
     const { data: config } = await supabase
@@ -202,8 +218,13 @@ async function consultarVendasEyemobile(
         if (response.ok) {
           const result = await response.json();
           const rawList = result.transactions || result.sales || [];
-          apiSales = rawList.filter((s: any) => s.completed !== false && !s.cancelled);
-          console.log("[consultarVendasEyemobile] Vendas retornadas pelo eyemobile-sync:", apiSales.length);
+          // Filtra rigorosamente pelo fuso horário de Brasília para não misturar dias
+          apiSales = rawList.filter((s: any) => {
+            if (s.completed === false || s.cancelled) return false;
+            const saleDate = toSaoPauloDate(s.time || s.created_at || "");
+            return saleDate >= startDate && saleDate <= endDate;
+          });
+          console.log("[consultarVendasEyemobile] Vendas retornadas pelo eyemobile-sync (filtradas no fuso):", apiSales.length);
         } else {
           console.warn("[consultarVendasEyemobile] eyemobile-sync respondeu com status:", response.status);
         }
@@ -212,56 +233,38 @@ async function consultarVendasEyemobile(
       }
     }
 
-    // Se a API retornou vendas em tempo real, usa as da API; senão usa as do banco local
-    if (apiSales.length > 0) {
-      const totalVendas = apiSales.reduce((sum: number, t: any) => sum + Number(t.amount || t.value || t.total || t.price || t.valor || 0), 0);
-      const qtdTransacoes = apiSales.length;
+    const dataFormatada = startDate === endDate 
+      ? startDate.split("-").reverse().join("/") 
+      : `${startDate.split("-").reverse().join("/")} a ${endDate.split("-").reverse().join("/")}`;
+
+    // Escolhe o conjunto de dados mais completo (API em tempo real ou banco local sincronizado)
+    const activeSales = (apiSales.length >= localTxs.length && apiSales.length > 0) ? apiSales : localTxs;
+    const isFromApi = (activeSales === apiSales && apiSales.length > 0);
+
+    if (activeSales.length > 0) {
+      const totalVendas = activeSales.reduce((sum: number, t: any) => sum + Number(t.amount || t.value || t.total || t.price || t.valor || 0), 0);
+      const qtdTransacoes = activeSales.length;
       const ticketMedio = qtdTransacoes > 0 ? totalVendas / qtdTransacoes : 0;
 
       const metodos: Record<string, number> = {};
-      for (const t of apiSales) {
+      for (const t of activeSales) {
         const metodo = t.payment_method || t.metodo_pagamento || t.transaction_pays?.[0]?.pay_type_name || t.payment_type || "outros";
         const val = Number(t.amount || t.value || t.total || t.price || t.valor || 0);
         metodos[metodo] = (metodos[metodo] || 0) + val;
       }
 
       const resultado = {
-        data: startDate === endDate ? startDate : `${startDate} a ${endDate}`,
+        data_consultada: startDate === endDate ? startDate : `${startDate} a ${endDate}`,
+        data_formatada: dataFormatada,
+        origem: isFromApi ? "eyemobile_api_realtime" : "banco_local",
         total_vendas: totalVendas,
         quantidade_transacoes: qtdTransacoes,
         ticket_medio: ticketMedio,
         metodos_pagamento: metodos,
         vendas_por_metodo: metodos,
-        observacao: `Vendas do PDV Eyemobile (API em tempo real): Total de R$ ${totalVendas.toFixed(2)} em ${qtdTransacoes} transações. Ticket médio: R$ ${ticketMedio.toFixed(2)}.`,
+        observacao: `Vendas do PDV Eyemobile em ${dataFormatada}: Total de R$ ${totalVendas.toFixed(2)} em ${qtdTransacoes} transações. Ticket médio: R$ ${ticketMedio.toFixed(2)}.`,
       };
-      console.log("[consultarVendasEyemobile] Resultado API:", JSON.stringify(resultado));
-      return resultado;
-    }
-
-    // Fallback: utiliza as transações locais do banco
-    if (localTxs.length > 0) {
-      const totalVendas = localTxs.reduce((sum: number, t: any) => sum + Number(t.valor || 0), 0);
-      const qtdTransacoes = localTxs.length;
-      const ticketMedio = qtdTransacoes > 0 ? totalVendas / qtdTransacoes : 0;
-
-      const metodos: Record<string, number> = {};
-      for (const t of localTxs) {
-        const metodo = t.metodo_pagamento || "outros";
-        const val = Number(t.valor || 0);
-        metodos[metodo] = (metodos[metodo] || 0) + val;
-      }
-
-      const resultado = {
-        data: startDate === endDate ? startDate : `${startDate} a ${endDate}`,
-        total_vendas: totalVendas,
-        quantidade_transacoes: qtdTransacoes,
-        ticket_medio: ticketMedio,
-        metodos_pagamento: metodos,
-        vendas_por_metodo: metodos,
-        origem: "banco_local",
-        observacao: `Vendas do PDV Eyemobile: Total de R$ ${totalVendas.toFixed(2)} em ${qtdTransacoes} transações. Ticket médio: R$ ${ticketMedio.toFixed(2)}.`,
-      };
-      console.log("[consultarVendasEyemobile] Resultado Banco Local:", JSON.stringify(resultado));
+      console.log("[consultarVendasEyemobile] Resultado final:", JSON.stringify(resultado));
       return resultado;
     }
 

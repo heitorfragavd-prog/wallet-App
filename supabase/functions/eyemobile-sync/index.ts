@@ -507,6 +507,10 @@ serve(async (req) => {
     // Consulta em tempo real para o sub-dashboard (Dashboard Eyemobile PDV).
     // Suporta paginação controlada pelo frontend via page/page_size.
     if (mode === "DASHBOARD") {
+      console.log("[eyemobile-sync] mode: DASHBOARD, start_date:", requestBody.start_date, "end_date:", end_date);
+      console.log("[eyemobile-sync] Data atual (UTC):", new Date().toISOString());
+      console.log("[eyemobile-sync] Data atual (Brasil):", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
+
       const page = requestBody.page || 0;
       const pageSize = requestBody.page_size || 100;
       const offset = page * pageSize;

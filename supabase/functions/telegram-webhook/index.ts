@@ -262,6 +262,10 @@ serve(async (req) => {
     const anoAtual = nowSp.getFullYear();
     const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
 
+    console.log("[telegram-webhook] Data servidor (UTC):", new Date().toISOString());
+    console.log("[telegram-webhook] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
+    console.log("[telegram-webhook] hojeStr enviado:", hojeStr, "primeiroDiaMes:", primeiroDiaMes);
+
     const systemPrompt = `Você é o assistente financeiro inteligente do Wallet App integrado ao Telegram.
 Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
 Início do mês atual: ${primeiroDiaMes}.
