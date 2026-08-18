@@ -461,6 +461,7 @@ serve(async (req) => {
     const chatId = String(message.chat.id);
     const username = message.chat.username || message.chat.first_name || null;
     const text = (message.text || "").trim();
+    const respLower = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
     console.log("[telegram-webhook] ===== MENSAGEM RECEBIDA =====");
     console.log("[telegram-webhook] chatId:", chatId, "username:", username, "text:", text.slice(0, 100));
@@ -692,7 +693,6 @@ serve(async (req) => {
     }
 
     // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Confirmação de Propostas Pendentes) ───
-    const respLower = text.toLowerCase().trim();
     const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
     const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
 
