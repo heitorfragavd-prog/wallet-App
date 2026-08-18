@@ -512,17 +512,17 @@ serve(async (req) => {
         let finalImageBase64Uri = "";
 
         // ============================================
-        // FLUXO PDF: Texto → PDF.co → Vision
+        // FLUXO PDF: OpenAI Assistants API Nativo (Code Interpreter + File Search)
         // ============================================
         if (ext === "pdf" || docMime.includes("pdf")) {
-          console.log("[telegram-webhook] Documento PDF recebido:", filePath, docMime);
+          console.log("[telegram-webhook] Documento PDF recebido, iniciando processamento nativo...");
           await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ chat_id: chatId, action: "typing" }),
           }).catch(() => {});
 
-          // 1. Baixar PDF
+          // 1. Baixar PDF do Telegram
           const pdfDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
           if (!pdfDownloadResp.ok) {
             await sendReply("❌ Não foi possível baixar o PDF. Tente enviar novamente.");
@@ -531,139 +531,107 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // 2. Tentar extrair texto direto
-          let pdfText = "";
-          try {
-            const rawStr = new TextDecoder("latin1").decode(new Uint8Array(pdfBuffer));
-            const tjMatches = rawStr.match(/\(([^)\\]{2,300})\)\s*Tj/g) || [];
-            const textParts: string[] = [];
-            for (const m of tjMatches.slice(0, 500)) {
-              const cleaned = m.replace(/\)\s*Tj$/, "").replace(/^\(/, "").trim();
-              if (cleaned.length > 2) textParts.push(cleaned);
-            }
-            pdfText = textParts.join(" ");
-            console.log("[telegram-webhook] Texto extraído do PDF:", pdfText.slice(0, 200));
-          } catch (e: any) {
-            console.warn("[telegram-webhook] PDF parse error:", e.message);
-          }
+          let pdfDocumentData: any = null;
 
-          // 3. Tentar converter PDF → Imagem via PDF.co
-          const pdfCoApiKey = Deno.env.get("PDFCO_API_KEY");
-          console.log("[telegram-webhook] PDFCO_API_KEY configurada?", !!pdfCoApiKey);
+          // 2. Busca chave da OpenAI do usuário ou do ambiente
+          const { data: iaCfg } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
+          const openaiApiKey = iaCfg?.api_key || Deno.env.get("OPENAI_API_KEY");
 
-          if (pdfCoApiKey && (!pdfText.trim() || pdfText.trim().length < 15)) {
+          if (openaiApiKey) {
             try {
-              console.log("[telegram-webhook] Tentando conversão PDF → Imagem via PDF.co...");
-              const pdfBase64 = base64Encode(new Uint8Array(pdfBuffer));
+              console.log("[telegram-webhook] Fazendo upload do PDF para OpenAI Files API...");
+              const fd = new FormData();
+              fd.append("purpose", "assistants");
+              fd.append("file", new Blob([new Uint8Array(pdfBuffer)], { type: "application/pdf" }), "boleto.pdf");
 
-              const uploadRes = await fetch("https://api.pdf.co/v1/file/upload/base64", {
+              const upRes = await fetch("https://api.openai.com/v1/files", {
                 method: "POST",
-                headers: { "x-api-key": pdfCoApiKey, "Content-Type": "application/json" },
-                body: JSON.stringify({ filedata: pdfBase64, name: "boleto.pdf" }),
+                headers: { Authorization: `Bearer ${openaiApiKey}` },
+                body: fd,
               });
-              const uploadData = await uploadRes.json();
-              console.log("[telegram-webhook] PDF.co upload status:", uploadData?.error ? "ERRO" : "OK");
+              const upData = await upRes.json();
+              console.log("[telegram-webhook] OpenAI File ID:", upData?.id);
 
-              if (uploadData?.url) {
-                const convertRes = await fetch("https://api.pdf.co/v1/pdf/convert/to/png", {
+              if (upData?.id) {
+                const fileId = upData.id;
+                console.log("[telegram-webhook] Disparando Assistente OpenAI para leitura de boleto...");
+
+                const runRes = await fetch("https://api.openai.com/v1/threads/runs", {
                   method: "POST",
-                  headers: { "x-api-key": pdfCoApiKey, "Content-Type": "application/json" },
-                  body: JSON.stringify({ url: uploadData.url, pages: "0", width: 1200, height: -1 }),
+                  headers: {
+                    Authorization: `Bearer ${openaiApiKey}`,
+                    "Content-Type": "application/json",
+                    "OpenAI-Beta": "assistants=v2",
+                  },
+                  body: JSON.stringify({
+                    assistant_id: "asst_VOopPuJfJ8MtZAtLd8WbSC22",
+                    thread: {
+                      messages: [
+                        {
+                          role: "user",
+                          content: "Extraia com máxima precisão o beneficiário (quem recebe), valor do documento, data de vencimento e linha digitável deste boleto bancário.",
+                          attachments: [
+                            { file_id: fileId, tools: [{ type: "code_interpreter" }, { type: "file_search" }] },
+                          ],
+                        },
+                      ],
+                    },
+                  }),
                 });
-                const convertData = await convertRes.json();
-                console.log("[telegram-webhook] PDF.co convert status:", convertData?.error ? "ERRO" : "OK");
+                const runData = await runRes.json();
+                console.log("[telegram-webhook] Run ID:", runData?.id, "Thread ID:", runData?.thread_id);
 
-                if (convertData?.url) {
-                  const imgRes = await fetch(convertData.url);
-                  const imgBuf = await imgRes.arrayBuffer();
-                  const imgB64 = base64Encode(new Uint8Array(imgBuf));
-                  finalImageBase64Uri = `data:image/png;base64,${imgB64}`;
-                  console.log("[telegram-webhook] PDF convertido para PNG com sucesso! Tamanho b64:", imgB64.length);
+                if (runData?.id && runData?.thread_id) {
+                  let runStatus = runData.status;
+                  const threadId = runData.thread_id;
+                  const runId = runData.id;
+
+                  for (let i = 0; i < 15 && (runStatus === "queued" || runStatus === "in_progress"); i++) {
+                    await new Promise((r) => setTimeout(r, 1200));
+                    const checkRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
+                      headers: { Authorization: `Bearer ${openaiApiKey}`, "OpenAI-Beta": "assistants=v2" },
+                    });
+                    const checkData = await checkRes.json();
+                    runStatus = checkData.status;
+                  }
+
+                  console.log("[telegram-webhook] Assistente finalizou com status:", runStatus);
+
+                  if (runStatus === "completed") {
+                    const msgRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+                      headers: { Authorization: `Bearer ${openaiApiKey}`, "OpenAI-Beta": "assistants=v2" },
+                    });
+                    const msgData = await msgRes.json();
+                    const rawMsg = msgData.data?.[0]?.content?.[0]?.text?.value || "";
+                    console.log("[telegram-webhook] Resposta do Assistente:", rawMsg.slice(0, 300));
+
+                    try {
+                      const cleaned = rawMsg.replace(/```json\s*/i, "").replace(/```/g, "").trim();
+                      pdfDocumentData = JSON.parse(cleaned);
+                    } catch {
+                      const objMatch = rawMsg.match(/\{[\s\S]*\}/);
+                      if (objMatch) {
+                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch {}
+                      }
+                    }
+                  }
                 }
+
+                // Limpeza do arquivo na OpenAI
+                fetch(`https://api.openai.com/v1/files/${fileId}`, {
+                  method: "DELETE",
+                  headers: { Authorization: `Bearer ${openaiApiKey}` },
+                }).catch(() => {});
               }
-            } catch (pdfCoErr: any) {
-              console.warn("[telegram-webhook] PDF.co falhou:", pdfCoErr.message);
+            } catch (asstErr: any) {
+              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr.message);
             }
           }
 
-          // 4. Se não converteu e não tem texto suficiente → fallback amigável
-          if (!finalImageBase64Uri && (!pdfText.trim() || pdfText.trim().length < 15)) {
-            await sendReply(
-              "📄 <b>PDF recebido!</b>\n\n" +
-              "Os boletos em PDF possuem camadas vetoriais protegidas que impedem a extração direta do texto.\n\n" +
-              "📸 <b>Como cadastrar instantaneamente:</b>\n" +
-              "Abra o boleto no celular → <b>tire um print / screenshot</b> → envie a imagem aqui no chat!\n\n" +
-              "<i>A nossa IA lê a foto na hora, identifica os valores, vencimento e cadastra a dívida automaticamente.</i>"
-            );
-            return new Response("OK", { status: 200, headers: corsHeaders });
-          }
-
-          // 5. Se não converteu mas tem texto → analisar com LLM
-          if (!finalImageBase64Uri && pdfText.trim().length >= 15) {
-            console.log("[telegram-webhook] Analisando texto extraído do PDF com LLM...");
-            const pdfAnalysisResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${supabaseServiceKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "gpt-4o-mini",
-                user_id: userId,
-                tools: [],
-                messages: [
-                  {
-                    role: "system",
-                    content: `Você é um extrator especialista em boletos bancários brasileiros.
-
-DISTINÇÃO CRÍTICA em boletos brasileiros:
-- BENEFICIÁRIO / CEDENTE = quem RECEBE o pagamento (empresa fornecedora/credora). Ex: "SPAL IND BRAS DE BEBIDAS SA", "ISPAL INDUSTRIA BRASILEIRA DE"
-- PAGADOR / SACADO = quem PAGA (cliente/devedor). Ex: "HEITOR FRAGA DE OLIVEIRA", "RODO POINT LTDA"
-- ❌ NUNCA coloque o PAGADOR como beneficiario. O beneficiário aparece primeiro no boleto, o pagador aparece no final.
-
-CAMPOS A EXTRAIR:
-- beneficiario: Nome/razão social do BENEFICIÁRIO (quem recebe) — NÃO o pagador
-- valor: Valor do Documento em decimal (ex: 1534.39)
-- data_vencimento: Data de vencimento em YYYY-MM-DD (ex: 2026-08-21)
-- linha_digitavel: Sequência de dígitos do código de barras (47-48 dígitos, com ou sem espaços)
-- descricao: Descrição curta (ex: "Boleto - SPAL")
-- confianca: "alta" se encontrou valor + data, "baixa" se não encontrou
-
-Responda APENAS com JSON válido sem markdown:
-{"tipo":"boleto","valor":null,"data_vencimento":null,"beneficiario":null,"linha_digitavel":null,"descricao":null,"confianca":"alta"}`,
-                  },
-                  {
-                    role: "user",
-                    content: `Extraia os dados deste boleto em PDF:\n\n${pdfText.slice(0, 5000)}`,
-                  },
-                ],
-              }),
-            });
-
-            let pdfDocumentData: any = null;
-            if (pdfAnalysisResp.ok) {
-              const pdfJson = await pdfAnalysisResp.json();
-              const pdfContent = pdfJson.choices?.[0]?.message?.content || "";
-              console.log("[telegram-webhook] Análise PDF:", pdfContent.slice(0, 400));
-              try {
-                const cleaned = pdfContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-                pdfDocumentData = JSON.parse(cleaned);
-              } catch {
-                console.error("[telegram-webhook] Erro ao parsear JSON do PDF");
-              }
-            }
-
-            if (!pdfDocumentData || pdfDocumentData.confianca === "baixa" || !pdfDocumentData.valor || !pdfDocumentData.data_vencimento) {
-              await sendReply(
-                "📄 <b>PDF analisado, mas os dados do boleto não foram identificados com clareza.</b>\n\n" +
-                "📸 <i>Por favor, tire uma foto do boleto impresso ou envie um print/screenshot da tela para melhor resultado!</i>"
-              );
-              return new Response("OK", { status: 200, headers: corsHeaders });
-            }
-
-            // Processar dados do PDF como boleto
+          // Se conseguiu extrair os dados do boleto com sucesso
+          if (pdfDocumentData && (pdfDocumentData.valor || pdfDocumentData.beneficiario)) {
             const pdfValor = typeof pdfDocumentData.valor === "number" ? pdfDocumentData.valor : parseFloat(String(pdfDocumentData.valor).replace(",", ".")) || 0;
-            const pdfVenc = pdfDocumentData.data_vencimento || hojeStr;
+            const pdfVenc = pdfDocumentData.data_vencimento || pdfDocumentData.vencimento || hojeStr;
             const pdfBenef = String(pdfDocumentData.beneficiario || "Beneficiário Boleto").trim();
             const pdfLinha = String(pdfDocumentData.linha_digitavel || "").trim();
             const pdfDesc = String(pdfDocumentData.descricao || `Boleto PDF - ${pdfBenef}`).trim();
@@ -714,13 +682,21 @@ Responda APENAS com JSON válido sem markdown:
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`
               );
-            } else {
-              console.error("[telegram-webhook] Erro ao salvar proposta do PDF:", errPdfProp?.message);
-              await sendReply("❌ Erro ao registrar a proposta do PDF. Tente novamente.");
+              return new Response("OK", { status: 200, headers: corsHeaders });
             }
-            return new Response("OK", { status: 200, headers: corsHeaders });
           }
+
+          // Fallback amigável se a leitura automática do PDF não identificar os dados
+          await sendReply(
+            "📄 <b>PDF recebido!</b>\n\n" +
+            "Os boletos em PDF possuem camadas vetoriais protegidas que impedem a extração direta do texto.\n\n" +
+            "📸 <b>Como cadastrar instantaneamente:</b>\n" +
+            "Abra o boleto no celular → <b>tire um print / screenshot</b> → envie a imagem aqui no chat!\n\n" +
+            "<i>A nossa IA lê a foto na hora, identifica os valores, vencimento e cadastra a dívida automaticamente.</i>"
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
+
 
         // ============================================
         // FLUXO IMAGEM (foto normal, se não veio de PDF convertido)
