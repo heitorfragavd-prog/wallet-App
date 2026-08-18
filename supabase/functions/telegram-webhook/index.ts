@@ -526,51 +526,116 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // Extração de texto do PDF — tenta unpdf (edge-compatible), depois extração raw
+          // ─── Parser binário de PDF: localiza streams, descomprime FlateDecode, extrai texto ───
           let pdfText = "";
           try {
-            // Tentativa 1: unpdf — biblioteca específica para edge environments
-            const unpdf = await import("https://esm.sh/unpdf@0.12.0");
-            const result = await unpdf.extractText(new Uint8Array(pdfBuffer), { mergePages: true });
-            pdfText = result.text || "";
-            console.log("[telegram-webhook] unpdf extraiu texto:", pdfText.slice(0, 300));
-          } catch (unpdfErr: any) {
-            console.warn("[telegram-webhook] unpdf falhou, tentando extração raw:", unpdfErr.message);
-            // Fallback: extração raw de streams BT/ET do PDF (funciona em qualquer ambiente)
-            try {
-              const rawText = new TextDecoder("latin1").decode(new Uint8Array(pdfBuffer));
-              // Extrai strings de texto dentro de blocos BT...ET
-              const btMatches = rawText.matchAll(/BT\s([\s\S]*?)ET/g);
-              const parts: string[] = [];
-              for (const match of btMatches) {
-                // Extrai strings entre parênteses ou colchetes em Tj/TJ
-                const strMatches = match[1].matchAll(/\(([^)]{1,200})\)\s*(?:Tj|TJ|'|")/g);
-                for (const sm of strMatches) {
-                  const s = sm[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-                  if (s.trim()) parts.push(s.trim());
-                }
+            const pdfBytes = new Uint8Array(pdfBuffer);
+            const textParts: string[] = [];
+
+            // Helper: descomprime FlateDecode (zlib) usando a API nativa do Deno Edge
+            async function decompressFlate(data: Uint8Array): Promise<Uint8Array | null> {
+              for (const fmt of ["deflate", "deflate-raw"] as CompressionFormat[]) {
+                try {
+                  const ds = new DecompressionStream(fmt);
+                  const writer = ds.writable.getWriter();
+                  writer.write(data);
+                  writer.close();
+                  const buf = await new Response(ds.readable).arrayBuffer();
+                  return new Uint8Array(buf);
+                } catch { /* tenta próximo formato */ }
               }
-              // Também extrai strings de arrays TJ
-              const tjMatches = rawText.matchAll(/\[([^\]]+)\]\s*TJ/g);
-              for (const match of tjMatches) {
-                const strParts = match[1].matchAll(/\(([^)]{1,200})\)/g);
-                for (const sp of strParts) {
-                  const s = sp[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-                  if (s.trim()) parts.push(s.trim());
-                }
-              }
-              pdfText = parts.join(" ");
-              console.log("[telegram-webhook] Extração raw extraiu:", pdfText.slice(0, 300));
-            } catch (rawErr: any) {
-              console.error("[telegram-webhook] Extração raw também falhou:", rawErr.message);
+              return null;
             }
+
+            // Marcadores binários de "stream"
+            const STREAM_MARKER = new Uint8Array([115, 116, 114, 101, 97, 109]); // "stream"
+
+            let scanPos = 0;
+            let streamsProcessed = 0;
+
+            while (scanPos < pdfBytes.length - 20 && streamsProcessed < 50) {
+              // Localiza próximo "stream"
+              let foundAt = -1;
+              outer: for (let i = scanPos; i < pdfBytes.length - STREAM_MARKER.length - 2; i++) {
+                let match = true;
+                for (let j = 0; j < STREAM_MARKER.length; j++) {
+                  if (pdfBytes[i + j] !== STREAM_MARKER[j]) { match = false; break; }
+                }
+                if (match) { foundAt = i; break outer; }
+              }
+
+              if (foundAt === -1) break;
+
+              // Determina onde começa o conteúdo (após \n ou \r\n)
+              const afterMarker = foundAt + STREAM_MARKER.length;
+              let dataStart: number;
+              if (pdfBytes[afterMarker] === 10) {
+                dataStart = afterMarker + 1;
+              } else if (pdfBytes[afterMarker] === 13 && pdfBytes[afterMarker + 1] === 10) {
+                dataStart = afterMarker + 2;
+              } else {
+                scanPos = foundAt + 1;
+                continue;
+              }
+
+              // Lê o dicionário antes deste stream para obter /Length e /Filter
+              const dictStart = Math.max(0, foundAt - 800);
+              const dictStr = new TextDecoder("latin1").decode(pdfBytes.slice(dictStart, foundAt));
+
+              const lenMatch = dictStr.match(/\/Length\s+(\d+)/);
+              if (!lenMatch) { scanPos = dataStart; continue; }
+              const streamLen = parseInt(lenMatch[1]);
+              if (streamLen <= 0 || streamLen > 2_000_000) { scanPos = dataStart; continue; }
+
+              const isFlate = dictStr.includes("FlateDecode") || /\/Filter\s*\/Fl[\s>]/.test(dictStr);
+
+              // Extrai os bytes brutos do stream
+              const streamBytes = pdfBytes.slice(dataStart, dataStart + streamLen);
+
+              let content = "";
+              if (isFlate) {
+                const decompressed = await decompressFlate(streamBytes);
+                if (decompressed) {
+                  content = new TextDecoder("latin1").decode(decompressed);
+                }
+              } else {
+                content = new TextDecoder("latin1").decode(streamBytes);
+              }
+
+              if (content) {
+                // Extrai strings de operadores Tj (texto literal)
+                for (const m of content.matchAll(/\(([^)\\]{0,300}(?:\\.[^)\\]{0,300})*)\)\s*(?:Tj|'|")/g)) {
+                  const t = m[1]
+                    .replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
+                    .replace(/\\n/g, " ").replace(/\\r/g, "").replace(/\\\\/g, "\\")
+                    .replace(/\\([()\\])/g, "$1");
+                  if (t.trim()) textParts.push(t.trim());
+                }
+                // Extrai strings de operadores TJ (array de strings)
+                for (const m of content.matchAll(/\[([\s\S]*?)\]\s*TJ/g)) {
+                  for (const s of m[1].matchAll(/\(([^)\\]{0,300})\)/g)) {
+                    const t = s[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+                    if (t.trim()) textParts.push(t.trim());
+                  }
+                }
+                streamsProcessed++;
+              }
+
+              scanPos = dataStart + streamLen;
+            }
+
+            pdfText = textParts.join(" ");
+            console.log("[telegram-webhook] PDF parser nativo extraiu", textParts.length, "strings, amostra:", pdfText.slice(0, 400));
+          } catch (pdfParseErr: any) {
+            console.error("[telegram-webhook] PDF parser nativo falhou:", pdfParseErr.message);
           }
 
-          if (!pdfText.trim() || pdfText.trim().length < 20) {
+          if (!pdfText.trim() || pdfText.trim().length < 10) {
+            // Último recurso: informa e pede screenshot
             await sendReply(
-              "📄 <b>PDF recebido, mas sem texto legível.</b>\n\n" +
-              "Este PDF parece ser uma imagem escaneada. Para melhor resultado:\n\n" +
-              "📸 <i>Tire uma foto do boleto com a câmera ou envie um print/screenshot da tela!</i>"
+              "📄 <b>PDF recebido, mas não foi possível extrair o texto automaticamente.</b>\n\n" +
+              "Este tipo de PDF usa codificação não suportada.\n\n" +
+              "📸 <i>Tire um screenshot/print do PDF aberto no celular e envie como imagem — o bot vai ler instantaneamente!</i>"
             );
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
