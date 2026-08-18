@@ -105,6 +105,9 @@ serve(async (req) => {
     const username = message.chat.username || message.chat.first_name || null;
     const text = (message.text || "").trim();
 
+    console.log("[telegram-webhook] ===== MENSAGEM RECEBIDA =====");
+    console.log("[telegram-webhook] chatId:", chatId, "username:", username, "text:", text.slice(0, 100));
+
     const sendReply = async (replyText: string) => {
       if (!telegramBotToken) return;
       await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
@@ -148,6 +151,7 @@ serve(async (req) => {
       .maybeSingle();
 
     if (!usuarioTg) {
+      console.log("[telegram-webhook] Usuário NÃO vinculado para chatId:", chatId);
       await sendReply(
         `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
       );
@@ -155,6 +159,7 @@ serve(async (req) => {
     }
 
     const userId = usuarioTg.user_id;
+    console.log("[telegram-webhook] Usuário vinculado: userId=", userId, "chatId=", chatId);
 
     // Comando /dividas
     if (text.startsWith("/dividas")) {
@@ -237,6 +242,7 @@ Ferramentas disponíveis:
     ];
 
     try {
+      console.log("[telegram-webhook] Encaminhando para openai-proxy:", { userId, model: "gpt-4o-mini", messageCount: aiMessages.length });
       const aiResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
         method: "POST",
         headers: {
@@ -250,16 +256,25 @@ Ferramentas disponíveis:
         }),
       });
 
+      console.log("[telegram-webhook] openai-proxy response status:", aiResponse.status);
+
       if (aiResponse.ok) {
         const aiJson = await aiResponse.json();
         const replyContent = aiJson.choices?.[0]?.message?.content;
+        console.log("[telegram-webhook] Resposta da IA:", (replyContent || "SEM CONTEÚDO").slice(0, 300));
+        console.log("[telegram-webhook] aiJson keys:", Object.keys(aiJson));
         if (replyContent) {
           await sendReply(replyContent);
           return new Response("OK", { status: 200, headers: corsHeaders });
+        } else {
+          console.log("[telegram-webhook] AVISO: replyContent vazio/null. aiJson.choices:", JSON.stringify(aiJson.choices || []).slice(0, 500));
         }
+      } else {
+        const errorBody = await aiResponse.text();
+        console.error("[telegram-webhook] openai-proxy retornou erro:", aiResponse.status, errorBody.slice(0, 500));
       }
     } catch (aiErr: any) {
-      console.error("[telegram-webhook] Erro ao consultar openai-proxy:", aiErr.message);
+      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErr.message, aiErr.stack);
     }
 
     // Fallback se a IA não retornar resposta

@@ -142,6 +142,8 @@ async function consultarVendasEyemobile(
   userId: string,
   dataStr: string
 ): Promise<Record<string, unknown>> {
+  console.log("[consultarVendasEyemobile] ===== INÍCIO =====");
+  console.log("[consultarVendasEyemobile] userId=", userId, "data=", dataStr);
   try {
     // 1. Buscar configuração do Eyemobile para o usuário
     const { data: config, error: configError } = await supabase
@@ -150,7 +152,17 @@ async function consultarVendasEyemobile(
       .eq("user_id", userId)
       .maybeSingle();
 
+    console.log("[consultarVendasEyemobile] Config query resultado:", {
+      hasConfig: !!config,
+      hasAccessKey: !!config?.access_key,
+      hasSecretKey: !!config?.secret_key,
+      storeId: config?.store_id || "N/A",
+      environment: config?.environment || "N/A",
+      configError: configError?.message || null,
+    });
+
     if (configError || !config?.access_key || !config?.secret_key) {
+      console.log("[consultarVendasEyemobile] Config NÃO encontrada ou incompleta, usando fallback banco");
       // Fallback: Busca transações locais caso o Eyemobile não esteja cadastrado
       const { data: dbTxs } = await supabase
         .from("transacoes")
@@ -159,9 +171,11 @@ async function consultarVendasEyemobile(
         .eq("tipo", "receita")
         .eq("data", dataStr);
 
+      console.log("[consultarVendasEyemobile] Fallback banco local: encontradas", dbTxs?.length || 0, "transações");
+
       if (dbTxs && dbTxs.length > 0) {
         const total = dbTxs.reduce((sum: number, t: any) => sum + Number(t.valor || 0), 0);
-        return {
+        const resultado = {
           data: dataStr,
           origem: "banco_local",
           total_vendas: total,
@@ -169,53 +183,84 @@ async function consultarVendasEyemobile(
           ticket_medio: total / dbTxs.length,
           observacao: `Dados locais do banco. Total: R$ ${total.toFixed(2)}. Configure as credenciais do Eyemobile em Configurações para obter dados em tempo real.`,
         };
+        console.log("[consultarVendasEyemobile] Resultado (banco local):", JSON.stringify(resultado));
+        return resultado;
       }
 
-      return {
+      const resultado = {
         erro: "Configuração Eyemobile não encontrada para este usuário.",
         sugestao: "Verifique se a integração com o PDV Eyemobile está configurada em Configurações > Eyemobile.",
         total_vendas: 0,
         quantidade_transacoes: 0,
       };
+      console.log("[consultarVendasEyemobile] Resultado (sem config, sem banco):", JSON.stringify(resultado));
+      return resultado;
     }
 
     // 2. Chamar a Edge Function eyemobile-sync em modo DASHBOARD
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const response = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
+    const syncUrl = `${supabaseUrl}/functions/v1/eyemobile-sync`;
+    const syncBody = {
+      user_id: userId,
+      access_key: config.access_key,
+      secret_key: config.secret_key,
+      environment: config.environment || "production",
+      store_id: config.store_id,
+      mode: "DASHBOARD",
+      start_date: dataStr,
+      end_date: dataStr,
+    };
+    console.log("[consultarVendasEyemobile] Chamando eyemobile-sync:", { url: syncUrl, mode: "DASHBOARD", start_date: dataStr, end_date: dataStr, store_id: config.store_id });
+
+    const response = await fetch(syncUrl, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${serviceRoleKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        user_id: userId,
-        access_key: config.access_key,
-        secret_key: config.secret_key,
-        environment: config.environment || "production",
-        store_id: config.store_id,
-        mode: "DASHBOARD",
-        start_date: dataStr,
-        end_date: dataStr,
-      }),
+      body: JSON.stringify(syncBody),
     });
+
+    console.log("[consultarVendasEyemobile] eyemobile-sync response status:", response.status);
+
+    // Tratamento específico para 404 — Edge Function não publicada
+    if (response.status === 404) {
+      console.error("[consultarVendasEyemobile] eyemobile-sync retornou 404 — Edge Function NÃO publicada!");
+      return {
+        erro: "Edge Function eyemobile-sync não está publicada no Supabase.",
+        sugestao: "Execute: supabase functions deploy eyemobile-sync",
+        total_vendas: 0,
+        quantidade_transacoes: 0,
+      };
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("[consultarVendasEyemobile] Erro eyemobile-sync:", errorText);
+      console.error("[consultarVendasEyemobile] Erro eyemobile-sync:", response.status, errorText);
       return {
         erro: "Falha ao consultar API Eyemobile em tempo real.",
-        detalhe: errorText,
+        detalhe: `Status ${response.status}: ${errorText}`,
         sugestao: "A API do Eyemobile pode estar indisponível ou as credenciais podem estar expiradas.",
       };
     }
 
     const result = await response.json();
+    console.log("[consultarVendasEyemobile] eyemobile-sync response body keys:", Object.keys(result));
+    console.log("[consultarVendasEyemobile] eyemobile-sync transactions count:", (result.transactions || []).length, "sales count:", (result.sales || []).length);
+
     const rawList = result.transactions || result.sales || [];
+    console.log("[consultarVendasEyemobile] rawList length:", rawList.length);
+    if (rawList.length > 0) {
+      console.log("[consultarVendasEyemobile] Primeiro item (sample):", JSON.stringify(rawList[0]).slice(0, 500));
+    }
+
     const validSales = rawList.filter((s: any) => s.completed !== false && !s.cancelled);
+    console.log("[consultarVendasEyemobile] validSales após filtro:", validSales.length, "de", rawList.length);
 
     if (!result || validSales.length === 0) {
+      console.log("[consultarVendasEyemobile] Nenhuma venda válida, tentando fallback banco local");
       // Fallback para transações no banco se a API retornou 0
       const { data: dbTxs } = await supabase
         .from("transacoes")
@@ -224,9 +269,11 @@ async function consultarVendasEyemobile(
         .eq("tipo", "receita")
         .eq("data", dataStr);
 
+      console.log("[consultarVendasEyemobile] Fallback banco: encontradas", dbTxs?.length || 0, "transações");
+
       if (dbTxs && dbTxs.length > 0) {
         const total = dbTxs.reduce((sum: number, t: any) => sum + Number(t.valor || 0), 0);
-        return {
+        const resultado = {
           data: dataStr,
           origem: "banco_local_fallback",
           total_vendas: total,
@@ -234,9 +281,11 @@ async function consultarVendasEyemobile(
           ticket_medio: total / dbTxs.length,
           observacao: `Vendas obtidas do banco local: Total de R$ ${total.toFixed(2)}.`,
         };
+        console.log("[consultarVendasEyemobile] Resultado (fallback banco):", JSON.stringify(resultado));
+        return resultado;
       }
 
-      return {
+      const resultado = {
         data: dataStr,
         total_vendas: 0,
         quantidade_transacoes: 0,
@@ -244,6 +293,8 @@ async function consultarVendasEyemobile(
         metodos_pagamento: {},
         observacao: "Nenhuma venda encontrada para esta data no PDV Eyemobile. Verifique se o PDV registrou vendas ou se a sincronização está configurada.",
       };
+      console.log("[consultarVendasEyemobile] Resultado (zero vendas):", JSON.stringify(resultado));
+      return resultado;
     }
 
     // Calcular totais
@@ -259,7 +310,7 @@ async function consultarVendasEyemobile(
       metodos[metodo] = (metodos[metodo] || 0) + val;
     }
 
-    return {
+    const resultado = {
       data: dataStr,
       total_vendas: totalVendas,
       quantidade_transacoes: qtdTransacoes,
@@ -268,8 +319,12 @@ async function consultarVendasEyemobile(
       vendas_por_metodo: metodos,
       observacao: `Dados obtidos em tempo real da API Eyemobile. Total: R$ ${totalVendas.toFixed(2)}.`,
     };
+    console.log("[consultarVendasEyemobile] ===== SUCESSO =====");
+    console.log("[consultarVendasEyemobile] Resultado final:", JSON.stringify(resultado));
+    return resultado;
   } catch (err: any) {
-    console.error("[consultarVendasEyemobile] Erro:", err.message);
+    console.error("[consultarVendasEyemobile] ===== EXCEPTION =====");
+    console.error("[consultarVendasEyemobile] Erro:", err.message, err.stack);
     return {
       erro: "Erro interno ao consultar vendas do Eyemobile.",
       detalhe: err.message,
@@ -465,6 +520,11 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "API key não configurada. Configure sua chave OpenAI na aba Configurações." }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
   }
 
+  console.log("[openai-proxy] ===== REQUEST =====");
+  console.log("[openai-proxy] userId:", userId, "model:", body.model || "gpt-4o-mini", "messageCount:", body.messages.length, "toolsCount:", TOOLS.length);
+  console.log("[openai-proxy] Tools registradas:", TOOLS.map(t => t.function.name).join(", "));
+  console.log("[openai-proxy] hasOpenAIKey:", !!openaiKey, "keySource:", config?.api_key ? "ia_configuracoes" : "env");
+
   const messages = [...body.messages] as Record<string, unknown>[];
   const MAX_ITERATIONS = 8;
 
@@ -488,25 +548,36 @@ Deno.serve(async (req: Request) => {
 
     const data = await response.json();
     if (!response.ok) {
+      console.error("[openai-proxy] OpenAI retornou erro:", response.status, JSON.stringify(data).slice(0, 500));
       return new Response(JSON.stringify(data), { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
     const choice = data.choices?.[0];
     const message = choice?.message;
-    if (!message) break;
+    if (!message) {
+      console.log("[openai-proxy] Iteração", i, "— sem message na resposta, quebrando loop");
+      break;
+    }
     messages.push(message);
 
     if (!message.tool_calls || message.tool_calls.length === 0) {
+      console.log("[openai-proxy] Iteração", i, "— resposta final do modelo (sem tool_calls)");
+      console.log("[openai-proxy] Resposta content:", (message.content || "").slice(0, 300));
       return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
+
+    console.log("[openai-proxy] Iteração", i, "— modelo escolheu", message.tool_calls.length, "ferramenta(s):", message.tool_calls.map((tc: any) => tc.function.name).join(", "));
 
     await Promise.all(
       message.tool_calls.map(async (tc: any) => {
         let toolResult: unknown;
         try {
           const toolArgs = JSON.parse(tc.function.arguments || "{}");
+          console.log("[openai-proxy] Executando ferramenta:", tc.function.name, "args:", JSON.stringify(toolArgs).slice(0, 500));
           toolResult = await executeTool(tc.function.name, toolArgs, supabase, userId);
+          console.log("[openai-proxy] Resultado ferramenta", tc.function.name, ":", JSON.stringify(toolResult).slice(0, 500));
         } catch (e) {
+          console.error("[openai-proxy] EXCEPTION na ferramenta", tc.function.name, ":", e instanceof Error ? e.message : String(e));
           toolResult = { error: e instanceof Error ? e.message : String(e) };
         }
         messages.push({
