@@ -224,17 +224,27 @@ serve(async (req) => {
     }
 
     // ─── CASO 3: Mensagem natural -> Encaminha para o OpenAI Proxy ───
+    const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
+    const mesAtual = nowSp.getMonth() + 1;
+    const anoAtual = nowSp.getFullYear();
+    const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
+
     const systemPrompt = `Você é o assistente financeiro inteligente do Wallet App integrado ao Telegram.
-Responda de forma concisa, educada, clara e direta em português do Brasil.
-Use formatação HTML simples suportada pelo Telegram (<b>, <i>, <code>).
-Sempre use valores monetários em formato Real (ex: R$ 1.234,56).
+Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
+Início do mês atual: ${primeiroDiaMes}.
+
+Diretrizes:
+- Responda de forma concisa, educada, clara e direta em português do Brasil.
+- Use formatação HTML simples suportada pelo Telegram (<b>, <i>, <code>).
+- Sempre use valores monetários em formato Real (ex: R$ 1.234,56).
 
 Ferramentas disponíveis:
-- consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API. Use SEMPRE que o usuário perguntar sobre vendas do dia, hoje, ontem, semana ou mês, faturamento da loja ou PDV.
+- consultar_vendas_eyemobile: Consulta vendas do PDV Eyemobile em tempo real via API e banco de dados. Use SEMPRE que o usuário perguntar sobre vendas do dia (hoje=${hojeStr}), ontem, semana ou vendas do mês (data_inicio=${primeiroDiaMes}, data_fim=${hojeStr}), faturamento da loja ou PDV.
 - buscar_transacoes: Consulta transações locais de receitas e despesas.
 - consultar_saldos: Consulta saldos de contas cadastradas.
 - consultar_dividas: Consulta dívidas pendentes.
-- consultar_resumo_mensal: Consulta resumo financeiro mensal.`;
+- consultar_resumo_mensal: Consulta resumo financeiro mensal (ano=${anoAtual}, mes=${mesAtual}).`;
 
     const aiMessages = [
       { role: "system", content: systemPrompt },
