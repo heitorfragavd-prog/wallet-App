@@ -166,6 +166,91 @@ async function salvarCacheCategoria(supabase: any, userId: string, credor: strin
   }
 }
 
+// ─── VALIDADORES DETERMINÍSTICOS PARA BENEFICIÁRIO (EVITA CONFUNDIR COM BANCO OU PAGADOR) ───
+const BANCO_STOP_WORDS = [
+  "sicoob", "cooperativa de credito", "cooperativa de livre admissao",
+  "cooperativa", "credito", "banco", "bradesco", "itau", "itaú",
+  "banco do brasil", "caixa economica", "caixa", "santander", "nubank", "inter",
+  "c6 bank", "original", "safra", "banrisul", "banco cooperativo", "sicredi"
+];
+
+function isNomeDeBanco(nome: string): boolean {
+  const norm = (nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  return BANCO_STOP_WORDS.some(sw => norm.includes(sw));
+}
+
+function isPessoaFisicaProvavel(nome: string): boolean {
+  const norm = (nome || "").toLowerCase().trim();
+  const termosCorp = [
+    "ltda", "sa", "me", "epp", "eireli", "s/a", "industria", "distribuidora",
+    "comercio", "servicos", "participacoes", "cia", "alimentos", "foods",
+    "bebidas", "supermercado", "distribuicao", "comercial"
+  ];
+  const temTermoCorp = termosCorp.some(t => norm.includes(t));
+  const palavras = nome.trim().split(/\s+/).filter(Boolean).length;
+  // Se tem 3+ nomes próprios e nenhum termo corporativo, é altamente provável ser o pagador pessoa física
+  return !temTermoCorp && palavras >= 3;
+}
+
+async function reextrairBeneficiarioDoDocumento(
+  supabaseUrl: string,
+  serviceKey: string,
+  userId: string,
+  imageBase64Uri: string,
+  tentativaAtual: string
+): Promise<string | null> {
+  const promptCorrecao = `Você errou na extração anterior do beneficiário do boleto. O nome "${tentativaAtual}" está INCORRETO.
+
+REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
+1. Se "${tentativaAtual}" for um BANCO ou COOPERATIVA (ex: Sicoob, Bradesco, Itaú, Cooperativa de Crédito...) → PROCURE na VIA INFERIOR (Ficha de Compensação) pelo campo "Beneficiário:" ou no TOPO pelo texto "RECEBEMOS de [EMPRESA]".
+2. Se "${tentativaAtual}" for uma PESSOA FÍSICA → ela é o PAGADOR, NÃO o beneficiário. O beneficiário é a EMPRESA FORNECEDORA que emitiu a cobrança.
+3. O BENEFICIÁRIO É SEMPRE UMA EMPRESA / RAZÃO SOCIAL (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL IND BRAS DE BEBIDAS SA", "SELLPACK DISTRIBUIDORA LTDA").
+4. Responda APENAS com o JSON:
+{"beneficiario": "NOME COMPLETO DA EMPRESA FORNECEDORA"}`;
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        user_id: userId,
+        tools: [],
+        temperature: 0.0,
+        messages: [
+          { role: "system", content: "Extrator especialista em boletos bancários. Responda apenas com JSON." },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: promptCorrecao },
+              { type: "image_url", image_url: { url: imageBase64Uri, detail: "high" } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (resp.ok) {
+      const json = await resp.json();
+      const raw = json.choices?.[0]?.message?.content?.trim() || "";
+      const cleaned = raw.replace(/```json\s*/i, "").replace(/```/g, "").trim();
+      let parsed: any = null;
+      try { parsed = JSON.parse(cleaned); } catch {}
+      const nomeCorrigido = parsed?.beneficiario || parsed?.nome || null;
+      if (nomeCorrigido && nomeCorrigido.length >= 3 && !isNomeDeBanco(nomeCorrigido)) {
+        return nomeCorrigido.trim();
+      }
+    }
+  } catch (e: any) {
+    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", e.message);
+  }
+  return null;
+}
+
+
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -1125,8 +1210,25 @@ REGRA CRÍTICA — BENEFICIÁRIO (QUEM RECEBE) vs PAGADOR (QUEM PAGA)
 
           const valor = parseNum(documentData.valor);
           const dataVencimento = parseDt(documentData.data_vencimento);
-          const beneficiario = String(documentData.beneficiario || "").trim();
+          let beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
+
+          // ─── AUTO-CORREÇÃO: Detecta se o beneficiário foi confundido com Banco ou Pagador ───
+          if (beneficiario && (isNomeDeBanco(beneficiario) || isPessoaFisicaProvavel(beneficiario))) {
+            console.warn(`[telegram-webhook] Beneficiário suspeito ("${beneficiario}") detectado como Banco ou Pessoa Física. Iniciando re-extração direcionada...`);
+            const beneficiarioCorrigido = await reextrairBeneficiarioDoDocumento(
+              supabaseUrl,
+              supabaseServiceKey,
+              userId,
+              finalImageBase64Uri,
+              beneficiario
+            );
+            if (beneficiarioCorrigido) {
+              console.log(`[telegram-webhook] Beneficiário corrigido com sucesso: "${beneficiario}" -> "${beneficiarioCorrigido}"`);
+              beneficiario = beneficiarioCorrigido;
+              documentData.beneficiario = beneficiarioCorrigido;
+            }
+          }
 
           const camposIlegiveis: string[] = Array.isArray(documentData.campos_ilegiveis) ? [...documentData.campos_ilegiveis] : [];
           const isConfiancaBaixa = (documentData.confianca === "baixa" && (valor <= 0 || !dataVencimento)) || camposIlegiveis.length >= 3;
