@@ -16,6 +16,39 @@ function generateToken(): string {
   return token;
 }
 
+async function resolveCategoriaByCredor(supabase: any, userId: string, credorOrDesc: string): Promise<{ id: string; nome: string } | null> {
+  const { data } = await supabase.from("categorias").select("id,nome,tipo").eq("user_id", userId);
+  if (!data || data.length === 0) return null;
+
+  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+  const inputNorm = normalize(credorOrDesc);
+
+  // 1. Match exato
+  const exact = data.find((c: any) => normalize(c.nome) === inputNorm);
+  if (exact) return { id: exact.id, nome: exact.nome };
+
+  // 2. Inclusão completa
+  const fullInc = data.find((c: any) => {
+    const catNorm = normalize(c.nome);
+    return catNorm.length >= 3 && (inputNorm.includes(catNorm) || catNorm.includes(inputNorm));
+  });
+  if (fullInc) return { id: fullInc.id, nome: fullInc.nome };
+
+  // 3. Match por palavras-chave do beneficiário
+  const ignoreWords = new Set(["e", "de", "do", "da", "em", "para", "com", "ltda", "me", "epp", "sa", "s/a", "eireli", "comercio", "distribuicao", "distribuidora", "servicos", "pagamentos", "brasil", "alimentos", "foods", "industria", "cia"]);
+  const inputTokens = inputNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
+
+  for (const token of inputTokens) {
+    const match = data.find((c: any) => {
+      const catNorm = normalize(c.nome);
+      return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
+    });
+    if (match) return { id: match.id, nome: match.nome };
+  }
+
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -194,6 +227,12 @@ serve(async (req) => {
     const userId = usuarioTg.user_id;
     console.log("[telegram-webhook] Usuário vinculado: userId=", userId, "chatId=", chatId);
 
+    const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
+    const mesAtual = nowSp.getMonth() + 1;
+    const anoAtual = nowSp.getFullYear();
+    const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
+
     // Comando /dividas
     if (text.startsWith("/dividas")) {
       const { data: dividas } = await supabase
@@ -341,6 +380,10 @@ serve(async (req) => {
           codigo_barras: dados.codigo_barras || null,
         };
 
+        if (dados.categoria_id) {
+          insertPayload.categoria_id = dados.categoria_id;
+        }
+
         if (wsMember?.workspace_id) {
           insertPayload.workspace_id = wsMember.workspace_id;
         }
@@ -350,7 +393,7 @@ serve(async (req) => {
         const { data: dividaInserida, error: errDivida } = await supabase
           .from("dividas")
           .insert(insertPayload)
-          .select("id,descricao,valor_total,data_vencimento,credor")
+          .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
           .single();
 
         if (errDivida) {
@@ -368,6 +411,7 @@ serve(async (req) => {
         await sendReply(
           `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
           `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
+          (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
           `💰 Valor: <b>${valFmt}</b>\n` +
           `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
           `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
@@ -445,20 +489,21 @@ serve(async (req) => {
         const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
         const imageBase64Uri = `data:${mime};base64,${b64}`;
 
-        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental de altíssima precisão.
-Analise a imagem enviada com EXTREMA cautela e rigor contra qualquer alucinação ou suposição.
+        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental e visão computacional de boletos e notas fiscais.
 
-REGRAS DE SEGURANÇA E PRECISÃO (OBRIGATÓRIAS):
-1. NUNCA invente, deduza ou adivinhe valores, datas, nomes de beneficiários ou números de código de barras.
-2. Se a imagem estiver DEITADA (rotacionada a 90°, 180° ou 270°), BORRADA, ESCURA, CORTADA ou com baixa resolução:
-   • Se os dados NÃO puderem ser lidos com 100% de clareza, defina obrigatoriamente "confianca": "baixa".
-   • Liste em "campos_ilegiveis" os campos que não puderem ser lidos com precisão cirúrgica.
-3. Se um campo não estiver perfeitamente legível na imagem, retorne null para aquele campo.
-4. Para BOLETOS BANCÁRIOS:
-   • valor: extraia o valor numérico em reais (número decimal) apenas se estiver perfeitamente visível.
-   • data_vencimento: extraia apenas no formato YYYY-MM-DD se a data estiver legível. Se duvidosa, retorne null.
-   • beneficiario: extraia o nome/razão social da empresa emissora se legível. Se cortado, retorne null.
-   • linha_digitavel: extraia os números do topo do boleto se puder ler os blocos com exatidão.
+IMPORTANTE SOBRE A ORIENTAÇÃO DA IMAGEM:
+- A foto pode estar em QUALQUER orientação: vertical (0°), deitada para a direita (90°), deitada para a esquerda (270°) ou invertida (180°).
+- ROTACIONE MENTALMENTE A IMAGEM e leia todos os textos, números, valores e datas com precisão.
+- NUNCA recuse uma imagem apenas por estar deitada ou inclinada. Se o texto for legível na orientação correta, extraia todos os dados com precisão e defina a confiança como alta.
+
+REGRAS DE EXTRAÇÃO:
+- NUNCA invente ou adivinhe valores. Extraia apenas o que puder ler com clareza.
+- Para BOLETOS BANCÁRIOS:
+  • valor: número decimal em reais (ex: 658.14).
+  • data_vencimento: data de vencimento no formato YYYY-MM-DD.
+  • beneficiario: razão social ou nome fantasia da empresa emissora/cedente (ex: "XODO FOODS E DISTRIBUICAO LTDA").
+  • descricao: descrição curta do boleto (ex: "Boleto - XODO FOODS").
+  • linha_digitavel: sequência numérica com os blocos legíveis do topo do boleto.
 
 FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
 <document_analysis>
@@ -466,13 +511,12 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
   "tipo": "boleto" | "nota_fiscal" | "comprovante" | "desconhecido",
   "valor": 123.45,
   "data_vencimento": "YYYY-MM-DD",
-  "beneficiario": "Razão Social ou Nome do Beneficiário",
+  "beneficiario": "Razão Social do Beneficiário",
   "descricao": "Boleto - Razão Social",
   "linha_digitavel": "34191.09008 16679.735607 59984.260007 1 15310000065814",
   "confianca": "alta" | "media" | "baixa",
-  "motivo_confianca": "Explicação objetiva da legibilidade",
-  "campos_ilegiveis": ["valor", "data_vencimento"],
-  "orientacao_imagem": "vertical" | "rotacionada" | "ilegivel"
+  "motivo_confianca": "Explicação da leitura",
+  "campos_ilegiveis": []
 }
 </document_analysis>`;
 
@@ -492,7 +536,7 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro com precisão. Se a imagem estiver deitada, borrada ou ilegível, não invente dados e classifique a confiança como baixa." },
+                  { type: "text", text: promptText || "Analise este documento financeiro. Se estiver deitado ou rotacionado, leia mentalmente na orientação correta e extraia os dados com precisão." },
                   { type: "image_url", image_url: { url: imageBase64Uri } },
                 ],
               },
@@ -549,55 +593,9 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
           const beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
 
-          const errosValidacao: string[] = [];
           const camposIlegiveis: string[] = Array.isArray(documentData.campos_ilegiveis) ? [...documentData.campos_ilegiveis] : [];
+          const isConfiancaBaixa = (documentData.confianca === "baixa" && (valor <= 0 || !dataVencimento)) || camposIlegiveis.length >= 3;
 
-          // 1. Validação de valor
-          if (valor <= 0) {
-            errosValidacao.push("Valor não identificado ou inválido");
-            if (!camposIlegiveis.includes("Valor do boleto")) camposIlegiveis.push("Valor do boleto");
-          }
-
-          // 2. Validação de vencimento
-          if (!dataVencimento) {
-            errosValidacao.push("Data de vencimento não identificada ou ilegível");
-            if (!camposIlegiveis.includes("Data de vencimento")) camposIlegiveis.push("Data de vencimento");
-          } else {
-            const ano = parseInt(dataVencimento.split("-")[0], 10);
-            const anoAtual = new Date().getFullYear();
-            if (isNaN(ano) || ano < anoAtual - 2 || ano > anoAtual + 3) {
-              errosValidacao.push(`Ano de vencimento suspeito (${ano})`);
-              if (!camposIlegiveis.includes("Data de vencimento")) camposIlegiveis.push("Data de vencimento");
-            }
-          }
-
-          // 3. Validação de beneficiário
-          const termosGenericos = ["beneficiario", "beneficiário", "boleto", "credor", "desconhecido", "empresa", "banco", "pagador", "cedente"];
-          if (!beneficiario || beneficiario.length < 3 || termosGenericos.includes(beneficiario.toLowerCase())) {
-            errosValidacao.push("Beneficiário não identificado claramente");
-            if (!camposIlegiveis.includes("Nome do beneficiário")) camposIlegiveis.push("Nome do beneficiário");
-          }
-
-          // 4. Validação de linha digitável
-          if (linhaDigitavel) {
-            const digitsOnly = linhaDigitavel.replace(/\D/g, "");
-            if (digitsOnly.length > 0 && digitsOnly.length !== 47 && digitsOnly.length !== 48) {
-              errosValidacao.push(`Linha digitável incompleta (${digitsOnly.length} dígitos)`);
-            }
-          }
-
-          // Determinar confiança final
-          const confiancaDeclarada = String(documentData.confianca || "media").toLowerCase();
-          const isRotacionada = documentData.orientacao_imagem === "rotacionada" || docAnalysisText.toLowerCase().includes("rotacionad") || docAnalysisText.toLowerCase().includes("deitad");
-
-          const isConfiancaBaixa =
-            confiancaDeclarada === "baixa" ||
-            camposIlegiveis.length >= 2 ||
-            errosValidacao.length >= 2 ||
-            valor <= 0 ||
-            !dataVencimento;
-
-          // Se a confiança for BAIXA: recusa o cadastro e pede foto nítida e na vertical
           if (isConfiancaBaixa) {
             const listaCampos = camposIlegiveis.length > 0
               ? camposIlegiveis.map(c => `• <b>${c}</b>`).join("\n")
@@ -605,18 +603,22 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
 
             const msgRecusa =
               `📄 <b>Não foi possível analisar o boleto com segurança.</b>\n\n` +
-              (isRotacionada ? `⚠️ <b>A imagem parece estar deitada (rotacionada) ou inclinada.</b>\n\n` : `⚠️ <b>A imagem está borrada, cortada ou com baixa iluminação.</b>\n\n`) +
+              `⚠️ <b>A imagem está muito borrada, cortada ou com iluminação insuficiente.</b>\n\n` +
               `❌ <b>Campos não identificados com precisão:</b>\n` +
               `${listaCampos}\n\n` +
               `📸 <b>Dica para envio:</b>\n` +
-              `Envie uma nova foto com o boleto na <b>posição vertical (em pé/reto)</b>, bem iluminado e enquadrando os códigos e valores.`;
+              `Envie uma foto nítida e bem iluminada enquadrando todo o código de barras e valores.`;
 
             await sendReply(msgRecusa);
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          // Confiança Média ou Alta -> Prepara proposta de cadastro
-          const isConfiancaMedia = confiancaDeclarada === "media" || errosValidacao.length > 0 || !linhaDigitavel;
+          // ─── BUSCA AUTOMÁTICA DE CATEGORIA PELO BENEFICIÁRIO ───
+          const catEncontrada = await resolveCategoriaByCredor(supabase, userId, `${beneficiario} ${documentData.descricao || ""}`);
+          const categoriaId = catEncontrada?.id || null;
+          const categoriaNome = catEncontrada?.nome || null;
+          console.log("[telegram-webhook] Categoria auto-identificada para", beneficiario, ":", categoriaNome, "(id:", categoriaId, ")");
+
           const descricaoBoleto = String(documentData.descricao || `Boleto - ${beneficiario}`).trim();
           const linhaFmt = documentData.linha_digitavel ? String(documentData.linha_digitavel).trim() : "";
 
@@ -632,6 +634,8 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
                 valor_restante: valor,
                 data_vencimento: dataVencimento || hojeStr,
                 credor: beneficiario,
+                categoria_id: categoriaId,
+                categoria_nome: categoriaNome,
                 status: "pendente",
                 linha_digitavel: linhaFmt || null,
               },
@@ -657,14 +661,10 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
             let mensagemProposta =
               `📄 <b>Boleto identificado!</b>\n\n` +
               `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+              (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
               `💰 Valor: <b>${valFmt}</b>\n` +
               `📅 Vencimento: <b>${vencFmt}</b>\n` +
               (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
-
-            if (isConfiancaMedia) {
-              mensagemProposta +=
-                `\n⚠️ <i>Atenção: A nitidez da foto é moderada. Por favor, confira atentamente se os valores e o vencimento acima conferem com o boleto físico.</i>\n`;
-            }
 
             mensagemProposta +=
               `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
@@ -693,7 +693,7 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
         } else {
           await sendReply(
             `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
-            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal na <b>posição vertical (em pé)</b> com os valores e códigos visíveis.`
+            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
           );
           return new Response("OK", { status: 200, headers: corsHeaders });
         }

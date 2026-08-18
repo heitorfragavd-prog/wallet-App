@@ -100,6 +100,7 @@ const TOOLS = [
   { type: "function", function: { name: "comparar_periodos", description: "Compara dois meses mostrando variação percentual de receitas, despesas e saldo.", parameters: { type: "object", properties: { ano1: { type: "number" }, mes1: { type: "number" }, ano2: { type: "number" }, mes2: { type: "number" } }, required: ["ano1", "mes1", "ano2", "mes2"] } } },
   { type: "function", function: { name: "consultar_saldos", description: "Lista todas as contas do usuário com ID, nome, tipo e saldo. Use para descobrir o ID de uma conta pelo nome.", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "consultar_categorias", description: "Lista categorias de transações com ID e nome. Use para descobrir o ID de uma categoria pelo nome.", parameters: { type: "object", properties: { tipo: { type: "string", enum: ["receita", "despesa"], description: "Filtrar por tipo" } } } } },
+  { type: "function", function: { name: "buscar_categorias", description: "Busca categorias de despesa ou dívida existentes por termo ou nome do credor/beneficiário.", parameters: { type: "object", properties: { busca: { type: "string", description: "Termo de busca (ex: 'Xodó', 'Alimentação')" }, tipo: { type: "string", enum: ["despesa", "receita"] } }, required: ["busca"] } } },
   { type: "function", function: { name: "consultar_transacoes_recorrentes", description: "Lista gastos e receitas fixos mensais (assinaturas, aluguel, salário).", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "projetar_gastos", description: "Projeta receitas e despesas dos próximos N meses com base nas recorrências cadastradas.", parameters: { type: "object", properties: { meses: { type: "number", description: "Número de meses para projetar (1-12)" } }, required: ["meses"] } } },
   { type: "function", function: { name: "consultar_dividas", description: "Lista dívidas do usuário com status, vencimentos e valores pendentes.", parameters: { type: "object", properties: { status: { type: "string", enum: ["pendente", "vencida", "quitada"], description: "Filtrar por status" } } } } },
@@ -111,14 +112,14 @@ const TOOLS = [
   { type: "function", function: { name: "deletar_transacao", description: "Remove transação cadastrada incorretamente. Requer confirmação explícita do usuário.", parameters: { type: "object", properties: { transacao_id: { type: "string" } }, required: ["transacao_id"] } } },
   { type: "function", function: { name: "criar_conta", description: "Cria uma nova conta financeira para o usuário.", parameters: { type: "object", properties: { nome: { type: "string", description: "Nome da conta (ex: 'PagSeguro', 'Nubank')" }, tipo: { type: "string", enum: ["conta_corrente", "poupanca", "carteira", "investimento", "cartao_credito", "outro"], description: "Tipo da conta" }, saldo: { type: "number", description: "Saldo inicial (padrão 0)" } }, required: ["nome", "tipo"] } } },
   { type: "function", function: { name: "atualizar_conta", description: "Atualiza dados de uma conta existente. Aceita nome da conta para resolver o ID.", parameters: { type: "object", properties: { conta_id: { type: "string", description: "UUID da conta (use se já tiver)" }, conta_nome: { type: "string", description: "Nome da conta para localizar (alternativa ao ID)" }, nome: { type: "string", description: "Novo nome" }, saldo: { type: "number", description: "Novo saldo" } }, required: [] } } },
-  { type: "function", function: { name: "cadastrar_divida", description: "Registra nova dívida ou financiamento.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string", description: "YYYY-MM-DD" }, parcelas: { type: "number" } }, required: ["descricao", "valor_total"] } } },
+  { type: "function", function: { name: "cadastrar_divida", description: "Registra nova dívida ou financiamento. Aceita categoria_id ou categoria_nome para associação automática.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string", description: "YYYY-MM-DD" }, parcelas: { type: "number" }, categoria_id: { type: "string" }, categoria_nome: { type: "string" } }, required: ["descricao", "valor_total"] } } },
   { type: "function", function: { name: "atualizar_divida", description: "Atualiza status de dívida (ex: marcar como paga, registrar pagamento parcial).", parameters: { type: "object", properties: { divida_id: { type: "string" }, status: { type: "string", enum: ["pendente", "vencida", "quitada"] }, valor_pago: { type: "number" } }, required: ["divida_id"] } } },
   { type: "function", function: { name: "cadastrar_meta", description: "Cria nova meta financeira com valor alvo e prazo.", parameters: { type: "object", properties: { nome: { type: "string" }, valor_alvo: { type: "number" }, valor_atual: { type: "number", description: "Valor já acumulado (padrão 0)" }, data_limite: { type: "string", description: "YYYY-MM-DD" }, descricao: { type: "string" } }, required: ["nome", "valor_alvo"] } } },
   { type: "function", function: { name: "atualizar_meta", description: "Atualiza progresso ou dados de uma meta existente.", parameters: { type: "object", properties: { meta_id: { type: "string" }, valor_atual: { type: "number" }, status: { type: "string", enum: ["ativa", "concluida", "pausada"] }, nome: { type: "string" }, valor_alvo: { type: "number" }, data_limite: { type: "string" } }, required: ["meta_id"] } } },
   { type: "function", function: { name: "atualizar_custo_produto_eyemobile", description: "Atualiza o custo de um produto no Eyemobile PDV e adiciona quantidade ao estoque. Use após analisar uma NF de compra.", parameters: { type: "object", properties: { produto_id: { type: "string" }, produto_nome: { type: "string" }, codigo_barras: { type: "string" }, novo_custo: { type: "number" }, quantidade_estoque: { type: "number" } }, required: ["novo_custo"] } } },
   { type: "function", function: { name: "cadastrar_despesa_nf", description: "Cadastra uma despesa no sistema a partir dos dados de uma Nota Fiscal de compra.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor: { type: "number" }, data: { type: "string" }, categoria_nome: { type: "string" }, fornecedor: { type: "string" }, metodo_pagamento: { type: "string", enum: ["pix", "boleto", "cartao_credito", "cartao_debito", "dinheiro", "outros"] }, numero_nf: { type: "string" } }, required: ["descricao", "valor", "data"] } } },
-  { type: "function", function: { name: "cadastrar_divida_boleto", description: "Cadastra uma nova dívida no sistema a partir dos dados de um boleto analisado.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string" }, codigo_barras: { type: "string" }, linha_digitavel: { type: "string" }, pix_copia_cola: { type: "string" }, parcelas: { type: "number" }, categoria_nome: { type: "string" } }, required: ["descricao", "valor_total", "data_vencimento"] } } },
-  { type: "function", function: { name: "cadastrar_boleto", description: "Cadastra um boleto como dívida pendente no sistema. Recebe: valor, vencimento (YYYY-MM-DD), beneficiario (ou credor), descricao (opcional), linha_digitavel (opcional), codigo_barras (opcional).", parameters: { type: "object", properties: { valor: { type: "number", description: "Valor do boleto em reais" }, vencimento: { type: "string", description: "Data de vencimento YYYY-MM-DD" }, beneficiario: { type: "string", description: "Nome do beneficiário ou credor" }, descricao: { type: "string", description: "Descrição do boleto/dívida" }, linha_digitavel: { type: "string", description: "Linha digitável do boleto (opcional)" }, codigo_barras: { type: "string", description: "Código de barras do boleto (opcional)" } }, required: ["valor", "vencimento", "beneficiario"] } } },
+  { type: "function", function: { name: "cadastrar_divida_boleto", description: "Cadastra uma nova dívida no sistema a partir dos dados de um boleto analisado.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string" }, codigo_barras: { type: "string" }, linha_digitavel: { type: "string" }, pix_copia_cola: { type: "string" }, parcelas: { type: "number" }, categoria_id: { type: "string" }, categoria_nome: { type: "string" } }, required: ["descricao", "valor_total", "data_vencimento"] } } },
+  { type: "function", function: { name: "cadastrar_boleto", description: "Cadastra um boleto como dívida pendente no sistema. Recebe: valor, vencimento (YYYY-MM-DD), beneficiario (ou credor), descricao (opcional), categoria_id (opcional), categoria_nome (opcional), linha_digitavel (opcional), codigo_barras (opcional).", parameters: { type: "object", properties: { valor: { type: "number", description: "Valor do boleto em reais" }, vencimento: { type: "string", description: "Data de vencimento YYYY-MM-DD" }, beneficiario: { type: "string", description: "Nome do beneficiário ou credor" }, descricao: { type: "string", description: "Descrição do boleto/dívida" }, categoria_id: { type: "string" }, categoria_nome: { type: "string" }, linha_digitavel: { type: "string", description: "Linha digitável do boleto (opcional)" }, codigo_barras: { type: "string", description: "Código de barras do boleto (opcional)" } }, required: ["valor", "vencimento", "beneficiario"] } } },
   { type: "function", function: { name: "validar_fechamento_caixa", description: "Analisa o valor relatado pelo funcionário no fechamento de turno e cruza com as vendas registradas no Eyemobile PDV e transferências para encontrar furos de caixa.", parameters: { type: "object", properties: { valor_relatado: { type: "number" }, turno_data: { type: "string", description: "Data do turno a validar (YYYY-MM-DD)" } }, required: ["valor_relatado", "turno_data"] } } },
 ];
 
@@ -150,6 +151,39 @@ async function resolveCategoriaByName(supabase: any, userId: string, nome: strin
   const normalizedInput = normalize(nome);
   const normalized = data.find((c: any) => normalize(c.nome) === normalizedInput || normalize(c.nome).includes(normalizedInput) || normalizedInput.includes(normalize(c.nome)));
   return normalized?.id || null;
+}
+
+async function resolveCategoriaByCredor(supabase: any, userId: string, credorOrDesc: string): Promise<{ id: string; nome: string } | null> {
+  const { data } = await supabase.from("categorias").select("id,nome,tipo").eq("user_id", userId);
+  if (!data || data.length === 0) return null;
+
+  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+  const inputNorm = normalize(credorOrDesc);
+
+  // 1. Match exato
+  const exact = data.find((c: any) => normalize(c.nome) === inputNorm);
+  if (exact) return { id: exact.id, nome: exact.nome };
+
+  // 2. Inclusão completa
+  const fullInc = data.find((c: any) => {
+    const catNorm = normalize(c.nome);
+    return catNorm.length >= 3 && (inputNorm.includes(catNorm) || catNorm.includes(inputNorm));
+  });
+  if (fullInc) return { id: fullInc.id, nome: fullInc.nome };
+
+  // 3. Match por palavras-chave do beneficiário
+  const ignoreWords = new Set(["e", "de", "do", "da", "em", "para", "com", "ltda", "me", "epp", "sa", "s/a", "eireli", "comercio", "distribuicao", "distribuidora", "servicos", "pagamentos", "brasil", "alimentos", "foods", "industria", "cia"]);
+  const inputTokens = inputNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
+
+  for (const token of inputTokens) {
+    const match = data.find((c: any) => {
+      const catNorm = normalize(c.nome);
+      return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
+    });
+    if (match) return { id: match.id, nome: match.nome };
+  }
+
+  return null;
 }
 
 interface TransacaoRow { id: string; descricao: string; valor: number; tipo: string; data: string; created_at: string; categoria_id?: string | null; categorias?: { nome: string } | null; metodo_pagamento?: string | null; observacoes?: string | null; conta_id?: string | null; origem: "transacoes" | "receitas" | "despesas"; }
@@ -655,10 +689,46 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       for (const table of tables) { const { data: result, error } = await supabase.from(table).update(updates).eq("id", id).eq("user_id", userId).select("id,descricao,valor,data").maybeSingle(); if (result) return { sucesso: true, transacao: result, tabela: table }; if (error && error.code !== "PGRST116") return { error: error.message }; }
       return { error: `Transação ${id} não encontrada.` };
     }
+    case "buscar_categorias": {
+      const { busca, tipo } = args as { busca: string; tipo?: string };
+      let q = supabase.from("categorias").select("id,nome,tipo").eq("user_id", userId);
+      if (tipo) q = q.eq("tipo", tipo);
+      if (busca) {
+        const sanitized = sanitizeIlike(busca);
+        q = q.ilike("nome", `%${sanitized}%`);
+      }
+      const { data, error } = await q.limit(10);
+      if (error) return { error: error.message };
+      return { sucesso: true, busca, categorias: data || [], total: data?.length || 0 };
+    }
     case "deletar_transacao": { const id = args.transacao_id as string; const results = await Promise.all([supabase.from("transacoes").delete().eq("id", id).eq("user_id", userId), supabase.from("receitas").delete().eq("id", id).eq("user_id", userId), supabase.from("despesas").delete().eq("id", id).eq("user_id", userId)]); const anyError = results.find(r => r.error); if (anyError?.error) return { error: anyError.error.message }; return { sucesso: true }; }
     case "criar_conta": { const { nome, tipo, saldo } = args as { nome: string; tipo: string; saldo?: number }; const { data: result, error } = await supabase.from("contas_usuario").insert({ user_id: userId, nome, tipo, saldo: Number(saldo || 0) }).select("id,nome,tipo,saldo").single(); if (error) return { error: error.message }; return { sucesso: true, conta: result }; }
     case "atualizar_conta": { let contaId = args.conta_id as string | undefined; if (!contaId && args.conta_nome) { contaId = await resolveContaByName(supabase, userId, args.conta_nome as string) || undefined; if (!contaId) return { error: `Conta "${args.conta_nome}" não encontrada.` }; } if (!contaId) return { error: "Informe conta_id ou conta_nome para localizar a conta." }; const updates: Record<string, unknown> = {}; if (args.nome) updates.nome = args.nome; if (args.saldo !== undefined) updates.saldo = Number(args.saldo); const { data: result, error } = await supabase.from("contas_usuario").update(updates).eq("id", contaId).eq("user_id", userId).select("id,nome,tipo,saldo").single(); if (error) return { error: error.message }; return { sucesso: true, conta: result }; }
-    case "cadastrar_divida": { const { descricao, valor_total, credor, data_vencimento, parcelas } = args as Record<string, unknown>; const { data: result, error } = await supabase.from("dividas").insert({ user_id: userId, descricao, valor_total: Number(valor_total), credor: credor || null, data_vencimento: data_vencimento || null, parcelas: parcelas || null, status: "pendente" }).select("id,descricao,valor_total,status").single(); if (error) return { error: error.message }; return { sucesso: true, divida: result }; }
+    case "cadastrar_divida": {
+      const { descricao, valor_total, credor, data_vencimento, parcelas, categoria_id, categoria_nome } = args as Record<string, unknown>;
+      let catId = (categoria_id as string) || null;
+      if (!catId && (categoria_nome || credor || descricao)) {
+        const found = await resolveCategoriaByCredor(supabase, userId, String(categoria_nome || credor || descricao));
+        if (found) catId = found.id;
+      }
+      const { data: result, error } = await supabase
+        .from("dividas")
+        .insert({
+          user_id: userId,
+          descricao,
+          valor_total: Number(valor_total),
+          valor_restante: Number(valor_total),
+          credor: credor || null,
+          data_vencimento: data_vencimento || null,
+          parcelas: parcelas || null,
+          categoria_id: catId,
+          status: "pendente"
+        })
+        .select("id,descricao,valor_total,status,categoria_id")
+        .single();
+      if (error) return { error: error.message };
+      return { sucesso: true, divida: result };
+    }
     case "atualizar_divida": { const updates: Record<string, unknown> = {}; if (args.status) updates.status = args.status; if (args.valor_pago !== undefined) updates.valor_pago = Number(args.valor_pago); const { error } = await supabase.from("dividas").update(updates).eq("id", args.divida_id as string).eq("user_id", userId); if (error) return { error: error.message }; return { sucesso: true }; }
     case "cadastrar_meta": { const { nome, valor_alvo, valor_atual, data_limite, descricao } = args as Record<string, unknown>; const { data: result, error } = await supabase.from("metas").insert({ user_id: userId, nome, valor_alvo: Number(valor_alvo), valor_atual: Number(valor_atual || 0), data_limite: data_limite || null, descricao: descricao || null, status: "ativa" }).select("id,nome,valor_alvo,status").single(); if (error) return { error: error.message }; return { sucesso: true, meta: result }; }
     case "atualizar_meta": { const { meta_id, ...rest } = args as Record<string, unknown>; const updates: Record<string, unknown> = {}; if (rest.valor_atual !== undefined) updates.valor_atual = Number(rest.valor_atual); if (rest.status) updates.status = rest.status; if (rest.nome) updates.nome = rest.nome; if (rest.valor_alvo !== undefined) updates.valor_alvo = Number(rest.valor_alvo); if (rest.data_limite) updates.data_limite = rest.data_limite; const { error } = await supabase.from("metas").update(updates).eq("id", meta_id as string).eq("user_id", userId); if (error) return { error: error.message }; return { sucesso: true }; }
@@ -689,14 +759,15 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
     case "cadastrar_despesa_nf": { const { descricao, valor, data, categoria_nome, fornecedor, metodo_pagamento, numero_nf } = args as Record<string, unknown>; let categoriaId: string | null = null; if (categoria_nome) { categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa"); } const { data: result, error } = await supabase.from("despesas").insert({ user_id: userId, descricao: descricao, valor: Number(valor), data: data, categoria_id: categoriaId || null, metodo_pagamento: metodo_pagamento || null, observacoes: `Nota Fiscal nº ${numero_nf || ""}. Fornecedor: ${fornecedor || ""}.` }).select("id,descricao,valor,data").single(); if (error) return { error: error.message }; return { sucesso: true, despesa: result }; }
     case "cadastrar_boleto":
     case "cadastrar_divida_boleto": {
-      const { descricao, valor_total, valor, credor, beneficiario, data_vencimento, vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_nome } = args as Record<string, unknown>;
+      const { descricao, valor_total, valor, credor, beneficiario, data_vencimento, vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_id, categoria_nome } = args as Record<string, unknown>;
       const val = Number(valor_total ?? valor ?? 0);
       const dtVenc = (data_vencimento ?? vencimento) as string;
       const benef = (credor ?? beneficiario ?? "Beneficiário Boleto") as string;
       const desc = (descricao as string) || `Boleto - ${benef}`;
-      let categoriaId: string | null = null;
-      if (categoria_nome) {
-        categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa");
+      let catId = (categoria_id as string) || null;
+      if (!catId && (categoria_nome || benef || desc)) {
+        const found = await resolveCategoriaByCredor(supabase, userId, String(categoria_nome || benef || desc));
+        if (found) catId = found.id;
       }
       const obsParts = [
         `Boleto.`,
@@ -718,17 +789,16 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
           parcelas: Number(parcelas || 1),
           parcelas_pagas: 0,
           status: "pendente",
-          observacoes: obsParts.join(" | "),
-          categoria_id: categoriaId || null,
           metodo_pagamento_esperado: "boleto",
+          categoria_id: catId,
           codigo_barras: codigo_barras || null,
           linha_digitavel: linha_digitavel || null,
-          pix_copia_cola: pix_copia_cola || null
+          observacoes: obsParts.join(" ") || null,
         })
-        .select("id,descricao,valor_total,status,data_vencimento,credor")
+        .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
         .single();
       if (error) return { error: error.message };
-      return { sucesso: true, mensagem: `Boleto cadastrado com sucesso como dívida pendente!`, divida: result };
+      return { sucesso: true, divida: result };
     }
     case "validar_fechamento_caixa": {
       const { valor_relatado, turno_data } = args as Record<string, unknown>;
