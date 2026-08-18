@@ -17,38 +17,155 @@ function generateToken(): string {
   return token;
 }
 
-async function resolveCategoriaByCredor(supabase: any, userId: string, credorOrDesc: string): Promise<{ id: string; nome: string } | null> {
-  const { data } = await supabase.from("categorias").select("id,nome,tipo").eq("user_id", userId);
-  if (!data || data.length === 0) return null;
+async function resolveCategoriaByCredor(
+  supabase: any,
+  userId: string,
+  credorOrDesc: string,
+  supabaseUrl?: string,
+  serviceKey?: string
+): Promise<{ id: string; nome: string } | null> {
+  const normalize = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+  const credorNorm = normalize(credorOrDesc);
+  if (!credorNorm || credorNorm.length < 2) return null;
 
-  const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
-  const inputNorm = normalize(credorOrDesc);
+  try {
+    // ─── 1. CACHE: Histórico de aprendizado do usuário ───
+    const { data: cacheHit } = await supabase
+      .from("categoria_credor_cache")
+      .select("id, hits, categoria_id, categorias(id, nome)")
+      .eq("user_id", userId)
+      .eq("credor_normalizado", credorNorm)
+      .maybeSingle();
 
-  // 1. Match exato
-  const exact = data.find((c: any) => normalize(c.nome) === inputNorm);
+    if (cacheHit?.categorias) {
+      console.log(`[telegram-webhook] Categoria encontrada via CACHE para "${credorOrDesc}":`, cacheHit.categorias.nome);
+      supabase
+        .from("categoria_credor_cache")
+        .update({ hits: (cacheHit.hits || 1) + 1, updated_at: new Date().toISOString() })
+        .eq("id", cacheHit.id)
+        .then(() => {});
+      return { id: cacheHit.categorias.id, nome: cacheHit.categorias.nome };
+    }
+  } catch (err: any) {
+    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err.message);
+  }
+
+  const { data: categorias } = await supabase
+    .from("categorias")
+    .select("id,nome,tipo,aliases")
+    .eq("user_id", userId);
+
+  if (!categorias || categorias.length === 0) return null;
+
+  // ─── 2. ALIASES: Sinônimos e marcas cadastrados ───
+  for (const cat of categorias) {
+    if (!cat.aliases) continue;
+    const aliasList = cat.aliases.split(",").map((a: string) => normalize(a.trim()));
+    for (const alias of aliasList) {
+      if (alias.length >= 3 && (credorNorm.includes(alias) || alias.includes(credorNorm))) {
+        console.log(`[telegram-webhook] Categoria encontrada via ALIAS ("${alias}") para "${credorOrDesc}":`, cat.nome);
+        return { id: cat.id, nome: cat.nome };
+      }
+    }
+  }
+
+  // ─── 3. MATCH EXATO E POR INCLUSÃO COMPLETA ───
+  const exact = categorias.find((c: any) => normalize(c.nome) === credorNorm);
   if (exact) return { id: exact.id, nome: exact.nome };
 
-  // 2. Inclusão completa
-  const fullInc = data.find((c: any) => {
+  const fullInc = categorias.find((c: any) => {
     const catNorm = normalize(c.nome);
-    return catNorm.length >= 3 && (inputNorm.includes(catNorm) || catNorm.includes(inputNorm));
+    return catNorm.length >= 3 && (credorNorm.includes(catNorm) || catNorm.includes(credorNorm));
   });
   if (fullInc) return { id: fullInc.id, nome: fullInc.nome };
 
-  // 3. Match por palavras-chave do beneficiário
-  const ignoreWords = new Set(["e", "de", "do", "da", "em", "para", "com", "ltda", "me", "epp", "sa", "s/a", "eireli", "comercio", "distribuicao", "distribuidora", "servicos", "pagamentos", "brasil", "alimentos", "foods", "industria", "cia"]);
-  const inputTokens = inputNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
+  // ─── 4. TOKEN MATCHING COM STOPWORDS REMOVIDAS ───
+  const ignoreWords = new Set([
+    "e", "de", "do", "da", "em", "para", "com", "ltda", "me", "epp", "sa", "s/a", "eireli",
+    "comercio", "distribuicao", "distribuidora", "servicos", "pagamentos", "brasil", "alimentos",
+    "foods", "industria", "ind", "bras", "cia", "cia."
+  ]);
+  const inputTokens = credorNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
 
   for (const token of inputTokens) {
-    const match = data.find((c: any) => {
+    const match = categorias.find((c: any) => {
       const catNorm = normalize(c.nome);
       return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
     });
     if (match) return { id: match.id, nome: match.nome };
   }
 
+  // ─── 5. LLM FALLBACK: Pergunta ao modelo quando não há correspondência direta ───
+  if (supabaseUrl && serviceKey && categorias.length > 0) {
+    try {
+      console.log(`[telegram-webhook] Tentando categorização por LLM para "${credorOrDesc}"...`);
+      const catListStr = categorias.map((c: any, i: number) => `${i + 1}. ${c.nome}`).join("\n");
+      const prompt = `Você é um classificador financeiro inteligente.
+Dado o nome do beneficiário/fornecedor "${credorOrDesc}", escolha a categoria mais provável entre as seguintes:
+${catListStr}
+
+Responda APENAS com o número correspondente (ex: 1, 2, etc). Se nenhuma categoria fizer sentido, responda 0.`;
+
+      const aiCatResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          user_id: userId,
+          tools: [],
+          temperature: 0.0,
+          messages: [
+            { role: "system", content: "Classificador de categorias. Responda apenas com o número." },
+            { role: "user", content: prompt },
+          ],
+        }),
+      });
+
+      if (aiCatResp.ok) {
+        const aiJson = await aiCatResp.json();
+        const numStr = aiJson.choices?.[0]?.message?.content?.match(/\d+/)?.[0];
+        const num = numStr ? parseInt(numStr, 10) : 0;
+        if (num > 0 && num <= categorias.length) {
+          const chosenCat = categorias[num - 1];
+          console.log(`[telegram-webhook] Categoria sugerida por LLM para "${credorOrDesc}":`, chosenCat.nome);
+          return { id: chosenCat.id, nome: chosenCat.nome };
+        }
+      }
+    } catch (llmCatErr: any) {
+      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr.message);
+    }
+  }
+
   return null;
 }
+
+async function salvarCacheCategoria(supabase: any, userId: string, credor: string, categoriaId: string) {
+  if (!credor || !categoriaId) return;
+  const normalize = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+  const credorNorm = normalize(credor);
+  if (!credorNorm || credorNorm.length < 2) return;
+
+  try {
+    await supabase.from("categoria_credor_cache").upsert(
+      {
+        user_id: userId,
+        credor_normalizado: credorNorm,
+        categoria_id: categoriaId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,credor_normalizado" }
+    );
+    console.log(`[telegram-webhook] Cache de categoria salvo: "${credorNorm}" -> ${categoriaId}`);
+  } catch (err: any) {
+    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err.message);
+  }
+}
+
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -433,6 +550,10 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
+        if (dividaInserida?.categoria_id && credorNome) {
+          salvarCacheCategoria(supabase, userId, credorNome, dividaInserida.categoria_id).catch(() => {});
+        }
+
         await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
         await supabase.from("telegram_conversas").upsert(
           { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
@@ -636,7 +757,7 @@ serve(async (req) => {
             const pdfLinha = String(pdfDocumentData.linha_digitavel || "").trim();
             const pdfDesc = String(pdfDocumentData.descricao || `Boleto PDF - ${pdfBenef}`).trim();
 
-            const pdfCat = await resolveCategoriaByCredor(supabase, userId, `${pdfBenef} ${pdfDesc}`);
+            const pdfCat = await resolveCategoriaByCredor(supabase, userId, `${pdfBenef} ${pdfDesc}`, supabaseUrl, supabaseServiceKey);
 
             const { data: pdfProposta, error: errPdfProp } = await supabase
               .from("telegram_propostas")
@@ -963,8 +1084,14 @@ serve(async (req) => {
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          // ─── BUSCA AUTOMÁTICA DE CATEGORIA PELO BENEFICIÁRIO ───
-          const catEncontrada = await resolveCategoriaByCredor(supabase, userId, `${beneficiario} ${documentData.descricao || ""}`);
+          // ─── BUSCA AUTOMÁTICA DE CATEGORIA PELO BENEFICIÁRIO (4 Camadas: Cache + Aliases + Tokens + LLM) ───
+          const catEncontrada = await resolveCategoriaByCredor(
+            supabase,
+            userId,
+            `${beneficiario} ${documentData.descricao || ""}`,
+            supabaseUrl,
+            supabaseServiceKey
+          );
           const categoriaId = catEncontrada?.id || null;
           const categoriaNome = catEncontrada?.nome || null;
           console.log("[telegram-webhook] Categoria auto-identificada para", beneficiario, ":", categoriaNome, "(id:", categoriaId, ")");
