@@ -53,6 +53,27 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "consultar_despesas_periodo",
+      description: "Consulta despesas (gastos, pagamentos efetuados, contas pagas, saques) do usuário para um dia ou período específico. Use SEMPRE que o usuário perguntar quanto gastou, quanto pagou hoje/ontem/no mês, ou total de despesas pagas. Retorna total pago, quantidade de transações, agrupamento por método de pagamento e lista das despesas. NÃO use para dívidas pendentes a pagar no futuro (use consultar_dividas para dívidas pendentes).",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: {
+            type: "string",
+            description: "Data de início no formato YYYY-MM-DD (ex: 2026-08-18 para hoje).",
+          },
+          data_fim: {
+            type: "string",
+            description: "Data de fim no formato YYYY-MM-DD. Se for um único dia, informe a mesma data do início.",
+          },
+        },
+        required: ["data_inicio", "data_fim"],
+      },
+    },
+  },
   { type: "function", function: { name: "buscar_transacoes", description: "Busca transações financeiras do usuário com filtros opcionais por período, tipo e categoria.", parameters: { type: "object", properties: { data_inicio: { type: "string", description: "Data início no formato YYYY-MM-DD" }, data_fim: { type: "string", description: "Data fim no formato YYYY-MM-DD" }, tipo: { type: "string", enum: ["receita", "despesa"], description: "Tipo da transação" }, categoria_id: { type: "string", description: "ID da categoria para filtrar" }, categoria_nome: { type: "string", description: "Nome da categoria para filtrar (alternativa ao ID)" }, limit: { type: "number", description: "Limite de resultados (padrão 50)" } } } } },
   { type: "function", function: { name: "consultar_resumo_mensal", description: "Retorna resumo financeiro de um mês específico: total receitas, despesas, saldo e top categorias.", parameters: { type: "object", properties: { ano: { type: "number", description: "Ano (ex: 2025)" }, mes: { type: "number", description: "Mês 1-12" } }, required: ["ano", "mes"] } } },
   { type: "function", function: { name: "comparar_periodos", description: "Compara dois meses mostrando variação percentual de receitas, despesas e saldo.", parameters: { type: "object", properties: { ano1: { type: "number" }, mes1: { type: "number" }, ano2: { type: "number" }, mes2: { type: "number" } }, required: ["ano1", "mes1", "ano2", "mes2"] } } },
@@ -289,12 +310,83 @@ async function consultarVendasEyemobile(
   }
 }
 
+/** Consulta despesas e pagamentos efetuados pelo usuário em um período específico */
+async function consultarDespesasPeriodo(
+  supabase: any,
+  userId: string,
+  dataInicio: string,
+  dataFim?: string
+): Promise<Record<string, unknown>> {
+  const startDate = dataInicio || getHojeBrasil();
+  const endDate = dataFim || startDate;
+
+  console.log("[consultarDespesasPeriodo] ===== INÍCIO =====");
+  console.log("[consultarDespesasPeriodo] userId=", userId, "startDate=", startDate, "endDate=", endDate);
+
+  try {
+    const despesas = await fetchAllTransacoes(supabase, userId, {
+      dataInicio: startDate,
+      dataFim: endDate,
+      tipo: "despesa",
+      select: "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome),metodo_pagamento,observacoes"
+    });
+
+    console.log("[consultarDespesasPeriodo] Despesas encontradas:", despesas.length, "para o período", startDate, "a", endDate);
+
+    const totalDespesas = despesas.reduce((sum, d) => sum + Number(d.valor || 0), 0);
+    const qtd = despesas.length;
+    const ticketMedio = qtd > 0 ? totalDespesas / qtd : 0;
+
+    const metodos: Record<string, number> = {};
+    for (const d of despesas) {
+      const m = d.metodo_pagamento || "outros";
+      metodos[m] = (metodos[m] || 0) + Number(d.valor || 0);
+    }
+
+    const dataFormatada = startDate === endDate 
+      ? startDate.split("-").reverse().join("/") 
+      : `${startDate.split("-").reverse().join("/")} a ${endDate.split("-").reverse().join("/")}`;
+
+    const resultado = {
+      periodo: dataFormatada,
+      data_inicio: startDate,
+      data_fim: endDate,
+      total_despesas: totalDespesas,
+      quantidade_transacoes: qtd,
+      ticket_medio: ticketMedio,
+      despesas_por_metodo: metodos,
+      transacoes: despesas.slice(0, 30).map(d => ({
+        descricao: d.descricao,
+        valor: Number(d.valor || 0),
+        categoria: (d as any).categorias?.nome || "Sem categoria",
+        metodo_pagamento: d.metodo_pagamento || "outros",
+        data: d.data
+      })),
+      observacao: `Despesas / pagamentos em ${dataFormatada}: Total de R$ ${totalDespesas.toFixed(2)} em ${qtd} transações.`
+    };
+
+    console.log("[consultarDespesasPeriodo] Resultado:", JSON.stringify(resultado));
+    return resultado;
+  } catch (err: any) {
+    console.error("[consultarDespesasPeriodo] EXCEPTION:", err.message);
+    return {
+      erro: "Erro ao consultar despesas do período.",
+      detalhe: err.message
+    };
+  }
+}
+
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
     case "consultar_vendas_eyemobile": {
       const targetStart = (args.data_inicio as string) || (args.data as string) || getHojeBrasil();
       const targetEnd = (args.data_fim as string) || (args.data as string) || targetStart;
       return await consultarVendasEyemobile(supabase, userId, targetStart, targetEnd);
+    }
+    case "consultar_despesas_periodo": {
+      const targetStart = (args.data_inicio as string) || (args.data as string) || getHojeBrasil();
+      const targetEnd = (args.data_fim as string) || (args.data as string) || targetStart;
+      return await consultarDespesasPeriodo(supabase, userId, targetStart, targetEnd);
     }
     case "buscar_transacoes": {
       let categoriaId = args.categoria_id as string | undefined;
