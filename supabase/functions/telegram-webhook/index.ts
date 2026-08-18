@@ -266,8 +266,8 @@ serve(async (req) => {
 
     if (text && conversaAtiva?.estado === "aguardando_confirmacao_boleto" && conversaAtiva.proposta_id) {
       const respLower = text.toLowerCase().trim();
-      const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar"].includes(respLower);
-      const isNao = ["não", "nao", "n", "no", "cancelar", "cancela"].includes(respLower);
+      const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar"].includes(respLower);
+      const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
 
       if (isSim) {
         const { data: proposta } = await supabase
@@ -291,28 +291,71 @@ serve(async (req) => {
         }
 
         const dados = typeof proposta.dados === "string" ? JSON.parse(proposta.dados) : proposta.dados;
+        
+        // Sanitização de valores e datas
+        const parseNum = (v: any) => {
+          if (typeof v === "number") return isNaN(v) ? 0 : v;
+          if (!v) return 0;
+          const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
+          const n = parseFloat(s);
+          return isNaN(n) ? 0 : n;
+        };
+
+        const parseDate = (v: any) => {
+          if (!v) return hojeStr;
+          const str = String(v).trim();
+          if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
+          if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
+            const p = str.split("/");
+            return `${p[2]}-${p[1]}-${p[0]}`;
+          }
+          return hojeStr;
+        };
+
+        const valorNum = parseNum(dados.valor_total || dados.valor);
+        const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
+        const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
+        const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
+
+        // Busca workspace do usuário para associar a dívida
+        const { data: wsMember } = await supabase
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", userId)
+          .limit(1)
+          .maybeSingle();
+
+        const insertPayload: Record<string, any> = {
+          user_id: userId,
+          descricao: desc,
+          valor_total: valorNum,
+          valor_restante: valorNum,
+          valor_pago: 0,
+          data_vencimento: vencIso,
+          credor: credorNome,
+          status: "pendente",
+          parcelas: 1,
+          parcelas_pagas: 0,
+          metodo_pagamento_esperado: "boleto",
+          linha_digitavel: dados.linha_digitavel || null,
+          codigo_barras: dados.codigo_barras || null,
+        };
+
+        if (wsMember?.workspace_id) {
+          insertPayload.workspace_id = wsMember.workspace_id;
+        }
+
+        console.log("[telegram-webhook] Inserindo divida confirmada:", JSON.stringify(insertPayload));
+
         const { data: dividaInserida, error: errDivida } = await supabase
           .from("dividas")
-          .insert({
-            user_id: userId,
-            descricao: dados.descricao || `Boleto - ${dados.credor || "Credor"}`,
-            valor_total: Number(dados.valor_total || 0),
-            valor_restante: Number(dados.valor_restante || dados.valor_total || 0),
-            valor_pago: 0,
-            data_vencimento: dados.data_vencimento || null,
-            credor: dados.credor || null,
-            status: "pendente",
-            observacoes: dados.observacoes || null,
-            linha_digitavel: dados.linha_digitavel || null,
-            codigo_barras: dados.codigo_barras || null,
-            metodo_pagamento_esperado: "boleto",
-          })
+          .insert(insertPayload)
           .select("id,descricao,valor_total,data_vencimento,credor")
           .single();
 
         if (errDivida) {
-          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message);
-          await sendReply("❌ <b>Erro ao cadastrar boleto no banco de dados.</b> Tente novamente.");
+          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
+          await sendReply(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
@@ -485,12 +528,31 @@ Se a imagem não for legível ou não for documento financeiro:
           }
         }
 
-        if (documentData && documentData.tipo === "boleto" && Number(documentData.valor) > 0) {
-          const valor = Number(documentData.valor) || 0;
-          const vencimento = documentData.data_vencimento || hojeStr;
-          const beneficiario = documentData.beneficiario || "Beneficiário Boleto";
-          const descricao = documentData.descricao || `Boleto - ${beneficiario}`;
-          const linhaDigitavel = documentData.linha_digitavel || "";
+        if (documentData && documentData.tipo === "boleto") {
+          const parseVal = (v: any) => {
+            if (typeof v === "number") return isNaN(v) ? 0 : v;
+            if (!v) return 0;
+            const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
+            const n = parseFloat(s);
+            return isNaN(n) ? 0 : n;
+          };
+
+          const parseDt = (v: any) => {
+            if (!v) return hojeStr;
+            const str = String(v).trim();
+            if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
+            if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
+              const p = str.split("/");
+              return `${p[2]}-${p[1]}-${p[0]}`;
+            }
+            return hojeStr;
+          };
+
+          const valor = parseVal(documentData.valor);
+          const vencimento = parseDt(documentData.data_vencimento);
+          const beneficiario = String(documentData.beneficiario || "Beneficiário Boleto").trim();
+          const descricao = String(documentData.descricao || `Boleto - ${beneficiario}`).trim();
+          const linhaDigitavel = String(documentData.linha_digitavel || "").trim();
 
           const { data: propostaSalva, error: errProp } = await supabase
             .from("telegram_propostas")
@@ -505,7 +567,6 @@ Se a imagem não for legível ou não for documento financeiro:
                 data_vencimento: vencimento,
                 credor: beneficiario,
                 status: "pendente",
-                observacoes: linhaDigitavel ? `Linha digitável: ${linhaDigitavel}` : "Extraído de boleto via Telegram",
                 linha_digitavel: linhaDigitavel || null,
               },
               resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${vencimento}`,
