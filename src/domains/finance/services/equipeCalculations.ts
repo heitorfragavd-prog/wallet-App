@@ -1,4 +1,11 @@
 export type TipoColaborador = 'funcionario' | 'socio' | 'folguista';
+export type RegimeEncargos = 'mei' | 'geral';
+
+export type EstadoContrato =
+  | { estado: 'experiencia'; diasRestantes: number; dataFim: string }
+  | { estado: 'decisao'; diasRestantes: 0; dataFim: string }
+  | { estado: 'indeterminado'; diasRestantes: null; dataFim: string | null }
+  | { estado: 'inativo'; diasRestantes: null; dataFim: string | null };
 
 export type DiaAcertoFuncionario = {
   trabalhou: boolean;
@@ -16,6 +23,7 @@ export type DiaAcertoFolguista = {
 
 export type CustoColaboradorInput = {
   tipo: TipoColaborador;
+  regimeEncargos?: RegimeEncargos;
   salarioCentavos: number;
   proLaboreCentavos?: number;
   transporteCentavos?: number;
@@ -95,6 +103,46 @@ export function calcularFimExperiencia(admissionDate: string, experienceDays = 9
   return isoDate(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
+export type ResolverEstadoContratoInput = {
+  statusPersistido?: string | null;
+  dataAdmissao?: string | null;
+  diasExperiencia?: number | null;
+  dataReferencia?: string | null;
+  dataDemissao?: string | null;
+};
+
+export function resolverEstadoContrato(input: ResolverEstadoContratoInput): EstadoContrato {
+  if (input.dataDemissao || input.statusPersistido === 'inativo') {
+    return { estado: 'inativo', diasRestantes: null, dataFim: input.dataDemissao ?? null };
+  }
+
+  if (!input.dataAdmissao) {
+    return { estado: 'indeterminado', diasRestantes: null, dataFim: null };
+  }
+
+  const dataFim = calcularFimExperiencia(input.dataAdmissao, input.diasExperiencia ?? 90);
+  const ref = input.dataReferencia ?? new Date().toISOString().slice(0, 10);
+
+  if (input.statusPersistido !== 'experiencia') {
+    return { estado: 'indeterminado', diasRestantes: null, dataFim };
+  }
+
+  const endUtc = Date.parse(`${dataFim}T00:00:00Z`);
+  const [refY, refM, refD] = ref.slice(0, 10).split('-').map(Number);
+  const refUtc = Date.UTC(refY, refM - 1, refD);
+  const diasRestantes = Math.ceil((endUtc - refUtc) / 86_400_000);
+
+  if (diasRestantes < 0) {
+    return { estado: 'indeterminado', diasRestantes: null, dataFim };
+  }
+
+  if (diasRestantes === 0) {
+    return { estado: 'decisao', diasRestantes: 0, dataFim };
+  }
+
+  return { estado: 'experiencia', diasRestantes, dataFim };
+}
+
 export function calcularAcertoFuncionario(dias: DiaAcertoFuncionario[]) {
   return dias.reduce(
     (total, dia) => {
@@ -104,14 +152,26 @@ export function calcularAcertoFuncionario(dias: DiaAcertoFuncionario[]) {
       const uberBase = positiveInteger(dia.uberBaseCentavos);
       const passagem = positiveInteger(dia.passagemCentavos);
       const meta = positiveInteger(dia.metaCentavos);
-      const transporte = uberBase + passagem + Math.max(0, uberReal - uberBase);
+      const diferenca = Math.max(0, uberReal - uberBase);
 
-      total.transporteCentavos += transporte;
+      total.uberRealCentavos += uberReal;
+      total.uberBaseCentavos += uberBase;
+      total.passagensCentavos += passagem;
+      total.diferencaUberCentavos += diferenca;
+      total.transporteCentavos += uberBase + passagem + diferenca;
       total.metaCentavos += meta;
-      total.totalCentavos += transporte + meta;
+      total.totalCentavos += uberBase + passagem + diferenca + meta;
       return total;
     },
-    { transporteCentavos: 0, metaCentavos: 0, totalCentavos: 0 },
+    {
+      uberRealCentavos: 0,
+      uberBaseCentavos: 0,
+      passagensCentavos: 0,
+      diferencaUberCentavos: 0,
+      transporteCentavos: 0,
+      metaCentavos: 0,
+      totalCentavos: 0,
+    },
   );
 }
 
@@ -141,7 +201,8 @@ export function calcularCustoColaborador(input: CustoColaboradorInput): CustoCol
   const dias = positiveInteger(input.diasTrabalhoMes);
   const hasLaborCharges = input.tipo === 'funcionario';
 
-  const inssEmpresa = hasLaborCharges ? Math.round(salario * 0.2) : 0;
+  const aliquotaInss = input.regimeEncargos === 'mei' ? 0.03 : 0.2;
+  const inssEmpresa = hasLaborCharges ? Math.round(salario * aliquotaInss) : 0;
   const fgts = hasLaborCharges ? Math.round(salario * 0.08) : 0;
   const decimoTerceiro = hasLaborCharges ? Math.round(salario / 12) : 0;
   const ferias = hasLaborCharges ? Math.round((salario / 12) * (4 / 3)) : 0;

@@ -46,4 +46,22 @@ describe("AcertoSemanalFuncionario", () => {
     expect(await screen.findByText(/acerto pendente criado/i)).toBeInTheDocument();
     expect(screen.queryByText(/pago com sucesso/i)).not.toBeInTheDocument();
   });
+
+  it("mostra Uber base, passagem, diferenca e meta sem misturar o relatorio", () => {
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colaborador-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-08-17"
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "13.92" } });
+    expect(screen.getAllByText("Diferença").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/1,92/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Uber Fixo \(base\)|Uber base/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Passagem/i).length).toBeGreaterThan(0);
+  });
 });

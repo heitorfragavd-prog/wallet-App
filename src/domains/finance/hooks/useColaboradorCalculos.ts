@@ -2,9 +2,11 @@ import { useMemo } from 'react';
 
 import {
   calcularCustoColaborador,
-  calcularFimExperiencia,
   centavosParaDecimal,
   decimalParaCentavos,
+  EstadoContrato,
+  RegimeEncargos,
+  resolverEstadoContrato,
 } from '../services/equipeCalculations';
 import { Colaborador } from './useColaboradores';
 import { ColaboradorCusto } from './useColaboradorCustos';
@@ -35,6 +37,7 @@ export interface CalculosColaborador {
   diasAtrasos: number;
   percentualFaltas: number;
   diasParaFimExperiencia: number | null;
+  estadoContrato: EstadoContrato;
 }
 
 const EMPTY_CALCULATIONS: CalculosColaborador = {
@@ -62,6 +65,7 @@ const EMPTY_CALCULATIONS: CalculosColaborador = {
   diasAtrasos: 0,
   percentualFaltas: 0,
   diasParaFimExperiencia: null,
+  estadoContrato: { estado: 'inativo', diasRestantes: null, dataFim: null },
 };
 
 const TRANSPORT_COST_TYPES = new Set([
@@ -85,17 +89,12 @@ function workDaysInMonth(reference: string): number {
   return workDays || 26;
 }
 
-function daysUntil(experienceEnd: string, today = new Date()): number {
-  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  const endUtc = Date.parse(`${experienceEnd}T00:00:00Z`);
-  return Math.max(0, Math.ceil((endUtc - todayUtc) / 86_400_000));
-}
-
 export function useColaboradorCalculos(
   colaborador: Colaborador | null,
   custos: ColaboradorCusto[],
   presencas: ColaboradorPresenca[],
   mesRef?: string,
+  regimeEncargos: RegimeEncargos = 'geral',
 ): CalculosColaborador {
   return useMemo(() => {
     if (!colaborador) return EMPTY_CALCULATIONS;
@@ -127,6 +126,7 @@ export function useColaboradorCalculos(
 
     const custo = calcularCustoColaborador({
       tipo: colaborador.tipo,
+      regimeEncargos,
       salarioCentavos: decimalParaCentavos(salarioBruto),
       proLaboreCentavos: decimalParaCentavos(colaborador.valor_pro_labore || salarioBruto),
       transporteCentavos: decimalParaCentavos(valeTransporte),
@@ -183,10 +183,15 @@ export function useColaboradorCalculos(
     const diasAtrasos = presencas.filter((presenca) => presenca.atraso_minutos > 0).length;
     const percentualFaltas = presencas.length > 0 ? (diasFaltas / presencas.length) * 100 : 0;
 
-    const diasParaFimExperiencia = isFuncionario
-      && colaborador.status === 'experiencia'
-      && colaborador.data_admissao
-      ? daysUntil(calcularFimExperiencia(colaborador.data_admissao, colaborador.dias_experiencia || 90))
+    const estadoContrato = resolverEstadoContrato({
+      statusPersistido: colaborador.status,
+      dataAdmissao: colaborador.data_admissao,
+      diasExperiencia: colaborador.dias_experiencia,
+      dataDemissao: colaborador.data_demissao,
+    });
+
+    const diasParaFimExperiencia = estadoContrato.estado === 'experiencia'
+      ? estadoContrato.diasRestantes
       : null;
 
     return {
@@ -214,6 +219,7 @@ export function useColaboradorCalculos(
       diasAtrasos,
       percentualFaltas,
       diasParaFimExperiencia,
+      estadoContrato,
     };
-  }, [colaborador, custos, presencas, mesRef]);
+  }, [colaborador, custos, presencas, mesRef, regimeEncargos]);
 }

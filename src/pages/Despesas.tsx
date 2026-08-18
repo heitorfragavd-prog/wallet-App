@@ -58,6 +58,7 @@ import { useMediaMensalDespesas } from "@/domains/finance/hooks/useMediaMensalDe
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useCategorizacaoIA } from "@/domains/finance/hooks/useCategorizacaoIA";
 import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
 import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
@@ -105,6 +106,7 @@ const formatarMetodoPagamento = (metodo?: string | null) => {
 
 const Despesas = () => {
   const { toast } = useToast();
+  const { isPrivate, formatCurrency } = usePrivacy();
   const { categoriasDespesa } = useCategorias();
 
   // ── Filtro de data ────────────────────────────────────────────
@@ -503,7 +505,7 @@ const Despesas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalDespesasDeHoje)}
+                      {formatCurrency(totalDespesasDeHoje)}
                     </p>
                   )}
                 </div>
@@ -526,9 +528,7 @@ const Despesas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                        temFiltrosAtivos ? totalFiltrado : totalDespesas
-                      )}
+                      {formatCurrency(temFiltrosAtivos ? totalFiltrado : totalDespesas)}
                     </p>
                   )}
                 </div>
@@ -549,7 +549,7 @@ const Despesas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(previstoParaPagar)}
+                      {formatCurrency(previstoParaPagar)}
                     </p>
                   )}
                 </div>
@@ -570,7 +570,7 @@ const Despesas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(mediaMensalCalculada)}
+                      {formatCurrency(mediaMensalCalculada)}
                     </p>
                   )}
                 </div>
@@ -722,7 +722,7 @@ const Despesas = () => {
                                 <span className="font-medium text-foreground">{item.label}</span>
                                 <div className="space-x-2 text-right">
                                   <span className="font-semibold text-foreground">
-                                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.valor)}
+                                    {formatCurrency(item.valor)}
                                   </span>
                                   <span className="text-xs text-muted-foreground">
                                     ({item.porcentagem.toFixed(1)}%)
@@ -758,7 +758,7 @@ const Despesas = () => {
                                 <span className="font-medium text-foreground">{item.label}</span>
                                 <div className="space-x-2 text-right">
                                   <span className="font-semibold text-foreground">
-                                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.valor)}
+                                    {formatCurrency(item.valor)}
                                   </span>
                                   <span className="text-xs text-muted-foreground">
                                     ({item.porcentagem.toFixed(1)}%)
@@ -847,7 +847,7 @@ const Despesas = () => {
                 {despesasFiltradas.length} despesa{despesasFiltradas.length !== 1 ? "s" : ""} encontrada{despesasFiltradas.length !== 1 ? "s" : ""}
                 {totalFiltrado > 0 && (
                   <span className="ml-1 font-semibold text-foreground">
-                    · Total: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalFiltrado)}
+                    · Total: {formatCurrency(totalFiltrado)}
                   </span>
                 )}
               </p>
@@ -952,7 +952,7 @@ const Despesas = () => {
                                 </TableCell>
                                 <TableCell className="text-right">
                                   <span className="font-semibold text-red-500">
-                                    -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                    {isPrivate ? "R$ ••••••" : `-${formatCurrency(despesa.valor)}`}
                                   </span>
                                 </TableCell>
                                 <TableCell>
@@ -1044,7 +1044,7 @@ const Despesas = () => {
                                         <span className="text-xs text-muted-foreground">{formatarData(despesa.data)}</span>
                                       </div>
                                       <div className="font-semibold text-red-500">
-                                        -R$ {despesa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                        {isPrivate ? "R$ ••••••" : `-${formatCurrency(despesa.valor)}`}
                                       </div>
                                       <div className="flex gap-2">
                                         <Button

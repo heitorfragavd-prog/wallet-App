@@ -11,13 +11,29 @@ vi.mock("react-router-dom", async () => {
 });
 vi.mock("@/shared/components/layouts/DashboardLayout", () => ({ DashboardLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 
+vi.mock("@/contexts/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    activeWorkspace: {
+      id: "ws-1",
+      user_id: "user-1",
+      nome: "Conta Rodo Point",
+      tipo: "PJ",
+      is_default: true,
+      regime_encargos: "mei",
+      piso_categoria: 1681.18,
+      convencao_mte: "MR009846/2026",
+      convencao_fonte_url: "https://mediador.trabalho.gov.br/exemplo",
+    },
+  }),
+}));
+
 const colaborador: Colaborador = {
   id: "colaborador-1",
   nome: "Shuellen Pereira Santos",
   foto_url: null,
   tipo: "funcionario",
   cargo: "Atendente",
-  data_admissao: "2026-05-24",
+  data_admissao: "2026-02-23",
   data_demissao: null,
   salario_bruto: 1621,
   vale_transporte: 0,
@@ -62,6 +78,7 @@ vi.mock("@/domains/finance/components/equipe/AcertoPaymentDialog", () => ({ Acer
 describe("EquipeDetalhePage", () => {
   it("organiza o perfil em abas específicas e lista o acerto pendente", () => {
     render(<EquipeDetalhePage />);
+    expect(screen.getAllByText("Prazo indeterminado").length).toBeGreaterThan(0);
     expect(screen.getByRole("tab", { name: "Visão geral" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Acertos" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Escalas" })).toBeInTheDocument();
@@ -71,6 +88,11 @@ describe("EquipeDetalhePage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Acertos" }));
     expect(screen.getByText("Transporte semanal")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /revisar e pagar/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Financeiro" }));
+    expect(screen.getAllByText(/2\.114,50/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Simulador de desligamento")).toBeInTheDocument();
+    expect(screen.getByText(/diferença informativa de R\$\s*60,18/i)).toBeInTheDocument();
   });
 
   it("mascara dados sensíveis por padrão e só revela com ação explícita", () => {

@@ -1,4 +1,4 @@
-type SummaryLine = { label: string; value: number; tone?: "default" | "accent" };
+type SummaryLine = { label: string; value: number; tone?: "default" | "accent" | "warning" };
 
 const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -9,7 +9,15 @@ export function SettlementSummary({ lines, total }: { lines: SummaryLine[]; tota
         {lines.map((line) => (
           <div className="flex items-center justify-between gap-4 text-sm" key={line.label}>
             <span className="text-muted-foreground">{line.label}</span>
-            <span className={line.tone === "accent" ? "font-semibold text-amber-400" : "font-medium"}>
+            <span
+              className={
+                line.tone === "accent"
+                  ? "font-semibold text-emerald-400"
+                  : line.tone === "warning"
+                    ? "font-semibold text-amber-400"
+                    : "font-medium"
+              }
+            >
               {money.format(line.value)}
             </span>
           </div>

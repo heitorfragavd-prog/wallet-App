@@ -14,12 +14,14 @@ import { Target, Plus, AlertCircle, CheckCircle2, TrendingUp, Edit2, Trash2 } fr
 import { useOrcamentosCategorias } from "@/domains/finance/hooks/useOrcamentosCategorias";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 export const TetoGastosCard: React.FC = () => {
   const mesAtual = new Date().toISOString().substring(0, 7);
   const { orcamentos, loading, upsertOrcamento, deleteOrcamento } = useOrcamentosCategorias(mesAtual);
   const { categoriasDespesa } = useCategorias();
   const { despesas } = useDespesas();
+  const { formatCurrency } = usePrivacy();
 
   const [modalAberto, setModalAberto] = useState(false);
   const [categoriaId, setCategoriaId] = useState("");
@@ -126,7 +128,7 @@ export const TetoGastosCard: React.FC = () => {
 
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">
-                        R$ {gastoReal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} de R$ {Number(o.valor_limite).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                        {formatCurrency(gastoReal)} de {formatCurrency(Number(o.valor_limite))}
                       </span>
                       <button
                         onClick={() => deleteOrcamento(o.id)}

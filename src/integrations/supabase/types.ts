@@ -21,6 +21,11 @@ export type Database = {
           nome: string
           tipo: "PF" | "PJ"
           is_default: boolean
+          regime_encargos: "mei" | "geral"
+          piso_categoria: number | null
+          piso_vigencia_inicio: string | null
+          convencao_mte: string | null
+          convencao_fonte_url: string | null
           created_at: string
           updated_at: string
         }
@@ -30,6 +35,11 @@ export type Database = {
           nome: string
           tipo?: "PF" | "PJ"
           is_default?: boolean
+          regime_encargos?: "mei" | "geral"
+          piso_categoria?: number | null
+          piso_vigencia_inicio?: string | null
+          convencao_mte?: string | null
+          convencao_fonte_url?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -39,6 +49,11 @@ export type Database = {
           nome?: string
           tipo?: "PF" | "PJ"
           is_default?: boolean
+          regime_encargos?: "mei" | "geral"
+          piso_categoria?: number | null
+          piso_vigencia_inicio?: string | null
+          convencao_mte?: string | null
+          convencao_fonte_url?: string | null
           created_at?: string
           updated_at?: string
         }

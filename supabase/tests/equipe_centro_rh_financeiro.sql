@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(56);
+select plan(60);
 
 select has_table('public', 'workspace_members', 'workspace_members existe');
 select has_table('public', 'colaborador_acertos', 'colaborador_acertos existe');
@@ -366,6 +366,11 @@ select results_eq(
   $$values ('2026-10-25'::date)$$,
   'Pro labore da Viviane vence dia 25'
 );
+
+select has_column('public', 'workspaces', 'regime_encargos', 'Workspace guarda o regime de encargos');
+select has_column('public', 'workspaces', 'piso_categoria', 'Workspace guarda o piso coletivo');
+select has_column('public', 'workspaces', 'convencao_mte', 'Workspace guarda a referencia da CCT');
+select col_has_check('public', 'workspaces', 'regime_encargos', 'Regime aceita somente valores conhecidos');
 
 reset role;
 select * from finish();

@@ -2,16 +2,20 @@ import { useState } from "react";
 import { ArrowLeft, Banknote, BriefcaseBusiness, CalendarDays, CircleDollarSign, Clock3, Pencil, Plus, ShieldAlert, UserRound } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { AcertoPaymentDialog } from "@/domains/finance/components/equipe/AcertoPaymentDialog";
 import { AcertoSemanalFolguista } from "@/domains/finance/components/equipe/AcertoSemanalFolguista";
 import { AcertoSemanalFuncionario } from "@/domains/finance/components/equipe/AcertoSemanalFuncionario";
+import { EmployeeCostBreakdown } from "@/domains/finance/components/equipe/EmployeeCostBreakdown";
 import { SensitiveValue } from "@/domains/finance/components/equipe/SensitiveValue";
 import { SettlementStatusBadge } from "@/domains/finance/components/equipe/SettlementStatusBadge";
+import { TerminationSimulator } from "@/domains/finance/components/equipe/TerminationSimulator";
 import { useColaboradorCalculos } from "@/domains/finance/hooks/useColaboradorCalculos";
 import { useColaboradorCustos } from "@/domains/finance/hooks/useColaboradorCustos";
 import { useColaboradorPresencas } from "@/domains/finance/hooks/useColaboradorPresencas";
 import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
 import { type EquipeAcerto, useEquipeAcertos } from "@/domains/finance/hooks/useEquipeAcertos";
+import { decimalParaCentavos } from "@/domains/finance/services/equipeCalculations";
 import { maskBankAccount, maskCpf, maskPixKey } from "@/domains/finance/services/equipePrivacy";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/components/ui/avatar";
 import { Badge } from "@/shared/components/ui/badge";
@@ -41,13 +45,20 @@ function MetricCard({ label, value, detail, icon: Icon, tone = "text-primary" }:
 export default function EquipeDetalhePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { activeWorkspace } = useWorkspace();
   const monthRef = new Date().toISOString().slice(0, 7);
   const { data: colaboradores, isLoading } = useColaboradores();
   const colaborador = colaboradores?.find((item) => item.id === id) ?? null;
   const { data: custos = [] } = useColaboradorCustos(id || null, monthRef);
   const { data: presencas = [] } = useColaboradorPresencas(id || null, monthRef);
   const acertosQuery = useEquipeAcertos(id || null);
-  const calc = useColaboradorCalculos(colaborador, custos, presencas, monthRef);
+  const calc = useColaboradorCalculos(
+    colaborador,
+    custos,
+    presencas,
+    monthRef,
+    activeWorkspace?.regime_encargos ?? "geral",
+  );
   const [paymentAcerto, setPaymentAcerto] = useState<EquipeAcerto | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -56,6 +67,7 @@ export default function EquipeDetalhePage() {
 
   const isSocio = colaborador.tipo === "socio";
   const isFolguista = colaborador.tipo === "folguista";
+  const isFuncionario = colaborador.tipo === "funcionario";
   const acertos = acertosQuery.data ?? [];
   const primaryAmount = isSocio ? Number(colaborador.valor_pro_labore) || Number(colaborador.salario_bruto) : isFolguista ? Number(colaborador.valor_diaria) || 0 : Number(colaborador.salario_bruto) || 0;
 
@@ -67,7 +79,22 @@ export default function EquipeDetalhePage() {
           <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
             <Button aria-label="Voltar" variant="ghost" size="icon" onClick={() => navigate("/equipe")}><ArrowLeft className="h-5 w-5" /></Button>
             <Avatar className="h-16 w-16 border border-border/70"><AvatarImage src={colaborador.foto_url || undefined} className="object-cover" style={{ objectPosition: colaborador.foto_posicao || "50% 15%" }} /><AvatarFallback className="bg-primary/15 text-xl font-bold text-primary">{colaborador.nome.split(" ").map((name) => name[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
-            <div className="min-w-0 flex-1"><h1 className="truncate text-2xl font-bold">{colaborador.nome}</h1><div className="mt-2 flex flex-wrap items-center gap-2"><Badge variant="outline">{labels[colaborador.tipo]}</Badge><span className="text-sm text-muted-foreground">{colaborador.cargo || "Cargo não informado"}</span>{colaborador.status === "experiencia" && <Badge className="bg-amber-500/15 text-amber-300">Em experiência</Badge>}</div></div>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-2xl font-bold">{colaborador.nome}</h1>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{labels[colaborador.tipo]}</Badge>
+                <span className="text-sm text-muted-foreground">{colaborador.cargo || "Cargo não informado"}</span>
+                {isFuncionario && calc.estadoContrato.estado === "indeterminado" && (
+                  <Badge className="bg-emerald-500/15 text-emerald-300">Prazo indeterminado</Badge>
+                )}
+                {isFuncionario && calc.estadoContrato.estado === "experiencia" && (
+                  <Badge className="bg-amber-500/15 text-amber-300">Em experiência</Badge>
+                )}
+                {isFuncionario && calc.estadoContrato.estado === "decisao" && (
+                  <Badge className="bg-rose-500/15 text-rose-300">Decisão de experiência</Badge>
+                )}
+              </div>
+            </div>
             <Button variant="outline" onClick={() => navigate(`/equipe/${id}/editar`)}><Pencil className="mr-2 h-4 w-4" />Editar perfil</Button>
           </div>
         </header>
@@ -81,8 +108,12 @@ export default function EquipeDetalhePage() {
               <MetricCard label="Custo estimado" value={money.format(calc.custoRealMensal)} detail="Mesma regra usada no painel" icon={CircleDollarSign} tone="text-emerald-400" />
               <MetricCard label="Custo por dia" value={money.format(calc.custoPorDia)} detail={isFolguista ? "Valor por escala" : `${calc.diasUteisMes} dias de referência`} icon={Clock3} tone="text-sky-400" />
             </div>
-            {calc.diasParaFimExperiencia !== null && calc.diasParaFimExperiencia <= 15 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300"><strong>Contrato de experiência:</strong> faltam {calc.diasParaFimExperiencia} dias para a decisão.</div>}
-            <Card className="border-border/50 bg-card/70"><CardContent className="grid gap-4 p-5 sm:grid-cols-2"><div><p className="text-xs text-muted-foreground">Admissão</p><p className="mt-1 font-medium">{colaborador.data_admissao ? formatDate(colaborador.data_admissao) : "Não informada"}</p></div><div><p className="text-xs text-muted-foreground">Status</p><p className="mt-1 font-medium capitalize">{colaborador.status || "Ativo"}</p></div><div><p className="text-xs text-muted-foreground">Pix</p><p className={colaborador.pix_chave ? "mt-1 text-emerald-400" : "mt-1 text-amber-400"}>{colaborador.pix_chave ? "Cadastrado e protegido" : "Pendente"}</p></div><div><p className="text-xs text-muted-foreground">Obrigações abertas</p><p className="mt-1 font-medium">{acertos.filter((item) => ["pendente", "processando", "falhou"].includes(item.status)).length}</p></div></CardContent></Card>
+            {calc.estadoContrato.estado === "experiencia" && calc.diasParaFimExperiencia !== null && calc.diasParaFimExperiencia <= 15 && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300">
+                <strong>Contrato de experiência:</strong> faltam {calc.diasParaFimExperiencia} dias para a decisão.
+              </div>
+            )}
+            <Card className="border-border/50 bg-card/70"><CardContent className="grid gap-4 p-5 sm:grid-cols-2"><div><p className="text-xs text-muted-foreground">Admissão</p><p className="mt-1 font-medium">{colaborador.data_admissao ? formatDate(colaborador.data_admissao) : "Não informada"}</p></div><div><p className="text-xs text-muted-foreground">Status</p><p className="mt-1 font-medium capitalize">{isFuncionario && calc.estadoContrato.estado === "indeterminado" ? "Prazo indeterminado" : colaborador.status || "Ativo"}</p></div><div><p className="text-xs text-muted-foreground">Pix</p><p className={colaborador.pix_chave ? "mt-1 text-emerald-400" : "mt-1 text-amber-400"}>{colaborador.pix_chave ? "Cadastrado e protegido" : "Pendente"}</p></div><div><p className="text-xs text-muted-foreground">Obrigações abertas</p><p className="mt-1 font-medium">{acertos.filter((item) => ["pendente", "processando", "falhou"].includes(item.status)).length}</p></div></CardContent></Card>
           </TabsContent>
 
           <TabsContent value="settlements" className="space-y-3">
@@ -92,12 +123,51 @@ export default function EquipeDetalhePage() {
           </TabsContent>
 
           <TabsContent value="schedules" className="space-y-4">
-            {isSocio ? <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">Sócios não usam escala semanal.</div> : isFolguista ? <AcertoSemanalFolguista colaboradorId={colaborador.id} colaboradorNome={colaborador.nome} valorDiaria={Number(colaborador.valor_diaria) || 100} /> : <AcertoSemanalFuncionario colaboradorId={colaborador.id} colaboradorNome={colaborador.nome} valorPassagem={Number(colaborador.valor_passagem) || 6.25} />}
+            {isSocio ? (
+              <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">Sócios não usam escala semanal.</div>
+            ) : isFolguista ? (
+              <AcertoSemanalFolguista colaboradorId={colaborador.id} colaboradorNome={colaborador.nome} valorDiaria={Number(colaborador.valor_diaria) || 100} />
+            ) : (
+              <AcertoSemanalFuncionario
+                colaboradorId={colaborador.id}
+                colaboradorNome={colaborador.nome}
+                valorPassagem={Number(colaborador.valor_passagem) || 6.25}
+                pixChave={colaborador.pix_chave}
+                pixTipo={colaborador.pix_tipo}
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="finance" className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><MetricCard label="Base mensal" value={money.format(primaryAmount)} detail={labels[colaborador.tipo]} icon={BriefcaseBusiness} /><MetricCard label="Transporte" value={money.format(calc.valeTransporte)} detail="Acertos agrupados" icon={CalendarDays} tone="text-sky-400" /><MetricCard label="Benefícios" value={money.format(calc.valeRefeicao + calc.outrosBeneficios)} detail="Refeição e outros" icon={Plus} tone="text-violet-400" /><MetricCard label="Total estimado" value={money.format(calc.custoRealMensal)} detail="Sem taxa Divipay" icon={CircleDollarSign} tone="text-emerald-400" /></div>
-            {!isSocio && !isFolguista && <Card className="border-border/50 bg-card/70"><CardContent className="space-y-2 p-5 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">INSS patronal</span><span>{money.format(calc.inssEmpresa)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">FGTS</span><span>{money.format(calc.fgts)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">13º provisionado</span><span>{money.format(calc.decimoTerceiroProvisao)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Férias provisionadas</span><span>{money.format(calc.feriasProvisao)}</span></div></CardContent></Card>}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard label="Base mensal" value={money.format(primaryAmount)} detail={labels[colaborador.tipo]} icon={BriefcaseBusiness} />
+              <MetricCard label="Transporte" value={money.format(calc.valeTransporte)} detail="Acertos agrupados" icon={CalendarDays} tone="text-sky-400" />
+              <MetricCard label="Benefícios" value={money.format(calc.valeRefeicao + calc.outrosBeneficios)} detail="Refeição e outros" icon={Plus} tone="text-violet-400" />
+              <MetricCard label="Total estimado" value={money.format(calc.custoRealMensal)} detail="Sem taxa Divipay" icon={CircleDollarSign} tone="text-emerald-400" />
+            </div>
+
+            {isFuncionario && (
+              <>
+                <EmployeeCostBreakdown
+                  salarioCentavos={decimalParaCentavos(colaborador.salario_bruto || 0)}
+                  inssEmpresaCentavos={decimalParaCentavos(calc.inssEmpresa)}
+                  fgtsCentavos={decimalParaCentavos(calc.fgts)}
+                  decimoTerceiroCentavos={decimalParaCentavos(calc.decimoTerceiroProvisao)}
+                  feriasCentavos={decimalParaCentavos(calc.feriasProvisao)}
+                  pisoCategoriaCentavos={activeWorkspace?.piso_categoria ? decimalParaCentavos(activeWorkspace.piso_categoria) : null}
+                  convencaoMte={activeWorkspace?.convencao_mte}
+                  fonteUrl={activeWorkspace?.convencao_fonte_url}
+                />
+                {calc.estadoContrato.estado === "indeterminado" && (
+                  <TerminationSimulator
+                    dataAdmissao={colaborador.data_admissao || new Date().toISOString().slice(0, 10)}
+                    salarioCentavos={decimalParaCentavos(colaborador.salario_bruto || 0)}
+                    fgtsHistoricoEstimadoCentavos={decimalParaCentavos(calc.fgts * 10)}
+                  />
+                )}
+              </>
+            )}
+
             <Button onClick={() => navigate(`/equipe/${id}/custo/novo`)}><Plus className="mr-2 h-4 w-4" />Lançar vale ou ajuste</Button>
           </TabsContent>
 

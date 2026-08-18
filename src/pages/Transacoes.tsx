@@ -37,6 +37,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 // Função para formatar data
 const formatarData = (dataString: string) => {
@@ -95,6 +96,7 @@ const getDataUltimos90Dias = () => {
 };
 
 const Transacoes = () => {
+  const { isPrivate, formatCurrency } = usePrivacy();
   const { transacoes, loading } = useTransacoes();
 
   // Filtros básicos
@@ -286,7 +288,7 @@ const Transacoes = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-green-500">
-                      R$ {statsToShow.receitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(statsToShow.receitas)}
                     </p>
                   )}
                 </div>
@@ -308,7 +310,7 @@ const Transacoes = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-red-500">
-                      R$ {statsToShow.despesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(statsToShow.despesas)}
                     </p>
                   )}
                 </div>
@@ -330,7 +332,7 @@ const Transacoes = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className={`text-2xl font-bold ${statsToShow.saldo >= 0 ? "text-blue-500" : "text-orange-500"}`}>
-                      R$ {statsToShow.saldo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(statsToShow.saldo)}
                     </p>
                   )}
                 </div>
@@ -693,7 +695,9 @@ const Transacoes = () => {
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={`font-semibold ${transacao.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
-                            {transacao.tipo === "receita" ? "+" : "-"}R$ {transacao.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            {isPrivate
+                              ? "R$ ••••••"
+                              : `${transacao.tipo === "receita" ? "+" : "-"}${formatCurrency(transacao.valor)}`}
                           </span>
                         </TableCell>
                       </TableRow>
@@ -755,7 +759,9 @@ const Transacoes = () => {
                                   <span className="text-xs text-muted-foreground">{formatarData(transacao.data)}</span>
                                 </div>
                                 <div className={`font-semibold ${transacao.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
-                                  {transacao.tipo === "receita" ? "+" : "-"}R$ {transacao.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  {isPrivate
+                                    ? "R$ ••••••"
+                                    : `${transacao.tipo === "receita" ? "+" : "-"}${formatCurrency(transacao.valor)}`}
                                 </div>
                               </div>
                             </div>

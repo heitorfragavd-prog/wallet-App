@@ -1,5 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { AiAuthorizationError, authorizeAiRequest } from "../_shared/ai/auth.ts";
+import {
+  createSupabaseAuthorizationDependencies,
+  type SupabaseClientLike,
+} from "../wallet-ai-query/supabase-adapter.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,39 +13,32 @@ const corsHeaders = {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
   try {
+    const { pergunta, workspaceId } = await req.json();
+    if (typeof pergunta !== "string" || !pergunta.trim() || typeof workspaceId !== "string") {
+      return new Response(JSON.stringify({ resposta: "Requisição inválida." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    
-    // CORREÇÃO: Extrair e validar userId do JWT do header Authorization
-    // NÃO aceitar userId do body da requisição (previne IDOR)
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Missing authorization header" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    
-    // Validar JWT usando Supabase Auth
-    const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
-    const jwt = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
-    
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Invalid or expired token" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-    
-    const userId = user.id; // ID validado pelo Supabase Auth, NÃO do body
-    
-    const { pergunta } = await req.json();
-    
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false },
+    });
+    const authorizationDependencies = createSupabaseAuthorizationDependencies(
+      supabaseAdmin as unknown as SupabaseClientLike,
+    );
+    const context = await authorizeAiRequest(req, workspaceId, authorizationDependencies);
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 
     const inicioMes = new Date().toISOString().slice(0, 7) + "-01";
 
     const [receitas, despesas, saldo] = await Promise.all([
-      supabaseAdmin.from("receitas").select("valor, descricao, data").eq("user_id", userId).gte("data", inicioMes),
-      supabaseAdmin.from("despesas").select("valor, descricao, data").eq("user_id", userId).gte("data", inicioMes),
-      supabaseAdmin.from("contas_usuario").select("saldo_atual").eq("user_id", userId),
+      supabaseAdmin.from("receitas").select("valor, descricao, data").eq("user_id", context.userId).eq("workspace_id", context.workspaceId).gte("data", inicioMes),
+      supabaseAdmin.from("despesas").select("valor, descricao, data").eq("user_id", context.userId).eq("workspace_id", context.workspaceId).gte("data", inicioMes),
+      supabaseAdmin.from("contas_usuario").select("saldo_atual").eq("user_id", context.userId).eq("workspace_id", context.workspaceId),
     ]);
 
     const totalReceitas = (receitas.data || []).reduce((a, r) => a + (r.valor || 0), 0);
@@ -59,7 +57,10 @@ Responda de forma natural, amigavel e objetiva em portugues do Brasil.`;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         model: "gpt-3.5-turbo",
         messages: [
@@ -74,8 +75,19 @@ Responda de forma natural, amigavel e objetiva em portugues do Brasil.`;
     const data = await response.json();
     const resposta = data.choices[0].message.content;
 
-    return new Response(JSON.stringify({ resposta }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  } catch {
-    return new Response(JSON.stringify({ resposta: "Desculpe, ocorreu um erro. Tente novamente." }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ resposta }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    if (error instanceof AiAuthorizationError) {
+      return new Response(JSON.stringify({ resposta: error.message }), {
+        status: error.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ resposta: "Desculpe, ocorreu um erro. Tente novamente." }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

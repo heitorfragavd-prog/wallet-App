@@ -3,12 +3,45 @@ import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
+interface FinancialDebtContext {
+  descricao?: string;
+  valor_total?: number;
+  valor_pago?: number;
+  data_vencimento?: string;
+  status?: string;
+}
+
+interface FinancialAccountContext {
+  id: string;
+  nome: string;
+  saldo_atual: number;
+  tipo: string;
+}
+
+interface StockItemContext {
+  quantidade_estoque?: number;
+  quantidade_ideal?: number;
+  status?: string;
+}
+
+interface GoalContext {
+  nome?: string;
+  titulo?: string;
+  valor_alvo?: number;
+  valor_atual?: number;
+  status?: string;
+}
+
+interface VehicleContext {
+  manutencoes?: Array<{ status?: string }>;
+}
+
 export interface FinancialContext {
   dividas: {
     totalPendente: number;
     totalVencido: number;
     totalQuitado: number;
-    proximosVencimentos: any[];
+    proximosVencimentos: FinancialDebtContext[];
   };
   receitas: {
     totalMes: number;
@@ -22,24 +55,24 @@ export interface FinancialContext {
   };
   contas: {
     saldoTotal: number;
-    contas: any[];
+    contas: FinancialAccountContext[];
   };
   eyemobile: {
     vendasHoje: number;
     vendasMes: number;
-    produtosBaixoEstoque: any[];
+    produtosBaixoEstoque: StockItemContext[];
   };
   divipay: {
     saldoDisponivel: number;
     saquesPendentes: number;
   };
   metas: {
-    ativas: any[];
+    ativas: GoalContext[];
     progresso: number;
   };
   veiculos: {
     totalManutencaoPendente: number;
-    veiculos: any[];
+    veiculos: VehicleContext[];
   };
   investimentos: {
     posicaoAtual: number;
@@ -56,36 +89,30 @@ export const useFinancialContext = () => {
 
   const buildContext = useCallback(async () => {
     setLoading(true);
+    if (!workspaceId) {
+      setContextData(null);
+      setContextText("Selecione um workspace para consultar dados financeiros.");
+      setLoading(false);
+      return;
+    }
     try {
       const hoje = new Date();
       const hojeIso = hoje.toISOString().split("T")[0];
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split("T")[0];
 
       // Construir as queries base do Supabase
-      let qDividas = supabase.from("dividas").select("*");
-      let qReceitas = supabase.from("receitas").select("*, categorias!categoria_id(nome)");
-      let qDespesas = supabase.from("despesas").select("*, categorias!categoria_id(nome)");
-      let qTransacoes = supabase.from("transacoes").select("*, categorias!categoria_id(nome)");
-      let qContas = supabase.from("contas_usuario").select("*");
-      let qEyemobileLogs = supabase.from("eyemobile_sync_logs").select("*").order("created_at", { ascending: false }).limit(5);
-      let qVeiculos = supabase.from("veiculos").select("*, manutencoes(*)");
-      let qInvestimentos = supabase.from("investimentos").select("*");
-      let qRendimentos = supabase.from("historico_rendimentos").select("*").eq("ano", hoje.getFullYear()).eq("mes", hoje.getMonth() + 1);
-      let qItensMercado = supabase.from("itens_mercado").select("*, categorias_mercado(nome)");
-      let qDivipayTransacoes = supabase.from("divipay_transacoes").select("*").eq("type", "withdraw").eq("status", "pending");
-      let qMetas = supabase.from("metas").select("*");
-
-      // Filtrar pelo workspace ativo se estiver presente para evitar conflito de dados entre contas
-      if (workspaceId) {
-        qDividas = qDividas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qReceitas = qReceitas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qDespesas = qDespesas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qTransacoes = qTransacoes.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qContas = qContas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qMetas = qMetas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qVeiculos = qVeiculos.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        qInvestimentos = qInvestimentos.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-      }
+      const qDividas = supabase.from("dividas").select("*").eq("workspace_id", workspaceId);
+      const qReceitas = supabase.from("receitas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qDespesas = supabase.from("despesas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qTransacoes = supabase.from("transacoes").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qContas = supabase.from("contas_usuario").select("*").eq("workspace_id", workspaceId);
+      const qEyemobileLogs = supabase.from("eyemobile_sync_logs").select("*").order("created_at", { ascending: false }).limit(5);
+      const qVeiculos = supabase.from("veiculos").select("*, manutencoes(*)").eq("workspace_id", workspaceId);
+      const qInvestimentos = supabase.from("investimentos").select("*").eq("workspace_id", workspaceId);
+      const qRendimentos = supabase.from("historico_rendimentos").select("*").eq("ano", hoje.getFullYear()).eq("mes", hoje.getMonth() + 1);
+      const qItensMercado = supabase.from("itens_mercado").select("*, categorias_mercado(nome)").eq("workspace_id", workspaceId);
+      const qDivipayTransacoes = supabase.from("divipay_transacoes").select("*").eq("type", "withdraw").eq("status", "pending");
+      const qMetas = supabase.from("metas").select("*");
 
       const [
         { data: resDividas },
@@ -172,8 +199,14 @@ export const useFinancialContext = () => {
         .sort((a, b) => b.valor - a.valor);
 
       // ─── CONTAS BANCÁRIAS ───
-      const contasRaw = resContas || [];
-      const contasMapped = contasRaw.map((c: any) => ({
+      const contasRaw = (resContas || []) as unknown as Array<{
+        id: string;
+        nome: string;
+        saldo_atual?: number;
+        saldo?: number;
+        tipo: string;
+      }>;
+      const contasMapped = contasRaw.map((c) => ({
         id: c.id,
         nome: c.nome,
         saldo_atual: Number(c.saldo_atual ?? c.saldo ?? 0),
@@ -190,8 +223,8 @@ export const useFinancialContext = () => {
       const vendasMes = receitasList
         .filter(r => r.data >= inicioMes && r.data <= hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String(r.origem || "").toLowerCase().includes("eyemobile")))
         .reduce((sum, r) => sum + Number(r.valor || 0), 0);
-      const produtosBaixoEstoque = (resItensMercado || [])
-        .filter((item: any) => Number(item.quantidade_estoque || 0) <= Number(item.quantidade_ideal || 0) || item.status === "baixo");
+      const produtosBaixoEstoque = ((resItensMercado || []) as unknown as StockItemContext[])
+        .filter((item) => Number(item.quantidade_estoque || 0) <= Number(item.quantidade_ideal || 0) || item.status === "baixo");
 
       // ─── DIVIPAY ───
       const divipayConta = contasMapped.find(c => c.nome.toLowerCase().includes("divipay"));
@@ -206,9 +239,9 @@ export const useFinancialContext = () => {
         : 0;
 
       // ─── VEÍCULOS ───
-      const veiculosList = resVeiculos || [];
+      const veiculosList = (resVeiculos || []) as unknown as VehicleContext[];
       const totalManutencaoPendente = veiculosList.reduce((sum, v) => {
-        const pendentes = (v.manutencoes || []).filter((m: any) => m.status === "pendente").length;
+        const pendentes = (v.manutencoes || []).filter((m) => m.status === "pendente").length;
         return sum + pendentes;
       }, 0);
 
@@ -318,7 +351,7 @@ export const useFinancialContext = () => {
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, activeWorkspace]);
 
   useEffect(() => {
     buildContext();

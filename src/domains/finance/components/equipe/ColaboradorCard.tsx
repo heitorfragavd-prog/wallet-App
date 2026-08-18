@@ -1,7 +1,13 @@
 import { AlertTriangle, CalendarDays, ChevronRight, Pencil, WalletCards } from "lucide-react";
 
 import type { Colaborador } from "@/domains/finance/hooks/useColaboradores";
-import { calcularCustoColaborador, calcularFimExperiencia, centavosParaDecimal, decimalParaCentavos } from "@/domains/finance/services/equipeCalculations";
+import {
+  calcularCustoColaborador,
+  centavosParaDecimal,
+  decimalParaCentavos,
+  type RegimeEncargos,
+  resolverEstadoContrato,
+} from "@/domains/finance/services/equipeCalculations";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/components/ui/avatar";
 import { Badge } from "@/shared/components/ui/badge";
 import { Button } from "@/shared/components/ui/button";
@@ -11,10 +17,11 @@ const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL
 
 const typeLabels = { socio: "Sócio", funcionario: "Funcionário", folguista: "Folguista" } as const;
 
-export function colaboradorMonthlyCost(colaborador: Colaborador): number {
+export function colaboradorMonthlyCost(colaborador: Colaborador, regimeEncargos: RegimeEncargos = "geral"): number {
   const salary = Number(colaborador.salario_bruto) || 0;
   const result = calcularCustoColaborador({
     tipo: colaborador.tipo,
+    regimeEncargos,
     salarioCentavos: decimalParaCentavos(salary),
     proLaboreCentavos: decimalParaCentavos(colaborador.valor_pro_labore || salary),
     transporteCentavos: decimalParaCentavos(Number(colaborador.vale_transporte) || 0),
@@ -25,19 +32,34 @@ export function colaboradorMonthlyCost(colaborador: Colaborador): number {
 }
 
 function experienceMessage(colaborador: Colaborador): string | null {
-  if (colaborador.tipo !== "funcionario" || colaborador.status !== "experiencia" || !colaborador.data_admissao) return null;
-  const end = calcularFimExperiencia(colaborador.data_admissao, colaborador.dias_experiencia || 90);
-  const endTime = Date.parse(`${end}T00:00:00Z`);
-  const now = new Date();
-  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  const days = Math.max(0, Math.ceil((endTime - today) / 86_400_000));
-  if (days > 15) return null;
-  return `Experiência termina em ${days} dia${days === 1 ? "" : "s"}`;
+  if (colaborador.tipo !== "funcionario" || !colaborador.data_admissao) return null;
+  const estado = resolverEstadoContrato({
+    statusPersistido: colaborador.status,
+    dataAdmissao: colaborador.data_admissao,
+    diasExperiencia: colaborador.dias_experiencia || 90,
+  });
+  if (estado.estado === "experiencia" && estado.diasRestantes <= 15) {
+    return `Experiência termina em ${estado.diasRestantes} dia${estado.diasRestantes === 1 ? "" : "s"}`;
+  }
+  if (estado.estado === "decisao") {
+    return "Decisão de experiência hoje";
+  }
+  return null;
 }
 
-export function ColaboradorCard({ colaborador, onOpen, onEdit }: { colaborador: Colaborador; onOpen: () => void; onEdit: () => void }) {
+export function ColaboradorCard({
+  colaborador,
+  regimeEncargos = "geral",
+  onOpen,
+  onEdit,
+}: {
+  colaborador: Colaborador;
+  regimeEncargos?: RegimeEncargos;
+  onOpen: () => void;
+  onEdit: () => void;
+}) {
   const experience = experienceMessage(colaborador);
-  const cost = colaboradorMonthlyCost(colaborador);
+  const cost = colaboradorMonthlyCost(colaborador, regimeEncargos);
   const principal = colaborador.tipo === "folguista"
     ? `Diária ${money.format(Number(colaborador.valor_diaria) || 0)}`
     : colaborador.tipo === "socio"

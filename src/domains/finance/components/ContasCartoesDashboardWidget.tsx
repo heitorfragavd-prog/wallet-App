@@ -12,13 +12,14 @@ import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 export const ContasCartoesDashboardWidget: React.FC = () => {
   const navigate = useNavigate();
   const { contas, loading, saldoConsolidado } = useContasUsuario();
   const { dividas } = useDividas();
   const { despesas } = useDespesas();
-  const [esconderValores, setEsconderValores] = useState(false);
+  const { isPrivate: esconderValores, togglePrivacy } = usePrivacy();
   const [cartaoFatura, setCartaoFatura] = useState<ContaUsuario | null>(null);
   const [modalFaturaAberto, setModalFaturaAberto] = useState(false);
 
@@ -73,7 +74,7 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setEsconderValores(!esconderValores)}
+                  onClick={togglePrivacy}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                   title={esconderValores ? "Mostrar valores" : "Esconder valores"}
                 >
@@ -169,7 +170,7 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setEsconderValores(!esconderValores)}
+                  onClick={togglePrivacy}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                   title={esconderValores ? "Mostrar valores" : "Esconder valores"}
                 >

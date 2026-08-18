@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { Plus, RefreshCw, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ColaboradorCard, colaboradorMonthlyCost } from "@/domains/finance/components/equipe/ColaboradorCard";
 import { EquipeSummaryCards } from "@/domains/finance/components/equipe/EquipeSummaryCards";
 import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
 import { useEquipeObrigacoesMensais } from "@/domains/finance/hooks/useEquipeObrigacoesMensais";
 import { useEquipeResumo } from "@/domains/finance/hooks/useEquipeResumo";
-import { calcularFimExperiencia } from "@/domains/finance/services/equipeCalculations";
+import { resolverEstadoContrato } from "@/domains/finance/services/equipeCalculations";
 import { Button } from "@/shared/components/ui/button";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 
@@ -20,17 +21,9 @@ const filterLabels: Array<{ value: Filter; label: string }> = [
   { value: "folguista", label: "Folguistas" },
 ];
 
-function experienceNeedsAttention(admission: string | null, days = 90): boolean {
-  if (!admission) return false;
-  const end = Date.parse(`${calcularFimExperiencia(admission, days)}T00:00:00Z`);
-  const now = new Date();
-  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  const remaining = Math.ceil((end - today) / 86_400_000);
-  return remaining >= 0 && remaining <= 15;
-}
-
 export default function EquipePage() {
   const navigate = useNavigate();
+  const { activeWorkspace } = useWorkspace();
   const [filter, setFilter] = useState<Filter>("todos");
   const colaboradoresQuery = useColaboradores();
   const obligationsQuery = useEquipeObrigacoesMensais();
@@ -38,14 +31,24 @@ export default function EquipePage() {
   const colaboradores = colaboradoresQuery.data ?? [];
   const resumo = resumoQuery.data;
 
+  const regimeEncargos = activeWorkspace?.regime_encargos ?? "geral";
+
   const counts = useMemo(() => ({
     socio: colaboradores.filter((item) => item.tipo === "socio").length,
     funcionario: colaboradores.filter((item) => item.tipo === "funcionario").length,
     folguista: colaboradores.filter((item) => item.tipo === "folguista").length,
   }), [colaboradores]);
   const filtered = useMemo(() => colaboradores.filter((item) => filter === "todos" || item.tipo === filter), [colaboradores, filter]);
-  const custoMensal = useMemo(() => colaboradores.reduce((total, item) => total + colaboradorMonthlyCost(item), 0), [colaboradores]);
-  const experiencias = colaboradores.filter((item) => item.status === "experiencia" && experienceNeedsAttention(item.data_admissao, item.dias_experiencia)).length;
+  const custoMensal = useMemo(() => colaboradores.reduce((total, item) => total + colaboradorMonthlyCost(item, regimeEncargos), 0), [colaboradores, regimeEncargos]);
+  const experiencias = colaboradores.filter((item) => {
+    if (item.tipo !== "funcionario" || !item.data_admissao) return false;
+    const est = resolverEstadoContrato({
+      statusPersistido: item.status,
+      dataAdmissao: item.data_admissao,
+      diasExperiencia: item.dias_experiencia || 90,
+    });
+    return (est.estado === "experiencia" && est.diasRestantes <= 15) || est.estado === "decisao";
+  }).length;
 
   return (
     <DashboardLayout>
@@ -89,7 +92,15 @@ export default function EquipePage() {
             <div className="rounded-2xl border border-dashed border-border p-12 text-center"><Users className="mx-auto h-10 w-10 text-muted-foreground/40" /><p className="mt-3 font-medium">Nenhum integrante neste filtro</p><p className="mt-1 text-sm text-muted-foreground">Cadastre uma pessoa ou escolha outro tipo.</p></div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {filtered.map((colaborador) => <ColaboradorCard key={colaborador.id} colaborador={colaborador} onOpen={() => navigate(`/equipe/${colaborador.id}`)} onEdit={() => navigate(`/equipe/${colaborador.id}/editar`)} />)}
+              {filtered.map((colaborador) => (
+                <ColaboradorCard
+                  key={colaborador.id}
+                  colaborador={colaborador}
+                  regimeEncargos={regimeEncargos}
+                  onOpen={() => navigate(`/equipe/${colaborador.id}`)}
+                  onEdit={() => navigate(`/equipe/${colaborador.id}/editar`)}
+                />
+              ))}
             </div>
           )}
         </section>

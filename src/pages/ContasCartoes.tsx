@@ -61,6 +61,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/components/ui
 import { InvestimentosView } from "@/domains/finance/components/InvestimentosView";
 import { useSenhaInvestimentos } from "@/domains/finance/hooks/useSenhaInvestimentos";
 import { InvestimentoSenhaModal } from "@/domains/finance/components/InvestimentoSenhaModal";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 const TIPO_LABELS: Record<string, string> = {
   conta_corrente: "Conta Corrente",
@@ -79,6 +80,7 @@ const TIPO_ICONS: Record<string, ElementType> = {
 };
 
 export default function ContasCartoes() {
+  const { isPrivate, formatCurrency } = usePrivacy();
   const { contas, loading, saldoConsolidado, cartoesCredito, createConta, updateConta, deleteConta } = useContasUsuario();
   const { dividas = [] } = useDividas();
   const { despesas = [] } = useDespesas();
@@ -349,7 +351,7 @@ export default function ContasCartoes() {
                     <div>
                       <p className="text-xs text-slate-400 font-medium">Saldo Consolidado</p>
                       <p className="text-2xl font-black text-white tracking-tight mt-1">
-                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(saldoConsolidado)}
+                        {formatCurrency(saldoConsolidado)}
                       </p>
                     </div>
                     <div className="bg-blue-600/20 border border-blue-500/30 p-2.5 rounded-xl text-blue-400">
@@ -365,11 +367,11 @@ export default function ContasCartoes() {
                     <div>
                       <p className="text-xs text-slate-400 font-medium">Limite de Crédito Total</p>
                       <p className="text-2xl font-black text-white tracking-tight mt-1">
-                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteMaximo)}
+                        {formatCurrency(totalLimiteMaximo)}
                       </p>
                       {totalUsadoGeralCartoes > 0 && (
                         <p className="text-[11px] text-slate-400 font-medium mt-1">
-                          Disponível: <span className="text-emerald-400 font-bold">{new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalLimiteDisponivelGeral)}</span>
+                          Disponível: <span className="text-emerald-400 font-bold">{formatCurrency(totalLimiteDisponivelGeral)}</span>
                         </p>
                       )}
                     </div>
@@ -541,7 +543,7 @@ export default function ContasCartoes() {
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-slate-400 font-medium">Limite Total</span>
                             <span className="font-extrabold text-emerald-400 text-base">
-                              {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(limiteTotal)}
+                              {formatCurrency(limiteTotal)}
                             </span>
                           </div>
 
@@ -549,7 +551,7 @@ export default function ContasCartoes() {
                             <div className="flex items-center justify-between text-[11px] text-slate-400">
                               <span>Fatura Atual / Usado</span>
                               <span className="font-bold text-rose-400 text-sm">
-                                {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalFaturaUsado)}
+                                {formatCurrency(totalFaturaUsado)}
                               </span>
                             </div>
                             {limiteTotal > 0 && (
@@ -569,7 +571,7 @@ export default function ContasCartoes() {
                                 </div>
                                 <div className="flex justify-between text-[9px] text-slate-500 font-semibold px-0.5">
                                   <span>{pctUsado.toFixed(0)}% usado</span>
-                                  <span>Disp: {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(limiteDisponivel)}</span>
+                                  <span>Disp: {formatCurrency(limiteDisponivel)}</span>
                                 </div>
                               </div>
                             )}
@@ -610,9 +612,7 @@ export default function ContasCartoes() {
                           <div className="flex items-center justify-between">
                             <span className="text-xs text-slate-400 font-medium">Saldo Disponível</span>
                             <span className="text-xl font-black text-white tracking-tight">
-                              {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                                conta.saldo_atual || 0
-                              )}
+                              {formatCurrency(conta.saldo_atual || 0)}
                             </span>
                           </div>
 
@@ -623,9 +623,7 @@ export default function ContasCartoes() {
                                 {dividasVinculadas.length} dívida(s)
                               </span>
                               <span className="font-extrabold text-rose-400">
-                                {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-                                  totalDividas
-                                )}
+                                {formatCurrency(totalDividas)}
                               </span>
                             </div>
                           ) : (

@@ -65,6 +65,7 @@ import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
 import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 import { supabase } from "@/integrations/supabase/client";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
@@ -112,6 +113,7 @@ const getPaymentMethodInfo = (method: string | null | undefined) => {
 
 const Receitas = () => {
   const { toast } = useToast();
+  const { isPrivate, formatCurrency } = usePrivacy();
   const { categoriasReceita } = useCategorias();
   const { activeWorkspace } = useWorkspace();
 
@@ -491,7 +493,7 @@ const Receitas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalReceitasDoDia.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(totalReceitasDoDia)}
                     </p>
                   )}
                 </div>
@@ -511,7 +513,7 @@ const Receitas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalFiltrado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatCurrency(totalFiltrado)}
                     </p>
                   )}
                 </div>
@@ -531,7 +533,7 @@ const Receitas = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {mediaMensalCalculada.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatCurrency(mediaMensalCalculada)}
                     </p>
                   )}
                 </div>
@@ -681,7 +683,7 @@ const Receitas = () => {
                                 <span className="font-medium text-foreground">{item.label}</span>
                                 <div className="space-x-2 text-right">
                                   <span className="font-semibold text-foreground">
-                                    R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                    {formatCurrency(item.valor)}
                                   </span>
                                   <span className="text-xs text-muted-foreground">
                                     ({item.porcentagem.toFixed(1)}%)
@@ -851,7 +853,7 @@ const Receitas = () => {
                             </TableCell>
                             <TableCell className="text-right">
                               <span className="font-semibold text-green-500">
-                                +R$ {receita.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                {isPrivate ? "R$ ••••••" : `+${formatCurrency(receita.valor)}`}
                               </span>
                             </TableCell>
                             <TableCell>
@@ -984,7 +986,7 @@ const Receitas = () => {
                                       })()}
                                     </div>
                                     <div className="font-semibold text-green-500">
-                                      +R$ {receita.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                      {isPrivate ? "R$ ••••••" : `+${formatCurrency(receita.valor)}`}
                                     </div>
                                     <div className="flex gap-2">
                                       <Button

@@ -47,6 +47,7 @@ import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTr
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { usePontoEquilibrio } from "@/domains/finance/hooks/usePontoEquilibrio";
 import { useBurnRate } from "@/domains/finance/hooks/useBurnRate";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 
 // Função para formatar a data corretamente
@@ -84,6 +85,7 @@ const formatarMes = (data: Date) => {
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { isPrivate, formatCurrency } = usePrivacy();
 
   // ── Filtro de data global do dashboard
   // Padrão: MÊS VIGENTE — a saúde financeira mostra receitas e despesas do mês
@@ -418,7 +420,7 @@ const Dashboard = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalReceitas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(totalReceitas)}
                     </p>
                   )}
                 </div>
@@ -439,7 +441,7 @@ const Dashboard = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
-                      R$ {totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(totalDespesas)}
                     </p>
                   )}
                 </div>
@@ -460,7 +462,7 @@ const Dashboard = () => {
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className={`text-2xl font-bold ${saldoPeriodo >= 0 ? "text-foreground" : "text-red-500"}`}>
-                      R$ {saldoPeriodo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(saldoPeriodo)}
                     </p>
                   )}
                 </div>
@@ -506,7 +508,7 @@ const Dashboard = () => {
                 </div>
               </div>
               <p className="text-2xl font-bold text-foreground">
-                R$ {pontoEquilibrio.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                {formatCurrency(pontoEquilibrio)}
               </p>
               <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
                 <div
@@ -520,7 +522,7 @@ const Dashboard = () => {
               <p className="text-xs mt-2 text-muted-foreground">
                 {percentualPontoEquilibrio >= 100
                   ? "✅ Já pagou as contas de hoje!"
-                  : `Faltam R$ ${Math.max(0, pontoEquilibrio - vendasHoje).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} para lucrar.`}
+                  : `Faltam ${formatCurrency(Math.max(0, pontoEquilibrio - vendasHoje))} para lucrar.`}
               </p>
             </CardContent>
           </Card>
@@ -531,14 +533,14 @@ const Dashboard = () => {
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-muted-foreground">Runway (Dias de Caixa)</p>
                 <p className="text-xs text-muted-foreground">
-                  Burn: R$ {burnRate.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/dia
+                  Burn: {formatCurrency(burnRate)}/dia
                 </p>
               </div>
               <p className={`text-2xl font-bold ${runway <= 7 ? "text-red-400" : runway <= 15 ? "text-amber-400" : "text-emerald-400"}`}>
                 {runway.toFixed(0)} dias
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Saldo: R$ {saldoAtualBurn.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                Saldo: {formatCurrency(saldoAtualBurn)}
               </p>
               {runway <= 7 && (
                 <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
@@ -600,7 +602,7 @@ const Dashboard = () => {
                         <div className="flex items-center gap-2 text-right">
                           <span className="text-muted-foreground text-xs">{cat.percentual.toFixed(0)}%</span>
                           <span className="font-semibold text-red-500 whitespace-nowrap">
-                            R$ {cat.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            {formatCurrency(cat.valor)}
                           </span>
                         </div>
                       </div>
@@ -664,7 +666,7 @@ const Dashboard = () => {
                       {dividasInterval === "semana" ? "Total Semana" : `Total ${dividasInterval}d`}
                     </p>
                     <p className="text-lg font-bold text-red-500">
-                      R$ {totalDividaPeriodo.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatCurrency(totalDividaPeriodo)}
                     </p>
                   </div>
                   {/* Vencidas */}
@@ -693,7 +695,6 @@ const Dashboard = () => {
                           ? Number(divida.valor_total) / Number(divida.parcelas)
                           : Number(divida.valor_restante);
                         const valorTaxa = Number(divida.valor_taxa || 0);
-                        const valorParcelaTotal = valorParcelaBase + valorTaxa;
 
                         return (
                           <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
@@ -702,17 +703,17 @@ const Dashboard = () => {
                               <span className="text-sm truncate font-medium">{divida.descricao}</span>
                               {valorTaxa > 0 && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-500 border border-orange-500/20 font-normal shrink-0">
-                                  + R$ {valorTaxa.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} taxa
+                                  + {formatCurrency(valorTaxa)} taxa
                                 </span>
                               )}
                             </div>
                             <div className="flex items-center gap-2 shrink-0 ml-2">
                               <span className="text-xs text-muted-foreground">{formatarData(divida.data_vencimento)}</span>
                               <span className="text-sm font-medium text-yellow-700">
-                                R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                {formatCurrency(Number(divida.valor_restante))}
                               </span>
                               <span className="text-xs text-muted-foreground">
-                                · Parcela R$ {valorParcelaBase.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                · Parcela {formatCurrency(valorParcelaBase)}
                               </span>
                             </div>
                           </div>
@@ -734,7 +735,9 @@ const Dashboard = () => {
                         {dividasInterval === "semana" ? "Impacto Semana" : `Impacto ${dividasInterval}d`}
                       </p>
                       <p className={`text-sm font-bold ${totalImpactoRecorrentesPeriodo > 0 ? "text-red-500" : "text-green-500"}`}>
-                        {totalImpactoRecorrentesPeriodo > 0 ? "-" : "+"}R$ {Math.abs(totalImpactoRecorrentesPeriodo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                        {isPrivate
+                          ? "R$ ••••••"
+                          : `${totalImpactoRecorrentesPeriodo > 0 ? "-" : "+"}${formatCurrency(Math.abs(totalImpactoRecorrentesPeriodo))}`}
                       </p>
                     </div>
                   </div>
@@ -805,7 +808,9 @@ const Dashboard = () => {
                                   </div>
                                 </div>
                                 <span className={`text-sm font-semibold whitespace-nowrap ${t.tipo === "receita" ? "text-green-500" : "text-red-500"}`}>
-                                  {t.tipo === "receita" ? "+" : "-"}R$ {Number(t.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  {isPrivate
+                                    ? "R$ ••••••"
+                                    : `${t.tipo === "receita" ? "+" : "-"}${formatCurrency(Number(t.valor))}`}
                                 </span>
                               </div>
                             );
@@ -873,7 +878,7 @@ const Dashboard = () => {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-xs">
                               <span className="text-muted-foreground">
-                                R$ {meta.valor_atual.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                                {formatCurrency(meta.valor_atual)}
                               </span>
                               <span className="font-medium text-violet-500">
                                 {meta.progresso.toFixed(0)}%
@@ -884,7 +889,7 @@ const Dashboard = () => {
                               className="h-1.5 bg-violet-500/20"
                             />
                             <p className="text-xs text-muted-foreground">
-                              Meta: R$ {meta.valor_alvo.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}
+                              Meta: {formatCurrency(meta.valor_alvo)}
                             </p>
                           </div>
                         </div>
@@ -930,26 +935,29 @@ const Dashboard = () => {
               {dividasVencidas.length > 0 && (
                 <CardContent className="pt-0">
                   <div className="space-y-2">
-                    {dividasVencidas.slice(0, 3).map((divida) => (
-                      <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-background/50">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
-                          <span className="text-sm truncate">{divida.descricao}</span>
-                        </div>
-                        <span className="text-sm font-medium text-red-500 whitespace-nowrap ml-2">
-                          R$ {Number(divida.valor_restante).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                          <span className="text-xs text-muted-foreground font-normal">
-                            {" "}· Parcela R$ {Number(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    {dividasVencidas.slice(0, 3).map((divida) => {
+                      const parcelaUnit = divida.parcelas && divida.parcelas > 1 ? Number(divida.valor_total) / divida.parcelas : Number(divida.valor_restante);
+                      return (
+                        <div key={divida.id} className="flex items-center justify-between p-2 rounded-lg bg-background/50">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                            <span className="text-sm truncate">{divida.descricao}</span>
+                          </div>
+                          <span className="text-sm font-medium text-red-500 whitespace-nowrap ml-2">
+                            {formatCurrency(Number(divida.valor_restante))}
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {" "}· Parcela {formatCurrency(parcelaUnit)}
+                            </span>
                           </span>
-                        </span>
-                      </div>
-                    ))}
+                        </div>
+                      );
+                    })}
                     {dividasVencidas.length > 0 && (
                       <div className="pt-2 border-t border-border/50">
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Total vencido</span>
                           <span className="font-semibold text-red-500">
-                            R$ {totalDividasVencidas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            {formatCurrency(totalDividasVencidas)}
                           </span>
                         </div>
                       </div>

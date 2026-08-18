@@ -8,7 +8,50 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+/** Retorna a data atual no fuso horário do Brasil (America/Sao_Paulo) no formato YYYY-MM-DD */
+function getHojeBrasil(): string {
+  try {
+    const now = new Date();
+    const spDate = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const y = spDate.getFullYear();
+    const m = String(spDate.getMonth() + 1).padStart(2, "0");
+    const d = String(spDate.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  } catch {
+    return new Date().toISOString().split("T")[0];
+  }
+}
+
+/** Sanitiza strings para uso seguro em queries com ilike */
+function sanitizeIlike(input: string): string {
+  return String(input || "").replace(/[%_\\]/g, "\\$&");
+}
+
 const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "consultar_vendas_eyemobile",
+      description: "Consulta as vendas e faturamento do PDV Eyemobile em tempo real para uma data específica ou período. Use SEMPRE que o usuário perguntar quanto vendeu hoje, vendas do PDV, faturamento da loja ou métricas do Eyemobile.",
+      parameters: {
+        type: "object",
+        properties: {
+          data: {
+            type: "string",
+            description: "Data para consulta no formato YYYY-MM-DD (ex: 2026-08-17). Padrão: data de hoje no fuso horário do Brasil.",
+          },
+          data_inicio: {
+            type: "string",
+            description: "Data inicial no formato YYYY-MM-DD para períodos",
+          },
+          data_fim: {
+            type: "string",
+            description: "Data final no formato YYYY-MM-DD para períodos",
+          },
+        },
+      },
+    },
+  },
   { type: "function", function: { name: "buscar_transacoes", description: "Busca transações financeiras do usuário com filtros opcionais por período, tipo e categoria.", parameters: { type: "object", properties: { data_inicio: { type: "string", description: "Data início no formato YYYY-MM-DD" }, data_fim: { type: "string", description: "Data fim no formato YYYY-MM-DD" }, tipo: { type: "string", enum: ["receita", "despesa"], description: "Tipo da transação" }, categoria_id: { type: "string", description: "ID da categoria para filtrar" }, categoria_nome: { type: "string", description: "Nome da categoria para filtrar (alternativa ao ID)" }, limit: { type: "number", description: "Limite de resultados (padrão 50)" } } } } },
   { type: "function", function: { name: "consultar_resumo_mensal", description: "Retorna resumo financeiro de um mês específico: total receitas, despesas, saldo e top categorias.", parameters: { type: "object", properties: { ano: { type: "number", description: "Ano (ex: 2025)" }, mes: { type: "number", description: "Mês 1-12" } }, required: ["ano", "mes"] } } },
   { type: "function", function: { name: "comparar_periodos", description: "Compara dois meses mostrando variação percentual de receitas, despesas e saldo.", parameters: { type: "object", properties: { ano1: { type: "number" }, mes1: { type: "number" }, ano2: { type: "number" }, mes2: { type: "number" } }, required: ["ano1", "mes1", "ano2", "mes2"] } } },
@@ -94,6 +137,129 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataIn
 
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
+    case "consultar_vendas_eyemobile": {
+      const targetDate = (args.data as string) || getHojeBrasil();
+      const dataInicio = (args.data_inicio as string) || targetDate;
+      const dataFim = (args.data_fim as string) || targetDate;
+
+      // 1. Busca configurações do Eyemobile
+      const { data: config, error: configErr } = await supabase
+        .from("eyemobile_config")
+        .select("access_key, secret_key, environment, store_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (configErr) {
+        return { error: `Erro ao buscar configuração Eyemobile: ${configErr.message}` };
+      }
+
+      if (!config?.access_key || !config?.secret_key) {
+        // Fallback: Busca na tabela de transações sincronizadas no banco
+        const { data: dbTxs, error: dbErr } = await supabase
+          .from("transacoes")
+          .select("valor, data, metodo_pagamento, descricao")
+          .eq("user_id", userId)
+          .eq("tipo", "receita")
+          .gte("data", dataInicio)
+          .lte("data", dataFim);
+
+        if (dbErr) return { error: dbErr.message };
+
+        const totalVendas = (dbTxs || []).reduce((acc: number, t: any) => acc + Number(t.valor || 0), 0);
+        return {
+          origem: "banco_local",
+          aviso: "Eyemobile API não configurada; consultando dados de transações locais.",
+          periodo: `${dataInicio} a ${dataFim}`,
+          total_vendas: totalVendas,
+          quantidade_transacoes: (dbTxs || []).length,
+          ticket_medio: (dbTxs || []).length > 0 ? totalVendas / (dbTxs || []).length : 0,
+        };
+      }
+
+      // 2. Consulta em tempo real à API Eyemobile
+      const baseUrl = config.environment === "staging"
+        ? "https://staging-api.eyemobile.com.br/v1"
+        : "https://api.eyemobile.com.br/v1";
+
+      const headers = {
+        "X-EYEMOBILE-ACCESS-KEY": config.access_key,
+        "X-EYEMOBILE-SECRET-KEY": config.secret_key,
+        "Content-Type": "application/json",
+      };
+
+      const params = new URLSearchParams({
+        start_date: dataInicio,
+        end_date: dataFim,
+        limit: "100",
+      });
+      if (config.store_id) params.set("store_id", config.store_id);
+
+      try {
+        let salesData: any[] = [];
+        const salesResp = await fetch(`${baseUrl}/sales?${params.toString()}`, { headers });
+        if (salesResp.ok) {
+          const json = await salesResp.json();
+          salesData = json.data || [];
+        } else {
+          const txResp = await fetch(`${baseUrl}/transactions?${params.toString()}`, { headers });
+          if (txResp.ok) {
+            const json = await txResp.json();
+            salesData = json.data || [];
+          }
+        }
+
+        // Filtra vendas válidas (completas e não canceladas)
+        const validSales = salesData.filter((s: any) => s.completed !== false && !s.cancelled);
+        const totalVendas = validSales.reduce((acc: number, s: any) => acc + Number(s.value || s.total || s.price || s.valor || 0), 0);
+        const qtdVendas = validSales.length;
+        const ticketMedio = qtdVendas > 0 ? totalVendas / qtdVendas : 0;
+
+        const porMetodo: Record<string, number> = {};
+        validSales.forEach((s: any) => {
+          const m = s.payment_method || s.metodo_pagamento || s.payment_type || "Outros";
+          const val = Number(s.value || s.total || s.price || s.valor || 0);
+          porMetodo[m] = (porMetodo[m] || 0) + val;
+        });
+
+        // Se a API retornar 0 mas temos transações no banco para o dia, faz fallback
+        if (qtdVendas === 0) {
+          const { data: dbTxs } = await supabase
+            .from("transacoes")
+            .select("valor, data, metodo_pagamento, descricao")
+            .eq("user_id", userId)
+            .eq("tipo", "receita")
+            .gte("data", dataInicio)
+            .lte("data", dataFim);
+
+          if (dbTxs && dbTxs.length > 0) {
+            const dbTotal = dbTxs.reduce((acc: number, t: any) => acc + Number(t.valor || 0), 0);
+            return {
+              origem: "banco_local_fallback",
+              total_vendas: dbTotal,
+              quantidade_transacoes: dbTxs.length,
+              ticket_medio: dbTotal / dbTxs.length,
+              periodo: `${dataInicio} a ${dataFim}`,
+              aviso: "Vendas recuperadas do banco local de transações.",
+            };
+          }
+        }
+
+        return {
+          origem: "api_eyemobile_realtime",
+          periodo: `${dataInicio} a ${dataFim}`,
+          total_vendas: totalVendas,
+          quantidade_transacoes: qtdVendas,
+          ticket_medio: ticketMedio,
+          vendas_por_metodo: porMetodo,
+        };
+      } catch (apiErr: any) {
+        console.error("Erro ao consultar Eyemobile:", apiErr.message);
+        return {
+          error: `Falha na conexão com Eyemobile: ${apiErr.message}`,
+          periodo: `${dataInicio} a ${dataFim}`,
+        };
+      }
+    }
     case "buscar_transacoes": {
       let categoriaId = args.categoria_id as string | undefined;
       if (!categoriaId && args.categoria_nome) {
@@ -176,10 +342,61 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
     case "cadastrar_meta": { const { nome, valor_alvo, valor_atual, data_limite, descricao } = args as Record<string, unknown>; const { data: result, error } = await supabase.from("metas").insert({ user_id: userId, nome, valor_alvo: Number(valor_alvo), valor_atual: Number(valor_atual || 0), data_limite: data_limite || null, descricao: descricao || null, status: "ativa" }).select("id,nome,valor_alvo,status").single(); if (error) return { error: error.message }; return { sucesso: true, meta: result }; }
     case "atualizar_meta": { const { meta_id, ...rest } = args as Record<string, unknown>; const updates: Record<string, unknown> = {}; if (rest.valor_atual !== undefined) updates.valor_atual = Number(rest.valor_atual); if (rest.status) updates.status = rest.status; if (rest.nome) updates.nome = rest.nome; if (rest.valor_alvo !== undefined) updates.valor_alvo = Number(rest.valor_alvo); if (rest.data_limite) updates.data_limite = rest.data_limite; const { error } = await supabase.from("metas").update(updates).eq("id", meta_id as string).eq("user_id", userId); if (error) return { error: error.message }; return { sucesso: true }; }
     case "analisar_documento": { return { acao: "analisar_imagem", tipo: args.tipo_suspeito || "desconhecido", mensagem: "Analisando documento..." }; }
-    case "atualizar_custo_produto_eyemobile": { const { produto_id, produto_nome, codigo_barras, novo_custo, quantidade_estoque } = args as Record<string, unknown>; let foundProduct: any = null; if (codigo_barras) { const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("codigo_barras", codigo_barras).maybeSingle(); if (data) foundProduct = data; } if (!foundProduct && produto_id) { const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("produto_id", produto_id).maybeSingle(); if (data) foundProduct = data; } if (!foundProduct && produto_nome) { const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).ilike("nome", `%${produto_nome}%`).limit(1).maybeSingle(); if (data) foundProduct = data; } if (foundProduct) { const { data: updated, error } = await supabase.from("eyemobile_produtos").update({ custo: Number(novo_custo), estoque: Number(quantidade_estoque ?? foundProduct.estoque ?? 0), updated_at: new Date().toISOString() }).eq("id", foundProduct.id).select("*").single(); if (error) return { error: error.message }; return { sucesso: true, produto: updated }; } return { error: `Produto "${produto_nome || codigo_barras || 'desconhecido'}" não localizado na tabela de produtos do Eyemobile.`, sugerir_cadastro: true, dados: { nome: produto_nome || "", codigo_barras: codigo_barras || "", custo: novo_custo, estoque: quantidade_estoque } }; }
+    case "atualizar_custo_produto_eyemobile": {
+      const { produto_id, produto_nome, codigo_barras, novo_custo, quantidade_estoque } = args as Record<string, unknown>;
+      let foundProduct: any = null;
+      if (codigo_barras) {
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("codigo_barras", codigo_barras).maybeSingle();
+        if (data) foundProduct = data;
+      }
+      if (!foundProduct && produto_id) {
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).eq("produto_id", produto_id).maybeSingle();
+        if (data) foundProduct = data;
+      }
+      if (!foundProduct && produto_nome) {
+        const sanitizedNome = sanitizeIlike(produto_nome as string);
+        const { data } = await supabase.from("eyemobile_produtos").select("*").eq("user_id", userId).ilike("nome", `%${sanitizedNome}%`).limit(1).maybeSingle();
+        if (data) foundProduct = data;
+      }
+      if (foundProduct) {
+        const { data: updated, error } = await supabase.from("eyemobile_produtos").update({ custo: Number(novo_custo), estoque: Number(quantidade_estoque ?? foundProduct.estoque ?? 0), updated_at: new Date().toISOString() }).eq("id", foundProduct.id).select("*").single();
+        if (error) return { error: error.message };
+        return { sucesso: true, produto: updated };
+      }
+      return { error: `Produto "${produto_nome || codigo_barras || 'desconhecido'}" não localizado na tabela de produtos do Eyemobile.`, sugerir_cadastro: true, dados: { nome: produto_nome || "", codigo_barras: codigo_barras || "", custo: novo_custo, estoque: quantidade_estoque } };
+    }
     case "cadastrar_despesa_nf": { const { descricao, valor, data, categoria_nome, fornecedor, metodo_pagamento, numero_nf } = args as Record<string, unknown>; let categoriaId: string | null = null; if (categoria_nome) { categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa"); } const { data: result, error } = await supabase.from("despesas").insert({ user_id: userId, descricao: descricao, valor: Number(valor), data: data, categoria_id: categoriaId || null, metodo_pagamento: metodo_pagamento || null, observacoes: `Nota Fiscal nº ${numero_nf || ""}. Fornecedor: ${fornecedor || ""}.` }).select("id,descricao,valor,data").single(); if (error) return { error: error.message }; return { sucesso: true, despesa: result }; }
     case "cadastrar_divida_boleto": { const { descricao, valor_total, credor, data_vencimento, codigo_barras, linha_digitavel, pix_copia_cola, parcelas, categoria_nome } = args as Record<string, unknown>; let categoriaId: string | null = null; if (categoria_nome) { categoriaId = await resolveCategoriaByName(supabase, userId, categoria_nome as string, "despesa"); } const obsParts = [`Boleto.`, linha_digitavel ? `Linha digitável: ${linha_digitavel}` : null, codigo_barras ? `Código de barras: ${codigo_barras}` : null, pix_copia_cola ? `Pix Copia e Cola: ${pix_copia_cola}` : null, categoria_nome ? `Categoria sugerida: ${categoria_nome}` : null].filter(Boolean); const { data: result, error } = await supabase.from("dividas").insert({ user_id: userId, descricao, valor_total: Number(valor_total), valor_restante: Number(valor_total), valor_pago: 0, credor: credor || null, data_vencimento, parcelas: Number(parcelas || 1), parcelas_pagas: 0, status: "pendente", observacoes: obsParts.join(" | "), categoria_id: categoriaId || null, metodo_pagamento_esperado: "boleto", codigo_barras: codigo_barras || null, linha_digitavel: linha_digitavel || null, pix_copia_cola: pix_copia_cola || null }).select("id,descricao,valor_total,status").single(); if (error) return { error: error.message }; return { sucesso: true, divida: result }; }
-    case "validar_fechamento_caixa": { const { valor_relatado, turno_data } = args as Record<string, unknown>; const { data: defaultWs } = await supabase.from("workspaces").select("id").eq("user_id", userId).eq("is_default", true).maybeSingle(); const wsId = defaultWs?.id || null; let queryVendas = supabase.from("transacoes").select("valor").eq("user_id", userId).eq("tipo", "receita").eq("data", turno_data as string); if (wsId) queryVendas = queryVendas.eq("workspace_id", wsId); const { data: vendas, error: errV } = await queryVendas; if (errV) return { error: errV.message }; const totalVendas = (vendas || []).reduce((sum, v) => sum + Number(v.valor || 0), 0); let querySaques = supabase.from("transacoes").select("valor").eq("user_id", userId).eq("tipo", "despesa").eq("data", turno_data as string).ilike("descricao", "%divipay%"); if (wsId) querySaques = querySaques.eq("workspace_id", wsId); const { data: saques, error: errS } = await querySaques; if (errS) return { error: errS.message }; const totalSaques = (saques || []).reduce((sum, s) => sum + Number(s.valor || 0), 0); const esperado = totalVendas - totalSaques; const relatado = Number(valor_relatado); const diferenca = relatado - esperado; let status = "exato"; let msg = `Fechamento exato! O saldo bateu com o esperado de R$ ${esperado.toFixed(2)}.`; if (diferenca < -0.01) { status = "furo"; msg = `Atenção: Furo de caixa detectado! Faltam R$ ${Math.abs(diferenca).toFixed(2)} no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`; } else if (diferenca > 0.01) { status = "sobra"; msg = `Aviso: Sobra de caixa detectada! R$ ${diferenca.toFixed(2)} a mais no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`; } return { sucesso: true, dados: { total_vendas_pdv: totalVendas, total_saques_divipay: totalSaques, saldo_esperado: esperado, saldo_relatado: relatado, diferenca, status, mensagem: msg } }; }
+    case "validar_fechamento_caixa": {
+      const { valor_relatado, turno_data } = args as Record<string, unknown>;
+      const { data: defaultWs } = await supabase.from("workspaces").select("id").eq("user_id", userId).eq("is_default", true).maybeSingle();
+      const wsId = defaultWs?.id || null;
+      let queryVendas = supabase.from("transacoes").select("valor").eq("user_id", userId).eq("tipo", "receita").eq("data", turno_data as string);
+      if (wsId) queryVendas = queryVendas.eq("workspace_id", wsId);
+      const { data: vendas, error: errV } = await queryVendas;
+      if (errV) return { error: errV.message };
+      const totalVendas = (vendas || []).reduce((sum: number, v: any) => sum + Number(v.valor || 0), 0);
+      
+      const diviFilter = sanitizeIlike("divipay");
+      let querySaques = supabase.from("transacoes").select("valor").eq("user_id", userId).eq("tipo", "despesa").eq("data", turno_data as string).ilike("descricao", `%${diviFilter}%`);
+      if (wsId) querySaques = querySaques.eq("workspace_id", wsId);
+      const { data: saques, error: errS } = await querySaques;
+      if (errS) return { error: errS.message };
+      const totalSaques = (saques || []).reduce((sum: number, s: any) => sum + Number(s.valor || 0), 0);
+      const esperado = totalVendas - totalSaques;
+      const relatado = Number(valor_relatado);
+      const diferenca = relatado - esperado;
+      let status = "exato";
+      let msg = `Fechamento exato! O saldo bateu com o esperado de R$ ${esperado.toFixed(2)}.`;
+      if (diferenca < -0.01) {
+        status = "furo";
+        msg = `Atenção: Furo de caixa detectado! Faltam R$ ${Math.abs(diferenca).toFixed(2)} no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`;
+      } else if (diferenca > 0.01) {
+        status = "sobra";
+        msg = `Aviso: Sobra de caixa detectada! R$ ${diferenca.toFixed(2)} a mais no caixa (Esperado: R$ ${esperado.toFixed(2)}, Relatado: R$ ${relatado.toFixed(2)}).`;
+      }
+      return { sucesso: true, dados: { total_vendas_pdv: totalVendas, total_saques_divipay: totalSaques, saldo_esperado: esperado, saldo_relatado: relatado, diferenca, status, mensagem: msg } };
+    }
     default: return { error: `Ferramenta desconhecida: ${name}` };
   }
 }
@@ -187,33 +404,95 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return new Response(JSON.stringify({ error: "Missing authorization header" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
-  const jwt = authHeader.replace("Bearer ", "");
-  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
-  if (authError || !user) return new Response(JSON.stringify({ error: "Invalid or expired token" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  const userId = user.id;
+  const jwt = authHeader.replace("Bearer ", "").trim();
+
+  let body: { model?: string; messages: unknown[]; max_tokens?: number; temperature?: number; user_id?: string; response_format?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  }
+
+  let userId: string;
+
+  // Validação segura do JWT / Service Role
+  if (jwt === supabaseServiceKey && body.user_id) {
+    // Chamada interna autenticada por chave service-role (ex: telegram-webhook)
+    userId = body.user_id;
+  } else {
+    const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Invalid or expired token" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    }
+    userId = user.id;
+  }
+
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");
-  if (!openaiKey) return new Response(JSON.stringify({ error: "API key não configurada. Configure sua chave OpenAI na aba Configurações." }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  let body: { model: string; messages: unknown[]; max_tokens?: number; temperature?: number };
-  try { body = await req.json(); } catch { return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }); }
+  if (!openaiKey) {
+    return new Response(JSON.stringify({ error: "API key não configurada. Configure sua chave OpenAI na aba Configurações." }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  }
+
   const messages = [...body.messages] as Record<string, unknown>[];
   const MAX_ITERATIONS = 8;
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const response = await fetch(OPENAI_API_URL, { method: "POST", headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: body.model, messages, tools: TOOLS, tool_choice: "auto", max_tokens: body.max_tokens || 2000, temperature: body.temperature ?? 0.4, response_format: body.response_format || undefined }) });
+    const response = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: body.model || "gpt-4o-mini",
+        messages,
+        tools: TOOLS,
+        tool_choice: "auto",
+        max_tokens: body.max_tokens || 2000,
+        temperature: body.temperature ?? 0.3,
+        response_format: body.response_format || undefined,
+      }),
+    });
+
     const data = await response.json();
-    if (!response.ok) return new Response(JSON.stringify(data), { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    if (!response.ok) {
+      return new Response(JSON.stringify(data), { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    }
+
     const choice = data.choices?.[0];
     const message = choice?.message;
     if (!message) break;
     messages.push(message);
-    if (!message.tool_calls || message.tool_calls.length === 0) return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-    await Promise.all(message.tool_calls.map(async (tc: any) => { let toolResult: unknown; try { const toolArgs = JSON.parse(tc.function.arguments || "{}"); toolResult = await executeTool(tc.function.name, toolArgs, supabase, userId); } catch (e) { toolResult = { error: e instanceof Error ? e.message : String(e) }; } messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(toolResult) }); }));
+
+    if (!message.tool_calls || message.tool_calls.length === 0) {
+      return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    }
+
+    await Promise.all(
+      message.tool_calls.map(async (tc: any) => {
+        let toolResult: unknown;
+        try {
+          const toolArgs = JSON.parse(tc.function.arguments || "{}");
+          toolResult = await executeTool(tc.function.name, toolArgs, supabase, userId);
+        } catch (e) {
+          toolResult = { error: e instanceof Error ? e.message : String(e) };
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify(toolResult),
+        });
+      }),
+    );
   }
+
   return new Response(JSON.stringify({ error: "Máximo de iterações atingido" }), { status: 500, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
 });

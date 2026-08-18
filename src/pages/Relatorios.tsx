@@ -108,12 +108,10 @@ const getMesPorExtenso = (date: Date) => {
   return `${meses[date.getMonth()]}/${date.getFullYear()}`;
 };
 
-const formatCurrency = (value: number) =>
-  `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-
 // ── Hook principal de dados ─────────────────────────────────────────────────
 import type { DateRange } from "@/shared/components/DateRangePicker/DateRangePicker";
 import { useSearchParams } from "react-router-dom";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 import { ComparativosView } from "@/domains/finance/components/comparativos/ComparativosView";
 import { EquipeReport } from "@/domains/finance/components/equipe/EquipeReport";
 
@@ -382,6 +380,7 @@ const metaStatusConfig: Record<string, { label: string; color: string }> = {
 
 // ── Componente principal ─────────────────────────────────────────────────────
 const Relatorios = () => {
+  const { isPrivate, formatCurrency } = usePrivacy();
   const [searchParams, setSearchParams] = useSearchParams();
   const validTabs = new Set(["overview", "comparativos", "equipe", "categories", "transactions", "dividas", "metas", "recorrentes"]);
   const requestedTab = searchParams.get("aba") ?? "overview";
