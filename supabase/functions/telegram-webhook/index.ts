@@ -445,40 +445,34 @@ serve(async (req) => {
         const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
         const imageBase64Uri = `data:${mime};base64,${b64}`;
 
-        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise de documentos e boletos bancários.
-Analise a imagem enviada com atenção aos dados financeiros.
+        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental de altíssima precisão.
+Analise a imagem enviada com EXTREMA cautela e rigor contra qualquer alucinação ou suposição.
 
-Se for BOLETO BANCÁRIO:
-- Extraia com máxima precisão: valor em reais (número decimal), data de vencimento (YYYY-MM-DD), beneficiário/credor/emissor, descrição do boleto, e linha digitável / código de barras (se legível).
-- Responda SEMPRE incluindo o JSON estruturado dentro da tag <document_analysis> da seguinte forma:
+REGRAS DE SEGURANÇA E PRECISÃO (OBRIGATÓRIAS):
+1. NUNCA invente, deduza ou adivinhe valores, datas, nomes de beneficiários ou números de código de barras.
+2. Se a imagem estiver DEITADA (rotacionada a 90°, 180° ou 270°), BORRADA, ESCURA, CORTADA ou com baixa resolução:
+   • Se os dados NÃO puderem ser lidos com 100% de clareza, defina obrigatoriamente "confianca": "baixa".
+   • Liste em "campos_ilegiveis" os campos que não puderem ser lidos com precisão cirúrgica.
+3. Se um campo não estiver perfeitamente legível na imagem, retorne null para aquele campo.
+4. Para BOLETOS BANCÁRIOS:
+   • valor: extraia o valor numérico em reais (número decimal) apenas se estiver perfeitamente visível.
+   • data_vencimento: extraia apenas no formato YYYY-MM-DD se a data estiver legível. Se duvidosa, retorne null.
+   • beneficiario: extraia o nome/razão social da empresa emissora se legível. Se cortado, retorne null.
+   • linha_digitavel: extraia os números do topo do boleto se puder ler os blocos com exatidão.
+
+FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
 <document_analysis>
 {
-  "tipo": "boleto",
+  "tipo": "boleto" | "nota_fiscal" | "comprovante" | "desconhecido",
   "valor": 123.45,
   "data_vencimento": "YYYY-MM-DD",
-  "beneficiario": "Nome do Beneficiário",
-  "descricao": "Boleto - Nome",
-  "linha_digitavel": "12345.67890 12345.678901 12345.678901 1 12345678901234",
-  "confianca": "alta"
-}
-</document_analysis>
-
-Se for NOTA FISCAL ou COMPROVANTE:
-<document_analysis>
-{
-  "tipo": "nota_fiscal",
-  "valor": 123.45,
-  "data": "YYYY-MM-DD",
-  "beneficiario": "Fornecedor",
-  "confianca": "alta"
-}
-</document_analysis>
-
-Se a imagem não for legível ou não for documento financeiro:
-<document_analysis>
-{
-  "tipo": "desconhecido",
-  "confianca": "baixa"
+  "beneficiario": "Razão Social ou Nome do Beneficiário",
+  "descricao": "Boleto - Razão Social",
+  "linha_digitavel": "34191.09008 16679.735607 59984.260007 1 15310000065814",
+  "confianca": "alta" | "media" | "baixa",
+  "motivo_confianca": "Explicação objetiva da legibilidade",
+  "campos_ilegiveis": ["valor", "data_vencimento"],
+  "orientacao_imagem": "vertical" | "rotacionada" | "ilegivel"
 }
 </document_analysis>`;
 
@@ -498,7 +492,7 @@ Se a imagem não for legível ou não for documento financeiro:
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro e extraia os dados." },
+                  { type: "text", text: promptText || "Analise este documento financeiro com precisão. Se a imagem estiver deitada, borrada ou ilegível, não invente dados e classifique a confiança como baixa." },
                   { type: "image_url", image_url: { url: imageBase64Uri } },
                 ],
               },
@@ -530,7 +524,8 @@ Se a imagem não for legível ou não for documento financeiro:
         }
 
         if (documentData && documentData.tipo === "boleto") {
-          const parseVal = (v: any) => {
+          // ─── VALIDAÇÃO DETERMINÍSTICA CONTRA ALUCINAÇÃO ───
+          const parseNum = (v: any) => {
             if (typeof v === "number") return isNaN(v) ? 0 : v;
             if (!v) return 0;
             const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
@@ -539,21 +534,91 @@ Se a imagem não for legível ou não for documento financeiro:
           };
 
           const parseDt = (v: any) => {
-            if (!v) return hojeStr;
+            if (!v) return null;
             const str = String(v).trim();
             if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
             if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
               const p = str.split("/");
               return `${p[2]}-${p[1]}-${p[0]}`;
             }
-            return hojeStr;
+            return null;
           };
 
-          const valor = parseVal(documentData.valor);
-          const vencimento = parseDt(documentData.data_vencimento);
-          const beneficiario = String(documentData.beneficiario || "Beneficiário Boleto").trim();
-          const descricao = String(documentData.descricao || `Boleto - ${beneficiario}`).trim();
-          const linhaDigitavel = String(documentData.linha_digitavel || "").trim();
+          const valor = parseNum(documentData.valor);
+          const dataVencimento = parseDt(documentData.data_vencimento);
+          const beneficiario = String(documentData.beneficiario || "").trim();
+          const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
+
+          const errosValidacao: string[] = [];
+          const camposIlegiveis: string[] = Array.isArray(documentData.campos_ilegiveis) ? [...documentData.campos_ilegiveis] : [];
+
+          // 1. Validação de valor
+          if (valor <= 0) {
+            errosValidacao.push("Valor não identificado ou inválido");
+            if (!camposIlegiveis.includes("Valor do boleto")) camposIlegiveis.push("Valor do boleto");
+          }
+
+          // 2. Validação de vencimento
+          if (!dataVencimento) {
+            errosValidacao.push("Data de vencimento não identificada ou ilegível");
+            if (!camposIlegiveis.includes("Data de vencimento")) camposIlegiveis.push("Data de vencimento");
+          } else {
+            const ano = parseInt(dataVencimento.split("-")[0], 10);
+            const anoAtual = new Date().getFullYear();
+            if (isNaN(ano) || ano < anoAtual - 2 || ano > anoAtual + 3) {
+              errosValidacao.push(`Ano de vencimento suspeito (${ano})`);
+              if (!camposIlegiveis.includes("Data de vencimento")) camposIlegiveis.push("Data de vencimento");
+            }
+          }
+
+          // 3. Validação de beneficiário
+          const termosGenericos = ["beneficiario", "beneficiário", "boleto", "credor", "desconhecido", "empresa", "banco", "pagador", "cedente"];
+          if (!beneficiario || beneficiario.length < 3 || termosGenericos.includes(beneficiario.toLowerCase())) {
+            errosValidacao.push("Beneficiário não identificado claramente");
+            if (!camposIlegiveis.includes("Nome do beneficiário")) camposIlegiveis.push("Nome do beneficiário");
+          }
+
+          // 4. Validação de linha digitável
+          if (linhaDigitavel) {
+            const digitsOnly = linhaDigitavel.replace(/\D/g, "");
+            if (digitsOnly.length > 0 && digitsOnly.length !== 47 && digitsOnly.length !== 48) {
+              errosValidacao.push(`Linha digitável incompleta (${digitsOnly.length} dígitos)`);
+            }
+          }
+
+          // Determinar confiança final
+          const confiancaDeclarada = String(documentData.confianca || "media").toLowerCase();
+          const isRotacionada = documentData.orientacao_imagem === "rotacionada" || docAnalysisText.toLowerCase().includes("rotacionad") || docAnalysisText.toLowerCase().includes("deitad");
+
+          const isConfiancaBaixa =
+            confiancaDeclarada === "baixa" ||
+            camposIlegiveis.length >= 2 ||
+            errosValidacao.length >= 2 ||
+            valor <= 0 ||
+            !dataVencimento;
+
+          // Se a confiança for BAIXA: recusa o cadastro e pede foto nítida e na vertical
+          if (isConfiancaBaixa) {
+            const listaCampos = camposIlegiveis.length > 0
+              ? camposIlegiveis.map(c => `• <b>${c}</b>`).join("\n")
+              : "• <b>Valor ou data de vencimento ilegíveis</b>";
+
+            const msgRecusa =
+              `📄 <b>Não foi possível analisar o boleto com segurança.</b>\n\n` +
+              (isRotacionada ? `⚠️ <b>A imagem parece estar deitada (rotacionada) ou inclinada.</b>\n\n` : `⚠️ <b>A imagem está borrada, cortada ou com baixa iluminação.</b>\n\n`) +
+              `❌ <b>Campos não identificados com precisão:</b>\n` +
+              `${listaCampos}\n\n` +
+              `📸 <b>Dica para envio:</b>\n` +
+              `Envie uma nova foto com o boleto na <b>posição vertical (em pé/reto)</b>, bem iluminado e enquadrando os códigos e valores.`;
+
+            await sendReply(msgRecusa);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          // Confiança Média ou Alta -> Prepara proposta de cadastro
+          const isConfiancaMedia = confiancaDeclarada === "media" || errosValidacao.length > 0 || !linhaDigitavel;
+          const descricaoBoleto = String(documentData.descricao || `Boleto - ${beneficiario}`).trim();
+          const linhaFmt = documentData.linha_digitavel ? String(documentData.linha_digitavel).trim() : "";
 
           const { data: propostaSalva, error: errProp } = await supabase
             .from("telegram_propostas")
@@ -562,15 +627,15 @@ Se a imagem não for legível ou não for documento financeiro:
               chat_id: chatId,
               tipo: "cadastrar_divida",
               dados: {
-                descricao,
+                descricao: descricaoBoleto,
                 valor_total: valor,
                 valor_restante: valor,
-                data_vencimento: vencimento,
+                data_vencimento: dataVencimento || hojeStr,
                 credor: beneficiario,
                 status: "pendente",
-                linha_digitavel: linhaDigitavel || null,
+                linha_digitavel: linhaFmt || null,
               },
-              resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${vencimento}`,
+              resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${dataVencimento || hojeStr}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
             })
@@ -587,14 +652,21 @@ Se a imagem não for legível ou não for documento financeiro:
             });
 
             const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-            const vencFmt = vencimento.split("T")[0].split("-").reverse().join("/");
+            const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
 
-            const mensagemProposta =
+            let mensagemProposta =
               `📄 <b>Boleto identificado!</b>\n\n` +
               `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
               `💰 Valor: <b>${valFmt}</b>\n` +
               `📅 Vencimento: <b>${vencFmt}</b>\n` +
-              (linhaDigitavel ? `🔢 Linha digitável: <code>${linhaDigitavel}</code>\n` : "") +
+              (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
+
+            if (isConfiancaMedia) {
+              mensagemProposta +=
+                `\n⚠️ <i>Atenção: A nitidez da foto é moderada. Por favor, confira atentamente se os valores e o vencimento acima conferem com o boleto físico.</i>\n`;
+            }
+
+            mensagemProposta +=
               `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
               `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
               `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
@@ -621,7 +693,7 @@ Se a imagem não for legível ou não for documento financeiro:
         } else {
           await sendReply(
             `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
-            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
+            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal na <b>posição vertical (em pé)</b> com os valores e códigos visíveis.`
           );
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
