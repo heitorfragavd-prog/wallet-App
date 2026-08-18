@@ -580,43 +580,54 @@ serve(async (req) => {
               // Extrai bytes brutos do stream
               const streamBytes = pdfBytes.slice(dataStart, dataStart + streamLen);
 
+              // Só processa streams FlateDecode — streams sem compressão são geralmente
+              // fontes binárias ou imagens que causam catastrophic backtracking na regex
+              if (!isFlate) { pos = eIdx + ENDSTREAM_TAG.length; continue; }
+
               let content = "";
-              if (isFlate) {
-                // Tenta descomprimir: zlib (deflate) primeiro, depois deflate-raw
-                for (const fmt of ["deflate", "deflate-raw"]) {
-                  try {
-                    const ds = new DecompressionStream(fmt as CompressionFormat);
-                    const writer = ds.writable.getWriter();
-                    writer.write(new Uint8Array(streamBytes));
-                    writer.close();
-                    const buf = await new Response(ds.readable).arrayBuffer();
-                    content = new TextDecoder("latin1").decode(buf);
-                    if (content.length > 10) break; // sucesso
-                  } catch { content = ""; }
-                }
-              } else {
-                content = new TextDecoder("latin1").decode(streamBytes);
+              // Tenta descomprimir: zlib (deflate) primeiro, depois deflate-raw
+              for (const fmt of ["deflate", "deflate-raw"]) {
+                try {
+                  const ds = new DecompressionStream(fmt as CompressionFormat);
+                  const writer = ds.writable.getWriter();
+                  writer.write(new Uint8Array(streamBytes));
+                  writer.close();
+                  const buf = await new Response(ds.readable).arrayBuffer();
+                  content = new TextDecoder("latin1").decode(buf);
+                  if (content.length > 5) break;
+                } catch { content = ""; }
               }
 
-              if (content && content.length > 5) {
-                // Extrai strings de operadores Tj
-                for (const m of content.matchAll(/\(([^)\\]{0,400}(?:\\.[^)\\]{0,400})*)\)\s*(?:Tj|'|")/g)) {
-                  const t = m[1]
-                    .replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
-                    .replace(/\\n/g, " ").replace(/\\r/g, "").replace(/\\\\/g, "\\");
-                  if (t.trim().length > 1) textParts.push(t.trim());
-                }
-                // Extrai strings de operadores TJ (array)
-                for (const m of content.matchAll(/\[([\s\S]*?)\]\s*TJ/g)) {
-                  for (const s of m[1].matchAll(/\(([^)\\]{0,400})\)/g)) {
-                    const t = s[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-                    if (t.trim().length > 1) textParts.push(t.trim());
-                  }
+              // Só processa conteúdo que seja stream de texto PDF (contém operador BT)
+              if (!content || !content.includes("BT") || !content.includes("ET")) {
+                pos = eIdx + ENDSTREAM_TAG.length;
+                continue;
+              }
+
+              // Limita a 30KB para evitar regex lenta em streams grandes
+              const safeContent = content.slice(0, 30000);
+
+              // Extrai strings de Tj — regex simples sem alternância aninhada
+              const tjRe = /\(([^)\\]{1,300})\)\s*Tj/g;
+              for (const m of safeContent.matchAll(tjRe)) {
+                const t = m[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
+                               .replace(/\\n/g, " ").replace(/\\\\/g, "\\");
+                if (t.trim().length > 0) textParts.push(t.trim());
+              }
+              // Extrai strings de TJ (array) — percorre cada ( ) separadamente
+              const tjArrRe = /\[([\s\S]{1,2000}?)\]\s*TJ/g;
+              for (const m of safeContent.matchAll(tjArrRe)) {
+                const inner = m[1];
+                const strRe = /\(([^)\\]{1,300})\)/g;
+                for (const s of inner.matchAll(strRe)) {
+                  const t = s[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+                  if (t.trim().length > 0) textParts.push(t.trim());
                 }
               }
 
               // Avança para após este stream
-              pos = dataStart + streamLen;
+              pos = eIdx + ENDSTREAM_TAG.length;
+
             }
 
             pdfText = textParts.join(" ");
