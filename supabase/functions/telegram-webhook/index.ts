@@ -510,11 +510,171 @@ serve(async (req) => {
 
         if (ext === "pdf" || docMime.includes("pdf")) {
           console.log("[telegram-webhook] Documento PDF recebido:", filePath, docMime);
-          await sendReply(
-            "📄 <b>Envio de PDF detectado:</b>\n\n" +
-            "O processamento automático no Telegram funciona com <b>fotos / imagens</b> (JPEG ou PNG).\n\n" +
-            "📸 <i>Por favor, tire uma foto do boleto com a câmera ou envie um print/screenshot da tela para cadastrar instantaneamente!</i>"
-          );
+          await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+          }).catch(() => {});
+
+          // Baixar o PDF e extrair texto com pdf-parse
+          const pdfDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+          if (!pdfDownloadResp.ok) {
+            await sendReply("❌ Não foi possível baixar o PDF. Tente enviar novamente.");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          const pdfBuffer = await pdfDownloadResp.arrayBuffer();
+          console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
+
+          // Extração de texto via pdfjs-dist (suporte nativo no Deno/Edge)
+          let pdfText = "";
+          try {
+            const pdfjsLib = await import("https://esm.sh/pdfjs-dist@4.4.168/build/pdf.min.mjs");
+            const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) });
+            const pdfDoc = await loadingTask.promise;
+            console.log("[telegram-webhook] PDF páginas:", pdfDoc.numPages);
+            
+            for (let pg = 1; pg <= Math.min(pdfDoc.numPages, 3); pg++) {
+              const page = await pdfDoc.getPage(pg);
+              const textContent = await page.getTextContent();
+              const pageText = textContent.items.map((item: any) => item.str || "").join(" ");
+              pdfText += pageText + "\n";
+            }
+            console.log("[telegram-webhook] Texto extraído do PDF:", pdfText.slice(0, 500));
+          } catch (pdfErr: any) {
+            console.error("[telegram-webhook] Erro ao extrair texto do PDF:", pdfErr.message);
+            await sendReply(
+              "📄 <b>Envio de PDF detectado:</b>\n\n" +
+              "Não foi possível extrair o texto deste PDF automaticamente.\n\n" +
+              "📸 <i>Por favor, tire uma foto do boleto com a câmera ou envie um print/screenshot da tela!</i>"
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          if (!pdfText.trim() || pdfText.trim().length < 20) {
+            await sendReply(
+              "📄 <b>PDF recebido, mas sem texto legível.</b>\n\n" +
+              "Este PDF parece ser uma imagem escaneada. Para melhor resultado:\n\n" +
+              "📸 <i>Tire uma foto do boleto com a câmera ou envie um print/screenshot da tela!</i>"
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          // Analisar texto extraído com LLM
+          console.log("[telegram-webhook] Enviando texto do PDF para análise...");
+          const pdfAnalysisResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              user_id: userId,
+              tools: [],
+              messages: [
+                {
+                  role: "system",
+                  content: `Você é um extrator de dados de boletos bancários brasileiros. Analise o texto extraído do PDF e retorne um JSON com os campos do boleto.
+
+INSTRUÇÕES:
+- Extraia APENAS o que está claramente no texto
+- NUNCA invente dados
+- Para boletos bancários: valor, data_vencimento, beneficiario (razão social), linha_digitavel
+- Formato de data: YYYY-MM-DD
+- Valor: número decimal (ex: 1536.39)
+- linha_digitavel: sequência de números com espaços/pontos (47-48 dígitos)
+- confianca: "alta" se encontrou valor e data, "baixa" se não encontrou
+
+Responda APENAS com JSON válido, sem markdown:
+{"tipo":"boleto","valor":null,"data_vencimento":null,"beneficiario":null,"linha_digitavel":null,"descricao":null,"confianca":"alta"}`,
+                },
+                {
+                  role: "user",
+                  content: `Extraia os dados deste boleto em PDF:\n\n${pdfText.slice(0, 4000)}`,
+                },
+              ],
+            }),
+          });
+
+          let pdfDocumentData: any = null;
+          if (pdfAnalysisResp.ok) {
+            const pdfJson = await pdfAnalysisResp.json();
+            const pdfContent = pdfJson.choices?.[0]?.message?.content || "";
+            console.log("[telegram-webhook] Análise PDF:", pdfContent.slice(0, 400));
+            try {
+              const cleaned = pdfContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+              pdfDocumentData = JSON.parse(cleaned);
+            } catch {
+              console.error("[telegram-webhook] Erro ao parsear JSON do PDF");
+            }
+          }
+
+          if (!pdfDocumentData || pdfDocumentData.confianca === "baixa" || !pdfDocumentData.valor || !pdfDocumentData.data_vencimento) {
+            await sendReply(
+              "📄 <b>PDF analisado, mas os dados do boleto não foram identificados com clareza.</b>\n\n" +
+              "📸 <i>Por favor, tire uma foto do boleto impresso ou envie um print/screenshot da tela para melhor resultado!</i>"
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          // Processar dados do PDF como boleto
+          const pdfValor = typeof pdfDocumentData.valor === "number" ? pdfDocumentData.valor : parseFloat(String(pdfDocumentData.valor).replace(",", ".")) || 0;
+          const pdfVenc = pdfDocumentData.data_vencimento || hojeStr;
+          const pdfBenef = String(pdfDocumentData.beneficiario || "Beneficiário Boleto").trim();
+          const pdfLinha = String(pdfDocumentData.linha_digitavel || "").trim();
+          const pdfDesc = String(pdfDocumentData.descricao || `Boleto PDF - ${pdfBenef}`).trim();
+
+          const pdfCat = await resolveCategoriaByCredor(supabase, userId, `${pdfBenef} ${pdfDesc}`);
+
+          const { data: pdfProposta, error: errPdfProp } = await supabase
+            .from("telegram_propostas")
+            .insert({
+              user_id: userId,
+              chat_id: chatId,
+              tipo: "cadastrar_divida",
+              dados: {
+                descricao: pdfDesc,
+                valor_total: pdfValor,
+                valor_restante: pdfValor,
+                data_vencimento: pdfVenc,
+                credor: pdfBenef,
+                categoria_id: pdfCat?.id || null,
+                categoria_nome: pdfCat?.nome || null,
+                status: "pendente",
+                linha_digitavel: pdfLinha || null,
+              },
+              resumo: `Boleto PDF de ${pdfBenef} no valor de R$ ${pdfValor.toFixed(2)} com vencimento em ${pdfVenc}`,
+              status: "pendente",
+              expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+            })
+            .select("id")
+            .single();
+
+          if (!errPdfProp && pdfProposta) {
+            await supabase.from("telegram_conversas").upsert(
+              { user_id: userId, chat_id: chatId, estado: "aguardando_confirmacao_boleto", proposta_id: pdfProposta.id, updated_at: new Date().toISOString() },
+              { onConflict: "chat_id" }
+            );
+            const pdfValFmt = pdfValor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+            const pdfIsVencido = pdfVenc && pdfVenc < hojeStr;
+            const pdfVencFmt = pdfVenc ? pdfVenc.split("-").reverse().join("/") : "Sem data";
+            await sendReply(
+              `📄 <b>Boleto PDF identificado!</b>\n\n` +
+              `🏢 Beneficiário: <b>${pdfBenef}</b>\n` +
+              (pdfCat?.nome ? `🏷️ Categoria: <b>${pdfCat.nome}</b>\n` : "") +
+              `💰 Valor: <b>${pdfValFmt}</b>\n` +
+              `📅 Vencimento: <b>${pdfVencFmt}</b>${pdfIsVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+              (pdfLinha ? `🔢 Linha digitável: <code>${pdfLinha}</code>\n` : "") +
+              `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+              `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
+              `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+              `⏰ <i>Esta proposta expira em 30 minutos.</i>`
+            );
+          } else {
+            console.error("[telegram-webhook] Erro ao salvar proposta do PDF:", errPdfProp?.message);
+            await sendReply("❌ Erro ao registrar a proposta do PDF. Tente novamente.");
+          }
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
