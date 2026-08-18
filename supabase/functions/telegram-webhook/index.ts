@@ -508,6 +508,12 @@ serve(async (req) => {
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
         const docMime = (message.document?.mime_type || "").toLowerCase();
 
+        // ─── VARIÁVEL ÚNICA — NUNCA redeclare! ───
+        let finalImageBase64Uri = "";
+
+        // ============================================
+        // FLUXO PDF: Texto → PDF.co → Vision
+        // ============================================
         if (ext === "pdf" || docMime.includes("pdf")) {
           console.log("[telegram-webhook] Documento PDF recebido:", filePath, docMime);
           await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
@@ -516,51 +522,47 @@ serve(async (req) => {
             body: JSON.stringify({ chat_id: chatId, action: "typing" }),
           }).catch(() => {});
 
-          // Baixar o PDF e extrair texto com pdf-parse
+          // 1. Baixar PDF
           const pdfDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
           if (!pdfDownloadResp.ok) {
             await sendReply("❌ Não foi possível baixar o PDF. Tente enviar novamente.");
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
-
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // ─── Parser de PDF Seguro: extração de texto não comprimido e strings simples ───
+          // 2. Tentar extrair texto direto
           let pdfText = "";
           try {
-            const pdfBytes = new Uint8Array(pdfBuffer);
-            const rawStr = new TextDecoder("latin1").decode(pdfBytes);
-            const textParts: string[] = [];
-
-            // Extrai strings diretas (PDFs com texto não comprimido ou metadados)
+            const rawStr = new TextDecoder("latin1").decode(new Uint8Array(pdfBuffer));
             const tjMatches = rawStr.match(/\(([^)\\]{2,300})\)\s*Tj/g) || [];
+            const textParts: string[] = [];
             for (const m of tjMatches.slice(0, 500)) {
               const cleaned = m.replace(/\)\s*Tj$/, "").replace(/^\(/, "").trim();
               if (cleaned.length > 2) textParts.push(cleaned);
             }
-
             pdfText = textParts.join(" ");
-            console.log("[telegram-webhook] Extração de texto do PDF:", textParts.length, "partes encontradas");
-          } catch (pdfParseErr: any) {
-            console.error("[telegram-webhook] PDF parse error:", pdfParseErr.message);
+            console.log("[telegram-webhook] Texto extraído do PDF:", pdfText.slice(0, 200));
+          } catch (e: any) {
+            console.warn("[telegram-webhook] PDF parse error:", e.message);
           }
 
-          // ─── Tentativa de Conversão PDF -> Imagem via PDF.co (caso chave esteja configurada) ───
+          // 3. Tentar converter PDF → Imagem via PDF.co
           const pdfCoApiKey = Deno.env.get("PDFCO_API_KEY");
-          let pdfConvertedImageBase64: string | null = null;
+          console.log("[telegram-webhook] PDFCO_API_KEY configurada?", !!pdfCoApiKey);
 
           if (pdfCoApiKey && (!pdfText.trim() || pdfText.trim().length < 15)) {
             try {
-              console.log("[telegram-webhook] Tentando conversão PDF -> Imagem via PDF.co...");
+              console.log("[telegram-webhook] Tentando conversão PDF → Imagem via PDF.co...");
               const pdfBase64 = base64Encode(new Uint8Array(pdfBuffer));
-              
+
               const uploadRes = await fetch("https://api.pdf.co/v1/file/upload/base64", {
                 method: "POST",
                 headers: { "x-api-key": pdfCoApiKey, "Content-Type": "application/json" },
                 body: JSON.stringify({ filedata: pdfBase64, name: "boleto.pdf" }),
               });
               const uploadData = await uploadRes.json();
+              console.log("[telegram-webhook] PDF.co upload status:", uploadData?.error ? "ERRO" : "OK");
 
               if (uploadData?.url) {
                 const convertRes = await fetch("https://api.pdf.co/v1/pdf/convert/to/png", {
@@ -569,25 +571,23 @@ serve(async (req) => {
                   body: JSON.stringify({ url: uploadData.url, pages: "0", width: 1200, height: -1 }),
                 });
                 const convertData = await convertRes.json();
+                console.log("[telegram-webhook] PDF.co convert status:", convertData?.error ? "ERRO" : "OK");
 
                 if (convertData?.url) {
                   const imgRes = await fetch(convertData.url);
                   const imgBuf = await imgRes.arrayBuffer();
-                  pdfConvertedImageBase64 = base64Encode(new Uint8Array(imgBuf));
-                  console.log("[telegram-webhook] PDF convertido para imagem PNG com sucesso! Base64 len:", pdfConvertedImageBase64.length);
+                  const imgB64 = base64Encode(new Uint8Array(imgBuf));
+                  finalImageBase64Uri = `data:image/png;base64,${imgB64}`;
+                  console.log("[telegram-webhook] PDF convertido para PNG com sucesso! Tamanho b64:", imgB64.length);
                 }
               }
             } catch (pdfCoErr: any) {
-              console.warn("[telegram-webhook] Conversão via PDF.co falhou:", pdfCoErr.message);
+              console.warn("[telegram-webhook] PDF.co falhou:", pdfCoErr.message);
             }
           }
 
-          let finalImageBase64Uri = "";
-
-          // Se converteu para imagem com sucesso, direciona diretamente para o GPT-4o Vision!
-          if (pdfConvertedImageBase64) {
-            finalImageBase64Uri = `data:image/png;base64,${pdfConvertedImageBase64}`;
-          } else if (!pdfText.trim() || pdfText.trim().length < 15) {
+          // 4. Se não converteu e não tem texto suficiente → fallback amigável
+          if (!finalImageBase64Uri && (!pdfText.trim() || pdfText.trim().length < 15)) {
             await sendReply(
               "📄 <b>PDF recebido!</b>\n\n" +
               "Os boletos em PDF possuem camadas vetoriais protegidas que impedem a extração direta do texto.\n\n" +
@@ -598,9 +598,9 @@ serve(async (req) => {
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          if (!finalImageBase64Uri) {
-            // Analisar texto extraído com LLM (para PDFs com texto selecionável)
-            console.log("[telegram-webhook] Enviando texto do PDF para análise...");
+          // 5. Se não converteu mas tem texto → analisar com LLM
+          if (!finalImageBase64Uri && pdfText.trim().length >= 15) {
+            console.log("[telegram-webhook] Analisando texto extraído do PDF com LLM...");
             const pdfAnalysisResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
               method: "POST",
               headers: {
@@ -722,7 +722,9 @@ Responda APENAS com JSON válido sem markdown:
           }
         }
 
-        let finalImageBase64Uri = "";
+        // ============================================
+        // FLUXO IMAGEM (foto normal, se não veio de PDF convertido)
+        // ============================================
         if (!finalImageBase64Uri) {
           console.log("[telegram-webhook] Baixando binário de:", filePath);
           const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
@@ -746,7 +748,7 @@ Responda APENAS com JSON válido sem markdown:
           const mime = ext === "png" ? "image/png" : "image/jpeg";
           finalImageBase64Uri = `data:${mime};base64,${b64}`;
 
-          // ─── PRÉ-PROCESSAMENTO: Detecção e Rotação Física da Imagem via ImageScript ───
+          // ─── PRÉ-PROCESSAMENTO: Detecção e Rotação Física da Imagem via ImageScript (apenas para fotos) ───
           try {
             console.log("[telegram-webhook] Iniciando decodificação de imagem com ImageScript...");
             const decodedImage = await Image.decode(new Uint8Array(arrayBuffer));
