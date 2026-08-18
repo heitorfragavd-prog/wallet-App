@@ -27,6 +27,7 @@ import { useQuery } from "@tanstack/react-query";
 import { logger } from "@/core/logging/LoggerService";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { UploadInteligente } from "@/domains/ia/components/UploadInteligente";
+import { AgentV2Tab } from "@/domains/ia/components/AgentV2Tab";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSULTA RÁPIDA — Motor local (sem custo, sem tokens)
@@ -757,17 +758,25 @@ export default function IAPage() {
         </div>
 
         {/* Abas principais */}
-        <Tabs defaultValue="rapida" className="space-y-4">
-          <TabsList className="grid grid-cols-2 bg-muted/50 max-w-md">
-            <TabsTrigger value="rapida" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white gap-2">
-              <Zap className="w-4 h-4" />
+        <Tabs defaultValue="agent_v2" className="space-y-4">
+          <TabsList className="grid grid-cols-3 bg-muted/50 max-w-lg">
+            <TabsTrigger value="agent_v2" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground gap-1.5 font-semibold text-xs">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Agent V2</span>
+            </TabsTrigger>
+            <TabsTrigger value="rapida" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white gap-1.5 text-xs">
+              <Zap className="w-3.5 h-3.5" />
               <span>Consulta Rápida</span>
             </TabsTrigger>
-            <TabsTrigger value="avancada" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white gap-2">
-              <Brain className="w-4 h-4" />
-              <span>IA Avançada</span>
+            <TabsTrigger value="avancada" className="data-[state=active]:bg-purple-500 data-[state=active]:text-white gap-1.5 text-xs">
+              <Brain className="w-3.5 h-3.5" />
+              <span>IA Legada</span>
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="agent_v2" className="mt-0">
+            <AgentV2Tab />
+          </TabsContent>
 
           <TabsContent value="rapida" className="mt-0">
             <div className="flex items-center gap-2 mb-3 px-1">
