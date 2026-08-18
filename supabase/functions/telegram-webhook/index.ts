@@ -526,29 +526,44 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          // Extração de texto via pdfjs-dist (suporte nativo no Deno/Edge)
+          // Extração de texto do PDF — tenta unpdf (edge-compatible), depois extração raw
           let pdfText = "";
           try {
-            const pdfjsLib = await import("https://esm.sh/pdfjs-dist@4.4.168/build/pdf.min.mjs");
-            const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) });
-            const pdfDoc = await loadingTask.promise;
-            console.log("[telegram-webhook] PDF páginas:", pdfDoc.numPages);
-            
-            for (let pg = 1; pg <= Math.min(pdfDoc.numPages, 3); pg++) {
-              const page = await pdfDoc.getPage(pg);
-              const textContent = await page.getTextContent();
-              const pageText = textContent.items.map((item: any) => item.str || "").join(" ");
-              pdfText += pageText + "\n";
+            // Tentativa 1: unpdf — biblioteca específica para edge environments
+            const unpdf = await import("https://esm.sh/unpdf@0.12.0");
+            const result = await unpdf.extractText(new Uint8Array(pdfBuffer), { mergePages: true });
+            pdfText = result.text || "";
+            console.log("[telegram-webhook] unpdf extraiu texto:", pdfText.slice(0, 300));
+          } catch (unpdfErr: any) {
+            console.warn("[telegram-webhook] unpdf falhou, tentando extração raw:", unpdfErr.message);
+            // Fallback: extração raw de streams BT/ET do PDF (funciona em qualquer ambiente)
+            try {
+              const rawText = new TextDecoder("latin1").decode(new Uint8Array(pdfBuffer));
+              // Extrai strings de texto dentro de blocos BT...ET
+              const btMatches = rawText.matchAll(/BT\s([\s\S]*?)ET/g);
+              const parts: string[] = [];
+              for (const match of btMatches) {
+                // Extrai strings entre parênteses ou colchetes em Tj/TJ
+                const strMatches = match[1].matchAll(/\(([^)]{1,200})\)\s*(?:Tj|TJ|'|")/g);
+                for (const sm of strMatches) {
+                  const s = sm[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+                  if (s.trim()) parts.push(s.trim());
+                }
+              }
+              // Também extrai strings de arrays TJ
+              const tjMatches = rawText.matchAll(/\[([^\]]+)\]\s*TJ/g);
+              for (const match of tjMatches) {
+                const strParts = match[1].matchAll(/\(([^)]{1,200})\)/g);
+                for (const sp of strParts) {
+                  const s = sp[1].replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+                  if (s.trim()) parts.push(s.trim());
+                }
+              }
+              pdfText = parts.join(" ");
+              console.log("[telegram-webhook] Extração raw extraiu:", pdfText.slice(0, 300));
+            } catch (rawErr: any) {
+              console.error("[telegram-webhook] Extração raw também falhou:", rawErr.message);
             }
-            console.log("[telegram-webhook] Texto extraído do PDF:", pdfText.slice(0, 500));
-          } catch (pdfErr: any) {
-            console.error("[telegram-webhook] Erro ao extrair texto do PDF:", pdfErr.message);
-            await sendReply(
-              "📄 <b>Envio de PDF detectado:</b>\n\n" +
-              "Não foi possível extrair o texto deste PDF automaticamente.\n\n" +
-              "📸 <i>Por favor, tire uma foto do boleto com a câmera ou envie um print/screenshot da tela!</i>"
-            );
-            return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
           if (!pdfText.trim() || pdfText.trim().length < 20) {
@@ -575,23 +590,27 @@ serve(async (req) => {
               messages: [
                 {
                   role: "system",
-                  content: `Você é um extrator de dados de boletos bancários brasileiros. Analise o texto extraído do PDF e retorne um JSON com os campos do boleto.
+                  content: `Você é um extrator especialista em boletos bancários brasileiros.
 
-INSTRUÇÕES:
-- Extraia APENAS o que está claramente no texto
-- NUNCA invente dados
-- Para boletos bancários: valor, data_vencimento, beneficiario (razão social), linha_digitavel
-- Formato de data: YYYY-MM-DD
-- Valor: número decimal (ex: 1536.39)
-- linha_digitavel: sequência de números com espaços/pontos (47-48 dígitos)
-- confianca: "alta" se encontrou valor e data, "baixa" se não encontrou
+DISTINÇÃO CRÍTICA em boletos brasileiros:
+- BENEFICIÁRIO / CEDENTE = quem RECEBE o pagamento (empresa fornecedora/credora). Ex: "SPAL IND BRAS DE BEBIDAS SA", "ISPAL INDUSTRIA BRASILEIRA DE"
+- PAGADOR / SACADO = quem PAGA (cliente/devedor). Ex: "HEITOR FRAGA DE OLIVEIRA", "RODO POINT LTDA"
+- ❌ NUNCA coloque o PAGADOR como beneficiario. O beneficiário aparece primeiro no boleto, o pagador aparece no final.
 
-Responda APENAS com JSON válido, sem markdown:
+CAMPOS A EXTRAIR:
+- beneficiario: Nome/razão social do BENEFICIÁRIO (quem recebe) — NÃO o pagador
+- valor: Valor do Documento em decimal (ex: 1534.39)
+- data_vencimento: Data de vencimento em YYYY-MM-DD (ex: 2026-08-21)
+- linha_digitavel: Sequência de dígitos do código de barras (47-48 dígitos, com ou sem espaços)
+- descricao: Descrição curta (ex: "Boleto - SPAL")
+- confianca: "alta" se encontrou valor + data, "baixa" se não encontrou
+
+Responda APENAS com JSON válido sem markdown:
 {"tipo":"boleto","valor":null,"data_vencimento":null,"beneficiario":null,"linha_digitavel":null,"descricao":null,"confianca":"alta"}`,
                 },
                 {
                   role: "user",
-                  content: `Extraia os dados deste boleto em PDF:\n\n${pdfText.slice(0, 4000)}`,
+                  content: `Extraia os dados deste boleto em PDF:\n\n${pdfText.slice(0, 5000)}`,
                 },
               ],
             }),
