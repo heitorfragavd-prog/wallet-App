@@ -772,31 +772,74 @@ Responda APENAS com JSON válido, sem markdown:
             console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
           }
 
-        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental de altíssima precisão.
+        const docAnalysisSystemPrompt = `Você é um especialista em leitura de boletos bancários brasileiros com precisão cirúrgica.
 
-REGRAS DE EXTRAÇÃO:
-- NUNCA invente ou adivinhe valores. Extraia apenas o que puder ler com clareza.
-- Para BOLETOS BANCÁRIOS:
-  • valor: número decimal em reais (ex: 658.14).
-  • data_vencimento: data de vencimento no formato YYYY-MM-DD.
-  • beneficiario: razão social ou nome fantasia da empresa emissora/cedente (ex: "XODO FOODS E DISTRIBUICAO LTDA").
-  • descricao: descrição curta do boleto (ex: "Boleto - XODO FOODS").
-  • linha_digitavel: sequência numérica com os blocos legíveis do topo do boleto.
+═══════════════════════════════════════
+ESTRUTURA DE UM BOLETO BANCÁRIO BRASILEIRO
+═══════════════════════════════════════
 
-FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
+Um boleto tem SEMPRE estas seções distintas (aprenda a diferenciá-las):
+
+1. BENEFICIÁRIO / CEDENTE / SACADOR (quem RECEBE o pagamento — é a empresa fornecedora/credora):
+   - Fica no TOPO do boleto, logo abaixo do nome do banco
+   - Exemplos: "ISPAL INDUSTRIA BRASILEIRA DE", "XODO FOODS E DISTRIBUICAO LTDA"
+   - ⚠️ ESTE é o campo "beneficiario" que você deve extrair
+
+2. PAGADOR / SACADO (quem PAGA — é o cliente/devedor, NÃO é o beneficiário):
+   - Fica na parte INFERIOR do boleto, geralmente precedido de "PAGADOR:" ou "SACADO:"
+   - Exemplos: "HEITOR FRAGA DE OLIVEIRA", "RODO POINT LTDA"
+   - ❌ NUNCA use o PAGADOR como "beneficiario" — ele é irrelevante para o campo beneficiario
+
+3. VENCIMENTO: Data limite de pagamento (geralmente no canto superior direito do boleto)
+   - Formato no boleto: DD/MM/AAAA → converter para YYYY-MM-DD
+   - Boletos vencidos (data passada) são válidos e devem ser cadastrados normalmente
+
+4. VALOR DO DOCUMENTO: Valor total a pagar (geralmente no canto superior direito)
+   - Usar "Valor do Documento" e NÃO "Valor Cobrado" ou outros campos secundários
+
+5. LINHA DIGITÁVEL: Sequência de números no TOPO do boleto (acima do código de barras)
+   - Formato: NNNNN.NNNNN NNNNN.NNNNNN NNNNN.NNNNNN N NNNNNNNNNNNNNNN
+   - Total: 47 ou 48 dígitos (sem contar espaços/pontos)
+
+═══════════════════════════════════════
+REGRAS DE OURO
+═══════════════════════════════════════
+
+✅ FAÇA:
+- Extraia o BENEFICIÁRIO da seção do topo (logo abaixo do banco)
+- Use a LINHA DIGITÁVEL para validar o valor e vencimento
+- Informe confiança "baixa" se não conseguiu ler claramente
+- Se houver 3 vias do mesmo boleto, leia a terceira via (mais completa, na parte inferior)
+
+❌ NUNCA:
+- Confundir PAGADOR com BENEFICIÁRIO
+- Inventar dados que não estão visíveis
+- Usar dados do campo "Mora/Multa" como valor principal
+- Confundir o número do documento com a linha digitável
+
+═══════════════════════════════════════
+FORMATO DE RESPOSTA
+═══════════════════════════════════════
+
+Responda SEMPRE dentro da tag <document_analysis>:
 <document_analysis>
 {
-  "tipo": "boleto" | "nota_fiscal" | "comprovante" | "desconhecido",
-  "valor": 123.45,
-  "data_vencimento": "YYYY-MM-DD",
-  "beneficiario": "Razão Social do Beneficiário",
-  "descricao": "Boleto - Razão Social",
-  "linha_digitavel": "34191.09008 16679.735607 59984.260007 1 15310000065814",
-  "confianca": "alta" | "media" | "baixa",
-  "motivo_confianca": "Explicação da leitura",
+  "tipo": "boleto",
+  "valor": 1534.39,
+  "data_vencimento": "2026-08-15",
+  "beneficiario": "ISPAL INDUSTRIA BRASILEIRA DE",
+  "descricao": "Boleto - ISPAL INDUSTRIA",
+  "linha_digitavel": "34191.09107 96116.842939 83045.790009 7 15450000153439",
+  "confianca": "alta",
+  "motivo_confianca": "Beneficiário, valor e vencimento lidos com clareza na terceira via",
   "campos_ilegiveis": []
 }
-</document_analysis>`;
+</document_analysis>
+
+Se não conseguir ler um campo, coloque null e liste em campos_ilegiveis.
+Se a imagem for ilegível, coloque confianca: "baixa".`;
+
+
 
         console.log("[telegram-webhook] Chamando openai-proxy para analisar documento...");
         const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
