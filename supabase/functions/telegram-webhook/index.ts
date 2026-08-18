@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -487,14 +488,83 @@ serve(async (req) => {
 
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
         const mime = ext === "png" ? "image/png" : ext === "pdf" ? "application/pdf" : "image/jpeg";
-        const imageBase64Uri = `data:${mime};base64,${b64}`;
+        let finalImageBase64Uri = `data:${mime};base64,${b64}`;
 
-        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental e visão computacional de boletos e notas fiscais.
+        // ─── PRÉ-PROCESSAMENTO: Detecção e Rotação Física da Imagem via ImageScript ───
+        if (mime !== "application/pdf") {
+          try {
+            console.log("[telegram-webhook] Iniciando decodificação de imagem com ImageScript...");
+            const decodedImage = await Image.decode(new Uint8Array(arrayBuffer));
+            console.log(`[telegram-webhook] Dimensões da foto: ${decodedImage.width}x${decodedImage.height}`);
 
-IMPORTANTE SOBRE A ORIENTAÇÃO DA IMAGEM:
-- A foto pode estar em QUALQUER orientação: vertical (0°), deitada para a direita (90°), deitada para a esquerda (270°) ou invertida (180°).
-- ROTACIONE MENTALMENTE A IMAGEM e leia todos os textos, números, valores e datas com precisão.
-- NUNCA recuse uma imagem apenas por estar deitada ou inclinada. Se o texto for legível na orientação correta, extraia todos os dados com precisão e defina a confiança como alta.
+            // Gera miniaturas leves nas 4 rotações (0°, 90°, 180°, 270°)
+            const angles = [0, 90, 180, 270];
+            const thumbs: { angle: number; b64: string }[] = [];
+
+            for (const angle of angles) {
+              const rotated = angle === 0 ? decodedImage.clone() : decodedImage.clone().rotate(angle);
+              const thumb = rotated.resize(160, Image.RESIZE_AUTO);
+              const enc = await thumb.encodeJPEG(50);
+              thumbs.push({ angle, b64: base64Encode(enc) });
+            }
+
+            console.log("[telegram-webhook] Classificando orientação correta...");
+            const orientResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${supabaseServiceKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                user_id: userId,
+                tools: [],
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "Você é um classificador de orientação de documentos. Analise as 4 miniaturas [0 graus, 90 graus, 180 graus, 270 graus]. Responda APENAS com o número correspondente (0, 90, 180 ou 270) da imagem que estiver na orientação VERTICAL CORRETA de leitura (onde o texto do documento e código de barras estão retos e legíveis de cima para baixo). Responda SOMENTE o número.",
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: "Qual das miniaturas está na orientação vertical correta?" },
+                      { type: "text", text: "Opção 0°:" },
+                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[0].b64}` } },
+                      { type: "text", text: "Opção 90°:" },
+                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[1].b64}` } },
+                      { type: "text", text: "Opção 180°:" },
+                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[2].b64}` } },
+                      { type: "text", text: "Opção 270°:" },
+                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[3].b64}` } },
+                    ],
+                  },
+                ],
+              }),
+            });
+
+            if (orientResp.ok) {
+              const orientJson = await orientResp.json();
+              const orientText = orientJson.choices?.[0]?.message?.content || "0";
+              console.log("[telegram-webhook] Resposta da orientação:", orientText);
+              const matchAngle = orientText.match(/(0|90|180|270)/);
+              const bestAngle = matchAngle ? parseInt(matchAngle[0], 10) : 0;
+              console.log("[telegram-webhook] Melhor ângulo detectado:", bestAngle);
+
+              if (bestAngle !== 0) {
+                console.log(`[telegram-webhook] Rotacionando imagem original em ${bestAngle}°...`);
+                const rotatedOriginal = decodedImage.rotate(bestAngle);
+                const correctedJpg = await rotatedOriginal.encodeJPEG(85);
+                finalImageBase64Uri = `data:image/jpeg;base64,${base64Encode(correctedJpg)}`;
+                console.log("[telegram-webhook] Imagem rotacionada e re-codificada com sucesso!");
+              }
+            }
+          } catch (imgErr: any) {
+            console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
+          }
+        }
+
+        const docAnalysisSystemPrompt = `Você é o assistente financeiro do Wallet App especializado em análise documental de altíssima precisão.
 
 REGRAS DE EXTRAÇÃO:
 - NUNCA invente ou adivinhe valores. Extraia apenas o que puder ler com clareza.
@@ -536,8 +606,8 @@ FORMATO DE RESPOSTA (SEMPRE dentro da tag <document_analysis>):
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro. Se estiver deitado ou rotacionado, leia mentalmente na orientação correta e extraia os dados com precisão." },
-                  { type: "image_url", image_url: { url: imageBase64Uri } },
+                  { type: "text", text: promptText || "Analise este documento financeiro e extraia os dados com máxima precisão." },
+                  { type: "image_url", image_url: { url: finalImageBase64Uri } },
                 ],
               },
             ],
