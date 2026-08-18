@@ -134,7 +134,7 @@ async function resolveCategoriaByName(supabase: any, userId: string, nome: strin
 interface TransacaoRow { id: string; descricao: string; valor: number; tipo: string; data: string; created_at: string; categoria_id?: string | null; categorias?: { nome: string } | null; metodo_pagamento?: string | null; observacoes?: string | null; conta_id?: string | null; origem: "transacoes" | "receitas" | "despesas"; }
 
 async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataInicio?: string; dataFim?: string; tipo?: string; categoriaId?: string; limit?: number; select?: string }): Promise<TransacaoRow[]> {
-  const sel = opts?.select || "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome)";
+  const sel = opts?.select || "id,descricao,valor,tipo,data,created_at,categoria_id,metodo_pagamento,observacoes,conta_id";
   const selNonTipo = sel.replace(",tipo", "");
   const buildQuery = (table: string, hasTipo: boolean) => {
     let q = supabase.from(table).select(hasTipo ? sel : selNonTipo).eq("user_id", userId);
@@ -146,7 +146,11 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataIn
   };
   const skipReceitas = opts?.tipo === "despesa";
   const skipDespesas = opts?.tipo === "receita";
-  const promises = [buildQuery("transacoes", true), skipReceitas ? Promise.resolve({ data: [], error: null }) : buildQuery("receitas", false), skipDespesas ? Promise.resolve({ data: [], error: null }) : buildQuery("despesas", false)];
+  const promises = [
+    buildQuery("transacoes", true),
+    skipReceitas ? Promise.resolve({ data: [], error: null }) : buildQuery("receitas", false),
+    skipDespesas ? Promise.resolve({ data: [], error: null }) : buildQuery("despesas", false)
+  ];
   const [resT, resR, resD] = await Promise.all(promises);
   const transacoes = (resT.data || []).map((t: any) => ({ ...t, origem: "transacoes" }));
   const receitas = (resR.data || []).map((r: any) => ({ ...r, tipo: "receita", origem: "receitas" }));
@@ -324,12 +328,17 @@ async function consultarDespesasPeriodo(
   console.log("[consultarDespesasPeriodo] userId=", userId, "startDate=", startDate, "endDate=", endDate);
 
   try {
-    const despesas = await fetchAllTransacoes(supabase, userId, {
-      dataInicio: startDate,
-      dataFim: endDate,
-      tipo: "despesa",
-      select: "id,descricao,valor,tipo,data,created_at,categoria_id,categorias(nome),metodo_pagamento,observacoes"
-    });
+    const [despesas, { data: categorias }] = await Promise.all([
+      fetchAllTransacoes(supabase, userId, {
+        dataInicio: startDate,
+        dataFim: endDate,
+        tipo: "despesa",
+      }),
+      supabase.from("categorias").select("id,nome").eq("user_id", userId),
+    ]);
+
+    const catMap = new Map<string, string>();
+    (categorias || []).forEach((c: any) => catMap.set(c.id, c.nome));
 
     console.log("[consultarDespesasPeriodo] Despesas encontradas:", despesas.length, "para o período", startDate, "a", endDate);
 
@@ -358,7 +367,7 @@ async function consultarDespesasPeriodo(
       transacoes: despesas.slice(0, 30).map(d => ({
         descricao: d.descricao,
         valor: Number(d.valor || 0),
-        categoria: (d as any).categorias?.nome || "Sem categoria",
+        categoria: d.categoria_id ? (catMap.get(d.categoria_id) || "Sem categoria") : "Sem categoria",
         metodo_pagamento: d.metodo_pagamento || "outros",
         data: d.data
       })),
