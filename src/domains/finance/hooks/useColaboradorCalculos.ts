@@ -1,7 +1,16 @@
-import { useMemo } from "react";
-import { Colaborador } from "./useColaboradores";
-import { ColaboradorCusto } from "./useColaboradorCustos";
-import { ColaboradorPresenca } from "./useColaboradorPresencas";
+import { useMemo } from 'react';
+
+import {
+  calcularCustoColaborador,
+  centavosParaDecimal,
+  decimalParaCentavos,
+  EstadoContrato,
+  RegimeEncargos,
+  resolverEstadoContrato,
+} from '../services/equipeCalculations';
+import { Colaborador } from './useColaboradores';
+import { ColaboradorCusto } from './useColaboradorCustos';
+import { ColaboradorPresenca } from './useColaboradorPresencas';
 
 export interface CalculosColaborador {
   salarioBruto: number;
@@ -28,143 +37,189 @@ export interface CalculosColaborador {
   diasAtrasos: number;
   percentualFaltas: number;
   diasParaFimExperiencia: number | null;
+  estadoContrato: EstadoContrato;
+}
+
+const EMPTY_CALCULATIONS: CalculosColaborador = {
+  salarioBruto: 0,
+  inssEmpresa: 0,
+  fgts: 0,
+  decimoTerceiroProvisao: 0,
+  feriasProvisao: 0,
+  multaFgtsRescisao: 0,
+  valeTransporte: 0,
+  valeTransporteBase: 0,
+  valeTransporteAcertos: 0,
+  valeTransporteDiario: 0,
+  diasUteisMes: 26,
+  valeRefeicao: 0,
+  outrosBeneficios: 0,
+  custosVariaveis: 0,
+  custoRealMensal: 0,
+  custoPorDia: 0,
+  custoPorHora: 0,
+  reservaRescisao: 0,
+  custoSeAssinarCarteira: 0,
+  diasTrabalhados: 0,
+  diasFaltas: 0,
+  diasAtrasos: 0,
+  percentualFaltas: 0,
+  diasParaFimExperiencia: null,
+  estadoContrato: { estado: 'inativo', diasRestantes: null, dataFim: null },
+};
+
+const TRANSPORT_COST_TYPES = new Set([
+  'acerto_transporte',
+  'passagem_semanal',
+  'uber_semanal',
+  'transporte_diferenca',
+]);
+
+function workDaysInMonth(reference: string): number {
+  const [yearText, monthText] = reference.split('-');
+  const year = Number(yearText);
+  const monthIndex = Number(monthText) - 1;
+  const totalDays = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  let workDays = 0;
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    if (new Date(Date.UTC(year, monthIndex, day)).getUTCDay() !== 0) workDays += 1;
+  }
+
+  return workDays || 26;
 }
 
 export function useColaboradorCalculos(
   colaborador: Colaborador | null,
   custos: ColaboradorCusto[],
   presencas: ColaboradorPresenca[],
-  mesRef?: string
+  mesRef?: string,
+  regimeEncargos: RegimeEncargos = 'geral',
 ): CalculosColaborador {
   return useMemo(() => {
-    if (!colaborador) return {
-      salarioBruto: 0, inssEmpresa: 0, fgts: 0, decimoTerceiroProvisao: 0,
-      feriasProvisao: 0, multaFgtsRescisao: 0, valeTransporte: 0, valeTransporteBase: 0,
-      valeTransporteAcertos: 0, valeTransporteDiario: 0, diasUteisMes: 26,
-      valeRefeicao: 0, outrosBeneficios: 0, custosVariaveis: 0, custoRealMensal: 0,
-      custoPorDia: 0, custoPorHora: 0, reservaRescisao: 0, custoSeAssinarCarteira: 0,
-      diasTrabalhados: 0, diasFaltas: 0, diasAtrasos: 0, percentualFaltas: 0,
-      diasParaFimExperiencia: null,
-    };
+    if (!colaborador) return EMPTY_CALCULATIONS;
 
-    // Calcular dias úteis do mês (Segunda a Sábado: getDay() !== 0)
-    const refDateStr = mesRef || new Date().toISOString().slice(0, 7);
-    const [anoStr, mesStr] = refDateStr.split("-");
-    const ano = Number(anoStr) || new Date().getFullYear();
-    const mesIdx = (Number(mesStr) || (new Date().getMonth() + 1)) - 1;
-    const totalDiasNoMes = new Date(ano, mesIdx + 1, 0).getDate();
+    const currentReference = mesRef || new Date().toISOString().slice(0, 7);
+    const diasUteisMes = workDaysInMonth(currentReference);
+    const isSocio = colaborador.tipo === 'socio';
+    const isFolguista = colaborador.tipo === 'folguista';
+    const isFuncionario = colaborador.tipo === 'funcionario';
 
-    let diasUteis = 0;
-    for (let day = 1; day <= totalDiasNoMes; day++) {
-      const dayOfWeek = new Date(ano, mesIdx, day).getDay();
-      if (dayOfWeek !== 0) { // Exclui apenas Domingo (0), conta Seg-Sáb
-        diasUteis++;
-      }
-    }
+    const salarioBruto = Number(colaborador.salario_bruto) || 0;
+    const valeTransporteFixo = Number(colaborador.vale_transporte) || 0;
+    const valeTransporteDiario = Number(colaborador.vale_transporte_diario) || 0;
+    const valeTransporteBase = isSocio || isFolguista
+      ? 0
+      : (valeTransporteFixo > 0 ? valeTransporteFixo : valeTransporteDiario * diasUteisMes);
 
-    const isSocio = colaborador.tipo === "socio";
-    const isFolguista = colaborador.tipo === "folguista";
-    const temEncargos = !isSocio && !isFolguista; // só funcionário CLT tem encargos
-
-    const salario = Number(colaborador.salario_bruto) || 0;
-    const vtFixo = Number(colaborador.vale_transporte) || 0;
-    const vtDiario = Number(colaborador.vale_transporte_diario) || 0;
-
-    // FOLGUISTAS e SÓCIOS: NÃO possuem base mensal fixa automática de VT de 26 dias!
-    // Folguistas só recebem transporte nos dias efetivamente contratados/lançados.
-    const vtBase = (isFolguista || isSocio) ? 0 : (vtFixo > 0 ? vtFixo : vtDiario * diasUteis);
-
-    // Somar acertos semanais reais lançados em custos
-    const tiposAcertoTransporte = ["acerto_transporte", "passagem_semanal", "uber_semanal", "transporte_diferenca"];
-    const vtAcertos = custos
-      .filter(c => tiposAcertoTransporte.includes(c.tipo))
-      .reduce((s, c) => s + Number(c.valor), 0);
-
-    // Vale Transporte Total
-    const vtTotal = vtBase + vtAcertos;
-
-    const vr = Number(colaborador.vale_refeicao) || 0;
-    const outros = Number(colaborador.outros_beneficios) || 0;
-
-    // Encargos trabalhistas (SÓ para funcionário CLT)
-    const inssEmpresa = temEncargos ? salario * 0.20 : 0;
-    const fgts = temEncargos ? salario * 0.08 : 0;
-    const decimoTerceiroProvisao = temEncargos ? salario / 12 : 0;
-    const feriasProvisao = temEncargos ? (salario / 12) * 1.3333 : 0;
-
-    // Custos variáveis do mês
+    const valeTransporteAcertos = custos
+      .filter((custo) => TRANSPORT_COST_TYPES.has(custo.tipo))
+      .reduce((total, custo) => total + (Number(custo.valor) || 0), 0);
+    const valeTransporte = valeTransporteBase + valeTransporteAcertos;
+    const valeRefeicao = Number(colaborador.vale_refeicao) || 0;
+    const outrosBeneficios = Number(colaborador.outros_beneficios) || 0;
+    const custosVariaveis = custos.reduce((total, custo) => total + (Number(custo.valor) || 0), 0);
     const custosVariaveisNaoTransporte = custos
-      .filter(c => !tiposAcertoTransporte.includes(c.tipo))
-      .reduce((s, c) => s + Number(c.valor), 0);
+      .filter((custo) => !TRANSPORT_COST_TYPES.has(custo.tipo))
+      .reduce((total, custo) => total + (Number(custo.valor) || 0), 0);
+    const diasFolguista = Math.max(1, new Set(custos.map((custo) => custo.data)).size);
 
-    const custosVariaveisTotal = custos.reduce((s, c) => s + Number(c.valor), 0);
+    const custo = calcularCustoColaborador({
+      tipo: colaborador.tipo,
+      regimeEncargos,
+      salarioCentavos: decimalParaCentavos(salarioBruto),
+      proLaboreCentavos: decimalParaCentavos(colaborador.valor_pro_labore || salarioBruto),
+      transporteCentavos: decimalParaCentavos(valeTransporte),
+      beneficiosCentavos: decimalParaCentavos(valeRefeicao + outrosBeneficios),
+      variaveisCentavos: decimalParaCentavos(
+        isFuncionario ? custosVariaveisNaoTransporte : custosVariaveis,
+      ),
+      diasTrabalhoMes: isFolguista ? diasFolguista : diasUteisMes,
+    });
 
-    // CUSTO REAL MENSAL:
-    // - FOLGUISTA: Custa APENAS o que for efetivamente pago/lançado no mês em colaborador_custos (diárias + transportes reais)
-    // - SÓCIO: Pró-labore + retiradas
-    // - FUNCIONÁRIO: Salário + Encargos + VT + VR + Outros + Variáveis
-    let custoRealMensal = 0;
-    if (isFolguista) {
-      custoRealMensal = custosVariaveisTotal;
-    } else if (isSocio) {
-      custoRealMensal = salario + custosVariaveisTotal;
-    } else {
-      custoRealMensal = salario + inssEmpresa + fgts + decimoTerceiroProvisao + feriasProvisao + vtTotal + vr + outros + custosVariaveisNaoTransporte;
-    }
+    const inssEmpresa = centavosParaDecimal(custo.inssEmpresaCentavos);
+    const fgts = centavosParaDecimal(custo.fgtsCentavos);
+    const decimoTerceiroProvisao = centavosParaDecimal(custo.decimoTerceiroCentavos);
+    const feriasProvisao = centavosParaDecimal(custo.feriasCentavos);
+    const custoRealMensal = centavosParaDecimal(custo.totalCentavos);
+    const diariaConfigurada = Number(colaborador.valor_diaria) || 0;
+    const custoPorDia = isFolguista && diariaConfigurada > 0
+      ? diariaConfigurada
+      : centavosParaDecimal(custo.custoDiaCentavos);
+    const horasPorDia = colaborador.carga_horaria_semanal > 0
+      ? colaborador.carga_horaria_semanal / 6
+      : 0;
+    const custoPorHora = horasPorDia > 0 ? custoPorDia / horasPorDia : 0;
 
-    // CUSTO POR DIA:
-    // - FOLGUISTA: Valor da diária configurada (salario ou vtDiario) ou média do pago pelos dias contratados
-    let custoPorDia = 0;
-    if (isFolguista) {
-      custoPorDia = salario > 0 ? salario : (vtDiario > 0 ? vtDiario : (custosVariaveisTotal > 0 ? custosVariaveisTotal : 0));
-    } else {
-      custoPorDia = custoRealMensal / (diasUteis || 26);
-    }
-
-    const custoPorHora = colaborador.carga_horaria_semanal > 0 ? custoPorDia / (colaborador.carga_horaria_semanal / 6) : 0;
-
-    // Reserva para rescisão (SÓ para funcionários)
     let reservaRescisao = 0;
     let multaFgtsRescisao = 0;
     let custoSeAssinarCarteira = 0;
-
-    if (temEncargos) {
-      const mesesTrabalhados = colaborador.data_admissao 
-        ? Math.max(1, Math.floor((new Date().getTime() - new Date(colaborador.data_admissao).getTime()) / (1000 * 60 * 60 * 24 * 30)))
+    if (isFuncionario) {
+      const mesesTrabalhados = colaborador.data_admissao
+        ? Math.max(
+          1,
+          Math.floor(
+            (Date.now() - Date.parse(`${colaborador.data_admissao}T00:00:00`))
+            / (30 * 86_400_000),
+          ),
+        )
         : 1;
       const fgtsAcumulado = fgts * mesesTrabalhados;
-      multaFgtsRescisao = fgtsAcumulado * 0.40;
-      const avisoPrevio = salario;
-      const feriasVencidas = feriasProvisao * mesesTrabalhados;
-      const decimoVencido = decimoTerceiroProvisao * mesesTrabalhados;
-      reservaRescisao = fgtsAcumulado + multaFgtsRescisao + avisoPrevio + feriasVencidas + decimoVencido;
-      custoSeAssinarCarteira = salario + inssEmpresa + fgts + decimoTerceiroProvisao + feriasProvisao;
+      multaFgtsRescisao = fgtsAcumulado * 0.4;
+      reservaRescisao = fgtsAcumulado
+        + multaFgtsRescisao
+        + salarioBruto
+        + feriasProvisao * mesesTrabalhados
+        + decimoTerceiroProvisao * mesesTrabalhados;
+      custoSeAssinarCarteira = salarioBruto
+        + inssEmpresa
+        + fgts
+        + decimoTerceiroProvisao
+        + feriasProvisao;
     }
 
-    // Presenças
-    const diasTrabalhados = presencas.filter(p => p.presente).length;
-    const diasFaltas = presencas.filter(p => !p.presente).length;
-    const diasAtrasos = presencas.filter(p => p.atraso_minutos > 0).length;
+    const diasTrabalhados = presencas.filter((presenca) => presenca.presente).length;
+    const diasFaltas = presencas.filter((presenca) => !presenca.presente).length;
+    const diasAtrasos = presencas.filter((presenca) => presenca.atraso_minutos > 0).length;
     const percentualFaltas = presencas.length > 0 ? (diasFaltas / presencas.length) * 100 : 0;
 
-    // Fim de experiência (só para funcionários)
-    let diasParaFimExperiencia: number | null = null;
-    if (temEncargos && colaborador.status === "experiencia" && colaborador.data_admissao) {
-      const adm = new Date(colaborador.data_admissao);
-      const fimExp = new Date(adm);
-      fimExp.setDate(adm.getDate() + (colaborador.dias_experiencia || 90));
-      const hoje = new Date();
-      diasParaFimExperiencia = Math.max(0, Math.ceil((fimExp.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
-    }
+    const estadoContrato = resolverEstadoContrato({
+      statusPersistido: colaborador.status,
+      dataAdmissao: colaborador.data_admissao,
+      diasExperiencia: colaborador.dias_experiencia,
+      dataDemissao: colaborador.data_demissao,
+    });
+
+    const diasParaFimExperiencia = estadoContrato.estado === 'experiencia'
+      ? estadoContrato.diasRestantes
+      : null;
 
     return {
-      salarioBruto: salario, inssEmpresa, fgts, decimoTerceiroProvisao, feriasProvisao,
-      multaFgtsRescisao, valeTransporte: vtTotal, valeTransporteBase: vtBase,
-      valeTransporteAcertos: vtAcertos, valeTransporteDiario: vtDiario,
-      diasUteisMes: diasUteis, valeRefeicao: vr, outrosBeneficios: outros,
-      custosVariaveis: custosVariaveisTotal, custoRealMensal, custoPorDia, custoPorHora,
-      reservaRescisao, custoSeAssinarCarteira, diasTrabalhados, diasFaltas, diasAtrasos,
-      percentualFaltas, diasParaFimExperiencia,
+      salarioBruto,
+      inssEmpresa,
+      fgts,
+      decimoTerceiroProvisao,
+      feriasProvisao,
+      multaFgtsRescisao,
+      valeTransporte,
+      valeTransporteBase,
+      valeTransporteAcertos,
+      valeTransporteDiario,
+      diasUteisMes,
+      valeRefeicao,
+      outrosBeneficios,
+      custosVariaveis,
+      custoRealMensal,
+      custoPorDia,
+      custoPorHora,
+      reservaRescisao,
+      custoSeAssinarCarteira,
+      diasTrabalhados,
+      diasFaltas,
+      diasAtrasos,
+      percentualFaltas,
+      diasParaFimExperiencia,
+      estadoContrato,
     };
-  }, [colaborador, custos, presencas, mesRef]);
+  }, [colaborador, custos, presencas, mesRef, regimeEncargos]);
 }

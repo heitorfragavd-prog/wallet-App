@@ -43,6 +43,7 @@ import { ThemeToggle } from "@/shared/components/ThemeToggle";
 import { WhatsAppButton } from "@/shared/components/WhatsAppButton";
 import { WorkspaceSwitcher } from "@/shared/components/WorkspaceSwitcher";
 import { NotificationsPopover } from "@/shared/components/NotificationsPopover";
+import { PrivacyToggle } from "@/shared/components/PrivacyToggle";
 import { useDivipayConciliacaoAuto } from "@/domains/divipay/hooks/useDivipayConciliacao";
 
 interface DashboardLayoutProps {
@@ -82,13 +83,12 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: Users, label: "Equipe", path: "/equipe" },
     { icon: CheckCircle, label: "Conciliação", path: "/conciliacao" },
     { icon: Receipt, label: "Recibos", path: "/recibos" },
-    { icon: BarChart3, label: "Relatorios", path: "/relatorios" },
+    { icon: BarChart3, label: "Relatórios", path: "/relatorios" },
     { icon: TrendingUp, label: "Fluxo de Caixa", path: "/fluxo-caixa" },
     { icon: FileText, label: "DRE Simplificada", path: "/dre" },
     { icon: ChefHat, label: "Cardápio", path: "/cardapio" },
     { icon: AlertTriangle, label: "Validades", path: "/validades" },
     { icon: Target, label: "Metas", path: "/metas" },
-    { icon: BarChart3, label: "Comparativo", path: "/comparativo" },
     { icon: Wallet, label: "Patrimônio", path: "/patrimonio" },
     { icon: Brain, label: "Inteligência Artificial", path: "/ia" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },
@@ -139,10 +139,10 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
       {/* Overlay for mobile menu */}
       {isMobileMenuOpen && (
-        <div
-          className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-40"
           onClick={closeMobileMenu}
-        ></div>
+        />
       )}
 
       {/* Sidebar */}
@@ -186,7 +186,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           <WorkspaceSwitcher isCollapsed={isCollapsed} />
         </div>
 
-        {/* Collapse Button - Positioned on the edge - Desktop only */}
+        {/* Collapse Button - Desktop only */}
         <Button
           variant="ghost"
           size="icon"
@@ -267,6 +267,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
             {/* Mobile menu space */}
           </div>
           <div className="flex items-center gap-3 ml-auto">
+            <PrivacyToggle />
             <NotificationsPopover />
           </div>
         </header>

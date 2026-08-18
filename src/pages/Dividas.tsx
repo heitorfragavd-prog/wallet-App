@@ -59,6 +59,7 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { usePrivacy } from "@/contexts/PrivacyContext";
 
 // Função para formatar data
 const formatarData = (dataString: string) => {
@@ -128,6 +129,7 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
 
 const Dividas = () => {
   const { toast } = useToast();
+  const { isPrivate, formatCurrency } = usePrivacy();
   const { categoriasDespesa } = useCategorias();
   const { contas } = useContasUsuario();
 
@@ -516,7 +518,7 @@ const Dividas = () => {
                   <p className="text-sm text-muted-foreground">Total a Pagar</p>
                   {loading ? <Skeleton className="h-8 w-32" /> : (
                     <p className="text-2xl font-bold text-rose-500">
-                      R$ {totalDividas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      {formatCurrency(totalDividas)}
                     </p>
                   )}
                 </div>
@@ -584,7 +586,7 @@ const Dividas = () => {
                 <div>
                   <p className="text-sm font-medium text-foreground">Progresso de Quitação</p>
                   <p className="text-xs text-muted-foreground">
-                    R$ {totalPago.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} pagos de R$ {(totalPago + totalDividas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    {formatCurrency(totalPago)} pagos de {formatCurrency(totalPago + totalDividas)}
                   </p>
                 </div>
                 <Badge className="bg-violet-500/20 text-violet-600 border-0">{progressoGeral.toFixed(0)}%</Badge>
@@ -942,11 +944,11 @@ const Dividas = () => {
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground mb-1">Valor Restante</p>
-                              <p className="font-semibold text-rose-500 whitespace-nowrap">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                              <p className="font-semibold text-rose-500 whitespace-nowrap">{formatCurrency(divida.valor_restante)}</p>
                             </div>
                             <div>
                               <p className="text-xs text-muted-foreground mb-1">Parcela</p>
-                              <p className="font-semibold text-foreground whitespace-nowrap">R$ {(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                              <p className="font-semibold text-foreground whitespace-nowrap">{formatCurrency(divida.valor_total / divida.parcelas)}</p>
                             </div>
                           </div>
 
@@ -1301,11 +1303,11 @@ const Dividas = () => {
                                 </div>
                                 <div>
                                   <p className="text-xs text-muted-foreground">Valor Restante</p>
-                                  <p className="font-semibold text-rose-500">R$ {divida.valor_restante.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                                  <p className="font-semibold text-rose-500">{formatCurrency(divida.valor_restante)}</p>
                                 </div>
                                 <div>
                                   <p className="text-xs text-muted-foreground">Valor Parcela</p>
-                                  <p className="font-semibold text-foreground">R$ {(divida.valor_total / divida.parcelas).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</p>
+                                  <p className="font-semibold text-foreground">{formatCurrency(divida.valor_total / divida.parcelas)}</p>
                                 </div>
                               </div>
                               <div className="flex items-center justify-between gap-2 pt-3 border-t border-border/50">

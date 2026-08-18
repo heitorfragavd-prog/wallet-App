@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./domains/auth/components/ProtectedRoute";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { Toaster } from "@/shared/components/ui/toaster";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import { PrivacyProvider } from "@/contexts/PrivacyContext";
 import { lazyWithRetry } from "@/shared/utils/lazyWithRetry";
 import "./App.css";
 
@@ -87,74 +88,77 @@ function App() {
     <Router>
       <ErrorBoundary context="App">
         <WorkspaceProvider>
-          <Suspense fallback={<PageLoader />}>
-            <div className="min-h-screen bg-background">
-              <Routes>
-                {/* Públicas */}
-                <Route path="/"      element={<LandingPage />} />
-                <Route path="/login" element={<Login />} />
+          <PrivacyProvider>
+            <Suspense fallback={<PageLoader />}>
+              <div className="min-h-screen bg-background">
+                <Routes>
+                  {/* Públicas */}
+                  <Route path="/"      element={<LandingPage />} />
+                  <Route path="/login" element={<Login />} />
 
-                {/* Protegidas — usuário comum */}
-                <Route path="/dashboard"  element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-                <Route path="/receitas"   element={<ProtectedRoute><Receitas /></ProtectedRoute>} />
-                <Route path="/despesas"   element={<ProtectedRoute><Despesas /></ProtectedRoute>} />
-                <Route path="/transacoes" element={<ProtectedRoute><Transacoes /></ProtectedRoute>} />
-                <Route path="/dividas"    element={<ProtectedRoute><Dividas /></ProtectedRoute>} />
-                <Route path="/categorias" element={<ProtectedRoute><Categorias /></ProtectedRoute>} />
-                <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
-                <Route path="/metas"      element={<ProtectedRoute><Metas /></ProtectedRoute>} />
-                <Route path="/mercado"    element={<ProtectedRoute><Mercado /></ProtectedRoute>} />
-                <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
-                <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
-                <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
-                <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
-                <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
-                <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
-                <Route path="/dre"           element={<ProtectedRoute><DRE /></ProtectedRoute>} />
-                <Route path="/fluxo-caixa"   element={<ProtectedRoute><FluxoCaixa /></ProtectedRoute>} />
-                <Route path="/contas"        element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
-                <Route path="/investimento/:id" element={<ProtectedRoute><InvestimentoDetalhe /></ProtectedRoute>} />
-                <Route path="/meta-investimento/:id" element={<ProtectedRoute><MetaInvestimentoDetalhe /></ProtectedRoute>} />
-                <Route path="/cardapio"      element={<ProtectedRoute><Cardapio /></ProtectedRoute>} />
-                <Route path="/cardapio/novo" element={<ProtectedRoute><CardapioNovo /></ProtectedRoute>} />
-                <Route path="/cardapio/:id"  element={<ProtectedRoute><CardapioDetalhe /></ProtectedRoute>} />
-                <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
-                <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
-                <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
-                <Route path="/ia-chat"       element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
-                <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
-                <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
-                <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
-                <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
-                <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
-                <Route path="/equipe"        element={<ProtectedRoute><EquipePage /></ProtectedRoute>} />
-                <Route path="/equipe/novo"   element={<ProtectedRoute><EquipeNovoPage /></ProtectedRoute>} />
-                <Route path="/equipe/:id"    element={<ProtectedRoute><EquipeDetalhePage /></ProtectedRoute>} />
-                <Route path="/equipe/:id/editar" element={<ProtectedRoute><EquipeEditarPage /></ProtectedRoute>} />
-                <Route path="/equipe/:id/custo/novo" element={<ProtectedRoute><EquipeCustoNovoPage /></ProtectedRoute>} />
-                <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
-                <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
-                <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
-                <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
+                  {/* Protegidas — usuário comum */}
+                  <Route path="/dashboard"  element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                  <Route path="/receitas"   element={<ProtectedRoute><Receitas /></ProtectedRoute>} />
+                  <Route path="/despesas"   element={<ProtectedRoute><Despesas /></ProtectedRoute>} />
+                  <Route path="/transacoes" element={<ProtectedRoute><Transacoes /></ProtectedRoute>} />
+                  <Route path="/dividas"    element={<ProtectedRoute><Dividas /></ProtectedRoute>} />
+                  <Route path="/categorias" element={<ProtectedRoute><Categorias /></ProtectedRoute>} />
+                  <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
+                  <Route path="/metas"      element={<ProtectedRoute><Metas /></ProtectedRoute>} />
+                  <Route path="/mercado"    element={<ProtectedRoute><Mercado /></ProtectedRoute>} />
+                  <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
+                  <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
+                  <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
+                  <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
+                  <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
+                  <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
+                  <Route path="/dre"           element={<ProtectedRoute><DRE /></ProtectedRoute>} />
+                  <Route path="/fluxo-caixa"   element={<ProtectedRoute><FluxoCaixa /></ProtectedRoute>} />
+                  <Route path="/contas"        element={<ProtectedRoute><ContasCartoes /></ProtectedRoute>} />
+                  <Route path="/investimento/:id" element={<ProtectedRoute><InvestimentoDetalhe /></ProtectedRoute>} />
+                  <Route path="/meta-investimento/:id" element={<ProtectedRoute><MetaInvestimentoDetalhe /></ProtectedRoute>} />
+                  <Route path="/cardapio"      element={<ProtectedRoute><Cardapio /></ProtectedRoute>} />
+                  <Route path="/cardapio/novo" element={<ProtectedRoute><CardapioNovo /></ProtectedRoute>} />
+                  <Route path="/cardapio/:id"  element={<ProtectedRoute><CardapioDetalhe /></ProtectedRoute>} />
+                  <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
+                  <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
+                  <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
+                  <Route path="/ia-chat"       element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
+                  <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
+                  <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
+                  <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
+                  <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
+                  <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
+                  <Route path="/equipe"        element={<ProtectedRoute><EquipePage /></ProtectedRoute>} />
+                  <Route path="/equipe/novo"   element={<ProtectedRoute><EquipeNovoPage /></ProtectedRoute>} />
+                  <Route path="/equipe/:id"    element={<ProtectedRoute><EquipeDetalhePage /></ProtectedRoute>} />
+                  <Route path="/equipe/:id/editar" element={<ProtectedRoute><EquipeEditarPage /></ProtectedRoute>} />
+                  <Route path="/equipe/:id/custos/novo" element={<ProtectedRoute><EquipeCustoNovoPage /></ProtectedRoute>} />
+                  <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
+                  <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
+                  <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
+                  <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
 
-                {/* Protegidas — somente admin */}
-                <Route path="/admin"                        element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />
-                <Route path="/admin/users"                  element={<ProtectedRoute requiredRole="admin"><AdminUsers /></ProtectedRoute>} />
-                <Route path="/admin/plans"                  element={<ProtectedRoute requiredRole="admin"><AdminPlans /></ProtectedRoute>} />
-                <Route path="/admin/limits"                 element={<ProtectedRoute requiredRole="admin"><AdminPlanLimits /></ProtectedRoute>} />
-                <Route path="/admin/subscriptions"          element={<ProtectedRoute requiredRole="admin"><AdminSubscriptions /></ProtectedRoute>} />
-                <Route path="/admin/reports"                element={<ProtectedRoute requiredRole="admin"><AdminReports /></ProtectedRoute>} />
-                <Route path="/admin/audit"                  element={<ProtectedRoute requiredRole="admin"><AdminAuditLogs /></ProtectedRoute>} />
-                <Route path="/admin/payment-settings"       element={<ProtectedRoute requiredRole="admin"><AdminPaymentSettings /></ProtectedRoute>} />
-                <Route path="/admin/webhooks"               element={<ProtectedRoute requiredRole="admin"><AdminWebhooks /></ProtectedRoute>} />
-                <Route path="/admin/webhook-settings"       element={<ProtectedRoute requiredRole="admin"><AdminWebhookSettings /></ProtectedRoute>} />
-                <Route path="/admin/webhooks/manutencao"    element={<ProtectedRoute requiredRole="admin"><AdminWebhooksManutencao /></ProtectedRoute>} />
+                  {/* Rotas administrativas */}
+                  <Route path="/admin"                element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />
+                  <Route path="/admin/users"          element={<ProtectedRoute requiredRole="admin"><AdminUsers /></ProtectedRoute>} />
+                  <Route path="/admin/plans"          element={<ProtectedRoute requiredRole="admin"><AdminPlans /></ProtectedRoute>} />
+                  <Route path="/admin/plans/limits"   element={<ProtectedRoute requiredRole="admin"><AdminPlanLimits /></ProtectedRoute>} />
+                  <Route path="/admin/subscriptions"  element={<ProtectedRoute requiredRole="admin"><AdminSubscriptions /></ProtectedRoute>} />
+                  <Route path="/admin/reports"        element={<ProtectedRoute requiredRole="admin"><AdminReports /></ProtectedRoute>} />
+                  <Route path="/admin/audit-logs"     element={<ProtectedRoute requiredRole="admin"><AdminAuditLogs /></ProtectedRoute>} />
+                  <Route path="/admin/payment-settings" element={<ProtectedRoute requiredRole="admin"><AdminPaymentSettings /></ProtectedRoute>} />
+                  <Route path="/admin/webhook-settings" element={<ProtectedRoute requiredRole="admin"><AdminWebhookSettings /></ProtectedRoute>} />
+                  <Route path="/admin/webhooks/manutencao" element={<ProtectedRoute requiredRole="admin"><AdminWebhooksManutencao /></ProtectedRoute>} />
+                  <Route path="/admin/webhooks"       element={<ProtectedRoute requiredRole="admin"><AdminWebhooks /></ProtectedRoute>} />
 
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-              <Toaster />
-            </div>
-          </Suspense>
+                  {/* 404 */}
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+                <Toaster />
+              </div>
+            </Suspense>
+          </PrivacyProvider>
         </WorkspaceProvider>
       </ErrorBoundary>
     </Router>

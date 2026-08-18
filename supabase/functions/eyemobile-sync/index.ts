@@ -613,18 +613,21 @@ async function fetchDashboardData(
     }
   };
 
+  const effectiveStartDate = startDate || toSaoPauloDate(new Date().toISOString());
+  const effectiveEndDate = endDate || effectiveStartDate;
+
   // Busca vendas com paginação completa (iterando todas as páginas até que acabe o período)
   const buildUrl = (off: number) => {
     const params = new URLSearchParams({ limit: String(customLimit), offset: String(off) });
-    if (startDate) params.set("start_date", startDate);
-    if (endDate) params.set("end_date", endDate);
+    if (effectiveStartDate) params.set("start_date", effectiveStartDate);
+    if (effectiveEndDate) params.set("end_date", effectiveEndDate);
     if (selectedStoreId) params.set("store_id", selectedStoreId);
     return `${baseUrl}/sales?${params.toString()}`;
   };
   const buildFallbackUrl = (off: number) => {
     const params = new URLSearchParams({ limit: String(customLimit), offset: String(off) });
-    if (startDate) params.set("start_date", startDate);
-    if (endDate) params.set("end_date", endDate);
+    if (effectiveStartDate) params.set("start_date", effectiveStartDate);
+    if (effectiveEndDate) params.set("end_date", effectiveEndDate);
     if (selectedStoreId) params.set("store_id", selectedStoreId);
     return `${baseUrl}/transactions?${params.toString()}`;
   };
@@ -632,7 +635,7 @@ async function fetchDashboardData(
   let allSales: any[] = [];
   let startOffset = 0;
 
-  if (startDate) {
+  if (effectiveStartDate) {
     try {
       const { count: totalDbCount } = await supabaseAdmin
         .from("transacoes")
@@ -647,18 +650,18 @@ async function fetchDashboardData(
         .eq("user_id", user_id)
         .eq("tipo", "receita")
         .ilike("observacoes", "%Integrado via Eyemobile API.%")
-        .lt("data", startDate);
+        .lt("data", effectiveStartDate);
 
       startOffset = await findStartOffsetParallel(
         baseUrl,
         headers,
-        startDate,
+        effectiveStartDate,
         customLimit,
         selectedStoreId,
         dbCountBeforeDate || 0,
         totalDbCount || 0
       );
-      console.log(`Resolved API start offset for date ${startDate}: ${startOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
+      console.log(`Resolved API start offset for date ${effectiveStartDate}: ${startOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
     } catch (e: any) {
       console.error(`Error resolving API start offset: ${e.message}`);
     }

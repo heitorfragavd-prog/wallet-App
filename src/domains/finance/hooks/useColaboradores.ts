@@ -12,6 +12,9 @@ export interface Colaborador {
   data_admissao: string | null;
   data_demissao: string | null;
   salario_bruto: number;
+  valor_pro_labore?: number;
+  valor_diaria?: number;
+  dia_pagamento?: number | null;
   vale_transporte: number;
   vale_transporte_diario?: number;
   vale_refeicao: number;
@@ -29,6 +32,7 @@ export interface Colaborador {
   contato_emergencia_2?: string | null;
   pix_tipo?: string | null;
   pix_chave?: string | null;
+  pix_chave_normalizada?: string | null;
   banco_nome?: string | null;
   banco_agencia?: string | null;
   banco_conta?: string | null;

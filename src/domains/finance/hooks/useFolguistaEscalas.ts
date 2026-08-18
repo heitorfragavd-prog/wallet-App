@@ -13,6 +13,9 @@ export interface ColaboradorEscala {
   valor_meta: number;
   valor_total: number;
   observacao?: string | null;
+  status?: "programada" | "realizada" | "cancelada";
+  cancelado_em?: string | null;
+  cancelamento_motivo?: string | null;
   created_at: string;
 }
 
@@ -56,54 +59,39 @@ export function useFolguistaEscalas(colaboradorId: string | null, mesRef?: strin
       observacao?: string;
     }) => {
       if (!activeWorkspace?.id) throw new Error("Workspace não encontrado");
-      const valor_total = nova.valor_diaria + (nova.bateu_meta ? nova.valor_meta : 0);
-
-      // 1. Inserir na tabela colaborador_escalas
-      const { data: escala, error } = await supabase
-        .from("colaborador_escalas")
-        .insert({
-          colaborador_id: nova.colaborador_id,
-          workspace_id: activeWorkspace.id,
-          data: nova.data,
-          turno: nova.turno,
-          valor_diaria: nova.valor_diaria,
-          bateu_meta: nova.bateu_meta,
-          valor_meta: nova.valor_meta,
-          valor_total,
-          observacao: nova.observacao || null,
-        })
-        .select("*")
-        .single();
-
-      if (error) throw error;
-
-      // 2. Criar registro de custo em colaborador_custos para contabilizar financeiramente
-      await supabase.from("colaborador_custos").insert({
-        colaborador_id: nova.colaborador_id,
-        tipo: "folguista",
-        valor: valor_total,
-        data: nova.data,
-        descricao: `Diária Folguista (${nova.turno})${nova.bateu_meta ? " + Bônus Meta" : ""}`,
-        lancado_na_despesa: true,
+      const { data, error } = await supabase.rpc("registrar_escala_folguista" as never, {
+        p_colaborador_id: nova.colaborador_id,
+        p_data: nova.data,
+        p_turno: nova.turno,
+        p_valor_diaria: nova.valor_diaria,
+        p_bateu_meta: nova.bateu_meta,
+        p_valor_meta: nova.valor_meta,
+        p_observacao: nova.observacao || null,
       });
-
-      return escala;
+      if (error) throw error;
+      return data as string;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["colaborador_escalas"] });
-      queryClient.invalidateQueries({ queryKey: ["colaborador_custos"] });
+      queryClient.invalidateQueries({ queryKey: ["equipe-acertos"] });
+      queryClient.invalidateQueries({ queryKey: ["equipe-resumo"] });
       queryClient.invalidateQueries({ queryKey: ["colaboradores"] });
     },
   });
 
   const deleteEscala = useMutation({
     mutationFn: async (escalaId: string) => {
-      const { error } = await supabase.from("colaborador_escalas").delete().eq("id", escalaId);
+      const { error } = await supabase.rpc("cancelar_escala_e_recalcular_acerto" as never, {
+        p_escala_id: escalaId,
+        p_motivo: "Escala cancelada pelo usuario",
+      });
       if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["colaborador_escalas"] });
-      queryClient.invalidateQueries({ queryKey: ["colaborador_custos"] });
+      queryClient.invalidateQueries({ queryKey: ["equipe-acertos"] });
+      queryClient.invalidateQueries({ queryKey: ["equipe-resumo"] });
+      queryClient.invalidateQueries({ queryKey: ["despesas"] });
       queryClient.invalidateQueries({ queryKey: ["colaboradores"] });
     },
   });

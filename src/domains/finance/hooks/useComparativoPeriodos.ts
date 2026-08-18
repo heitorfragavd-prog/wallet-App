@@ -18,13 +18,13 @@ async function fetchSomaValores(buildQuery: () => any): Promise<number> {
   try {
     for (let offset = 0; offset < 50000; offset += PAGE_SIZE) {
       const { data, error } = await buildQuery().range(offset, offset + PAGE_SIZE - 1);
-      if (error) break;
+      if (error) throw new Error(error.message);
       const rows = data ?? [];
       total += rows.reduce((acc: number, r: any) => acc + Number(r.valor || 0), 0);
       if (rows.length < PAGE_SIZE) break;
     }
   } catch (e) {
-    console.warn("fetchSomaValores erro:", e);
+    throw e instanceof Error ? e : new Error("Não foi possível carregar os dados do comparativo mensal");
   }
   return total;
 }

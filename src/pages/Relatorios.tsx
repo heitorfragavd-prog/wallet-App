@@ -108,11 +108,12 @@ const getMesPorExtenso = (date: Date) => {
   return `${meses[date.getMonth()]}/${date.getFullYear()}`;
 };
 
-const formatCurrency = (value: number) =>
-  `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-
 // ── Hook principal de dados ─────────────────────────────────────────────────
 import type { DateRange } from "@/shared/components/DateRangePicker/DateRangePicker";
+import { useSearchParams } from "react-router-dom";
+import { usePrivacy } from "@/contexts/PrivacyContext";
+import { ComparativosView } from "@/domains/finance/components/comparativos/ComparativosView";
+import { EquipeReport } from "@/domains/finance/components/equipe/EquipeReport";
 
 interface FilterParams {
   dateRange: DateRange;
@@ -379,6 +380,17 @@ const metaStatusConfig: Record<string, { label: string; color: string }> = {
 
 // ── Componente principal ─────────────────────────────────────────────────────
 const Relatorios = () => {
+  const { isPrivate, formatCurrency } = usePrivacy();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const validTabs = new Set(["overview", "comparativos", "equipe", "categories", "transactions", "dividas", "metas", "recorrentes"]);
+  const requestedTab = searchParams.get("aba") ?? "overview";
+  const activeTab = validTabs.has(requestedTab) ? requestedTab : "overview";
+  const changeTab = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("aba", value);
+    if (value === "comparativos" && !["completa", "diaria", "mensal"].includes(next.get("visao") ?? "")) next.set("visao", "completa");
+    setSearchParams(next);
+  };
   const { exportarTransacoes_Excel } = useExportarRelatorios();
   const { dateRange, setRange, clearFilter } = useDateRangeFilter();
   const { toast } = useToast();
@@ -645,6 +657,53 @@ const Relatorios = () => {
   const totalTxPages = Math.ceil(filteredTransactions.length / TX_PAGE_SIZE);
 
   // ── JSX ───────────────────────────────────────────────────────────────
+  if (activeTab === "comparativos") {
+    return (
+      <DashboardLayout>
+        <div className="p-4 md:p-6 space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl p-3 shadow-lg shadow-cyan-500/20">
+              <BarChart3 className="w-6 h-6 text-white" />
+            </div>
+            <div><h1 className="text-2xl font-bold text-foreground">Relatórios</h1><p className="text-muted-foreground text-sm">Central de comparativos</p></div>
+          </div>
+          <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
+            <TabsList className="flex-wrap h-auto gap-1 p-1">
+              <TabsTrigger value="overview">Visão Geral</TabsTrigger>
+              <TabsTrigger value="comparativos">Comparativos</TabsTrigger>
+              <TabsTrigger value="equipe">Equipe</TabsTrigger>
+              <TabsTrigger value="categories">Categorias</TabsTrigger>
+              <TabsTrigger value="transactions">Transações</TabsTrigger>
+              <TabsTrigger value="dividas">Dívidas</TabsTrigger>
+              <TabsTrigger value="metas">Metas</TabsTrigger>
+              <TabsTrigger value="recorrentes">Recorrentes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="comparativos" className="space-y-4"><ComparativosView /></TabsContent>
+          </Tabs>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (activeTab === "equipe") {
+    return (
+      <DashboardLayout>
+        <div className="space-y-4 p-4 md:p-6">
+          <div className="flex items-center gap-4">
+            <div className="rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 p-3 shadow-lg shadow-cyan-500/20"><BarChart3 className="h-6 w-6 text-white" /></div>
+            <div><h1 className="text-2xl font-bold">Relatórios</h1><p className="text-sm text-muted-foreground">Custos classificados da equipe</p></div>
+          </div>
+          <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
+            <TabsList className="h-auto flex-wrap gap-1 p-1">
+              <TabsTrigger value="overview">Visão Geral</TabsTrigger><TabsTrigger value="comparativos">Comparativos</TabsTrigger><TabsTrigger value="equipe">Equipe</TabsTrigger><TabsTrigger value="categories">Categorias</TabsTrigger><TabsTrigger value="transactions">Transações</TabsTrigger><TabsTrigger value="dividas">Dívidas</TabsTrigger><TabsTrigger value="metas">Metas</TabsTrigger><TabsTrigger value="recorrentes">Recorrentes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="equipe"><EquipeReport startDate={dateRange.startDate} endDate={dateRange.endDate} /></TabsContent>
+          </Tabs>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
       <div className="p-4 md:p-6 space-y-4">
@@ -1031,9 +1090,11 @@ const Relatorios = () => {
         </div>
 
         {/* ── Tabs ────────────────────────────────────────────────────── */}
-        <Tabs defaultValue="overview" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
           <TabsList className="flex-wrap h-auto gap-1 p-1">
             <TabsTrigger value="overview" className="text-xs sm:text-sm">Visão Geral</TabsTrigger>
+            <TabsTrigger value="comparativos" className="text-xs sm:text-sm">Comparativos</TabsTrigger>
+            <TabsTrigger value="equipe" className="text-xs sm:text-sm">Equipe</TabsTrigger>
             <TabsTrigger value="categories" className="text-xs sm:text-sm">Categorias</TabsTrigger>
             <TabsTrigger value="transactions" className="text-xs sm:text-sm">
               Transações

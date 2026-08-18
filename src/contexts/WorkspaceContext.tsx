@@ -8,6 +8,11 @@ export interface Workspace {
   nome: string;
   tipo: "PF" | "PJ";
   is_default: boolean;
+  regime_encargos?: "mei" | "geral";
+  piso_categoria?: number | null;
+  piso_vigencia_inicio?: string | null;
+  convencao_mte?: string | null;
+  convencao_fonte_url?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -44,7 +49,6 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const { data, error } = await supabase
         .from("workspaces")
         .select("*")
-        .eq("user_id", user.id)
         .order("created_at", { ascending: true });
 
       if (error) {

@@ -2,6 +2,29 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.45] - 2026-08-18
+
+### ✨ Novo
+- **Módulo IA Agent V2:**
+  - Implementação do novo orquestrador de IA (`wallet-ai-orchestrator` e `wallet-ai-query`).
+  - Novos componentes de interface para o agente (`AgentV2Tab`, `AgentActionProposalCard`, `AgentVisualizationRenderer`).
+  - Segurança aprimorada na comunicação via Edge Functions.
+  - Novas migrations para dar suporte ao Agent V2 (`20260818010000_wallet_ai_phase1_security`, `conversations`, `action_proposals`).
+- **Módulo de Equipe:**
+  - Adicionado simulador de rescisão (`TerminationSimulator`) e breakdown de custos do empregado (`EmployeeCostBreakdown`).
+  - Nova tabela/migration para configurações trabalhistas (`20260817140000_equipe_configuracao_trabalhista.sql`).
+- **Privacidade & Segurança:**
+  - Novo controle de privacidade (`PrivacyContext`, `PrivacyToggle`) que permite ocultar valores sensíveis no painel inteiro.
+
+### 🔧 Corrigido & Melhorado
+- Integração maciça de testes automatizados unitários e de componente (Vitest) cobrindo IA, Equipe, Rescisão e Componentes.
+- Melhorias nos hooks de rescisão, cálculos, obrigações mensais e acertos semanais da equipe (`useEquipeResumo`, `useEquipeObrigacoesMensais`, `useEquipeAcertos`, etc.).
+
+### 📊 Estatísticas
+- **Múltiplos commits e +111 arquivos alterados na release 1.0.45**
+
+---
+
 ## [1.0.44] - 2026-08-15
 
 ### ✨ Novo
