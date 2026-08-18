@@ -22,12 +22,44 @@ serve(async (req) => {
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const telegramBotToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
+  console.log("[telegram-webhook] ===== REQUISIÇÃO RECEBIDA =====");
+  console.log("[telegram-webhook] URL:", req.url, "Method:", req.method, "hasBotToken:", !!telegramBotToken);
+
   const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { persistSession: false },
   });
 
   try {
-    const body = await req.json();
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch (_) {}
+
+    // ─── AÇÕES ADMINISTRATIVAS (Info / Configuração do Webhook) ───
+    if (body?.action === "get_webhook_info" || req.method === "GET") {
+      if (!telegramBotToken) {
+        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const [whResp, meResp] = await Promise.all([
+        fetch(`https://api.telegram.org/bot${telegramBotToken}/getWebhookInfo`).then(r => r.json()),
+        fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json()),
+      ]);
+      return new Response(JSON.stringify({ webhook_info: whResp, bot_info: meResp, expected_url: `${supabaseUrl}/functions/v1/telegram-webhook` }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (body?.action === "setup_webhook") {
+      if (!telegramBotToken) {
+        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
+      const setResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`).then(r => r.json());
+      const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
+      return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // ─── CASO 1: Chamada da Web App para vincular a conta via Token ───
     if (body?.action === "vincular") {
