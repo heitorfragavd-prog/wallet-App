@@ -115,7 +115,6 @@ const TOOLS = [
   { type: "function", function: { name: "atualizar_divida", description: "Atualiza status de dívida (ex: marcar como paga, registrar pagamento parcial).", parameters: { type: "object", properties: { divida_id: { type: "string" }, status: { type: "string", enum: ["pendente", "vencida", "quitada"] }, valor_pago: { type: "number" } }, required: ["divida_id"] } } },
   { type: "function", function: { name: "cadastrar_meta", description: "Cria nova meta financeira com valor alvo e prazo.", parameters: { type: "object", properties: { nome: { type: "string" }, valor_alvo: { type: "number" }, valor_atual: { type: "number", description: "Valor já acumulado (padrão 0)" }, data_limite: { type: "string", description: "YYYY-MM-DD" }, descricao: { type: "string" } }, required: ["nome", "valor_alvo"] } } },
   { type: "function", function: { name: "atualizar_meta", description: "Atualiza progresso ou dados de uma meta existente.", parameters: { type: "object", properties: { meta_id: { type: "string" }, valor_atual: { type: "number" }, status: { type: "string", enum: ["ativa", "concluida", "pausada"] }, nome: { type: "string" }, valor_alvo: { type: "number" }, data_limite: { type: "string" } }, required: ["meta_id"] } } },
-  { type: "function", function: { name: "analisar_documento", description: "Analisa uma imagem ou PDF de documento financeiro (Nota Fiscal ou Boleto) e extrai dados estruturados em JSON. Use quando o usuário enviar qualquer imagem de documento.", parameters: { type: "object", properties: { image_base64: { type: "string", description: "Documento em base64" }, tipo_suspeito: { type: "string", enum: ["nota_fiscal", "boleto", "desconhecido"] } }, required: ["image_base64"] } } },
   { type: "function", function: { name: "atualizar_custo_produto_eyemobile", description: "Atualiza o custo de um produto no Eyemobile PDV e adiciona quantidade ao estoque. Use após analisar uma NF de compra.", parameters: { type: "object", properties: { produto_id: { type: "string" }, produto_nome: { type: "string" }, codigo_barras: { type: "string" }, novo_custo: { type: "number" }, quantidade_estoque: { type: "number" } }, required: ["novo_custo"] } } },
   { type: "function", function: { name: "cadastrar_despesa_nf", description: "Cadastra uma despesa no sistema a partir dos dados de uma Nota Fiscal de compra.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor: { type: "number" }, data: { type: "string" }, categoria_nome: { type: "string" }, fornecedor: { type: "string" }, metodo_pagamento: { type: "string", enum: ["pix", "boleto", "cartao_credito", "cartao_debito", "dinheiro", "outros"] }, numero_nf: { type: "string" } }, required: ["descricao", "valor", "data"] } } },
   { type: "function", function: { name: "cadastrar_divida_boleto", description: "Cadastra uma nova dívida no sistema a partir dos dados de um boleto analisado.", parameters: { type: "object", properties: { descricao: { type: "string" }, valor_total: { type: "number" }, credor: { type: "string" }, data_vencimento: { type: "string" }, codigo_barras: { type: "string" }, linha_digitavel: { type: "string" }, pix_copia_cola: { type: "string" }, parcelas: { type: "number" }, categoria_nome: { type: "string" } }, required: ["descricao", "valor_total", "data_vencimento"] } } },
@@ -824,6 +823,8 @@ Deno.serve(async (req: Request) => {
   const messages = [...body.messages] as Record<string, unknown>[];
   const MAX_ITERATIONS = 8;
 
+  const toolsToUse = Array.isArray(body.tools) ? (body.tools.length > 0 ? body.tools : undefined) : (body.tools === null ? undefined : TOOLS);
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let modelToUse = body.model || "gpt-4o-mini";
     let response = await fetch(OPENAI_API_URL, {
@@ -835,8 +836,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model: modelToUse,
         messages,
-        tools: TOOLS,
-        tool_choice: "auto",
+        ...(toolsToUse ? { tools: toolsToUse, tool_choice: "auto" } : {}),
         max_tokens: body.max_tokens || 2000,
         temperature: body.temperature ?? 0.3,
         response_format: body.response_format || undefined,
@@ -858,8 +858,7 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({
             model: modelToUse,
             messages,
-            tools: TOOLS,
-            tool_choice: "auto",
+            ...(toolsToUse ? { tools: toolsToUse, tool_choice: "auto" } : {}),
             max_tokens: body.max_tokens || 2000,
             temperature: body.temperature ?? 0.3,
             response_format: body.response_format || undefined,

@@ -348,15 +348,23 @@ serve(async (req) => {
     if (hasPhoto || hasDoc) {
       console.log("[telegram-webhook] ===== INÍCIO PROCESSAMENTO DE IMAGEM =====");
       try {
+        if (!telegramBotToken) {
+          await sendReply("❌ Token do bot do Telegram não configurado no servidor.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Feedback imediato ao usuário
+        await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+        }).catch(() => {});
+
         const fileId = hasPhoto
           ? message.photo[message.photo.length - 1].file_id
           : message.document.file_id;
 
         console.log("[telegram-webhook] fileId:", fileId, "hasBotToken:", !!telegramBotToken);
-        if (!telegramBotToken) {
-          await sendReply("❌ Token do bot do Telegram não configurado no servidor.");
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
 
         console.log("[telegram-webhook] Chamando Telegram getFile para fileId:", fileId);
         const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
@@ -438,8 +446,9 @@ Se a imagem não for legível ou não for documento financeiro:
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             user_id: userId,
+            tools: [],
             messages: [
               { role: "system", content: docAnalysisSystemPrompt },
               {
@@ -562,6 +571,11 @@ Se a imagem não for legível ou não for documento financeiro:
     }
 
     // ─── CONSULTAS GERAIS DE TEXTO (Vendas, Despesas, Saídas, Dívidas, Saldos) ───
+    if (!promptText) {
+      await sendReply("👋 Olá! Envie sua pergunta sobre finanças (ex: <i>'Quanto vendeu hoje?'</i>) ou a foto de um boleto para cadastrar.");
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     const systemPrompt = `Você é o assistente financeiro inteligente do Wallet App integrado ao Telegram.
 Data atual (fuso de Brasília): ${hojeStr} (Mês: ${mesAtual}/${anoAtual}).
 Início do mês atual: ${primeiroDiaMes}.
