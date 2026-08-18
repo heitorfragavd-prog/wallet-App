@@ -32,23 +32,24 @@ const TOOLS = [
     type: "function",
     function: {
       name: "consultar_vendas_eyemobile",
-      description: "Consulta as vendas e faturamento do PDV Eyemobile em tempo real para uma data específica ou período. Use SEMPRE que o usuário perguntar quanto vendeu hoje, vendas do PDV, faturamento da loja ou métricas do Eyemobile.",
+      description: "Consulta vendas do PDV Eyemobile para uma data específica via API em tempo real. Retorna total de vendas, quantidade de transações, ticket médio e detalhamento por método de pagamento. Use esta ferramenta quando o usuário perguntar sobre vendas do dia, ontem, semana ou mês, especialmente quando os dados da tabela transacoes podem estar desatualizados.",
       parameters: {
         type: "object",
         properties: {
           data: {
             type: "string",
-            description: "Data para consulta no formato YYYY-MM-DD (ex: 2026-08-17). Padrão: data de hoje no fuso horário do Brasil.",
+            description: "Data no formato YYYY-MM-DD para consultar vendas. Ex: 2026-08-17",
           },
           data_inicio: {
             type: "string",
-            description: "Data inicial no formato YYYY-MM-DD para períodos",
+            description: "Data início opcional para períodos (YYYY-MM-DD)",
           },
           data_fim: {
             type: "string",
-            description: "Data final no formato YYYY-MM-DD para períodos",
+            description: "Data fim opcional para períodos (YYYY-MM-DD)",
           },
         },
+        required: ["data"],
       },
     },
   },
@@ -135,130 +136,153 @@ async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataIn
   return merged;
 }
 
+/** Consulta vendas do PDV Eyemobile via Edge Function eyemobile-sync em tempo real */
+async function consultarVendasEyemobile(
+  supabase: any,
+  userId: string,
+  dataStr: string
+): Promise<Record<string, unknown>> {
+  try {
+    // 1. Buscar configuração do Eyemobile para o usuário
+    const { data: config, error: configError } = await supabase
+      .from("eyemobile_config")
+      .select("access_key, secret_key, environment, store_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (configError || !config?.access_key || !config?.secret_key) {
+      // Fallback: Busca transações locais caso o Eyemobile não esteja cadastrado
+      const { data: dbTxs } = await supabase
+        .from("transacoes")
+        .select("valor, data, metodo_pagamento, descricao")
+        .eq("user_id", userId)
+        .eq("tipo", "receita")
+        .eq("data", dataStr);
+
+      if (dbTxs && dbTxs.length > 0) {
+        const total = dbTxs.reduce((sum: number, t: any) => sum + Number(t.valor || 0), 0);
+        return {
+          data: dataStr,
+          origem: "banco_local",
+          total_vendas: total,
+          quantidade_transacoes: dbTxs.length,
+          ticket_medio: total / dbTxs.length,
+          observacao: `Dados locais do banco. Total: R$ ${total.toFixed(2)}. Configure as credenciais do Eyemobile em Configurações para obter dados em tempo real.`,
+        };
+      }
+
+      return {
+        erro: "Configuração Eyemobile não encontrada para este usuário.",
+        sugestao: "Verifique se a integração com o PDV Eyemobile está configurada em Configurações > Eyemobile.",
+        total_vendas: 0,
+        quantidade_transacoes: 0,
+      };
+    }
+
+    // 2. Chamar a Edge Function eyemobile-sync em modo DASHBOARD
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        access_key: config.access_key,
+        secret_key: config.secret_key,
+        environment: config.environment || "production",
+        store_id: config.store_id,
+        mode: "DASHBOARD",
+        start_date: dataStr,
+        end_date: dataStr,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[consultarVendasEyemobile] Erro eyemobile-sync:", errorText);
+      return {
+        erro: "Falha ao consultar API Eyemobile em tempo real.",
+        detalhe: errorText,
+        sugestao: "A API do Eyemobile pode estar indisponível ou as credenciais podem estar expiradas.",
+      };
+    }
+
+    const result = await response.json();
+    const rawList = result.transactions || result.sales || [];
+    const validSales = rawList.filter((s: any) => s.completed !== false && !s.cancelled);
+
+    if (!result || validSales.length === 0) {
+      // Fallback para transações no banco se a API retornou 0
+      const { data: dbTxs } = await supabase
+        .from("transacoes")
+        .select("valor, data, metodo_pagamento, descricao")
+        .eq("user_id", userId)
+        .eq("tipo", "receita")
+        .eq("data", dataStr);
+
+      if (dbTxs && dbTxs.length > 0) {
+        const total = dbTxs.reduce((sum: number, t: any) => sum + Number(t.valor || 0), 0);
+        return {
+          data: dataStr,
+          origem: "banco_local_fallback",
+          total_vendas: total,
+          quantidade_transacoes: dbTxs.length,
+          ticket_medio: total / dbTxs.length,
+          observacao: `Vendas obtidas do banco local: Total de R$ ${total.toFixed(2)}.`,
+        };
+      }
+
+      return {
+        data: dataStr,
+        total_vendas: 0,
+        quantidade_transacoes: 0,
+        ticket_medio: 0,
+        metodos_pagamento: {},
+        observacao: "Nenhuma venda encontrada para esta data no PDV Eyemobile. Verifique se o PDV registrou vendas ou se a sincronização está configurada.",
+      };
+    }
+
+    // Calcular totais
+    const totalVendas = validSales.reduce((sum: number, t: any) => sum + Number(t.amount || t.value || t.total || t.price || t.valor || 0), 0);
+    const qtdTransacoes = validSales.length;
+    const ticketMedio = qtdTransacoes > 0 ? totalVendas / qtdTransacoes : 0;
+
+    // Agrupar por método de pagamento
+    const metodos: Record<string, number> = {};
+    for (const t of validSales) {
+      const metodo = t.payment_method || t.metodo_pagamento || t.payment_type || "outros";
+      const val = Number(t.amount || t.value || t.total || t.price || t.valor || 0);
+      metodos[metodo] = (metodos[metodo] || 0) + val;
+    }
+
+    return {
+      data: dataStr,
+      total_vendas: totalVendas,
+      quantidade_transacoes: qtdTransacoes,
+      ticket_medio: ticketMedio,
+      metodos_pagamento: metodos,
+      vendas_por_metodo: metodos,
+      observacao: `Dados obtidos em tempo real da API Eyemobile. Total: R$ ${totalVendas.toFixed(2)}.`,
+    };
+  } catch (err: any) {
+    console.error("[consultarVendasEyemobile] Erro:", err.message);
+    return {
+      erro: "Erro interno ao consultar vendas do Eyemobile.",
+      detalhe: err.message,
+      sugestao: "Tente novamente em alguns instantes.",
+    };
+  }
+}
+
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
     case "consultar_vendas_eyemobile": {
-      const targetDate = (args.data as string) || getHojeBrasil();
-      const dataInicio = (args.data_inicio as string) || targetDate;
-      const dataFim = (args.data_fim as string) || targetDate;
-
-      // 1. Busca configurações do Eyemobile
-      const { data: config, error: configErr } = await supabase
-        .from("eyemobile_config")
-        .select("access_key, secret_key, environment, store_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (configErr) {
-        return { error: `Erro ao buscar configuração Eyemobile: ${configErr.message}` };
-      }
-
-      if (!config?.access_key || !config?.secret_key) {
-        // Fallback: Busca na tabela de transações sincronizadas no banco
-        const { data: dbTxs, error: dbErr } = await supabase
-          .from("transacoes")
-          .select("valor, data, metodo_pagamento, descricao")
-          .eq("user_id", userId)
-          .eq("tipo", "receita")
-          .gte("data", dataInicio)
-          .lte("data", dataFim);
-
-        if (dbErr) return { error: dbErr.message };
-
-        const totalVendas = (dbTxs || []).reduce((acc: number, t: any) => acc + Number(t.valor || 0), 0);
-        return {
-          origem: "banco_local",
-          aviso: "Eyemobile API não configurada; consultando dados de transações locais.",
-          periodo: `${dataInicio} a ${dataFim}`,
-          total_vendas: totalVendas,
-          quantidade_transacoes: (dbTxs || []).length,
-          ticket_medio: (dbTxs || []).length > 0 ? totalVendas / (dbTxs || []).length : 0,
-        };
-      }
-
-      // 2. Consulta em tempo real à API Eyemobile
-      const baseUrl = config.environment === "staging"
-        ? "https://staging-api.eyemobile.com.br/v1"
-        : "https://api.eyemobile.com.br/v1";
-
-      const headers = {
-        "X-EYEMOBILE-ACCESS-KEY": config.access_key,
-        "X-EYEMOBILE-SECRET-KEY": config.secret_key,
-        "Content-Type": "application/json",
-      };
-
-      const params = new URLSearchParams({
-        start_date: dataInicio,
-        end_date: dataFim,
-        limit: "100",
-      });
-      if (config.store_id) params.set("store_id", config.store_id);
-
-      try {
-        let salesData: any[] = [];
-        const salesResp = await fetch(`${baseUrl}/sales?${params.toString()}`, { headers });
-        if (salesResp.ok) {
-          const json = await salesResp.json();
-          salesData = json.data || [];
-        } else {
-          const txResp = await fetch(`${baseUrl}/transactions?${params.toString()}`, { headers });
-          if (txResp.ok) {
-            const json = await txResp.json();
-            salesData = json.data || [];
-          }
-        }
-
-        // Filtra vendas válidas (completas e não canceladas)
-        const validSales = salesData.filter((s: any) => s.completed !== false && !s.cancelled);
-        const totalVendas = validSales.reduce((acc: number, s: any) => acc + Number(s.value || s.total || s.price || s.valor || 0), 0);
-        const qtdVendas = validSales.length;
-        const ticketMedio = qtdVendas > 0 ? totalVendas / qtdVendas : 0;
-
-        const porMetodo: Record<string, number> = {};
-        validSales.forEach((s: any) => {
-          const m = s.payment_method || s.metodo_pagamento || s.payment_type || "Outros";
-          const val = Number(s.value || s.total || s.price || s.valor || 0);
-          porMetodo[m] = (porMetodo[m] || 0) + val;
-        });
-
-        // Se a API retornar 0 mas temos transações no banco para o dia, faz fallback
-        if (qtdVendas === 0) {
-          const { data: dbTxs } = await supabase
-            .from("transacoes")
-            .select("valor, data, metodo_pagamento, descricao")
-            .eq("user_id", userId)
-            .eq("tipo", "receita")
-            .gte("data", dataInicio)
-            .lte("data", dataFim);
-
-          if (dbTxs && dbTxs.length > 0) {
-            const dbTotal = dbTxs.reduce((acc: number, t: any) => acc + Number(t.valor || 0), 0);
-            return {
-              origem: "banco_local_fallback",
-              total_vendas: dbTotal,
-              quantidade_transacoes: dbTxs.length,
-              ticket_medio: dbTotal / dbTxs.length,
-              periodo: `${dataInicio} a ${dataFim}`,
-              aviso: "Vendas recuperadas do banco local de transações.",
-            };
-          }
-        }
-
-        return {
-          origem: "api_eyemobile_realtime",
-          periodo: `${dataInicio} a ${dataFim}`,
-          total_vendas: totalVendas,
-          quantidade_transacoes: qtdVendas,
-          ticket_medio: ticketMedio,
-          vendas_por_metodo: porMetodo,
-        };
-      } catch (apiErr: any) {
-        console.error("Erro ao consultar Eyemobile:", apiErr.message);
-        return {
-          error: `Falha na conexão com Eyemobile: ${apiErr.message}`,
-          periodo: `${dataInicio} a ${dataFim}`,
-        };
-      }
+      const targetDate = (args.data as string) || (args.data_inicio as string) || getHojeBrasil();
+      return await consultarVendasEyemobile(supabase, userId, targetDate);
     }
     case "buscar_transacoes": {
       let categoriaId = args.categoria_id as string | undefined;
@@ -488,7 +512,7 @@ Deno.serve(async (req: Request) => {
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
-          content: JSON.stringify(toolResult),
+          content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
         });
       }),
     );
