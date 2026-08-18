@@ -525,34 +525,121 @@ serve(async (req) => {
     const anoAtual = nowSp.getFullYear();
     const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
 
-    // Comando /dividas (e consultas comuns de dívidas por texto)
+    // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Limpa confirmação pendente se usuário fez outra pergunta) ───
+    const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
+    const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
+
+    // Se NÃO é confirmação (SIM/NÃO), limpa propostas pendentes antigas para evitar confirmações acidentais
+    if (!isSim && !isNao) {
+      const { data: conversaAtiva } = await supabase
+        .from("telegram_conversas")
+        .select("estado, proposta_id, updated_at")
+        .eq("chat_id", chatId)
+        .maybeSingle();
+
+      if (conversaAtiva?.estado === "aguardando_confirmacao_boleto") {
+        const ultimaAtualizacao = new Date(conversaAtiva.updated_at || 0);
+        const agora = new Date();
+        const diffMin = (agora.getTime() - ultimaAtualizacao.getTime()) / (1000 * 60);
+        if (diffMin > 5) {
+          console.log("[telegram-webhook] Limpando estado pendente antigo por inatividade (>5min)");
+          await supabase
+            .from("telegram_conversas")
+            .update({ estado: "livre", proposta_id: null, updated_at: agora.toISOString() })
+            .eq("chat_id", chatId);
+        }
+      }
+    }
+
+    // ─── 1. CONSULTA DE DÍVIDAS COM FILTRO DE PERÍODO INTELIGENTE ───
     const isConsultaDividas =
       text.startsWith("/dividas") ||
       respLower.includes("quanto devo") ||
       respLower.includes("dividas pendentes") ||
       respLower.includes("minhas dividas") ||
       respLower.includes("contas a pagar") ||
-      respLower.includes("boletos a pagar");
+      respLower.includes("boletos a pagar") ||
+      respLower.includes("dividas dessa semana") ||
+      respLower.includes("dividas desta semana") ||
+      respLower.includes("dividas ate sexta");
 
     if (isConsultaDividas) {
-      const { data: dividas, error: errDiv } = await supabase
+      const hoje = new Date(hojeStr);
+      let dataInicioStr: string | null = null;
+      let dataFimStr: string | null = null;
+      let periodoDescricao = "pendentes";
+
+      // "essa semana" / "esta semana"
+      if (respLower.includes("essa semana") || respLower.includes("esta semana")) {
+        const diaSemana = hoje.getDay(); // 0=dom, 6=sab
+        const dIni = new Date(hoje);
+        dIni.setDate(hoje.getDate() - diaSemana);
+        const dFim = new Date(dIni);
+        dFim.setDate(dIni.getDate() + 6);
+        dataInicioStr = dIni.toISOString().split("T")[0];
+        dataFimStr = dFim.toISOString().split("T")[0];
+        periodoDescricao = "desta semana";
+      }
+      // "até sexta" / "ate sexta"
+      else if (respLower.includes("ate sexta") || respLower.includes("até sexta")) {
+        const diaSemana = hoje.getDay();
+        const diasAteSexta = (5 - diaSemana + 7) % 7;
+        const dFim = new Date(hoje);
+        dFim.setDate(hoje.getDate() + diasAteSexta);
+        dataFimStr = dFim.toISOString().split("T")[0];
+        periodoDescricao = "com vencimento até sexta-feira";
+      }
+      // "esse mês" / "este mês"
+      else if (respLower.includes("esse mes") || respLower.includes("este mes")) {
+        dataInicioStr = primeiroDiaMes;
+        const ultimoDiaMes = new Date(anoAtual, mesAtual, 0).getDate();
+        dataFimStr = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-${String(ultimoDiaMes).padStart(2, "0")}`;
+        periodoDescricao = "deste mês";
+      }
+      // "hoje"
+      else if (respLower.includes("hoje")) {
+        dataInicioStr = hojeStr;
+        dataFimStr = hojeStr;
+        periodoDescricao = "de hoje";
+      }
+      // "próximos X dias"
+      else if (respLower.includes("proximo") || respLower.includes("proximos")) {
+        const match = respLower.match(/(\d+)\s*dia/);
+        if (match) {
+          const numDias = parseInt(match[1], 10);
+          const dFim = new Date(hoje);
+          dFim.setDate(hoje.getDate() + numDias);
+          dataFimStr = dFim.toISOString().split("T")[0];
+          periodoDescricao = `dos próximos ${numDias} dias`;
+        }
+      }
+
+      let query = supabase
         .from("dividas")
         .select("id, descricao, status, valor_total, valor_restante, data_vencimento, credor")
         .eq("user_id", userId)
         .neq("status", "quitada")
         .neq("status", "paga")
-        .order("data_vencimento", { ascending: true })
-        .limit(20);
+        .order("data_vencimento", { ascending: true });
+
+      if (dataInicioStr) {
+        query = query.gte("data_vencimento", dataInicioStr);
+      }
+      if (dataFimStr) {
+        query = query.lte("data_vencimento", dataFimStr);
+      }
+
+      const { data: dividas, error: errDiv } = await query.limit(30);
 
       if (errDiv) {
         console.error("[telegram-webhook] Erro ao consultar dívidas:", errDiv.message);
       }
 
       if (!dividas || dividas.length === 0) {
-        await sendReply("🎉 <b>Nenhuma dívida pendente encontrada!</b> Você está em dia.");
+        await sendReply(`🎉 <b>Nenhuma dívida pendente encontrada ${periodoDescricao}!</b> Você está em dia.`);
       } else {
         const hojeObj = new Date(hojeStr);
-        let msg = "💳 <b>Suas Dívidas Pendentes:</b>\n\n";
+        let msg = `💳 <b>Suas Dívidas (${periodoDescricao}):</b>\n\n`;
 
         dividas.forEach((d: any) => {
           const valor = Number(d.valor_restante || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -587,25 +674,110 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // Comando /saldo
-    if (text.startsWith("/saldo")) {
-      const [recResp, despResp] = await Promise.all([
+    // ─── 2. CONSULTA DE SALDO E CONTAS BANCÁRIAS ───
+    const isConsultaSaldo =
+      text.startsWith("/saldo") ||
+      respLower.includes("quanto tenho") ||
+      respLower.includes("meu saldo") ||
+      respLower.includes("saldo da conta") ||
+      respLower.includes("saldo das contas") ||
+      respLower.includes("quanto tem no banco") ||
+      respLower.includes("quanto tenho no banco") ||
+      respLower.includes("saldo bancario");
+
+    if (isConsultaSaldo) {
+      const [contasResp, recResp, despResp] = await Promise.all([
+        supabase.from("contas_usuario").select("nome, tipo, saldo_atual").eq("user_id", userId),
         supabase.from("receitas").select("valor").eq("user_id", userId),
         supabase.from("despesas").select("valor").eq("user_id", userId),
       ]);
 
+      const contas = contasResp.data || [];
       const totalReceitas = (recResp.data || []).reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
       const totalDespesas = (despResp.data || []).reduce((acc, d) => acc + (Number(d.valor) || 0), 0);
-      const saldo = totalReceitas - totalDespesas;
-
+      const saldoFluxo = totalReceitas - totalDespesas;
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-      await sendReply(
-        `📊 <b>Resumo Financeiro Consolidado:</b>\n\n` +
-        `🟢 <b>Total Receitas:</b> ${format(totalReceitas)}\n` +
-        `🔴 <b>Total Despesas:</b> ${format(totalDespesas)}\n` +
-        `💵 <b>Saldo Atual:</b> <b>${format(saldo)}</b>`
-      );
+      let msg = `🏦 <b>Seus Saldos e Contas:</b>\n\n`;
+
+      if (contas.length > 0) {
+        let totalEmContas = 0;
+        contas.forEach((c: any) => {
+          const s = Number(c.saldo_atual || 0);
+          totalEmContas += s;
+          const icon = c.tipo === "cartao_credito" ? "💳" : "🏛️";
+          msg += `${icon} <b>${c.nome}</b>: <b>${format(s)}</b>\n`;
+        });
+        msg += `\n💵 <b>Total em Contas:</b> <b>${format(totalEmContas)}</b>\n`;
+      }
+
+      msg += `📊 <b>Saldo Acumulado (Receitas - Despesas):</b> <b>${format(saldoFluxo)}</b>\n\n`;
+      msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
+
+      await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 3. GERAÇÃO DE GRÁFICO NO TELEGRAM (ASCII Bar Chart) ───
+    const isConsultaGrafico =
+      text.startsWith("/grafico") ||
+      respLower.includes("grafico de vendas") ||
+      respLower.includes("grafico das vendas") ||
+      respLower.includes("gerar grafico") ||
+      respLower.includes("consegue gerar um grafico");
+
+    if (isConsultaGrafico) {
+      let dataInicioG = primeiroDiaMes;
+      let dataFimG = hojeStr;
+      let labelPeriodo = "Deste Mês";
+
+      if (respLower.includes("semana")) {
+        const diaSemana = nowSp.getDay();
+        const dIni = new Date(nowSp);
+        dIni.setDate(nowSp.getDate() - diaSemana);
+        dataInicioG = dIni.toISOString().split("T")[0];
+        labelPeriodo = "Desta Semana";
+      }
+
+      const { data: vendasG } = await supabase
+        .from("vendas_eyemobile")
+        .select("data_venda, valor_total, metodo_pagamento")
+        .eq("user_id", userId)
+        .gte("data_venda", dataInicioG)
+        .lte("data_venda", dataFimG)
+        .order("data_venda", { ascending: true });
+
+      if (!vendasG || vendasG.length === 0) {
+        await sendReply(`📊 <b>Nenhuma venda registrada no período (${labelPeriodo}).</b>`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const porDia: Record<string, number> = {};
+      let totalPeriodo = 0;
+      vendasG.forEach((v: any) => {
+        const d = (v.data_venda || "").split("T")[0];
+        const val = Number(v.valor_total || 0);
+        porDia[d] = (porDia[d] || 0) + val;
+        totalPeriodo += val;
+      });
+
+      const maxVal = Math.max(...Object.values(porDia), 1);
+      let chartMsg = `📊 <b>Gráfico de Vendas (${labelPeriodo})</b>\n\n<pre>\n`;
+
+      Object.entries(porDia).slice(-10).forEach(([dia, valor]) => {
+        const diaFmt = dia.split("-").slice(1).reverse().join("/");
+        const barLen = Math.max(1, Math.round((valor / maxVal) * 12));
+        const bar = "█".repeat(barLen);
+        const valFmt = valor.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        chartMsg += `${diaFmt} | ${bar} R$ ${valFmt}\n`;
+      });
+
+      chartMsg += `</pre>\n`;
+      chartMsg += `💰 <b>Total do Período:</b> <b>${totalPeriodo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n`;
+      chartMsg += `🛒 <b>Total de Transações:</b> <b>${vendasG.length}</b>\n\n`;
+      chartMsg += `💡 <i>No aplicativo Wallet você tem gráficos interativos em tempo real!</i>`;
+
+      await sendReply(chartMsg);
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
@@ -697,17 +869,14 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Confirmação de Propostas Pendentes) ───
-    const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
-    const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
-
-    const { data: conversaAtiva } = await supabase
-      .from("telegram_conversas")
-      .select("estado, proposta_id")
-      .eq("chat_id", chatId)
-      .maybeSingle();
-
+    // ─── VERIFICAÇÃO DE CONFIRMAÇÃO DE PROPOSTAS PENDENTES (SIM / NÃO) ───
     if (text && (isSim || isNao)) {
+      const { data: conversaAtiva } = await supabase
+        .from("telegram_conversas")
+        .select("estado, proposta_id")
+        .eq("chat_id", chatId)
+        .maybeSingle();
+
       let proposta: any = null;
 
       if (conversaAtiva?.proposta_id) {
@@ -723,14 +892,16 @@ serve(async (req) => {
         }
       }
 
-      // Fallback resiliente: se não encontrou por conversaAtiva, busca a última proposta pendente deste chat
+      // Fallback: só busca se a proposta tiver menos de 10 minutos
       if (!proposta) {
+        const dezMinAtras = new Date(Date.now() - 10 * 60 * 1000).toISOString();
         const { data: lastProp } = await supabase
           .from("telegram_propostas")
           .select("*")
           .eq("chat_id", chatId)
           .eq("user_id", userId)
           .eq("status", "pendente")
+          .gte("created_at", dezMinAtras)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
