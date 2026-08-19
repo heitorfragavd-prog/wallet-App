@@ -618,6 +618,69 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
+    // ─── 0.5. CONSULTA DE MÉTRICAS E CUSTOS DE IA ───
+    const isConsultaMetricasIA =
+      text.startsWith("/metricas") ||
+      text.startsWith("/ia_metricas") ||
+      respLower.includes("painel de metricas") ||
+      respLower.includes("painel de métricas") ||
+      respLower.includes("metricas de ia") ||
+      respLower.includes("métricas de ia") ||
+      respLower.includes("metricas da ia") ||
+      respLower.includes("métricas da ia") ||
+      respLower.includes("custo de ia") ||
+      respLower.includes("custos de ia") ||
+      respLower.includes("custo da ia") ||
+      respLower.includes("custos da ia") ||
+      respLower.includes("gasto com ia") ||
+      respLower.includes("consumo de ia") ||
+      respLower.includes("tokens");
+
+    if (isConsultaMetricasIA) {
+      const { data: events } = await supabase
+        .from("wallet_ai_audit_events")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      const evts = events || [];
+      const totalCalls = evts.length;
+      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
+      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
+      const estimatedCostBrl = estimatedCostUsd * 5.65;
+      const avgDuration = totalCalls > 0
+        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        : 0;
+
+      const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+      let msg = `🧠 <b>Painel de Métricas & Custos de IA</b>\n`;
+      msg += `<i>Monitoramento de desempenho, tokens e custos do Wallet</i>\n\n`;
+
+      msg += `⚡ <b>Requisições IA:</b> <b>${totalCalls}</b> (${successRate.toFixed(1)}% taxa de sucesso)\n`;
+      msg += `📦 <b>Tokens Processados:</b> <b>${totalTokens.toLocaleString("pt-BR")}</b> (Prompt + Completion)\n`;
+      msg += `💵 <b>Custo Acumulado:</b> <b>${formatBRL(estimatedCostBrl)}</b> ($${estimatedCostUsd.toFixed(4)} USD)\n`;
+      msg += `⏱️ <b>Tempo Médio Resposta:</b> <b>${avgDuration} ms</b>\n\n`;
+
+      if (evts.length > 0) {
+        msg += `📋 <b>Últimas Ações Auditadas:</b>\n`;
+        evts.slice(0, 4).forEach((e: any) => {
+          const dt = new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+          const st = e.execution_status === "success" ? "✅" : "⚠️";
+          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${e.duration_ms || 0}ms)\n`;
+        });
+        msg += `\n`;
+      }
+
+      msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
+
+      await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // ─── 1. CONSULTA DE DÍVIDAS COM FILTRO DE PERÍODO INTELIGENTE ───
     const isConsultaDividas =
       text.startsWith("/dividas") ||
@@ -845,12 +908,20 @@ serve(async (req) => {
         labelPeriodoD = "de Hoje";
       }
 
-      // Busca despesas e categorias
-      const [{ data: despesasRaw }, { data: categoriasRaw }] = await Promise.all([
+      // Busca despesas, transações do tipo despesa e categorias
+      const [{ data: despesasRaw }, { data: txsDespesasRaw }, { data: categoriasRaw }] = await Promise.all([
         supabase
           .from("despesas")
           .select("id, descricao, valor, data, categoria_id, metodo_pagamento")
           .eq("user_id", userId)
+          .gte("data", dataInicioD)
+          .lte("data", dataFimD)
+          .order("data", { ascending: false }),
+        supabase
+          .from("transacoes")
+          .select("id, descricao, valor, data, categoria_id, metodo_pagamento")
+          .eq("user_id", userId)
+          .eq("tipo", "despesa")
           .gte("data", dataInicioD)
           .lte("data", dataFimD)
           .order("data", { ascending: false }),
@@ -863,7 +934,7 @@ serve(async (req) => {
       const catMap = new Map<string, string>();
       (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
 
-      const despesas = despesasRaw || [];
+      const despesas = [...(despesasRaw || []), ...(txsDespesasRaw || [])];
       const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -933,7 +1004,10 @@ serve(async (req) => {
         msgDesp += `• ${icon} <b>${label}</b>: ${format(val)} <i>(${perc}%)</i>\n`;
       });
 
-      msgDesp += `\n<i>Se precisar de mais informações, estou à disposição!</i>`;
+      msgDesp += `\n💡 <b>Entenda:</b>\n`;
+      msgDesp += `• <b>Total de Despesas</b> = Todas as saídas operacionais e cartões\n`;
+      msgDesp += `• <b>Saldo bancário</b> = Dinheiro disponível nas contas agora\n`;
+      msgDesp += `• Para ver seu saldo real: <i>"Quanto tenho no banco?"</i> ou <code>/saldo</code>\n`;
 
       await sendReply(msgDesp);
       return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1039,11 +1113,18 @@ serve(async (req) => {
       }
 
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const resultado = totalReceitas - totalDespesas;
+      const labelResultado = resultado >= 0 ? "Lucro do Período" : "Prejuízo do Período";
+      const emojiResultado = resultado >= 0 ? "📈" : "📉";
 
-      chartMsg += `📈 <b>Total de Receitas:</b> <b>${format(totalReceitas)}</b> (${todasReceitas.length} lançamentos)\n`;
-      chartMsg += `📉 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b> (${todasDespesas.length} lançamentos)\n`;
-      chartMsg += `💵 <b>Resultado do Período:</b> <b>${format(saldoPeriodo)}</b>\n\n`;
-      chartMsg += `💡 <i>Abra o Wallet App para navegar no gráfico interativo com filtros por categoria!</i>`;
+      chartMsg += `💰 <b>Total de Receitas:</b> <b>${format(totalReceitas)}</b> (${todasReceitas.length} lançamentos)\n`;
+      chartMsg += `💸 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b> (${todasDespesas.length} lançamentos)\n`;
+      chartMsg += `${emojiResultado} <b>${labelResultado}:</b> <b>${format(resultado)}</b>\n\n`;
+
+      chartMsg += `💡 <b>Entenda:</b>\n`;
+      chartMsg += `• <b>Resultado do período</b> = Receitas − Despesas (lucro/prejuízo operacional)\n`;
+      chartMsg += `• <b>Saldo bancário</b> = Dinheiro disponível nas contas agora\n`;
+      chartMsg += `• Para ver seu saldo real: <i>"Quanto tenho no banco?"</i> ou <code>/saldo</code>`;
 
       await sendReply(chartMsg);
       return new Response("OK", { status: 200, headers: corsHeaders });
