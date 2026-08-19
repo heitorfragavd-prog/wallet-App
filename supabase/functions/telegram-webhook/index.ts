@@ -4540,7 +4540,7 @@ Retorne APENAS um array JSON no formato:
             await sendReply("❌ Erro ao registrar a proposta do boleto. Tente novamente.");
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
-        } else if (documentData && documentData.tipo !== "desconhecido" && documentData.confianca !== "baixa") {
+        } else if (documentData && documentData.tipo !== "desconhecido" && documentData.confianca_geral !== "baixa" && documentData.tipo !== "outro") {
           const valFmt = Number(documentData.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const dtFmt = documentData.data || documentData.data_vencimento || "Não identificada";
           await sendReply(
@@ -4552,10 +4552,30 @@ Retorne APENAS um array JSON no formato:
           );
           return new Response("OK", { status: 200, headers: corsHeaders });
         } else {
-          await sendReply(
-            `📄 <b>Não foi possível identificar o documento com clareza.</b>\n\n` +
-            `Por favor, envie uma foto nítida e bem iluminada do boleto ou nota fiscal com os valores e códigos visíveis.`
-          );
+          // Fallback: documento não identificado — fornecer orientações contextuais
+          let msgFallback = `📄 <b>Não consegui identificar o documento.</b>\n\n`;
+          msgFallback += `🔍 Causas possíveis:\n`;
+          msgFallback += `• Imagem com pouca resolução ou muito inclinada\n`;
+          msgFallback += `• Documento muito pequeno em relação ao fundo\n`;
+          msgFallback += `• Iluminação insuficiente ou reflexos no papel\n\n`;
+
+          if (isTelegramCompressedPhoto) {
+            msgFallback += `📂 <b>Solução recomendada — envie como ARQUIVO:</b>\n`;
+            msgFallback += `O Telegram comprime fotos automaticamente, reduzindo a resolução.\n`;
+            msgFallback += `Para a IA conseguir ler a DANFE:\n\n`;
+            msgFallback += `① Toque no ícone 📎 (clipe/anexo)\n`;
+            msgFallback += `② Selecione <b>"Arquivo"</b> (não "Galeria" nem "Câmera")\n`;
+            msgFallback += `③ Escolha a foto da nota fiscal e envie\n`;
+            msgFallback += `④ O bot recebe em resolução original e lê corretamente ✅`;
+          } else {
+            msgFallback += `💡 <b>Dicas para melhorar a leitura:</b>\n`;
+            msgFallback += `• Aproxime a câmera do documento\n`;
+            msgFallback += `• Tire a foto de cima, sem inclinação\n`;
+            msgFallback += `• Garanta boa iluminação sem reflexo\n`;
+            msgFallback += `• Abra a nota completamente antes de fotografar`;
+          }
+
+          await sendReply(msgFallback);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
       } catch (imgErr: any) {
