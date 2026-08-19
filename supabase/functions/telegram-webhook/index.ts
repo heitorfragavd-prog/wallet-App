@@ -551,6 +551,73 @@ serve(async (req) => {
       }
     }
 
+    // ─── 0. COMANDO /ensinar: APRENDIZADO DE CATEGORIA POR CREDOR ───
+    if (text.startsWith("/ensinar")) {
+      const match = text.match(/^\/ensinar\s+(.+?)\s+(?:e|é|eh)\s+(.+)$/i);
+
+      if (!match) {
+        await sendReply(
+          "🎓 <b>Como ensinar categorias:</b>\n\n" +
+          "Envie no formato:\n" +
+          "<code>/ensinar [nome do credor] e [nome da categoria]</code>\n\n" +
+          "<b>Exemplos:</b>\n" +
+          "• <code>/ensinar Brasnorte e Ambev</code>\n" +
+          "• <code>/ensinar SELLPACK e Descartáveis</code>\n" +
+          "• <code>/ensinar CEMIG e Energia Elétrica</code>\n\n" +
+          "<i>O Wallet lembrará dessa regra e categorizará futuros boletos automaticamente!</i>"
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const credorNome = match[1].trim();
+      const categoriaNome = match[2].trim();
+
+      // Busca categorias do usuário
+      const { data: categorias } = await supabase
+        .from("categorias")
+        .select("id, nome")
+        .eq("user_id", userId);
+
+      const catNorm = categoriaNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const categoria = (categorias || []).find((c: any) => {
+        const n = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return n === catNorm || n.includes(catNorm) || catNorm.includes(n);
+      });
+
+      if (!categoria) {
+        const sugestoes = (categorias || []).slice(0, 6).map((c: any) => `• ${c.nome}`).join("\n");
+        await sendReply(
+          `❌ Categoria <b>"${categoriaNome}"</b> não encontrada.\n\n` +
+          (sugestoes ? `<b>Categorias disponíveis:</b>\n${sugestoes}\n\n` : "") +
+          `<i>Verifique a ortografia ou cadastre a categoria no painel do Wallet.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const credorNorm = credorNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+
+      const { error: upsertErr } = await supabase.from("categoria_credor_cache").upsert({
+        user_id: userId,
+        credor_normalizado: credorNorm,
+        categoria_id: categoria.id,
+        hits: 1,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id,credor_normalizado" });
+
+      if (upsertErr) {
+        console.error("[telegram-webhook] Erro ao salvar /ensinar no cache:", upsertErr.message);
+      }
+
+      await sendReply(
+        `✅ <b>Aprendido com sucesso!</b>\n\n` +
+        `📄 <b>Credor / Fornecedor:</b> <code>${credorNome}</code>\n` +
+        `🏷️ <b>Categoria vinculada:</b> <b>${categoria.nome}</b>\n\n` +
+        `🎯 <i>Todos os próximos boletos e despesas deste fornecedor serão classificados automaticamente como <b>${categoria.nome}</b>.</i>`
+      );
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // ─── 1. CONSULTA DE DÍVIDAS COM FILTRO DE PERÍODO INTELIGENTE ───
     const isConsultaDividas =
       text.startsWith("/dividas") ||
