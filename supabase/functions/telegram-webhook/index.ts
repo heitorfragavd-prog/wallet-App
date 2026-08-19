@@ -692,7 +692,21 @@ serve(async (req) => {
         supabase.from("despesas").select("valor").eq("user_id", userId),
       ]);
 
-      const contas = contasResp.data || [];
+      let contas = contasResp.data || [];
+      
+      // Filtro por instituição se mencionada
+      const bancoMatch = respLower.match(/(?:divipay|nubank|inter|bradesco|itau|itaú|caixa|sicoob|pagbank|pagseguro|banco\s+do\s+brasil|bb)/i);
+      if (bancoMatch) {
+        const bTerm = bancoMatch[0].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const filtradas = contas.filter((c: any) => {
+          const nNorm = (c.nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+          return nNorm.includes(bTerm);
+        });
+        if (filtradas.length > 0) {
+          contas = filtradas;
+        }
+      }
+
       const totalReceitas = (recResp.data || []).reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
       const totalDespesas = (despResp.data || []).reduce((acc, d) => acc + (Number(d.valor) || 0), 0);
       const saldoFluxo = totalReceitas - totalDespesas;
@@ -709,9 +723,13 @@ serve(async (req) => {
           msg += `${icon} <b>${c.nome}</b>: <b>${format(s)}</b>\n`;
         });
         msg += `\n💵 <b>Total em Contas:</b> <b>${format(totalEmContas)}</b>\n`;
+      } else {
+        msg += `<i>Nenhuma conta correspondente encontrada.</i>\n\n`;
       }
 
-      msg += `📊 <b>Saldo Acumulado (Receitas - Despesas):</b> <b>${format(saldoFluxo)}</b>\n\n`;
+      if (!bancoMatch) {
+        msg += `📊 <b>Saldo Acumulado (Receitas - Despesas):</b> <b>${format(saldoFluxo)}</b>\n\n`;
+      }
       msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
       await sendReply(msg);
