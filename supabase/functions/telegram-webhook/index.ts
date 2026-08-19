@@ -721,15 +721,29 @@ serve(async (req) => {
     // ─── 3. GERAÇÃO DE GRÁFICO NO TELEGRAM (ASCII Bar Chart) ───
     const isConsultaGrafico =
       text.startsWith("/grafico") ||
-      respLower.includes("grafico de vendas") ||
-      respLower.includes("grafico das vendas") ||
-      respLower.includes("gerar grafico") ||
-      respLower.includes("consegue gerar um grafico");
+      respLower.includes("grafico") ||
+      respLower.includes("gráfico");
 
     if (isConsultaGrafico) {
       let dataInicioG = primeiroDiaMes;
       let dataFimG = hojeStr;
-      let labelPeriodo = "Deste Mês";
+      let labelPeriodo = "Deste Mês (Agosto/2026)";
+
+      // Mapeamento de meses
+      const mesesMap: Record<string, number> = {
+        janeiro: 1, fevereiro: 2, marco: 3, março: 3, abril: 4, maio: 5, junho: 6,
+        julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+      };
+
+      for (const [nomeMes, numMes] of Object.entries(mesesMap)) {
+        if (respLower.includes(nomeMes)) {
+          const uDia = new Date(anoAtual, numMes, 0).getDate();
+          dataInicioG = `${anoAtual}-${String(numMes).padStart(2, "0")}-01`;
+          dataFimG = `${anoAtual}-${String(numMes).padStart(2, "0")}-${String(uDia).padStart(2, "0")}`;
+          labelPeriodo = `${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}/${anoAtual}`;
+          break;
+        }
+      }
 
       if (respLower.includes("semana")) {
         const diaSemana = nowSp.getDay();
@@ -739,56 +753,76 @@ serve(async (req) => {
         labelPeriodo = "Desta Semana";
       }
 
-      // Busca receitas e vendas do PDV (tabelas transacoes e receitas)
-      const [txsResp, recsResp] = await Promise.all([
-        supabase
-          .from("transacoes")
-          .select("data, valor, descricao")
-          .eq("user_id", userId)
-          .eq("tipo", "receita")
-          .gte("data", dataInicioG)
-          .lte("data", dataFimG)
-          .order("data", { ascending: true }),
-        supabase
-          .from("receitas")
-          .select("data, valor, descricao")
-          .eq("user_id", userId)
-          .gte("data", dataInicioG)
-          .lte("data", dataFimG)
-          .order("data", { ascending: true }),
+      // Busca todas as receitas e vendas (com paginação ampla para suportar milhares de lançamentos)
+      const fetchAllRows = async (table: string, filterTipo?: string) => {
+        const rows: any[] = [];
+        let from = 0;
+        const step = 1000;
+        while (true) {
+          let q = supabase
+            .from(table)
+            .select("data, valor, descricao")
+            .eq("user_id", userId)
+            .gte("data", dataInicioG)
+            .lte("data", dataFimG);
+          if (filterTipo) q = q.eq("tipo", filterTipo);
+          const { data, error } = await q.range(from, from + step - 1);
+          if (error || !data || data.length === 0) break;
+          rows.push(...data);
+          if (data.length < step || rows.length >= 10000) break;
+          from += step;
+        }
+        return rows;
+      };
+
+      const [txsReceitas, recsTabela, txsDespesas, despTabela] = await Promise.all([
+        fetchAllRows("transacoes", "receita"),
+        fetchAllRows("receitas"),
+        fetchAllRows("transacoes", "despesa"),
+        fetchAllRows("despesas"),
       ]);
 
-      const todasVendas = [...(txsResp.data || []), ...(recsResp.data || [])];
+      const todasReceitas = [...txsReceitas, ...recsTabela];
+      const todasDespesas = [...txsDespesas, ...despTabela];
 
-      if (!todasVendas || todasVendas.length === 0) {
-        await sendReply(`📊 <b>Nenhuma venda ou receita registrada no período (${labelPeriodo}).</b>`);
+      const totalReceitas = todasReceitas.reduce((s, r) => s + Number(r.valor || 0), 0);
+      const totalDespesas = todasDespesas.reduce((s, d) => s + Number(d.valor || 0), 0);
+      const saldoPeriodo = totalReceitas - totalDespesas;
+
+      if (todasReceitas.length === 0 && todasDespesas.length === 0) {
+        await sendReply(`📊 <b>Nenhuma movimentação registrada no período (${labelPeriodo}).</b>`);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
+      // Agrupa receitas por dia
       const porDia: Record<string, number> = {};
-      let totalPeriodo = 0;
-      todasVendas.forEach((v: any) => {
+      todasReceitas.forEach((v: any) => {
         const d = (v.data || "").split("T")[0];
         const val = Number(v.valor || 0);
         porDia[d] = (porDia[d] || 0) + val;
-        totalPeriodo += val;
       });
 
       const maxVal = Math.max(...Object.values(porDia), 1);
-      let chartMsg = `📊 <b>Gráfico de Vendas (${labelPeriodo})</b>\n\n<pre>\n`;
+      let chartMsg = `📊 <b>Gráfico Financeiro — ${labelPeriodo}</b>\n\n`;
 
-      Object.entries(porDia).slice(-10).forEach(([dia, valor]) => {
-        const diaFmt = dia.split("-").slice(1).reverse().join("/");
-        const barLen = Math.max(1, Math.round((valor / maxVal) * 12));
-        const bar = "█".repeat(barLen);
-        const valFmt = valor.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-        chartMsg += `${diaFmt} | ${bar} R$ ${valFmt}\n`;
-      });
+      if (Object.keys(porDia).length > 0) {
+        chartMsg += `📈 <b>Evolução Diária de Receitas:</b>\n<pre>\n`;
+        Object.entries(porDia).sort(([a], [b]) => a.localeCompare(b)).slice(-15).forEach(([dia, valor]) => {
+          const diaFmt = dia.split("-").slice(1).reverse().join("/");
+          const barLen = Math.max(1, Math.round((valor / maxVal) * 12));
+          const bar = "█".repeat(barLen);
+          const valFmt = valor.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+          chartMsg += `${diaFmt} | ${bar} R$ ${valFmt}\n`;
+        });
+        chartMsg += `</pre>\n`;
+      }
 
-      chartMsg += `</pre>\n`;
-      chartMsg += `💰 <b>Total do Período:</b> <b>${totalPeriodo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n`;
-      chartMsg += `🛒 <b>Total de Lançamentos:</b> <b>${todasVendas.length}</b>\n\n`;
-      chartMsg += `💡 <i>No aplicativo Wallet você tem gráficos interativos em tempo real!</i>`;
+      const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+      chartMsg += `📈 <b>Total de Receitas:</b> <b>${format(totalReceitas)}</b> (${todasReceitas.length} lançamentos)\n`;
+      chartMsg += `📉 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b> (${todasDespesas.length} lançamentos)\n`;
+      chartMsg += `💵 <b>Resultado do Período:</b> <b>${format(saldoPeriodo)}</b>\n\n`;
+      chartMsg += `💡 <i>Abra o Wallet App para navegar no gráfico interativo com filtros por categoria!</i>`;
 
       await sendReply(chartMsg);
       return new Response("OK", { status: 200, headers: corsHeaders });

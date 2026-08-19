@@ -191,20 +191,35 @@ interface TransacaoRow { id: string; descricao: string; valor: number; tipo: str
 async function fetchAllTransacoes(supabase: any, userId: string, opts?: { dataInicio?: string; dataFim?: string; tipo?: string; categoriaId?: string; limit?: number; select?: string }): Promise<TransacaoRow[]> {
   const sel = opts?.select || "id,descricao,valor,tipo,data,created_at,categoria_id,metodo_pagamento,observacoes,conta_id";
   const selNonTipo = sel.replace(",tipo", "");
-  const buildQuery = (table: string, hasTipo: boolean) => {
-    let q = supabase.from(table).select(hasTipo ? sel : selNonTipo).eq("user_id", userId);
-    if (opts?.dataInicio) q = q.gte("data", opts.dataInicio);
-    if (opts?.dataFim) q = q.lte("data", opts.dataFim);
-    if (hasTipo && opts?.tipo) q = q.eq("tipo", opts.tipo);
-    if (opts?.categoriaId) q = q.eq("categoria_id", opts.categoriaId);
-    return q;
+
+  const fetchTableAll = async (table: string, hasTipo: boolean) => {
+    const allData: any[] = [];
+    let from = 0;
+    const step = 1000;
+    const maxRows = opts?.limit || 10000;
+
+    while (true) {
+      let q = supabase.from(table).select(hasTipo ? sel : selNonTipo).eq("user_id", userId);
+      if (opts?.dataInicio) q = q.gte("data", opts.dataInicio);
+      if (opts?.dataFim) q = q.lte("data", opts.dataFim);
+      if (hasTipo && opts?.tipo) q = q.eq("tipo", opts.tipo);
+      if (opts?.categoriaId) q = q.eq("categoria_id", opts.categoriaId);
+
+      const { data, error } = await q.range(from, from + step - 1);
+      if (error || !data || data.length === 0) break;
+      allData.push(...data);
+      if (data.length < step || allData.length >= maxRows) break;
+      from += step;
+    }
+    return { data: allData };
   };
+
   const skipReceitas = opts?.tipo === "despesa";
   const skipDespesas = opts?.tipo === "receita";
   const promises = [
-    buildQuery("transacoes", true),
-    skipReceitas ? Promise.resolve({ data: [], error: null }) : buildQuery("receitas", false),
-    skipDespesas ? Promise.resolve({ data: [], error: null }) : buildQuery("despesas", false)
+    fetchTableAll("transacoes", true),
+    skipReceitas ? Promise.resolve({ data: [] }) : fetchTableAll("receitas", false),
+    skipDespesas ? Promise.resolve({ data: [] }) : fetchTableAll("despesas", false)
   ];
   const [resT, resR, resD] = await Promise.all(promises);
   const transacoes = (resT.data || []).map((t: any) => ({ ...t, origem: "transacoes" }));
