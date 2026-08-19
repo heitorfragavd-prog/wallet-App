@@ -612,8 +612,464 @@ serve(async (req) => {
       });
     }
 
+    const sendReplyWithButtons = async (replyChatId: string | number, replyText: string, buttons: Array<Array<{ text: string; callback_data: string }>>) => {
+      if (!telegramBotToken) return null;
+      const resp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: replyChatId,
+          text: replyText,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: buttons },
+        }),
+      });
+      return await resp.json().catch(() => ({}));
+    };
+
+    const editMessageText = async (replyChatId: string | number, messageId: number, text: string) => {
+      if (!telegramBotToken) return;
+      await fetch(`https://api.telegram.org/bot${telegramBotToken}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: replyChatId,
+          message_id: messageId,
+          text,
+          parse_mode: "HTML",
+        }),
+      }).catch(() => {});
+    };
+
+    const removeInlineKeyboard = async (replyChatId: string | number, messageId: number) => {
+      if (!telegramBotToken) return;
+      await fetch(`https://api.telegram.org/bot${telegramBotToken}/editMessageReplyMarkup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: replyChatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [] },
+        }),
+      }).catch(() => {});
+    };
+
+    const answerCallback = async (callbackQueryId: string, text: string) => {
+      if (!telegramBotToken) return;
+      await fetch(`https://api.telegram.org/bot${telegramBotToken}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+      }).catch(() => {});
+    };
+
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
     const message = body?.message;
+    const callbackQuery = body?.callback_query;
+
+    if (callbackQuery) {
+      const callbackChatId = callbackQuery.message?.chat?.id;
+      const callbackMessageId = callbackQuery.message?.message_id;
+      const callbackData = callbackQuery.data || "";
+      const callbackUserId = callbackQuery.from?.id;
+
+      let { data: userData } = await supabase
+        .from("usuarios_telegram")
+        .select("user_id, telegram_chat_id")
+        .eq("telegram_chat_id", String(callbackChatId))
+        .maybeSingle();
+
+      if (!userData && callbackUserId) {
+        const { data: uData } = await supabase
+          .from("usuarios_telegram")
+          .select("user_id, telegram_chat_id")
+          .eq("telegram_user_id", String(callbackUserId))
+          .maybeSingle();
+        userData = uData;
+      }
+
+      const cbUserId = userData?.user_id;
+      const cbChatId = userData?.telegram_chat_id || callbackChatId;
+
+      if (!cbUserId) {
+        await answerCallback(callbackQuery.id, "Usuário não encontrado.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      // ================================================================
+      // BOTÃO: nf_confirmar
+      // ================================================================
+      if (callbackData.startsWith("nf_confirmar:")) {
+        const nfId = callbackData.split(":")[1];
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+
+        const { data: nf } = await supabase
+          .from("notas_fiscais_compra")
+          .select("*")
+          .eq("id", nfId)
+          .single();
+
+        if (!nf) {
+          await answerCallback(callbackQuery.id, "Nota fiscal não encontrada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
+          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi confirmada anteriormente.");
+          await answerCallback(callbackQuery.id, "NF já confirmada!");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await supabase.from("notas_fiscais_compra").update({ status: "confirmada" }).eq("id", nfId);
+        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
+
+        const { data: itens } = await supabase
+          .from("nf_itens")
+          .select("*")
+          .eq("nf_id", nfId);
+
+        let msgConf = `✅ <b>Nota Fiscal Confirmada!</b>\n\n`;
+        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
+        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n`;
+        msgConf += `📦 <b>Itens processados:</b> ${itens?.length || 0}\n\n`;
+
+        const alertasCriados: any[] = [];
+        if (itens && itens.length > 0) {
+          for (const item of itens) {
+            await supabase.from("nf_itens").update({ status_estoque: "processado" }).eq("id", item.id);
+
+            await supabase.from("historico_custo_produto").insert({
+              user_id: cbUserId,
+              workspace_id: nf.workspace_id,
+              produto_descricao: item.descricao,
+              codigo_produto: item.codigo_produto,
+              fornecedor: nf.fornecedor,
+              cnpj_fornecedor: nf.cnpj_fornecedor,
+              custo_unitario_bruto: item.valor_unitario,
+              custo_unitario_liquido: item.custo_unitario_liquido,
+              data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
+              nf_id: nfId,
+            });
+
+            const { data: prodEye } = await supabase
+              .from("produtos_eyemobile")
+              .select("*")
+              .eq("user_id", cbUserId)
+              .ilike("descricao", `%${item.descricao.trim()}%`)
+              .limit(1)
+              .maybeSingle();
+
+            if (prodEye) {
+              await supabase.from("produtos_eyemobile").update({
+                custo_atual: item.custo_unitario_liquido,
+                estoque_atual: (Number(prodEye.estoque_atual) || 0) + (Number(item.quantidade) || 0),
+                ultima_atualizacao_custo: new Date().toISOString(),
+              }).eq("id", prodEye.id);
+            }
+
+            const dozeMesesAtras = new Date();
+            dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
+
+            const { data: histAnterior } = await supabase
+              .from("historico_custo_produto")
+              .select("custo_unitario_liquido, created_at")
+              .eq("user_id", cbUserId)
+              .ilike("produto_descricao", `%${item.descricao.trim()}%`)
+              .lt("created_at", nf.created_at || new Date().toISOString())
+              .gte("created_at", dozeMesesAtras.toISOString())
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
+              const custoAnt = Number(histAnterior.custo_unitario_liquido);
+              const custoNovo = Number(item.custo_unitario_liquido);
+              const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
+
+              if (variacao > 10) {
+                let precoVendaAtual = Number(prodEye?.preco_venda || 0);
+                let margemReal = Number(prodEye?.margem_real_percentual || 0);
+                let precoSugerido = 0;
+
+                if (precoVendaAtual > 0 && custoAnt > 0) {
+                  margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
+                  precoSugerido = custoNovo * (1 + margemReal / 100);
+                } else {
+                  precoSugerido = custoNovo * 1.3;
+                }
+
+                const { data: novoAlerta } = await supabase
+                  .from("alertas_preco_pendentes")
+                  .insert({
+                    user_id: cbUserId,
+                    workspace_id: nf.workspace_id,
+                    nf_id: nfId,
+                    produto_eyemobile_id: prodEye?.eyemobile_id || null,
+                    produto_codigo: item.codigo_produto,
+                    produto_descricao: item.descricao,
+                    custo_anterior: custoAnt,
+                    custo_novo: custoNovo,
+                    variacao_custo_percentual: variacao,
+                    preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
+                    margem_real_percentual: margemReal > 0 ? margemReal : null,
+                    preco_sugerido: precoSugerido,
+                    status: "pendente",
+                  })
+                  .select("*")
+                  .single();
+
+                if (novoAlerta) {
+                  alertasCriados.push(novoAlerta);
+                }
+              }
+            }
+          }
+        }
+
+        await editMessageText(cbChatId, callbackMessageId, msgConf);
+
+        if (alertasCriados.length > 0) {
+          for (const alerta of alertasCriados) {
+            let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
+            msgAlerta += `📦 <b>${alerta.produto_descricao}</b>\n\n`;
+            msgAlerta += `💰 Custo anterior: ${fmt(alerta.custo_anterior)}\n`;
+            msgAlerta += `💰 Custo novo: ${fmt(alerta.custo_novo)}\n`;
+            msgAlerta += `📈 Aumento: <b>+${alerta.variacao_custo_percentual?.toFixed(1)}%</b>\n\n`;
+            if (alerta.preco_venda_atual) msgAlerta += `💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
+            msgAlerta += `💡 <b>PREÇO SUGERIDO: ${fmt(alerta.preco_sugerido)}</b>\n`;
+            if (alerta.margem_real_percentual) msgAlerta += `<i>(margem real ${alerta.margem_real_percentual.toFixed(0)}%)</i>`;
+
+            const botoesPreco = [
+              [{ text: `✅ CONFIRMAR ${fmt(alerta.preco_sugerido)}`, callback_data: `preco_confirmar:${alerta.id}` }],
+              [
+                { text: "✏️ EDITAR PREÇO", callback_data: `preco_editar:${alerta.id}` },
+                { text: "🚫 IGNORAR", callback_data: `preco_ignorar:${alerta.id}` },
+              ],
+            ];
+
+            await sendReplyWithButtons(cbChatId, msgAlerta, botoesPreco);
+          }
+
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: cbUserId,
+              chat_id: Number(cbChatId),
+              estado: "aguardando_ajuste_precos",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+        }
+
+        await answerCallback(callbackQuery.id, "NF confirmada com sucesso!");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // BOTÃO: nf_cancelar
+      // ================================================================
+      if (callbackData.startsWith("nf_cancelar:")) {
+        const nfId = callbackData.split(":")[1];
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+        await editMessageText(cbChatId, callbackMessageId, "❌ Nota Fiscal cancelada.");
+        await supabase.from("nf_itens").delete().eq("nf_id", nfId);
+        await supabase.from("notas_fiscais_compra").delete().eq("id", nfId);
+        await answerCallback(callbackQuery.id, "NF cancelada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // BOTÃO: preco_confirmar
+      // ================================================================
+      if (callbackData.startsWith("preco_confirmar:")) {
+        const alertaId = callbackData.split(":")[1];
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .maybeSingle();
+
+        if (!alerta) {
+          await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        let updateResult: any = { success: true };
+        if (alerta.produto_eyemobile_id) {
+          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              mode: "UPDATE_PRODUCT_PRICE",
+              user_id: cbUserId,
+              product_id: alerta.produto_eyemobile_id,
+              new_price: alerta.preco_sugerido,
+            }),
+          });
+          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        }
+
+        await supabase.from("alertas_preco_pendentes").update({
+          status: "aplicado",
+          data_resolucao: new Date().toISOString(),
+        }).eq("id", alertaId);
+
+        if (alerta.produto_eyemobile_id) {
+          await supabase.from("produtos_eyemobile").update({
+            preco_venda: alerta.preco_sugerido,
+          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        }
+
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+        await editMessageText(
+          cbChatId,
+          callbackMessageId,
+          `✅ <b>Preço atualizado!</b>\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Novo preço: <b>${fmt(alerta.preco_sugerido)}</b>` +
+          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+        );
+        await answerCallback(callbackQuery.id, "Preço aplicado no Eyemobile!");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // BOTÃO: preco_editar
+      // ================================================================
+      if (callbackData.startsWith("preco_editar:")) {
+        const alertaId = callbackData.split(":")[1];
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .maybeSingle();
+
+        if (!alerta) {
+          await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+        await editMessageText(
+          cbChatId,
+          callbackMessageId,
+          `✏️ <b>Editar preço: ${alerta.produto_descricao}</b>\n\n` +
+          `💰 Sugerido: ${fmt(alerta.preco_sugerido)}\n` +
+          `💰 Custo: ${fmt(alerta.custo_novo)}\n\n` +
+          `👉 <b>Digite o novo preço no chat</b> (ex: 15.00):`
+        );
+
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: cbUserId,
+            chat_id: Number(cbChatId),
+            estado: "aguardando_preco_editado",
+            proposta_id: alertaId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+
+        await answerCallback(callbackQuery.id, "Digite o novo preço");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // BOTÃO: preco_ignorar
+      // ================================================================
+      if (callbackData.startsWith("preco_ignorar:")) {
+        const alertaId = callbackData.split(":")[1];
+        await supabase.from("alertas_preco_pendentes").update({
+          status: "ignorado",
+          data_resolucao: new Date().toISOString(),
+        }).eq("id", alertaId);
+
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+        await editMessageText(
+          cbChatId,
+          callbackMessageId,
+          `🚫 <b>Alerta ignorado.</b>\n` +
+          `Preço não será alterado. Lembrete semanal ativo.`
+        );
+        await answerCallback(callbackQuery.id, "Alerta ignorado.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // BOTÃO: preco_confirmar_editado
+      // ================================================================
+      if (callbackData.startsWith("preco_confirmar_editado:")) {
+        const parts = callbackData.split(":");
+        const alertaId = parts[1];
+        const precoDigitado = parseFloat(parts[2]);
+
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .maybeSingle();
+
+        if (!alerta) {
+          await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        let updateResult: any = { success: true };
+        if (alerta.produto_eyemobile_id) {
+          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              mode: "UPDATE_PRODUCT_PRICE",
+              user_id: cbUserId,
+              product_id: alerta.produto_eyemobile_id,
+              new_price: precoDigitado,
+            }),
+          });
+          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        }
+
+        await supabase.from("alertas_preco_pendentes").update({
+          status: "aplicado",
+          preco_definido_usuario: precoDigitado,
+          data_resolucao: new Date().toISOString(),
+        }).eq("id", alertaId);
+
+        if (alerta.produto_eyemobile_id) {
+          await supabase.from("produtos_eyemobile").update({
+            preco_venda: precoDigitado,
+          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        }
+
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+        await editMessageText(
+          cbChatId,
+          callbackMessageId,
+          `✅ <b>Preço atualizado!</b>\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Novo preço: <b>${fmt(precoDigitado)}</b>` +
+          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+        );
+        await answerCallback(callbackQuery.id, "Preço aplicado!");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      await answerCallback(callbackQuery.id, "Ação realizada.");
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     if (!message || !message.chat) {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
@@ -774,6 +1230,74 @@ serve(async (req) => {
     // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Limpa confirmação pendente se usuário fez outra pergunta) ───
     const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
     const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
+
+    // ─── HANDLER PARA PREÇO EDITADO DIGITADO NO CHAT ───
+    const { data: conversaPrecoEdit } = await supabase
+      .from("telegram_conversas")
+      .select("estado, proposta_id")
+      .eq("chat_id", chatId)
+      .maybeSingle();
+
+    if (conversaPrecoEdit?.estado === "aguardando_preco_editado" && conversaPrecoEdit?.proposta_id) {
+      const alertaId = conversaPrecoEdit.proposta_id;
+      const precoDigitado = parseFloat(text.replace(",", ".").replace(/[^0-9.]/g, ""));
+
+      if (isNaN(precoDigitado) || precoDigitado <= 0) {
+        await sendReply("❌ Valor inválido. Digite apenas o número do novo preço (ex: 15.00)");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const { data: alerta } = await supabase
+        .from("alertas_preco_pendentes")
+        .select("*")
+        .eq("id", alertaId)
+        .maybeSingle();
+
+      if (alerta) {
+        const custoNovo = Number(alerta.custo_novo || 0);
+        const novaMargem = custoNovo > 0 ? ((precoDigitado / custoNovo) - 1) * 100 : 0;
+
+        const fmt = (v: any) =>
+          v != null && !isNaN(Number(v))
+            ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+            : "R$ 0,00";
+
+        const msgEditado = `✏️ <b>Preço definido por você:</b>\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Sugerido: ${fmt(alerta.preco_sugerido)}\n` +
+          `💰 Definido por você: <b>${fmt(precoDigitado)}</b>\n` +
+          `📈 Nova margem real: <b>${novaMargem.toFixed(1)}%</b>\n\n` +
+          `👉 Confirmar este preço para atualizar no Eyemobile?`;
+
+        const botoesConfirmar = [
+          [{ text: `✅ CONFIRMAR ${fmt(precoDigitado)}`, callback_data: `preco_confirmar_editado:${alertaId}:${precoDigitado}` }],
+          [
+            { text: "✏️ TENTAR OUTRO", callback_data: `preco_editar:${alertaId}` },
+            { text: "🚫 CANCELAR", callback_data: `preco_ignorar:${alertaId}` },
+          ],
+        ];
+
+        await sendReplyWithButtons(chatId, msgEditado, botoesConfirmar);
+
+        await supabase.from("alertas_preco_pendentes").update({
+          preco_definido_usuario: precoDigitado,
+          status: "editado",
+        }).eq("id", alertaId);
+
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: userId,
+            chat_id: Number(chatId),
+            estado: "inicio",
+            proposta_id: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    }
 
     // ─── HANDLERS DE CORREÇÃO DE NOTA FISCAL (PROSSEGUIR / MANUAL) ───
     const { data: conversaAtivaPre } = await supabase
@@ -3622,11 +4146,21 @@ Retorne APENAS um array JSON no formato:
             msg += `👉 Responda <b>CANCELAR</b> para descartar.\n\n`;
             msg += `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
 
+            const botoesNF = [
+              [
+                { text: "✅ SIM, confirmar", callback_data: `nf_confirmar:${nfSalva.id}` },
+                { text: "❌ NÃO, cancelar", callback_data: `nf_cancelar:${nfSalva.id}` },
+              ],
+            ];
+
+            const respMsg = await sendReplyWithButtons(chatId, msg, botoesNF);
+            const messageId = respMsg?.result?.message_id;
+
             const { data: propCriada } = await supabase.from("telegram_propostas").insert({
               user_id: userId,
               chat_id: Number(chatId) || null,
               tipo: "atualizar_estoque_nf",
-              dados: { nf_id: nfSalva.id },
+              dados: { nf_id: nfSalva.id, message_id: messageId },
               resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf)}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
@@ -3645,7 +4179,6 @@ Retorne APENAS um array JSON no formato:
               );
             }
 
-            await sendReply(msg);
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
         }
