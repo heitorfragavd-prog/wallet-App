@@ -192,6 +192,124 @@ function isPessoaFisicaProvavel(nome: string): boolean {
   return !temTermoCorp && palavras >= 3;
 }
 
+// ─── PREVISÃO DE CAIXA INTELIGENTE ───
+async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?: string | null): Promise<string> {
+  const hoje = new Date();
+  
+  // 1. Saldo atual nas contas
+  let qContas = supabase
+    .from("contas")
+    .select("saldo, instituicao, nome")
+    .eq("user_id", userId)
+    .eq("ativo", true);
+  if (workspaceId) {
+    qContas = qContas.eq("workspace_id", workspaceId);
+  }
+  const { data: contas } = await qContas;
+  
+  const saldoAtual = (contas || []).reduce((a: number, c: any) => a + (Number(c.saldo) || 0), 0);
+  
+  // 2. Receitas médias dos últimos 30 dias
+  const dataInicio30 = new Date(hoje);
+  dataInicio30.setDate(hoje.getDate() - 30);
+  const dataInicio30Str = dataInicio30.toISOString().split("T")[0];
+  
+  let qTxRec = supabase
+    .from("transacoes")
+    .select("valor")
+    .eq("user_id", userId)
+    .eq("tipo", "receita")
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qTxRec = qTxRec.eq("workspace_id", workspaceId);
+  const { data: txsRec30d } = await qTxRec;
+  
+  let qRec = supabase
+    .from("receitas")
+    .select("valor")
+    .eq("user_id", userId)
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qRec = qRec.eq("workspace_id", workspaceId);
+  const { data: recs30d } = await qRec;
+  
+  const totalReceitas30d = [...(txsRec30d || []), ...(recs30d || [])].reduce((a, v) => a + Number(v.valor || 0), 0);
+  const mediaDiariaVendas = totalReceitas30d > 0 ? totalReceitas30d / 30 : 0;
+  
+  // 3. Despesas diárias estimadas
+  let qDespFixas = supabase
+    .from("despesas")
+    .select("valor, recorrencia_id")
+    .eq("user_id", userId)
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qDespFixas = qDespFixas.eq("workspace_id", workspaceId);
+  const { data: despesas30d } = await qDespFixas;
+  
+  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: any) => a + Number(d.valor || 0), 0);
+  const despesaDiaria = totalDespesas30d > 0 ? totalDespesas30d / 30 : 0;
+  
+  // 4. Dívidas a vencer nos próximos 90 dias
+  const hojeStr = hoje.toISOString().split("T")[0];
+  const d90 = new Date(hoje.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  
+  let qDividas = supabase
+    .from("dividas")
+    .select("valor_restante, valor_total, data_vencimento, credor, descricao")
+    .eq("user_id", userId)
+    .or("status.eq.pendente,status.eq.parcial")
+    .gte("data_vencimento", hojeStr)
+    .lte("data_vencimento", d90)
+    .order("data_vencimento", { ascending: true });
+  if (workspaceId) qDividas = qDividas.eq("workspace_id", workspaceId);
+  const { data: dividasFuturas } = await qDividas;
+  
+  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: any) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
+  
+  // 5. Calcular fluxo diário
+  const fluxoDiario = mediaDiariaVendas - despesaDiaria;
+  const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  
+  // 6. Montar resposta
+  let msg = "📊 <b>Previsão de Caixa Inteligente</b>\n\n";
+  msg += `💰 <b>Saldo atual:</b> <b>${format(saldoAtual)}</b>\n`;
+  msg += `📈 <b>Receita média/dia:</b> ${format(mediaDiariaVendas)}\n`;
+  msg += `📉 <b>Despesa média/dia:</b> ${format(despesaDiaria)}\n`;
+  msg += `📊 <b>Fluxo diário:</b> <b>${fluxoDiario >= 0 ? "+" : ""}${format(fluxoDiario)}</b>\n\n`;
+  
+  if (fluxoDiario >= 0) {
+    const proj30dias = fluxoDiario * 30;
+    msg += `✅ <b>Fluxo de Caixa Positivo!</b>\n`;
+    msg += `📈 <b>Projeção para 30 dias:</b> +${format(proj30dias)}\n`;
+  } else {
+    const diasAteZerar = saldoAtual > 0 ? Math.max(1, Math.floor(saldoAtual / Math.abs(fluxoDiario))) : 0;
+    const dataZerar = new Date(hoje);
+    dataZerar.setDate(hoje.getDate() + diasAteZerar);
+    
+    msg += `🚨 <b>ALERTA DE CAIXA:</b> Seu fluxo diário está negativo!\n`;
+    msg += `⏰ <b>Seu saldo atual cobre cerca de ${diasAteZerar} dias de operação.</b>\n`;
+    msg += `📅 Data estimada de exaustão: <b>${dataZerar.toLocaleDateString("pt-BR")}</b>\n\n`;
+    msg += `💡 <b>Recomendações:</b>\n`;
+    msg += `• Acelere recebimentos e ações de vendas\n`;
+    msg += `• Renegocie prazos de vencimento de fornecedores\n`;
+    msg += `• Pause despesas não essenciais\n`;
+  }
+  
+  // 7. Dívidas próximas
+  if (dividasFuturas && dividasFuturas.length > 0) {
+    msg += `\n📋 <b>Contas a vencer (próx. 90 dias):</b> <b>${format(totalDividasProximas)}</b>\n`;
+    msg += `   (<i>${dividasFuturas.length} compromissos</i>)\n\n`;
+    
+    msg += `<b>Próximos vencimentos:</b>\n`;
+    dividasFuturas.slice(0, 5).forEach((d: any) => {
+      const venc = new Date(d.data_vencimento + "T12:00:00Z");
+      const dias = Math.max(0, Math.ceil((venc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
+      const emoji = dias <= 3 ? "🔴" : dias <= 7 ? "🟡" : "🟢";
+      const val = Number(d.valor_restante || d.valor_total || 0);
+      msg += `${emoji} <b>${d.credor || d.descricao || "Boleto"}</b> — ${format(val)} (${dias === 0 ? "Vence hoje" : `em ${dias} dias`})\n`;
+    });
+  }
+  
+  return msg;
+}
+
 async function reextrairBeneficiarioDoDocumento(
   supabaseUrl: string,
   serviceKey: string,
@@ -500,24 +618,70 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // Busca vínculo do usuário
-    const { data: usuarioTg } = await supabase
-      .from("usuarios_telegram")
-      .select("user_id")
-      .eq("telegram_chat_id", chatId)
-      .eq("ativo", true)
-      .maybeSingle();
+    // ─── RESOLUÇÃO DE USUÁRIO / GRUPO ───
+    const chatType = message.chat?.type || "private";
+    const isGroup = chatType === "group" || chatType === "supergroup";
+    let grupoConfig: any = null;
+    let userId: string = "";
+    let workspaceId: string | null = null;
 
-    if (!usuarioTg) {
-      console.log("[telegram-webhook] Usuário NÃO vinculado para chatId:", chatId);
-      await sendReply(
-        `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
-      );
-      return new Response("OK", { status: 200, headers: corsHeaders });
+    if (isGroup) {
+      const { data: gc } = await supabase
+        .from("telegram_grupos_config")
+        .select("*")
+        .eq("chat_id", chatId)
+        .maybeSingle();
+
+      if (!gc) {
+        await sendReply(
+          `⚠️ <b>Este grupo do Telegram ainda não está configurado.</b>\n\n` +
+          `🆔 <b>Chat ID do Grupo:</b> <code>${chatId}</code>\n` +
+          `🏷️ <b>Nome:</b> <i>${message.chat?.title || "Grupo"}</i>\n\n` +
+          `<i>Para habilitar o bot neste grupo, configure as permissões no banco de dados na tabela <code>telegram_grupos_config</code>.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      grupoConfig = gc;
+      workspaceId = gc.workspace_id || null;
+
+      // Se o grupo tiver workspace_id vinculado, busca o dono do workspace
+      if (workspaceId) {
+        const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", workspaceId).maybeSingle();
+        userId = ws?.user_id || "";
+      }
+
+      // Fallback para primeiro usuário ativo vinculado se não houver dono explícito
+      if (!userId) {
+        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
+        userId = anyUser?.user_id || "";
+      }
+
+      if (!userId) {
+        await sendReply("⚠️ Não foi possível identificar a conta administradora para este grupo.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    } else {
+      // Busca vínculo do usuário no chat privado
+      const { data: usuarioTg } = await supabase
+        .from("usuarios_telegram")
+        .select("user_id")
+        .eq("telegram_chat_id", chatId)
+        .eq("ativo", true)
+        .maybeSingle();
+
+      if (!usuarioTg) {
+        console.log("[telegram-webhook] Usuário NÃO vinculado para chatId:", chatId);
+        await sendReply(
+          `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      userId = usuarioTg.user_id;
     }
 
-    const userId = usuarioTg.user_id;
-    console.log("[telegram-webhook] Usuário vinculado: userId=", userId, "chatId=", chatId);
+    console.log("[telegram-webhook] Identificação:", isGroup ? `GRUPO (${grupoConfig?.nome_grupo})` : "PRIVADO", "userId=", userId, "chatId=", chatId);
 
     const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
     const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
@@ -678,6 +842,156 @@ serve(async (req) => {
       msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
       await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.6. CONSULTA DE AGENDA / EVENTOS / COMPROMISSOS (ETAPA 1) ───
+    const isConsultaAgenda =
+      text.startsWith("/agenda") ||
+      respLower.includes("agenda") ||
+      respLower.includes("evento") ||
+      respLower.includes("compromisso") ||
+      respLower.includes("reuniao") ||
+      respLower.includes("reunião") ||
+      respLower.includes("tem algo") ||
+      respLower.includes("o que tenho") ||
+      respLower.includes("minha agenda");
+
+    if (isConsultaAgenda) {
+      if (isGroup && grupoConfig?.ferramentas_permitidas?.length > 0 &&
+          !grupoConfig.ferramentas_permitidas.includes("consultar_agenda") &&
+          !grupoConfig.ferramentas_permitidas.includes("agenda")) {
+        await sendReply("❌ Este grupo não tem permissão para consultar a agenda.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const hoje = new Date(hojeStr);
+      let dataInicio = new Date(hoje);
+      let dataFim = new Date(hoje);
+      let periodoLabel = "de hoje";
+
+      // Detectar período solicitado
+      if (respLower.includes("semana que vem") || respLower.includes("proxima semana") || respLower.includes("próxima semana")) {
+        const diaSemana = hoje.getDay();
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() + (7 - diaSemana));
+        dataFim = new Date(dataInicio);
+        dataFim.setDate(dataInicio.getDate() + 6);
+        periodoLabel = "da semana que vem";
+      } else if (respLower.includes("essa semana") || respLower.includes("esta semana")) {
+        const diaSemana = hoje.getDay();
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() - diaSemana);
+        dataFim = new Date(dataInicio);
+        dataFim.setDate(dataInicio.getDate() + 6);
+        periodoLabel = "desta semana";
+      } else if (respLower.includes("esse mes") || respLower.includes("este mes") || respLower.includes("esse mês") || respLower.includes("este mês")) {
+        dataInicio = new Date(anoAtual, mesAtual - 1, 1);
+        const uDia = new Date(anoAtual, mesAtual, 0).getDate();
+        dataFim = new Date(anoAtual, mesAtual - 1, uDia);
+        periodoLabel = "deste mês";
+      } else if (respLower.includes("amanha") || respLower.includes("amanhã")) {
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() + 1);
+        dataFim = new Date(dataInicio);
+        periodoLabel = "de amanhã";
+      } else if (respLower.includes("proximo") || respLower.includes("próximo") || respLower.includes("proximos") || respLower.includes("próximos")) {
+        const matchDias = text.match(/(\d+)\s*dias?/);
+        const dias = matchDias ? parseInt(matchDias[1], 10) : 7;
+        dataFim = new Date(hoje);
+        dataFim.setDate(hoje.getDate() + dias);
+        periodoLabel = `dos próximos ${dias} dias`;
+      }
+
+      const dataInicioStr = dataInicio.toISOString().split("T")[0];
+      const dataFimStr = dataFim.toISOString().split("T")[0];
+
+      // Busca unificada em compromissos e lembretes
+      const [{ data: compromissos }, { data: lembretes }] = await Promise.all([
+        supabase
+          .from("compromissos")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("data", dataInicioStr)
+          .lte("data", dataFimStr)
+          .order("data", { ascending: true }),
+        supabase
+          .from("lembretes")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("data", dataInicioStr)
+          .lte("data", dataFimStr)
+          .order("data", { ascending: true }),
+      ]);
+
+      const eventos = [
+        ...(compromissos || []).map((c: any) => ({
+          tipo: "Compromisso",
+          titulo: c.titulo,
+          data: c.data,
+          hora: c.hora,
+          local: c.local,
+          descricao: null,
+        })),
+        ...(lembretes || []).map((l: any) => ({
+          tipo: "Lembrete",
+          titulo: l.titulo,
+          data: l.data,
+          hora: l.hora,
+          local: null,
+          descricao: l.descricao,
+        })),
+      ].sort((a, b) => {
+        const da = `${a.data}T${a.hora || "00:00:00"}`;
+        const db = `${b.data}T${b.hora || "00:00:00"}`;
+        return da.localeCompare(db);
+      });
+
+      if (eventos.length === 0) {
+        await sendReply(`📅 <b>Sem eventos ${periodoLabel}!</b>\n\nSua agenda está livre. 🎉`);
+      } else {
+        let msg = `📅 <b>Agenda & Eventos ${periodoLabel}:</b>\n\n`;
+        eventos.forEach((e: any, i: number) => {
+          const [ano, mes, dia] = e.data.split("-");
+          const dObj = new Date(Number(ano), Number(mes) - 1, Number(dia));
+          const diaSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][dObj.getDay()];
+          const dataFmt = `${dia}/${mes}/${ano}`;
+          const horaFmt = e.hora ? String(e.hora).slice(0, 5) : "Dia todo";
+
+          msg += `${i + 1}. <b>${e.titulo || "Evento"}</b>\n`;
+          msg += `   📆 ${diaSemana}, ${dataFmt} | 🕐 ${horaFmt}\n`;
+          if (e.local) msg += `   📍 <i>Local:</i> ${e.local}\n`;
+          if (e.descricao) msg += `   📝 <i>Nota:</i> ${e.descricao}\n`;
+          msg += `\n`;
+        });
+        await sendReply(msg);
+      }
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.7. PREVISÃO DE CAIXA INTELIGENTE (ETAPA 2) ───
+    const isConsultaPrevisaoCaixa =
+      text.startsWith("/previsao") ||
+      respLower.includes("previsao") ||
+      respLower.includes("previsão") ||
+      respLower.includes("quando acaba") ||
+      respLower.includes("caixa acaba") ||
+      respLower.includes("quanto tempo") ||
+      respLower.includes("meu caixa") ||
+      respLower.includes("quanto dura") ||
+      respLower.includes("quanto sobra");
+
+    if (isConsultaPrevisaoCaixa) {
+      if (isGroup && grupoConfig?.ferramentas_permitidas?.length > 0 &&
+          !grupoConfig.ferramentas_permitidas.includes("previsao_caixa") &&
+          !grupoConfig.ferramentas_permitidas.includes("consultar_saldo")) {
+        await sendReply("❌ Este grupo não tem permissão para consultar a previsão de caixa.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const previsaoMsg = await calcularPrevisaoCaixa(supabase, userId, workspaceId);
+      await sendReply(previsaoMsg);
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
@@ -1207,11 +1521,16 @@ serve(async (req) => {
         `🤖 <b>Comandos do Bot Wallet:</b>\n\n` +
         `/dividas - Lista suas dívidas pendentes\n` +
         `/saldo - Exibe o saldo consolidado\n` +
+        `/agenda - Consulta seus eventos e compromissos\n` +
+        `/previsao - Previsão de fluxo de caixa inteligente\n` +
+        `/metricas - Métricas e telemetria da IA\n` +
         `/ensinar - Ensinar vínculo de fornecedor com categoria\n` +
         `/start - Gerar código de vínculo\n` +
         `/ajuda - Ver este menu de comandos\n\n` +
         `💬 <i>Você também pode conversar naturalmente! Exemplos:</i>\n` +
         `• <i>"Quanto vendeu hoje?"</i>\n` +
+        `• <i>"Tem algum evento na agenda semana que vem?"</i>\n` +
+        `• <i>"Quando acaba meu caixa?"</i>\n` +
         `• <i>"Qual o resumo do mês?"</i>\n` +
         `• <i>"Cadastre uma despesa de R$ 50 de almoço"</i>`
       );
