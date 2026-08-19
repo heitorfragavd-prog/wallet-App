@@ -113,6 +113,8 @@ async function buildLocalFallbackDashboard(
     sales,
     products,
     stores: [],
+    startDate: filters.startDate,
+    endDate: filters.endDate,
   });
 
   return {
@@ -176,6 +178,8 @@ async function fetchLiveDashboard(
     sales: data?.sales ?? [],
     products: data?.products ?? [],
     stores: data?.stores ?? [],
+    startDate: isoStartDate,
+    endDate: isoEndDate,
   });
   return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
 }

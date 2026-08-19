@@ -71,7 +71,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + 1),
           role: "assistant",
-          content: response.message.content ?? "",
+          content: response.message?.content ?? (typeof response.message === "string" ? response.message : ""),
           toolCalls: response.toolCalls,
           createdAt: new Date(),
         };

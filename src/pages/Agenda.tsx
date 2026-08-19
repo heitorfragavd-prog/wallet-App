@@ -4,6 +4,7 @@ import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { useCompromissos } from "@/domains/finance/hooks/useCompromissos";
 import { Calendar } from "@/shared/components/ui/calendar";
 import { Card, CardContent } from "@/shared/components/ui/card";
@@ -46,36 +47,29 @@ const TIPO_CONFIG = {
   compromisso: { label: "Compromisso", cor: "bg-sky-500", text: "text-sky-500", icon: Clock },
 };
 
-// Despesas e dívidas vêm direto das tabelas. As RECEITAS usam o hook
-// useReceitas (consolidação oficial: manuais + PDV dinheiro + Divipay
-// líquido) — a Agenda mostra exatamente o mesmo que a tela de Receitas.
-async function fetchDespesasEDividas(mes: string, workspaceId: string | null): Promise<Compromisso[]> {
+// Dívidas vêm direto do banco. As DESPESAS usam useDespesas (consolidação oficial:
+// manuais + transações + Divipay live) e as RECEITAS usam useReceitas.
+async function fetchDividas(mes: string, workspaceId: string | null): Promise<Compromisso[]> {
   const [ano, m] = mes.split("-").map(Number);
   const startDate = `${mes}-01`;
   const endDate = new Date(ano, m, 0).toISOString().split("T")[0];
 
-  let despesasQ = supabase.from("despesas").select("id, descricao, valor, data").gte("data", startDate).lte("data", endDate);
   let dividasQ = supabase.from("dividas").select("id, descricao, credor, valor_restante, data_vencimento").gte("data_vencimento", startDate).lte("data_vencimento", endDate);
 
   if (workspaceId) {
-    despesasQ = despesasQ.eq("workspace_id", workspaceId);
     dividasQ = dividasQ.eq("workspace_id", workspaceId);
   }
 
-  const [d, v] = await Promise.all([despesasQ, dividasQ]);
-  if (d.error) throw d.error;
+  const v = await dividasQ;
   if (v.error) throw v.error;
 
-  return [
-    ...(d.data ?? []).map((x): Compromisso => ({ id: x.id, tipo: "despesa", descricao: x.descricao, valor: x.valor, data: x.data })),
-    ...(v.data ?? []).map((x): Compromisso => ({
-      id: x.id,
-      tipo: "divida",
-      descricao: x.descricao || x.credor || "Dívida",
-      valor: x.valor_restante,
-      data: x.data_vencimento,
-    })),
-  ];
+  return (v.data ?? []).map((x): Compromisso => ({
+    id: x.id,
+    tipo: "divida",
+    descricao: x.descricao || x.credor || "Dívida",
+    valor: x.valor_restante,
+    data: x.data_vencimento,
+  }));
 }
 
 const diaISO = (d: Date) =>
@@ -97,26 +91,29 @@ const Agenda = () => {
   const [formLembrete, setFormLembrete] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
-  const { data: saidas = [], isLoading: loadingSaidas } = useQuery({
-    queryKey: ["agenda-financeira", { mes: mesRef, workspaceId }],
-    queryFn: () => fetchDespesasEDividas(mesRef, workspaceId),
+  const [ano, m] = mesRef.split("-").map(Number);
+  const mesStart = `${mesRef}-01`;
+  const mesEnd = new Date(ano, m, 0).toISOString().split("T")[0];
+
+  const { data: dividas = [], isLoading: loadingDividas } = useQuery({
+    queryKey: ["agenda-dividas", { mes: mesRef, workspaceId }],
+    queryFn: () => fetchDividas(mesRef, workspaceId),
     staleTime: 1000 * 60 * 2,
   });
 
   // Mesma consolidação da tela de Receitas (manuais + PDV dinheiro + Divipay)
-  const [ano, m] = mesRef.split("-").map(Number);
-  const mesStart = `${mesRef}-01`;
-  const mesEnd = new Date(ano, m, 0).toISOString().split("T")[0];
   const { receitas, loading: loadingReceitas } = useReceitas({ startDate: mesStart, endDate: mesEnd });
+
+  // Mesma consolidação da tela de Despesas (manuais + transações + Divipay live)
+  const { despesas, loading: loadingDespesas } = useDespesas({ startDate: mesStart, endDate: mesEnd });
 
   // Compromissos manuais (título, local, data, hora, repetir, lembrete)
   const { compromissos: compromissosManuais, loading: loadingCompromissos, createCompromisso, deleteCompromisso } = useCompromissos(mesRef);
 
-  const isLoading = loadingSaidas || loadingReceitas || loadingCompromissos;
+  const isLoading = loadingDividas || loadingReceitas || loadingDespesas || loadingCompromissos;
 
   const compromissos = useMemo<Compromisso[]>(() => {
-    // Receita consolidada por DIA: uma única linha com o valor total,
-    // em vez de listar cada venda individual do PDV/Divipay.
+    // Receita consolidada por DIA: uma única linha com o valor total
     const receitaPorDia = new Map<string, { total: number; qtd: number }>();
     for (const r of receitas) {
       const dia = String(r.data).split("T")[0];
@@ -132,6 +129,15 @@ const Agenda = () => {
       valor: total,
       data: dia,
     }));
+
+    const despList: Compromisso[] = despesas.map((d) => ({
+      id: d.id,
+      tipo: "despesa",
+      descricao: d.descricao,
+      valor: d.valor,
+      data: String(d.data).split("T")[0],
+    }));
+
     const manuais: Compromisso[] = compromissosManuais.map((c) => ({
       id: c.id,
       tipo: "compromisso",
@@ -140,8 +146,9 @@ const Agenda = () => {
       hora: c.hora ? String(c.hora).slice(0, 5) : null,
       local: c.local,
     }));
-    return [...recs, ...saidas, ...manuais];
-  }, [receitas, saidas, compromissosManuais]);
+
+    return [...recs, ...despList, ...dividas, ...manuais];
+  }, [receitas, despesas, dividas, compromissosManuais]);
 
   const porDia = useMemo(() => {
     const map = new Map<string, Compromisso[]>();

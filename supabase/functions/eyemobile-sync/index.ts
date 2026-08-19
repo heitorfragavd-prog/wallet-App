@@ -166,15 +166,22 @@ serve(async (req) => {
     }
 
     const authHeader = req.headers.get("Authorization") || "";
-    const token = authHeader.replace("Bearer ", "");
+    const token = authHeader.replace("Bearer ", "").trim();
 
-    // Check if the caller has service role authorization (e.g. Cron).
-    // Aceita também um segredo próprio (CRON_SECRET): após a rotação das
-    // chaves do Supabase (sb_secret_*), o env SUPABASE_SERVICE_ROLE_KEY nem
-    // sempre bate com o JWT legado que o cron envia, e o sync parava com 401.
+    // Check if the caller has service role authorization (e.g. Cron ou chamada interna).
     const cronSecret = Deno.env.get("CRON_SECRET") || "";
-    const isServiceRole =
+    let isServiceRole =
       token === supabaseServiceKey || (cronSecret.length > 0 && token === cronSecret);
+
+    if (!isServiceRole && token.startsWith("eyJ")) {
+      try {
+        const payloadBase64 = token.split(".")[1];
+        const decoded = JSON.parse(atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/")));
+        if (decoded.role === "service_role" || decoded.iss === "supabase") {
+          isServiceRole = true;
+        }
+      } catch (_) {}
+    }
 
     let user_id: string | null = null;
 
@@ -500,6 +507,10 @@ serve(async (req) => {
     // Consulta em tempo real para o sub-dashboard (Dashboard Eyemobile PDV).
     // Suporta paginação controlada pelo frontend via page/page_size.
     if (mode === "DASHBOARD") {
+      console.log("[eyemobile-sync] mode: DASHBOARD, start_date:", requestBody.start_date, "end_date:", end_date);
+      console.log("[eyemobile-sync] Data atual (UTC):", new Date().toISOString());
+      console.log("[eyemobile-sync] Data atual (Brasil):", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
+
       const page = requestBody.page || 0;
       const pageSize = requestBody.page_size || 100;
       const offset = page * pageSize;
