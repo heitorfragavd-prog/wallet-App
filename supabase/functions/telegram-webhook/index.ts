@@ -877,6 +877,304 @@ serve(async (req) => {
       }
     }
 
+    // ─── 0. COMANDO /precos (LISTAR ALERTAS DE PREÇO PENDENTES) ───
+    if (text.startsWith("/precos") || respLower.includes("alertas de preco") || respLower.includes("precos pendentes")) {
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      const { data: alertas } = await supabase
+        .from("alertas_preco_pendentes")
+        .select("*")
+        .eq("user_id", userId)
+        .in("status", ["pendente", "editado"])
+        .order("created_at", { ascending: false });
+
+      if (!alertas || alertas.length === 0) {
+        await sendReply("✅ <b>Nenhum alerta de preço pendente!</b> Todos os preços estão atualizados e dentro da margem.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      let msgPrecos = `🚨 <b>Alertas de Preço Pendentes:</b> (${alertas.length} produto(s))\n\n`;
+
+      alertas.forEach((alerta: any, idx: number) => {
+        const idCurto = alerta.id.slice(0, 8);
+        const statusEmoji = alerta.status === "editado" ? "✏️" : "⏳";
+
+        msgPrecos += `${idx + 1}. ${statusEmoji} <b>${alerta.produto_descricao}</b> (<code>${idCurto}</code>)\n`;
+        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${alerta.variacao_custo_percentual?.toFixed(1)}%)\n`;
+        msgPrecos += `   💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
+        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${alerta.margem_real_percentual?.toFixed(0)}%)\n`;
+        if (alerta.preco_definido_usuario) {
+          msgPrecos += `   ✏️ Editado por você: <b>${fmt(alerta.preco_definido_usuario)}</b>\n`;
+        }
+        msgPrecos += `   👉 <code>CONFIRMAR ${idCurto}</code> | <code>EDITAR ${idCurto} 15.00</code> | <code>IGNORAR ${idCurto}</code>\n\n`;
+      });
+
+      await sendReply(msgPrecos);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.1 HANDLER DE CONFIRMAR PREÇO NO EYEMOBILE ───
+    const confirmarPrecoMatch = text.match(/^confirmar\s+([a-f0-9]{8})/i);
+    const { data: conversaAtivaPreco } = await supabase
+      .from("telegram_conversas")
+      .select("estado, proposta_id")
+      .eq("chat_id", chatId)
+      .maybeSingle();
+
+    if (confirmarPrecoMatch || (respLower.startsWith("confirmar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      let alertaId: string | null = null;
+
+      if (confirmarPrecoMatch) {
+        const idCurto = confirmarPrecoMatch[1].toLowerCase();
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .ilike("id", `${idCurto}%`)
+          .in("status", ["pendente", "editado"])
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      } else {
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .in("status", ["pendente", "editado"])
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      }
+
+      if (alertaId) {
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .single();
+
+        if (alerta) {
+          const precoConfirmado = alerta.preco_definido_usuario || alerta.preco_sugerido;
+
+          await sendReply(
+            `🔄 <b>Atualizando preço no Eyemobile PDV...</b>\n` +
+            `📦 <b>Produto:</b> ${alerta.produto_descricao}\n` +
+            `💰 <b>Novo Preço:</b> <b>${fmt(precoConfirmado)}</b>`
+          );
+
+          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              mode: "UPDATE_PRODUCT_PRICE",
+              user_id: userId,
+              product_id: alerta.produto_eyemobile_id,
+              new_price: precoConfirmado,
+            }),
+          });
+
+          let updateResult: any = null;
+          try {
+            updateResult = await updateResp.json();
+          } catch {
+            updateResult = { success: updateResp.ok };
+          }
+
+          if (updateResult?.success) {
+            await supabase.from("alertas_preco_pendentes").update({
+              status: "aplicado",
+              preco_definido_usuario: precoConfirmado,
+              data_resolucao: new Date().toISOString(),
+            }).eq("id", alertaId);
+
+            await supabase.from("produtos_eyemobile").update({
+              preco_venda: precoConfirmado,
+            }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", userId);
+
+            await sendReply(
+              `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
+              `📦 <b>${alerta.produto_descricao}</b>\n` +
+              `💰 Preço de venda: <b>${fmt(precoConfirmado)}</b>\n` +
+              `📈 Margem mantida: <b>${alerta.margem_real_percentual?.toFixed(0)}%</b>`
+            );
+          } else {
+            await sendReply(
+              `❌ <b>Erro ao atualizar preço no Eyemobile PDV:</b>\n` +
+              `${updateResult?.error || "Erro de comunicação com a API do Eyemobile"}\n\n` +
+              `💡 Você também pode ajustar diretamente no PDV.`
+            );
+          }
+
+          const { count: pendentesRestantes } = await supabase
+            .from("alertas_preco_pendentes")
+            .select("*", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .in("status", ["pendente", "editado"]);
+
+          if (pendentesRestantes === 0) {
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "inicio",
+                proposta_id: null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
+            await sendReply("🎉 <b>Todos os preços pendentes foram ajustados com sucesso!</b>");
+          } else {
+            await sendReply(`📋 Ainda há <b>${pendentesRestantes}</b> alerta(s) de preço pendente(s). Use /precos para ver.`);
+          }
+
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+    }
+
+    // ─── 0.2 HANDLER DE EDITAR PREÇO ───
+    const editarPrecoMatch = text.match(/^editar\s+([a-f0-9]{8})\s+R?\$?\s*([0-9]+[.,]?[0-9]*)/i);
+
+    if (editarPrecoMatch || (respLower.startsWith("editar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      let alertaId: string | null = null;
+      let precoEditado: number | null = null;
+
+      if (editarPrecoMatch) {
+        const idCurto = editarPrecoMatch[1].toLowerCase();
+        precoEditado = parseFloat(editarPrecoMatch[2].replace(",", "."));
+
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .ilike("id", `${idCurto}%`)
+          .in("status", ["pendente", "editado"])
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      } else {
+        const valorMatch = text.match(/R?\$?\s*([0-9]+[.,]?[0-9]*)/);
+        if (valorMatch) {
+          precoEditado = parseFloat(valorMatch[1].replace(",", "."));
+        }
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .in("status", ["pendente", "editado"])
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      }
+
+      if (alertaId && precoEditado && precoEditado > 0) {
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .single();
+
+        if (alerta) {
+          const novaMargem = alerta.custo_novo > 0 ? ((precoEditado / Number(alerta.custo_novo)) - 1) * 100 : 0;
+
+          await supabase.from("alertas_preco_pendentes").update({
+            preco_definido_usuario: precoEditado,
+            status: "editado",
+          }).eq("id", alertaId);
+
+          await sendReply(
+            `✏️ <b>Preço editado:</b>\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço sugerido: ${fmt(alerta.preco_sugerido)}\n` +
+            `💰 Preço definido: <b>${fmt(precoEditado)}</b>\n` +
+            `📈 Nova margem: <b>${novaMargem.toFixed(1)}%</b> (Custo: ${fmt(alerta.custo_novo)})\n\n` +
+            `👉 Responda <code>CONFIRMAR ${alerta.id.slice(0, 8)}</code> para aplicar no Eyemobile PDV.`
+          );
+
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+    }
+
+    // ─── 0.3 HANDLER DE IGNORAR ALERTA DE PREÇO ───
+    const ignorarMatch = text.match(/^ignorar\s+([a-f0-9]{8})/i);
+
+    if (ignorarMatch || (respLower === "ignorar" && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
+      let alertaId: string | null = null;
+
+      if (ignorarMatch) {
+        const idCurto = ignorarMatch[1].toLowerCase();
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .ilike("id", `${idCurto}%`)
+          .in("status", ["pendente", "editado"])
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      } else {
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("user_id", userId)
+          .in("status", ["pendente", "editado"])
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        alertaId = alerta?.id || null;
+      }
+
+      if (alertaId) {
+        await supabase.from("alertas_preco_pendentes").update({
+          status: "ignorado",
+          data_resolucao: new Date().toISOString(),
+        }).eq("id", alertaId);
+
+        await sendReply(
+          `🚫 <b>Alerta de preço ignorado.</b>\n` +
+          `O preço de venda no PDV não foi alterado.\n` +
+          `Você pode alterar manualmente quando desejar.`
+        );
+
+        const { count: pendentesRestantes } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId)
+          .in("status", ["pendente", "editado"]);
+
+        if (pendentesRestantes === 0) {
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: userId,
+              chat_id: chatId,
+              estado: "inicio",
+              proposta_id: null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+        }
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    }
+
     // ─── 0.0. BOAS-VINDAS / ORIENTAÇÃO NO GRUPO DE FECHAMENTO ───
     if (isGroup && grupoConfig?.tipo_grupo === "fechamento") {
       const isGreeting = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "fechamento", "/start", "/ajuda"].includes(respLower);
@@ -2031,18 +2329,31 @@ serve(async (req) => {
             if (variacao12m > 10) {
               const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
 
-              alertasAumento.push(
-                `🔴 <b>${item.descricao}</b>\n` +
-                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
-                `   Custo novo: ${fmt(item.custo_unitario_liquido)}\n` +
-                `   📈 Aumento: <b>+${variacao12m.toFixed(1)}%</b> em 12 meses`
-              );
+              const { data: alertaCriado } = await supabase.from("alertas_preco_pendentes").insert({
+                user_id: userId,
+                workspace_id: nf.workspace_id,
+                produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
+                produto_codigo: item.codigo_produto,
+                produto_descricao: item.descricao,
+                custo_anterior: custoInicial12m,
+                custo_novo: item.custo_unitario_liquido,
+                preco_venda_atual: produtoExistente?.preco_venda || 0,
+                preco_sugerido: sugestaoPreco,
+                margem_real_percentual: margemReal,
+                variacao_custo_percentual: variacao12m,
+                nf_id: nf.id,
+                status: "pendente",
+              }).select("id").single();
 
-              sugestoesPreco.push(
-                `💡 <b>${item.descricao}</b>\n` +
-                `   Preço atual: ${fmt(produtoExistente?.preco_venda)}\n` +
-                `   💰 Sugestão novo preço: <b>${fmt(sugestaoPreco)}</b>\n` +
-                `   (mantendo margem real de ${margemReal.toFixed(0)}% sobre custo ${fmt(item.custo_unitario_liquido)})`
+              const idCurto = alertaCriado?.id ? alertaCriado.id.slice(0, 8) : "N/A";
+
+              alertasAumento.push(
+                `🔴 <b>${item.descricao}</b> (Alerta <code>#${idCurto}</code>)\n` +
+                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
+                `   Custo novo: <b>${fmt(item.custo_unitario_liquido)}</b>\n` +
+                `   📈 Aumento: <b>+${variacao12m.toFixed(1)}%</b> em 12 meses\n` +
+                `   💰 Preço venda atual: ${fmt(produtoExistente?.preco_venda)}\n` +
+                `   💡 PREÇO SUGERIDO: <b>${fmt(sugestaoPreco)}</b> (margem ${margemReal.toFixed(0)}%)`
               );
 
               await supabase.from("historico_custo_produto")
@@ -2087,10 +2398,6 @@ serve(async (req) => {
 
           await supabase.from("notas_fiscais_compra").update({ status: "custo_atualizado" }).eq("id", nfId);
           await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-          await supabase.from("telegram_conversas").upsert(
-            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-            { onConflict: "chat_id" }
-          );
 
           msg += `<b>📦 Estoque atualizado:</b> ${produtosAtualizados.length} produtos\n`;
           msg += `<b>💰 Custos atualizados:</b> ${produtosAtualizados.length} produtos\n\n`;
@@ -2100,13 +2407,51 @@ serve(async (req) => {
             alertasAumento.forEach(a => msg += a + "\n\n");
           }
 
-          if (sugestoesPreco.length > 0) {
-            msg += `\n💡 <b>SUGESTÕES DE NOVO PREÇO DE VENDA:</b>\n\n`;
-            sugestoesPreco.forEach(s => msg += s + "\n\n");
-            msg += `\n⚠️ <b>Ação necessária:</b> Revise os preços de venda no Eyemobile PDV.`;
+          const { data: alertasPendentes } = await supabase
+            .from("alertas_preco_pendentes")
+            .select("*")
+            .eq("nf_id", nfId)
+            .eq("status", "pendente");
+
+          if (alertasPendentes && alertasPendentes.length > 0) {
+            msg += `\n🚨 <b>PREÇOS DE VENDA PRECISAM SER AJUSTADOS:</b>\n\n`;
+            alertasPendentes.forEach((alerta: any, idx: number) => {
+              const idCurto = alerta.id.slice(0, 8);
+              msg += `${idx + 1}. <b>${alerta.produto_descricao}</b>\n`;
+              msg += `   💰 Preço atual: ${fmt(alerta.preco_venda_atual)}\n`;
+              msg += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b>\n`;
+              msg += `   ✅ Para confirmar: <code>CONFIRMAR ${idCurto}</code>\n`;
+              msg += `   ✏️ Para editar: <code>EDITAR ${idCurto} 15.00</code>\n`;
+              msg += `   🚫 Para ignorar: <code>IGNORAR ${idCurto}</code>\n\n`;
+            });
+
+            msg += `<i>💡 Ao responder CONFIRMAR, o preço sobe automaticamente para o Eyemobile PDV.</i>\n`;
+            msg += `<i>Alertas não resolvidos serão lembrados 1x por semana.</i>`;
+
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "aguardando_ajuste_precos",
+                proposta_id: nfId,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
           } else {
             msg += `✅ <b>Nenhum aumento crítico de custo detectado (>10%).</b>\n`;
             msg += `💡 Preços de venda estão dentro da margem esperada.`;
+
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "inicio",
+                proposta_id: null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
           }
 
           await sendReply(msg);

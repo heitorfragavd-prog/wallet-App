@@ -633,6 +633,77 @@ serve(async (req) => {
       });
     }
 
+    // ================================================================
+    // MODO UPDATE_PRODUCT_PRICE: Atualiza o preço de venda de um produto no Eyemobile
+    // ================================================================
+    if (mode === "UPDATE_PRODUCT_PRICE") {
+      const productId = requestBody.product_id;
+      const newPrice = requestBody.new_price;
+      const targetUserId = user_id || requestBody.user_id;
+
+      if (!targetUserId || !productId || newPrice === undefined) {
+        return new Response(JSON.stringify({ success: false, error: "user_id, product_id e new_price são obrigatórios" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const { data: pConfig, error: pConfigErr } = await supabaseAdmin
+        .from("eyemobile_config")
+        .select("access_key, secret_key, environment, store_id")
+        .eq("user_id", targetUserId)
+        .maybeSingle();
+
+      if (pConfigErr) throw pConfigErr;
+      if (!pConfig?.access_key || !pConfig?.secret_key) {
+        return new Response(JSON.stringify({ success: false, error: "Credenciais Eyemobile não configuradas" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const pBaseUrl = pConfig.environment === "staging"
+        ? "https://staging-api.eyemobile.com.br/v1"
+        : "https://api.eyemobile.com.br/v1";
+      const pHeaders = {
+        "X-EYEMOBILE-ACCESS-KEY": pConfig.access_key,
+        "X-EYEMOBILE-SECRET-KEY": pConfig.secret_key,
+        "Content-Type": "application/json",
+      };
+
+      try {
+        const resp = await fetch(`${pBaseUrl}/products/${productId}`, {
+          method: "PUT",
+          headers: pHeaders,
+          body: JSON.stringify({ price: Number(newPrice) }),
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text();
+          console.error(`[eyemobile-sync] Erro na API do Eyemobile ao atualizar preço: ${errText}`);
+          return new Response(JSON.stringify({ success: false, error: `Eyemobile API error: ${errText}` }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
+        const result = await resp.json();
+        return new Response(JSON.stringify({
+          success: true,
+          message: `Preço atualizado no Eyemobile: R$ ${Number(newPrice).toFixed(2)}`,
+          eyemobile_response: result,
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      } catch (err: any) {
+        return new Response(JSON.stringify({ success: false, error: err.message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+    }
+
     // 2. Batch Cron execution: if no user_id is specified and it is service role, sync all users
     if (!user_id && isServiceRole) {
       const { data: configs, error: fetchError } = await supabaseAdmin
