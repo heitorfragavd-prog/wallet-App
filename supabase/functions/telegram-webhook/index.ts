@@ -775,6 +775,86 @@ serve(async (req) => {
     const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
     const isNao = ["não", "nao", "n", "no", "cancelar", "cancela", "não cadastrar"].includes(respLower);
 
+    // ─── HANDLERS DE CORREÇÃO DE NOTA FISCAL (PROSSEGUIR / MANUAL) ───
+    const { data: conversaAtivaPre } = await supabase
+      .from("telegram_conversas")
+      .select("estado, proposta_id, updated_at")
+      .eq("chat_id", chatId)
+      .maybeSingle();
+
+    if (respLower === "prosseguir" && conversaAtivaPre?.estado === "aguardando_correcao_nf") {
+      const { data: nfParcial } = await supabase
+        .from("notas_fiscais_compra")
+        .select("*")
+        .eq("chat_id", Number(chatId))
+        .eq("status", "validacao_falhou")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!nfParcial) {
+        await sendReply("❌ NF não encontrada. Envie a foto novamente.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const { data: itensParciais } = await supabase
+        .from("nf_itens")
+        .select("*")
+        .eq("nf_id", nfParcial.id);
+
+      await supabase.from("notas_fiscais_compra").update({ status: "pendente" }).eq("id", nfParcial.id);
+
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      let msg = `📄 <b>Prosseguindo com os itens detectados:</b>\n\n`;
+      msg += `🏢 <b>Fornecedor:</b> ${nfParcial.fornecedor || "N/A"}\n`;
+      msg += `📦 <b>Itens:</b> ${itensParciais?.length || 0} produtos\n`;
+      msg += `💰 <b>Valor Total NF:</b> ${fmt(nfParcial.valor_total)}\n\n`;
+
+      (itensParciais || []).forEach((item: any, i: number) => {
+        msg += `${i + 1}. <b>${item.descricao || "Item"}</b>\n`;
+        msg += `   📦 ${item.quantidade || 0} ${item.unidade || "UN"} × ${fmt(item.valor_unitario)}\n`;
+        msg += `   💰 Total: ${fmt(item.valor_total)}\n`;
+      });
+
+      msg += `\n⚠️ <b>Deseja confirmar e atualizar estoque/custo?</b>\n`;
+      msg += `👉 Responda <b>CONFIRMAR</b> para atualizar com os itens lidos.\n`;
+      msg += `👉 Responda <b>CANCELAR</b> para descartar.`;
+
+      const { data: propCriada } = await supabase.from("telegram_propostas").insert({
+        user_id: userId,
+        chat_id: Number(chatId),
+        tipo: "atualizar_estoque_nf",
+        dados: { nf_id: nfParcial.id },
+        resumo: `NF ${nfParcial.numero_nf} - ${nfParcial.fornecedor} - ${fmt(nfParcial.valor_total)}`,
+        status: "pendente",
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      }).select("id").single();
+
+      await supabase.from("telegram_conversas").upsert({
+        user_id: userId,
+        chat_id: chatId,
+        estado: "aguardando_confirmacao_nf",
+        proposta_id: propCriada?.id || nfParcial.id,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "chat_id" });
+
+      await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    if (respLower === "manual" && conversaAtivaPre?.estado === "aguardando_correcao_nf") {
+      await sendReply(
+        `📝 <b>Modo Manual de Entrada de NF:</b>\n\n` +
+        `Você pode reenviar a foto mais próxima da tabela ou informar os produtos no formato:\n` +
+        `<code>Item: Coca-Cola 2L | Qtd: 10 | R$ 7,50</code>`
+      );
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // Se NÃO é confirmação (SIM/NÃO), limpa propostas pendentes antigas para evitar confirmações acidentais
     if (!isSim && !isNao) {
       const { data: conversaAtiva } = await supabase
@@ -2719,44 +2799,40 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
         // ================================================================
-        const docAnalysisSystemPrompt = `Você é um extrator especialista de documentos financeiros e fiscais brasileiros (DANFE, Nota Fiscal de Compra e Boleto Bancário) com visão computacional de altíssima precisão.
+        const docAnalysisSystemPrompt = `Você é um extrator especialista de documentos fiscais e financeiros brasileiros (DANFE / Nota Fiscal de Compra e Boleto Bancário).
 
-ATENÇÃO CRÍTICA SOBRE A FOTO:
-1. O documento na foto pode estar deitado na horizontal (rotacionado em 90° ou 270°), inclinado, amassado ou na vertical. Você DEVE ler e interpretar o documento com perfeição em QUALQUER orientação que ele estiver.
-2. Identifique com precisão o TIPO do documento:
-   - "nf_compra": DANFE (Documento Auxiliar da Nota Fiscal Eletrônica), Nota Fiscal de entrada de mercadorias (ex: Ambev / Brasnorte, Coca-Cola / SPAL, Sellpack, Distribuidoras de Bebidas ou Alimentos, Atacadistas). Possui tabela com produtos, quantidades, valores unitários, NCM, CFOP e tributos.
-   - "boleto": Boleto Bancário brasileiro (com código de barras, linha digitável de 47 dígitos, data de vencimento e valor a pagar).
-   - "outro": Se não for nenhum documento legível.
+=== INSTRUÇÕES CRÍTICAS SOBRE A FOTO E A TABELA ===
+1. A foto pode estar na horizontal (deitada em 90° ou 270°), inclinada ou vertical. Leia perfeitamente em QUALQUER orientação!
+2. CONTAGEM OBRIGATÓRIA DA TABELA: Se o documento for uma DANFE / Nota Fiscal de Compra, conte visualmente QUANTAS LINHAS de produtos existem na tabela de "DADOS DO PRODUTO / SERVIÇO".
+3. NUNCA RESUMA OU AGRUPE: Não agrupe produtos similares. Não pule linhas. Cada linha da tabela é UM ITEM separado que DEVE constar no array. Se a nota tiver 8 ou 15 itens, você DEVE retornar todos os 8 ou 15 itens!
 
 REGRAS PARA NOTA FISCAL DE COMPRA ("nf_compra"):
 - cabecalho:
-  - numero_nf: Número da Nota Fiscal (ex: "00738699", "013664150")
-  - serie_nf: Série da NF (ex: "1", "26")
-  - data_emissao: Data de emissão (YYYY-MM-DD)
-  - data_entrada: Data de entrada/saída (YYYY-MM-DD)
-  - fornecedor: Razão social do emitente/fornecedor (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A")
-  - cnpj_fornecedor: CNPJ do fornecedor (apenas dígitos)
-  - chave_acesso: Chave de acesso da NF-e (44 dígitos, se visível)
+  - numero_nf: Número da NF
+  - serie_nf: Série da NF
+  - data_emissao: YYYY-MM-DD
+  - data_entrada: YYYY-MM-DD
+  - fornecedor: Razão social do emitente/fornecedor (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A", "Brasnorte Distribuidora de Bebidas Ltda")
+  - cnpj_fornecedor: CNPJ (apenas dígitos)
+  - chave_acesso: Chave de acesso de 44 dígitos
 - valores_totais:
-  - valor_total_nf: Valor total da NF (decimal)
-  - valor_produtos: Valor total dos produtos (decimal)
-  - valor_icms: Valor do ICMS (decimal)
-  - valor_ipi: Valor do IPI (decimal)
-  - valor_frete: Valor do frete (decimal)
-- itens: Liste TODOS os itens da tabela de produtos/serviços:
-  - codigo: Código interno do produto (coluna CÓDIGO DO PRODUTO, ex: "55404", "19071", "11969", "55443", "738699")
-  - descricao: Descrição do produto (ex: "COCA-COLA LT 250ML FL", "BRAHMA DUPLO MALTE 350ML", "FANTA LARANJA 2L")
-  - ncm: Código NCM (8 dígitos)
-  - cfop: CFOP (4 dígitos, ex: "5102", "5403", "5405")
-  - unidade: Unidade de medida (CX, UN, FD, KG, LT)
+  - valor_total_nf: Valor total da NF
+  - valor_produtos: Valor total dos produtos
+  - valor_icms: Valor do ICMS
+  - valor_ipi: Valor do IPI
+  - valor_frete: Valor do frete
+- itens: Lista com TODOS os produtos da tabela:
+  - codigo: Código do produto (número interno do fornecedor na 1ª coluna)
+  - descricao: Descrição completa do produto (incluindo volume, embalagem, sabor)
+  - ncm: NCM (8 dígitos)
+  - cfop: CFOP (4 dígitos)
+  - unidade: CX, UN, FD, KG, LT
   - quantidade: Quantidade faturada (decimal)
-  - valor_unitario: Valor unitário do item (decimal)
-  - valor_total: Valor total do item (decimal)
-  - icms_aliquota: Alíquota de ICMS (%)
-  - ipi_aliquota: Alíquota de IPI (%)
-  - pis_aliquota: Alíquota de PIS (%)
-  - cofins_aliquota: Alíquota de COFINS (%)
-  - custo_unitario_liquido = valor_unitario - (valor_unitario * (icms_aliquota / 100)) - (valor_unitario * (ipi_aliquota / 100))
+  - valor_unitario: Valor unitário
+  - valor_total: Valor total do item
+  - icms_aliquota: % ICMS
+  - ipi_aliquota: % IPI
+  - custo_unitario_liquido = valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
 
 REGRAS PARA BOLETO BANCÁRIO ("boleto"):
 - beneficiario: Razão social da Empresa Beneficiária (no canhoto procure "RECEBEMOS DE:"). NUNCA use o pagador ou o banco!
@@ -2765,54 +2841,17 @@ REGRAS PARA BOLETO BANCÁRIO ("boleto"):
 - data_vencimento: Data de vencimento (YYYY-MM-DD)
 - linha_digitavel: Sequência de 47 dígitos
 
-FORMATO DE RESPOSTA (JSON estrito):
-Para NF de Compra:
+FORMATO DE RESPOSTA OBRIGATÓRIO (JSON estrito):
 {
-  "tipo": "nf_compra",
-  "cabecalho": {
-    "numero_nf": "...",
-    "serie_nf": "...",
-    "data_emissao": "YYYY-MM-DD",
-    "data_entrada": "YYYY-MM-DD",
-    "fornecedor": "...",
-    "cnpj_fornecedor": "...",
-    "chave_acesso": "..."
-  },
-  "valores_totais": {
-    "valor_total_nf": 0.00,
-    "valor_produtos": 0.00,
-    "valor_icms": 0.00,
-    "valor_ipi": 0.00,
-    "valor_frete": 0.00
-  },
+  "tipo": "nf_compra" | "boleto" | "outro",
+  "cabecalho": { "numero_nf": "...", "serie_nf": "...", "data_emissao": "YYYY-MM-DD", "data_entrada": "YYYY-MM-DD", "fornecedor": "...", "cnpj_fornecedor": "...", "chave_acesso": "..." },
+  "valores_totais": { "valor_total_nf": 0.00, "valor_produtos": 0.00, "valor_icms": 0.00, "valor_ipi": 0.00, "valor_frete": 0.00 },
   "itens": [
-    {
-      "codigo": "...",
-      "descricao": "...",
-      "ncm": "...",
-      "cfop": "...",
-      "unidade": "CX",
-      "quantidade": 1.0000,
-      "valor_unitario": 0.0000,
-      "valor_total": 0.00,
-      "icms_aliquota": 0.00,
-      "ipi_aliquota": 0.00,
-      "pis_aliquota": 0.00,
-      "cofins_aliquota": 0.00,
-      "custo_unitario_liquido": 0.0000
-    }
+    { "codigo": "...", "descricao": "...", "ncm": "...", "cfop": "...", "unidade": "CX", "quantidade": 1.0000, "valor_unitario": 0.00, "valor_total": 0.00, "icms_aliquota": 0.00, "ipi_aliquota": 0.00, "custo_unitario_liquido": 0.00 }
   ],
-  "confianca": "alta"
-}
-
-Para Boleto:
-{
-  "tipo": "boleto",
   "beneficiario": "...",
-  "pagador": "...",
   "valor": 0.00,
   "data_vencimento": "YYYY-MM-DD",
-  "descricao": "Boleto - ...",
   "linha_digitavel": "...",
   "confianca": "alta"
 }`;
@@ -2834,7 +2873,7 @@ Para Boleto:
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro/fiscal brasileiro (pode ser Nota Fiscal de Compra/DANFE ou Boleto Bancário). A foto pode estar na horizontal (deitada). Extraia todos os dados com máxima precisão." },
+                  { type: "text", text: promptText || "Analise este documento financeiro/fiscal brasileiro. Se for DANFE / Nota Fiscal, conte e extraia CADA LINHA de produtos da tabela sem resumir nem pular itens. A foto pode estar na horizontal." },
                   { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
               },
@@ -2873,6 +2912,99 @@ Para Boleto:
         }
 
         // ================================================================
+        // SEGUNDA PASSAGEM AUTOMÁTICA: Foco exclusivo na tabela de produtos
+        // ================================================================
+        if (documentData && documentData.tipo === "nf_compra") {
+          const itensIniciais = documentData.itens || [];
+          const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
+
+          if (itensIniciais.length < 6 && valorTotalNF > 250) {
+            console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNF})...`);
+
+            const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
+A foto pode estar deitada na horizontal ou vertical.
+
+Esta tabela tem VÁRIAS LINHAS de produtos. Leia CADA LINHA individualmente e extraia:
+- codigo: Código do produto (número interno do fornecedor na coluna da esquerda)
+- descricao: Descrição COMPLETA do produto (leia tudo, sabor, embalagem, volume)
+- ncm: NCM (8 dígitos)
+- cfop: CFOP (4 dígitos)
+- unidade: Unidade (CX, UN, FD, KG, LT)
+- quantidade: Quantidade faturada (decimal)
+- valor_unitario: Valor unitário
+- valor_total: Valor total do item
+- icms_aliquota: % ICMS
+- ipi_aliquota: % IPI
+- custo_unitario_liquido: valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
+
+NUNCA PULE LINHAS. Liste TODOS os produtos visíveis na tabela.
+
+Retorne APENAS um array JSON no formato:
+[
+  {
+    "codigo": "...",
+    "descricao": "...",
+    "ncm": "...",
+    "cfop": "...",
+    "unidade": "CX",
+    "quantidade": 1.0000,
+    "valor_unitario": 0.00,
+    "valor_total": 0.00,
+    "icms_aliquota": 0.00,
+    "ipi_aliquota": 0.00,
+    "custo_unitario_liquido": 0.00
+  }
+]`;
+
+            try {
+              const aiZoomResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${supabaseServiceKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o",
+                  user_id: userId,
+                  temperature: 0.0,
+                  messages: [
+                    { role: "system", content: promptZoom },
+                    {
+                      role: "user",
+                      content: [
+                        { type: "text", text: "Extraia todas as linhas individuais desta tabela de produtos da DANFE sem resumir nem agrupar:" },
+                        { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                      ],
+                    },
+                  ],
+                }),
+              });
+
+              if (aiZoomResp.ok) {
+                const aiZoomJson = await aiZoomResp.json();
+                const rawZoom = aiZoomJson.choices?.[0]?.message?.content || "";
+                let itensZoom: any[] = [];
+                try {
+                  itensZoom = JSON.parse(rawZoom.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+                } catch {
+                  const matchZ = rawZoom.match(/\[[\s\S]*\]/);
+                  if (matchZ) {
+                    try { itensZoom = JSON.parse(matchZ[0]); } catch {}
+                  }
+                }
+
+                if (Array.isArray(itensZoom) && itensZoom.length > itensIniciais.length) {
+                  console.log(`[telegram-webhook] Segunda passagem melhorou: ${itensIniciais.length} -> ${itensZoom.length} itens extraídos!`);
+                  documentData.itens = itensZoom;
+                }
+              }
+            } catch (zoomErr: any) {
+              console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
+            }
+          }
+        }
+
+        // ================================================================
         // 1. FLUXO NOTA FISCAL DE COMPRA (DANFE)
         // ================================================================
         if (documentData && (documentData.tipo === "nf_compra" || (documentData.itens && documentData.itens.length > 0))) {
@@ -2886,6 +3018,84 @@ Para Boleto:
             .maybeSingle();
 
           const wsId = wsMember?.workspace_id || workspaceId || null;
+
+          const fmt = (v: any) =>
+            v != null && !isNaN(Number(v))
+              ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+              : "R$ 0,00";
+
+          // ─── VALIDAÇÃO DE CONSISTÊNCIA: Itens vs Valor Total da NF ───
+          const itensExtraidos = documentData.itens || [];
+          const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
+          const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
+          const diferencaValor = Math.abs(valorTotalItens - valorTotalNF);
+          const percentualDiferenca = valorTotalNF > 0 ? (diferencaValor / valorTotalNF) * 100 : 0;
+
+          // Se a diferença for maior que 10% e houver menos de 3 itens em nota de alto valor:
+          const alertaItensFaltando = percentualDiferenca > 10 && valorTotalNF > 300 && itensExtraidos.length < 3;
+
+          if (alertaItensFaltando) {
+            console.warn(`[telegram-webhook] Validação NF falhou: ${itensExtraidos.length} itens, soma=${valorTotalItens}, totalNF=${valorTotalNF}, diff=${percentualDiferenca.toFixed(1)}%`);
+
+            const { data: nfFalha } = await supabase
+              .from("notas_fiscais_compra")
+              .insert({
+                user_id: userId,
+                workspace_id: wsId,
+                chat_id: Number(chatId) || null,
+                numero_nf: documentData.cabecalho?.numero_nf,
+                serie_nf: documentData.cabecalho?.serie_nf,
+                fornecedor: documentData.cabecalho?.fornecedor,
+                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
+                data_emissao: documentData.cabecalho?.data_emissao,
+                data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
+                valor_total: valorTotalNF,
+                status: "validacao_falhou",
+                origem: "foto",
+              })
+              .select("id")
+              .single();
+
+            if (nfFalha && itensExtraidos.length > 0) {
+              const itensParc = itensExtraidos.map((it: any) => ({
+                nf_id: nfFalha.id,
+                codigo_produto: it.codigo,
+                descricao: it.descricao,
+                quantidade: it.quantidade,
+                valor_unitario: it.valor_unitario,
+                valor_total: it.valor_total,
+                custo_unitario_liquido: it.custo_unitario_liquido || it.valor_unitario,
+                status_estoque: "pendente",
+              }));
+              await supabase.from("nf_itens").insert(itensParc);
+            }
+
+            let msgAlerta = `⚠️ <b>Atenção: Possível erro na leitura completa da Nota Fiscal!</b>\n\n`;
+            msgAlerta += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
+            msgAlerta += `💰 <b>Valor Total da NF:</b> ${fmt(valorTotalNF)}\n`;
+            msgAlerta += `📦 <b>Itens lidos:</b> ${itensExtraidos.length} produto(s)\n`;
+            msgAlerta += `💰 <b>Soma dos itens:</b> ${fmt(valorTotalItens)}\n`;
+            msgAlerta += `📊 <b>Diferença:</b> ${percentualDiferenca.toFixed(1)}%\n\n`;
+            msgAlerta += `🔍 <i>A tabela é extensa e podem faltar itens na leitura automática.</i>\n\n`;
+            msgAlerta += `👉 <b>Opções:</b>\n`;
+            msgAlerta += `1. Envie a foto mais próxima e focada na tabela de produtos.\n`;
+            msgAlerta += `2. Digite <b>PROSSEGUIR</b> para cadastrar apenas os ${itensExtraidos.length} itens lidos.\n`;
+            msgAlerta += `3. Digite <b>MANUAL</b> para registrar manualmente.`;
+
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "aguardando_correcao_nf",
+                proposta_id: nfFalha?.id || null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
+
+            await sendReply(msgAlerta);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
 
           const { data: nfSalva, error: errNF } = await supabase
             .from("notas_fiscais_compra")
