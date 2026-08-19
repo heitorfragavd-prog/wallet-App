@@ -2,6 +2,26 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.46] - 2026-08-18
+
+### ✨ Novo
+- **Automações e Lembretes:**
+  - Sistema de **Lembretes Automáticos** implementado via Edge Function (`notificar-lembretes`) e migration (`130000_lembretes_automaticos.sql`).
+  - Lembretes agora são exibidos diretamente no dashboard e na agenda (`Agenda.tsx`).
+- **Telegram & IA V2:**
+  - Suporte completo a aprovação de **Propostas do Agente IA** via Telegram (`120000_telegram_propostas.sql`).
+  - O webhook do telegram agora pode gerenciar e executar callbacks de propostas pendentes da IA.
+
+### 🔧 Corrigido & Melhorado
+- Integrações e Webhooks: Atualizações massivas nos webhooks e API externas (`divipay-api`, `eyemobile-sync`, `openai-proxy`, `telegram-webhook`).
+- **Eyemobile Dashboard:** Refinamentos nos componentes e hooks (`EyemobileDashboardView`, `useEyemobileDashboard`, `eyemobileDashboard.ts`) para melhorar o desempenho e consistência de dados.
+- **Despesas e Relatórios:** Ajustes de layout nas páginas `Despesas` e componentes internos.
+
+### 📊 Estatísticas
+- **1 commit na release 1.0.46**
+
+---
+
 ## [1.0.45] - 2026-08-18
 
 ### ✨ Novo
