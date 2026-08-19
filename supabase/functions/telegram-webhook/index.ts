@@ -3106,6 +3106,11 @@ serve(async (req) => {
           ? message.photo[message.photo.length - 1].file_id
           : message.document.file_id;
 
+        // IMPORTANTE: fotos enviadas como "foto" (hasPhoto) são comprimidas pelo Telegram para ~1280px.
+        // Arquivos enviados como "documento" (hasDoc) mantêm a qualidade original.
+        // Isso impacta diretamente a legibilidade de DANFEs com muitas linhas de texto pequeno.
+        const isTelegramCompressedPhoto = hasPhoto && !hasDoc;
+
         console.log("[telegram-webhook] fileId:", fileId, "hasBotToken:", !!telegramBotToken);
 
         console.log("[telegram-webhook] Chamando Telegram getFile para fileId:", fileId);
@@ -3402,9 +3407,12 @@ serve(async (req) => {
               if (bestAngle !== 0) {
                 console.log(`[telegram-webhook] Rotacionando imagem original em ${bestAngle}°...`);
                 const rotatedOriginal = decodedImage.rotate(bestAngle);
-                const correctedJpg = await rotatedOriginal.encodeJPEG(85);
+                // Qualidade 92 (era 85) — reduz artefato de dupla compressão JPEG
+                const correctedJpg = await rotatedOriginal.encodeJPEG(92);
                 finalImageBase64Uri = `data:image/jpeg;base64,${base64Encode(correctedJpg)}`;
-                console.log("[telegram-webhook] Imagem rotacionada e re-codificada com sucesso!");
+                console.log(`[telegram-webhook] Imagem rotacionada ${bestAngle}° e re-codificada em qualidade 92.`);
+              } else {
+                console.log("[telegram-webhook] Sem rotação necessária — usando bytes originais sem re-encoding.");
               }
             }
           } catch (imgErr: any) {
@@ -3678,48 +3686,87 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // ================================================================
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
+        // Estratégia: DUAS FASES — transcrição literal primeiro, JSON depois.
+        // Isso evita que o modelo "complete" com produtos genéricos do treinamento.
         // ================================================================
-        const docAnalysisSystemPrompt = `INSTRUCAO CRITICA: Voce e um scanner OCR de alta precisao para documentos fiscais brasileiros (DANFE e Boleto). Descreva APENAS o que consegue ler com certeza na imagem. Se algo estiver borrado, ilegivel ou cortado, diga "NAO CONSIGO LER" ou use null. NUNCA invente, adivinhe, suponha ou complete dados ou marcas.
+        const docAnalysisSystemPrompt = `MODO DE OPERAÇÃO: SCANNER OCR FORENSE — PROIBIDO INVENTAR.
 
-PASSO 1: Identifique a orientacao e o tipo de documento. Se for DANFE / Nota Fiscal de Compra, use tipo "nf_compra". Se for Boleto Bancario, use tipo "boleto". Caso contrario, retorne { "tipo": "outro" }.
+Você é um scanner que transcreve APENAS o que está VISÍVEL na imagem. Nunca use conhecimento prévio para completar nomes de produtos, marcas ou valores.
 
-PASSO 2: Leia o CABECALHO:
-- numero_nf, serie_nf, data_emissao (YYYY-MM-DD), data_entrada (YYYY-MM-DD), fornecedor (Razao Social EXATA visivel na nota), cnpj_fornecedor, chave_acesso (44 digitos se visivel)
+═══════════════════════════════
+FASE 1 — TRANSCRIÇÃO LITERAL (OBRIGATÓRIA para DANFE)
+═══════════════════════════════
+Antes de qualquer JSON, você DEVE preencher o campo "transcricao_tabela".
+Para cada linha da tabela de produtos na DANFE, transcreva LITERALMENTE o que consegue ler:
 
-PASSO 3: Leia os VALORES TOTAIS:
-- valor_total_nf, valor_produtos, valor_icms, valor_ipi, valor_frete
+Formato por linha:
+"L1: cod=[XXXX] desc=[TEXTO EXATO QUE VOCÊ VÊ] qtd=[X] unit=[R$X,XX] total=[R$X,XX]"
 
-PASSO 4: Se for DANFE, leia a TABELA DE PRODUTOS.
+REGRAS CRÍTICAS DA TRANSCRIÇÃO:
+- Se NÃO CONSEGUIR LER um campo, escreva "???" naquele campo. NÃO ADIVINHE.
+- NÃO use nomes de marcas genéricas (Fanta, Sprite, Brahma, Skol) se não estiverem escritas.
+- Se a linha está borrada/cortada, escreva: "L?: ilegível"
+- Prefira "???" a qualquer invenção.
 
-REGRAS CRITICAS DE PRODUTO (DANFE):
-- Leia CADA LINHA da tabela como um item separado.
-- A descricao deve ser EXATAMENTE o que esta escrito na nota.
-- NUNCA substitua, traduza, abrevie ou invente nomes de produtos.
-- Se diz 'Monster Energy LT 473ml', retorne EXATAMENTE isso.
-- Se diz 'Eisenbahn LT 473ml', retorne EXATAMENTE isso.
-- NUNCA diga 'Coca-Cola 350ml' se o nome completo e mais longo.
-- NUNCA adicione produtos que nao estao na tabela.
-- Se nao conseguir ler uma linha, pule-a (nao invente).
+═══════════════════════════════
+FASE 2 — JSON BASEADO NA TRANSCRIÇÃO
+═══════════════════════════════
+Após a transcrição, preencha o JSON usando SOMENTE o que você transcreveu na FASE 1.
+REGRA ABSOLUTA: Se um produto não aparece na sua transcrição literal, NÃO o adicione ao array itens[].
+Se a descrição está parcialmente ilegível, use o que leu seguido de "..." (ex: "COCA-COLA LT ...").
 
-CAMPOS POR ITEM:
-- codigo, descricao (EXATA), ncm, cfop, unidade, quantidade, valor_unitario, valor_total, icms_aliquota, ipi_aliquota, custo_unitario_liquido = valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
+TIPO DO DOCUMENTO:
+- DANFE / Nota Fiscal de Compra → tipo "nf_compra"
+- Boleto Bancário → tipo "boleto"
+- Outro → tipo "outro"
 
-PASSO 5: Se for BOLETO BANCARIO ("boleto"):
-- beneficiario (Razao Social no canhoto "RECEBEMOS DE:"), pagador, valor, data_vencimento (YYYY-MM-DD), linha_digitavel (47 digitos)
+CONFIANÇA:
+- "alta": conseguiu ler claramente a maioria dos campos
+- "media": conseguiu ler alguns campos, outros ficaram parciais
+- "baixa": imagem borrada, texto pequeno, muitos campos ilegíveis
 
-FORMATO JSON ESTRITO:
+PARA BOLETO: beneficiario (razão social), valor, data_vencimento (YYYY-MM-DD), linha_digitavel (47 dígitos).
+
+FORMATO JSON OBRIGATÓRIO:
 {
-  "tipo": "nf_compra" | "boleto" | "outro",
-  "confianca_geral": "alta" | "media" | "baixa",
-  "cabecalho": { "numero_nf": "...", "serie_nf": "...", "data_emissao": "YYYY-MM-DD", "data_entrada": "YYYY-MM-DD", "fornecedor": "...", "cnpj_fornecedor": "...", "chave_acesso": "..." },
-  "valores_totais": { "valor_total_nf": 0.00, "valor_produtos": 0.00, "valor_icms": 0.00, "valor_ipi": 0.00, "valor_frete": 0.00 },
+  "tipo": "nf_compra",
+  "confianca_geral": "alta|media|baixa",
+  "transcricao_tabela": "L1: cod=[1234] desc=[COCA-COLA LT 350ML] qtd=[2 CX] unit=[33,01] total=[66,02]\\nL2: cod=[5678] desc=[EISENBAHN LT 473ML] qtd=[1 CX] unit=[57,23] total=[57,23]\\n...",
+  "cabecalho": {
+    "numero_nf": "...",
+    "serie_nf": "...",
+    "data_emissao": "YYYY-MM-DD",
+    "data_entrada": "YYYY-MM-DD",
+    "fornecedor": "RAZAO SOCIAL EXATA VISIVEL",
+    "cnpj_fornecedor": "XX.XXX.XXX/XXXX-XX",
+    "chave_acesso": "44 digitos se visivel"
+  },
+  "valores_totais": {
+    "valor_total_nf": 0.00,
+    "valor_produtos": 0.00,
+    "valor_icms": 0.00,
+    "valor_ipi": 0.00,
+    "valor_frete": 0.00
+  },
   "itens": [
-    { "codigo": "...", "descricao": "...", "ncm": "...", "cfop": "...", "unidade": "CX", "quantidade": 1.0000, "valor_unitario": 0.00, "valor_total": 0.00, "icms_aliquota": 0.00, "ipi_aliquota": 0.00, "custo_unitario_liquido": 0.00 }
+    {
+      "codigo": "...",
+      "descricao": "TEXTO EXATO DA TRANSCRICAO",
+      "ncm": "...",
+      "cfop": "...",
+      "unidade": "CX",
+      "quantidade": 1.0000,
+      "valor_unitario": 0.00,
+      "valor_total": 0.00,
+      "icms_aliquota": 0.00,
+      "ipi_aliquota": 0.00,
+      "custo_unitario_liquido": 0.00
+    }
   ],
-  "beneficiario": "...",
-  "valor": 0.00,
-  "data_vencimento": "YYYY-MM-DD",
-  "linha_digitavel": "..."
+  "beneficiario": null,
+  "valor": null,
+  "data_vencimento": null,
+  "linha_digitavel": null
 }`;
 
         console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
@@ -3739,7 +3786,15 @@ FORMATO JSON ESTRITO:
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise este documento financeiro/fiscal brasileiro. Se for DANFE / Nota Fiscal, conte e extraia CADA LINHA de produtos da tabela sem resumir nem pular itens. A foto pode estar na horizontal." },
+                  {
+                    type: "text",
+                    text: promptText ||
+                      "Analise este documento fiscal brasileiro.\n\n" +
+                      "SE FOR DANFE: Siga as DUAS FASES obrigatórias:\n" +
+                      "FASE 1 — Preencha 'transcricao_tabela' com o que você lê literalmente em CADA LINHA da tabela de produtos (use L1:, L2: etc).\n" +
+                      "FASE 2 — Preencha 'itens[]' baseado APENAS na sua transcrição acima.\n\n" +
+                      "A foto pode estar na horizontal ou inclinada. Leia em qualquer orientação."
+                  },
                   { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
               },
@@ -3758,7 +3813,7 @@ FORMATO JSON ESTRITO:
 
         const aiDocJson = await aiDocResponse.json();
         const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
-        console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 300));
+        console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 400));
 
         let documentData: any = null;
         try {
@@ -3778,14 +3833,43 @@ FORMATO JSON ESTRITO:
         }
 
         // ================================================================
+        // VALIDAÇÃO DA TRANSCRIÇÃO: Cross-check itens[] vs transcricao_tabela
+        // O modelo deve ter transcrito em texto livre antes de criar o JSON.
+        // Se um item não aparece na transcrição, é suspeito de alucinação.
+        // ================================================================
+        if (documentData && documentData.tipo === "nf_compra" && documentData.transcricao_tabela) {
+          const transcricao = (documentData.transcricao_tabela || "").toLowerCase();
+          console.log("[NF] Transcrição literal recebida:\n", documentData.transcricao_tabela);
+
+          // Conta linhas na transcrição (L1:, L2:, etc.)
+          const linhasTranscricao = (transcricao.match(/l\d+:/g) || []).length;
+          const itensJson = (documentData.itens || []).length;
+          console.log(`[NF] Linhas na transcrição: ${linhasTranscricao}, itens no JSON: ${itensJson}`);
+
+          // Se há muito mais itens que linhas na transcrição, é suspeito
+          if (itensJson > linhasTranscricao + 1) {
+            console.warn(`[NF] SUSPEITO: JSON tem ${itensJson} itens mas transcrição tem só ${linhasTranscricao} linhas. Possível alucinação.`);
+            // Truncar itens para o número plausível da transcrição
+            documentData.itens = documentData.itens.slice(0, Math.max(linhasTranscricao, 1));
+          }
+
+          // Verificar se transcrição indica muitos campos ilegíveis
+          const camposIlegiveis = (transcricao.match(/\?\?\?|ileg[íi]vel/g) || []).length;
+          if (camposIlegiveis > 5) {
+            console.warn(`[NF] Muitos campos ilegíveis na transcrição: ${camposIlegiveis}. Marcando confiança como baixa.`);
+            documentData.confianca_geral = "baixa";
+          }
+        }
+
+        // ================================================================
         // SEGUNDA PASSAGEM AUTOMÁTICA: Foco exclusivo na tabela de produtos
         // ================================================================
         if (documentData && documentData.tipo === "nf_compra") {
           const itensIniciais = documentData.itens || [];
-          const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
+          const valorTotalNFPass2 = Number(documentData.valores_totais?.valor_total_nf || 0);
 
-          if (itensIniciais.length < 6 && valorTotalNF > 250) {
-            console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNF})...`);
+          if (itensIniciais.length < 6 && valorTotalNFPass2 > 250) {
+            console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNFPass2})...`);
 
             const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
 A foto pode estar deitada na horizontal ou vertical.
@@ -4088,16 +4172,26 @@ Retorne APENAS um array JSON no formato:
             if (somaIncoerente) msgSanidade += `• Soma dos itens (${fmt(valorTotalItens)}) difere do total (${fmt(valorTotalNF)})\n`;
             if (itensExtraidos.length === 0) msgSanidade += `• Nenhum item encontrado na tabela\n`;
 
-            msgSanidade += `\n💡 <b>Soluções:</b>\n`;
-            msgSanidade += `1. Envie a foto mais próxima da tabela de produtos\n`;
-            msgSanidade += `2. Tire a foto com mais luz e sem reflexo\n`;
-            msgSanidade += `3. Envie apenas a tabela de produtos (corte a imagem)\n\n`;
-            msgSanidade += `📸 <b>Dicas para tirar uma boa foto da DANFE:</b>\n`;
-            msgSanidade += `• Aproxime a câmera da tabela de produtos\n`;
-            msgSanidade += `• Tire a foto de cima, sem inclinação\n`;
-            msgSanidade += `• Evite reflexos de luz no papel\n`;
-            msgSanidade += `• Se a nota estiver dobrada, abra completamente\n`;
-            msgSanidade += `• Envie a foto no formato retrato (vertical) se possível`;
+            // Se foi enviado como foto comprimida pelo Telegram → qualidade limitada
+            if (isTelegramCompressedPhoto) {
+              msgSanidade += `\n📂 <b>Solução principal — envie como ARQUIVO:</b>\n`;
+              msgSanidade += `O Telegram comprime fotos e reduz a resolução, dificultando a leitura de DANFEs.\n`;
+              msgSanidade += `Para melhor qualidade:\n`;
+              msgSanidade += `① Toque no clipe 📎 → selecione <b>Arquivo</b> (não Galeria/Foto)\n`;
+              msgSanidade += `② Navegue até a foto da DANFE e envie como arquivo\n`;
+              msgSanidade += `③ O bot receberá a imagem em resolução original ✅\n\n`;
+            } else {
+              msgSanidade += `\n💡 <b>Soluções:</b>\n`;
+              msgSanidade += `1. Envie a foto mais próxima da tabela de produtos\n`;
+              msgSanidade += `2. Tire a foto com mais luz e sem reflexo\n`;
+              msgSanidade += `3. Envie apenas a tabela de produtos (corte a imagem)\n\n`;
+              msgSanidade += `📸 <b>Dicas para tirar uma boa foto da DANFE:</b>\n`;
+              msgSanidade += `• Aproxime a câmera da tabela de produtos\n`;
+              msgSanidade += `• Tire a foto de cima, sem inclinação\n`;
+              msgSanidade += `• Evite reflexos de luz no papel\n`;
+              msgSanidade += `• Se a nota estiver dobrada, abra completamente\n`;
+              msgSanidade += `• Envie a foto no formato retrato (vertical) se possível`;
+            }
 
             await sendReply(msgSanidade);
             return new Response("OK", { status: 200, headers: corsHeaders });
