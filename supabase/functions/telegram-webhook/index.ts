@@ -1066,6 +1066,54 @@ serve(async (req) => {
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
+      // ================================================================
+      // BOTÃO: sefaz_consultar
+      // ================================================================
+      if (callbackData.startsWith("sefaz_consultar:")) {
+        const chaveAcesso = callbackData.split(":")[1] || "";
+        await answerCallback(callbackQuery.id, "Abrindo consulta SEFAZ...");
+        await removeInlineKeyboard(cbChatId, callbackMessageId);
+
+        // Determinar estado com base nos primeiros 2 dígitos da chave (cUF)
+        const estadoCodigos: Record<string, string> = {
+          "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA",
+          "16": "AP", "17": "TO", "21": "MA", "22": "PI", "23": "CE",
+          "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE",
+          "29": "BA", "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
+          "41": "PR", "42": "SC", "43": "RS", "50": "MS", "51": "MT",
+          "52": "GO", "53": "DF",
+        };
+        const cuf = chaveAcesso.slice(0, 2);
+        const estado = estadoCodigos[cuf] || "??";
+
+        const urlNacional = `https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=completa&nfe=${chaveAcesso}`;
+
+        let msgSefaz = `🔍 <b>Consulta SEFAZ — Nota Fiscal Eletrônica</b>\n\n`;
+        msgSefaz += `📋 <b>Chave de Acesso:</b>\n<code>${chaveAcesso}</code>\n\n`;
+        msgSefaz += `🗺️ Estado emissor: <b>${estado}</b>\n\n`;
+        msgSefaz += `🌐 <b>Portal Nacional NF-e:</b>\n`;
+        msgSefaz += `${urlNacional}\n\n`;
+        msgSefaz += `📱 <b>Como consultar:</b>\n`;
+        msgSefaz += `① Acesse o link acima no seu navegador\n`;
+        msgSefaz += `② A chave já está na URL — confirme e resolva o CAPTCHA\n`;
+        msgSefaz += `③ Veja todos os dados oficiais da nota\n\n`;
+        msgSefaz += `💡 <i>Alternativa: escaneie o QR Code impresso na DANFE com a câmera do celular para abrir diretamente.</i>`;
+
+        await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: cbChatId,
+            text: msgSefaz,
+            parse_mode: "HTML",
+            disable_web_page_preview: false,
+          }),
+        });
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Fallback para callbacks não reconhecidos
       await answerCallback(callbackQuery.id, "Ação realizada.");
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
