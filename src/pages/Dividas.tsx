@@ -510,68 +510,68 @@ const Dividas = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total a Pagar</p>
-                  {loading ? <Skeleton className="h-8 w-32" /> : (
-                    <p className="text-2xl font-bold text-rose-500">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Total a Pagar">Total a Pagar</p>
+                  {loading ? <Skeleton className="h-6 sm:h-8 w-24 sm:w-32" /> : (
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-rose-500 truncate" title={formatCurrency(totalDividas)}>
                       {formatCurrency(totalDividas)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-rose-500/20">
-                  <DollarSign className="w-5 h-5 text-rose-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-rose-500/20 shrink-0">
+                  <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-rose-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Vencidas</p>
-                  {loading ? <Skeleton className="h-8 w-16" /> : (
-                    <p className="text-2xl font-bold text-red-500">{dividasVencidas}</p>
+          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Vencidas">Vencidas</p>
+                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-red-500 truncate">{dividasVencidas}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-red-500/20">
-                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-red-500/20 shrink-0">
+                  <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-red-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-yellow-500/10 to-yellow-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Pendentes</p>
-                  {loading ? <Skeleton className="h-8 w-16" /> : (
-                    <p className="text-2xl font-bold text-yellow-600">{dividasPendentes}</p>
+          <Card className="border-0 bg-gradient-to-br from-yellow-500/10 to-yellow-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Pendentes">Pendentes</p>
+                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-yellow-600 truncate">{dividasPendentes}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-yellow-500/20">
-                  <Clock className="w-5 h-5 text-yellow-600" />
+                <div className="p-2 sm:p-3 rounded-xl bg-yellow-500/20 shrink-0">
+                  <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-yellow-600" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Quitadas</p>
-                  {loading ? <Skeleton className="h-8 w-16" /> : (
-                    <p className="text-2xl font-bold text-green-500">{dividasQuitadas}</p>
+          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Quitadas">Quitadas</p>
+                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-green-500 truncate">{dividasQuitadas}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-green-500/20">
-                  <CheckCircle2 className="w-5 h-5 text-green-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-green-500/20 shrink-0">
+                  <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 text-green-500" />
                 </div>
               </div>
             </CardContent>
@@ -599,44 +599,41 @@ const Dividas = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="bg-muted/50">
-            <TabsTrigger value="lista" className="data-[state=active]:bg-rose-500 data-[state=active]:text-white">
-              Lista de Dívidas
-            </TabsTrigger>
-            <TabsTrigger value="adicionar" className="data-[state=active]:bg-rose-500 data-[state=active]:text-white">
-              Adicionar Dívida
-            </TabsTrigger>
-            <TabsTrigger value="historico" className="data-[state=active]:bg-rose-500 data-[state=active]:text-white">
-              <History className="w-4 h-4 mr-1" />
-              Histórico
-            </TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="lista">Lista de Dívidas</TabsTrigger>
+            <TabsTrigger value="adicionar">Adicionar Dívida</TabsTrigger>
+            <TabsTrigger value="historico">Histórico</TabsTrigger>
           </TabsList>
 
           <TabsContent value="lista" className="space-y-4">
             {/* Filtros */}
             <Card>
               <CardContent className="p-4">
-                <div className="flex flex-col sm:flex-row gap-3">
-                  {/* Filtro por data de vencimento */}
-                  <DateRangePicker
-                    value={dateRange}
-                    onChange={setRange}
-                    onClear={clearFilter}
-                    placeholder="Filtrar por vencimento"
-                  />
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                    <Input placeholder="Buscar dívidas..." value={filtro} onChange={(e) => setFiltro(e.target.value)} className="pl-10" />
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex-1 min-w-[200px] relative">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Buscar dívidas..."
+                      value={filtro}
+                      onChange={(e) => setFiltro(e.target.value)}
+                      className="pl-9"
+                    />
                   </div>
-                  <select value={statusFiltro} onChange={(e) => setStatusFiltro(e.target.value)}
-                    className="h-10 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
+                  <select
+                    value={statusFiltro}
+                    onChange={(e) => setStatusFiltro(e.target.value)}
+                    className="h-10 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 min-w-[140px]"
+                  >
                     <option value="">Todos os status</option>
                     <option value="pendente">Pendentes</option>
                     <option value="vencida">Vencidas</option>
                     <option value="quitada">Quitadas</option>
                   </select>
-                  <select value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)}
-                    className="h-10 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500">
+                  <select
+                    value={categoriaFiltro}
+                    onChange={(e) => setCategoriaFiltro(e.target.value)}
+                    className="h-10 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 min-w-[140px]"
+                  >
                     <option value="">Todas as categorias</option>
                     {categorias.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
@@ -646,20 +643,11 @@ const Dividas = () => {
                     </Button>
                   )}
                 </div>
-                {temFiltrosAtivos && (
-                  <div className="flex flex-wrap items-center gap-2 mt-3">
-                    <span className="text-xs text-muted-foreground">Filtros ativos:</span>
-                    {filtro && <Badge variant="secondary" className="text-xs">Busca: {filtro}<button onClick={() => setFiltro("")} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button></Badge>}
-                    {statusFiltro && <Badge variant="secondary" className="text-xs">{statusFiltro === "pendente" ? "Pendentes" : statusFiltro === "vencida" ? "Vencidas" : "Quitadas"}<button onClick={() => setStatusFiltro("")} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button></Badge>}
-                    {categoriaFiltro && <Badge variant="secondary" className="text-xs">{categoriaFiltro}<button onClick={() => setCategoriaFiltro("")} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button></Badge>}
-                    <span className="text-xs text-muted-foreground ml-2">{dividasFiltradas.length} resultado{dividasFiltradas.length !== 1 ? "s" : ""}</span>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
-            {/* Lista Desktop */}
-            <div className="hidden md:block space-y-3">
+            {/* Lista Desktop/Mobile */}
+            <div className="space-y-3">
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <Card key={i}>
@@ -740,24 +728,6 @@ const Dividas = () => {
                               <Label htmlFor="edit-parcelas">Total Parcelas *</Label>
                               <Input id="edit-parcelas" type="number" value={editParcelas} onChange={(e) => setEditParcelas(e.target.value)} />
                             </div>
-                            {(() => {
-                              const vt = parseFloat(editValorTotal);
-                              const np = parseInt(editParcelas);
-                              const valido = !isNaN(vt) && vt > 0 && !isNaN(np) && np > 0;
-                              if (!valido) return null;
-                              const valorParcela = vt / np;
-                              return (
-                                <div className="md:col-span-3 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
-                                  <div className="flex items-center gap-2">
-                                    <CreditCard className="w-4 h-4 text-rose-500" />
-                                    <span className="text-sm text-muted-foreground">Valor de cada parcela</span>
-                                  </div>
-                                  <span className="text-lg font-bold text-rose-500">
-                                    R$ {valorParcela.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                  </span>
-                                </div>
-                              );
-                            })()}
                             <div className="space-y-2">
                               <Label htmlFor="edit-parcelas-pagas">Parcelas Pagas</Label>
                               <Input id="edit-parcelas-pagas" type="number" value={editParcelasPagas} onChange={(e) => setEditParcelasPagas(e.target.value)} />
@@ -767,255 +737,123 @@ const Dividas = () => {
                               <ReminderSelector value={editReminderHours} onChange={setEditReminderHours} />
                             </div>
                           </div>
-
-                          <div className="space-y-4 border rounded-lg p-4 bg-muted/20 mt-4">
-                            <h4 className="text-sm font-semibold text-rose-500">Dados de Pagamento (Opcional)</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-metodo-pagamento">Método de Pagamento Esperado</Label>
-                                <select
-                                  id="edit-metodo-pagamento"
-                                  value={editMetodoPagamento}
-                                  onChange={(e) => setEditMetodoPagamento(e.target.value)}
-                                  className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
-                                >
-                                  <option value="pix">🔑 Pix</option>
-                                  <option value="boleto">📄 Boleto</option>
-                                  <option value="transferencia">🏦 Transferência Bancária</option>
-                                  <option value="cartao_credito">💳 Cartão de Crédito</option>
-                                  <option value="cartao_debito">💳 Cartão de Débito</option>
-                                  <option value="dinheiro">💵 Dinheiro</option>
-                                  <option value="outros">❓ Outros</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            {editMetodoPagamento === "pix" && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
-                                <div className="space-y-2">
-                                  <Label htmlFor="edit-chave-pix">Chave Pix</Label>
-                                  <Input
-                                    id="edit-chave-pix"
-                                    placeholder="CPF, CNPJ, Celular, E-mail ou Chave Aleatória"
-                                    value={editChavePix}
-                                    onChange={(e) => setEditChavePix(e.target.value)}
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label htmlFor="edit-pix-copia-cola">Pix Copia e Cola (Código QR)</Label>
-                                  <textarea
-                                    id="edit-pix-copia-cola"
-                                    placeholder="Código longo para pagamento copia e cola"
-                                    value={editPixCopiaCola}
-                                    onChange={(e) => setEditPixCopiaCola(e.target.value)}
-                                    className="w-full min-h-[40px] h-10 px-3 py-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
-                                  />
-                                </div>
-                              </div>
-                            )}
-
-                            {editMetodoPagamento === "boleto" && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/30">
-                                <div className="space-y-2">
-                                  <Label htmlFor="edit-codigo-barras">Código de Barras</Label>
-                                  <Input
-                                    id="edit-codigo-barras"
-                                    placeholder="Somente números"
-                                    value={editCodigoBarras}
-                                    onChange={(e) => setEditCodigoBarras(e.target.value)}
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label htmlFor="edit-linha-digitavel">Linha Digitável</Label>
-                                  <Input
-                                    id="edit-linha-digitavel"
-                                    placeholder="Linha digitável do boleto"
-                                    value={editLinhaDigitavel}
-                                    onChange={(e) => setEditLinhaDigitavel(e.target.value)}
-                                  />
-                                </div>
-                              </div>
-                            )}
-
-                            {editMetodoPagamento === "transferencia" && (
-                              <div className="space-y-4 pt-2 border-t border-border/30">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                  <div className="space-y-2">
-                                    <Label htmlFor="edit-banco">Banco</Label>
-                                    <Input
-                                      id="edit-banco"
-                                      placeholder="Nome do banco ou código"
-                                      value={editBanco}
-                                      onChange={(e) => setEditBanco(e.target.value)}
-                                    />
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label htmlFor="edit-agencia">Agência</Label>
-                                    <Input
-                                      id="edit-agencia"
-                                      placeholder="Ex: 0001"
-                                      value={editAgencia}
-                                      onChange={(e) => setEditAgencia(e.target.value)}
-                                    />
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label htmlFor="edit-conta-bancaria">Conta</Label>
-                                    <Input
-                                      id="edit-conta-bancaria"
-                                      placeholder="Ex: 12345-6"
-                                      value={editConta}
-                                      onChange={(e) => setEditConta(e.target.value)}
-                                    />
-                                  </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  <div className="space-y-2">
-                                    <Label htmlFor="edit-titular">Titular da Conta</Label>
-                                    <Input
-                                      id="edit-titular"
-                                      placeholder="Nome completo / Razão Social"
-                                      value={editTitular}
-                                      onChange={(e) => setEditTitular(e.target.value)}
-                                    />
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label htmlFor="edit-tipo-conta">Tipo de Conta</Label>
-                                    <select
-                                      id="edit-tipo-conta"
-                                      value={editTipoConta}
-                                      onChange={(e) => setEditTipoConta(e.target.value as any)}
-                                      className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
-                                    >
-                                      <option value="corrente">Conta Corrente</option>
-                                      <option value="poupanca">Conta Poupança</option>
-                                    </select>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
                         </div>
                       ) : (
-                        // Visualização normal com grid fixo
-                        <div className="grid grid-cols-[auto_1fr_420px] gap-4 items-center">
-                          {/* Coluna 1: Ícone */}
-                          <div className={`p-3 rounded-lg ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
-                            <CreditCard className={`w-5 h-5 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
+                        // Visualização normal com layout flex responsivo
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            {/* Ícone */}
+                            <div className={`p-2.5 sm:p-3 rounded-xl shrink-0 ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
+                              <CreditCard className={`w-5 h-5 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
+                            </div>
+
+                            {/* Informações em grid responsivo */}
+                            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 items-center flex-1 min-w-0">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-foreground truncate" title={divida.descricao}>{divida.descricao}</p>
+                                <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                  <span className="text-xs text-muted-foreground truncate">{divida.categorias?.nome || "Sem categoria"}</span>
+                                  {getMetodoPagamentoBadge(divida.metodo_pagamento_esperado)}
+                                  {divida.contas_usuario && (
+                                    <div className="flex items-center gap-1">
+                                      <BankLogoBadge nomeOuId={divida.contas_usuario.nome} size="sm" className="w-4 h-4 text-[8px]" />
+                                      <span className="text-xs text-blue-400 font-medium truncate">
+                                        {divida.contas_usuario.nome}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-muted-foreground">Credor</p>
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  <span className="text-xs sm:text-sm truncate" title={divida.credor}>{divida.credor}</span>
+                                </div>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-muted-foreground">Parcelas</p>
+                                <div className="space-y-1 mt-0.5">
+                                  <span className="text-xs sm:text-sm font-medium">{divida.parcelas_pagas}/{divida.parcelas}</span>
+                                  <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1 max-w-[80px]" />
+                                </div>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-muted-foreground">Vencimento</p>
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <Calendar className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  <span className="text-xs sm:text-sm truncate">{formatarData(divida.data_vencimento)}</span>
+                                </div>
+                                <DiasVencimentoBadge dataVencimento={divida.data_vencimento} status={divida.status} />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-muted-foreground">Valor Restante</p>
+                                <p className="text-xs sm:text-sm font-bold text-rose-500 whitespace-nowrap mt-0.5">{formatCurrency(divida.valor_restante)}</p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] text-muted-foreground">Parcela</p>
+                                <p className="text-xs sm:text-sm font-semibold text-foreground whitespace-nowrap mt-0.5">{formatCurrency(divida.valor_total / divida.parcelas)}</p>
+                              </div>
+                            </div>
                           </div>
 
-                          {/* Coluna 2: Informações em grid fixo */}
-                          <div className="grid grid-cols-6 gap-3 items-center">
-                            <div>
-                              <p className="font-medium">{divida.descricao}</p>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-xs text-muted-foreground">{divida.categorias?.nome || "Sem categoria"}</span>
-                                {getMetodoPagamentoBadge(divida.metodo_pagamento_esperado)}
-                                {divida.contas_usuario && (
-                                  <div className="flex items-center gap-1">
-                                    <BankLogoBadge nomeOuId={divida.contas_usuario.nome} size="sm" className="w-5 h-5 text-[8px]" />
-                                    <span className="text-xs text-blue-400 font-medium">
-                                      {divida.contas_usuario.nome}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Credor</p>
-                              <div className="flex items-center gap-1.5">
-                                <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
-                                <span className="text-sm">{divida.credor}</span>
-                              </div>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Parcelas</p>
-                              <div className="space-y-1">
-                                <span className="text-sm font-medium">{divida.parcelas_pagas}/{divida.parcelas}</span>
-                                <Progress value={(divida.parcelas_pagas / divida.parcelas) * 100} className="h-1" />
-                              </div>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Vencimento</p>
-                              <div className="flex items-center gap-1.5">
-                                <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-                                <span className="text-sm">{formatarData(divida.data_vencimento)}</span>
-                              </div>
-                              <DiasVencimentoBadge dataVencimento={divida.data_vencimento} status={divida.status} />
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Valor Restante</p>
-                              <p className="font-semibold text-rose-500 whitespace-nowrap">{formatCurrency(divida.valor_restante)}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Parcela</p>
-                              <p className="font-semibold text-foreground whitespace-nowrap">{formatCurrency(divida.valor_total / divida.parcelas)}</p>
-                            </div>
-                          </div>
-
-                          {/* Coluna 3: Ações com largura fixa de 420px */}
-                          <div className="flex items-center gap-2 justify-end">
-                            <div className="w-[90px] flex justify-center">
-                              {getStatusBadge(divida.status)}
-                            </div>
-                            <div className="w-[32px] flex justify-center">
-                              {divida.debt_reminders && divida.debt_reminders.length > 0 && (
-                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Lembrete configurado">
-                                  <Bell className="w-4 h-4 text-yellow-500" />
-                                </Button>
-                              )}
-                            </div>
-                            <div className="w-[90px] flex justify-center">
-                              {divida.status !== "quitada" && (
-                                <Button
-                                  onClick={() => handleAbrirModalPagamento(divida)}
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 text-green-600 border-green-600 hover:bg-green-600 hover:text-white"
-                                  title="Registrar Pagamento"
-                                >
-                                  <DollarSign className="w-4 h-4 mr-1" />
-                                  Pagar
-                                </Button>
-                              )}
-                            </div>
-                            <div className="w-[100px] flex justify-center">
-                              {divida.status !== "quitada" && (
-                                <Button
-                                  onClick={() => handleAbrirModalDivipay(divida)}
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 text-orange-500 border-orange-500 hover:bg-orange-500 hover:text-white"
-                                  title="Pagar via Divipay (baixa automática)"
-                                >
-                                  <Zap className="w-4 h-4 mr-1" />
-                                  Divipay
-                                </Button>
-                              )}
-                            </div>
-                            <div className="w-[32px] flex justify-center">
-                              <Button variant="ghost" size="sm" onClick={() => handleEditarDivida(divida.id)} className="h-8 w-8 p-0 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10">
-                                <Edit className="w-4 h-4" />
+                          {/* Ações com wrap flexível */}
+                          <div className="flex items-center gap-2 justify-end shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-border/40">
+                            {getStatusBadge(divida.status)}
+                            {divida.debt_reminders && divida.debt_reminders.length > 0 && (
+                              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" title="Lembrete configurado">
+                                <Bell className="w-4 h-4 text-yellow-500" />
                               </Button>
-                            </div>
-                            <div className="w-[32px] flex justify-center">
-                              <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10">
-                                    <Trash2 className="w-4 h-4" />
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>Excluir Dívida</AlertDialogTitle>
-                                    <AlertDialogDescription>Tem certeza que deseja excluir a dívida "{divida.descricao}"? Esta ação não pode ser desfeita.</AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
-                            </div>
+                            )}
+                            {divida.status !== "quitada" && (
+                              <Button
+                                onClick={() => handleAbrirModalPagamento(divida)}
+                                variant="outline"
+                                size="sm"
+                                className="h-8 px-2.5 text-green-600 border-green-600/50 hover:bg-green-600 hover:text-white shrink-0 text-xs"
+                                title="Registrar Pagamento"
+                              >
+                                <DollarSign className="w-3.5 h-3.5 mr-1" />
+                                Pagar
+                              </Button>
+                            )}
+                            {divida.status !== "quitada" && (
+                              <Button
+                                onClick={() => handleAbrirModalDivipay(divida)}
+                                variant="outline"
+                                size="sm"
+                                className="h-8 px-2.5 text-orange-500 border-orange-500/50 hover:bg-orange-500 hover:text-white shrink-0 text-xs"
+                                title="Pagar via Divipay (baixa automática)"
+                              >
+                                <Zap className="w-3.5 h-3.5 mr-1" />
+                                Divipay
+                              </Button>
+                            )}
+                            <Button
+                              onClick={() => handleEditarDivida(divida.id)}
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground shrink-0"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </Button>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10 shrink-0">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Excluir Dívida</AlertDialogTitle>
+                                  <AlertDialogDescription>Tem certeza que deseja excluir a dívida "{divida.descricao}"? Esta ação não pode ser desfeita.</AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleExcluirDivida(divida.id)} className="bg-red-500 hover:bg-red-600">Excluir</AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
                         </div>
                       )}

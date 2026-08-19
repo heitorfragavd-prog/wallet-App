@@ -483,98 +483,98 @@ const Receitas = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
           <Card className="border-0 bg-gradient-to-br from-cyan-500/10 to-cyan-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Receitas do Dia</p>
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Receitas do Dia">Receitas do Dia</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-6 sm:h-7 w-20 sm:w-24 mt-1" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5 whitespace-nowrap">
                       {formatCurrency(totalReceitasDoDia)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-cyan-500/20">
-                  <CalendarDays className="w-5 h-5 text-cyan-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-cyan-500/20 shrink-0">
+                  <CalendarDays className="w-4 h-4 text-cyan-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Receitas</p>
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Total Receitas">Total Receitas</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-6 sm:h-7 w-20 sm:w-24 mt-1" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5 whitespace-nowrap">
                       {formatCurrency(totalFiltrado)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-green-500/20">
-                  <DollarSign className="w-5 h-5 text-green-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-green-500/20 shrink-0">
+                  <DollarSign className="w-4 h-4 text-green-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Média Mensal (6 Meses)</p>
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Média Mensal (6 Meses)">Média Mensal (6M)</p>
                   {loadingMedia ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-6 sm:h-7 w-20 sm:w-24 mt-1" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5 whitespace-nowrap">
                       {formatCurrency(mediaMensalCalculada)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-blue-500/20">
-                  <TrendingUp className="w-5 h-5 text-blue-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-blue-500/20 shrink-0">
+                  <TrendingUp className="w-4 h-4 text-blue-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Registros</p>
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Total Registros">Total Registros</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-16" />
+                    <Skeleton className="h-6 sm:h-7 w-12 mt-1" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">{receitasFiltradas.length}</p>
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5">{receitasFiltradas.length}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-purple-500/20">
-                  <Wallet className="w-5 h-5 text-purple-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-purple-500/20 shrink-0">
+                  <Wallet className="w-4 h-4 text-purple-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Categorias</p>
+          <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5 col-span-2 sm:col-span-1">
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Categorias">Categorias</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-16" />
+                    <Skeleton className="h-6 sm:h-7 w-12 mt-1" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">{categoriasReceita.length}</p>
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5">{categoriasReceita.length}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-orange-500/20">
-                  <Tag className="w-5 h-5 text-orange-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-orange-500/20 shrink-0">
+                  <Tag className="w-4 h-4 text-orange-500" />
                 </div>
               </div>
             </CardContent>

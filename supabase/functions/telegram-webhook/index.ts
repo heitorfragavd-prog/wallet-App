@@ -3672,81 +3672,87 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // ================================================================
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
-        // Estratégia: DUAS FASES — transcrição literal primeiro, JSON depois.
-        // Isso evita que o modelo "complete" com produtos genéricos do treinamento.
         // ================================================================
-        const docAnalysisSystemPrompt = `MODO DE OPERAÇÃO: SCANNER OCR FORENSE — PROIBIDO INVENTAR.
+        const docAnalysisSystemPrompt = `Você é um scanner OCR especialista em documentos fiscais e boletos bancários brasileiros.
+Extraia com 100% de fidelidade APENAS o que está visível no documento. NUNCA invente dados nem resuma produtos.
 
-Você é um scanner que transcreve APENAS o que está VISÍVEL na imagem. Nunca use conhecimento prévio para completar nomes de produtos, marcas ou valores.
+TIPO DE DOCUMENTO:
+- DANFE / Nota Fiscal de Compra -> tipo: "nf_compra"
+- Boleto Bancário -> tipo: "boleto"
+- Outro documento -> tipo: "outro"
 
-═══════════════════════════════
-FASE 1 — TRANSCRIÇÃO LITERAL (OBRIGATÓRIA para DANFE)
-═══════════════════════════════
-Antes de qualquer JSON, você DEVE preencher o campo "transcricao_tabela".
-Para cada linha da tabela de produtos na DANFE, transcreva LITERALMENTE o que consegue ler:
+INSTRUÇÕES PARA DANFE (tipo: "nf_compra"):
+1. CABEÇALHO:
+   - numero_nf: número da NF (ex: "013.754.779" ou "13754779")
+   - serie_nf: série da NF (ex: "26")
+   - data_emissao: data no formato YYYY-MM-DD
+   - data_entrada: data no formato YYYY-MM-DD
+   - fornecedor: Razão Social do emitente (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A")
+   - cnpj_fornecedor: CNPJ do emitente formatado
+   - chave_acesso: 44 dígitos numéricos da chave de acesso (se visível no topo ou código de barras)
 
-Formato por linha:
-"L1: cod=[XXXX] desc=[TEXTO EXATO QUE VOCÊ VÊ] qtd=[X] unit=[R$X,XX] total=[R$X,XX]"
+2. TOTAIS DA NOTA:
+   - valor_total_nf: Valor Total da NF (campo "VALOR TOTAL DA NOTA")
+   - valor_produtos: Valor Total dos Produtos (campo "VALOR TOTAL DOS PRODUTOS")
+   - valor_icms: Valor do ICMS
+   - valor_icms_st: Valor do ICMS Substituição Tributária
+   - valor_ipi: Valor do IPI
+   - valor_frete: Valor do Frete
 
-REGRAS CRÍTICAS DA TRANSCRIÇÃO:
-- Se NÃO CONSEGUIR LER um campo, escreva "???" naquele campo. NÃO ADIVINHE.
-- NÃO use nomes de marcas genéricas (Fanta, Sprite, Brahma, Skol) se não estiverem escritas.
-- Se a linha está borrada/cortada, escreva: "L?: ilegível"
-- Prefira "???" a qualquer invenção.
+3. TABELA DE PRODUTOS (DADOS DO PRODUTO / SERVIÇO):
+   - Extraia TODAS as linhas da tabela de produtos sem pular nenhuma linha.
+   - codigo: código interno do item (coluna CÓDIGO DO PRODUTO/SERVIÇO)
+   - descricao: descrição completa do produto impressa na nota (marca, nome, volume, sabor, embalagem)
+   - ncm: NCM (8 dígitos se visível)
+   - cfop: CFOP (4 dígitos se visível)
+   - unidade: unidade de medida (CX, UN, FD, LT, KG, etc.)
+   - quantidade: quantidade faturada (número decimal)
+   - valor_unitario: valor unitário do item (número decimal)
+   - valor_total: valor total do item (número decimal)
+   - icms_aliquota: % alíquota ICMS (número)
+   - ipi_aliquota: % alíquota IPI (número)
+   - custo_unitario_liquido: valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
 
-═══════════════════════════════
-FASE 2 — JSON BASEADO NA TRANSCRIÇÃO
-═══════════════════════════════
-Após a transcrição, preencha o JSON usando SOMENTE o que você transcreveu na FASE 1.
-REGRA ABSOLUTA: Se um produto não aparece na sua transcrição literal, NÃO o adicione ao array itens[].
-Se a descrição está parcialmente ilegível, use o que leu seguido de "..." (ex: "COCA-COLA LT ...").
+INSTRUÇÕES PARA BOLETO (tipo: "boleto"):
+- beneficiario: Razão Social do beneficiário/cedente
+- valor: Valor do documento (número decimal)
+- data_vencimento: Data de vencimento no formato YYYY-MM-DD
+- linha_digitavel: 47 dígitos numéricos da linha digitável
 
-TIPO DO DOCUMENTO:
-- DANFE / Nota Fiscal de Compra → tipo "nf_compra"
-- Boleto Bancário → tipo "boleto"
-- Outro → tipo "outro"
-
-CONFIANÇA:
-- "alta": conseguiu ler claramente a maioria dos campos
-- "media": conseguiu ler alguns campos, outros ficaram parciais
-- "baixa": imagem borrada, texto pequeno, muitos campos ilegíveis
-
-PARA BOLETO: beneficiario (razão social), valor, data_vencimento (YYYY-MM-DD), linha_digitavel (47 dígitos).
-
-FORMATO JSON OBRIGATÓRIO:
+Retorne APENAS JSON válido no seguinte formato:
 {
   "tipo": "nf_compra",
-  "confianca_geral": "alta|media|baixa",
-  "transcricao_tabela": "L1: cod=[1234] desc=[COCA-COLA LT 350ML] qtd=[2 CX] unit=[33,01] total=[66,02]\\nL2: cod=[5678] desc=[EISENBAHN LT 473ML] qtd=[1 CX] unit=[57,23] total=[57,23]\\n...",
+  "confianca_geral": "alta",
   "cabecalho": {
-    "numero_nf": "...",
-    "serie_nf": "...",
-    "data_emissao": "YYYY-MM-DD",
-    "data_entrada": "YYYY-MM-DD",
-    "fornecedor": "RAZAO SOCIAL EXATA VISIVEL",
-    "cnpj_fornecedor": "XX.XXX.XXX/XXXX-XX",
-    "chave_acesso": "44 digitos se visivel"
+    "numero_nf": "013754779",
+    "serie_nf": "26",
+    "data_emissao": "2026-08-07",
+    "data_entrada": "2026-08-07",
+    "fornecedor": "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A",
+    "cnpj_fornecedor": "61.186.888/0020-56",
+    "chave_acesso": "31260861186888002056550260137547791096161890"
   },
   "valores_totais": {
-    "valor_total_nf": 0.00,
-    "valor_produtos": 0.00,
-    "valor_icms": 0.00,
+    "valor_total_nf": 1262.55,
+    "valor_produtos": 1093.39,
+    "valor_icms": 127.86,
+    "valor_icms_st": 196.82,
     "valor_ipi": 0.00,
     "valor_frete": 0.00
   },
   "itens": [
     {
-      "codigo": "...",
-      "descricao": "TEXTO EXATO DA TRANSCRICAO",
-      "ncm": "...",
-      "cfop": "...",
+      "codigo": "55380",
+      "descricao": "AGUA TONICA LT 350ML",
+      "ncm": "22021000",
+      "cfop": "5405",
       "unidade": "CX",
-      "quantidade": 1.0000,
-      "valor_unitario": 0.00,
-      "valor_total": 0.00,
-      "icms_aliquota": 0.00,
-      "ipi_aliquota": 0.00,
-      "custo_unitario_liquido": 0.00
+      "quantidade": 1.0,
+      "valor_unitario": 28.56,
+      "valor_total": 28.56,
+      "icms_aliquota": 0.0,
+      "ipi_aliquota": 0.0,
+      "custo_unitario_liquido": 28.56
     }
   ],
   "beneficiario": null,
@@ -3775,11 +3781,9 @@ FORMATO JSON OBRIGATÓRIO:
                   {
                     type: "text",
                     text: promptText ||
-                      "Analise este documento fiscal brasileiro.\n\n" +
-                      "SE FOR DANFE: Siga as DUAS FASES obrigatórias:\n" +
-                      "FASE 1 — Preencha 'transcricao_tabela' com o que você lê literalmente em CADA LINHA da tabela de produtos (use L1:, L2: etc).\n" +
-                      "FASE 2 — Preencha 'itens[]' baseado APENAS na sua transcrição acima.\n\n" +
-                      "A foto pode estar na horizontal ou inclinada. Leia em qualquer orientação."
+                      "Analise esta imagem e extraia todos os dados fiscais ou bancários visíveis com máxima fidelidade. " +
+                      "Se for DANFE, leia linha por linha da tabela de produtos sem pular nenhuma linha e sem agrupar itens. " +
+                      "Se a imagem estiver deitada ou inclinada, leia na orientação adequada. Retorne APENAS o JSON."
                   },
                   { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
@@ -3819,63 +3823,19 @@ FORMATO JSON OBRIGATÓRIO:
         }
 
         // ================================================================
-        // VALIDAÇÃO DA TRANSCRIÇÃO: Cross-check itens[] vs transcricao_tabela
-        // O modelo deve ter transcrito em texto livre antes de criar o JSON.
-        // Se um item não aparece na transcrição, é suspeito de alucinação.
-        // ================================================================
-        if (documentData && documentData.tipo === "nf_compra" && documentData.transcricao_tabela) {
-          const transcricao = (documentData.transcricao_tabela || "").toLowerCase();
-          console.log("[NF] Transcrição literal recebida:\n", documentData.transcricao_tabela);
-
-          // Conta linhas na transcrição (L1:, L2:, etc.)
-          const linhasTranscricao = (transcricao.match(/l\d+:/g) || []).length;
-          const itensJson = (documentData.itens || []).length;
-          console.log(`[NF] Linhas na transcrição: ${linhasTranscricao}, itens no JSON: ${itensJson}`);
-
-          // Se há muito mais itens que linhas na transcrição, é suspeito
-          if (itensJson > linhasTranscricao + 1) {
-            console.warn(`[NF] SUSPEITO: JSON tem ${itensJson} itens mas transcrição tem só ${linhasTranscricao} linhas. Possível alucinação.`);
-            // Truncar itens para o número plausível da transcrição
-            documentData.itens = documentData.itens.slice(0, Math.max(linhasTranscricao, 1));
-          }
-
-          // Verificar se transcrição indica muitos campos ilegíveis
-          const camposIlegiveis = (transcricao.match(/\?\?\?|ileg[íi]vel/g) || []).length;
-          if (camposIlegiveis > 5) {
-            console.warn(`[NF] Muitos campos ilegíveis na transcrição: ${camposIlegiveis}. Marcando confiança como baixa.`);
-            documentData.confianca_geral = "baixa";
-          }
-        }
-
-        // ================================================================
-        // SEGUNDA PASSAGEM AUTOMÁTICA: Foco exclusivo na tabela de produtos
+        // SEGUNDA PASSAGEM OPCIONAL (ZOOM): Se a NF tem alto valor mas poucos itens foram lidos
         // ================================================================
         if (documentData && documentData.tipo === "nf_compra") {
           const itensIniciais = documentData.itens || [];
           const valorTotalNFPass2 = Number(documentData.valores_totais?.valor_total_nf || 0);
+          const somaItensIniciais = itensIniciais.reduce((sum: number, it: any) => sum + (Number(it.valor_total) || 0), 0);
 
-          if (itensIniciais.length < 6 && valorTotalNFPass2 > 250) {
+          if (itensIniciais.length < 4 && valorTotalNFPass2 > 300 && somaItensIniciais < valorTotalNFPass2 * 0.6) {
             console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNFPass2})...`);
 
             const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
-A foto pode estar deitada na horizontal ou vertical.
-
-Esta tabela tem VÁRIAS LINHAS de produtos. Leia CADA LINHA individualmente e extraia:
-- codigo: Código do produto (número interno do fornecedor na coluna da esquerda)
-- descricao: Descrição COMPLETA do produto (leia tudo, sabor, embalagem, volume)
-- ncm: NCM (8 dígitos)
-- cfop: CFOP (4 dígitos)
-- unidade: Unidade (CX, UN, FD, KG, LT)
-- quantidade: Quantidade faturada (decimal)
-- valor_unitario: Valor unitário
-- valor_total: Valor total do item
-- icms_aliquota: % ICMS
-- ipi_aliquota: % IPI
-- custo_unitario_liquido: valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
-
-NUNCA PULE LINHAS. Liste TODOS os produtos visíveis na tabela.
-
-Retorne APENAS um array JSON no formato:
+Esta tabela tem VÁRIAS LINHAS de produtos. Leia CADA LINHA individualmente e extraia todos os produtos visíveis.
+Retorne APENAS um array JSON de itens no formato:
 [
   {
     "codigo": "...",
@@ -3883,7 +3843,7 @@ Retorne APENAS um array JSON no formato:
     "ncm": "...",
     "cfop": "...",
     "unidade": "CX",
-    "quantidade": 1.0000,
+    "quantidade": 1.0,
     "valor_unitario": 0.00,
     "valor_total": 0.00,
     "icms_aliquota": 0.00,
@@ -3938,123 +3898,6 @@ Retorne APENAS um array JSON no formato:
               console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
             }
           }
-
-          // ================================================================
-          // VALIDAÇÃO ANTI-ALUCINAÇÃO
-          // ================================================================
-          const itensExtraidosVal = documentData.itens || [];
-
-          const palavrasSuspeitas = [
-            "fanta laranja", "fanta", "sprite", "schweppes", "agua mineral",
-            "refrigerante generico", "coca-cola 350ml", "coca cola 350ml",
-            "guarana", "suco", "energetico generico"
-          ];
-
-          const itensSuspeitos = itensExtraidosVal.filter((item: any) => {
-            const desc = (item.descricao || "").toLowerCase();
-            return palavrasSuspeitas.some((p) => desc.includes(p));
-          });
-
-          const fornecedorLower = (documentData.cabecalho?.fornecedor || "").toLowerCase();
-          const ehSpal = fornecedorLower.includes("spal") || fornecedorLower.includes("coca");
-          const ehAmbev = fornecedorLower.includes("ambev") || fornecedorLower.includes("brasnor");
-
-          const temProdutoEspecifico = itensExtraidosVal.some((item: any) => {
-            const desc = (item.descricao || "").toLowerCase();
-            if (ehSpal) {
-              return (
-                desc.includes("monster") ||
-                desc.includes("eisenbahn") ||
-                desc.includes("guarana") ||
-                desc.includes("coca-cola lt") ||
-                desc.includes("coca-cola pet") ||
-                desc.includes("coca-cola zero")
-              );
-            }
-            if (ehAmbev) {
-              return (
-                desc.includes("brahma") ||
-                desc.includes("skol") ||
-                desc.includes("antarctica") ||
-                desc.includes("bohemia") ||
-                desc.includes("original")
-              );
-            }
-            return true;
-          });
-
-          const provavelAlucinacao = itensSuspeitos.length >= 2 || (ehSpal && !temProdutoEspecifico && itensExtraidosVal.length > 0);
-
-          if (provavelAlucinacao) {
-            console.warn("[NF] ALUCINACAO DETECTADA:", itensExtraidosVal.map((i: any) => i.descricao));
-
-            // Segunda passagem com prompt minimalista
-            const promptOCR = `Voce e um scanner OCR. Leia APENAS o texto visivel na imagem. Foque na TABELA DE PRODUTOS. Liste cada produto EXATAMENTE como esta escrito. NAO invente. NAO resuma. NAO traduza. Retorne JSON: { "itens": [ { "codigo": "...", "descricao": "TEXTO_EXATO_DA_NOTA", "quantidade": 1, "valor_unitario": 0.00, "valor_total": 0.00 } ] }`;
-
-            try {
-              const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${supabaseServiceKey}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  model: "gpt-4o",
-                  user_id: userId,
-                  temperature: 0.0,
-                  messages: [
-                    { role: "system", content: promptOCR },
-                    {
-                      role: "user",
-                      content: [
-                        { type: "text", text: "Leia a tabela de produtos desta DANFE. Retorne APENAS o JSON." },
-                        { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                      ],
-                    },
-                  ],
-                }),
-              });
-
-              if (aiResp2.ok) {
-                const aiJson2 = await aiResp2.json();
-                const raw2 = aiJson2.choices?.[0]?.message?.content || "";
-                let nf2: any = null;
-                try {
-                  nf2 = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
-                } catch {
-                  const match2 = raw2.match(/\{[\s\S]*\}/);
-                  if (match2) {
-                    try { nf2 = JSON.parse(match2[0]); } catch {}
-                  }
-                }
-
-                if (nf2?.itens && nf2.itens.length > 0) {
-                  console.log(`[NF] Segunda passagem anti-alucinação extraiu ${nf2.itens.length} itens`);
-                  documentData.itens = nf2.itens.map((item2: any) => ({
-                    ...item2,
-                    ncm: item2.ncm || null,
-                    cfop: item2.cfop || null,
-                    unidade: item2.unidade || "CX",
-                    icms_aliquota: item2.icms_aliquota || 0,
-                    ipi_aliquota: item2.ipi_aliquota || 0,
-                    custo_unitario_liquido: item2.custo_unitario_liquido || item2.valor_unitario || 0,
-                  }));
-                } else {
-                  await sendReply(
-                    "⚠️ <b>Não consegui ler os produtos corretamente.</b>\n\n" +
-                      "A leitura automática parece ter falhado (produtos genéricos detectados).\n\n" +
-                      "💡 <b>Soluções:</b>\n" +
-                      "1. Envie a foto mais próxima da tabela de produtos\n" +
-                      "2. Envie a foto com mais iluminação\n" +
-                      "3. Use o modo MANUAL digitando os dados"
-                  );
-                  return new Response("OK", { status: 200, headers: corsHeaders });
-                }
-              }
-            } catch (alucinacaoErr: any) {
-              console.warn("[NF] Erro na requisição anti-alucinação:", alucinacaoErr.message);
-            }
-          }
         }
 
         // ================================================================
@@ -4077,12 +3920,13 @@ Retorne APENAS um array JSON no formato:
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
 
-          // ─── VALIDAÇÃO DE SANIDADE RIGOROSA: Rejeitar leituras absurdas ───
+          // ─── VALIDAÇÃO DE SANIDADE: Rejeitar apenas leituras comprovadamente absurdas ───
           const itensExtraidos = documentData.itens || [];
           const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
+          const valorProdutosNF = Number(documentData.valores_totais?.valor_produtos || 0);
 
-          // REGRA 1: Valor total razoável (R$ 1 a R$ 100.000)
-          const valorAbsurdo = valorTotalNF < 1 || valorTotalNF > 100000;
+          // REGRA 1: Valor total razoável (R$ 1 a R$ 200.000)
+          const valorAbsurdo = valorTotalNF < 1 || valorTotalNF > 200000;
 
           // REGRA 2 & 3: Coerência de Fornecedor x Marca de Produto
           const fornecedorLido = documentData.cabecalho?.fornecedor || "";
@@ -4090,8 +3934,19 @@ Retorne APENAS um array JSON no formato:
           const ehAmbevVal = fornecedorLido.toLowerCase().includes("ambev") || fornecedorLido.toLowerCase().includes("brasnor") || fornecedorLido.toLowerCase().includes("brahma");
 
           const descricoesVal = itensExtraidos.map((i: any) => (i.descricao || "").toLowerCase());
-          const temProdutoSpalVal = descricoesVal.some((d: string) => d.includes("monster") || d.includes("eisenbahn") || d.includes("guarana") || d.includes("coca-cola") || d.includes("coca"));
-          const temProdutoAmbevVal = descricoesVal.some((d: string) => d.includes("brahma") || d.includes("skol") || d.includes("antarctica") || d.includes("original") || d.includes("stella") || d.includes("bohemia"));
+          const marcasSpal = [
+            "monster", "eisenbahn", "guarana", "coca", "schweppes", "del valle",
+            "kuat", "tonica", "crystal", "burn", "matte", "leao", "heineken",
+            "amstel", "tiger", "bavaria", "kaiser", "sol", "fresh", "kapo"
+          ];
+          const marcasAmbev = [
+            "brahma", "skol", "antarctica", "original", "stella", "bohemia",
+            "budweiser", "corona", "spaten", "beck", "colorado", "patagonia",
+            "fusion", "gatorade", "pepsi", "sukita", "h2oh"
+          ];
+
+          const temProdutoSpalVal = descricoesVal.some((d: string) => marcasSpal.some(m => d.includes(m)));
+          const temProdutoAmbevVal = descricoesVal.some((d: string) => marcasAmbev.some(m => d.includes(m)));
 
           const incoerenteFornecedor = (ehSpalVal && temProdutoAmbevVal && !temProdutoSpalVal) || (ehAmbevVal && temProdutoSpalVal && !temProdutoAmbevVal);
 
@@ -4101,11 +3956,14 @@ Retorne APENAS um array JSON no formato:
             return vu > 10000 || (vu < 0.10 && vu > 0);
           });
 
-          // REGRA 5: Soma dos itens vs total da NF (diferença máx 20%)
+          // REGRA 5: Soma dos itens vs total da NF
+          // Em notas de bebidas (SPAL/Ambev), o ICMS-ST e IPI podem representar 15% a 30% do total da NF acima dos produtos.
           const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
-          const diferencaValor = Math.abs(valorTotalItens - valorTotalNF);
-          const percentualDiferenca = valorTotalNF > 0 ? (diferencaValor / valorTotalNF) * 100 : 0;
-          const somaIncoerente = percentualDiferenca > 20 && itensExtraidos.length > 1;
+          const baseComparacao = valorProdutosNF > 0 ? valorProdutosNF : valorTotalNF;
+          const diferencaValor = Math.abs(valorTotalItens - baseComparacao);
+          const percentualDiferenca = baseComparacao > 0 ? (diferencaValor / baseComparacao) * 100 : 0;
+          const limiteDiff = valorProdutosNF > 0 ? 25 : 35;
+          const somaIncoerente = percentualDiferenca > limiteDiff && itensExtraidos.length > 1;
 
           // SE QUALQUER REGRA DE SANIDADE FALHAR → REJEITAR E OFERECER CHAVE DE ACESSO OU SEFAZ
           if (valorAbsurdo || incoerenteFornecedor || valoresUnitariosAbsurdos || somaIncoerente || itensExtraidos.length === 0) {
