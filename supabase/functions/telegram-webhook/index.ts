@@ -3392,79 +3392,17 @@ serve(async (req) => {
           const mime = ext === "png" ? "image/png" : "image/jpeg";
           finalImageBase64Uri = `data:${mime};base64,${b64}`;
 
-          // ─── PRÉ-PROCESSAMENTO: Detecção e Rotação Física da Imagem via ImageScript (apenas para fotos) ───
+          // Log das dimensões da imagem (sem re-encoding ou rotação)
+          // A detecção de rotação foi REMOVIDA porque:
+          // 1. Causava dupla compressão JPEG (perda de qualidade)
+          // 2. As miniaturas de 160px eram insuficientes para detectar ângulo correto
+          // 3. O prompt OCR já instrui o GPT-4o a ler em qualquer orientação
+          // 4. O ChatGPT lê a mesma foto sem qualquer pré-rotação
           try {
-            console.log("[telegram-webhook] Iniciando decodificação de imagem com ImageScript...");
             const decodedImage = await Image.decode(new Uint8Array(arrayBuffer));
-            console.log(`[telegram-webhook] Dimensões da foto: ${decodedImage.width}x${decodedImage.height}`);
-
-            // Gera miniaturas leves nas 4 rotações (0°, 90°, 180°, 270°)
-            const angles = [0, 90, 180, 270];
-            const thumbs: { angle: number; b64: string }[] = [];
-
-            for (const angle of angles) {
-              const rotated = angle === 0 ? decodedImage.clone() : decodedImage.clone().rotate(angle);
-              const thumb = rotated.resize(160, Image.RESIZE_AUTO);
-              const enc = await thumb.encodeJPEG(50);
-              thumbs.push({ angle, b64: base64Encode(enc) });
-            }
-
-            console.log("[telegram-webhook] Classificando orientação correta...");
-            const orientResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${supabaseServiceKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "gpt-4o",
-                user_id: userId,
-                tools: [],
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "Você é um classificador de orientação de documentos. Analise as 4 miniaturas [0 graus, 90 graus, 180 graus, 270 graus]. Responda APENAS com o número correspondente (0, 90, 180 ou 270) da imagem que estiver na orientação VERTICAL CORRETA de leitura (onde o texto do documento e código de barras estão retos e legíveis de cima para baixo). Responda SOMENTE o número.",
-                  },
-                  {
-                    role: "user",
-                    content: [
-                      { type: "text", text: "Qual das miniaturas está na orientação vertical correta?" },
-                      { type: "text", text: "Opção 0°:" },
-                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[0].b64}` } },
-                      { type: "text", text: "Opção 90°:" },
-                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[1].b64}` } },
-                      { type: "text", text: "Opção 180°:" },
-                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[2].b64}` } },
-                      { type: "text", text: "Opção 270°:" },
-                      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${thumbs[3].b64}` } },
-                    ],
-                  },
-                ],
-              }),
-            });
-
-            if (orientResp.ok) {
-              const orientJson = await orientResp.json();
-              const orientText = orientJson.choices?.[0]?.message?.content || "0";
-              console.log("[telegram-webhook] Resposta da orientação:", orientText);
-              const matchAngle = orientText.match(/(0|90|180|270)/);
-              const bestAngle = matchAngle ? parseInt(matchAngle[0], 10) : 0;
-              console.log("[telegram-webhook] Melhor ângulo detectado:", bestAngle);
-
-              if (bestAngle !== 0) {
-                console.log(`[telegram-webhook] Rotacionando imagem original em ${bestAngle}°...`);
-                const rotatedOriginal = decodedImage.rotate(bestAngle);
-                // Qualidade 92 (era 85) — reduz artefato de dupla compressão JPEG
-                const correctedJpg = await rotatedOriginal.encodeJPEG(92);
-                finalImageBase64Uri = `data:image/jpeg;base64,${base64Encode(correctedJpg)}`;
-                console.log(`[telegram-webhook] Imagem rotacionada ${bestAngle}° e re-codificada em qualidade 92.`);
-              } else {
-                console.log("[telegram-webhook] Sem rotação necessária — usando bytes originais sem re-encoding.");
-              }
-            }
+            console.log(`[telegram-webhook] Dimensões da imagem: ${decodedImage.width}x${decodedImage.height}. Enviando diretamente ao OCR sem rotação.`);
           } catch (imgErr: any) {
-            console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
+            console.log("[telegram-webhook] Não foi possível decodificar dimensões:", imgErr.message);
           }
         }
 
