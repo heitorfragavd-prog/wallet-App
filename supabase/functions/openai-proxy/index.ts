@@ -1005,9 +1005,18 @@ Deno.serve(async (req: Request) => {
   console.log("[openai-proxy] ===== REQUEST =====");
   console.log("[openai-proxy] userId:", userId, "model:", body.model || "gpt-4o-mini", "messageCount:", body.messages.length, "toolsCount:", TOOLS.length);
   console.log("[openai-proxy] Tools registradas:", TOOLS.map(t => t.function.name).join(", "));
-  console.log("[openai-proxy] hasOpenAIKey:", !!openaiKey, "keySource:", config?.api_key ? "ia_configuracoes" : "env");
-
   const messages = [...body.messages] as Record<string, unknown>[];
+  const hojeBrasil = getHojeBrasil();
+  const hasSystem = messages.some((m) => m.role === "system");
+  if (!hasSystem) {
+    messages.unshift({
+      role: "system",
+      content: `Você é o Assistente Financeiro Inteligente do Wallet App.
+Data atual no Brasil: ${hojeBrasil} (America/Sao_Paulo).
+Ao responder perguntas sobre vendas, entradas ou faturamento de "hoje" ou datas relativas, utilize a ferramenta consultar_vendas_eyemobile com data_inicio = "${hojeBrasil}" e data_fim = "${hojeBrasil}".
+Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket médio e a quebra por métodos de pagamento (Pix, Débito, Crédito, Dinheiro).`,
+    });
+  }
   const MAX_ITERATIONS = 8;
 
   const toolsToUse = Array.isArray(body.tools) ? (body.tools.length > 0 ? body.tools : undefined) : (body.tools === null ? undefined : TOOLS);
