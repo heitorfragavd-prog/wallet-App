@@ -1939,10 +1939,17 @@ serve(async (req) => {
               ? ((item.custo_unitario_liquido - custoInicial12m) / custoInicial12m) * 100
               : 0;
 
-            let markupAplicado = produtoExistente?.markup_padrao || 30;
+            // Usar margem real do produto ((preco_venda / custo_atual) - 1) * 100
+            let margemReal = Number(produtoExistente?.margem_real_percentual) || 0;
+            if (margemReal <= 0 && produtoExistente?.preco_venda && produtoExistente?.custo_atual) {
+              margemReal = ((Number(produtoExistente.preco_venda) / Number(produtoExistente.custo_atual)) - 1) * 100;
+            }
+            if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
+
+            let markupAplicado = margemReal;
 
             if (variacao12m > 10) {
-              const sugestaoPreco = item.custo_unitario_liquido * (1 + markupAplicado / 100);
+              const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
 
               alertasAumento.push(
                 `🔴 <b>${item.descricao}</b>\n` +
@@ -1955,11 +1962,11 @@ serve(async (req) => {
                 `💡 <b>${item.descricao}</b>\n` +
                 `   Preço atual: ${fmt(produtoExistente?.preco_venda)}\n` +
                 `   💰 Sugestão novo preço: <b>${fmt(sugestaoPreco)}</b>\n` +
-                `   (markup ${markupAplicado}% sobre custo ${fmt(item.custo_unitario_liquido)})`
+                `   (mantendo margem real de ${margemReal.toFixed(0)}% sobre custo ${fmt(item.custo_unitario_liquido)})`
               );
 
               await supabase.from("historico_custo_produto")
-                .update({ alerta_enviado: true, sugestao_preco_venda: sugestaoPreco, markup_aplicado: markupAplicado })
+                .update({ alerta_enviado: true, sugestao_preco_venda: sugestaoPreco, markup_aplicado: margemReal })
                 .eq("nf_id", nf.id)
                 .eq("produto_codigo", item.codigo_produto);
             } else if (variacao12m > 0) {
