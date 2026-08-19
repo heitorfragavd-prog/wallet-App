@@ -1852,7 +1852,9 @@ Início do mês atual: ${primeiroDiaMes}.
 
 Diretrizes de TOM DE VOZ e FORMATAÇÃO:
 - Tom: PROFISSIONAL, CORDIAL, DIRETO E VISUALMENTE ELEGANTE.
-- REGRA CRÍTICA DE FORMATAÇÃO: NUNCA use Markdown cru (como **negrito** ou _italico_). SEMPRE use tags HTML válidas suportadas pelo Telegram (<b>negrito</b>, <i>itálico</i>, <code>código</code>).
+- REGRA CRÍTICA DE FORMATAÇÃO:
+  • NUNCA use Markdown cru (como **negrito** ou _italico_). SEMPRE use tags HTML válidas suportadas pelo Telegram (<b>negrito</b>, <i>itálico</i>, <code>código</code>).
+  • DÊ UMA LINHA EM BRANCO (ESPAÇAMENTO) ENTRE CADA DATA/DIA NO DETALHAMENTO para que a leitura fique confortável e clara.
 - NUNCA use frases conclusivas exageradas (ex: "Bate certinho", "Show de bola").
 - NUNCA invente dados ou conceitos não informados pelas ferramentas.
 - Termine sempre com: "<i>Se precisar de mais informações, estou à disposição!</i>"
@@ -1867,19 +1869,24 @@ Exemplo de formato para pagamentos a colaboradores / pessoas / fornecedores:
 📝 <b>Lançamentos:</b> <b>8 transações</b>
 
 📋 <b>Detalhamento:</b>
-• 🗓️ <b>17/08/2026</b>
-  - 💸 Luiz folguista: <b>R$ 240,00</b> <i>(📲 Pix)</i>
-  - 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
-• 🗓️ <b>14/08/2026</b>
-  - 💸 Luiz: <b>R$ 379,80</b> <i>(📲 Pix)</i>
-  - 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
-• 🗓️ <b>10/08/2026</b>
-  - 💸 Luiz folguista: <b>R$ 215,00</b> <i>(📲 Pix)</i>
-  - 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
-• 🗓️ <b>04/08/2026</b>
-  - 💸 Luiz: <b>R$ 200,00</b> <i>(📲 Pix)</i>
-• 🗓️ <b>01/08/2026</b>
-  - 💸 Luiz folguista: <b>R$ 260,00</b> <i>(📲 Pix)</i>
+
+🗓️ <b>17/08/2026</b>
+• 💸 Luiz folguista: <b>R$ 240,00</b> <i>(📲 Pix)</i>
+• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+
+🗓️ <b>14/08/2026</b>
+• 💸 Luiz: <b>R$ 379,80</b> <i>(📲 Pix)</i>
+• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+
+🗓️ <b>10/08/2026</b>
+• 💸 Luiz folguista: <b>R$ 215,00</b> <i>(📲 Pix)</i>
+• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+
+🗓️ <b>04/08/2026</b>
+• 💸 Luiz: <b>R$ 200,00</b> <i>(📲 Pix)</i>
+
+🗓️ <b>01/08/2026</b>
+• 💸 Luiz folguista: <b>R$ 260,00</b> <i>(📲 Pix)</i>
 
 <i>Se precisar de mais informações, estou à disposição!</i>
 
