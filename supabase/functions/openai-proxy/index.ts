@@ -1080,6 +1080,23 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
     if (!message.tool_calls || message.tool_calls.length === 0) {
       console.log("[openai-proxy] Iteração", i, "— resposta final do modelo (sem tool_calls)");
       console.log("[openai-proxy] Resposta content:", (message.content || "").slice(0, 300));
+      
+      const usage = data.usage || {};
+      const durationMs = Date.now() - (body._startTime || Date.now());
+      const toolsExecuted = (messages.filter((m: any) => m.role === "tool") as any[]).length;
+      
+      supabase.from("wallet_ai_audit_events").insert({
+        user_id: userId,
+        workspace_id: body.workspace_id || null,
+        tool_name: toolsExecuted > 0 ? "consultar_vendas_eyemobile" : "chat_assistente",
+        model: modelToUse,
+        tokens_prompt: usage.prompt_tokens || 0,
+        tokens_completion: usage.completion_tokens || 0,
+        tokens_total: usage.total_tokens || 0,
+        duration_ms: Math.max(50, durationMs),
+        execution_status: "success",
+      }).then(() => {});
+
       return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
