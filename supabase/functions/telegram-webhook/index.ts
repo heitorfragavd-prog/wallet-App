@@ -718,6 +718,100 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
+    // ─── 2.5. CONSULTA DE DESPESAS E GASTOS (Nativo e Preciso) ───
+    const isConsultaDespesas =
+      text.startsWith("/despesas") ||
+      respLower.includes("despesa") ||
+      respLower.includes("despeza") ||
+      respLower.includes("gastos") ||
+      respLower.includes("quanto gastei") ||
+      respLower.includes("saidas do mes") ||
+      respLower.includes("saidas de agosto");
+
+    if (isConsultaDespesas && !respLower.includes("grafico")) {
+      let dataInicioD = primeiroDiaMes;
+      let dataFimD = hojeStr;
+      let labelPeriodoD = "Deste Mês (Agosto/2026)";
+
+      const mesesMapD: Record<string, number> = {
+        janeiro: 1, fevereiro: 2, marco: 3, março: 3, abril: 4, maio: 5, junho: 6,
+        julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+      };
+
+      for (const [nomeMes, numMes] of Object.entries(mesesMapD)) {
+        if (respLower.includes(nomeMes)) {
+          const uDia = new Date(anoAtual, numMes, 0).getDate();
+          dataInicioD = `${anoAtual}-${String(numMes).padStart(2, "0")}-01`;
+          dataFimD = `${anoAtual}-${String(numMes).padStart(2, "0")}-${String(uDia).padStart(2, "0")}`;
+          labelPeriodoD = `${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}/${anoAtual}`;
+          break;
+        }
+      }
+
+      if (respLower.includes("semana")) {
+        const diaSemana = nowSp.getDay();
+        const dIni = new Date(nowSp);
+        dIni.setDate(nowSp.getDate() - diaSemana);
+        dataInicioD = dIni.toISOString().split("T")[0];
+        labelPeriodoD = "Desta Semana";
+      } else if (respLower.includes("hoje")) {
+        dataInicioD = hojeStr;
+        dataFimD = hojeStr;
+        labelPeriodoD = "de Hoje";
+      }
+
+      // Busca despesas e categorias
+      const [{ data: despesasRaw }, { data: categoriasRaw }] = await Promise.all([
+        supabase
+          .from("despesas")
+          .select("id, descricao, valor, data, categoria_id")
+          .eq("user_id", userId)
+          .gte("data", dataInicioD)
+          .lte("data", dataFimD)
+          .order("data", { ascending: false }),
+        supabase
+          .from("categorias")
+          .select("id, nome")
+          .eq("user_id", userId),
+      ]);
+
+      const catMap = new Map<string, string>();
+      (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
+
+      const despesas = despesasRaw || [];
+      const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
+      const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+      if (despesas.length === 0) {
+        await sendReply(`🎉 <b>Nenhuma despesa registrada no período (${labelPeriodoD}).</b>`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Agrupa por categoria
+      const porCat: Record<string, number> = {};
+      despesas.forEach((d: any) => {
+        const nomeCat = (d.categoria_id && catMap.get(d.categoria_id)) || "Sem categoria";
+        porCat[nomeCat] = (porCat[nomeCat] || 0) + Number(d.valor || 0);
+      });
+
+      const topCats = Object.entries(porCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
+
+      let msgDesp = `📉 <b>Despesas — ${labelPeriodoD}</b>\n\n`;
+      msgDesp += `💰 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b>\n`;
+      msgDesp += `📝 <b>Total de Lançamentos:</b> <b>${despesas.length}</b>\n\n`;
+      msgDesp += `📂 <b>Principais Categorias:</b>\n`;
+
+      topCats.forEach(([cat, val]) => {
+        const perc = totalDespesas > 0 ? ((val / totalDespesas) * 100).toFixed(1) : "0.0";
+        msgDesp += `• <b>${cat}</b>: ${format(val)} <i>(${perc}%)</i>\n`;
+      });
+
+      msgDesp += `\n<i>Se precisar de mais informações, estou à disposição!</i>`;
+
+      await sendReply(msgDesp);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // ─── 3. GERAÇÃO DE GRÁFICO NO TELEGRAM (ASCII Bar Chart) ───
     const isConsultaGrafico =
       text.startsWith("/grafico") ||
