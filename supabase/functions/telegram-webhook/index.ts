@@ -764,7 +764,7 @@ serve(async (req) => {
       const [{ data: despesasRaw }, { data: categoriasRaw }] = await Promise.all([
         supabase
           .from("despesas")
-          .select("id, descricao, valor, data, categoria_id")
+          .select("id, descricao, valor, data, categoria_id, metodo_pagamento")
           .eq("user_id", userId)
           .gte("data", dataInicioD)
           .lte("data", dataFimD)
@@ -789,9 +789,35 @@ serve(async (req) => {
 
       // Agrupa por categoria
       const porCat: Record<string, number> = {};
+      // Agrupa por meio de pagamento
+      const porMetodo: Record<string, number> = {
+        pix: 0,
+        cartao_credito: 0,
+        boleto: 0,
+        cartao_debito: 0,
+        dinheiro: 0,
+        outros: 0,
+      };
+
       despesas.forEach((d: any) => {
+        const val = Number(d.valor || 0);
         const nomeCat = (d.categoria_id && catMap.get(d.categoria_id)) || "Sem categoria";
-        porCat[nomeCat] = (porCat[nomeCat] || 0) + Number(d.valor || 0);
+        porCat[nomeCat] = (porCat[nomeCat] || 0) + val;
+
+        const mRaw = String(d.metodo_pagamento || "").toLowerCase().trim();
+        if (mRaw.includes("pix")) {
+          porMetodo.pix += val;
+        } else if (mRaw.includes("credito") || mRaw.includes("crédito") || mRaw === "cartao_credito") {
+          porMetodo.cartao_credito += val;
+        } else if (mRaw.includes("boleto")) {
+          porMetodo.boleto += val;
+        } else if (mRaw.includes("debito") || mRaw.includes("débito") || mRaw === "cartao_debito") {
+          porMetodo.cartao_debito += val;
+        } else if (mRaw.includes("dinheiro") || mRaw.includes("especie") || mRaw.includes("espécie")) {
+          porMetodo.dinheiro += val;
+        } else {
+          porMetodo.outros += val;
+        }
       });
 
       const topCats = Object.entries(porCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
@@ -804,6 +830,22 @@ serve(async (req) => {
       topCats.forEach(([cat, val]) => {
         const perc = totalDespesas > 0 ? ((val / totalDespesas) * 100).toFixed(1) : "0.0";
         msgDesp += `• <b>${cat}</b>: ${format(val)} <i>(${perc}%)</i>\n`;
+      });
+
+      msgDesp += `\n💳 <b>Meios de Pagamento:</b>\n`;
+      const labelsMetodos: Array<{ key: keyof typeof porMetodo; label: string; icon: string }> = [
+        { key: "pix", label: "PIX", icon: "📲" },
+        { key: "cartao_credito", label: "CARTÃO CRÉDITO", icon: "💳" },
+        { key: "boleto", label: "BOLETO", icon: "📄" },
+        { key: "cartao_debito", label: "CARTÃO DÉBITO", icon: "💳" },
+        { key: "dinheiro", label: "DINHEIRO", icon: "💵" },
+        { key: "outros", label: "OUTROS", icon: "🔹" },
+      ];
+
+      labelsMetodos.forEach(({ key, label, icon }) => {
+        const val = porMetodo[key] || 0;
+        const perc = totalDespesas > 0 ? ((val / totalDespesas) * 100).toFixed(1) : "0.0";
+        msgDesp += `• ${icon} <b>${label}</b>: ${format(val)} <i>(${perc}%)</i>\n`;
       });
 
       msgDesp += `\n<i>Se precisar de mais informações, estou à disposição!</i>`;
