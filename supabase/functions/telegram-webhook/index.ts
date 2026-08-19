@@ -1379,6 +1379,17 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
+    if ((respLower.includes("sefaz") || text.toUpperCase().includes("SEFAZ")) && conversaAtivaPre?.estado === "aguardando_consulta_sefaz") {
+      await sendReply(
+        `📋 <b>Consulta SEFAZ</b>\n\n` +
+        `Acesse o Portal Oficial da SEFAZ para consultar a DANFE:\n` +
+        `https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx\n\n` +
+        `Ou escaneie o QR Code impresso na nota com a câmera do seu celular.\n\n` +
+        `💡 <i>Para cadastrar os produtos no Wallet, envie uma foto aproximada da tabela de produtos ou utilize o modo manual.</i>`
+      );
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // Se NÃO é confirmação (SIM/NÃO), limpa propostas pendentes antigas para evitar confirmações acidentais
     if (!isSim && !isNao) {
       const { data: conversaAtiva } = await supabase
@@ -3668,12 +3679,12 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
         // ================================================================
-        const docAnalysisSystemPrompt = `INSTRUCAO ABSOLUTA: Voce e um scanner OCR. Leia APENAS o que esta VISIVEL na imagem. NUNCA invente, adivinhe, suponha ou complete dados.
+        const docAnalysisSystemPrompt = `INSTRUCAO CRITICA: Voce e um scanner OCR de alta precisao para documentos fiscais brasileiros (DANFE e Boleto). Descreva APENAS o que consegue ler com certeza na imagem. Se algo estiver borrado, ilegivel ou cortado, diga "NAO CONSIGO LER" ou use null. NUNCA invente, adivinhe, suponha ou complete dados ou marcas.
 
-PASSO 1: Identifique o tipo de documento. Se for DANFE / Nota Fiscal de Compra, use tipo "nf_compra". Se for Boleto Bancario, use tipo "boleto". Caso contrario, retorne { "tipo": "outro" }.
+PASSO 1: Identifique a orientacao e o tipo de documento. Se for DANFE / Nota Fiscal de Compra, use tipo "nf_compra". Se for Boleto Bancario, use tipo "boleto". Caso contrario, retorne { "tipo": "outro" }.
 
 PASSO 2: Leia o CABECALHO:
-- numero_nf, serie_nf, data_emissao (YYYY-MM-DD), data_entrada (YYYY-MM-DD), fornecedor (Razao Social exata na nota), cnpj_fornecedor, chave_acesso
+- numero_nf, serie_nf, data_emissao (YYYY-MM-DD), data_entrada (YYYY-MM-DD), fornecedor (Razao Social EXATA visivel na nota), cnpj_fornecedor, chave_acesso (44 digitos se visivel)
 
 PASSO 3: Leia os VALORES TOTAIS:
 - valor_total_nf, valor_produtos, valor_icms, valor_ipi, valor_frete
@@ -3699,6 +3710,7 @@ PASSO 5: Se for BOLETO BANCARIO ("boleto"):
 FORMATO JSON ESTRITO:
 {
   "tipo": "nf_compra" | "boleto" | "outro",
+  "confianca_geral": "alta" | "media" | "baixa",
   "cabecalho": { "numero_nf": "...", "serie_nf": "...", "data_emissao": "YYYY-MM-DD", "data_entrada": "YYYY-MM-DD", "fornecedor": "...", "cnpj_fornecedor": "...", "chave_acesso": "..." },
   "valores_totais": { "valor_total_nf": 0.00, "valor_produtos": 0.00, "valor_icms": 0.00, "valor_ipi": 0.00, "valor_frete": 0.00 },
   "itens": [
@@ -3707,8 +3719,7 @@ FORMATO JSON ESTRITO:
   "beneficiario": "...",
   "valor": 0.00,
   "data_vencimento": "YYYY-MM-DD",
-  "linha_digitavel": "...",
-  "confianca": "alta"
+  "linha_digitavel": "..."
 }`;
 
         console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
@@ -3996,12 +4007,101 @@ Retorne APENAS um array JSON no formato:
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
 
-          // ─── VALIDAÇÃO DE CONSISTÊNCIA: Itens vs Valor Total da NF ───
+          // ─── VALIDAÇÃO DE SANIDADE RIGOROSA: Rejeitar leituras absurdas ───
           const itensExtraidos = documentData.itens || [];
-          const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
           const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
+
+          // REGRA 1: Valor total razoável (R$ 1 a R$ 100.000)
+          const valorAbsurdo = valorTotalNF < 1 || valorTotalNF > 100000;
+
+          // REGRA 2 & 3: Coerência de Fornecedor x Marca de Produto
+          const fornecedorLido = documentData.cabecalho?.fornecedor || "";
+          const ehSpalVal = fornecedorLido.toLowerCase().includes("spal") || fornecedorLido.toLowerCase().includes("coca");
+          const ehAmbevVal = fornecedorLido.toLowerCase().includes("ambev") || fornecedorLido.toLowerCase().includes("brasnor") || fornecedorLido.toLowerCase().includes("brahma");
+
+          const descricoesVal = itensExtraidos.map((i: any) => (i.descricao || "").toLowerCase());
+          const temProdutoSpalVal = descricoesVal.some((d: string) => d.includes("monster") || d.includes("eisenbahn") || d.includes("guarana") || d.includes("coca-cola") || d.includes("coca"));
+          const temProdutoAmbevVal = descricoesVal.some((d: string) => d.includes("brahma") || d.includes("skol") || d.includes("antarctica") || d.includes("original") || d.includes("stella") || d.includes("bohemia"));
+
+          const incoerenteFornecedor = (ehSpalVal && temProdutoAmbevVal && !temProdutoSpalVal) || (ehAmbevVal && temProdutoSpalVal && !temProdutoAmbevVal);
+
+          // REGRA 4: Valores unitários razoáveis (R$ 0,10 a R$ 10.000)
+          const valoresUnitariosAbsurdos = itensExtraidos.some((i: any) => {
+            const vu = Number(i.valor_unitario);
+            return vu > 10000 || (vu < 0.10 && vu > 0);
+          });
+
+          // REGRA 5: Soma dos itens vs total da NF (diferença máx 20%)
+          const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
           const diferencaValor = Math.abs(valorTotalItens - valorTotalNF);
           const percentualDiferenca = valorTotalNF > 0 ? (diferencaValor / valorTotalNF) * 100 : 0;
+          const somaIncoerente = percentualDiferenca > 20 && itensExtraidos.length > 1;
+
+          // SE QUALQUER REGRA DE SANIDADE FALHAR → REJEITAR E OFERECER CHAVE DE ACESSO OU SEFAZ
+          if (valorAbsurdo || incoerenteFornecedor || valoresUnitariosAbsurdos || somaIncoerente || itensExtraidos.length === 0) {
+            console.error("[NF] SANIDADE FALHOU:", {
+              valorAbsurdo,
+              incoerenteFornecedor,
+              valoresUnitariosAbsurdos,
+              somaIncoerente,
+              itensCount: itensExtraidos.length,
+              fornecedor: fornecedorLido,
+              valorTotal: valorTotalNF,
+              valorTotalItens,
+            });
+
+            // Tentar extrair CHAVE DE ACESSO (44 dígitos)
+            const rawChave = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
+            if (rawChave && rawChave.length === 44) {
+              const botoesSefaz = [
+                [{ text: "🔍 CONSULTAR NO SEFAZ", callback_data: `sefaz_consultar:${rawChave}` }],
+              ];
+
+              await sendReplyWithButtons(
+                chatId,
+                `⚠️ <b>Leitura automática falhou</b>, mas encontrei a chave de acesso!\n\n` +
+                `📋 Chave: <code>${rawChave}</code>\n\n` +
+                `💡 Posso indicar a consulta dos dados oficiais no SEFAZ.\n` +
+                `Clique no botão abaixo ou responda <b>SEFAZ</b> para consultar.`,
+                botoesSefaz
+              );
+
+              await supabase.from("telegram_conversas").upsert(
+                {
+                  user_id: userId,
+                  chat_id: Number(chatId),
+                  estado: "aguardando_consulta_sefaz",
+                  proposta_id: null,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: "chat_id" }
+              );
+
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+
+            let msgSanidade = `⚠️ <b>Não consegui ler a nota corretamente.</b>\n\n`;
+            msgSanidade += `🔍 Problemas detectados:\n`;
+            if (valorAbsurdo) msgSanidade += `• Valor total da nota lido parece incorreto\n`;
+            if (incoerenteFornecedor) msgSanidade += `• Fornecedor (${fornecedorLido}) e produtos não batem\n`;
+            if (valoresUnitariosAbsurdos) msgSanidade += `• Valores unitários parecem incorretos\n`;
+            if (somaIncoerente) msgSanidade += `• Soma dos itens (${fmt(valorTotalItens)}) difere do total (${fmt(valorTotalNF)})\n`;
+            if (itensExtraidos.length === 0) msgSanidade += `• Nenhum item encontrado na tabela\n`;
+
+            msgSanidade += `\n💡 <b>Soluções:</b>\n`;
+            msgSanidade += `1. Envie a foto mais próxima da tabela de produtos\n`;
+            msgSanidade += `2. Tire a foto com mais luz e sem reflexo\n`;
+            msgSanidade += `3. Envie apenas a tabela de produtos (corte a imagem)\n\n`;
+            msgSanidade += `📸 <b>Dicas para tirar uma boa foto da DANFE:</b>\n`;
+            msgSanidade += `• Aproxime a câmera da tabela de produtos\n`;
+            msgSanidade += `• Tire a foto de cima, sem inclinação\n`;
+            msgSanidade += `• Evite reflexos de luz no papel\n`;
+            msgSanidade += `• Se a nota estiver dobrada, abra completamente\n`;
+            msgSanidade += `• Envie a foto no formato retrato (vertical) se possível`;
+
+            await sendReply(msgSanidade);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
 
           // Se a diferença for maior que 10% e houver menos de 3 itens em nota de alto valor:
           const alertaItensFaltando = percentualDiferenca > 10 && valorTotalNF > 300 && itensExtraidos.length < 3;
