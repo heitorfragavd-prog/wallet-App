@@ -764,7 +764,28 @@ serve(async (req) => {
           (Number(total.voucher) || 0) +
           sobraValor;
 
-        msg += `\n🔸 <b>TOTAL GERAL:</b> <b>${fmt(totalGeral)}</b>`;
+        msg += `\n🔸 <b>TOTAL GERAL:</b> <b>${fmt(totalGeral)}</b>\n`;
+
+        // Lançar no sistema via RPC adicionar_saldo_conta
+        const { data: rpcResult, error: errSobra } = await supabase.rpc("adicionar_saldo_conta", {
+          p_user_id: userId,
+          p_workspace_id: workspaceId,
+          p_conta_nome: "Caixa",
+          p_valor: sobraValor,
+          p_descricao: `Sobra fechamento caixa - ${ultimo.data_fechamento || hojeStr}`,
+          p_categoria_nome: "Sobra de Caixa",
+        });
+
+        if (rpcResult?.success && !errSobra) {
+          msg += `\n✅ <b>Sobra lançada automaticamente!</b>\n`;
+          msg += `📥 Conta: Caixa / Dinheiro\n`;
+          msg += `💵 Valor: <b>${fmt(sobraValor)}</b>\n`;
+          msg += `🏷️ Categoria: <b>Sobra de Caixa</b>\n`;
+          if (rpcResult.novo_saldo != null) {
+            msg += `💰 Novo saldo em caixa: <b>${fmt(rpcResult.novo_saldo)}</b>\n`;
+          }
+          msg += `\n💡 <i>Seu saldo físico e o DRE já foram atualizados no Wallet App.</i>`;
+        }
 
         await supabase
           .from("fechamentos_caixa")
@@ -2103,6 +2124,7 @@ serve(async (req) => {
 
         // ================================================================
         // FECHAMENTO DE CAIXA (grupo fechamento ou foto de envelope)
+        // CONFERÊNCIA vs SISTEMA EYEMOBILE + SOBRA AUTOMÁTICA
         // ================================================================
         const isFechamentoContext =
           (isGroup && (grupoConfig?.tipo_grupo === "fechamento" || grupoConfig?.acoes_permitidas?.includes("extrair_fechamento"))) ||
@@ -2111,8 +2133,41 @@ serve(async (req) => {
           caption.toLowerCase().includes("caixa");
 
         if (isFechamentoContext) {
-          console.log("[telegram-webhook] Iniciando extração de Fechamento de Caixa / Envelope Rodo Point...");
-          const promptFechamento = `Você é um extrator especialista de fechamento de caixa e envelopes da Rodo Point.
+          console.log("[telegram-webhook] Iniciando extração e conferência de Fechamento de Caixa Rodo Point...");
+
+          // 1. Busca vendas do sistema para o dia de hoje (ou data informada)
+          let qVendasHoje = supabase
+            .from("transacoes")
+            .select("valor, metodo_pagamento")
+            .eq("tipo", "receita")
+            .eq("data", hojeStr);
+
+          if (workspaceId) qVendasHoje = qVendasHoje.eq("workspace_id", workspaceId);
+          else qVendasHoje = qVendasHoje.eq("user_id", userId);
+
+          const { data: txsHoje } = await qVendasHoje;
+
+          const eyemobilePorMetodo: Record<string, number> = {
+            dinheiro: 0,
+            debito: 0,
+            credito: 0,
+            pix: 0,
+            voucher: 0,
+          };
+          let totalEyemobile = 0;
+
+          for (const tx of txsHoje || []) {
+            const val = Number(tx.valor) || 0;
+            const m = (tx.metodo_pagamento || "").toLowerCase();
+            totalEyemobile += val;
+            if (m.includes("dinheiro")) eyemobilePorMetodo.dinheiro += val;
+            else if (m.includes("deb") || m.includes("debito")) eyemobilePorMetodo.debito += val;
+            else if (m.includes("cred") || m.includes("credito")) eyemobilePorMetodo.credito += val;
+            else if (m.includes("pix")) eyemobilePorMetodo.pix += val;
+            else if (m.includes("voucher") || m.includes("alimentacao") || m.includes("refeicao")) eyemobilePorMetodo.voucher += val;
+          }
+
+          const promptConferencia = `Você é um conferente especialista de fechamento de caixa e envelopes da Rodo Point.
 
 Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de maquininha ou resumo) e extraia os valores por forma de pagamento:
 - Dinheiro
@@ -2120,8 +2175,9 @@ Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de
 - Cartão Crédito
 - Pix
 - Voucher (somente se indicar VA, VR, Alimentação ou Refeição)
+- Sobra (se houver valor anotado como sobra de caixa)
 
-REGRAS:
+REGRAS DE CONFERÊNCIA:
 1. QR Code / Pix na maquininha = PIX
 2. Comprovante de Débito = DÉBITO
 3. Comprovante de Crédito = CRÉDITO
@@ -2137,7 +2193,8 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
   "caixa1": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
   "caixa2": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
   "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
-  "sobra": null
+  "sobra": 0,
+  "observacao": ""
 }`;
 
           const aiResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
@@ -2151,11 +2208,14 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
               user_id: userId,
               temperature: 0.0,
               messages: [
-                { role: "system", content: promptFechamento },
+                { role: "system", content: promptConferencia },
                 {
                   role: "user",
                   content: [
-                    { type: "text", text: "Extraia os valores do fechamento de caixa desta imagem:" },
+                    {
+                      type: "text",
+                      text: `Dados de vendas no sistema Eyemobile hoje: Dinheiro=R$ ${eyemobilePorMetodo.dinheiro.toFixed(2)}, Débito=R$ ${eyemobilePorMetodo.debito.toFixed(2)}, Crédito=R$ ${eyemobilePorMetodo.credito.toFixed(2)}, Pix=R$ ${eyemobilePorMetodo.pix.toFixed(2)}. Extraia e confira este fechamento.`,
+                    },
                     { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                   ],
                 },
@@ -2166,7 +2226,7 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           if (aiResp.ok) {
             const aiJson = await aiResp.json();
             const rawContent = aiJson.choices?.[0]?.message?.content || "";
-            console.log("[telegram-webhook] Resposta bruta fechamento:", rawContent.slice(0, 300));
+            console.log("[telegram-webhook] Resposta bruta conferência fechamento:", rawContent.slice(0, 300));
 
             let fechamento: any = null;
             try {
@@ -2184,42 +2244,140 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                   ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                   : "R$ 0,00";
 
-              let msg = "🔸 <b>Fechamento</b>\n\n";
-              if (fechamento.data) msg += `📅 <b>Data:</b> ${fechamento.data}\n\n`;
+              const env = fechamento.total || fechamento.envelope || {};
+              const envDinheiro = Number(env.dinheiro) || 0;
+              const envDebito = Number(env.debito) || 0;
+              const envCredito = Number(env.credito) || 0;
+              const envPix = Number(env.pix) || 0;
+              const envVoucher = Number(env.voucher) || 0;
+              const totalEnvelope = envDinheiro + envDebito + envCredito + envPix + envVoucher;
 
-              const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
-              const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+              // Comparar se há divergências com o sistema (apenas se houver vendas registradas no sistema)
+              const diferencas: string[] = [];
+              if (totalEyemobile > 0) {
+                const compara = (label: string, envVal: number, sysVal: number) => {
+                  const diff = envVal - sysVal;
+                  if (Math.abs(diff) > 0.5) {
+                    diferencas.push(
+                      `• <b>${label}:</b> Envelope ${fmt(envVal)} vs Sistema ${fmt(sysVal)} (diferença: ${diff > 0 ? "+" : ""}${fmt(diff)})`
+                    );
+                  }
+                };
 
-              if (temCaixa1 || temCaixa2) {
-                if (temCaixa1) {
-                  msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
-                }
-                if (temCaixa2) {
-                  msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
-                }
+                compara("Dinheiro", envDinheiro, eyemobilePorMetodo.dinheiro);
+                compara("Débito", envDebito, eyemobilePorMetodo.debito);
+                compara("Crédito", envCredito, eyemobilePorMetodo.credito);
+                compara("Pix", envPix, eyemobilePorMetodo.pix);
               }
 
-              msg += `<b>🔸 TOTAL:</b>\n`;
-              msg += `💰 Dinheiro: ${fmt(fechamento.total?.dinheiro)}\n`;
-              msg += `💳 Cartão Débito: ${fmt(fechamento.total?.debito)}\n`;
-              msg += `💳 Cartão Crédito: ${fmt(fechamento.total?.credito)}\n`;
-              msg += `📲 Pix: ${fmt(fechamento.total?.pix)}\n`;
-              if (fechamento.total?.voucher && Number(fechamento.total?.voucher) > 0) {
-                msg += `🎫 Voucher: ${fmt(fechamento.total?.voucher)}\n`;
+              let msg = "";
+
+              if (diferencas.length > 0) {
+                // DIVERGÊNCIA IDENTIFICADA
+                msg = `⚠️ <b>DIVERGÊNCIA NO FECHAMENTO!</b>\n\n`;
+                msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
+                msg += `<b>📄 Envelope Físico:</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(envDinheiro)}\n`;
+                msg += `💳 Cartão Débito: ${fmt(envDebito)}\n`;
+                msg += `💳 Cartão Crédito: ${fmt(envCredito)}\n`;
+                msg += `📲 Pix: ${fmt(envPix)}\n`;
+                if (envVoucher > 0) msg += `🎫 Voucher: ${fmt(envVoucher)}\n`;
+                msg += `\n`;
+                msg += `<b>💻 Sistema (Eyemobile):</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(eyemobilePorMetodo.dinheiro)}\n`;
+                msg += `💳 Cartão Débito: ${fmt(eyemobilePorMetodo.debito)}\n`;
+                msg += `💳 Cartão Crédito: ${fmt(eyemobilePorMetodo.credito)}\n`;
+                msg += `📲 Pix: ${fmt(eyemobilePorMetodo.pix)}\n`;
+                msg += `\n`;
+                msg += `❌ <b>Diferenças Encontradas:</b>\n`;
+                diferencas.forEach((d) => (msg += `${d}\n`));
+                msg += `\n💡 <i>Verifique os comprovantes do caixa e envie novamente se necessário.</i>`;
+
+                await supabase.from("fechamentos_caixa").insert({
+                  user_id: userId,
+                  workspace_id: workspaceId,
+                  chat_id: Number(chatId) || null,
+                  data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
+                  eyemobile_total: eyemobilePorMetodo,
+                  envelope_total: env,
+                  caixa1: fechamento.caixa1 || {},
+                  caixa2: fechamento.caixa2 || {},
+                  total: env,
+                  status: "divergencia",
+                  observacao: diferencas.join("; "),
+                });
+              } else {
+                // FECHAMENTO OK — BATEU COM SUCESSO!
+                msg = `✅ <b>Fechamento OK — Confirmado!</b>\n\n`;
+                msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
+
+                const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
+                const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+
+                if (temCaixa1 || temCaixa2) {
+                  if (temCaixa1) {
+                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                  }
+                  if (temCaixa2) {
+                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                  }
+                }
+
+                msg += `<b>🔸 Valores Conferidos:</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(envDinheiro)} ✅\n`;
+                msg += `💳 Cartão Débito: ${fmt(envDebito)} ✅\n`;
+                msg += `💳 Cartão Crédito: ${fmt(envCredito)} ✅\n`;
+                msg += `📲 Pix: ${fmt(envPix)} ✅\n`;
+                if (envVoucher > 0) msg += `🎫 Voucher: ${fmt(envVoucher)} ✅\n`;
+                msg += `\n`;
+                if (totalEyemobile > 0) {
+                  msg += `📊 Total Sistema (PDV): <b>${fmt(totalEyemobile)}</b>\n`;
+                }
+                msg += `📊 Total Envelope: <b>${fmt(totalEnvelope)}</b>\n`;
+                msg += `✅ <i>Sem divergências operacionais!</i>\n`;
+
+                // LANÇAMENTO AUTOMÁTICO DE SOBRA (se detectada no envelope)
+                const sobraValor = Number(fechamento.sobra) || 0;
+                if (sobraValor > 0) {
+                  msg += `\n💵 <b>Sobra detectada:</b> <b>${fmt(sobraValor)}</b>\n`;
+
+                  const { data: rpcResult, error: errSobra } = await supabase.rpc("adicionar_saldo_conta", {
+                    p_user_id: userId,
+                    p_workspace_id: workspaceId,
+                    p_conta_nome: "Caixa",
+                    p_valor: sobraValor,
+                    p_descricao: `Sobra fechamento caixa - ${fechamento.data || hojeStr}`,
+                    p_categoria_nome: "Sobra de Caixa",
+                  });
+
+                  if (rpcResult?.success && !errSobra) {
+                    msg += `✅ <b>Sobra lançada automaticamente!</b>\n`;
+                    msg += `📥 Conta: Caixa / Dinheiro\n`;
+                    msg += `💵 Valor: <b>${fmt(sobraValor)}</b>\n`;
+                    msg += `🏷️ Categoria: <b>Sobra de Caixa</b>\n`;
+                    if (rpcResult.novo_saldo != null) {
+                      msg += `💰 Novo saldo em caixa: <b>${fmt(rpcResult.novo_saldo)}</b>\n`;
+                    }
+                    msg += `\n💡 <i>Seu saldo físico e o DRE já foram atualizados no Wallet App.</i>`;
+                  }
+                } else {
+                  msg += `\n<i>Para lançar sobra de caixa extra, envie no chat:</i>\n<code>Sobra: R$ 50,00</code>`;
+                }
+
+                await supabase.from("fechamentos_caixa").insert({
+                  user_id: userId,
+                  workspace_id: workspaceId,
+                  chat_id: Number(chatId) || null,
+                  data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
+                  eyemobile_total: eyemobilePorMetodo,
+                  envelope_total: env,
+                  caixa1: fechamento.caixa1 || {},
+                  caixa2: fechamento.caixa2 || {},
+                  total: env,
+                  sobra: sobraValor > 0 ? sobraValor : null,
+                  status: "confirmado",
+                });
               }
-
-              msg += `\n<i>Para consolidar o valor final com a sobra de caixa, envie:</i>\n<code>Sobra: R$ 50,00</code>`;
-
-              await supabase.from("fechamentos_caixa").insert({
-                user_id: userId,
-                workspace_id: workspaceId,
-                chat_id: Number(chatId) || null,
-                data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
-                caixa1: fechamento.caixa1 || {},
-                caixa2: fechamento.caixa2 || {},
-                total: fechamento.total || {},
-                status: "pendente_conferencia",
-              });
 
               await sendReply(msg);
               return new Response("OK", { status: 200, headers: corsHeaders });
