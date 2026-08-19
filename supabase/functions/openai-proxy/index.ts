@@ -95,7 +95,7 @@ const TOOLS = [
       },
     },
   },
-  { type: "function", function: { name: "buscar_transacoes", description: "Busca transações financeiras do usuário com filtros opcionais por período, tipo e categoria.", parameters: { type: "object", properties: { data_inicio: { type: "string", description: "Data início no formato YYYY-MM-DD" }, data_fim: { type: "string", description: "Data fim no formato YYYY-MM-DD" }, tipo: { type: "string", enum: ["receita", "despesa"], description: "Tipo da transação" }, categoria_id: { type: "string", description: "ID da categoria para filtrar" }, categoria_nome: { type: "string", description: "Nome da categoria para filtrar (alternativa ao ID)" }, limit: { type: "number", description: "Limite de resultados (padrão 50)" } } } } },
+  { type: "function", function: { name: "buscar_transacoes", description: "Busca transações, despesas e pagamentos do usuário com filtros por termo de busca (nome de pessoa, colaborador como 'Shuellen' ou 'Heitor', fornecedor ou texto da descrição), período, tipo e categoria.", parameters: { type: "object", properties: { busca: { type: "string", description: "Termo de busca na descrição ou nome de pessoa/colaborador/fornecedor (ex: 'Shuellen', 'Aluguel', 'Passagem')" }, data_inicio: { type: "string", description: "Data início no formato YYYY-MM-DD" }, data_fim: { type: "string", description: "Data fim no formato YYYY-MM-DD" }, tipo: { type: "string", enum: ["receita", "despesa"], description: "Tipo da transação" }, categoria_id: { type: "string", description: "ID da categoria para filtrar" }, categoria_nome: { type: "string", description: "Nome da categoria para filtrar" }, limit: { type: "number", description: "Limite de resultados (padrão 50)" } } } } },
   { type: "function", function: { name: "consultar_resumo_mensal", description: "Retorna resumo financeiro de um mês específico: total receitas, despesas, saldo e top categorias.", parameters: { type: "object", properties: { ano: { type: "number", description: "Ano (ex: 2025)" }, mes: { type: "number", description: "Mês 1-12" } }, required: ["ano", "mes"] } } },
   { type: "function", function: { name: "comparar_periodos", description: "Compara dois meses mostrando variação percentual de receitas, despesas e saldo.", parameters: { type: "object", properties: { ano1: { type: "number" }, mes1: { type: "number" }, ano2: { type: "number" }, mes2: { type: "number" } }, required: ["ano1", "mes1", "ano2", "mes2"] } } },
   { type: "function", function: { name: "consultar_saldos", description: "Lista todas as contas do usuário com ID, nome, tipo e saldo. Use para descobrir o ID de uma conta pelo nome.", parameters: { type: "object", properties: {} } } },
@@ -631,11 +631,82 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
       return await consultarSaidasCaixaPeriodo(supabase, userId, targetStart, targetEnd);
     }
     case "buscar_transacoes": {
+      const termoBusca = (args.busca as string) || (args.termo as string) || "";
       let categoriaId = args.categoria_id as string | undefined;
+
       if (!categoriaId && args.categoria_nome) {
         categoriaId = await resolveCategoriaByName(supabase, userId, args.categoria_nome as string) || undefined;
-        if (!categoriaId) return { error: `Categoria "${args.categoria_nome}" não encontrada. Use consultar_categorias para ver as categorias disponíveis.` };
       }
+
+      // Se passou categoria_nome que não existe como categoria, trata como busca textual (ex: "Shuellen")
+      const effectiveSearch = termoBusca || (!categoriaId && args.categoria_nome ? String(args.categoria_nome) : "");
+
+      if (effectiveSearch) {
+        const termClean = effectiveSearch.trim();
+        const termNorm = termClean.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+        // Gera variantes fonéticas comuns (ex: Shuellen <-> Suellen <-> Suelen)
+        const variantes: string[] = [termClean, termNorm];
+        if (termNorm.startsWith("sh")) {
+          variantes.push(termNorm.replace(/^sh/, "s"));
+          variantes.push(termNorm.replace(/^sh/, "su"));
+        } else if (termNorm.startsWith("s")) {
+          variantes.push(termNorm.replace(/^s/, "sh"));
+        }
+        if (termNorm.includes("ll")) {
+          variantes.push(termNorm.replace(/ll/g, "l"));
+        } else if (termNorm.includes("l")) {
+          variantes.push(termNorm.replace(/l/g, "ll"));
+        }
+
+        // 1. Busca colaboradores
+        const { data: colabs } = await supabase.from("colaboradores").select("id, nome");
+        const colabsMatched = (colabs || []).filter((c: any) => {
+          const cNorm = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return variantes.some(v => cNorm.includes(v) || v.includes(cNorm.split(" ")[0]));
+        });
+        const colabIds = colabsMatched.map((c: any) => c.id);
+
+        // 2. Busca em despesas
+        let qDesp = supabase.from("despesas").select("id, descricao, valor, data, created_at, metodo_pagamento, categoria_id").eq("user_id", userId);
+        if (args.data_inicio) qDesp = qDesp.gte("data", args.data_inicio);
+        if (args.data_fim) qDesp = qDesp.lte("data", args.data_fim);
+
+        const { data: despData } = await qDesp.order("data", { ascending: false }).limit(200);
+
+        // Filtra por variantes no texto ou ID do colaborador
+        const matchedDesp = (despData || []).filter((d: any) => {
+          const descNorm = (d.descricao || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          const matchTexto = variantes.some(v => descNorm.includes(v));
+          const matchColab = d.colaborador_id && colabIds.includes(d.colaborador_id);
+          return matchTexto || matchColab;
+        }).map((d: any) => ({ ...d, tipo: "despesa", origem: "despesas" }));
+
+        // 3. Busca em transacoes
+        let qTx = supabase.from("transacoes").select("id, descricao, valor, tipo, data, created_at, metodo_pagamento, categoria_id").eq("user_id", userId);
+        if (args.data_inicio) qTx = qTx.gte("data", args.data_inicio);
+        if (args.data_fim) qTx = qTx.lte("data", args.data_fim);
+
+        const { data: txData } = await qTx.order("data", { ascending: false }).limit(200);
+        const matchedTx = (txData || []).filter((t: any) => {
+          const descNorm = (t.descricao || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return variantes.some(v => descNorm.includes(v));
+        }).map((t: any) => ({ ...t, origem: "transacoes" }));
+
+        const resultadoBusca = [...matchedDesp, ...matchedTx];
+        resultadoBusca.sort((a, b) => (b.data || "").localeCompare(a.data || ""));
+
+        const totalEncontrado = resultadoBusca.reduce((s, r) => s + Number(r.valor || 0), 0);
+
+        return {
+          termo_buscado: effectiveSearch,
+          total_itens: resultadoBusca.length,
+          total_valor: totalEncontrado,
+          transacoes: resultadoBusca.slice(0, 50),
+          observacao: `Encontrados ${resultadoBusca.length} pagamentos/lançamentos para '${effectiveSearch}' totalizando R$ ${totalEncontrado.toFixed(2)}.`
+        };
+      }
+
       const data = await fetchAllTransacoes(supabase, userId, { dataInicio: args.data_inicio as string | undefined, dataFim: args.data_fim as string | undefined, tipo: args.tipo as string | undefined, categoriaId, limit: (args.limit as number) || 50 });
       return data;
     }
