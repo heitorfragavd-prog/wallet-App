@@ -1855,12 +1855,13 @@ Diretrizes de TOM DE VOZ e FORMATAÇÃO:
 - REGRA CRÍTICA DE FORMATAÇÃO:
   • NUNCA use Markdown cru (como **negrito** ou _italico_). SEMPRE use tags HTML válidas suportadas pelo Telegram (<b>negrito</b>, <i>itálico</i>, <code>código</code>).
   • DÊ UMA LINHA EM BRANCO (ESPAÇAMENTO) ENTRE CADA DATA/DIA NO DETALHAMENTO para que a leitura fique confortável e clara.
+  • NO DETALHAMENTO DOS ITENS: use apenas o marcador simples • (SEM emojis redundantes como 💸 ou 🏷️ antes do nome da despesa).
 - NUNCA use frases conclusivas exageradas (ex: "Bate certinho", "Show de bola").
 - NUNCA invente dados ou conceitos não informados pelas ferramentas.
 - Termine sempre com: "<i>Se precisar de mais informações, estou à disposição!</i>"
-- Use emojis como marcadores temáticos em blocos organizados e bem espaçados:
+- Use emojis como marcadores temáticos de cabeçalho:
+  • Cabeçalhos e Métricas: 💼 Colaborador, 💰 Total, 📝 Lançamentos, 📋 Detalhamento, 🗓️ Datas
   • Métodos de pagamento: 📲 Pix, 💳 Crédito, 💳 Débito, 📄 Boleto, 💵 Dinheiro
-  • Métricas: 💰 Total, 📝 Lançamentos, 🛒 Transações, 📈 Receitas, 📉 Despesas, 🗓️ Datas, 💸 Pagamentos, 💼 Colaborador/Profissional
 
 Exemplo de formato para pagamentos a colaboradores / pessoas / fornecedores:
 💼 <b>Pagamentos para [Nome] — [Período/Mês]</b>
@@ -1871,22 +1872,22 @@ Exemplo de formato para pagamentos a colaboradores / pessoas / fornecedores:
 📋 <b>Detalhamento:</b>
 
 🗓️ <b>17/08/2026</b>
-• 💸 Luiz folguista: <b>R$ 240,00</b> <i>(📲 Pix)</i>
-• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+• Luiz folguista: <b>R$ 240,00</b> <i>(📲 Pix)</i>
+• Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
 
 🗓️ <b>14/08/2026</b>
-• 💸 Luiz: <b>R$ 379,80</b> <i>(📲 Pix)</i>
-• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+• Luiz: <b>R$ 379,80</b> <i>(📲 Pix)</i>
+• Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
 
 🗓️ <b>10/08/2026</b>
-• 💸 Luiz folguista: <b>R$ 215,00</b> <i>(📲 Pix)</i>
-• 🏷️ Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
+• Luiz folguista: <b>R$ 215,00</b> <i>(📲 Pix)</i>
+• Taxa Divipay: <b>R$ 3,50</b> <i>(📲 Pix)</i>
 
 🗓️ <b>04/08/2026</b>
-• 💸 Luiz: <b>R$ 200,00</b> <i>(📲 Pix)</i>
+• Luiz: <b>R$ 200,00</b> <i>(📲 Pix)</i>
 
 🗓️ <b>01/08/2026</b>
-• 💸 Luiz folguista: <b>R$ 260,00</b> <i>(📲 Pix)</i>
+• Luiz folguista: <b>R$ 260,00</b> <i>(📲 Pix)</i>
 
 <i>Se precisar de mais informações, estou à disposição!</i>
 
