@@ -2709,63 +2709,57 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         }
 
         // ================================================================
-        // NOTA FISCAL DE COMPRA — DETECÇÃO POR FOTO / DANFE NO PRIVADO
+        // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
+        // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
         // ================================================================
-        const isNFCompraHint =
-          respLower.includes("nota fiscal") ||
-          respLower.includes("nf compra") ||
-          respLower.includes("danfe") ||
-          respLower.includes("estoque") ||
-          respLower.includes("atualizar custo") ||
-          respLower.includes("coca cola") ||
-          respLower.includes("brahma") ||
-          respLower.includes("ambev") ||
-          respLower.includes("spal");
+        const docAnalysisSystemPrompt = `Você é um extrator especialista de documentos financeiros e fiscais brasileiros (DANFE, Nota Fiscal de Compra e Boleto Bancário) com visão computacional de altíssima precisão.
 
-        // Se for no privado (e não for contexto de fechamento de caixa), testa se a foto é uma NF de compra
-        if (!isGroup || isNFCompraHint) {
-          console.log("[telegram-webhook] Verificando se documento é Nota Fiscal de Compra (DANFE)...");
-          const promptNF = `Você é um extrator especializado em Notas Fiscais de COMPRA (entrada de mercadoria / DANFE) brasileiras (ex: Distribuidoras de Bebidas, Alimentos, Ambev, Coca-Cola/SPAL, Atacadistas).
+ATENÇÃO CRÍTICA SOBRE A FOTO:
+1. O documento na foto pode estar deitado na horizontal (rotacionado em 90° ou 270°), inclinado, amassado ou na vertical. Você DEVE ler e interpretar o documento com perfeição em QUALQUER orientação que ele estiver.
+2. Identifique com precisão o TIPO do documento:
+   - "nf_compra": DANFE (Documento Auxiliar da Nota Fiscal Eletrônica), Nota Fiscal de entrada de mercadorias (ex: Ambev / Brasnorte, Coca-Cola / SPAL, Sellpack, Distribuidoras de Bebidas ou Alimentos, Atacadistas). Possui tabela com produtos, quantidades, valores unitários, NCM, CFOP e tributos.
+   - "boleto": Boleto Bancário brasileiro (com código de barras, linha digitável de 47 dígitos, data de vencimento e valor a pagar).
+   - "outro": Se não for nenhum documento legível.
 
-Analise esta imagem. Se for uma Nota Fiscal / DANFE de compra de produtos/mercadorias, extraia TODOS os campos com máxima precisão.
+REGRAS PARA NOTA FISCAL DE COMPRA ("nf_compra"):
+- cabecalho:
+  - numero_nf: Número da Nota Fiscal (ex: "00738699", "013664150")
+  - serie_nf: Série da NF (ex: "1", "26")
+  - data_emissao: Data de emissão (YYYY-MM-DD)
+  - data_entrada: Data de entrada/saída (YYYY-MM-DD)
+  - fornecedor: Razão social do emitente/fornecedor (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A")
+  - cnpj_fornecedor: CNPJ do fornecedor (apenas dígitos)
+  - chave_acesso: Chave de acesso da NF-e (44 dígitos, se visível)
+- valores_totais:
+  - valor_total_nf: Valor total da NF (decimal)
+  - valor_produtos: Valor total dos produtos (decimal)
+  - valor_icms: Valor do ICMS (decimal)
+  - valor_ipi: Valor do IPI (decimal)
+  - valor_frete: Valor do frete (decimal)
+- itens: Liste TODOS os itens da tabela de produtos/serviços:
+  - codigo: Código interno do produto (coluna CÓDIGO DO PRODUTO, ex: "55404", "19071", "11969", "55443", "738699")
+  - descricao: Descrição do produto (ex: "COCA-COLA LT 250ML FL", "BRAHMA DUPLO MALTE 350ML", "FANTA LARANJA 2L")
+  - ncm: Código NCM (8 dígitos)
+  - cfop: CFOP (4 dígitos, ex: "5102", "5403", "5405")
+  - unidade: Unidade de medida (CX, UN, FD, KG, LT)
+  - quantidade: Quantidade faturada (decimal)
+  - valor_unitario: Valor unitário do item (decimal)
+  - valor_total: Valor total do item (decimal)
+  - icms_aliquota: Alíquota de ICMS (%)
+  - ipi_aliquota: Alíquota de IPI (%)
+  - pis_aliquota: Alíquota de PIS (%)
+  - cofins_aliquota: Alíquota de COFINS (%)
+  - custo_unitario_liquido = valor_unitario - (valor_unitario * (icms_aliquota / 100)) - (valor_unitario * (ipi_aliquota / 100))
 
-CAMPOS DO CABEÇALHO:
-- numero_nf: Número da Nota Fiscal (apenas números)
-- serie_nf: Série da NF
-- data_emissao: Data de emissão (YYYY-MM-DD)
-- data_entrada: Data de entrada/saída (YYYY-MM-DD)
-- fornecedor: Razão social do emitente/fornecedor (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A", "Brasnorte Distribuidora de Bebidas Ltda")
-- cnpj_fornecedor: CNPJ do fornecedor (apenas números)
-- chave_acesso: Chave de acesso da NF-e (44 dígitos, se visível)
+REGRAS PARA BOLETO BANCÁRIO ("boleto"):
+- beneficiario: Razão social da Empresa Beneficiária (no canhoto procure "RECEBEMOS DE:"). NUNCA use o pagador ou o banco!
+- pagador: Nome da pessoa/empresa pagadora
+- valor: Valor do documento
+- data_vencimento: Data de vencimento (YYYY-MM-DD)
+- linha_digitavel: Sequência de 47 dígitos
 
-VALORES TOTAIS:
-- valor_total_nf: Valor total da NF
-- valor_produtos: Valor total dos produtos
-- valor_icms: Valor total do ICMS
-- valor_ipi: Valor total do IPI
-- valor_frete: Valor do frete
-
-ITENS/PRODUTOS (liste TODOS os itens da tabela de produtos/serviços da DANFE):
-Para cada item, extraia:
-- codigo: Código do produto (coluna CÓDIGO DO PRODUTO do fornecedor, ex: 55404, 19071, 11969, 55443)
-- descricao: Descrição completa do produto (ex: "COCA-COLA LT 250ML FL", "FANTA LARANJA 2L", "BRAHMA DUPLO MALTE 350ML")
-- ncm: Código NCM (8 dígitos)
-- cfop: CFOP (4 dígitos, ex: 5102, 5403, 5405)
-- unidade: Unidade de medida (CX, UN, FD, KG, LT)
-- quantidade: Quantidade faturada (número decimal)
-- valor_unitario: Valor unitário do item
-- valor_total: Valor total do item
-- icms_aliquota: Alíquota de ICMS (%)
-- ipi_aliquota: Alíquota de IPI (%)
-- pis_aliquota: Alíquota de PIS (%)
-- cofins_aliquota: Alíquota de COFINS (%)
-
-CÁLCULO DO CUSTO LÍQUIDO UNITÁRIO:
-- custo_unitario_liquido = valor_unitario - (valor_unitario * (icms_aliquota / 100)) - (valor_unitario * (ipi_aliquota / 100))
-
-REGRAS CRÍTICAS:
-1. Se a imagem NÃO for uma Nota Fiscal / DANFE de compra (ex: se for um Boleto Bancário com código de barras no rodapé), responda estritamente: {"tipo": "outro"}
-2. Se for uma DANFE / NF de compra, responda estritamente em JSON:
+FORMATO DE RESPOSTA (JSON estrito):
+Para NF de Compra:
 {
   "tipo": "nf_compra",
   "cabecalho": {
@@ -2802,200 +2796,19 @@ REGRAS CRÍTICAS:
     }
   ],
   "confianca": "alta"
-}`;
+}
 
-          try {
-            const aiNfResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${supabaseServiceKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "gpt-4o",
-                user_id: userId,
-                temperature: 0.0,
-                messages: [
-                  { role: "system", content: promptNF },
-                  {
-                    role: "user",
-                    content: [
-                      { type: "text", text: "Extraia todos os dados desta Nota Fiscal de Compra (DANFE) se for uma NF:" },
-                      { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                    ],
-                  },
-                ],
-              }),
-            });
-
-            if (aiNfResp.ok) {
-              const aiNfJson = await aiNfResp.json();
-              const rawNfContent = aiNfJson.choices?.[0]?.message?.content || "";
-              let parsedNf: any = null;
-              try {
-                parsedNf = JSON.parse(rawNfContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
-              } catch {
-                const matchNf = rawNfContent.match(/\{[\s\S]*\}/);
-                if (matchNf) {
-                  try { parsedNf = JSON.parse(matchNf[0]); } catch {}
-                }
-              }
-
-              if (parsedNf && parsedNf.tipo === "nf_compra" && parsedNf.itens?.length > 0) {
-                console.log("[telegram-webhook] NF de Compra identificada com sucesso! Itens:", parsedNf.itens.length);
-
-                const { data: wsMember } = await supabase
-                  .from("workspace_members")
-                  .select("workspace_id")
-                  .eq("user_id", userId)
-                  .limit(1)
-                  .maybeSingle();
-
-                const wsId = wsMember?.workspace_id || workspaceId || null;
-
-                const { data: nfSalva, error: errNF } = await supabase
-                  .from("notas_fiscais_compra")
-                  .insert({
-                    user_id: userId,
-                    workspace_id: wsId,
-                    chat_id: Number(chatId) || null,
-                    numero_nf: parsedNf.cabecalho?.numero_nf,
-                    serie_nf: parsedNf.cabecalho?.serie_nf,
-                    fornecedor: parsedNf.cabecalho?.fornecedor,
-                    cnpj_fornecedor: parsedNf.cabecalho?.cnpj_fornecedor,
-                    data_emissao: parsedNf.cabecalho?.data_emissao,
-                    data_entrada: parsedNf.cabecalho?.data_entrada || hojeStr,
-                    valor_total: parsedNf.valores_totais?.valor_total_nf,
-                    valor_icms: parsedNf.valores_totais?.valor_icms,
-                    valor_ipi: parsedNf.valores_totais?.valor_ipi,
-                    valor_frete: parsedNf.valores_totais?.valor_frete,
-                    valor_produtos: parsedNf.valores_totais?.valor_produtos,
-                    chave_acesso: parsedNf.cabecalho?.chave_acesso,
-                    status: "pendente",
-                    origem: "foto",
-                  })
-                  .select("id")
-                  .single();
-
-                if (!errNF && nfSalva) {
-                  const itensParaInserir = (parsedNf.itens || []).map((item: any) => ({
-                    nf_id: nfSalva.id,
-                    codigo_produto: item.codigo,
-                    descricao: item.descricao,
-                    ncm: item.ncm,
-                    cfop: item.cfop,
-                    unidade: item.unidade,
-                    quantidade: item.quantidade,
-                    valor_unitario: item.valor_unitario,
-                    valor_total: item.valor_total,
-                    icms_aliquota: item.icms_aliquota,
-                    ipi_aliquota: item.ipi_aliquota,
-                    pis_aliquota: item.pis_aliquota,
-                    cofins_aliquota: item.cofins_aliquota,
-                    custo_unitario_liquido: item.custo_unitario_liquido || item.valor_unitario,
-                    status_estoque: "pendente",
-                  }));
-
-                  if (itensParaInserir.length > 0) {
-                    await supabase.from("nf_itens").insert(itensParaInserir);
-                  }
-
-                  const fmt = (v: any) =>
-                    v != null && !isNaN(Number(v))
-                      ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                      : "R$ 0,00";
-
-                  let msg = `📄 <b>Nota Fiscal de Compra Identificada!</b>\n\n`;
-                  msg += `🏢 <b>Fornecedor:</b> ${parsedNf.cabecalho?.fornecedor || "N/A"}\n`;
-                  msg += `📋 <b>NF:</b> ${parsedNf.cabecalho?.numero_nf || "N/A"} ${parsedNf.cabecalho?.serie_nf ? `(Série ${parsedNf.cabecalho.serie_nf})` : ""}\n`;
-                  msg += `📅 <b>Emissão:</b> ${parsedNf.cabecalho?.data_emissao ? parsedNf.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
-                  msg += `💰 <b>Valor Total da NF:</b> <b>${fmt(parsedNf.valores_totais?.valor_total_nf)}</b>\n`;
-                  msg += `📦 <b>Itens Localizados:</b> ${parsedNf.itens.length} produtos\n\n`;
-
-                  parsedNf.itens.slice(0, 8).forEach((item: any, i: number) => {
-                    const qtd = Number(item.quantidade) || 1;
-                    const vUnit = Number(item.valor_unitario) || 0;
-                    const vLiq = Number(item.custo_unitario_liquido) || vUnit;
-                    msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
-                    msg += `   📦 ${qtd} ${item.unidade || "UN"} × ${fmt(vUnit)}\n`;
-                    msg += `   💰 Total: ${fmt(item.valor_total)} | Custo Líquido: <b>${fmt(vLiq)}</b>\n\n`;
-                  });
-
-                  if (parsedNf.itens.length > 8) {
-                    msg += `<i>... e mais ${parsedNf.itens.length - 8} produtos</i>\n\n`;
-                  }
-
-                  msg += `⚠️ <b>Deseja confirmar e atualizar estoque e custos no sistema?</b>\n\n`;
-                  msg += `👉 Responda <b>CONFIRMAR</b> para atualizar o sistema.\n`;
-                  msg += `👉 Responda <b>CANCELAR</b> para descartar.\n\n`;
-                  msg += `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
-
-                  const { data: propCriada } = await supabase.from("telegram_propostas").insert({
-                    user_id: userId,
-                    chat_id: Number(chatId) || null,
-                    tipo: "atualizar_estoque_nf",
-                    dados: { nf_id: nfSalva.id },
-                    resumo: `NF ${parsedNf.cabecalho?.numero_nf} - ${parsedNf.cabecalho?.fornecedor} - ${fmt(parsedNf.valores_totais?.valor_total_nf)}`,
-                    status: "pendente",
-                    expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-                  }).select("id").single();
-
-                  if (propCriada) {
-                    await supabase.from("telegram_conversas").upsert(
-                      {
-                        user_id: userId,
-                        chat_id: chatId,
-                        estado: "aguardando_confirmacao_nf",
-                        proposta_id: propCriada.id,
-                        updated_at: new Date().toISOString(),
-                      },
-                      { onConflict: "chat_id" }
-                    );
-                  }
-
-                  await sendReply(msg);
-                  return new Response("OK", { status: 200, headers: corsHeaders });
-                }
-              }
-            }
-          } catch (errNf: any) {
-            console.warn("[telegram-webhook] Erro na tentativa de ler NF:", errNf.message);
-          }
-        }
-
-        const docAnalysisSystemPrompt = `Você é um extrator especialista em boletos bancários brasileiros com precisão cirúrgica.
-
-LAYOUT E ANATOMIA DO BOLETO:
-1. TOPO (Canhoto Superior):
-   - Procure "RECEBEMOS DE:" -> O NOME LOGO APÓS É A EMPRESA BENEFICIÁRIA (ex: "Brasnorte Distribuidora de Bebidas Ltda").
-   - "DATA VENCIMENTO:" -> Data de vencimento no canhoto.
-   - "VALOR DO DOCUMENTO:" -> Valor do documento no canhoto.
-   - "SACADO:" -> É o cliente/pagador (ex: Viviane...). NUNCA use como beneficiário!
-
-2. MEIO E INFERIOR (Recibo do Pagador e Ficha de Compensação):
-   - "Beneficiário:" -> Razão Social da Empresa (ex: "Brasnorte Distribuidora de Bebidas").
-   - "Vencimento" -> Data limite para pagamento (ex: 22/07/2026). NUNCA use a "Data do Documento".
-   - "Valor Documento" -> Valor a pagar (ex: 1053.58).
-   - "Pagador:" -> Pessoa que paga a conta (ex: Viviane Cristina Teotonio Siqueira).
-   - "Linha Digitável" -> Sequência de 47 dígitos no topo da via (ex: 75691.31191 01052.814538 53620.600014 6 15150000105358).
-
-REGRAS:
-- O beneficiário SEMPRE é uma EMPRESA/FORNECEDOR (ex: "Brasnorte Distribuidora de Bebidas Ltda", "SPAL IND BRAS DE BEBIDAS", "SELLPACK DISTRIBUIDORA").
-- NUNCA use o PAGADOR (pessoa física) ou o BANCO (Sicoob, Cooperativa) como beneficiário.
-
-FORMATO DE RESPOSTA (JSON estrito em tag <document_analysis>):
-<document_analysis>
+Para Boleto:
 {
   "tipo": "boleto",
-  "beneficiario": "Brasnorte Distribuidora de Bebidas Ltda",
-  "pagador": "Viviane Cristina Teotonio Siqueira",
-  "valor": 1053.58,
-  "data_vencimento": "2026-07-22",
-  "descricao": "Boleto - Brasnorte",
-  "linha_digitavel": "75691.31191 01052.814538 53620.600014 6 15150000105358",
+  "beneficiario": "...",
+  "pagador": "...",
+  "valor": 0.00,
+  "data_vencimento": "YYYY-MM-DD",
+  "descricao": "Boleto - ...",
+  "linha_digitavel": "...",
   "confianca": "alta"
-}
-</document_analysis>`;
+}`;
 
         console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
         const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
@@ -3014,7 +2827,7 @@ FORMATO DE RESPOSTA (JSON estrito em tag <document_analysis>):
               {
                 role: "user",
                 content: [
-                  { type: "text", text: promptText || "Analise esta foto de boleto bancário brasileiro. No topo (canhoto), procure 'RECEBEMOS DE:' para extrair a empresa beneficiária. Leia com máxima atenção a linha digitável, valor e vencimento." },
+                  { type: "text", text: promptText || "Analise este documento financeiro/fiscal brasileiro (pode ser Nota Fiscal de Compra/DANFE ou Boleto Bancário). A foto pode estar na horizontal (deitada). Extraia todos os dados com máxima precisão." },
                   { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                 ],
               },
@@ -3036,27 +2849,139 @@ FORMATO DE RESPOSTA (JSON estrito em tag <document_analysis>):
         console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 300));
 
         let documentData: any = null;
-        const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
-        if (jsonTagMatch) {
-          try {
-            documentData = JSON.parse(jsonTagMatch[1].trim());
-          } catch (err: any) {
-            console.error("[telegram-webhook] Erro ao parsear JSON de <document_analysis>:", err.message);
+        try {
+          const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+          documentData = JSON.parse(cleaned);
+        } catch {
+          const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
+          if (jsonTagMatch) {
+            try { documentData = JSON.parse(jsonTagMatch[1].trim()); } catch {}
+          }
+          if (!documentData) {
+            const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
+            if (objMatch) {
+              try { documentData = JSON.parse(objMatch[0]); } catch {}
+            }
           }
         }
 
-        if (!documentData) {
-          try {
-            const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
-            documentData = JSON.parse(cleaned);
-          } catch {
-            // fallback: regex para achar primeiro objeto JSON { ... }
-            const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
-            if (objMatch) {
-              try {
-                documentData = JSON.parse(objMatch[0]);
-              } catch {}
+        // ================================================================
+        // 1. FLUXO NOTA FISCAL DE COMPRA (DANFE)
+        // ================================================================
+        if (documentData && (documentData.tipo === "nf_compra" || (documentData.itens && documentData.itens.length > 0))) {
+          console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA <<< Itens:", documentData.itens?.length);
+
+          const { data: wsMember } = await supabase
+            .from("workspace_members")
+            .select("workspace_id")
+            .eq("user_id", userId)
+            .limit(1)
+            .maybeSingle();
+
+          const wsId = wsMember?.workspace_id || workspaceId || null;
+
+          const { data: nfSalva, error: errNF } = await supabase
+            .from("notas_fiscais_compra")
+            .insert({
+              user_id: userId,
+              workspace_id: wsId,
+              chat_id: Number(chatId) || null,
+              numero_nf: documentData.cabecalho?.numero_nf,
+              serie_nf: documentData.cabecalho?.serie_nf,
+              fornecedor: documentData.cabecalho?.fornecedor,
+              cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
+              data_emissao: documentData.cabecalho?.data_emissao,
+              data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
+              valor_total: documentData.valores_totais?.valor_total_nf,
+              valor_icms: documentData.valores_totais?.valor_icms,
+              valor_ipi: documentData.valores_totais?.valor_ipi,
+              valor_frete: documentData.valores_totais?.valor_frete,
+              valor_produtos: documentData.valores_totais?.valor_produtos,
+              chave_acesso: documentData.cabecalho?.chave_acesso,
+              status: "pendente",
+              origem: "foto",
+            })
+            .select("id")
+            .single();
+
+          if (!errNF && nfSalva) {
+            const itensParaInserir = (documentData.itens || []).map((item: any) => ({
+              nf_id: nfSalva.id,
+              codigo_produto: item.codigo,
+              descricao: item.descricao,
+              ncm: item.ncm,
+              cfop: item.cfop,
+              unidade: item.unidade,
+              quantidade: item.quantidade,
+              valor_unitario: item.valor_unitario,
+              valor_total: item.valor_total,
+              icms_aliquota: item.icms_aliquota,
+              ipi_aliquota: item.ipi_aliquota,
+              pis_aliquota: item.pis_aliquota,
+              cofins_aliquota: item.cofins_aliquota,
+              custo_unitario_liquido: item.custo_unitario_liquido || item.valor_unitario,
+              status_estoque: "pendente",
+            }));
+
+            if (itensParaInserir.length > 0) {
+              await supabase.from("nf_itens").insert(itensParaInserir);
             }
+
+            const fmt = (v: any) =>
+              v != null && !isNaN(Number(v))
+                ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                : "R$ 0,00";
+
+            let msg = `📄 <b>Nota Fiscal de Compra Identificada!</b>\n\n`;
+            msg += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
+            msg += `📋 <b>NF:</b> ${documentData.cabecalho?.numero_nf || "N/A"} ${documentData.cabecalho?.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
+            msg += `📅 <b>Emissão:</b> ${documentData.cabecalho?.data_emissao ? documentData.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
+            msg += `💰 <b>Valor Total:</b> <b>${fmt(documentData.valores_totais?.valor_total_nf)}</b>\n`;
+            msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
+
+            documentData.itens.slice(0, 8).forEach((item: any, i: number) => {
+              const qtd = Number(item.quantidade) || 1;
+              const vUnit = Number(item.valor_unitario) || 0;
+              const vLiq = Number(item.custo_unitario_liquido) || vUnit;
+              msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
+              msg += `   📦 ${qtd} ${item.unidade || "UN"} × ${fmt(vUnit)}\n`;
+              msg += `   💰 Total: ${fmt(item.valor_total)} | Custo Líquido: <b>${fmt(vLiq)}</b>\n\n`;
+            });
+
+            if (documentData.itens.length > 8) {
+              msg += `<i>... e mais ${documentData.itens.length - 8} produtos</i>\n\n`;
+            }
+
+            msg += `⚠️ <b>Deseja confirmar e atualizar estoque e custos?</b>\n\n`;
+            msg += `👉 Responda <b>CONFIRMAR</b> para atualizar o sistema.\n`;
+            msg += `👉 Responda <b>CANCELAR</b> para descartar.\n\n`;
+            msg += `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+            const { data: propCriada } = await supabase.from("telegram_propostas").insert({
+              user_id: userId,
+              chat_id: Number(chatId) || null,
+              tipo: "atualizar_estoque_nf",
+              dados: { nf_id: nfSalva.id },
+              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf)}`,
+              status: "pendente",
+              expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+            }).select("id").single();
+
+            if (propCriada) {
+              await supabase.from("telegram_conversas").upsert(
+                {
+                  user_id: userId,
+                  chat_id: chatId,
+                  estado: "aguardando_confirmacao_nf",
+                  proposta_id: propCriada.id,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: "chat_id" }
+              );
+            }
+
+            await sendReply(msg);
+            return new Response("OK", { status: 200, headers: corsHeaders });
           }
         }
 
