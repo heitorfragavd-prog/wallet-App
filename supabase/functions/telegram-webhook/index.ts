@@ -192,6 +192,166 @@ function isPessoaFisicaProvavel(nome: string): boolean {
   return !temTermoCorp && palavras >= 3;
 }
 
+// ─── TRANSCRIÇÃO DE ÁUDIO (Whisper via openai-proxy) ───
+async function transcribeAudio(fileId: string, telegramBotToken: string, supabaseUrl: string, supabaseServiceKey: string, userId: string): Promise<string | null> {
+  try {
+    const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
+    const fileInfo = await getFileResp.json();
+    if (!fileInfo?.ok || !fileInfo?.result?.file_path) {
+      console.error("[transcribeAudio] getFile failed:", fileInfo);
+      return null;
+    }
+
+    const filePath = fileInfo.result.file_path;
+    const fileDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+    const audioBuffer = await fileDownloadResp.arrayBuffer();
+
+    const ext = filePath.split(".").pop()?.toLowerCase() || "ogg";
+    const mimeType = ext === "mp3" ? "audio/mpeg" : ext === "wav" ? "audio/wav" : ext === "m4a" ? "audio/mp4" : "audio/ogg";
+
+    const formData = new FormData();
+    formData.append("audio", new Blob([audioBuffer], { type: mimeType }), `audio.${ext}`);
+    formData.append("user_id", userId);
+
+    const transcribeResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy/transcribe-audio`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${supabaseServiceKey}`,
+      },
+      body: formData,
+    });
+
+    if (!transcribeResp.ok) {
+      console.error("[transcribeAudio] transcribe failed:", await transcribeResp.text());
+      return null;
+    }
+
+    const result = await transcribeResp.json();
+    return result.transcription || null;
+  } catch (err: any) {
+    console.error("[transcribeAudio] exception:", err.message);
+    return null;
+  }
+}
+
+// ─── PREVISÃO DE CAIXA INTELIGENTE ───
+async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?: string | null): Promise<string> {
+  const hoje = new Date();
+  
+  // 1. Saldo atual nas contas
+  let qContas = supabase
+    .from("contas")
+    .select("saldo, instituicao, nome")
+    .eq("user_id", userId)
+    .eq("ativo", true);
+  if (workspaceId) {
+    qContas = qContas.eq("workspace_id", workspaceId);
+  }
+  const { data: contas } = await qContas;
+  
+  const saldoAtual = (contas || []).reduce((a: number, c: any) => a + (Number(c.saldo) || 0), 0);
+  
+  // 2. Receitas médias dos últimos 30 dias
+  const dataInicio30 = new Date(hoje);
+  dataInicio30.setDate(hoje.getDate() - 30);
+  const dataInicio30Str = dataInicio30.toISOString().split("T")[0];
+  
+  let qTxRec = supabase
+    .from("transacoes")
+    .select("valor")
+    .eq("user_id", userId)
+    .eq("tipo", "receita")
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qTxRec = qTxRec.eq("workspace_id", workspaceId);
+  const { data: txsRec30d } = await qTxRec;
+  
+  let qRec = supabase
+    .from("receitas")
+    .select("valor")
+    .eq("user_id", userId)
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qRec = qRec.eq("workspace_id", workspaceId);
+  const { data: recs30d } = await qRec;
+  
+  const totalReceitas30d = [...(txsRec30d || []), ...(recs30d || [])].reduce((a, v) => a + Number(v.valor || 0), 0);
+  const mediaDiariaVendas = totalReceitas30d > 0 ? totalReceitas30d / 30 : 0;
+  
+  // 3. Despesas diárias estimadas
+  let qDespFixas = supabase
+    .from("despesas")
+    .select("valor, recorrencia_id")
+    .eq("user_id", userId)
+    .gte("data", dataInicio30Str);
+  if (workspaceId) qDespFixas = qDespFixas.eq("workspace_id", workspaceId);
+  const { data: despesas30d } = await qDespFixas;
+  
+  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: any) => a + Number(d.valor || 0), 0);
+  const despesaDiaria = totalDespesas30d > 0 ? totalDespesas30d / 30 : 0;
+  
+  // 4. Dívidas a vencer nos próximos 90 dias
+  const hojeStr = hoje.toISOString().split("T")[0];
+  const d90 = new Date(hoje.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  
+  let qDividas = supabase
+    .from("dividas")
+    .select("valor_restante, valor_total, data_vencimento, credor, descricao")
+    .eq("user_id", userId)
+    .or("status.eq.pendente,status.eq.parcial")
+    .gte("data_vencimento", hojeStr)
+    .lte("data_vencimento", d90)
+    .order("data_vencimento", { ascending: true });
+  if (workspaceId) qDividas = qDividas.eq("workspace_id", workspaceId);
+  const { data: dividasFuturas } = await qDividas;
+  
+  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: any) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
+  
+  // 5. Calcular fluxo diário
+  const fluxoDiario = mediaDiariaVendas - despesaDiaria;
+  const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  
+  // 6. Montar resposta
+  let msg = "📊 <b>Previsão de Caixa Inteligente</b>\n\n";
+  msg += `💰 <b>Saldo atual:</b> <b>${format(saldoAtual)}</b>\n`;
+  msg += `📈 <b>Receita média/dia:</b> ${format(mediaDiariaVendas)}\n`;
+  msg += `📉 <b>Despesa média/dia:</b> ${format(despesaDiaria)}\n`;
+  msg += `📊 <b>Fluxo diário:</b> <b>${fluxoDiario >= 0 ? "+" : ""}${format(fluxoDiario)}</b>\n\n`;
+  
+  if (fluxoDiario >= 0) {
+    const proj30dias = fluxoDiario * 30;
+    msg += `✅ <b>Fluxo de Caixa Positivo!</b>\n`;
+    msg += `📈 <b>Projeção para 30 dias:</b> +${format(proj30dias)}\n`;
+  } else {
+    const diasAteZerar = saldoAtual > 0 ? Math.max(1, Math.floor(saldoAtual / Math.abs(fluxoDiario))) : 0;
+    const dataZerar = new Date(hoje);
+    dataZerar.setDate(hoje.getDate() + diasAteZerar);
+    
+    msg += `🚨 <b>ALERTA DE CAIXA:</b> Seu fluxo diário está negativo!\n`;
+    msg += `⏰ <b>Seu saldo atual cobre cerca de ${diasAteZerar} dias de operação.</b>\n`;
+    msg += `📅 Data estimada de exaustão: <b>${dataZerar.toLocaleDateString("pt-BR")}</b>\n\n`;
+    msg += `💡 <b>Recomendações:</b>\n`;
+    msg += `• Acelere recebimentos e ações de vendas\n`;
+    msg += `• Renegocie prazos de vencimento de fornecedores\n`;
+    msg += `• Pause despesas não essenciais\n`;
+  }
+  
+  // 7. Dívidas próximas
+  if (dividasFuturas && dividasFuturas.length > 0) {
+    msg += `\n📋 <b>Contas a vencer (próx. 90 dias):</b> <b>${format(totalDividasProximas)}</b>\n`;
+    msg += `   (<i>${dividasFuturas.length} compromissos</i>)\n\n`;
+    
+    msg += `<b>Próximos vencimentos:</b>\n`;
+    dividasFuturas.slice(0, 5).forEach((d: any) => {
+      const venc = new Date(d.data_vencimento + "T12:00:00Z");
+      const dias = Math.max(0, Math.ceil((venc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
+      const emoji = dias <= 3 ? "🔴" : dias <= 7 ? "🟡" : "🟢";
+      const val = Number(d.valor_restante || d.valor_total || 0);
+      msg += `${emoji} <b>${d.credor || d.descricao || "Boleto"}</b> — ${format(val)} (${dias === 0 ? "Vence hoje" : `em ${dias} dias`})\n`;
+    });
+  }
+  
+  return msg;
+}
+
 async function reextrairBeneficiarioDoDocumento(
   supabaseUrl: string,
   serviceKey: string,
@@ -460,8 +620,8 @@ serve(async (req) => {
 
     const chatId = String(message.chat.id);
     const username = message.chat.username || message.chat.first_name || null;
-    const text = (message.text || "").trim();
-    const respLower = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    let text = (message.text || "").trim();
+    let respLower = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
     console.log("[telegram-webhook] ===== MENSAGEM RECEBIDA =====");
     console.log("[telegram-webhook] chatId:", chatId, "username:", username, "text:", text.slice(0, 100));
@@ -500,24 +660,110 @@ serve(async (req) => {
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
-    // Busca vínculo do usuário
-    const { data: usuarioTg } = await supabase
-      .from("usuarios_telegram")
-      .select("user_id")
-      .eq("telegram_chat_id", chatId)
-      .eq("ativo", true)
-      .maybeSingle();
+    // ─── RESOLUÇÃO DE USUÁRIO / GRUPO ───
+    const chatType = message.chat?.type || "private";
+    const isGroup = chatType === "group" || chatType === "supergroup";
+    let grupoConfig: any = null;
+    let userId: string = "";
+    let workspaceId: string | null = null;
 
-    if (!usuarioTg) {
-      console.log("[telegram-webhook] Usuário NÃO vinculado para chatId:", chatId);
-      await sendReply(
-        `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
-      );
-      return new Response("OK", { status: 200, headers: corsHeaders });
+    if (isGroup) {
+      const { data: gc } = await supabase
+        .from("telegram_grupos_config")
+        .select("*")
+        .eq("chat_id", chatId)
+        .maybeSingle();
+
+      if (!gc) {
+        await sendReply(
+          `⚠️ <b>Este grupo do Telegram ainda não está configurado.</b>\n\n` +
+          `🆔 <b>Chat ID do Grupo:</b> <code>${chatId}</code>\n` +
+          `🏷️ <b>Nome:</b> <i>${message.chat?.title || "Grupo"}</i>\n\n` +
+          `<i>Para habilitar o bot neste grupo, configure as permissões no banco de dados na tabela <code>telegram_grupos_config</code>.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      grupoConfig = gc;
+      workspaceId = gc.workspace_id || null;
+
+      // Se o grupo tiver workspace_id vinculado, busca o dono do workspace
+      if (workspaceId) {
+        const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", workspaceId).maybeSingle();
+        userId = ws?.user_id || "";
+      }
+
+      // Fallback para primeiro usuário ativo vinculado se não houver dono explícito
+      if (!userId) {
+        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
+        userId = anyUser?.user_id || "";
+      }
+
+      if (!userId) {
+        await sendReply("⚠️ Não foi possível identificar a conta administradora para este grupo.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    } else {
+      // Busca vínculo do usuário no chat privado
+      const { data: usuarioTg } = await supabase
+        .from("usuarios_telegram")
+        .select("user_id")
+        .eq("telegram_chat_id", chatId)
+        .eq("ativo", true)
+        .maybeSingle();
+
+      if (!usuarioTg) {
+        console.log("[telegram-webhook] Usuário NÃO vinculado para chatId:", chatId);
+        await sendReply(
+          `⚠️ <b>Sua conta do Telegram ainda não está vinculada.</b>\n\nEnvie o comando /start para gerar seu código de vínculo.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      userId = usuarioTg.user_id;
     }
 
-    const userId = usuarioTg.user_id;
-    console.log("[telegram-webhook] Usuário vinculado: userId=", userId, "chatId=", chatId);
+    console.log("[telegram-webhook] Identificação:", isGroup ? `GRUPO (${grupoConfig?.nome_grupo})` : "PRIVADO", "userId=", userId, "chatId=", chatId);
+
+    // ================================================================
+    // SUPORTE A ÁUDIO (Whisper Transcription)
+    // ================================================================
+    const hasAudio = !!(message.voice || message.audio || message.video_note);
+    if (hasAudio) {
+      const audioFileId = message.voice?.file_id || message.audio?.file_id || message.video_note?.file_id;
+      const duracao = message.voice?.duration || message.audio?.duration || message.video_note?.duration || 0;
+
+      if (audioFileId && telegramBotToken) {
+        console.log("[telegram-webhook] Áudio recebido, iniciando transcrição Whisper...");
+        await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, action: "record_voice" }),
+        }).catch(() => {});
+
+        const transcricao = await transcribeAudio(audioFileId, telegramBotToken, supabaseUrl, supabaseServiceKey, userId);
+
+        if (transcricao) {
+          console.log("[telegram-webhook] Áudio transcrito com sucesso:", transcricao);
+          await supabase.from("audio_transcricoes").insert({
+            user_id: userId,
+            chat_id: Number(chatId) || null,
+            file_id: audioFileId,
+            duracao_segundos: duracao,
+            transcricao: transcricao,
+            sucesso: true,
+          });
+
+          text = transcricao.trim();
+          respLower = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+          await sendReply(`🎙️ <b>Áudio transcrito:</b>\n<i>"${transcricao}"</i>`);
+        } else {
+          await sendReply("❌ Não consegui transcrever o áudio. Tente enviar novamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+    }
 
     const nowSp = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
     const hojeStr = `${nowSp.getFullYear()}-${String(nowSp.getMonth() + 1).padStart(2, "0")}-${String(nowSp.getDate()).padStart(2, "0")}`;
@@ -549,6 +795,443 @@ serve(async (req) => {
             .eq("chat_id", chatId);
         }
       }
+    }
+
+    // ─── 0.0. BOAS-VINDAS / ORIENTAÇÃO NO GRUPO DE FECHAMENTO ───
+    if (isGroup && grupoConfig?.tipo_grupo === "fechamento") {
+      const isGreeting = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "fechamento", "/start", "/ajuda"].includes(respLower);
+      if (isGreeting) {
+        await sendReply(
+          `🤖 <b>Bot de Fechamento de Caixa Conectado!</b>\n\n` +
+          `📸 <b>Como usar:</b>\n` +
+          `1. Envie a <b>foto do envelope</b> ou <b>relatório de caixa</b> aqui no grupo.\n` +
+          `2. Eu vou ler os valores (Dinheiro, Débito, Crédito, Pix e Voucher) e conferir com o sistema Eyemobile.\n` +
+          `3. Se houver sobra física, digite: <code>Sobra: R$ 50,00</code> que eu lanço automaticamente na conta Caixa!\n\n` +
+          `<i>💡 Importante: Para o bot ler todas as fotos enviadas no grupo, certifique-se de promover o bot a <b>Administrador</b> deste grupo.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    }
+
+    // ─── 0.0. FECHAMENTO DE CAIXA: SOBRA (Grupo Fechamento ou Chat) ───
+    const matchSobra = text.match(/sobra[:\s]*R?\$?\s*([\d.,]+)/i);
+    if (matchSobra) {
+      const sobraStr = matchSobra[1].replace(/\./g, "").replace(",", ".");
+      const sobraValor = parseFloat(sobraStr);
+
+      if (!isNaN(sobraValor)) {
+        let qUltimo = supabase
+          .from("fechamentos_caixa")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (isGroup) {
+          qUltimo = qUltimo.eq("chat_id", chatId);
+        } else if (userId) {
+          qUltimo = qUltimo.eq("user_id", userId);
+        }
+
+        const { data: ultimo } = await qUltimo.maybeSingle();
+
+        if (!ultimo) {
+          await sendReply("❌ Envie a foto do envelope de fechamento primeiro antes de informar a sobra.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const total = (ultimo.total || {}) as Record<string, any>;
+        const fmt = (v: any) =>
+          v != null && Number(v) > 0
+            ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+            : "R$ 0,00";
+
+        let msg = `🔸 <b>Fechamento</b>\n\n`;
+        msg += `📅 <b>Data:</b> ${ultimo.data_fechamento || hojeStr.split("-").reverse().join("/")}\n\n`;
+        msg += `💰 Dinheiro: ${fmt(total.dinheiro)}\n`;
+        msg += `💳 Cartão Débito: ${fmt(total.debito)}\n`;
+        msg += `💳 Cartão Crédito: ${fmt(total.credito)}\n`;
+        msg += `📲 Pix: ${fmt(total.pix)}\n`;
+        if (total.voucher) msg += `🎫 Voucher: ${fmt(total.voucher)}\n`;
+        msg += `\n💵 <b>Sobra:</b> ${fmt(sobraValor)}\n`;
+
+        const totalGeral =
+          (Number(total.dinheiro) || 0) +
+          (Number(total.debito) || 0) +
+          (Number(total.credito) || 0) +
+          (Number(total.pix) || 0) +
+          (Number(total.voucher) || 0) +
+          sobraValor;
+
+        msg += `\n🔸 <b>TOTAL GERAL:</b> <b>${fmt(totalGeral)}</b>\n`;
+
+        // Lançar no sistema via RPC adicionar_saldo_conta
+        const { data: rpcResult, error: errSobra } = await supabase.rpc("adicionar_saldo_conta", {
+          p_user_id: userId,
+          p_workspace_id: workspaceId,
+          p_conta_nome: "Caixa",
+          p_valor: sobraValor,
+          p_descricao: `Sobra fechamento caixa - ${ultimo.data_fechamento || hojeStr}`,
+          p_categoria_nome: "Sobra de Caixa",
+        });
+
+        if (rpcResult?.success && !errSobra) {
+          msg += `\n✅ <b>Sobra lançada automaticamente!</b>\n`;
+          msg += `📥 Conta: Caixa / Dinheiro\n`;
+          msg += `💵 Valor: <b>${fmt(sobraValor)}</b>\n`;
+          msg += `🏷️ Categoria: <b>Sobra de Caixa</b>\n`;
+          if (rpcResult.novo_saldo != null) {
+            msg += `💰 Novo saldo em caixa: <b>${fmt(rpcResult.novo_saldo)}</b>\n`;
+          }
+          msg += `\n💡 <i>Seu saldo físico e o DRE já foram atualizados no Wallet App.</i>`;
+        }
+
+        await supabase
+          .from("fechamentos_caixa")
+          .update({ sobra: sobraValor, status: "conferido" })
+          .eq("id", ultimo.id);
+
+        await sendReply(msg);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    }
+
+    // ─── 0. COMANDO /ensinar: APRENDIZADO DE CATEGORIA POR CREDOR ───
+    if (text.startsWith("/ensinar")) {
+      const match = text.match(/^\/ensinar\s+(.+?)\s+(?:e|é|eh)\s+(.+)$/i);
+
+      if (!match) {
+        await sendReply(
+          "🎓 <b>Como ensinar categorias:</b>\n\n" +
+          "Envie no formato:\n" +
+          "<code>/ensinar [nome do credor] e [nome da categoria]</code>\n\n" +
+          "<b>Exemplos:</b>\n" +
+          "• <code>/ensinar Brasnorte e Ambev</code>\n" +
+          "• <code>/ensinar SELLPACK e Descartáveis</code>\n" +
+          "• <code>/ensinar CEMIG e Energia Elétrica</code>\n\n" +
+          "<i>O Wallet lembrará dessa regra e categorizará futuros boletos automaticamente!</i>"
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const credorNome = match[1].trim();
+      const categoriaNome = match[2].trim();
+
+      // Busca categorias do usuário
+      const { data: categorias } = await supabase
+        .from("categorias")
+        .select("id, nome")
+        .eq("user_id", userId);
+
+      const catNorm = categoriaNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const categoria = (categorias || []).find((c: any) => {
+        const n = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return n === catNorm || n.includes(catNorm) || catNorm.includes(n);
+      });
+
+      if (!categoria) {
+        const sugestoes = (categorias || []).slice(0, 6).map((c: any) => `• ${c.nome}`).join("\n");
+        await sendReply(
+          `❌ Categoria <b>"${categoriaNome}"</b> não encontrada.\n\n` +
+          (sugestoes ? `<b>Categorias disponíveis:</b>\n${sugestoes}\n\n` : "") +
+          `<i>Verifique a ortografia ou cadastre a categoria no painel do Wallet.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const credorNorm = credorNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
+
+      const { error: upsertErr } = await supabase.from("categoria_credor_cache").upsert({
+        user_id: userId,
+        credor_normalizado: credorNorm,
+        categoria_id: categoria.id,
+        hits: 1,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id,credor_normalizado" });
+
+      if (upsertErr) {
+        console.error("[telegram-webhook] Erro ao salvar /ensinar no cache:", upsertErr.message);
+      }
+
+      await sendReply(
+        `✅ <b>Aprendido com sucesso!</b>\n\n` +
+        `📄 <b>Credor / Fornecedor:</b> <code>${credorNome}</code>\n` +
+        `🏷️ <b>Categoria vinculada:</b> <b>${categoria.nome}</b>\n\n` +
+        `🎯 <i>Todos os próximos boletos e despesas deste fornecedor serão classificados automaticamente como <b>${categoria.nome}</b>.</i>`
+      );
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.5. CONSULTA DE MÉTRICAS E CUSTOS DE IA ───
+    const isConsultaMetricasIA =
+      text.startsWith("/metricas") ||
+      text.startsWith("/ia_metricas") ||
+      respLower.includes("painel de metricas") ||
+      respLower.includes("painel de métricas") ||
+      respLower.includes("metricas de ia") ||
+      respLower.includes("métricas de ia") ||
+      respLower.includes("metricas da ia") ||
+      respLower.includes("métricas da ia") ||
+      respLower.includes("custo de ia") ||
+      respLower.includes("custos de ia") ||
+      respLower.includes("custo da ia") ||
+      respLower.includes("custos da ia") ||
+      respLower.includes("gasto com ia") ||
+      respLower.includes("consumo de ia") ||
+      respLower.includes("tokens");
+
+    if (isConsultaMetricasIA) {
+      const { data: events } = await supabase
+        .from("wallet_ai_audit_events")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      const evts = events || [];
+      const totalCalls = evts.length;
+      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
+      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
+      const estimatedCostBrl = estimatedCostUsd * 5.65;
+      const avgDuration = totalCalls > 0
+        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        : 0;
+
+      const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+      let msg = `🧠 <b>Painel de Métricas & Custos de IA</b>\n`;
+      msg += `<i>Monitoramento de desempenho, tokens e custos do Wallet</i>\n\n`;
+
+      msg += `⚡ <b>Requisições IA:</b> <b>${totalCalls}</b> (${successRate.toFixed(1)}% taxa de sucesso)\n`;
+      msg += `📦 <b>Tokens Processados:</b> <b>${totalTokens.toLocaleString("pt-BR")}</b> (Prompt + Completion)\n`;
+      msg += `💵 <b>Custo Acumulado:</b> <b>${formatBRL(estimatedCostBrl)}</b> ($${estimatedCostUsd.toFixed(4)} USD)\n`;
+      msg += `⏱️ <b>Tempo Médio Resposta:</b> <b>${avgDuration} ms</b>\n\n`;
+
+      if (evts.length > 0) {
+        msg += `📋 <b>Últimas Ações Auditadas:</b>\n`;
+        evts.slice(0, 4).forEach((e: any) => {
+          const dt = new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+          const st = e.execution_status === "success" ? "✅" : "⚠️";
+          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${e.duration_ms || 0}ms)\n`;
+        });
+        msg += `\n`;
+      }
+
+      msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
+
+      await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.55. COMANDO /custo — HISTÓRICO DE CUSTO & AUMENTOS DE PRODUTOS ───
+    if (
+      text.startsWith("/custo") ||
+      respLower.includes("historico de custo") ||
+      respLower.includes("aumento de custo") ||
+      respLower.includes("custo dos produtos")
+    ) {
+      const produtoMatch = text.match(/^\/custo\s+(.+)$/i) || text.match(/custo\s+(?:de|do|da)?\s*(.+)/i);
+      const produtoBusca = produtoMatch ? produtoMatch[1].trim() : null;
+
+      let query = supabase
+        .from("historico_custo_produto")
+        .select("*")
+        .eq("user_id", userId)
+        .order("data_compra", { ascending: false })
+        .limit(20);
+
+      if (produtoBusca) {
+        query = query.or(`produto_descricao.ilike.%${produtoBusca}%,produto_codigo.ilike.%${produtoBusca}%`);
+      }
+
+      const { data: historico } = await query;
+
+      const fmt = (v: any) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      if (!historico || historico.length === 0) {
+        await sendReply(
+          `📊 <b>Sem histórico de custo encontrado${produtoBusca ? ` para "${produtoBusca}"` : ""}.</b>\n\n` +
+          `Envie uma foto de Nota Fiscal de Compra para registrar os custos dos produtos ou tente buscar por outro termo (ex: <code>/custo coca</code>).`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      let msg = `📊 <b>Histórico de Custo de Produtos</b>${produtoBusca ? ` — <i>"${produtoBusca}"</i>` : ""}\n\n`;
+
+      historico.forEach((h: any, i: number) => {
+        const dataFmt = h.data_compra ? h.data_compra.split("-").reverse().join("/") : "Sem data";
+        const variacao = Number(h.variacao_percentual) || 0;
+        const emoji = variacao > 10 ? "🔴" : variacao > 0 ? "🟡" : "🟢";
+
+        msg += `${i + 1}. ${emoji} <b>${h.produto_descricao || h.produto_codigo || "Produto"}</b>\n`;
+        msg += `   📅 ${dataFmt} | 🏢 <i>${h.fornecedor || "Fornecedor"}</i>\n`;
+        msg += `   💰 Custo Líquido: <b>${fmt(h.custo_unitario)}</b> | 📦 Qtd: ${h.quantidade || 0}\n`;
+        if (h.variacao_percentual != null) {
+          msg += `   📈 Variação: <b>${variacao > 0 ? "+" : ""}${variacao.toFixed(1)}%</b>\n`;
+        }
+        if (h.alerta_enviado && h.sugestao_preco_venda) {
+          msg += `   💡 Sugestão preço venda: <b>${fmt(h.sugestao_preco_venda)}</b> (markup ${h.markup_aplicado || 30}%)\n`;
+        }
+        msg += `\n`;
+      });
+
+      await sendReply(msg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.6. CONSULTA DE AGENDA / EVENTOS / COMPROMISSOS (ETAPA 1) ───
+    const isConsultaAgenda =
+      text.startsWith("/agenda") ||
+      respLower.includes("agenda") ||
+      respLower.includes("evento") ||
+      respLower.includes("compromisso") ||
+      respLower.includes("reuniao") ||
+      respLower.includes("reunião") ||
+      respLower.includes("tem algo") ||
+      respLower.includes("o que tenho") ||
+      respLower.includes("minha agenda");
+
+    if (isConsultaAgenda) {
+      if (isGroup && grupoConfig?.ferramentas_permitidas?.length > 0 &&
+          !grupoConfig.ferramentas_permitidas.includes("consultar_agenda") &&
+          !grupoConfig.ferramentas_permitidas.includes("agenda")) {
+        await sendReply("❌ Este grupo não tem permissão para consultar a agenda.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const hoje = new Date(hojeStr);
+      let dataInicio = new Date(hoje);
+      let dataFim = new Date(hoje);
+      let periodoLabel = "de hoje";
+
+      // Detectar período solicitado
+      if (respLower.includes("semana que vem") || respLower.includes("proxima semana") || respLower.includes("próxima semana")) {
+        const diaSemana = hoje.getDay();
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() + (7 - diaSemana));
+        dataFim = new Date(dataInicio);
+        dataFim.setDate(dataInicio.getDate() + 6);
+        periodoLabel = "da semana que vem";
+      } else if (respLower.includes("essa semana") || respLower.includes("esta semana")) {
+        const diaSemana = hoje.getDay();
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() - diaSemana);
+        dataFim = new Date(dataInicio);
+        dataFim.setDate(dataInicio.getDate() + 6);
+        periodoLabel = "desta semana";
+      } else if (respLower.includes("esse mes") || respLower.includes("este mes") || respLower.includes("esse mês") || respLower.includes("este mês")) {
+        dataInicio = new Date(anoAtual, mesAtual - 1, 1);
+        const uDia = new Date(anoAtual, mesAtual, 0).getDate();
+        dataFim = new Date(anoAtual, mesAtual - 1, uDia);
+        periodoLabel = "deste mês";
+      } else if (respLower.includes("amanha") || respLower.includes("amanhã")) {
+        dataInicio = new Date(hoje);
+        dataInicio.setDate(hoje.getDate() + 1);
+        dataFim = new Date(dataInicio);
+        periodoLabel = "de amanhã";
+      } else if (respLower.includes("proximo") || respLower.includes("próximo") || respLower.includes("proximos") || respLower.includes("próximos")) {
+        const matchDias = text.match(/(\d+)\s*dias?/);
+        const dias = matchDias ? parseInt(matchDias[1], 10) : 7;
+        dataFim = new Date(hoje);
+        dataFim.setDate(hoje.getDate() + dias);
+        periodoLabel = `dos próximos ${dias} dias`;
+      }
+
+      const dataInicioStr = dataInicio.toISOString().split("T")[0];
+      const dataFimStr = dataFim.toISOString().split("T")[0];
+
+      // Busca unificada em compromissos e lembretes
+      const [{ data: compromissos }, { data: lembretes }] = await Promise.all([
+        supabase
+          .from("compromissos")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("data", dataInicioStr)
+          .lte("data", dataFimStr)
+          .order("data", { ascending: true }),
+        supabase
+          .from("lembretes")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("data", dataInicioStr)
+          .lte("data", dataFimStr)
+          .order("data", { ascending: true }),
+      ]);
+
+      const eventos = [
+        ...(compromissos || []).map((c: any) => ({
+          tipo: "Compromisso",
+          titulo: c.titulo,
+          data: c.data,
+          hora: c.hora,
+          local: c.local,
+          descricao: null,
+        })),
+        ...(lembretes || []).map((l: any) => ({
+          tipo: "Lembrete",
+          titulo: l.titulo,
+          data: l.data,
+          hora: l.hora,
+          local: null,
+          descricao: l.descricao,
+        })),
+      ].sort((a, b) => {
+        const da = `${a.data}T${a.hora || "00:00:00"}`;
+        const db = `${b.data}T${b.hora || "00:00:00"}`;
+        return da.localeCompare(db);
+      });
+
+      if (eventos.length === 0) {
+        await sendReply(`📅 <b>Sem eventos ${periodoLabel}!</b>\n\nSua agenda está livre. 🎉`);
+      } else {
+        let msg = `📅 <b>Agenda & Eventos ${periodoLabel}:</b>\n\n`;
+        eventos.forEach((e: any, i: number) => {
+          const [ano, mes, dia] = e.data.split("-");
+          const dObj = new Date(Number(ano), Number(mes) - 1, Number(dia));
+          const diaSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][dObj.getDay()];
+          const dataFmt = `${dia}/${mes}/${ano}`;
+          const horaFmt = e.hora ? String(e.hora).slice(0, 5) : "Dia todo";
+
+          msg += `${i + 1}. <b>${e.titulo || "Evento"}</b>\n`;
+          msg += `   📆 ${diaSemana}, ${dataFmt} | 🕐 ${horaFmt}\n`;
+          if (e.local) msg += `   📍 <i>Local:</i> ${e.local}\n`;
+          if (e.descricao) msg += `   📝 <i>Nota:</i> ${e.descricao}\n`;
+          msg += `\n`;
+        });
+        await sendReply(msg);
+      }
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.7. PREVISÃO DE CAIXA INTELIGENTE (ETAPA 2) ───
+    const isConsultaPrevisaoCaixa =
+      text.startsWith("/previsao") ||
+      respLower.includes("previsao") ||
+      respLower.includes("previsão") ||
+      respLower.includes("quando acaba") ||
+      respLower.includes("caixa acaba") ||
+      respLower.includes("quanto tempo") ||
+      respLower.includes("meu caixa") ||
+      respLower.includes("quanto dura") ||
+      respLower.includes("quanto sobra");
+
+    if (isConsultaPrevisaoCaixa) {
+      if (isGroup && grupoConfig?.ferramentas_permitidas?.length > 0 &&
+          !grupoConfig.ferramentas_permitidas.includes("previsao_caixa") &&
+          !grupoConfig.ferramentas_permitidas.includes("consultar_saldo")) {
+        await sendReply("❌ Este grupo não tem permissão para consultar a previsão de caixa.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const previsaoMsg = await calcularPrevisaoCaixa(supabase, userId, workspaceId);
+      await sendReply(previsaoMsg);
+      return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
     // ─── 1. CONSULTA DE DÍVIDAS COM FILTRO DE PERÍODO INTELIGENTE ───
@@ -778,12 +1461,20 @@ serve(async (req) => {
         labelPeriodoD = "de Hoje";
       }
 
-      // Busca despesas e categorias
-      const [{ data: despesasRaw }, { data: categoriasRaw }] = await Promise.all([
+      // Busca despesas, transações do tipo despesa e categorias
+      const [{ data: despesasRaw }, { data: txsDespesasRaw }, { data: categoriasRaw }] = await Promise.all([
         supabase
           .from("despesas")
           .select("id, descricao, valor, data, categoria_id, metodo_pagamento")
           .eq("user_id", userId)
+          .gte("data", dataInicioD)
+          .lte("data", dataFimD)
+          .order("data", { ascending: false }),
+        supabase
+          .from("transacoes")
+          .select("id, descricao, valor, data, categoria_id, metodo_pagamento")
+          .eq("user_id", userId)
+          .eq("tipo", "despesa")
           .gte("data", dataInicioD)
           .lte("data", dataFimD)
           .order("data", { ascending: false }),
@@ -796,7 +1487,7 @@ serve(async (req) => {
       const catMap = new Map<string, string>();
       (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
 
-      const despesas = despesasRaw || [];
+      const despesas = [...(despesasRaw || []), ...(txsDespesasRaw || [])];
       const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -866,7 +1557,10 @@ serve(async (req) => {
         msgDesp += `• ${icon} <b>${label}</b>: ${format(val)} <i>(${perc}%)</i>\n`;
       });
 
-      msgDesp += `\n<i>Se precisar de mais informações, estou à disposição!</i>`;
+      msgDesp += `\n💡 <b>Entenda:</b>\n`;
+      msgDesp += `• <b>Total de Despesas</b> = Todas as saídas operacionais e cartões\n`;
+      msgDesp += `• <b>Saldo bancário</b> = Dinheiro disponível nas contas agora\n`;
+      msgDesp += `• Para ver seu saldo real: <i>"Quanto tenho no banco?"</i> ou <code>/saldo</code>\n`;
 
       await sendReply(msgDesp);
       return new Response("OK", { status: 200, headers: corsHeaders });
@@ -972,11 +1666,18 @@ serve(async (req) => {
       }
 
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const resultado = totalReceitas - totalDespesas;
+      const labelResultado = resultado >= 0 ? "Lucro do Período" : "Prejuízo do Período";
+      const emojiResultado = resultado >= 0 ? "📈" : "📉";
 
-      chartMsg += `📈 <b>Total de Receitas:</b> <b>${format(totalReceitas)}</b> (${todasReceitas.length} lançamentos)\n`;
-      chartMsg += `📉 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b> (${todasDespesas.length} lançamentos)\n`;
-      chartMsg += `💵 <b>Resultado do Período:</b> <b>${format(saldoPeriodo)}</b>\n\n`;
-      chartMsg += `💡 <i>Abra o Wallet App para navegar no gráfico interativo com filtros por categoria!</i>`;
+      chartMsg += `💰 <b>Total de Receitas:</b> <b>${format(totalReceitas)}</b> (${todasReceitas.length} lançamentos)\n`;
+      chartMsg += `💸 <b>Total de Despesas:</b> <b>${format(totalDespesas)}</b> (${todasDespesas.length} lançamentos)\n`;
+      chartMsg += `${emojiResultado} <b>${labelResultado}:</b> <b>${format(resultado)}</b>\n\n`;
+
+      chartMsg += `💡 <b>Entenda:</b>\n`;
+      chartMsg += `• <b>Resultado do período</b> = Receitas − Despesas (lucro/prejuízo operacional)\n`;
+      chartMsg += `• <b>Saldo bancário</b> = Dinheiro disponível nas contas agora\n`;
+      chartMsg += `• Para ver seu saldo real: <i>"Quanto tenho no banco?"</i> ou <code>/saldo</code>`;
 
       await sendReply(chartMsg);
       return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1059,13 +1760,24 @@ serve(async (req) => {
         `🤖 <b>Comandos do Bot Wallet:</b>\n\n` +
         `/dividas - Lista suas dívidas pendentes\n` +
         `/saldo - Exibe o saldo consolidado\n` +
+        `/agenda - Consulta seus eventos e compromissos\n` +
+        `/previsao - Previsão de fluxo de caixa inteligente\n` +
+        `/custo [produto] - Histórico de custos e alertas de aumento\n` +
+        `/metricas - Métricas e telemetria da IA\n` +
         `/ensinar - Ensinar vínculo de fornecedor com categoria\n` +
         `/start - Gerar código de vínculo\n` +
         `/ajuda - Ver este menu de comandos\n\n` +
+        `📸 <b>Fotos & Documentos:</b>\n` +
+        `• <b>Nota Fiscal de Compra (DANFE):</b> Envie a foto para atualizar estoque e custo dos produtos automaticamente.\n` +
+        `• <b>Boleto Bancário:</b> Envie a foto para cadastrar como dívida a pagar.\n` +
+        `• <b>Fechamento de Caixa:</b> Envie a foto do relatório ou envelope para conferir com o Eyemobile.\n\n` +
+        `🎙️ <b>Comandos por Áudio:</b>\n` +
+        `• Envie mensagens de voz no privado para transcrever e executar ações automaticamente!\n\n` +
         `💬 <i>Você também pode conversar naturalmente! Exemplos:</i>\n` +
         `• <i>"Quanto vendeu hoje?"</i>\n` +
-        `• <i>"Qual o resumo do mês?"</i>\n` +
-        `• <i>"Cadastre uma despesa de R$ 50 de almoço"</i>`
+        `• <i>"Tem algum evento na agenda semana que vem?"</i>\n` +
+        `• <i>"Quando acaba meu caixa?"</i>\n` +
+        `• <i>"Qual o resumo do mês?"</i>`
       );
       return new Response("OK", { status: 200, headers: corsHeaders });
     }
@@ -1153,6 +1865,166 @@ serve(async (req) => {
           }
           return hojeStr;
         };
+
+        // ─── CASO B: PROPOSTA DE NF DE COMPRA (ESTOQUE & CUSTO) ───
+        if (proposta.tipo === "atualizar_estoque_nf" || conversaAtiva?.estado === "aguardando_confirmacao_nf") {
+          const nfId = dados?.nf_id || conversaAtiva?.proposta_id;
+
+          const { data: nf } = await supabase
+            .from("notas_fiscais_compra")
+            .select("*")
+            .eq("id", nfId)
+            .single();
+
+          const { data: itens } = await supabase
+            .from("nf_itens")
+            .select("*")
+            .eq("nf_id", nfId);
+
+          if (!nf || !itens || itens.length === 0) {
+            await sendReply("❌ NF não encontrada ou sem itens para atualização.");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          let msg = `✅ <b>Nota Fiscal de Compra Confirmada!</b>\n\nAtualizando estoque e custos...\n\n`;
+          const alertasAumento: string[] = [];
+          const sugestoesPreco: string[] = [];
+          const produtosAtualizados: string[] = [];
+
+          const fmt = (v: any) =>
+            v != null && !isNaN(Number(v))
+              ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+              : "R$ 0,00";
+
+          for (const item of itens) {
+            const { data: produtoExistente } = await supabase
+              .from("produtos_eyemobile")
+              .select("*")
+              .eq("user_id", userId)
+              .eq("codigo", item.codigo_produto)
+              .maybeSingle();
+
+            let variacaoPct = 0;
+            if (produtoExistente?.custo_atual && item.custo_unitario_liquido) {
+              variacaoPct = ((item.custo_unitario_liquido - produtoExistente.custo_atual) / produtoExistente.custo_atual) * 100;
+            }
+
+            await supabase.from("historico_custo_produto").insert({
+              user_id: userId,
+              workspace_id: nf.workspace_id,
+              produto_codigo: item.codigo_produto,
+              produto_descricao: item.descricao,
+              fornecedor: nf.fornecedor,
+              custo_unitario: item.custo_unitario_liquido,
+              quantidade: item.quantidade,
+              nf_id: nf.id,
+              data_compra: nf.data_entrada || hojeStr,
+              variacao_percentual: variacaoPct,
+            });
+
+            const dataLimite = new Date();
+            dataLimite.setMonth(dataLimite.getMonth() - 12);
+
+            const { data: historico12m } = await supabase
+              .from("historico_custo_produto")
+              .select("custo_unitario, data_compra")
+              .eq("user_id", userId)
+              .eq("produto_codigo", item.codigo_produto)
+              .gte("data_compra", dataLimite.toISOString().split("T")[0])
+              .order("data_compra", { ascending: true })
+              .limit(1);
+
+            const custoInicial12m = historico12m?.[0]?.custo_unitario || produtoExistente?.custo_atual || item.custo_unitario_liquido;
+            const variacao12m = custoInicial12m > 0
+              ? ((item.custo_unitario_liquido - custoInicial12m) / custoInicial12m) * 100
+              : 0;
+
+            let markupAplicado = produtoExistente?.markup_padrao || 30;
+
+            if (variacao12m > 10) {
+              const sugestaoPreco = item.custo_unitario_liquido * (1 + markupAplicado / 100);
+
+              alertasAumento.push(
+                `🔴 <b>${item.descricao}</b>\n` +
+                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
+                `   Custo novo: ${fmt(item.custo_unitario_liquido)}\n` +
+                `   📈 Aumento: <b>+${variacao12m.toFixed(1)}%</b> em 12 meses`
+              );
+
+              sugestoesPreco.push(
+                `💡 <b>${item.descricao}</b>\n` +
+                `   Preço atual: ${fmt(produtoExistente?.preco_venda)}\n` +
+                `   💰 Sugestão novo preço: <b>${fmt(sugestaoPreco)}</b>\n` +
+                `   (markup ${markupAplicado}% sobre custo ${fmt(item.custo_unitario_liquido)})`
+              );
+
+              await supabase.from("historico_custo_produto")
+                .update({ alerta_enviado: true, sugestao_preco_venda: sugestaoPreco, markup_aplicado: markupAplicado })
+                .eq("nf_id", nf.id)
+                .eq("produto_codigo", item.codigo_produto);
+            } else if (variacao12m > 0) {
+              alertasAumento.push(
+                `🟡 <b>${item.descricao}</b>\n` +
+                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
+                `   Custo novo: ${fmt(item.custo_unitario_liquido)}\n` +
+                `   📈 Aumento: +${variacao12m.toFixed(1)}% em 12 meses (dentro da margem)`
+              );
+            }
+
+            if (produtoExistente) {
+              await supabase.from("produtos_eyemobile").update({
+                custo_atual: item.custo_unitario_liquido,
+                estoque_atual: (Number(produtoExistente.estoque_atual) || 0) + (Number(item.quantidade) || 0),
+                ultima_atualizacao_custo: new Date().toISOString(),
+                alerta_aumento_10pct: variacao12m > 10,
+              }).eq("id", produtoExistente.id);
+            } else {
+              await supabase.from("produtos_eyemobile").insert({
+                user_id: userId,
+                workspace_id: nf.workspace_id,
+                codigo: item.codigo_produto,
+                descricao: item.descricao,
+                custo_atual: item.custo_unitario_liquido,
+                estoque_atual: Number(item.quantidade) || 0,
+                ultima_atualizacao_custo: new Date().toISOString(),
+              });
+            }
+
+            await supabase.from("nf_itens").update({
+              status_estoque: "atualizado",
+              produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
+            }).eq("id", item.id);
+
+            produtosAtualizados.push(item.descricao);
+          }
+
+          await supabase.from("notas_fiscais_compra").update({ status: "custo_atualizado" }).eq("id", nfId);
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
+          await supabase.from("telegram_conversas").upsert(
+            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+            { onConflict: "chat_id" }
+          );
+
+          msg += `<b>📦 Estoque atualizado:</b> ${produtosAtualizados.length} produtos\n`;
+          msg += `<b>💰 Custos atualizados:</b> ${produtosAtualizados.length} produtos\n\n`;
+
+          if (alertasAumento.length > 0) {
+            msg += `📊 <b>RESUMO DE VARIAÇÕES DE CUSTO:</b>\n\n`;
+            alertasAumento.forEach(a => msg += a + "\n\n");
+          }
+
+          if (sugestoesPreco.length > 0) {
+            msg += `\n💡 <b>SUGESTÕES DE NOVO PREÇO DE VENDA:</b>\n\n`;
+            sugestoesPreco.forEach(s => msg += s + "\n\n");
+            msg += `\n⚠️ <b>Ação necessária:</b> Revise os preços de venda no Eyemobile PDV.`;
+          } else {
+            msg += `✅ <b>Nenhum aumento crítico de custo detectado (>10%).</b>\n`;
+            msg += `💡 Preços de venda estão dentro da margem esperada.`;
+          }
+
+          await sendReply(msg);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
 
         const valorNum = parseNum(dados.valor_total || dados.valor);
         const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
@@ -1570,6 +2442,524 @@ serve(async (req) => {
             }
           } catch (imgErr: any) {
             console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
+          }
+        }
+
+        // ================================================================
+        // FECHAMENTO DE CAIXA (grupo fechamento ou foto de envelope)
+        // CONFERÊNCIA vs SISTEMA EYEMOBILE + SOBRA AUTOMÁTICA
+        // ================================================================
+        const isFechamentoContext =
+          (isGroup && (grupoConfig?.tipo_grupo === "fechamento" || grupoConfig?.acoes_permitidas?.includes("extrair_fechamento"))) ||
+          caption.toLowerCase().includes("fechamento") ||
+          caption.toLowerCase().includes("envelope") ||
+          caption.toLowerCase().includes("caixa");
+
+        if (isFechamentoContext) {
+          console.log("[telegram-webhook] Iniciando extração e conferência de Fechamento de Caixa Rodo Point...");
+
+          // 1. Busca vendas do sistema para o dia de hoje (ou data informada)
+          let qVendasHoje = supabase
+            .from("transacoes")
+            .select("valor, metodo_pagamento")
+            .eq("tipo", "receita")
+            .eq("data", hojeStr);
+
+          if (workspaceId) qVendasHoje = qVendasHoje.eq("workspace_id", workspaceId);
+          else qVendasHoje = qVendasHoje.eq("user_id", userId);
+
+          const { data: txsHoje } = await qVendasHoje;
+
+          const eyemobilePorMetodo: Record<string, number> = {
+            dinheiro: 0,
+            debito: 0,
+            credito: 0,
+            pix: 0,
+            voucher: 0,
+          };
+          let totalEyemobile = 0;
+
+          for (const tx of txsHoje || []) {
+            const val = Number(tx.valor) || 0;
+            const m = (tx.metodo_pagamento || "").toLowerCase();
+            totalEyemobile += val;
+            if (m.includes("dinheiro")) eyemobilePorMetodo.dinheiro += val;
+            else if (m.includes("deb") || m.includes("debito")) eyemobilePorMetodo.debito += val;
+            else if (m.includes("cred") || m.includes("credito")) eyemobilePorMetodo.credito += val;
+            else if (m.includes("pix")) eyemobilePorMetodo.pix += val;
+            else if (m.includes("voucher") || m.includes("alimentacao") || m.includes("refeicao")) eyemobilePorMetodo.voucher += val;
+          }
+
+          const promptConferencia = `Você é um conferente especialista de fechamento de caixa e envelopes da Rodo Point.
+
+Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de maquininha ou resumo) e extraia os valores por forma de pagamento:
+- Dinheiro
+- Cartão Débito
+- Cartão Crédito
+- Pix
+- Voucher (somente se indicar VA, VR, Alimentação ou Refeição)
+- Sobra (se houver valor anotado como sobra de caixa)
+
+REGRAS DE CONFERÊNCIA:
+1. QR Code / Pix na maquininha = PIX
+2. Comprovante de Débito = DÉBITO
+3. Comprovante de Crédito = CRÉDITO
+4. SOMENTE classifique como VOUCHER se indicar explicitamente VA/VR/Ticket/Alelo/Sodexo
+5. Nunca invente valores numéricos
+6. Se houver Caixa 1 e Caixa 2 discriminados, separe nos campos correspondentes e faça a soma no campo "total".
+7. Se houver apenas um total geral ou um caixa, preencha no campo "total".
+
+Responda ESTRITAMENTE em formato JSON (sem markdown):
+{
+  "tipo": "fechamento",
+  "data": "DD/MM/AAAA",
+  "caixa1": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "caixa2": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "sobra": 0,
+  "observacao": ""
+}`;
+
+          const aiResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              user_id: userId,
+              temperature: 0.0,
+              messages: [
+                { role: "system", content: promptConferencia },
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: `Dados de vendas no sistema Eyemobile hoje: Dinheiro=R$ ${eyemobilePorMetodo.dinheiro.toFixed(2)}, Débito=R$ ${eyemobilePorMetodo.debito.toFixed(2)}, Crédito=R$ ${eyemobilePorMetodo.credito.toFixed(2)}, Pix=R$ ${eyemobilePorMetodo.pix.toFixed(2)}. Extraia e confira este fechamento.`,
+                    },
+                    { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                  ],
+                },
+              ],
+            }),
+          });
+
+          if (aiResp.ok) {
+            const aiJson = await aiResp.json();
+            const rawContent = aiJson.choices?.[0]?.message?.content || "";
+            console.log("[telegram-webhook] Resposta bruta conferência fechamento:", rawContent.slice(0, 300));
+
+            let fechamento: any = null;
+            try {
+              fechamento = JSON.parse(rawContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+            } catch {
+              const match = rawContent.match(/\{[\s\S]*\}/);
+              if (match) {
+                try { fechamento = JSON.parse(match[0]); } catch {}
+              }
+            }
+
+            if (fechamento && fechamento.tipo === "fechamento") {
+              const fmt = (v: any) =>
+                v != null && Number(v) > 0
+                  ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                  : "R$ 0,00";
+
+              const env = fechamento.total || fechamento.envelope || {};
+              const envDinheiro = Number(env.dinheiro) || 0;
+              const envDebito = Number(env.debito) || 0;
+              const envCredito = Number(env.credito) || 0;
+              const envPix = Number(env.pix) || 0;
+              const envVoucher = Number(env.voucher) || 0;
+              const totalEnvelope = envDinheiro + envDebito + envCredito + envPix + envVoucher;
+
+              // Comparar se há divergências com o sistema (apenas se houver vendas registradas no sistema)
+              const diferencas: string[] = [];
+              if (totalEyemobile > 0) {
+                const compara = (label: string, envVal: number, sysVal: number) => {
+                  const diff = envVal - sysVal;
+                  if (Math.abs(diff) > 0.5) {
+                    diferencas.push(
+                      `• <b>${label}:</b> Envelope ${fmt(envVal)} vs Sistema ${fmt(sysVal)} (diferença: ${diff > 0 ? "+" : ""}${fmt(diff)})`
+                    );
+                  }
+                };
+
+                compara("Dinheiro", envDinheiro, eyemobilePorMetodo.dinheiro);
+                compara("Débito", envDebito, eyemobilePorMetodo.debito);
+                compara("Crédito", envCredito, eyemobilePorMetodo.credito);
+                compara("Pix", envPix, eyemobilePorMetodo.pix);
+              }
+
+              let msg = "";
+
+              if (diferencas.length > 0) {
+                // DIVERGÊNCIA IDENTIFICADA
+                msg = `⚠️ <b>DIVERGÊNCIA NO FECHAMENTO!</b>\n\n`;
+                msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
+                msg += `<b>📄 Envelope Físico:</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(envDinheiro)}\n`;
+                msg += `💳 Cartão Débito: ${fmt(envDebito)}\n`;
+                msg += `💳 Cartão Crédito: ${fmt(envCredito)}\n`;
+                msg += `📲 Pix: ${fmt(envPix)}\n`;
+                if (envVoucher > 0) msg += `🎫 Voucher: ${fmt(envVoucher)}\n`;
+                msg += `\n`;
+                msg += `<b>💻 Sistema (Eyemobile):</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(eyemobilePorMetodo.dinheiro)}\n`;
+                msg += `💳 Cartão Débito: ${fmt(eyemobilePorMetodo.debito)}\n`;
+                msg += `💳 Cartão Crédito: ${fmt(eyemobilePorMetodo.credito)}\n`;
+                msg += `📲 Pix: ${fmt(eyemobilePorMetodo.pix)}\n`;
+                msg += `\n`;
+                msg += `❌ <b>Diferenças Encontradas:</b>\n`;
+                diferencas.forEach((d) => (msg += `${d}\n`));
+                msg += `\n💡 <i>Verifique os comprovantes do caixa e envie novamente se necessário.</i>`;
+
+                await supabase.from("fechamentos_caixa").insert({
+                  user_id: userId,
+                  workspace_id: workspaceId,
+                  chat_id: Number(chatId) || null,
+                  data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
+                  eyemobile_total: eyemobilePorMetodo,
+                  envelope_total: env,
+                  caixa1: fechamento.caixa1 || {},
+                  caixa2: fechamento.caixa2 || {},
+                  total: env,
+                  status: "divergencia",
+                  observacao: diferencas.join("; "),
+                });
+              } else {
+                // FECHAMENTO OK — BATEU COM SUCESSO!
+                msg = `✅ <b>Fechamento OK — Confirmado!</b>\n\n`;
+                msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
+
+                const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
+                const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+
+                if (temCaixa1 || temCaixa2) {
+                  if (temCaixa1) {
+                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                  }
+                  if (temCaixa2) {
+                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                  }
+                }
+
+                msg += `<b>🔸 Valores Conferidos:</b>\n`;
+                msg += `💰 Dinheiro: ${fmt(envDinheiro)} ✅\n`;
+                msg += `💳 Cartão Débito: ${fmt(envDebito)} ✅\n`;
+                msg += `💳 Cartão Crédito: ${fmt(envCredito)} ✅\n`;
+                msg += `📲 Pix: ${fmt(envPix)} ✅\n`;
+                if (envVoucher > 0) msg += `🎫 Voucher: ${fmt(envVoucher)} ✅\n`;
+                msg += `\n`;
+                if (totalEyemobile > 0) {
+                  msg += `📊 Total Sistema (PDV): <b>${fmt(totalEyemobile)}</b>\n`;
+                }
+                msg += `📊 Total Envelope: <b>${fmt(totalEnvelope)}</b>\n`;
+                msg += `✅ <i>Sem divergências operacionais!</i>\n`;
+
+                // LANÇAMENTO AUTOMÁTICO DE SOBRA (se detectada no envelope)
+                const sobraValor = Number(fechamento.sobra) || 0;
+                if (sobraValor > 0) {
+                  msg += `\n💵 <b>Sobra detectada:</b> <b>${fmt(sobraValor)}</b>\n`;
+
+                  const { data: rpcResult, error: errSobra } = await supabase.rpc("adicionar_saldo_conta", {
+                    p_user_id: userId,
+                    p_workspace_id: workspaceId,
+                    p_conta_nome: "Caixa",
+                    p_valor: sobraValor,
+                    p_descricao: `Sobra fechamento caixa - ${fechamento.data || hojeStr}`,
+                    p_categoria_nome: "Sobra de Caixa",
+                  });
+
+                  if (rpcResult?.success && !errSobra) {
+                    msg += `✅ <b>Sobra lançada automaticamente!</b>\n`;
+                    msg += `📥 Conta: Caixa / Dinheiro\n`;
+                    msg += `💵 Valor: <b>${fmt(sobraValor)}</b>\n`;
+                    msg += `🏷️ Categoria: <b>Sobra de Caixa</b>\n`;
+                    if (rpcResult.novo_saldo != null) {
+                      msg += `💰 Novo saldo em caixa: <b>${fmt(rpcResult.novo_saldo)}</b>\n`;
+                    }
+                    msg += `\n💡 <i>Seu saldo físico e o DRE já foram atualizados no Wallet App.</i>`;
+                  }
+                } else {
+                  msg += `\n<i>Para lançar sobra de caixa extra, envie no chat:</i>\n<code>Sobra: R$ 50,00</code>`;
+                }
+
+                await supabase.from("fechamentos_caixa").insert({
+                  user_id: userId,
+                  workspace_id: workspaceId,
+                  chat_id: Number(chatId) || null,
+                  data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
+                  eyemobile_total: eyemobilePorMetodo,
+                  envelope_total: env,
+                  caixa1: fechamento.caixa1 || {},
+                  caixa2: fechamento.caixa2 || {},
+                  total: env,
+                  sobra: sobraValor > 0 ? sobraValor : null,
+                  status: "confirmado",
+                });
+              }
+
+              await sendReply(msg);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+          }
+        }
+
+        // ================================================================
+        // NOTA FISCAL DE COMPRA — DETECÇÃO POR FOTO / DANFE NO PRIVADO
+        // ================================================================
+        const isNFCompraHint =
+          respLower.includes("nota fiscal") ||
+          respLower.includes("nf compra") ||
+          respLower.includes("danfe") ||
+          respLower.includes("estoque") ||
+          respLower.includes("atualizar custo") ||
+          respLower.includes("coca cola") ||
+          respLower.includes("brahma") ||
+          respLower.includes("ambev") ||
+          respLower.includes("spal");
+
+        // Se for no privado (e não for contexto de fechamento de caixa), testa se a foto é uma NF de compra
+        if (!isGroup || isNFCompraHint) {
+          console.log("[telegram-webhook] Verificando se documento é Nota Fiscal de Compra (DANFE)...");
+          const promptNF = `Você é um extrator especializado em Notas Fiscais de COMPRA (entrada de mercadoria / DANFE) brasileiras (ex: Distribuidoras de Bebidas, Alimentos, Ambev, Coca-Cola/SPAL, Atacadistas).
+
+Analise esta imagem. Se for uma Nota Fiscal / DANFE de compra de produtos/mercadorias, extraia TODOS os campos com máxima precisão.
+
+CAMPOS DO CABEÇALHO:
+- numero_nf: Número da Nota Fiscal (apenas números)
+- serie_nf: Série da NF
+- data_emissao: Data de emissão (YYYY-MM-DD)
+- data_entrada: Data de entrada/saída (YYYY-MM-DD)
+- fornecedor: Razão social do emitente/fornecedor (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A", "Brasnorte Distribuidora de Bebidas Ltda")
+- cnpj_fornecedor: CNPJ do fornecedor (apenas números)
+- chave_acesso: Chave de acesso da NF-e (44 dígitos, se visível)
+
+VALORES TOTAIS:
+- valor_total_nf: Valor total da NF
+- valor_produtos: Valor total dos produtos
+- valor_icms: Valor total do ICMS
+- valor_ipi: Valor total do IPI
+- valor_frete: Valor do frete
+
+ITENS/PRODUTOS (liste TODOS os itens da tabela de produtos/serviços da DANFE):
+Para cada item, extraia:
+- codigo: Código do produto (coluna CÓDIGO DO PRODUTO do fornecedor, ex: 55404, 19071, 11969, 55443)
+- descricao: Descrição completa do produto (ex: "COCA-COLA LT 250ML FL", "FANTA LARANJA 2L", "BRAHMA DUPLO MALTE 350ML")
+- ncm: Código NCM (8 dígitos)
+- cfop: CFOP (4 dígitos, ex: 5102, 5403, 5405)
+- unidade: Unidade de medida (CX, UN, FD, KG, LT)
+- quantidade: Quantidade faturada (número decimal)
+- valor_unitario: Valor unitário do item
+- valor_total: Valor total do item
+- icms_aliquota: Alíquota de ICMS (%)
+- ipi_aliquota: Alíquota de IPI (%)
+- pis_aliquota: Alíquota de PIS (%)
+- cofins_aliquota: Alíquota de COFINS (%)
+
+CÁLCULO DO CUSTO LÍQUIDO UNITÁRIO:
+- custo_unitario_liquido = valor_unitario - (valor_unitario * (icms_aliquota / 100)) - (valor_unitario * (ipi_aliquota / 100))
+
+REGRAS CRÍTICAS:
+1. Se a imagem NÃO for uma Nota Fiscal / DANFE de compra (ex: se for um Boleto Bancário com código de barras no rodapé), responda estritamente: {"tipo": "outro"}
+2. Se for uma DANFE / NF de compra, responda estritamente em JSON:
+{
+  "tipo": "nf_compra",
+  "cabecalho": {
+    "numero_nf": "...",
+    "serie_nf": "...",
+    "data_emissao": "YYYY-MM-DD",
+    "data_entrada": "YYYY-MM-DD",
+    "fornecedor": "...",
+    "cnpj_fornecedor": "...",
+    "chave_acesso": "..."
+  },
+  "valores_totais": {
+    "valor_total_nf": 0.00,
+    "valor_produtos": 0.00,
+    "valor_icms": 0.00,
+    "valor_ipi": 0.00,
+    "valor_frete": 0.00
+  },
+  "itens": [
+    {
+      "codigo": "...",
+      "descricao": "...",
+      "ncm": "...",
+      "cfop": "...",
+      "unidade": "CX",
+      "quantidade": 1.0000,
+      "valor_unitario": 0.0000,
+      "valor_total": 0.00,
+      "icms_aliquota": 0.00,
+      "ipi_aliquota": 0.00,
+      "pis_aliquota": 0.00,
+      "cofins_aliquota": 0.00,
+      "custo_unitario_liquido": 0.0000
+    }
+  ],
+  "confianca": "alta"
+}`;
+
+          try {
+            const aiNfResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${supabaseServiceKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                user_id: userId,
+                temperature: 0.0,
+                messages: [
+                  { role: "system", content: promptNF },
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: "Extraia todos os dados desta Nota Fiscal de Compra (DANFE) se for uma NF:" },
+                      { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                    ],
+                  },
+                ],
+              }),
+            });
+
+            if (aiNfResp.ok) {
+              const aiNfJson = await aiNfResp.json();
+              const rawNfContent = aiNfJson.choices?.[0]?.message?.content || "";
+              let parsedNf: any = null;
+              try {
+                parsedNf = JSON.parse(rawNfContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+              } catch {
+                const matchNf = rawNfContent.match(/\{[\s\S]*\}/);
+                if (matchNf) {
+                  try { parsedNf = JSON.parse(matchNf[0]); } catch {}
+                }
+              }
+
+              if (parsedNf && parsedNf.tipo === "nf_compra" && parsedNf.itens?.length > 0) {
+                console.log("[telegram-webhook] NF de Compra identificada com sucesso! Itens:", parsedNf.itens.length);
+
+                const { data: wsMember } = await supabase
+                  .from("workspace_members")
+                  .select("workspace_id")
+                  .eq("user_id", userId)
+                  .limit(1)
+                  .maybeSingle();
+
+                const wsId = wsMember?.workspace_id || workspaceId || null;
+
+                const { data: nfSalva, error: errNF } = await supabase
+                  .from("notas_fiscais_compra")
+                  .insert({
+                    user_id: userId,
+                    workspace_id: wsId,
+                    chat_id: Number(chatId) || null,
+                    numero_nf: parsedNf.cabecalho?.numero_nf,
+                    serie_nf: parsedNf.cabecalho?.serie_nf,
+                    fornecedor: parsedNf.cabecalho?.fornecedor,
+                    cnpj_fornecedor: parsedNf.cabecalho?.cnpj_fornecedor,
+                    data_emissao: parsedNf.cabecalho?.data_emissao,
+                    data_entrada: parsedNf.cabecalho?.data_entrada || hojeStr,
+                    valor_total: parsedNf.valores_totais?.valor_total_nf,
+                    valor_icms: parsedNf.valores_totais?.valor_icms,
+                    valor_ipi: parsedNf.valores_totais?.valor_ipi,
+                    valor_frete: parsedNf.valores_totais?.valor_frete,
+                    valor_produtos: parsedNf.valores_totais?.valor_produtos,
+                    chave_acesso: parsedNf.cabecalho?.chave_acesso,
+                    status: "pendente",
+                    origem: "foto",
+                  })
+                  .select("id")
+                  .single();
+
+                if (!errNF && nfSalva) {
+                  const itensParaInserir = (parsedNf.itens || []).map((item: any) => ({
+                    nf_id: nfSalva.id,
+                    codigo_produto: item.codigo,
+                    descricao: item.descricao,
+                    ncm: item.ncm,
+                    cfop: item.cfop,
+                    unidade: item.unidade,
+                    quantidade: item.quantidade,
+                    valor_unitario: item.valor_unitario,
+                    valor_total: item.valor_total,
+                    icms_aliquota: item.icms_aliquota,
+                    ipi_aliquota: item.ipi_aliquota,
+                    pis_aliquota: item.pis_aliquota,
+                    cofins_aliquota: item.cofins_aliquota,
+                    custo_unitario_liquido: item.custo_unitario_liquido || item.valor_unitario,
+                    status_estoque: "pendente",
+                  }));
+
+                  if (itensParaInserir.length > 0) {
+                    await supabase.from("nf_itens").insert(itensParaInserir);
+                  }
+
+                  const fmt = (v: any) =>
+                    v != null && !isNaN(Number(v))
+                      ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                      : "R$ 0,00";
+
+                  let msg = `📄 <b>Nota Fiscal de Compra Identificada!</b>\n\n`;
+                  msg += `🏢 <b>Fornecedor:</b> ${parsedNf.cabecalho?.fornecedor || "N/A"}\n`;
+                  msg += `📋 <b>NF:</b> ${parsedNf.cabecalho?.numero_nf || "N/A"} ${parsedNf.cabecalho?.serie_nf ? `(Série ${parsedNf.cabecalho.serie_nf})` : ""}\n`;
+                  msg += `📅 <b>Emissão:</b> ${parsedNf.cabecalho?.data_emissao ? parsedNf.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
+                  msg += `💰 <b>Valor Total da NF:</b> <b>${fmt(parsedNf.valores_totais?.valor_total_nf)}</b>\n`;
+                  msg += `📦 <b>Itens Localizados:</b> ${parsedNf.itens.length} produtos\n\n`;
+
+                  parsedNf.itens.slice(0, 8).forEach((item: any, i: number) => {
+                    const qtd = Number(item.quantidade) || 1;
+                    const vUnit = Number(item.valor_unitario) || 0;
+                    const vLiq = Number(item.custo_unitario_liquido) || vUnit;
+                    msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
+                    msg += `   📦 ${qtd} ${item.unidade || "UN"} × ${fmt(vUnit)}\n`;
+                    msg += `   💰 Total: ${fmt(item.valor_total)} | Custo Líquido: <b>${fmt(vLiq)}</b>\n\n`;
+                  });
+
+                  if (parsedNf.itens.length > 8) {
+                    msg += `<i>... e mais ${parsedNf.itens.length - 8} produtos</i>\n\n`;
+                  }
+
+                  msg += `⚠️ <b>Deseja confirmar e atualizar estoque e custos no sistema?</b>\n\n`;
+                  msg += `👉 Responda <b>CONFIRMAR</b> para atualizar o sistema.\n`;
+                  msg += `👉 Responda <b>CANCELAR</b> para descartar.\n\n`;
+                  msg += `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+                  const { data: propCriada } = await supabase.from("telegram_propostas").insert({
+                    user_id: userId,
+                    chat_id: Number(chatId) || null,
+                    tipo: "atualizar_estoque_nf",
+                    dados: { nf_id: nfSalva.id },
+                    resumo: `NF ${parsedNf.cabecalho?.numero_nf} - ${parsedNf.cabecalho?.fornecedor} - ${fmt(parsedNf.valores_totais?.valor_total_nf)}`,
+                    status: "pendente",
+                    expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                  }).select("id").single();
+
+                  if (propCriada) {
+                    await supabase.from("telegram_conversas").upsert(
+                      {
+                        user_id: userId,
+                        chat_id: chatId,
+                        estado: "aguardando_confirmacao_nf",
+                        proposta_id: propCriada.id,
+                        updated_at: new Date().toISOString(),
+                      },
+                      { onConflict: "chat_id" }
+                    );
+                  }
+
+                  await sendReply(msg);
+                  return new Response("OK", { status: 200, headers: corsHeaders });
+                }
+              }
+            }
+          } catch (errNf: any) {
+            console.warn("[telegram-webhook] Erro na tentativa de ler NF:", errNf.message);
           }
         }
 

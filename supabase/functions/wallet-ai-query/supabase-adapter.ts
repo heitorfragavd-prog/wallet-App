@@ -34,8 +34,11 @@ export async function executeSupabaseFinancialQuery(
   query: FinancialDataQuery,
 ): Promise<FinancialDataRow[]> {
   let builder = client.from(query.table).select(query.columns);
-  builder = builder.eq("user_id", query.equals.user_id);
-  builder = builder.eq("workspace_id", query.equals.workspace_id);
+  for (const [key, value] of Object.entries(query.equals)) {
+    if (value !== undefined) {
+      builder = builder.eq(key, value);
+    }
+  }
   if (query.dateRange) {
     builder = builder.gte(query.dateRange.column, query.dateRange.start);
     builder = builder.lte(query.dateRange.column, query.dateRange.end);

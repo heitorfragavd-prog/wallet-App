@@ -10,7 +10,7 @@ import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./quer
 export interface FinancialDataQuery {
   table: "receitas" | "despesas" | "transacoes" | "contas_usuario" | "dividas";
   columns: string;
-  equals: { user_id: string; workspace_id: string };
+  equals: { user_id: string; workspace_id: string; [key: string]: unknown };
   dateRange?: { column: "data" | "data_vencimento"; start: string; end: string };
 }
 
@@ -80,22 +80,48 @@ function scopedQuery(
 export function createFinancialRepository(execute: FinancialDataExecutor): FinancialQueryRepository {
   return {
     async listRevenues(context, period) {
-      const rows = await execute(scopedQuery(
-        "receitas",
-        "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
-        context,
-        period,
-      ));
-      return normalizeRecords(rows, context, "receita", "income");
+      const [recRows, txRows] = await Promise.all([
+        execute(scopedQuery(
+          "receitas",
+          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          context,
+          period,
+        )),
+        execute({
+          ...scopedQuery(
+            "transacoes",
+            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            context,
+            period,
+          ),
+          equals: { user_id: context.userId, workspace_id: context.workspaceId, tipo: "receita" },
+        }),
+      ]);
+      const recs = normalizeRecords(recRows, context, "receita", "income");
+      const txs = normalizeRecords(txRows, context, "transacao", "income");
+      return [...recs, ...txs];
     },
     async listExpenses(context, period) {
-      const rows = await execute(scopedQuery(
-        "despesas",
-        "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
-        context,
-        period,
-      ));
-      return normalizeRecords(rows, context, "despesa", "expense");
+      const [despRows, txRows] = await Promise.all([
+        execute(scopedQuery(
+          "despesas",
+          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          context,
+          period,
+        )),
+        execute({
+          ...scopedQuery(
+            "transacoes",
+            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            context,
+            period,
+          ),
+          equals: { user_id: context.userId, workspace_id: context.workspaceId, tipo: "despesa" },
+        }),
+      ]);
+      const desps = normalizeRecords(despRows, context, "despesa", "expense");
+      const txs = normalizeRecords(txRows, context, "transacao", "expense");
+      return [...desps, ...txs];
     },
     async listTransactions(context, period) {
       const rows = await execute(scopedQuery(

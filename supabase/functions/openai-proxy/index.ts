@@ -31,6 +31,17 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "consultar_metricas_ia",
+      description: "Consulta o Painel de Métricas & Custos de IA do Wallet Agent, incluindo total de requisições, tokens processados, custo acumulado em USD e BRL, latência média e últimas ações auditadas. Use SEMPRE que o usuário perguntar sobre métricas de IA, custos de IA, gasto com IA, telemetria ou painel de IA.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "consultar_vendas_eyemobile",
       description: "Consulta vendas do PDV Eyemobile para uma data específica via API em tempo real. Retorna total de vendas, quantidade de transações, ticket médio e detalhamento por método de pagamento. Use esta ferramenta quando o usuário perguntar sobre vendas do dia, ontem, semana ou mês, especialmente quando os dados da tabela transacoes podem estar desatualizados.",
       parameters: {
@@ -619,6 +630,41 @@ async function consultarSaidasCaixaPeriodo(
 
 async function executeTool(name: string, args: Record<string, unknown>, supabase: any, userId: string): Promise<unknown> {
   switch (name) {
+    case "consultar_metricas_ia": {
+      const { data: events } = await supabase
+        .from("wallet_ai_audit_events")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      const evts = events || [];
+      const totalCalls = evts.length;
+      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
+      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
+      const estimatedCostBrl = estimatedCostUsd * 5.65;
+      const avgDuration = totalCalls > 0
+        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        : 0;
+
+      return {
+        painel: "Painel de Métricas & Custos de IA",
+        total_requisicoes: totalCalls,
+        taxa_sucesso: `${successRate.toFixed(1)}%`,
+        tokens_processados: totalTokens,
+        custo_acumulado_usd: `$${estimatedCostUsd.toFixed(4)}`,
+        custo_acumulado_brl: `R$ ${estimatedCostBrl.toFixed(2)}`,
+        tempo_medio_resposta_ms: avgDuration,
+        ultimas_acoes_auditadas: evts.slice(0, 5).map((e: any) => ({
+          data_hora: e.created_at,
+          ferramenta: e.tool_name,
+          duracao_ms: e.duration_ms,
+          status: e.execution_status
+        }))
+      };
+    }
     case "consultar_vendas_eyemobile": {
       const targetStart = (args.data_inicio as string) || (args.data as string) || getHojeBrasil();
       const targetEnd = (args.data_fim as string) || (args.data as string) || targetStart;
@@ -955,12 +1001,87 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
   
+  const url = new URL(req.url);
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return new Response(JSON.stringify({ error: "Missing authorization header" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
   
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const jwt = authHeader.replace("Bearer ", "").trim();
+
+  // ================================================================
+  // ENDPOINT: /transcribe-audio (Whisper Transcription)
+  // ================================================================
+  if (url.pathname.endsWith("/transcribe-audio") || (req.headers.get("content-type") || "").includes("multipart/form-data")) {
+    try {
+      const formData = await req.formData();
+      const audioFile = formData.get("audio") as File;
+      const targetUserId = (formData.get("user_id") as string) || "";
+
+      if (!audioFile) {
+        return new Response(JSON.stringify({ error: "Nenhum arquivo de áudio fornecido" }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
+      }
+
+      const supabase = createClient(supabaseUrl, supabaseServiceKey);
+      let openaiApiKey = Deno.env.get("OPENAI_API_KEY");
+      if (targetUserId) {
+        const { data: cfg } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", targetUserId).maybeSingle();
+        if (cfg?.api_key) openaiApiKey = cfg.api_key;
+      }
+
+      if (!openaiApiKey) {
+        return new Response(JSON.stringify({ error: "OpenAI API Key não configurada para transcrição" }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
+      }
+
+      const openaiFormData = new FormData();
+      openaiFormData.append("file", audioFile, audioFile.name || "audio.ogg");
+      openaiFormData.append("model", "whisper-1");
+      openaiFormData.append("language", "pt");
+      openaiFormData.append("response_format", "json");
+
+      const whisperResp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+        },
+        body: openaiFormData,
+      });
+
+      if (!whisperResp.ok) {
+        const errText = await whisperResp.text();
+        console.error("[openai-proxy] Whisper error:", errText);
+        return new Response(JSON.stringify({ error: "Falha na transcrição Whisper", details: errText }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
+      }
+
+      const whisperData = await whisperResp.json();
+      return new Response(
+        JSON.stringify({
+          success: true,
+          transcription: whisperData.text,
+          language: whisperData.language || "pt",
+        }),
+        {
+          status: 200,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        },
+      );
+    } catch (err: any) {
+      console.error("[openai-proxy] Whisper exception:", err);
+      return new Response(JSON.stringify({ error: err.message }), {
+        status: 500,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+  }
 
   let body: { model?: string; messages: unknown[]; max_tokens?: number; temperature?: number; user_id?: string; response_format?: unknown };
   try {
@@ -1005,9 +1126,18 @@ Deno.serve(async (req: Request) => {
   console.log("[openai-proxy] ===== REQUEST =====");
   console.log("[openai-proxy] userId:", userId, "model:", body.model || "gpt-4o-mini", "messageCount:", body.messages.length, "toolsCount:", TOOLS.length);
   console.log("[openai-proxy] Tools registradas:", TOOLS.map(t => t.function.name).join(", "));
-  console.log("[openai-proxy] hasOpenAIKey:", !!openaiKey, "keySource:", config?.api_key ? "ia_configuracoes" : "env");
-
   const messages = [...body.messages] as Record<string, unknown>[];
+  const hojeBrasil = getHojeBrasil();
+  const hasSystem = messages.some((m) => m.role === "system");
+  if (!hasSystem) {
+    messages.unshift({
+      role: "system",
+      content: `Você é o Assistente Financeiro Inteligente do Wallet App.
+Data atual no Brasil: ${hojeBrasil} (America/Sao_Paulo).
+Ao responder perguntas sobre vendas, entradas ou faturamento de "hoje" ou datas relativas, utilize a ferramenta consultar_vendas_eyemobile com data_inicio = "${hojeBrasil}" e data_fim = "${hojeBrasil}".
+Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket médio e a quebra por métodos de pagamento (Pix, Débito, Crédito, Dinheiro).`,
+    });
+  }
   const MAX_ITERATIONS = 8;
 
   const toolsToUse = Array.isArray(body.tools) ? (body.tools.length > 0 ? body.tools : undefined) : (body.tools === null ? undefined : TOOLS);
@@ -1071,6 +1201,23 @@ Deno.serve(async (req: Request) => {
     if (!message.tool_calls || message.tool_calls.length === 0) {
       console.log("[openai-proxy] Iteração", i, "— resposta final do modelo (sem tool_calls)");
       console.log("[openai-proxy] Resposta content:", (message.content || "").slice(0, 300));
+      
+      const usage = data.usage || {};
+      const durationMs = Date.now() - (body._startTime || Date.now());
+      const toolsExecuted = (messages.filter((m: any) => m.role === "tool") as any[]).length;
+      
+      supabase.from("wallet_ai_audit_events").insert({
+        user_id: userId,
+        workspace_id: body.workspace_id || null,
+        tool_name: toolsExecuted > 0 ? "consultar_vendas_eyemobile" : "chat_assistente",
+        model: modelToUse,
+        tokens_prompt: usage.prompt_tokens || 0,
+        tokens_completion: usage.completion_tokens || 0,
+        tokens_total: usage.total_tokens || 0,
+        duration_ms: Math.max(50, durationMs),
+        execution_status: "success",
+      }).then(() => {});
+
       return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
     }
 
