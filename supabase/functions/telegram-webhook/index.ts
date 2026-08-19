@@ -3144,49 +3144,35 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
         // ================================================================
-        const docAnalysisSystemPrompt = `Você é um extrator especialista de documentos fiscais e financeiros brasileiros (DANFE / Nota Fiscal de Compra e Boleto Bancário).
+        const docAnalysisSystemPrompt = `INSTRUCAO ABSOLUTA: Voce e um scanner OCR. Leia APENAS o que esta VISIVEL na imagem. NUNCA invente, adivinhe, suponha ou complete dados.
 
-=== INSTRUÇÕES CRÍTICAS SOBRE A FOTO E A TABELA ===
-1. A foto pode estar na horizontal (deitada em 90° ou 270°), inclinada ou vertical. Leia perfeitamente em QUALQUER orientação!
-2. CONTAGEM OBRIGATÓRIA DA TABELA: Se o documento for uma DANFE / Nota Fiscal de Compra, conte visualmente QUANTAS LINHAS de produtos existem na tabela de "DADOS DO PRODUTO / SERVIÇO".
-3. NUNCA RESUMA OU AGRUPE: Não agrupe produtos similares. Não pule linhas. Cada linha da tabela é UM ITEM separado que DEVE constar no array. Se a nota tiver 8 ou 15 itens, você DEVE retornar todos os 8 ou 15 itens!
+PASSO 1: Identifique o tipo de documento. Se for DANFE / Nota Fiscal de Compra, use tipo "nf_compra". Se for Boleto Bancario, use tipo "boleto". Caso contrario, retorne { "tipo": "outro" }.
 
-REGRAS PARA NOTA FISCAL DE COMPRA ("nf_compra"):
-- cabecalho:
-  - numero_nf: Número da NF
-  - serie_nf: Série da NF
-  - data_emissao: YYYY-MM-DD
-  - data_entrada: YYYY-MM-DD
-  - fornecedor: Razão social do emitente/fornecedor (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A", "Brasnorte Distribuidora de Bebidas Ltda")
-  - cnpj_fornecedor: CNPJ (apenas dígitos)
-  - chave_acesso: Chave de acesso de 44 dígitos
-- valores_totais:
-  - valor_total_nf: Valor total da NF
-  - valor_produtos: Valor total dos produtos
-  - valor_icms: Valor do ICMS
-  - valor_ipi: Valor do IPI
-  - valor_frete: Valor do frete
-- itens: Lista com TODOS os produtos da tabela:
-  - codigo: Código do produto (número interno do fornecedor na 1ª coluna)
-  - descricao: Descrição completa do produto (incluindo volume, embalagem, sabor)
-  - ncm: NCM (8 dígitos)
-  - cfop: CFOP (4 dígitos)
-  - unidade: CX, UN, FD, KG, LT
-  - quantidade: Quantidade faturada (decimal)
-  - valor_unitario: Valor unitário
-  - valor_total: Valor total do item
-  - icms_aliquota: % ICMS
-  - ipi_aliquota: % IPI
-  - custo_unitario_liquido = valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
+PASSO 2: Leia o CABECALHO:
+- numero_nf, serie_nf, data_emissao (YYYY-MM-DD), data_entrada (YYYY-MM-DD), fornecedor (Razao Social exata na nota), cnpj_fornecedor, chave_acesso
 
-REGRAS PARA BOLETO BANCÁRIO ("boleto"):
-- beneficiario: Razão social da Empresa Beneficiária (no canhoto procure "RECEBEMOS DE:"). NUNCA use o pagador ou o banco!
-- pagador: Nome da pessoa/empresa pagadora
-- valor: Valor do documento
-- data_vencimento: Data de vencimento (YYYY-MM-DD)
-- linha_digitavel: Sequência de 47 dígitos
+PASSO 3: Leia os VALORES TOTAIS:
+- valor_total_nf, valor_produtos, valor_icms, valor_ipi, valor_frete
 
-FORMATO DE RESPOSTA OBRIGATÓRIO (JSON estrito):
+PASSO 4: Se for DANFE, leia a TABELA DE PRODUTOS.
+
+REGRAS CRITICAS DE PRODUTO (DANFE):
+- Leia CADA LINHA da tabela como um item separado.
+- A descricao deve ser EXATAMENTE o que esta escrito na nota.
+- NUNCA substitua, traduza, abrevie ou invente nomes de produtos.
+- Se diz 'Monster Energy LT 473ml', retorne EXATAMENTE isso.
+- Se diz 'Eisenbahn LT 473ml', retorne EXATAMENTE isso.
+- NUNCA diga 'Coca-Cola 350ml' se o nome completo e mais longo.
+- NUNCA adicione produtos que nao estao na tabela.
+- Se nao conseguir ler uma linha, pule-a (nao invente).
+
+CAMPOS POR ITEM:
+- codigo, descricao (EXATA), ncm, cfop, unidade, quantidade, valor_unitario, valor_total, icms_aliquota, ipi_aliquota, custo_unitario_liquido = valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
+
+PASSO 5: Se for BOLETO BANCARIO ("boleto"):
+- beneficiario (Razao Social no canhoto "RECEBEMOS DE:"), pagador, valor, data_vencimento (YYYY-MM-DD), linha_digitavel (47 digitos)
+
+FORMATO JSON ESTRITO:
 {
   "tipo": "nf_compra" | "boleto" | "outro",
   "cabecalho": { "numero_nf": "...", "serie_nf": "...", "data_emissao": "YYYY-MM-DD", "data_entrada": "YYYY-MM-DD", "fornecedor": "...", "cnpj_fornecedor": "...", "chave_acesso": "..." },
@@ -3345,6 +3331,123 @@ Retorne APENAS um array JSON no formato:
               }
             } catch (zoomErr: any) {
               console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
+            }
+          }
+
+          // ================================================================
+          // VALIDAÇÃO ANTI-ALUCINAÇÃO
+          // ================================================================
+          const itensExtraidosVal = documentData.itens || [];
+
+          const palavrasSuspeitas = [
+            "fanta laranja", "fanta", "sprite", "schweppes", "agua mineral",
+            "refrigerante generico", "coca-cola 350ml", "coca cola 350ml",
+            "guarana", "suco", "energetico generico"
+          ];
+
+          const itensSuspeitos = itensExtraidosVal.filter((item: any) => {
+            const desc = (item.descricao || "").toLowerCase();
+            return palavrasSuspeitas.some((p) => desc.includes(p));
+          });
+
+          const fornecedorLower = (documentData.cabecalho?.fornecedor || "").toLowerCase();
+          const ehSpal = fornecedorLower.includes("spal") || fornecedorLower.includes("coca");
+          const ehAmbev = fornecedorLower.includes("ambev") || fornecedorLower.includes("brasnor");
+
+          const temProdutoEspecifico = itensExtraidosVal.some((item: any) => {
+            const desc = (item.descricao || "").toLowerCase();
+            if (ehSpal) {
+              return (
+                desc.includes("monster") ||
+                desc.includes("eisenbahn") ||
+                desc.includes("guarana") ||
+                desc.includes("coca-cola lt") ||
+                desc.includes("coca-cola pet") ||
+                desc.includes("coca-cola zero")
+              );
+            }
+            if (ehAmbev) {
+              return (
+                desc.includes("brahma") ||
+                desc.includes("skol") ||
+                desc.includes("antarctica") ||
+                desc.includes("bohemia") ||
+                desc.includes("original")
+              );
+            }
+            return true;
+          });
+
+          const provavelAlucinacao = itensSuspeitos.length >= 2 || (ehSpal && !temProdutoEspecifico && itensExtraidosVal.length > 0);
+
+          if (provavelAlucinacao) {
+            console.warn("[NF] ALUCINACAO DETECTADA:", itensExtraidosVal.map((i: any) => i.descricao));
+
+            // Segunda passagem com prompt minimalista
+            const promptOCR = `Voce e um scanner OCR. Leia APENAS o texto visivel na imagem. Foque na TABELA DE PRODUTOS. Liste cada produto EXATAMENTE como esta escrito. NAO invente. NAO resuma. NAO traduza. Retorne JSON: { "itens": [ { "codigo": "...", "descricao": "TEXTO_EXATO_DA_NOTA", "quantidade": 1, "valor_unitario": 0.00, "valor_total": 0.00 } ] }`;
+
+            try {
+              const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${supabaseServiceKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o",
+                  user_id: userId,
+                  temperature: 0.0,
+                  messages: [
+                    { role: "system", content: promptOCR },
+                    {
+                      role: "user",
+                      content: [
+                        { type: "text", text: "Leia a tabela de produtos desta DANFE. Retorne APENAS o JSON." },
+                        { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                      ],
+                    },
+                  ],
+                }),
+              });
+
+              if (aiResp2.ok) {
+                const aiJson2 = await aiResp2.json();
+                const raw2 = aiJson2.choices?.[0]?.message?.content || "";
+                let nf2: any = null;
+                try {
+                  nf2 = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+                } catch {
+                  const match2 = raw2.match(/\{[\s\S]*\}/);
+                  if (match2) {
+                    try { nf2 = JSON.parse(match2[0]); } catch {}
+                  }
+                }
+
+                if (nf2?.itens && nf2.itens.length > 0) {
+                  console.log(`[NF] Segunda passagem anti-alucinação extraiu ${nf2.itens.length} itens`);
+                  documentData.itens = nf2.itens.map((item2: any) => ({
+                    ...item2,
+                    ncm: item2.ncm || null,
+                    cfop: item2.cfop || null,
+                    unidade: item2.unidade || "CX",
+                    icms_aliquota: item2.icms_aliquota || 0,
+                    ipi_aliquota: item2.ipi_aliquota || 0,
+                    custo_unitario_liquido: item2.custo_unitario_liquido || item2.valor_unitario || 0,
+                  }));
+                } else {
+                  await sendReply(
+                    "⚠️ <b>Não consegui ler os produtos corretamente.</b>\n\n" +
+                      "A leitura automática parece ter falhado (produtos genéricos detectados).\n\n" +
+                      "💡 <b>Soluções:</b>\n" +
+                      "1. Envie a foto mais próxima da tabela de produtos\n" +
+                      "2. Envie a foto com mais iluminação\n" +
+                      "3. Use o modo MANUAL digitando os dados"
+                  );
+                  return new Response("OK", { status: 200, headers: corsHeaders });
+                }
+              }
+            } catch (alucinacaoErr: any) {
+              console.warn("[NF] Erro na requisição anti-alucinação:", alucinacaoErr.message);
             }
           }
         }
