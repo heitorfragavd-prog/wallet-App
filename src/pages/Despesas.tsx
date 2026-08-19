@@ -119,11 +119,17 @@ const Despesas = () => {
 
   const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalDespesas();
 
-  // Get today's local date range (YYYY-MM-DD)
+  // Busca as despesas do dia atual de forma independente (sempre do dia de hoje)
   const hojeLocal = useMemo(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }, []);
+
+  const { despesas: despesasDeHoje } = useDespesas({
+    startDate: hojeLocal,
+    endDate: hojeLocal,
+  });
+
 
   const { dividas: todasDividas, loading: loadingDividas } = useDividas({
     startDate: dateRange.startDate,
@@ -337,10 +343,11 @@ const Despesas = () => {
 
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
 
-    // Despesas de Hoje
-    const totalDespesasDeHoje = despesas
-      .filter((d) => d.data === hojeLocal)
+    // Despesas de Hoje (usando consulta dedicada do dia de hoje e normalização segura de YYYY-MM-DD)
+    const totalDespesasDeHoje = despesasDeHoje
+      .filter((d) => (d.data || "").split("T")[0] === hojeLocal)
       .reduce((sum, d) => sum + (d.valor || 0), 0);
+
 
     // Previsto para pagar (dívidas em aberto no período filtrado)
     const previstoParaPagar = (todasDividas ?? [])

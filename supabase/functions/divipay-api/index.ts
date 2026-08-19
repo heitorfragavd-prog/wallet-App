@@ -202,17 +202,42 @@ serve(async (req) => {
       { auth: { autoRefreshToken: false, persistSession: false } },
     )
 
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
-    if (authError || !user) {
-      return jsonResponse({ success: false, error: 'Usuário não autenticado' }, 401)
+    const token = authHeader.replace('Bearer ', '').trim()
+    const serviceRoleKey = (Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim()
+
+    let isServiceRole = token === serviceRoleKey
+    if (!isServiceRole) {
+      try {
+        const parts = token.split('.')
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1]))
+          if (payload.role === 'service_role') {
+            isServiceRole = true
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const requestBody = await req.json().catch(() => ({}))
+    let targetUserId = ''
+
+    if (isServiceRole && requestBody.user_id) {
+      targetUserId = requestBody.user_id
+    } else {
+      const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
+      if (authError || !user) {
+        return jsonResponse({ success: false, error: 'Usuário não autenticado' }, 401)
+      }
+      targetUserId = user.id
     }
 
     // 2. Carrega a configuração Divipay do usuário
     const { data: config, error: configError } = await supabaseAdmin
       .from('divipay_config')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', targetUserId)
       .maybeSingle()
 
     if (configError || !config) {
@@ -225,7 +250,7 @@ serve(async (req) => {
       return jsonResponse({ success: false, error: 'Credenciais Divipay (client_id/client_secret) não configuradas.' }, 400)
     }
 
-    const { action, ...params } = await req.json()
+    const { action, ...params } = requestBody
     if (!action) {
       return jsonResponse({ success: false, error: 'Campo "action" é obrigatório' }, 400)
     }

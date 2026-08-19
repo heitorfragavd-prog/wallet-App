@@ -12,11 +12,14 @@ import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useEyemobileDashboard } from "@/domains/eyemobile/hooks/useEyemobileDashboard";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
-const getLocalDateString = () => {
+const getLocalDateString = (offsetDays: number = 0) => {
   const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-const today = getLocalDateString();
+const today = getLocalDateString(0);
+const yesterday = getLocalDateString(-1);
+const last7Days = getLocalDateString(-6);
 const monthStart = `${today.slice(0, 8)}01`;
 const currency = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -33,9 +36,14 @@ interface EyemobileDashboardViewProps {
 }
 
 export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewProps) {
-  const { dateRange, setRange } = useDateRangeFilter({ defaultPeriod: "month" });
-  const startDate = dateRange.startDate || monthStart;
+  const { dateRange, setRange } = useDateRangeFilter({ defaultPeriod: "today" });
+  const startDate = dateRange.startDate || today;
   const endDate = dateRange.endDate || today;
+  const isHoje = startDate === today && endDate === today;
+  const isOntem = startDate === yesterday && endDate === yesterday;
+  const isUltimos7 = startDate === last7Days && endDate === today;
+  const isMes = startDate === monthStart && endDate === today;
+
   const [storeId, setStoreId] = useState<string>("all");
   const { toast } = useToast();
   const { createItemMercado } = useItensMercado();
@@ -47,27 +55,15 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
   const [stockItemsPerPage, setStockItemsPerPage] = useState<number>(10);
   const [stockCurrentPage, setStockCurrentPage] = useState<number>(1);
 
-  const totalHoje = useMemo(() => {
-    if (!dashboard?.salesByHour) return 0;
-    const horaAtual = new Date().getHours();
-    return dashboard.salesByHour
-      .filter((h) => {
-        const hourNum = parseInt(h.hour);
-        return hourNum <= horaAtual && hourNum >= 5;
-      })
-      .reduce((acc, h) => acc + h.frontCashier + h.otherOrigins, 0);
-  }, [dashboard?.salesByHour]);
-
   const metrics = useMemo(() => {
     if (!dashboard) return [];
     return [
-      { label: "Receita do dia", value: currency(totalHoje), icon: TrendingUp, className: "text-amber-500 bg-amber-500/10" },
-      { label: "Receita total", value: currency(dashboard.kpis.totalRevenue), icon: TrendingUp, className: "text-emerald-500 bg-emerald-500/10" },
+      { label: isHoje ? "Receita de hoje" : "Receita do período", value: currency(dashboard.kpis.totalRevenue), icon: TrendingUp, className: "text-emerald-500 bg-emerald-500/10" },
       { label: "Total de transações", value: dashboard.kpis.totalTransactions.toLocaleString("pt-BR"), icon: Ticket, className: "text-blue-500 bg-blue-500/10" },
       { label: "Ticket médio por pessoa", value: currency(dashboard.kpis.averageTicket), icon: CreditCard, className: "text-violet-500 bg-violet-500/10" },
       { label: "Frente de caixa", value: currency(dashboard.kpis.frontCashierRevenue), icon: Banknote, className: "text-orange-500 bg-orange-500/10" },
     ];
-  }, [dashboard, totalHoje]);
+  }, [dashboard, isHoje]);
 
   // Lista paginada de Estoque Critico
   const criticalStockList = useMemo(() => dashboard?.criticalStock ?? [], [dashboard]);
@@ -105,6 +101,47 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
           <p className="text-xs text-muted-foreground mt-0.5">Vendas, caixa, pagamentos e estoque em tempo real.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3 bg-muted/30 p-2 rounded-2xl border border-border/50">
+          <div className="flex items-center gap-1 bg-background/60 p-1 rounded-xl border border-border/40">
+            <button
+              type="button"
+              onClick={() => setRange(today, today)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isHoje ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              Hoje
+            </button>
+            <button
+              type="button"
+              onClick={() => setRange(yesterday, yesterday)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isOntem ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              Ontem
+            </button>
+            <button
+              type="button"
+              onClick={() => setRange(last7Days, today)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isUltimos7 ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              7 dias
+            </button>
+            <button
+              type="button"
+              onClick={() => setRange(monthStart, today)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isMes ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              Este Mês
+            </button>
+          </div>
+
+          <div className="h-4 w-px bg-border" />
+
           <DateRangePicker
             value={dateRange}
             onChange={setRange}

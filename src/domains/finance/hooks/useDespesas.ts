@@ -27,11 +27,80 @@ export interface DespesasQueryParams {
   workspaceId?: string | null;
 }
 
+const DIVIPAY_NON_SETTLED_STATUSES = [
+  "PENDING", "PROCESSING", "FAILED", "ERROR", "REJECTED",
+  "CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "CHARGEBACK",
+];
+
+async function fetchDivipayDespesas(startDate?: string | null, endDate?: string | null, workspaceId?: string | null): Promise<Despesa[]> {
+  try {
+    const { divipayService } = await import("@/domains/divipay/services/DivipayService");
+    const { resolveBeneficiary } = await import("@/domains/divipay/utils");
+    const PAGE = 100;
+    const MAX_PAGES = 50;
+    const allWithdraws: import("@/domains/divipay/types").DivipaySaque[] = [];
+    const seenIds = new Set<string>();
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const { items } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
+      const fresh = (items || []).filter((w) => w.id && !seenIds.has(w.id));
+      fresh.forEach((w) => seenIds.add(w.id));
+      allWithdraws.push(...fresh);
+      if (!items || items.length < PAGE) break;
+      if (fresh.length === 0) break;
+    }
+
+    const startDay = startDate ? startDate.split("T")[0] : null;
+    const endDay = endDate ? endDate.split("T")[0] : null;
+
+    return allWithdraws
+      .filter((w) => {
+        const status = String(w.status || "").toUpperCase();
+        if (status && DIVIPAY_NON_SETTLED_STATUSES.some((s) => status.includes(s))) return false;
+        const dateStr = (w.createdAt || "").split("T")[0];
+        if (startDay && dateStr < startDay) return false;
+        if (endDay && dateStr > endDay) return false;
+        return true;
+      })
+      .map((w) => {
+        const isBoleto = w.type === "BILLET" || String(w.description || "").toLowerCase().includes("boleto");
+        const resolved = resolveBeneficiary(Number(w.amount || 0), w.description || "", isBoleto ? "Boleto" : "Pix");
+        const dateVal = w.createdAt ? w.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+        const desc = w.description || (isBoleto ? "Pagamento de boleto" : "Saque Pix");
+        const fav = w.name || resolved.name || "Divipay";
+
+        return {
+          id: `divipay-${w.id}`,
+          workspace_id: workspaceId || "",
+          user_id: "",
+          tipo: "variavel",
+          valor: Number(w.amount || 0),
+          descricao: desc.includes(fav) ? desc : `${desc} - ${fav}`,
+          data: dateVal,
+          created_at: w.createdAt || new Date().toISOString(),
+          updated_at: w.createdAt || new Date().toISOString(),
+          metodo_pagamento: (isBoleto ? "boleto" : "pix") as PaymentMethod,
+          observacoes: `Pago via Divipay (${isBoleto ? "boleto" : "Pix"}) - ${w.id}`,
+          status: "pago",
+          categorias: {
+            nome: "Transferências e Saques Divipay",
+            cor: "#f97316",
+            icone: "ArrowUpRight",
+          },
+          tags: [],
+        } as Despesa;
+      });
+  } catch (err) {
+    logger.warn("useDespesas", "Não foi possível carregar saques direto da Divipay", { error: String(err) });
+    return [];
+  }
+}
+
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
   const { startDate, endDate, workspaceId } = params;
 
-  let despesasQuery = supabase
+  let despesasQuery: any = supabase
     .from("despesas")
     .select("*, categorias!despesas_categoria_id_fkey(nome, cor, icone), despesa_tags (tags (id, nome, cor))");
 
@@ -39,7 +108,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
   if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
 
-  let transacoesQuery = supabase
+  let transacoesQuery: any = supabase
     .from("transacoes")
     .select("*, categorias(nome, cor, icone)")
     .eq("tipo", "despesa");
@@ -49,14 +118,14 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
   if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
 
   try {
-    const [despesasResp, transacoesResp] = await Promise.all([
+    const [despesasResp, transacoesResp, divipayDespesas] = await Promise.all([
       despesasQuery,
-      transacoesQuery
+      transacoesQuery,
+      fetchDivipayDespesas(startDate, endDate, workspaceId),
     ]);
 
-
     // Normaliza despesas: garante que categorias seja objeto
-    const mappedDespesas = (despesasResp.data ?? []).map((d: any) => {
+    const mappedDespesas = (despesasResp?.data ?? []).map((d: any) => {
       const cat = d.categorias;
       return {
         ...d,
@@ -66,7 +135,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     });
 
     // Normaliza transacoes: garante que categorias seja objeto
-    const mappedTransacoes = (transacoesResp.data ?? []).map((d: any) => {
+    const mappedTransacoes = (transacoesResp?.data ?? []).map((d: any) => {
       const cat = d.categorias;
       return {
         ...d,
@@ -74,7 +143,27 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       };
     });
 
-    const res = [...mappedDespesas, ...mappedTransacoes].sort(
+    // Anti-duplicidade: saques da Divipay que já foram gravados na tabela `despesas`
+    // (com marcador divipay-saque:... ou observacoes referenciando o ID)
+    const existingDivipayIds = new Set<string>();
+    mappedDespesas.forEach((d: any) => {
+      const obs = String(d.observacoes || "");
+      if (obs.includes("divipay-saque:")) {
+        const id = obs.split("divipay-saque:")[1]?.split(")")[0]?.trim();
+        if (id) existingDivipayIds.add(id);
+      }
+      if (obs.includes("Pago via Divipay") && obs.includes(" - ")) {
+        const id = obs.split(" - ").pop()?.trim();
+        if (id) existingDivipayIds.add(id);
+      }
+    });
+
+    const filteredDivipay = divipayDespesas.filter((d) => {
+      const externalId = d.id.replace("divipay-", "");
+      return !existingDivipayIds.has(externalId);
+    });
+
+    const res = [...mappedDespesas, ...mappedTransacoes, ...filteredDivipay].sort(
       (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
     ) as Despesa[];
 
@@ -84,6 +173,9 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     throw err;
   }
 }
+
+
+
 
 // ─── Tag helpers ─────────────────────────────────────────────────
 async function addTagsToDespesa(despesaId: string, tagNames: string[]) {

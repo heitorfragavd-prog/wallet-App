@@ -2,6 +2,8 @@ export interface EyemobileApiPayload {
   sales: unknown[];
   products: unknown[];
   stores: unknown[];
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface EyemobileDashboardData {
@@ -50,13 +52,53 @@ const paymentLabel = (value: unknown) => {
 
 const isFrontCashier = (sale: Record<string, unknown>) => {
   const source = firstText(sale.origin, sale.source, sale.channel, sale.type, sale.transaction_type).toLowerCase();
-  return source.includes("cash") || source.includes("caixa") || source.includes("pdv") || source.includes("front");
+  if (source.includes("delivery") || source.includes("ecom") || source.includes("online") || source.includes("web") || source.includes("comanda")) return false;
+  return true;
 };
 
 const saleTime = (sale: Record<string, unknown>) => firstText(sale.time, sale.created_at, sale.createdAt, sale.date);
 
+const toLocalDate = (iso: string) => {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso.split("T")[0] || "";
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(d);
+  } catch {
+    return iso.split("T")[0] || "";
+  }
+};
+
+const parseHour = (str: string) => {
+  if (!str) return -1;
+  try {
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return -1;
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      hour: "numeric",
+      hour12: false,
+    });
+    const parsed = parseInt(formatter.format(d), 10);
+    return parsed === 24 ? 0 : parsed;
+  } catch {
+    return -1;
+  }
+};
+
 export function buildEyemobileDashboard(payload: EyemobileApiPayload): EyemobileDashboardData {
-  const sales = unwrapList(payload.sales).map(toRecord).filter((sale) => !sale.cancelled && sale.completed !== false);
+  const sales = unwrapList(payload.sales)
+    .map(toRecord)
+    .filter((sale) => {
+      if (sale.cancelled || sale.completed === false) return false;
+      if (payload.startDate || payload.endDate) {
+        const d = toLocalDate(saleTime(sale));
+        if (payload.startDate && d && d < payload.startDate) return false;
+        if (payload.endDate && d && d > payload.endDate) return false;
+      }
+      return true;
+    });
+
   const paymentTotals = new Map<string, number>();
   const productTotals = new Map<string, { id: string; product: string; quantity: number; total: number }>();
   const deviceTotals = new Map<string, { name: string; transactions: number; total: number }>();
@@ -72,7 +114,8 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
     if (frontCashier) frontCashierRevenue += total;
 
     const createdAt = saleTime(sale);
-    const hour = new Date(createdAt).getHours();
+    const hour = parseHour(createdAt);
+
     if (Number.isFinite(hour) && hour >= 5 && hour <= 23) {
       const hourItem = hourly[hour - 5];
       if (frontCashier) hourItem.frontCashier += total;
@@ -83,7 +126,7 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
     if (operation.includes("acqui") || operation.includes("aquis")) operationValues["Aquisição de saldo"] += total;
     else if (operation.includes("saldo") || operation.includes("balance")) operationValues["Utilização de saldo"] += total;
     else if (operation.includes("comanda") || operation.includes("tab")) operationValues.Comandas += total;
-    else if (frontCashier) operationValues["Frente de caixa"] += total;
+    else operationValues["Frente de caixa"] += total;
 
     const pays = unwrapList(sale.transaction_pays ?? sale.payments ?? sale.pays);
     if (pays.length === 0) paymentTotals.set("Fidelidade / Vouchers / Outros", (paymentTotals.get("Fidelidade / Vouchers / Outros") ?? 0) + total);
