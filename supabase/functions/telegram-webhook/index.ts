@@ -739,24 +739,37 @@ serve(async (req) => {
         labelPeriodo = "Desta Semana";
       }
 
-      const { data: vendasG } = await supabase
-        .from("vendas_eyemobile")
-        .select("data_venda, valor_total, metodo_pagamento")
-        .eq("user_id", userId)
-        .gte("data_venda", dataInicioG)
-        .lte("data_venda", dataFimG)
-        .order("data_venda", { ascending: true });
+      // Busca receitas e vendas do PDV (tabelas transacoes e receitas)
+      const [txsResp, recsResp] = await Promise.all([
+        supabase
+          .from("transacoes")
+          .select("data, valor, descricao")
+          .eq("user_id", userId)
+          .eq("tipo", "receita")
+          .gte("data", dataInicioG)
+          .lte("data", dataFimG)
+          .order("data", { ascending: true }),
+        supabase
+          .from("receitas")
+          .select("data, valor, descricao")
+          .eq("user_id", userId)
+          .gte("data", dataInicioG)
+          .lte("data", dataFimG)
+          .order("data", { ascending: true }),
+      ]);
 
-      if (!vendasG || vendasG.length === 0) {
-        await sendReply(`📊 <b>Nenhuma venda registrada no período (${labelPeriodo}).</b>`);
+      const todasVendas = [...(txsResp.data || []), ...(recsResp.data || [])];
+
+      if (!todasVendas || todasVendas.length === 0) {
+        await sendReply(`📊 <b>Nenhuma venda ou receita registrada no período (${labelPeriodo}).</b>`);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
       const porDia: Record<string, number> = {};
       let totalPeriodo = 0;
-      vendasG.forEach((v: any) => {
-        const d = (v.data_venda || "").split("T")[0];
-        const val = Number(v.valor_total || 0);
+      todasVendas.forEach((v: any) => {
+        const d = (v.data || "").split("T")[0];
+        const val = Number(v.valor || 0);
         porDia[d] = (porDia[d] || 0) + val;
         totalPeriodo += val;
       });
@@ -774,7 +787,7 @@ serve(async (req) => {
 
       chartMsg += `</pre>\n`;
       chartMsg += `💰 <b>Total do Período:</b> <b>${totalPeriodo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n`;
-      chartMsg += `🛒 <b>Total de Transações:</b> <b>${vendasG.length}</b>\n\n`;
+      chartMsg += `🛒 <b>Total de Lançamentos:</b> <b>${todasVendas.length}</b>\n\n`;
       chartMsg += `💡 <i>No aplicativo Wallet você tem gráficos interativos em tempo real!</i>`;
 
       await sendReply(chartMsg);
