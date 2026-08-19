@@ -715,6 +715,67 @@ serve(async (req) => {
       }
     }
 
+    // ─── 0.0. FECHAMENTO DE CAIXA: SOBRA (Grupo Fechamento ou Chat) ───
+    const matchSobra = text.match(/sobra[:\s]*R?\$?\s*([\d.,]+)/i);
+    if (matchSobra) {
+      const sobraStr = matchSobra[1].replace(/\./g, "").replace(",", ".");
+      const sobraValor = parseFloat(sobraStr);
+
+      if (!isNaN(sobraValor)) {
+        let qUltimo = supabase
+          .from("fechamentos_caixa")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (isGroup) {
+          qUltimo = qUltimo.eq("chat_id", chatId);
+        } else if (userId) {
+          qUltimo = qUltimo.eq("user_id", userId);
+        }
+
+        const { data: ultimo } = await qUltimo.maybeSingle();
+
+        if (!ultimo) {
+          await sendReply("❌ Envie a foto do envelope de fechamento primeiro antes de informar a sobra.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const total = (ultimo.total || {}) as Record<string, any>;
+        const fmt = (v: any) =>
+          v != null && Number(v) > 0
+            ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+            : "R$ 0,00";
+
+        let msg = `🔸 <b>Fechamento</b>\n\n`;
+        msg += `📅 <b>Data:</b> ${ultimo.data_fechamento || hojeStr.split("-").reverse().join("/")}\n\n`;
+        msg += `💰 Dinheiro: ${fmt(total.dinheiro)}\n`;
+        msg += `💳 Cartão Débito: ${fmt(total.debito)}\n`;
+        msg += `💳 Cartão Crédito: ${fmt(total.credito)}\n`;
+        msg += `📲 Pix: ${fmt(total.pix)}\n`;
+        if (total.voucher) msg += `🎫 Voucher: ${fmt(total.voucher)}\n`;
+        msg += `\n💵 <b>Sobra:</b> ${fmt(sobraValor)}\n`;
+
+        const totalGeral =
+          (Number(total.dinheiro) || 0) +
+          (Number(total.debito) || 0) +
+          (Number(total.credito) || 0) +
+          (Number(total.pix) || 0) +
+          (Number(total.voucher) || 0) +
+          sobraValor;
+
+        msg += `\n🔸 <b>TOTAL GERAL:</b> <b>${fmt(totalGeral)}</b>`;
+
+        await supabase
+          .from("fechamentos_caixa")
+          .update({ sobra: sobraValor, status: "conferido" })
+          .eq("id", ultimo.id);
+
+        await sendReply(msg);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+    }
+
     // ─── 0. COMANDO /ensinar: APRENDIZADO DE CATEGORIA POR CREDOR ───
     if (text.startsWith("/ensinar")) {
       const match = text.match(/^\/ensinar\s+(.+?)\s+(?:e|é|eh)\s+(.+)$/i);
@@ -2037,6 +2098,132 @@ serve(async (req) => {
             }
           } catch (imgErr: any) {
             console.error("[telegram-webhook] Erro no pré-processamento ImageScript:", imgErr.message);
+          }
+        }
+
+        // ================================================================
+        // FECHAMENTO DE CAIXA (grupo fechamento ou foto de envelope)
+        // ================================================================
+        const isFechamentoContext =
+          (isGroup && (grupoConfig?.tipo_grupo === "fechamento" || grupoConfig?.acoes_permitidas?.includes("extrair_fechamento"))) ||
+          caption.toLowerCase().includes("fechamento") ||
+          caption.toLowerCase().includes("envelope") ||
+          caption.toLowerCase().includes("caixa");
+
+        if (isFechamentoContext) {
+          console.log("[telegram-webhook] Iniciando extração de Fechamento de Caixa / Envelope Rodo Point...");
+          const promptFechamento = `Você é um extrator especialista de fechamento de caixa e envelopes da Rodo Point.
+
+Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de maquininha ou resumo) e extraia os valores por forma de pagamento:
+- Dinheiro
+- Cartão Débito
+- Cartão Crédito
+- Pix
+- Voucher (somente se indicar VA, VR, Alimentação ou Refeição)
+
+REGRAS:
+1. QR Code / Pix na maquininha = PIX
+2. Comprovante de Débito = DÉBITO
+3. Comprovante de Crédito = CRÉDITO
+4. SOMENTE classifique como VOUCHER se indicar explicitamente VA/VR/Ticket/Alelo/Sodexo
+5. Nunca invente valores numéricos
+6. Se houver Caixa 1 e Caixa 2 discriminados, separe nos campos correspondentes e faça a soma no campo "total".
+7. Se houver apenas um total geral ou um caixa, preencha no campo "total".
+
+Responda ESTRITAMENTE em formato JSON (sem markdown):
+{
+  "tipo": "fechamento",
+  "data": "DD/MM/AAAA",
+  "caixa1": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "caixa2": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "sobra": null
+}`;
+
+          const aiResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              user_id: userId,
+              temperature: 0.0,
+              messages: [
+                { role: "system", content: promptFechamento },
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "Extraia os valores do fechamento de caixa desta imagem:" },
+                    { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                  ],
+                },
+              ],
+            }),
+          });
+
+          if (aiResp.ok) {
+            const aiJson = await aiResp.json();
+            const rawContent = aiJson.choices?.[0]?.message?.content || "";
+            console.log("[telegram-webhook] Resposta bruta fechamento:", rawContent.slice(0, 300));
+
+            let fechamento: any = null;
+            try {
+              fechamento = JSON.parse(rawContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+            } catch {
+              const match = rawContent.match(/\{[\s\S]*\}/);
+              if (match) {
+                try { fechamento = JSON.parse(match[0]); } catch {}
+              }
+            }
+
+            if (fechamento && fechamento.tipo === "fechamento") {
+              const fmt = (v: any) =>
+                v != null && Number(v) > 0
+                  ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                  : "R$ 0,00";
+
+              let msg = "🔸 <b>Fechamento</b>\n\n";
+              if (fechamento.data) msg += `📅 <b>Data:</b> ${fechamento.data}\n\n`;
+
+              const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
+              const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+
+              if (temCaixa1 || temCaixa2) {
+                if (temCaixa1) {
+                  msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                }
+                if (temCaixa2) {
+                  msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                }
+              }
+
+              msg += `<b>🔸 TOTAL:</b>\n`;
+              msg += `💰 Dinheiro: ${fmt(fechamento.total?.dinheiro)}\n`;
+              msg += `💳 Cartão Débito: ${fmt(fechamento.total?.debito)}\n`;
+              msg += `💳 Cartão Crédito: ${fmt(fechamento.total?.credito)}\n`;
+              msg += `📲 Pix: ${fmt(fechamento.total?.pix)}\n`;
+              if (fechamento.total?.voucher && Number(fechamento.total?.voucher) > 0) {
+                msg += `🎫 Voucher: ${fmt(fechamento.total?.voucher)}\n`;
+              }
+
+              msg += `\n<i>Para consolidar o valor final com a sobra de caixa, envie:</i>\n<code>Sobra: R$ 50,00</code>`;
+
+              await supabase.from("fechamentos_caixa").insert({
+                user_id: userId,
+                workspace_id: workspaceId,
+                chat_id: Number(chatId) || null,
+                data_fechamento: fechamento.data || hojeStr.split("-").reverse().join("/"),
+                caixa1: fechamento.caixa1 || {},
+                caixa2: fechamento.caixa2 || {},
+                total: fechamento.total || {},
+                status: "pendente_conferencia",
+              });
+
+              await sendReply(msg);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
           }
         }
 
