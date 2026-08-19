@@ -659,16 +659,46 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
           variantes.push(termNorm.replace(/l/g, "ll"));
         }
 
-        // 1. Busca colaboradores
-        const { data: colabs } = await supabase.from("colaboradores").select("id, nome");
+        // 1. Busca colaboradores (nome, pix_chave, telefone, cpf)
+        const { data: colabs } = await supabase
+          .from("colaboradores")
+          .select("id, nome, pix_chave, telefone, cpf");
+
+        const digitsOnly = (s: string) => (s || "").replace(/\D/g, "");
+        const inputDigits = digitsOnly(termClean);
+
         const colabsMatched = (colabs || []).filter((c: any) => {
           const cNorm = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          return variantes.some(v => cNorm.includes(v) || v.includes(cNorm.split(" ")[0]));
+          const matchNome = variantes.some(v => cNorm.includes(v) || v.includes(cNorm.split(" ")[0]));
+          const matchPix = inputDigits.length >= 8 && (digitsOnly(c.pix_chave).includes(inputDigits) || inputDigits.includes(digitsOnly(c.pix_chave)));
+          const matchTel = inputDigits.length >= 8 && (digitsOnly(c.telefone).includes(inputDigits) || inputDigits.includes(digitsOnly(c.telefone)));
+          return matchNome || matchPix || matchTel;
         });
+
         const colabIds = colabsMatched.map((c: any) => c.id);
 
+        // Expande variantes com as chaves Pix e telefones dos colaboradores encontrados
+        colabsMatched.forEach((c: any) => {
+          if (c.pix_chave) {
+            variantes.push(c.pix_chave.trim());
+            const d = digitsOnly(c.pix_chave);
+            if (d) variantes.push(d);
+          }
+          if (c.telefone) {
+            variantes.push(c.telefone.trim());
+            const d = digitsOnly(c.telefone);
+            if (d) variantes.push(d);
+          }
+          if (c.nome) {
+            const primeiroNome = c.nome.split(" ")[0].toLowerCase();
+            variantes.push(primeiroNome);
+            if (primeiroNome.startsWith("sh")) variantes.push(primeiroNome.replace(/^sh/, "s"));
+            if (primeiroNome.startsWith("s")) variantes.push(primeiroNome.replace(/^s/, "sh"));
+          }
+        });
+
         // 2. Busca em despesas
-        let qDesp = supabase.from("despesas").select("id, descricao, valor, data, created_at, metodo_pagamento, categoria_id").eq("user_id", userId);
+        let qDesp = supabase.from("despesas").select("id, descricao, valor, data, created_at, metodo_pagamento, categoria_id, observacoes").eq("user_id", userId);
         if (args.data_inicio) qDesp = qDesp.gte("data", args.data_inicio);
         if (args.data_fim) qDesp = qDesp.lte("data", args.data_fim);
 
@@ -676,8 +706,9 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
 
         // Filtra por variantes no texto ou ID do colaborador
         const matchedDesp = (despData || []).filter((d: any) => {
-          const descNorm = (d.descricao || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          const matchTexto = variantes.some(v => descNorm.includes(v));
+          const descNorm = ((d.descricao || "") + " " + (d.observacoes || "")).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          const descDigits = digitsOnly(d.descricao || "") + digitsOnly(d.observacoes || "");
+          const matchTexto = variantes.some(v => descNorm.includes(v.toLowerCase()) || (inputDigits.length >= 8 && descDigits.includes(inputDigits)));
           const matchColab = d.colaborador_id && colabIds.includes(d.colaborador_id);
           return matchTexto || matchColab;
         }).map((d: any) => ({ ...d, tipo: "despesa", origem: "despesas" }));
