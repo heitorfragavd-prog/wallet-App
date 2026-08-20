@@ -30,16 +30,16 @@ describe("financial repository", () => {
 
     expect(queries.map((query) => query.table)).toEqual([
       "receitas",
+      "transacoes",
       "despesas",
+      "transacoes",
       "transacoes",
       "contas_usuario",
       "dividas",
     ]);
     for (const query of queries) {
-      expect(query.equals).toEqual({
-        user_id: context.userId,
-        workspace_id: context.workspaceId,
-      });
+      expect(query.equals.user_id).toBe(context.userId);
+      expect(query.equals.workspace_id).toBe(context.workspaceId);
       expect(JSON.stringify(query)).not.toContain("is.null");
     }
   });

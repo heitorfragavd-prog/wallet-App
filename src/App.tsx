@@ -58,6 +58,7 @@ const EquipeNovoPage      = lazyWithRetry(() => import("./pages/EquipeNovo"));
 const EquipeEditarPage    = lazyWithRetry(() => import("./pages/EquipeEditar"));
 const EquipeCustoNovoPage = lazyWithRetry(() => import("./pages/EquipeCustoNovo"));
 const Conciliacao         = lazyWithRetry(() => import("./pages/Conciliacao"));
+const AIMetricsDashboard  = lazyWithRetry(() => import("./pages/AIMetricsDashboard"));
 const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
 const ConfiguracoesNotificacoes = lazyWithRetry(() => import("./pages/ConfiguracoesNotificacoes"));
 const PDVPage             = lazyWithRetry(() => import("./pages/PDVPage"));
@@ -136,6 +137,8 @@ function App() {
                   <Route path="/equipe/:id/custos/novo" element={<ProtectedRoute><EquipeCustoNovoPage /></ProtectedRoute>} />
                   <Route path="/conciliacao"   element={<ProtectedRoute><Conciliacao /></ProtectedRoute>} />
                   <Route path="/recibos"       element={<ProtectedRoute><Recibos /></ProtectedRoute>} />
+                  <Route path="/admin/ia-metrics" element={<ProtectedRoute><AIMetricsDashboard /></ProtectedRoute>} />
+                  <Route path="/ia-metrics"    element={<ProtectedRoute><AIMetricsDashboard /></ProtectedRoute>} />
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
 

@@ -2,6 +2,32 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.47] - 2026-08-20
+
+### ✨ Novo
+- **Processamento de Imagem e OCR Avançado:**
+  - Pipeline de pré-processamento para Notas Fiscais (DANFE) com auto-rotação, redimensionamento (2048px) e compressão JPEG de alta qualidade.
+  - Implementação de OCR em 2 passos usando Chain-of-Thought Vision (GPT-4o) para leitura precisa de DANFE e boletos em qualquer orientação.
+  - Leitura completa de todos os itens da DANFE com zoom automático na tabela de produtos.
+  - Suporte a múltiplas formas de ingestão de notas fiscais: foto/OCR DANFE, arquivo XML/PDF nativo, e consulta direta no SEFAZ via chave de acesso.
+- **Integração Eyemobile e Estoque:**
+  - Sincronização automática contínua (cron a cada 6h) de produtos do Eyemobile, incluindo cálculo de margem real.
+  - Sistema de **Alertas de Preço**: identificação de aumentos no custo líquido de compras (>10%) e notificação no Telegram.
+- **Telegram Bot interativo:**
+  - Inclusão de botões inline interativos (CONFIRMAR/EDITAR/IGNORAR) para gerenciar alertas de reajuste de preço no Eyemobile diretamente no Telegram.
+  - Adicionado suporte a processamento de notas por áudio (Whisper).
+
+### 🔧 Corrigido & Melhorado
+- Validação OCR rigorosa anti-alucinação, rejeitando detecções errôneas e garantindo máxima fidelidade para ICMS-ST e produtos reais (SPAL, etc).
+- Ajustes de prioridade absoluta para extração de DANFE sobre boletos no webhook do Telegram.
+- Correção na resolução de usuário em callbacks de botões inline, suportando perfeitamente grupos e chats privados.
+- Melhoria no fallback de OCR, correção no nível de confiança e filtro refinado por instituição bancária.
+
+### 📊 Estatísticas
+- **21 commits na release 1.0.47**
+
+---
+
 ## [1.0.46] - 2026-08-18
 
 ### ✨ Novo

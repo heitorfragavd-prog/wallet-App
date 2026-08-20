@@ -501,126 +501,126 @@ const Despesas = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-6">
           {/* Card: Despesas do Dia */}
-          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Despesas do Dia</p>
+          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Despesas do Dia">Despesas do Dia</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(totalDespesasDeHoje)}>
                       {formatCurrency(totalDespesasDeHoje)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-rose-500/20">
-                  <CalendarDays className="w-5 h-5 text-rose-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-rose-500/20 shrink-0">
+                  <CalendarDays className="w-4 h-4 sm:w-5 sm:h-5 text-rose-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Card: Valor Pago */}
-          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">
+          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title={temFiltrosAtivos ? "Valor Filtrado" : "Valor Pago"}>
                     {temFiltrosAtivos ? "Valor Filtrado" : "Valor Pago"}
                   </p>
                   {loading ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(temFiltrosAtivos ? totalFiltrado : totalDespesas)}>
                       {formatCurrency(temFiltrosAtivos ? totalFiltrado : totalDespesas)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-red-500/20">
-                  <DollarSign className="w-5 h-5 text-red-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-red-500/20 shrink-0">
+                  <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-red-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Card: Previsto para Pagar */}
-          <Card className="border-0 bg-gradient-to-br from-amber-500/10 to-amber-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Previsto a Pagar</p>
+          <Card className="border-0 bg-gradient-to-br from-amber-500/10 to-amber-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Previsto a Pagar">Previsto a Pagar</p>
                   {loadingDividas ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(previstoParaPagar)}>
                       {formatCurrency(previstoParaPagar)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-amber-500/20">
-                  <Receipt className="w-5 h-5 text-amber-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-amber-500/20 shrink-0">
+                  <Receipt className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Card: Média Mensal (Últimos 6 meses) */}
-          <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Média Mensal (6 Meses)</p>
+          <Card className="border-0 bg-gradient-to-br from-orange-500/10 to-orange-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Média Mensal (6 Meses)">Média Mensal (6M)</p>
                   {loadingMedia ? (
-                    <Skeleton className="h-8 w-32" />
+                    <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(mediaMensalCalculada)}>
                       {formatCurrency(mediaMensalCalculada)}
                     </p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-orange-500/20">
-                  <TrendingDown className="w-5 h-5 text-orange-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-orange-500/20 shrink-0">
+                  <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-orange-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Card: Total Registros */}
-          <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Total Registros</p>
+          <Card className="border-0 bg-gradient-to-br from-purple-500/10 to-purple-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Total Registros">Total Registros</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-16" />
+                    <Skeleton className="h-7 sm:h-8 w-16" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">{despesas.length}</p>
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={String(despesas.length)}>{despesas.length}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-purple-500/20">
-                  <Receipt className="w-5 h-5 text-purple-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-purple-500/20 shrink-0">
+                  <Receipt className="w-4 h-4 sm:w-5 sm:h-5 text-purple-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Card: Categorias */}
-          <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Categorias</p>
+          <Card className="border-0 bg-gradient-to-br from-blue-500/10 to-blue-500/5 overflow-hidden">
+            <CardContent className="p-3.5 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Categorias">Categorias</p>
                   {loading ? (
-                    <Skeleton className="h-8 w-16" />
+                    <Skeleton className="h-7 sm:h-8 w-16" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">{categoriasDespesa.length}</p>
+                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={String(categoriasDespesa.length)}>{categoriasDespesa.length}</p>
                   )}
                 </div>
-                <div className="p-3 rounded-xl bg-blue-500/20">
-                  <Tag className="w-5 h-5 text-blue-500" />
+                <div className="p-2 sm:p-3 rounded-xl bg-blue-500/20 shrink-0">
+                  <Tag className="w-4 h-4 sm:w-5 sm:h-5 text-blue-500" />
                 </div>
               </div>
             </CardContent>

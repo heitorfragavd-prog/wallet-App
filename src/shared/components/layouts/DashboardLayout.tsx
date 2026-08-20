@@ -35,6 +35,7 @@ import {
   BellRing,
   MonitorPlay,
   Brain,
+  Activity,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -91,6 +92,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: Target, label: "Metas", path: "/metas" },
     { icon: Wallet, label: "Patrimônio", path: "/patrimonio" },
     { icon: Brain, label: "Inteligência Artificial", path: "/ia" },
+    { icon: Activity, label: "Métricas de IA", path: "/ia-metrics" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },
     { icon: Car, label: "Veículos", path: "/veiculos" },
     { icon: Users, label: "Perfil", path: "/perfil" },

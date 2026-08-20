@@ -254,16 +254,16 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {metrics.map((metric) => (
-              <Card key={metric.label}>
-                <CardContent className="flex items-start justify-between p-5">
-                  <div>
-                    <p className="text-sm text-muted-foreground">{metric.label}</p>
-                    <p className="mt-1 text-2xl font-bold">{metric.value}</p>
+              <Card key={metric.label} className="overflow-hidden">
+                <CardContent className="flex items-center justify-between p-4 sm:p-5 gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs sm:text-sm text-muted-foreground truncate" title={metric.label}>{metric.label}</p>
+                    <p className="mt-1 text-lg sm:text-xl xl:text-2xl font-bold tracking-tight text-foreground truncate" title={metric.value}>{metric.value}</p>
                   </div>
-                  <div className={`rounded-xl p-3 ${metric.className}`}>
-                    <metric.icon className="h-5 w-5" />
+                  <div className={`rounded-xl p-2.5 sm:p-3 shrink-0 ${metric.className}`}>
+                    <metric.icon className="h-4 w-4 sm:h-5 sm:w-5" />
                   </div>
                 </CardContent>
               </Card>

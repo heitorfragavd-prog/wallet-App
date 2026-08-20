@@ -41,59 +41,72 @@ interface DREHistoricoMes {
   margemLiquida: number;
 }
 
+async function fetchAllRows(
+  table: string,
+  columns: string,
+  inicioStr: string,
+  fimStr: string,
+  tipo?: string,
+  workspaceId?: string | null
+): Promise<any[]> {
+  const PAGE_SIZE = 1000;
+  let allRows: any[] = [];
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let q = supabase
+      .from(table)
+      .select(columns)
+      .gte("data", inicioStr)
+      .lte("data", fimStr);
+
+    if (tipo) {
+      q = q.eq("tipo", tipo);
+    }
+
+    if (workspaceId) {
+      q = q.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
+    }
+
+    const { data, error } = await q.range(from, from + PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) {
+      break;
+    }
+    allRows = allRows.concat(data);
+    if (data.length < PAGE_SIZE) {
+      hasMore = false;
+    } else {
+      from += PAGE_SIZE;
+    }
+  }
+
+  return allRows;
+}
+
 async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<DREGerencial> {
   const ultimoDia = new Date(ano, mes, 0).getDate();
   const mesPad = String(mes).padStart(2, "0");
   const inicioStr = `${ano}-${mesPad}-01`;
-  const fimStr = `${ano}-${mesPad}-${String(ultimoDia).padStart(2, "0")}T23:59:59`;
+  const fimStr = `${ano}-${mesPad}-${String(ultimoDia).padStart(2, "0")}`;
 
-  let qReceitas = supabase
-    .from("receitas")
-    .select("valor, workspace_id")
-    .gte("data", inicioStr)
-    .lte("data", fimStr);
-
-  let qTransacoesReceita = supabase
-    .from("transacoes")
-    .select("valor, workspace_id")
-    .eq("tipo", "receita")
-    .gte("data", inicioStr)
-    .lte("data", fimStr);
-
-  let qDespesas = supabase
-    .from("despesas")
-    .select("valor, descricao, workspace_id, cartao_id, importacao_id")
-    .gte("data", inicioStr)
-    .lte("data", fimStr);
-
-  let qTransacoesDespesa = supabase
-    .from("transacoes")
-    .select("valor, descricao, workspace_id, cartao_id, importacao_id")
-    .eq("tipo", "despesa")
-    .gte("data", inicioStr)
-    .lte("data", fimStr);
-
-  if (workspaceId) {
-    qReceitas = qReceitas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-    qTransacoesReceita = qTransacoesReceita.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-    qDespesas = qDespesas.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-    qTransacoesDespesa = qTransacoesDespesa.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-  }
-
-  const [recResp, transRecResp, despResp, transDespResp] = await Promise.all([
-    qReceitas, qTransacoesReceita, qDespesas, qTransacoesDespesa,
+  const [recRows, transRecRows, despRows, transDespRows] = await Promise.all([
+    fetchAllRows("receitas", "valor, workspace_id", inicioStr, fimStr, undefined, workspaceId),
+    fetchAllRows("transacoes", "valor, workspace_id", inicioStr, fimStr, "receita", workspaceId),
+    fetchAllRows("despesas", "valor, descricao, workspace_id, conta_id, metodo_pagamento, fatura_id", inicioStr, fimStr, undefined, workspaceId),
+    fetchAllRows("transacoes", "valor, descricao, workspace_id, cartao_id, metodo_pagamento", inicioStr, fimStr, "despesa", workspaceId),
   ]);
 
   const soma = (rows: any[] | null) =>
     (rows ?? []).reduce((acc: number, r: any) => acc + Number(r.valor || 0), 0);
 
-  let somaReceitasBanco = soma(recResp.data) + soma(transRecResp.data);
+  let somaReceitasBanco = soma(recRows) + soma(transRecRows);
 
   let somaDivipay = 0;
   try {
     const divipayResp = await divipayService.listMovements({
       initialDate: `${inicioStr}T00:00:00`,
-      finalDate: fimStr,
+      finalDate: `${fimStr}T23:59:59`,
       limit: 1000,
     });
     const items = divipayResp.items ?? [];
@@ -131,26 +144,17 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
 
   const lucroBruto = receitaLiquida - cmv;
 
-  // SEPARAÇÃO CORRETA: Despesas do NEGÓCIO vs Cartão
+  // SEPARAÇÃO CORRETA: Despesas Operacionais do Negócio vs Cartão de Crédito
+  const isCartao = (r: any) =>
+    Boolean(r.cartao_id) || Boolean(r.fatura_id) || String(r.metodo_pagamento || "").toLowerCase().includes("credito");
+
   const despesasOperacionais =
-    (despResp.data ?? []).reduce((acc: number, r: any) => {
-      if (r.cartao_id || r.importacao_id) return acc; // EXCLUI cartão
-      return acc + Number(r.valor || 0);
-    }, 0) +
-    (transDespResp.data ?? []).reduce((acc: number, r: any) => {
-      if (r.cartao_id || r.importacao_id) return acc; // EXCLUI cartão
-      return acc + Number(r.valor || 0);
-    }, 0);
+    despRows.reduce((acc: number, r: any) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0) +
+    transDespRows.reduce((acc: number, r: any) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0);
 
   const despesasCartao =
-    (despResp.data ?? []).reduce((acc: number, r: any) => {
-      if (!r.cartao_id && !r.importacao_id) return acc; // SÓ cartão
-      return acc + Number(r.valor || 0);
-    }, 0) +
-    (transDespResp.data ?? []).reduce((acc: number, r: any) => {
-      if (!r.cartao_id && !r.importacao_id) return acc; // SÓ cartão
-      return acc + Number(r.valor || 0);
-    }, 0);
+    despRows.reduce((acc: number, r: any) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0) +
+    transDespRows.reduce((acc: number, r: any) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0);
 
   const ebitda = lucroBruto - despesasOperacionais;
   const depreciacao = receitaBruta * 0.01;
@@ -205,16 +209,15 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
 }
 
 async function buscarHistoricoDRE(mesAtual: number, anoAtual: number, meses: number, workspaceId?: string | null): Promise<DREHistoricoMes[]> {
-  const historico: DREHistoricoMes[] = [];
-  for (let i = 0; i < meses; i++) {
+  const promises = Array.from({ length: meses }, (_, i) => {
     const d = new Date(anoAtual, mesAtual - 1 - i, 1);
     const m = d.getMonth() + 1;
     const a = d.getFullYear();
-    try {
-      const dre = await calcularDRE({ mes: m, ano: a, workspaceId });
-      historico.unshift({
+    return calcularDRE({ mes: m, ano: a, workspaceId })
+      .then((dre) => ({
         periodo: dre.periodo,
-        mes: m, ano: a,
+        mes: m,
+        ano: a,
         receitaBruta: dre.receitaBruta,
         receitaLiquida: dre.receitaLiquida,
         lucroBruto: dre.lucroBruto,
@@ -226,10 +229,12 @@ async function buscarHistoricoDRE(mesAtual: number, anoAtual: number, meses: num
         margemBruta: dre.margemBruta,
         margemEbitda: dre.margemEbitda,
         margemLiquida: dre.margemLiquida,
-      });
-    } catch { }
-  }
-  return historico;
+      }))
+      .catch(() => null);
+  });
+
+  const results = await Promise.all(promises);
+  return (results.filter(Boolean) as DREHistoricoMes[]).reverse();
 }
 
 export function useDRE(mes?: number, ano?: number) {
@@ -247,10 +252,10 @@ export function useDRE(mes?: number, ano?: number) {
 
   const { data: historico, isLoading: loadingHistorico } = useQuery({
     queryKey: [...DRE_QUERY_KEY, "historico", mesAtual, anoAtual, workspaceId],
-    queryFn: () => buscarHistoricoDRE(mesAtual, anoAtual, 12, workspaceId),
+    queryFn: () => buscarHistoricoDRE(mesAtual, anoAtual, 6, workspaceId),
     staleTime: 1000 * 60 * 10,
     enabled: !!dre,
   });
 
-  return { dre, historico, loading: loadingDRE || loadingHistorico };
+  return { dre, historico, loading: loadingDRE, loadingHistorico };
 }
