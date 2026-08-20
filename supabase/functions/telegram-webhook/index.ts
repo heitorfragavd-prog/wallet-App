@@ -3899,100 +3899,48 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         }
 
         // ================================================================
-        // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
-        // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
+        // EXTRATOR EM 2 PASSOS (Chain-of-Thought Vision):
+        // Passo 1: GPT-4o descreve em texto livre tudo o que vê (sem alucinação)
+        // Passo 2: GPT-4o extrai JSON estruturado com precisão máxima
         // ================================================================
         if (!documentData && finalImageBase64Uri) {
-          const docAnalysisSystemPrompt = `Você é um scanner OCR especialista em documentos fiscais e boletos bancários brasileiros.
-Extraia com 100% de fidelidade APENAS o que está visível no documento. NUNCA invente dados nem resuma produtos.
+          console.log("[telegram-webhook] [NF] Passo 1: Descrição livre em texto do documento...");
 
-TIPO DE DOCUMENTO:
-- DANFE / Nota Fiscal de Compra -> tipo: "nf_compra"
-- Boleto Bancário -> tipo: "boleto"
-- Outro documento -> tipo: "outro"
+          const promptDescricao = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
 
-INSTRUÇÕES PARA DANFE (tipo: "nf_compra"):
-1. CABEÇALHO:
-   - numero_nf: número da NF (ex: "013.754.779" ou "13754779")
-   - serie_nf: série da NF (ex: "26")
-   - data_emissao: data no formato YYYY-MM-DD
-   - data_entrada: data no formato YYYY-MM-DD
-   - fornecedor: Razão Social do emitente (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A")
-   - cnpj_fornecedor: CNPJ do emitente formatado
-   - chave_acesso: 44 dígitos numéricos da chave de acesso (se visível no topo ou código de barras)
+Sua tarefa é DESCREVER em português com máxima fidelidade tudo o que você consegue ler com certeza no documento impresso.
+NUNCA invente dados. NUNCA adivinhe. Se algo não estiver visível, não mencione.
 
-2. TOTAIS DA NOTA:
-   - valor_total_nf: Valor Total da NF (campo "VALOR TOTAL DA NOTA")
-   - valor_produtos: Valor Total dos Produtos (campo "VALOR TOTAL DOS PRODUTOS")
-   - valor_icms: Valor do ICMS
-   - valor_icms_st: Valor do ICMS Substituição Tributária
-   - valor_ipi: Valor do IPI
-   - valor_frete: Valor do Frete
+Se for DANFE (Nota Fiscal de Compra):
+CABEÇALHO:
+- Emitente (fornecedor/razão social): ...
+- CNPJ do emitente: ...
+- Número da NF: ...
+- Série: ...
+- Data de emissão: ...
+- Chave de acesso (44 dígitos): ...
 
-3. TABELA DE PRODUTOS (DADOS DO PRODUTO / SERVIÇO):
-   - Extraia TODAS as linhas da tabela de produtos sem pular nenhuma linha.
-   - codigo: código interno do item (coluna CÓDIGO DO PRODUTO/SERVIÇO)
-   - descricao: descrição completa do produto impressa na nota (marca, nome, volume, sabor, embalagem)
-   - ncm: NCM (8 dígitos se visível)
-   - cfop: CFOP (4 dígitos se visível)
-   - unidade: unidade de medida (CX, UN, FD, LT, KG, etc.)
-   - quantidade: quantidade faturada (número decimal)
-   - valor_unitario: valor unitário do item (número decimal)
-   - valor_total: valor total do item (número decimal)
-   - icms_aliquota: % alíquota ICMS (número)
-   - ipi_aliquota: % alíquota IPI (número)
-   - custo_unitario_liquido: valor_unitario - (valor_unitario * icms_aliquota/100) - (valor_unitario * ipi_aliquota/100)
+VALORES TOTAIS:
+- Valor total da NF: ...
+- Valor dos produtos: ...
+- ICMS: ...
+- ICMS-ST / Substituição: ...
+- IPI: ...
+- Frete: ...
 
-INSTRUÇÕES PARA BOLETO (tipo: "boleto"):
-- beneficiario: Razão Social do beneficiário/cedente
-- valor: Valor do documento (número decimal)
-- data_vencimento: Data de vencimento no formato YYYY-MM-DD
-- linha_digitavel: 47 dígitos numéricos da linha digitável
+TABELA DE PRODUTOS (DADOS DO PRODUTO / SERVIÇO):
+Descreva CADA LINHA individual da tabela de produtos:
+1. Código: ... | Descrição: ... | NCM: ... | CFOP: ... | Unidade: ... | Quantidade: ... | Valor unitário: ... | Valor total / Custo Total: ... | ICMS %: ... | IPI %: ...
+2. Código: ... | Descrição: ...
+(continue linha por linha até o último produto visível da tabela)
 
-Retorne APENAS JSON válido no seguinte formato:
-{
-  "tipo": "nf_compra",
-  "confianca_geral": "alta",
-  "cabecalho": {
-    "numero_nf": "013754779",
-    "serie_nf": "26",
-    "data_emissao": "2026-08-07",
-    "data_entrada": "2026-08-07",
-    "fornecedor": "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A",
-    "cnpj_fornecedor": "61.186.888/0020-56",
-    "chave_acesso": "31260861186888002056550260137547791096161890"
-  },
-  "valores_totais": {
-    "valor_total_nf": 1262.55,
-    "valor_produtos": 1093.39,
-    "valor_icms": 127.86,
-    "valor_icms_st": 196.82,
-    "valor_ipi": 0.00,
-    "valor_frete": 0.00
-  },
-  "itens": [
-    {
-      "codigo": "55380",
-      "descricao": "AGUA TONICA LT 350ML",
-      "ncm": "22021000",
-      "cfop": "5405",
-      "unidade": "CX",
-      "quantidade": 1.0,
-      "valor_unitario": 28.56,
-      "valor_total": 28.56,
-      "icms_aliquota": 0.0,
-      "ipi_aliquota": 0.0,
-      "custo_unitario_liquido": 28.56
-    }
-  ],
-  "beneficiario": null,
-  "valor": null,
-  "data_vencimento": null,
-  "linha_digitavel": null
-}`;
+Se for BOLETO BANCÁRIO:
+- Beneficiário / Cedente: ...
+- Valor do documento: ...
+- Data de vencimento: ...
+- Linha digitável (47 dígitos): ...`;
 
-          console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
-          const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+          const aiResp1 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
             method: "POST",
             headers: {
               Authorization: `Bearer ${supabaseServiceKey}`,
@@ -4004,16 +3952,13 @@ Retorne APENAS JSON válido no seguinte formato:
               tools: [],
               temperature: 0.0,
               messages: [
-                { role: "system", content: docAnalysisSystemPrompt },
+                { role: "system", content: promptDescricao },
                 {
                   role: "user",
                   content: [
                     {
                       type: "text",
-                      text: promptText ||
-                        "Analise esta imagem e extraia todos os dados fiscais ou bancários visíveis com máxima fidelidade. " +
-                        "Se for DANFE, leia linha por linha da tabela de produtos sem pular nenhuma linha e sem agrupar itens. " +
-                        "Se a imagem estiver deitada ou inclinada, leia na orientação adequada. Retorne APENAS o JSON."
+                      text: promptText || "Descreva este documento fiscal / fatura detalhando cada linha de produto visível com máxima fidelidade. NUNCA invente dados."
                     },
                     { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                   ],
@@ -4022,109 +3967,99 @@ Retorne APENAS JSON válido no seguinte formato:
             }),
           });
 
-          console.log("[telegram-webhook] openai-proxy doc status:", aiDocResponse.status);
-
-          if (!aiDocResponse.ok) {
-            const errText = await aiDocResponse.text();
-            console.error("[telegram-webhook] openai-proxy falhou na análise de doc:", errText);
-            await sendReply("❌ Erro ao analisar a imagem com a IA. Detalhe: " + errText.slice(0, 100));
+          if (!aiResp1.ok) {
+            const errText = await aiResp1.text();
+            console.error("[telegram-webhook] Erro no Passo 1 (Visão):", errText);
+            await sendReply("❌ Erro ao analisar a imagem com a IA. Tente novamente.");
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          const aiDocJson = await aiDocResponse.json();
-          const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
-          console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 400));
+          const aiJson1 = await aiResp1.json();
+          const descricaoBruta = aiJson1.choices?.[0]?.message?.content || "";
+          console.log("[telegram-webhook] [NF] Passo 1 concluído! Prévia da descrição:\n", descricaoBruta.slice(0, 400));
 
-          try {
-            const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
-            documentData = JSON.parse(cleaned);
-          } catch {
-            const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
-            if (jsonTagMatch) {
-              try { documentData = JSON.parse(jsonTagMatch[1].trim()); } catch {}
-            }
-            if (!documentData) {
-              const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
+          // Passo 2: Extração JSON estruturada a partir da descrição
+          console.log("[telegram-webhook] [NF] Passo 2: Extraindo JSON estruturado da descrição...");
+
+          const promptJSON = `Você recebeu uma descrição de um documento fiscal (DANFE) ou boleto bancário brasileiro.
+
+Sua tarefa é extrair os dados em formato JSON.
+Use APENAS os dados presentes na descrição. NUNCA invente dados.
+Se um campo não estiver na descrição, use null.
+
+FORMATO JSON:
+{
+  "tipo": "nf_compra",
+  "confianca_geral": "alta",
+  "cabecalho": {
+    "numero_nf": "...",
+    "serie_nf": "...",
+    "data_emissao": "YYYY-MM-DD",
+    "data_entrada": "YYYY-MM-DD",
+    "fornecedor": "...",
+    "cnpj_fornecedor": "...",
+    "chave_acesso": "..."
+  },
+  "valores_totais": {
+    "valor_total_nf": 0.00,
+    "valor_produtos": 0.00,
+    "valor_icms": 0.00,
+    "valor_icms_st": 0.00,
+    "valor_ipi": 0.00,
+    "valor_frete": 0.00
+  },
+  "itens": [
+    {
+      "codigo": "...",
+      "descricao": "...",
+      "ncm": "...",
+      "cfop": "...",
+      "unidade": "CX",
+      "quantidade": 1.0,
+      "valor_unitario": 0.00,
+      "valor_total": 0.00,
+      "icms_aliquota": 0.00,
+      "ipi_aliquota": 0.00,
+      "custo_unitario_liquido": 0.00
+    }
+  ],
+  "beneficiario": null,
+  "valor": null,
+  "data_vencimento": null,
+  "linha_digitavel": null
+}
+
+Se for BOLETO BANCÁRIO, defina "tipo": "boleto" e preencha "beneficiario", "valor", "data_vencimento", "linha_digitavel".
+Retorne APENAS o JSON puro.`;
+
+          const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              user_id: userId,
+              tools: [],
+              temperature: 0.0,
+              messages: [
+                { role: "system", content: promptJSON },
+                { role: "user", content: `Extraia JSON desta descrição de documento fiscal:\n\n${descricaoBruta}` },
+              ],
+            }),
+          });
+
+          if (aiResp2.ok) {
+            const aiJson2 = await aiResp2.json();
+            const rawJSON = aiJson2.choices?.[0]?.message?.content || "";
+            try {
+              const cleaned = rawJSON.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+              documentData = JSON.parse(cleaned);
+            } catch {
+              const objMatch = rawJSON.match(/\{[\s\S]*\}/);
               if (objMatch) {
                 try { documentData = JSON.parse(objMatch[0]); } catch {}
-              }
-            }
-          }
-
-          // ================================================================
-          // SEGUNDA PASSAGEM OPCIONAL (ZOOM): Se a NF tem alto valor mas poucos itens foram lidos
-          // ================================================================
-          if (documentData && documentData.tipo === "nf_compra") {
-            const itensIniciais = documentData.itens || [];
-            const valorTotalNFPass2 = Number(documentData.valores_totais?.valor_total_nf || 0);
-            const somaItensIniciais = itensIniciais.reduce((sum: number, it: any) => sum + (Number(it.valor_total) || 0), 0);
-
-            if (itensIniciais.length < 4 && valorTotalNFPass2 > 300 && somaItensIniciais < valorTotalNFPass2 * 0.6) {
-              console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNFPass2})...`);
-
-              const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
-Esta tabela tem VÁRIAS LINHAS de produtos. Leia CADA LINHA individualmente e extraia todos os produtos visíveis.
-Retorne APENAS um array JSON de itens no formato:
-[
-  {
-    "codigo": "...",
-    "descricao": "...",
-    "ncm": "...",
-    "cfop": "...",
-    "unidade": "CX",
-    "quantidade": 1.0,
-    "valor_unitario": 0.00,
-    "valor_total": 0.00,
-    "icms_aliquota": 0.00,
-    "ipi_aliquota": 0.00,
-    "custo_unitario_liquido": 0.00
-  }
-]`;
-
-              try {
-                const aiZoomResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${supabaseServiceKey}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    model: "gpt-4o",
-                    user_id: userId,
-                    temperature: 0.0,
-                    messages: [
-                      { role: "system", content: promptZoom },
-                      {
-                        role: "user",
-                        content: [
-                          { type: "text", text: "Extraia todas as linhas individuais desta tabela de produtos da DANFE sem resumir nem agrupar:" },
-                          { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                        ],
-                      },
-                    ],
-                  }),
-                });
-
-                if (aiZoomResp.ok) {
-                  const aiZoomJson = await aiZoomResp.json();
-                  const rawZoom = aiZoomJson.choices?.[0]?.message?.content || "";
-                  let itensZoom: any[] = [];
-                  try {
-                    itensZoom = JSON.parse(rawZoom.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
-                  } catch {
-                    const matchZ = rawZoom.match(/\[[\s\S]*\]/);
-                    if (matchZ) {
-                      try { itensZoom = JSON.parse(matchZ[0]); } catch {}
-                    }
-                  }
-
-                  if (Array.isArray(itensZoom) && itensZoom.length > itensIniciais.length) {
-                    console.log(`[telegram-webhook] Segunda passagem melhorou: ${itensIniciais.length} -> ${itensZoom.length} itens extraídos!`);
-                    documentData.itens = itensZoom;
-                  }
-                }
-              } catch (zoomErr: any) {
-                console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
               }
             }
           }
