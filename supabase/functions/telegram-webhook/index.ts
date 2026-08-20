@@ -3610,24 +3610,29 @@ serve(async (req) => {
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          const b64 = base64Encode(new Uint8Array(arrayBuffer));
-          console.log("[telegram-webhook] Base64 gerado com sucesso! Tamanho:", b64.length);
+          let finalBase64Bytes = new Uint8Array(arrayBuffer);
+          let mime = ext === "png" ? "image/png" : "image/jpeg";
 
-          const mime = ext === "png" ? "image/png" : "image/jpeg";
-          finalImageBase64Uri = `data:${mime};base64,${b64}`;
-
-          // Log das dimensões da imagem (sem re-encoding ou rotação)
-          // A detecção de rotação foi REMOVIDA porque:
-          // 1. Causava dupla compressão JPEG (perda de qualidade)
-          // 2. As miniaturas de 160px eram insuficientes para detectar ângulo correto
-          // 3. O prompt OCR já instrui o GPT-4o a ler em qualquer orientação
-          // 4. O ChatGPT lê a mesma foto sem qualquer pré-rotação
           try {
-            const decodedImage = await Image.decode(new Uint8Array(arrayBuffer));
-            console.log(`[telegram-webhook] Dimensões da imagem: ${decodedImage.width}x${decodedImage.height}. Enviando diretamente ao OCR sem rotação.`);
+            const decodedImage = await Image.decode(finalBase64Bytes);
+            console.log(`[telegram-webhook] Dimensões originais da imagem: ${decodedImage.width}x${decodedImage.height}`);
+
+            // Se a imagem for em paisagem (largura > altura * 1.15), como DANFEs e notas fiscais são folhas A4 verticais,
+            // rotacionamos 90° para a orientação retrato perfeita antes de passar pelo GPT-4o:
+            if (decodedImage.width > decodedImage.height * 1.15) {
+              console.log("[telegram-webhook] 🔄 Imagem em paisagem detectada! Auto-rotacionando 90° para formato vertical/retrato...");
+              decodedImage.rotate(90);
+              finalBase64Bytes = await decodedImage.encodeJPEG(95);
+              mime = "image/jpeg";
+              console.log(`[telegram-webhook] Imagem rotacionada com sucesso: ${decodedImage.width}x${decodedImage.height}`);
+            }
           } catch (imgErr: any) {
-            console.log("[telegram-webhook] Não foi possível decodificar dimensões:", imgErr.message);
+            console.log("[telegram-webhook] Não foi possível decodificar ou rotacionar imagem:", imgErr.message);
           }
+
+          const b64 = base64Encode(finalBase64Bytes);
+          console.log("[telegram-webhook] Base64 gerado com sucesso! Tamanho:", b64.length);
+          finalImageBase64Uri = `data:${mime};base64,${b64}`;
         }
 
         // ================================================================
