@@ -2,6 +2,14 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+import {
+  calculateRotationNeeded,
+  calculateTableCropTiles,
+  deduplicateAndConsolidateItems,
+  validateDanfeMath,
+  evaluateStockStatus,
+  type DanfeItemRaw,
+} from "../_shared/danfe-extractor.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -878,6 +886,12 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
+        if (nf.status === "requer_revisao") {
+          await editMessageText(cbChatId, callbackMessageId, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+          await answerCallback(callbackQuery.id, "NF requer revisão e não pode ser confirmada automaticamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         await supabase.from("notas_fiscais_compra").update({ status: "confirmada" }).eq("id", nfId);
         await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
 
@@ -892,24 +906,12 @@ serve(async (req) => {
         msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n`;
         msgConf += `📦 <b>Itens processados:</b> ${itens?.length || 0}\n\n`;
 
+        let itensProcessados = 0;
+        let itensPendentes = 0;
+
         const alertasCriados: any[] = [];
         if (itens && itens.length > 0) {
           for (const item of itens) {
-            await supabase.from("nf_itens").update({ status_estoque: "processado" }).eq("id", item.id);
-
-            await supabase.from("historico_custo_produto").insert({
-              user_id: cbUserId,
-              workspace_id: nf.workspace_id,
-              produto_descricao: item.descricao,
-              codigo_produto: item.codigo_produto,
-              fornecedor: nf.fornecedor,
-              cnpj_fornecedor: nf.cnpj_fornecedor,
-              custo_unitario_bruto: item.valor_unitario,
-              custo_unitario_liquido: item.custo_unitario_liquido,
-              data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
-              nf_id: nfId,
-            });
-
             const { data: prodEye } = await supabase
               .from("produtos_eyemobile")
               .select("*")
@@ -918,69 +920,93 @@ serve(async (req) => {
               .limit(1)
               .maybeSingle();
 
-            if (prodEye) {
+            const avaliacaoEstoque = evaluateStockStatus(item, prodEye);
+
+            await supabase.from("nf_itens").update({
+              status_estoque: avaliacaoEstoque.status_estoque,
+            }).eq("id", item.id);
+
+            if (avaliacaoEstoque.status_estoque === "processado" && avaliacaoEstoque.podeGravarHistoricoCusto && prodEye) {
+              itensProcessados++;
+              const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
+
               await supabase.from("produtos_eyemobile").update({
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: (Number(prodEye.estoque_atual) || 0) + (Number(item.quantidade) || 0),
+                custo_atual: custoConvertido,
+                estoque_atual: (Number(prodEye.estoque_atual) || 0) + avaliacaoEstoque.quantidadeParaEstoque,
                 ultima_atualizacao_custo: new Date().toISOString(),
               }).eq("id", prodEye.id);
-            }
 
-            const dozeMesesAtras = new Date();
-            dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
+              await supabase.from("historico_custo_produto").insert({
+                user_id: cbUserId,
+                workspace_id: nf.workspace_id,
+                produto_descricao: item.descricao,
+                codigo_produto: item.codigo_produto,
+                fornecedor: nf.fornecedor,
+                cnpj_fornecedor: nf.cnpj_fornecedor,
+                custo_unitario_bruto: item.valor_unitario,
+                custo_unitario_liquido: custoConvertido,
+                data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
+                nf_id: nfId,
+              });
 
-            const { data: histAnterior } = await supabase
-              .from("historico_custo_produto")
-              .select("custo_unitario_liquido, created_at")
-              .eq("user_id", cbUserId)
-              .ilike("produto_descricao", `%${item.descricao.trim()}%`)
-              .lt("created_at", nf.created_at || new Date().toISOString())
-              .gte("created_at", dozeMesesAtras.toISOString())
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
+              const dozeMesesAtras = new Date();
+              dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
 
-            if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
-              const custoAnt = Number(histAnterior.custo_unitario_liquido);
-              const custoNovo = Number(item.custo_unitario_liquido);
-              const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
+              const { data: histAnterior } = await supabase
+                .from("historico_custo_produto")
+                .select("custo_unitario_liquido, created_at")
+                .eq("user_id", cbUserId)
+                .ilike("produto_descricao", `%${item.descricao.trim()}%`)
+                .lt("created_at", nf.created_at || new Date().toISOString())
+                .gte("created_at", dozeMesesAtras.toISOString())
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
 
-              if (variacao > 10) {
-                let precoVendaAtual = Number(prodEye?.preco_venda || 0);
-                let margemReal = Number(prodEye?.margem_real_percentual || 0);
-                let precoSugerido = 0;
+              if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
+                const custoAnt = Number(histAnterior.custo_unitario_liquido);
+                const custoNovo = Number(custoConvertido);
+                const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
 
-                if (precoVendaAtual > 0 && custoAnt > 0) {
-                  margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
-                  precoSugerido = custoNovo * (1 + margemReal / 100);
-                } else {
-                  precoSugerido = custoNovo * 1.3;
-                }
+                if (variacao > 10) {
+                  let precoVendaAtual = Number(prodEye?.preco_venda || 0);
+                  let margemReal = Number(prodEye?.margem_real_percentual || 0);
+                  let precoSugerido = 0;
 
-                const { data: novoAlerta } = await supabase
-                  .from("alertas_preco_pendentes")
-                  .insert({
-                    user_id: cbUserId,
-                    workspace_id: nf.workspace_id,
-                    nf_id: nfId,
-                    produto_eyemobile_id: prodEye?.eyemobile_id || null,
-                    produto_codigo: item.codigo_produto,
-                    produto_descricao: item.descricao,
-                    custo_anterior: custoAnt,
-                    custo_novo: custoNovo,
-                    variacao_custo_percentual: variacao,
-                    preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
-                    margem_real_percentual: margemReal > 0 ? margemReal : null,
-                    preco_sugerido: precoSugerido,
-                    status: "pendente",
-                  })
-                  .select("*")
-                  .single();
+                  if (precoVendaAtual > 0 && custoAnt > 0) {
+                    margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
+                    precoSugerido = custoNovo * (1 + margemReal / 100);
+                  } else {
+                    precoSugerido = custoNovo * 1.3;
+                  }
 
-                if (novoAlerta) {
-                  alertasCriados.push(novoAlerta);
+                  const { data: novoAlerta } = await supabase
+                    .from("alertas_preco_pendentes")
+                    .insert({
+                      user_id: cbUserId,
+                      workspace_id: nf.workspace_id,
+                      nf_id: nfId,
+                      produto_eyemobile_id: prodEye?.eyemobile_id || null,
+                      produto_codigo: item.codigo_produto,
+                      produto_descricao: item.descricao,
+                      custo_anterior: custoAnt,
+                      custo_novo: custoNovo,
+                      variacao_custo_percentual: variacao,
+                      preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
+                      margem_real_percentual: margemReal > 0 ? margemReal : null,
+                      preco_sugerido: precoSugerido,
+                      status: "pendente",
+                    })
+                    .select("*")
+                    .single();
+
+                  if (novoAlerta) {
+                    alertasCriados.push(novoAlerta);
+                  }
                 }
               }
+            } else {
+              itensPendentes++;
             }
           }
         }
@@ -3370,6 +3396,7 @@ serve(async (req) => {
 
         // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
+        let loadedDecodedImage: any = null;
         let documentData: any = null;
 
         // ============================================
@@ -3615,26 +3642,19 @@ serve(async (req) => {
 
           try {
             const decodedImage = await Image.decode(finalBase64Bytes);
-            console.log(`[telegram-webhook] Dimensões originais da imagem: ${decodedImage.width}x${decodedImage.height}`);
+            loadedDecodedImage = decodedImage;
+            console.log(`[NF] imagem original: ${decodedImage.width}x${decodedImage.height}`);
 
-            // 1. Se a imagem for em paisagem (largura > altura * 1.15), como DANFEs e notas fiscais são folhas A4 verticais,
-            // rotacionamos 90° para a orientação retrato perfeita antes de passar pelo GPT-4o:
-            if (decodedImage.width > decodedImage.height * 1.15) {
-              console.log("[telegram-webhook] 🔄 Imagem em paisagem detectada! Auto-rotacionando 90° para formato vertical/retrato...");
-              decodedImage.rotate(90);
-              console.log(`[telegram-webhook] Imagem rotacionada: ${decodedImage.width}x${decodedImage.height}`);
-            }
-
-            // 2. Redimensionar para até 2048px se a foto for gigantesca (48MP/108MP de celulares modernos)
-            if (decodedImage.width > 2048) {
+            // Redimensionar apenas para visão geral de análise inicial (preservando loadedDecodedImage intacto sem rotação)
+            const overviewImage = decodedImage.clone();
+            if (overviewImage.width > 2048) {
               const targetW = 2048;
-              const scale = targetW / decodedImage.width;
-              decodedImage.resize(targetW, Math.round(decodedImage.height * scale));
-              console.log(`[telegram-webhook] Imagem redimensionada para otimização OCR: ${decodedImage.width}x${decodedImage.height}`);
+              const scale = targetW / overviewImage.width;
+              overviewImage.resize(targetW, Math.round(overviewImage.height * scale));
             }
 
-            // 3. Re-encodificar como JPEG em altíssima qualidade (95)
-            finalBase64Bytes = await decodedImage.encodeJPEG(95);
+            // Re-encodificar overview como JPEG em alta qualidade (95)
+            finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
           } catch (imgErr: any) {
             console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
@@ -3908,52 +3928,57 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           }
         }
 
-        let descricaoBruta = "";
-
         // ================================================================
-        // EXTRATOR EM 2 PASSOS (Chain-of-Thought Vision):
-        // Passo 1: GPT-4o descreve em texto livre tudo o que vê (sem alucinação)
-        // Passo 2: GPT-4o extrai JSON estruturado com precisão máxima
+        // PIPELINE DANFE v1.0.47 (Orientação Real + Recortes + JSON Direto + Validação)
         // ================================================================
         if (!documentData && finalImageBase64Uri) {
-          console.log("[telegram-webhook] [NF] Passo 1: Descrição livre em texto do documento...");
+          console.log("[telegram-webhook] [NF] Iniciando análise estruturada de documento...");
 
-          const promptDescricao = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
+          // ─── PASSO 1: Cabeçalho, Totais, Detecção de Orientação e Região da Tabela ───
+          const promptCabecalhoEOrientacao = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
 
-Sua tarefa é DESCREVER em português com máxima fidelidade tudo o que você consegue ler com certeza no documento impresso.
-NUNCA invente dados. NUNCA adivinhe. Se algo não estiver visível, não mencione.
+Analise esta imagem e retorne APENAS um JSON no seguinte formato:
+{
+  "tipo_documento": "danfe" | "boleto" | "outro",
+  "orientacao_leitura": 0 | 90 | 180 | 270,
+  "regiao_tabela_produtos": {
+    "detectada": true,
+    "top": 0.28,
+    "bottom": 0.88
+  },
+  "cabecalho": {
+    "numero_nf": "string ou null",
+    "serie_nf": "string ou null",
+    "data_emissao": "YYYY-MM-DD ou null",
+    "data_entrada": "YYYY-MM-DD ou null",
+    "fornecedor": "string ou null",
+    "cnpj_fornecedor": "string ou null",
+    "chave_acesso": "string de 44 dígitos ou null"
+  },
+  "valores_totais": {
+    "valor_total_nf": 0.00,
+    "valor_produtos": 0.00,
+    "valor_icms": 0.00,
+    "valor_icms_st": 0.00,
+    "valor_ipi": 0.00,
+    "valor_frete": 0.00,
+    "valor_desconto": 0.00
+  },
+  "boleto_dados": {
+    "beneficiario": "string ou null",
+    "valor": 0.00,
+    "data_vencimento": "YYYY-MM-DD ou null",
+    "linha_digitavel": "string ou null"
+  }
+}
 
-Identifique primeiro:
-TIPO_DE_DOCUMENTO: (DANFE / Nota Fiscal de Compra, Boleto Bancário, Recibo, Outro)
-
-Se for DANFE (Nota Fiscal de Compra):
-CABEÇALHO:
-- Emitente (fornecedor/razão social): ...
-- CNPJ do emitente: ...
-- Número da NF: ...
-- Série: ...
-- Data de emissão: ...
-- Chave de acesso (44 dígitos): ...
-
-VALORES TOTAIS:
-- Valor total da NF: ...
-- Valor dos produtos: ...
-- ICMS: ...
-- ICMS-ST / Substituição: ...
-- IPI: ...
-- Frete: ...
-
-TABELA DE PRODUTOS (DADOS DO PRODUTO / SERVIÇO):
-Descreva CADA LINHA individual da tabela de produtos:
-1. Código: ... | Descrição: ... | NCM: ... | CFOP: ... | Unidade: ... | Quantidade: ... | Valor unitário: ... | Valor total / Custo Total: ... | ICMS %: ... | IPI %: ...
-2. Código: ... | Descrição: ...
-(continue linha por linha até o último produto visível da tabela)
-
-Se for BOLETO BANCÁRIO:
-- Beneficiário / Cedente: ...
-- Valor do documento: ...
-- Data de vencimento: ...
-- Linha digitável (47 dígitos): ...`;
+REGRAS:
+1. Se for DANFE (Nota Fiscal de Compra), defina "tipo_documento": "danfe".
+2. Se o texto da folha estiver deitado ou lateral para ler, indique em "orientacao_leitura" quantos graus (90, 180, 270) a folha precisa girar no sentido horário para ficar perfeitamente vertical (normal = 0).
+3. "regiao_tabela_produtos": indique as posições verticais aproximadas onde a seção "DADOS DO PRODUTO / SERVIÇO" começa ("top") e termina ("bottom"), com valores decimais de 0.0 (topo da folha) a 1.0 (base da folha). Se não tiver certeza, use "detectada": false.
+4. "valor_produtos": extraia o campo VALOR TOTAL DOS PRODUTOS da DANFE.
+5. "valor_total_nf": extraia o campo VALOR TOTAL DA NOTA da DANFE.
+6. Retorne APENAS o JSON puro.`;
 
           const aiResp1 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
             method: "POST",
@@ -3967,13 +3992,13 @@ Se for BOLETO BANCÁRIO:
               tools: [],
               temperature: 0.0,
               messages: [
-                { role: "system", content: promptDescricao },
+                { role: "system", content: promptCabecalhoEOrientacao },
                 {
                   role: "user",
                   content: [
                     {
                       type: "text",
-                      text: promptText || "Descreva este documento fiscal / fatura detalhando cada linha de produto visível com máxima fidelidade. NUNCA invente dados."
+                      text: promptText || "Analise o cabeçalho, totais, orientação e região da tabela de produtos deste documento fiscal. Retorne JSON puro."
                     },
                     { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                   ],
@@ -3982,56 +4007,68 @@ Se for BOLETO BANCÁRIO:
             }),
           });
 
-          if (!aiResp1.ok) {
-            const errText = await aiResp1.text();
-            console.error("[telegram-webhook] Erro no Passo 1 (Visão):", errText);
-            await sendReply("❌ Erro ao analisar a imagem com a IA. Tente novamente.");
-            return new Response("OK", { status: 200, headers: corsHeaders });
+          let docAnalysis: any = null;
+          if (aiResp1.ok) {
+            const aiJson1 = await aiResp1.json();
+            const raw1 = aiJson1.choices?.[0]?.message?.content || "";
+            try {
+              docAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+            } catch {
+              const m = raw1.match(/\{[\s\S]*\}/);
+              if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+            }
           }
 
-          const aiJson1 = await aiResp1.json();
-          descricaoBruta = aiJson1.choices?.[0]?.message?.content || "";
-          console.log("[telegram-webhook] [NF] Passo 1 concluído! Prévia da descrição:\n", descricaoBruta.slice(0, 400));
+          const ehTipoDanfe = docAnalysis?.tipo_documento === "danfe" ||
+            Boolean(docAnalysis?.cabecalho?.numero_nf || docAnalysis?.cabecalho?.cnpj_fornecedor || docAnalysis?.valores_totais?.valor_produtos);
 
-          // Passo 2: Extração JSON estruturada a partir da descrição
-          console.log("[telegram-webhook] [NF] Passo 2: Extraindo JSON estruturado da descrição...");
+          if (ehTipoDanfe) {
+            console.log("[NF] DANFE identificada");
 
-          const promptJSON = `Você recebeu uma descrição de um documento fiscal (DANFE) ou boleto bancário brasileiro.
+            // ─── CORREÇÃO DE ORIENTAÇÃO POR CONTEÚDO (UMA ÚNICA ROTAÇÃO) ───
+            const orientacaoDetectada = calculateRotationNeeded(docAnalysis?.orientacao_leitura);
+            console.log(`[NF] orientação detectada por conteúdo: ${orientacaoDetectada}°`);
 
-Sua tarefa é extrair os dados em formato JSON.
-Use APENAS os dados presentes na descrição. NUNCA invente dados.
-Se um campo não estiver na descrição, use null.
+            if (loadedDecodedImage && orientacaoDetectada > 0) {
+              console.log(`[NF] rotação aplicada: ${orientacaoDetectada}°`);
+              loadedDecodedImage.rotate(orientacaoDetectada);
+            } else {
+              console.log(`[NF] rotação aplicada: 0°`);
+            }
 
-Se houver menção a DANFE, Nota Fiscal, produtos, bebidas ou fornecedores (ex: SPAL, Ambev, Coca-Cola), defina SEMPRE "tipo": "nf_compra".
+            // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO ───
+            const todosItensRecortados: DanfeItemRaw[] = [];
 
-FORMATO JSON PARA DANFE:
+            if (loadedDecodedImage) {
+              const { tiles, usouFallback, topPercent, bottomPercent } = calculateTableCropTiles(
+                loadedDecodedImage.width,
+                loadedDecodedImage.height,
+                docAnalysis?.regiao_tabela_produtos,
+                2,
+                0.15
+              );
+
+              if (!usouFallback) {
+                console.log(`[NF] região da tabela detectada por conteúdo: ${Math.round(topPercent * 100)}%-${Math.round(bottomPercent * 100)}%`);
+              } else {
+                console.log("[NF] região da tabela não detectada");
+                console.log("[NF] usando fallback geométrico: 28%-88%");
+              }
+
+              console.log(`[NF] recortes gerados: ${tiles.length}`);
+
+              const promptRecorte = `Você é um extrator fiscal especializado na tabela DADOS DO PRODUTO / SERVIÇO da DANFE.
+Extraia CADA LINHA de produto visível neste recorte da tabela diretamente em JSON.
+
+FORMATO:
 {
-  "tipo": "nf_compra",
-  "confianca_geral": "alta",
-  "cabecalho": {
-    "numero_nf": "...",
-    "serie_nf": "...",
-    "data_emissao": "YYYY-MM-DD",
-    "data_entrada": "YYYY-MM-DD",
-    "fornecedor": "...",
-    "cnpj_fornecedor": "...",
-    "chave_acesso": "..."
-  },
-  "valores_totais": {
-    "valor_total_nf": 0.00,
-    "valor_produtos": 0.00,
-    "valor_icms": 0.00,
-    "valor_icms_st": 0.00,
-    "valor_ipi": 0.00,
-    "valor_frete": 0.00
-  },
   "itens": [
     {
-      "codigo": "...",
-      "descricao": "...",
-      "ncm": "...",
-      "cfop": "...",
-      "unidade": "CX",
+      "codigo": "string ou null",
+      "descricao": "string com descrição exata do produto",
+      "ncm": "string ou null",
+      "cfop": "string ou null",
+      "unidade": "CX" | "UN" | "LT" | "PCT" | "string",
       "quantidade": 1.0,
       "valor_unitario": 0.00,
       "valor_total": 0.00,
@@ -4039,59 +4076,109 @@ FORMATO JSON PARA DANFE:
       "ipi_aliquota": 0.00,
       "custo_unitario_liquido": 0.00
     }
-  ],
-  "beneficiario": null,
-  "valor": null,
-  "data_vencimento": null,
-  "linha_digitavel": null
+  ]
 }
 
-Se for estritamente um BOLETO BANCÁRIO (sem itens de produtos), defina "tipo": "boleto" e preencha "beneficiario", "valor", "data_vencimento", "linha_digitavel".
-Retorne APENAS o JSON puro.`;
+REGRAS CRÍTICAS:
+1. NUNCA INVENTE VALORES. Se não conseguir ler um campo, use null (ex: "quantidade": null).
+2. Não omita nenhum produto visível na imagem.
+3. Retorne APENAS o JSON puro.`;
 
-          const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              user_id: userId,
-              tools: [],
-              temperature: 0.0,
-              messages: [
-                { role: "system", content: promptJSON },
-                { role: "user", content: `Extraia JSON desta descrição de documento:\n\n${descricaoBruta}` },
-              ],
-            }),
-          });
+              for (let i = 0; i < tiles.length; i++) {
+                const tile = tiles[i];
+                try {
+                  const crop = loadedDecodedImage.clone().crop(tile.x, tile.y, tile.width, tile.height);
+                  const cropB64 = base64Encode(await crop.encodeJPEG(95));
+                  const tileUri = `data:image/jpeg;base64,${cropB64}`;
 
-          if (aiResp2.ok) {
-            const aiJson2 = await aiResp2.json();
-            const rawJSON = aiJson2.choices?.[0]?.message?.content || "";
-            try {
-              const cleaned = rawJSON.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
-              documentData = JSON.parse(cleaned);
-            } catch {
-              const objMatch = rawJSON.match(/\{[\s\S]*\}/);
-              if (objMatch) {
-                try { documentData = JSON.parse(objMatch[0]); } catch {}
+                  const tileResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                    method: "POST",
+                    headers: {
+                      Authorization: `Bearer ${supabaseServiceKey}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                      model: "gpt-4o",
+                      user_id: userId,
+                      tools: [],
+                      temperature: 0.0,
+                      messages: [
+                        { role: "system", content: promptRecorte },
+                        {
+                          role: "user",
+                          content: [
+                            { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${i + 1}/${tiles.length} da DANFE.` },
+                            { type: "image_url", image_url: { url: tileUri, detail: "high" } },
+                          ],
+                        },
+                      ],
+                    }),
+                  });
+
+                  if (tileResp.ok) {
+                    const tileJson = await tileResp.json();
+                    const rawTile = tileJson.choices?.[0]?.message?.content || "";
+                    let parsedTile: any = null;
+                    try {
+                      parsedTile = JSON.parse(rawTile.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+                    } catch {
+                      const m = rawTile.match(/\{[\s\S]*\}/);
+                      if (m) { try { parsedTile = JSON.parse(m[0]); } catch {} }
+                    }
+
+                    const rawArray: DanfeItemRaw[] = Array.isArray(parsedTile?.itens) ? parsedTile.itens : [];
+                    const itemsFound: DanfeItemRaw[] = rawArray.map((it: DanfeItemRaw, pos: number) => ({
+                      ...it,
+                      _sourceTile: i,
+                      _positionInTile: pos,
+                      _totalItemsInTile: rawArray.length,
+                    }));
+
+                    console.log(`[NF] recorte ${i + 1}: ${itemsFound.length} itens`);
+                    todosItensRecortados.push(...itemsFound);
+                  }
+                } catch (tileErr: any) {
+                  console.warn(`[NF] Aviso ao processar recorte ${i + 1}:`, tileErr.message);
+                }
               }
             }
+
+            console.log(`[NF] itens antes da deduplicação: ${todosItensRecortados.length}`);
+            const itensConsolidados = deduplicateAndConsolidateItems(todosItensRecortados);
+            console.log(`[NF] itens finais: ${itensConsolidados.length}`);
+
+            // ─── VALIDAÇÃO MATEMÁTICA DETERMINÍSTICA ───
+            const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+            console.log(`[NF] itens encontrados: ${validacao.itensValidosCount}`);
+            console.log(`[NF] soma dos itens: R$ ${validacao.somaItens.toFixed(2)}`);
+            console.log(`[NF] valor produtos NF: R$ ${validacao.valorReferencia.toFixed(2)}`);
+            console.log(`[NF] diferença: R$ ${validacao.diferenca.toFixed(2)}`);
+            console.log(`[NF] confiança: ${validacao.valido ? "alta" : "baixa"}`);
+            console.log(`[NF] validação: ${validacao.valido ? "OK" : "REQUER_REVISAO"}`);
+
+            documentData = {
+              tipo: "nf_compra",
+              confianca_geral: validacao.valido ? "alta" : "baixa",
+              status_validacao: validacao.status,
+              validacao_detalhes: validacao,
+              cabecalho: docAnalysis?.cabecalho || {},
+              valores_totais: docAnalysis?.valores_totais || {},
+              itens: itensConsolidados,
+            };
+          } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
+            documentData = {
+              tipo: "boleto",
+              beneficiario: docAnalysis?.boleto_dados?.beneficiario,
+              valor: docAnalysis?.boleto_dados?.valor,
+              data_vencimento: docAnalysis?.boleto_dados?.data_vencimento,
+              linha_digitavel: docAnalysis?.boleto_dados?.linha_digitavel,
+            };
           }
         }
 
-        const descLower = (descricaoBruta || "").toLowerCase();
         const ehDANFE = Boolean(
           documentData?.tipo === "nf_compra" ||
-          (documentData?.itens && documentData.itens.length > 0) ||
-          descLower.includes("danfe") ||
-          descLower.includes("nota fiscal") ||
-          descLower.includes("nfe") ||
-          descLower.includes("produtos") ||
-          descLower.includes("cfop") ||
-          descLower.includes("chave de acesso")
+          (documentData?.itens && documentData.itens.length > 0)
         );
 
         console.log("[telegram-webhook] Foto analisada:", {
@@ -4123,32 +4210,52 @@ Retorne APENAS o JSON puro.`;
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
 
-          // ─── VALIDAÇÃO DE SANIDADE: Rejeitar apenas leituras comprovadamente absurdas ───
           const itensExtraidos = documentData.itens || [];
+          const validacao = documentData.validacao_detalhes || validateDanfeMath(itensExtraidos, documentData.valores_totais);
           const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
           const valorProdutosNF = Number(documentData.valores_totais?.valor_produtos || 0);
+          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
 
-          const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
-          const baseComparacao = valorProdutosNF > 0 ? valorProdutosNF : valorTotalNF;
-          const diferencaValor = Math.abs(valorTotalItens - baseComparacao);
-          const percentualDiferenca = baseComparacao > 0 ? (diferencaValor / baseComparacao) * 100 : 0;
+          // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
+          if (!validacao.valido || itensExtraidos.length === 0) {
+            console.warn("[NF] Leitura duvidosa/divergente detectada. Bloqueando atualização automática de estoque.");
 
-          // Se nenhum item foi extraído
-          if (itensExtraidos.length === 0) {
-            let msgSemItens = `⚠️ <b>Não foi possível identificar os produtos da Nota Fiscal nesta imagem.</b>\n\n`;
-            if (isTelegramCompressedPhoto) {
-              msgSemItens += `📂 <b>Dica de alta precisão:</b> O Telegram comprime fotos por padrão.\n`;
-              msgSemItens += `Toque no clipe 📎 → selecione <b>Arquivo</b> → envie a foto como arquivo original ou envie o <b>XML</b> da nota fiscal ✅\n\n`;
-            } else {
-              msgSemItens += `💡 <b>Dicas:</b>\n`;
-              msgSemItens += `1. Aproxime a câmera da tabela de produtos (DADOS DO PRODUTO/SERVIÇO)\n`;
-              msgSemItens += `2. Você também pode enviar o arquivo <b>.XML</b> da nota para importação instantânea!\n`;
+            let msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura.</b>\n\n`;
+            msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
+            msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
+            if (validacao.valorReferencia > 0) {
+              msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
+              msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
             }
+            msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
+            msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
+            msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo</b> (não foto) para manter 100% da resolução\n`;
+            msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
 
-            await sendReply(msgSemItens);
+            await supabase
+              .from("notas_fiscais_compra")
+              .insert({
+                user_id: userId,
+                workspace_id: wsId,
+                chat_id: Number(chatId) || null,
+                numero_nf: documentData.cabecalho?.numero_nf,
+                serie_nf: documentData.cabecalho?.serie_nf,
+                fornecedor: documentData.cabecalho?.fornecedor,
+                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
+                data_emissao: documentData.cabecalho?.data_emissao,
+                data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
+                valor_total: valorTotalNF || valorTotalItens,
+                valor_produtos: valorProdutosNF || valorTotalItens,
+                chave_acesso: documentData.cabecalho?.chave_acesso,
+                status: "requer_revisao",
+                origem: documentData.origem || "foto",
+              });
+
+            await sendReply(msgDivergencia);
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
+          // ─── LEITURA VÁLIDA: Salvar NF e Exibir Card de Confirmação ───
           const { data: nfSalva, error: errNF } = await supabase
             .from("notas_fiscais_compra")
             .insert({
@@ -4165,7 +4272,7 @@ Retorne APENAS o JSON puro.`;
               valor_icms: documentData.valores_totais?.valor_icms,
               valor_ipi: documentData.valores_totais?.valor_ipi,
               valor_frete: documentData.valores_totais?.valor_frete,
-              valor_produtos: documentData.valores_totais?.valor_produtos || valorTotalItens,
+              valor_produtos: valorProdutosNF || valorTotalItens,
               chave_acesso: documentData.cabecalho?.chave_acesso,
               status: "pendente",
               origem: documentData.origem || "foto",
@@ -4180,7 +4287,7 @@ Retorne APENAS o JSON puro.`;
               descricao: item.descricao,
               ncm: item.ncm,
               cfop: item.cfop,
-              unidade: item.unidade,
+              unidade: item.unidade || "UN",
               quantidade: item.quantidade,
               valor_unitario: item.valor_unitario,
               valor_total: item.valor_total,
@@ -4196,30 +4303,33 @@ Retorne APENAS o JSON puro.`;
               await supabase.from("nf_itens").insert(itensParaInserir);
             }
 
-            const fmt = (v: any) =>
-              v != null && !isNaN(Number(v))
-                ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                : "R$ 0,00";
-
             let msg = `📄 <b>Nota Fiscal de Compra Identificada!</b>\n\n`;
             msg += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
             msg += `📋 <b>NF:</b> ${documentData.cabecalho?.numero_nf || "N/A"} ${documentData.cabecalho?.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
             msg += `📅 <b>Emissão:</b> ${documentData.cabecalho?.data_emissao ? documentData.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
-            msg += `💰 <b>Valor Total:</b> <b>${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}</b>\n`;
+            msg += `💰 <b>Valor Total:</b> <b>${fmt(valorTotalNF || valorTotalItens)}</b>\n`;
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
-            documentData.itens.slice(0, 8).forEach((item: any, i: number) => {
-              const qtd = Number(item.quantidade) || 1;
-              const vUnit = Number(item.valor_unitario) || 0;
-              const vLiq = Number(item.custo_unitario_liquido) || vUnit;
+            documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
+              const qtd = item.quantidade != null ? `${item.quantidade} ${item.unidade || "UN"}` : "Qtd N/A";
+              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario) : "N/A";
+              const vTot = item.valor_total != null ? fmt(item.valor_total) : "N/A";
+              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido) : vUnit;
               msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
-              msg += `   📦 ${qtd} ${item.unidade || "UN"} × ${fmt(vUnit)}\n`;
-              msg += `   💰 Total: ${fmt(item.valor_total)} | Custo Líquido: <b>${fmt(vLiq)}</b>\n\n`;
+              msg += `   📦 ${qtd} × ${vUnit}\n`;
+              msg += `   💰 Total: ${vTot} | Custo Líquido: <b>${vLiq}</b>\n\n`;
             });
 
-            if (documentData.itens.length > 8) {
-              msg += `<i>... e mais ${documentData.itens.length - 8} produtos</i>\n\n`;
+            if (documentData.itens.length > 10) {
+              msg += `<i>... e mais ${documentData.itens.length - 10} produtos</i>\n\n`;
             }
+
+            msg += `────────────────\n`;
+            msg += `💰 <b>Soma dos produtos:</b> ${fmt(validacao.somaItens)}\n`;
+            if (validacao.valorReferencia > 0) {
+              msg += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
+            }
+            msg += `✅ <b>Valores conferidos</b>\n\n`;
 
             msg += `⚠️ <b>Deseja confirmar e atualizar estoque e custos?</b>\n\n`;
             msg += `👉 Responda <b>CONFIRMAR</b> para atualizar o sistema.\n`;
@@ -4241,7 +4351,7 @@ Retorne APENAS o JSON puro.`;
               chat_id: Number(chatId) || null,
               tipo: "atualizar_estoque_nf",
               dados: { nf_id: nfSalva.id, message_id: messageId },
-              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}`,
+              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(valorTotalNF || valorTotalItens)}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
             }).select("id").single();
