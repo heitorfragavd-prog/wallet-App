@@ -511,67 +511,67 @@ const Dividas = () => {
 
         {/* Stats Cards */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5 overflow-hidden">
-            <CardContent className="p-3.5 sm:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
-                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Total a Pagar">Total a Pagar</p>
-                  {loading ? <Skeleton className="h-6 sm:h-8 w-24 sm:w-32" /> : (
-                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-rose-500 truncate" title={formatCurrency(totalDividas)}>
+          <Card className="border-0 bg-gradient-to-br from-rose-500/10 to-rose-500/5">
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Total a Pagar">Total a Pagar</p>
+                  {loading ? <Skeleton className="h-6 sm:h-7 w-20 sm:w-24 mt-1" /> : (
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-rose-500 mt-0.5 whitespace-nowrap">
                       {formatCurrency(totalDividas)}
                     </p>
                   )}
                 </div>
-                <div className="p-2 sm:p-3 rounded-xl bg-rose-500/20 shrink-0">
-                  <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-rose-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-rose-500/20 shrink-0">
+                  <DollarSign className="w-4 h-4 text-rose-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5 overflow-hidden">
-            <CardContent className="p-3.5 sm:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
-                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Vencidas">Vencidas</p>
-                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
-                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-red-500 truncate">{dividasVencidas}</p>
+          <Card className="border-0 bg-gradient-to-br from-red-500/10 to-red-500/5">
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Vencidas">Vencidas</p>
+                  {loading ? <Skeleton className="h-6 sm:h-7 w-12 mt-1" /> : (
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-red-500 mt-0.5">{dividasVencidas}</p>
                   )}
                 </div>
-                <div className="p-2 sm:p-3 rounded-xl bg-red-500/20 shrink-0">
-                  <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 text-red-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-red-500/20 shrink-0">
+                  <AlertTriangle className="w-4 h-4 text-red-500" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-yellow-500/10 to-yellow-500/5 overflow-hidden">
-            <CardContent className="p-3.5 sm:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
-                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Pendentes">Pendentes</p>
-                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
-                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-yellow-600 truncate">{dividasPendentes}</p>
+          <Card className="border-0 bg-gradient-to-br from-yellow-500/10 to-yellow-500/5">
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Pendentes">Pendentes</p>
+                  {loading ? <Skeleton className="h-6 sm:h-7 w-12 mt-1" /> : (
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-yellow-600 mt-0.5">{dividasPendentes}</p>
                   )}
                 </div>
-                <div className="p-2 sm:p-3 rounded-xl bg-yellow-500/20 shrink-0">
-                  <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-yellow-600" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-yellow-500/20 shrink-0">
+                  <Clock className="w-4 h-4 text-yellow-600" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5 overflow-hidden">
-            <CardContent className="p-3.5 sm:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
-                  <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Quitadas">Quitadas</p>
-                  {loading ? <Skeleton className="h-6 sm:h-8 w-12 sm:w-16" /> : (
-                    <p className="text-base sm:text-lg xl:text-2xl font-bold text-green-500 truncate">{dividasQuitadas}</p>
+          <Card className="border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
+            <CardContent className="p-3.5 sm:p-4">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground truncate" title="Quitadas">Quitadas</p>
+                  {loading ? <Skeleton className="h-6 sm:h-7 w-12 mt-1" /> : (
+                    <p className="text-sm sm:text-base xl:text-lg font-bold text-green-500 mt-0.5">{dividasQuitadas}</p>
                   )}
                 </div>
-                <div className="p-2 sm:p-3 rounded-xl bg-green-500/20 shrink-0">
-                  <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 text-green-500" />
+                <div className="p-2 sm:p-2.5 rounded-xl bg-green-500/20 shrink-0">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
                 </div>
               </div>
             </CardContent>
@@ -740,17 +740,17 @@ const Dividas = () => {
                         </div>
                       ) : (
                         // Visualização normal com layout flex responsivo
-                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+                          <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                             {/* Ícone */}
-                            <div className={`p-2.5 sm:p-3 rounded-xl shrink-0 ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
+                            <div className={`p-2.5 sm:p-3 rounded-xl shrink-0 mt-0.5 sm:mt-0 ${divida.status === "vencida" ? "bg-red-500/10" : divida.status === "quitada" ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
                               <CreditCard className={`w-5 h-5 ${divida.status === "vencida" ? "text-red-500" : divida.status === "quitada" ? "text-green-500" : "text-yellow-600"}`} />
                             </div>
 
                             {/* Informações em grid responsivo */}
-                            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 items-center flex-1 min-w-0">
-                              <div className="min-w-0">
-                                <p className="font-semibold text-foreground truncate" title={divida.descricao}>{divida.descricao}</p>
+                            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-x-4 gap-y-3 items-center flex-1 min-w-0">
+                              <div className="min-w-0 col-span-2 md:col-span-1">
+                                <p className="font-semibold text-foreground text-sm truncate" title={divida.descricao}>{divida.descricao}</p>
                                 <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                                   <span className="text-xs text-muted-foreground truncate">{divida.categorias?.nome || "Sem categoria"}</span>
                                   {getMetodoPagamentoBadge(divida.metodo_pagamento_esperado)}
@@ -798,7 +798,7 @@ const Dividas = () => {
                           </div>
 
                           {/* Ações com wrap flexível */}
-                          <div className="flex items-center gap-2 justify-end shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-border/40">
+                          <div className="flex items-center gap-2 justify-end shrink-0 pt-2 xl:pt-0 border-t xl:border-t-0 border-border/40">
                             {getStatusBadge(divida.status)}
                             {divida.debt_reminders && divida.debt_reminders.length > 0 && (
                               <Button variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0" title="Lembrete configurado">

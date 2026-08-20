@@ -496,9 +496,120 @@ function validarExtracaoBoleto(data: {
   return { valido: true };
 }
 
+// ─── PARSER DETERMINÍSTICO DE XML DE NF-e BRASILEIRA ───
+function parseNFeXml(xmlText: string) {
+  const getTag = (xml: string, tag: string): string => {
+    const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+    return match ? match[1].trim() : "";
+  };
 
+  const getNum = (xml: string, tag: string): number => {
+    const v = getTag(xml, tag);
+    return v ? parseFloat(v) || 0 : 0;
+  };
 
+  // 1. Chave de Acesso (44 dígitos)
+  let chaveAcesso = getTag(xmlText, "chNFe");
+  if (!chaveAcesso) {
+    const idMatch = xmlText.match(/Id="NFe(\d{44})"/i);
+    if (idMatch) chaveAcesso = idMatch[1];
+  }
 
+  // 2. Identificação da NF
+  const ideMatch = xmlText.match(/<ide[\s\S]*?<\/ide>/i);
+  const ideXml = ideMatch ? ideMatch[0] : "";
+  const numeroNf = getTag(ideXml, "nNF");
+  const serieNf = getTag(ideXml, "serie");
+  const dataEmissaoRaw = getTag(ideXml, "dhEmi") || getTag(ideXml, "dEmi");
+  const dataEmissao = dataEmissaoRaw ? dataEmissaoRaw.split("T")[0] : "";
+
+  // 3. Emitente / Fornecedor
+  const emitMatch = xmlText.match(/<emit[\s\S]*?<\/emit>/i);
+  const emitXml = emitMatch ? emitMatch[0] : "";
+  const cnpjFornecedor = getTag(emitXml, "CNPJ") || getTag(emitXml, "CPF");
+  const razaoSocial = getTag(emitXml, "xNome");
+  const nomeFantasia = getTag(emitXml, "xFant");
+  const fornecedor = razaoSocial || nomeFantasia || "Fornecedor";
+
+  // 4. Totais da Nota
+  const totalMatch = xmlText.match(/<ICMSTot[\s\S]*?<\/ICMSTot>/i);
+  const totalXml = totalMatch ? totalMatch[0] : "";
+  const valorTotalNf = getNum(totalXml, "vNF");
+  const valorProdutos = getNum(totalXml, "vProd");
+  const valorIcms = getNum(totalXml, "vICMS");
+  const valorIcmsSt = getNum(totalXml, "vST");
+  const valorIpi = getNum(totalXml, "vIPI");
+  const valorFrete = getNum(totalXml, "vFrete");
+  const valorDesconto = getNum(totalXml, "vDesc");
+
+  // 5. Itens da Nota
+  const detMatches = xmlText.match(/<det[\s\S]*?<\/det>/gi) || [];
+  const itens = detMatches.map((detXml, index) => {
+    const prodMatch = detXml.match(/<prod[\s\S]*?<\/prod>/i);
+    const prodXml = prodMatch ? prodMatch[0] : "";
+
+    const codigo = getTag(prodXml, "cProd") || String(index + 1);
+    const descricao = getTag(prodXml, "xProd");
+    const ncm = getTag(prodXml, "NCM");
+    const cfop = getTag(prodXml, "CFOP");
+    const unidade = getTag(prodXml, "uCom") || "UN";
+    const quantidade = getNum(prodXml, "qCom") || 1;
+    const valorUnitario = getNum(prodXml, "vUnCom");
+    const valorTotal = getNum(prodXml, "vProd");
+
+    // Impostos
+    const icmsAliq = getNum(detXml, "pICMS");
+    const ipiAliq = getNum(detXml, "pIPI");
+    const pisAliq = getNum(detXml, "pPIS");
+    const cofinsAliq = getNum(detXml, "pCOFINS");
+
+    // Custo unitário líquido
+    const icmsValor = valorUnitario * (icmsAliq / 100);
+    const ipiValor = valorUnitario * (ipiAliq / 100);
+    const custoUnitarioLiquido = Math.max(0, valorUnitario - icmsValor - ipiValor);
+
+    return {
+      codigo,
+      descricao,
+      ncm,
+      cfop,
+      unidade,
+      quantidade,
+      valor_unitario: valorUnitario,
+      valor_total: valorTotal,
+      icms_aliquota: icmsAliq,
+      ipi_aliquota: ipiAliq,
+      pis_aliquota: pisAliq,
+      cofins_aliquota: cofinsAliq,
+      custo_unitario_liquido: custoUnitarioLiquido > 0 ? custoUnitarioLiquido : valorUnitario,
+    };
+  });
+
+  return {
+    tipo: "nf_compra",
+    confianca_geral: "alta",
+    origem: "xml",
+    cabecalho: {
+      numero_nf: numeroNf,
+      serie_nf: serieNf,
+      data_emissao: dataEmissao,
+      data_entrada: dataEmissao,
+      fornecedor,
+      cnpj_fornecedor: cnpjFornecedor,
+      chave_acesso: chaveAcesso,
+    },
+    valores_totais: {
+      valor_total_nf: valorTotalNf,
+      valor_produtos: valorProdutos,
+      valor_icms: valorIcms,
+      valor_icms_st: valorIcmsSt,
+      valor_ipi: valorIpi,
+      valor_frete: valorFrete,
+      valor_desconto: valorDesconto,
+    },
+    itens,
+  };
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -1274,6 +1385,45 @@ serve(async (req) => {
     const mesAtual = nowSp.getMonth() + 1;
     const anoAtual = nowSp.getFullYear();
     const primeiroDiaMes = `${anoAtual}-${String(mesAtual).padStart(2, "0")}-01`;
+
+    // ─── COMANDO /sefaz — STATUS E CONSULTA SEFAZ ───
+    if (respLower.startsWith("/sefaz") || respLower === "sefaz") {
+      const { data: cert } = await supabase
+        .from("workspace_certificados_sefaz")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!cert || !cert.certificado_storage_path) {
+        let msgSefazInfo = `🏛️ <b>Sincronização Automática com a SEFAZ (DF-e)</b>\n\n`;
+        msgSefazInfo += `Para que o Wallet App baixe <b>automaticamente</b> todas as notas emitidas contra o seu CNPJ (sem você precisar fotografar nem digitar nada):\n\n`;
+        msgSefazInfo += `🔐 <b>Requisito:</b> Certificado Digital A1 (.pfx) do seu CNPJ.\n\n`;
+        msgSefazInfo += `📋 <b>Como ativar:</b>\n`;
+        msgSefazInfo += `1. Abra o Wallet App em <b>Configurações > SEFAZ / Certificado A1</b>\n`;
+        msgSefazInfo += `2. Faça o upload do arquivo <code>.pfx</code> e informe a senha\n`;
+        msgSefazInfo += `3. O sistema conectará na SEFAZ e buscará novas notas a cada hora automaticamente! 🚀\n\n`;
+        msgSefazInfo += `💡 <i>Enquanto isso, você pode enviar fotos de DANFEs ou arquivos <b>.XML</b> e <b>.PDF</b> direto aqui no chat!</i>`;
+
+        await sendReply(msgSefazInfo);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const valFmt = cert.validade_fim ? new Date(cert.validade_fim).toLocaleDateString("pt-BR") : "Não informada";
+      const ultSyncFmt = cert.ultima_sincronizacao ? new Date(cert.ultima_sincronizacao).toLocaleString("pt-BR") : "Nenhuma ainda";
+
+      let msgStatus = `🏛️ <b>Status da Integração SEFAZ:</b>\n\n`;
+      msgStatus += `🏢 <b>CNPJ:</b> <code>${cert.cnpj}</code>\n`;
+      msgStatus += `📍 <b>UF:</b> ${cert.uf || "MG"} (${cert.ambiente})\n`;
+      msgStatus += `📅 <b>Validade do Certificado:</b> ${valFmt}\n`;
+      msgStatus += `🔄 <b>Última busca na SEFAZ:</b> ${ultSyncFmt}\n`;
+      msgStatus += `📊 <b>Status:</b> ${cert.status === "ativo" ? "🟢 Ativo e Conectado" : "🔴 " + (cert.status || "Pendente")}\n\n`;
+      msgStatus += `💡 <i>As novas notas fiscais são sincronizadas automaticamente em segundo plano.</i>`;
+
+      await sendReply(msgStatus);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
 
     // ─── VERIFICAÇÃO DE ESTADO DE CONVERSA (Limpa confirmação pendente se usuário fez outra pergunta) ───
     const isSim = ["sim", "s", "yes", "y", "confirmar", "confirmo", "pode cadastrar", "cadastrar", "ok"].includes(respLower);
@@ -3176,13 +3326,45 @@ serve(async (req) => {
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
         const docMime = (message.document?.mime_type || "").toLowerCase();
 
-        // ─── VARIÁVEL ÚNICA — NUNCA redeclare! ───
+        // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
+        let documentData: any = null;
+
+        // ============================================
+        // FLUXO XML: Parser Nativo Determinístico de NF-e
+        // ============================================
+        if (ext === "xml" || docMime.includes("xml") || docMime.includes("text/xml")) {
+          console.log("[telegram-webhook] Arquivo XML recebido, iniciando parse nativo de NF-e...");
+          await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+          }).catch(() => {});
+
+          const xmlDownloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+          if (!xmlDownloadResp.ok) {
+            await sendReply("❌ Não foi possível baixar o arquivo XML. Tente enviar novamente.");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          const xmlText = await xmlDownloadResp.text();
+          const parsedNFe = parseNFeXml(xmlText);
+
+          if (parsedNFe && parsedNFe.itens && parsedNFe.itens.length > 0) {
+            console.log(`[telegram-webhook] XML de NF-e processado com sucesso! ${parsedNFe.itens.length} itens extraídos.`);
+            documentData = parsedNFe;
+          } else {
+            await sendReply(
+              "⚠️ <b>Arquivo XML recebido, mas não foi identificado como NF-e padrão.</b>\n\n" +
+              "Certifique-se de que o arquivo é o XML oficial da Nota Fiscal Eletrônica (com tags &lt;nfeProc&gt; ou &lt;NFe&gt;)."
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        }
 
         // ============================================
         // FLUXO PDF: OpenAI Assistants API Nativo (Code Interpreter + File Search)
         // ============================================
-        if (ext === "pdf" || docMime.includes("pdf")) {
+        if (!documentData && (ext === "pdf" || docMime.includes("pdf"))) {
           console.log("[telegram-webhook] Documento PDF recebido, iniciando processamento nativo...");
           await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendChatAction`, {
             method: "POST",
@@ -3673,7 +3855,8 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         // EXTRATOR UNIFICADO DE DOCUMENTOS (DANFE / NF COMPRA / BOLETO)
         // Suporta imagens em qualquer orientação (vertical, horizontal 90°/270°, inclinadas)
         // ================================================================
-        const docAnalysisSystemPrompt = `Você é um scanner OCR especialista em documentos fiscais e boletos bancários brasileiros.
+        if (!documentData && finalImageBase64Uri) {
+          const docAnalysisSystemPrompt = `Você é um scanner OCR especialista em documentos fiscais e boletos bancários brasileiros.
 Extraia com 100% de fidelidade APENAS o que está visível no documento. NUNCA invente dados nem resuma produtos.
 
 TIPO DE DOCUMENTO:
@@ -3761,79 +3944,78 @@ Retorne APENAS JSON válido no seguinte formato:
   "linha_digitavel": null
 }`;
 
-        console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
-        const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${supabaseServiceKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            user_id: userId,
-            tools: [],
-            temperature: 0.0,
-            messages: [
-              { role: "system", content: docAnalysisSystemPrompt },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: promptText ||
-                      "Analise esta imagem e extraia todos os dados fiscais ou bancários visíveis com máxima fidelidade. " +
-                      "Se for DANFE, leia linha por linha da tabela de produtos sem pular nenhuma linha e sem agrupar itens. " +
-                      "Se a imagem estiver deitada ou inclinada, leia na orientação adequada. Retorne APENAS o JSON."
-                  },
-                  { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                ],
-              },
-            ],
-          }),
-        });
+          console.log("[telegram-webhook] Chamando openai-proxy para analisar documento (detail: high, temp: 0.0)...");
+          const aiDocResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              user_id: userId,
+              tools: [],
+              temperature: 0.0,
+              messages: [
+                { role: "system", content: docAnalysisSystemPrompt },
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: promptText ||
+                        "Analise esta imagem e extraia todos os dados fiscais ou bancários visíveis com máxima fidelidade. " +
+                        "Se for DANFE, leia linha por linha da tabela de produtos sem pular nenhuma linha e sem agrupar itens. " +
+                        "Se a imagem estiver deitada ou inclinada, leia na orientação adequada. Retorne APENAS o JSON."
+                    },
+                    { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                  ],
+                },
+              ],
+            }),
+          });
 
-        console.log("[telegram-webhook] openai-proxy doc status:", aiDocResponse.status);
+          console.log("[telegram-webhook] openai-proxy doc status:", aiDocResponse.status);
 
-        if (!aiDocResponse.ok) {
-          const errText = await aiDocResponse.text();
-          console.error("[telegram-webhook] openai-proxy falhou na análise de doc:", errText);
-          await sendReply("❌ Erro ao analisar a imagem com a IA. Detalhe: " + errText.slice(0, 100));
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        const aiDocJson = await aiDocResponse.json();
-        const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
-        console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 400));
-
-        let documentData: any = null;
-        try {
-          const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
-          documentData = JSON.parse(cleaned);
-        } catch {
-          const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
-          if (jsonTagMatch) {
-            try { documentData = JSON.parse(jsonTagMatch[1].trim()); } catch {}
+          if (!aiDocResponse.ok) {
+            const errText = await aiDocResponse.text();
+            console.error("[telegram-webhook] openai-proxy falhou na análise de doc:", errText);
+            await sendReply("❌ Erro ao analisar a imagem com a IA. Detalhe: " + errText.slice(0, 100));
+            return new Response("OK", { status: 200, headers: corsHeaders });
           }
-          if (!documentData) {
-            const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
-            if (objMatch) {
-              try { documentData = JSON.parse(objMatch[0]); } catch {}
+
+          const aiDocJson = await aiDocResponse.json();
+          const docAnalysisText = aiDocJson.choices?.[0]?.message?.content || "";
+          console.log("[telegram-webhook] Análise retornada pela IA:", docAnalysisText.slice(0, 400));
+
+          try {
+            const cleaned = docAnalysisText.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+            documentData = JSON.parse(cleaned);
+          } catch {
+            const jsonTagMatch = docAnalysisText.match(/<document_analysis>([\s\S]*?)<\/document_analysis>/);
+            if (jsonTagMatch) {
+              try { documentData = JSON.parse(jsonTagMatch[1].trim()); } catch {}
+            }
+            if (!documentData) {
+              const objMatch = docAnalysisText.match(/\{[\s\S]*\}/);
+              if (objMatch) {
+                try { documentData = JSON.parse(objMatch[0]); } catch {}
+              }
             }
           }
-        }
 
-        // ================================================================
-        // SEGUNDA PASSAGEM OPCIONAL (ZOOM): Se a NF tem alto valor mas poucos itens foram lidos
-        // ================================================================
-        if (documentData && documentData.tipo === "nf_compra") {
-          const itensIniciais = documentData.itens || [];
-          const valorTotalNFPass2 = Number(documentData.valores_totais?.valor_total_nf || 0);
-          const somaItensIniciais = itensIniciais.reduce((sum: number, it: any) => sum + (Number(it.valor_total) || 0), 0);
+          // ================================================================
+          // SEGUNDA PASSAGEM OPCIONAL (ZOOM): Se a NF tem alto valor mas poucos itens foram lidos
+          // ================================================================
+          if (documentData && documentData.tipo === "nf_compra") {
+            const itensIniciais = documentData.itens || [];
+            const valorTotalNFPass2 = Number(documentData.valores_totais?.valor_total_nf || 0);
+            const somaItensIniciais = itensIniciais.reduce((sum: number, it: any) => sum + (Number(it.valor_total) || 0), 0);
 
-          if (itensIniciais.length < 4 && valorTotalNFPass2 > 300 && somaItensIniciais < valorTotalNFPass2 * 0.6) {
-            console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNFPass2})...`);
+            if (itensIniciais.length < 4 && valorTotalNFPass2 > 300 && somaItensIniciais < valorTotalNFPass2 * 0.6) {
+              console.log(`[telegram-webhook] Segunda passagem: focando na tabela de produtos (${itensIniciais.length} itens lidos inicialmente para NF de R$ ${valorTotalNFPass2})...`);
 
-            const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
+              const promptZoom = `Você está vendo uma NOTA FISCAL DANFE brasileira. Foque EXCLUSIVAMENTE na tabela "DADOS DO PRODUTO / SERVIÇO" (a maior tabela de itens do documento).
 Esta tabela tem VÁRIAS LINHAS de produtos. Leia CADA LINHA individualmente e extraia todos os produtos visíveis.
 Retorne APENAS um array JSON de itens no formato:
 [
@@ -3852,50 +4034,51 @@ Retorne APENAS um array JSON de itens no formato:
   }
 ]`;
 
-            try {
-              const aiZoomResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${supabaseServiceKey}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  model: "gpt-4o",
-                  user_id: userId,
-                  temperature: 0.0,
-                  messages: [
-                    { role: "system", content: promptZoom },
-                    {
-                      role: "user",
-                      content: [
-                        { type: "text", text: "Extraia todas as linhas individuais desta tabela de produtos da DANFE sem resumir nem agrupar:" },
-                        { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                      ],
-                    },
-                  ],
-                }),
-              });
+              try {
+                const aiZoomResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${supabaseServiceKey}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4o",
+                    user_id: userId,
+                    temperature: 0.0,
+                    messages: [
+                      { role: "system", content: promptZoom },
+                      {
+                        role: "user",
+                        content: [
+                          { type: "text", text: "Extraia todas as linhas individuais desta tabela de produtos da DANFE sem resumir nem agrupar:" },
+                          { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                        ],
+                      },
+                    ],
+                  }),
+                });
 
-              if (aiZoomResp.ok) {
-                const aiZoomJson = await aiZoomResp.json();
-                const rawZoom = aiZoomJson.choices?.[0]?.message?.content || "";
-                let itensZoom: any[] = [];
-                try {
-                  itensZoom = JSON.parse(rawZoom.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
-                } catch {
-                  const matchZ = rawZoom.match(/\[[\s\S]*\]/);
-                  if (matchZ) {
-                    try { itensZoom = JSON.parse(matchZ[0]); } catch {}
+                if (aiZoomResp.ok) {
+                  const aiZoomJson = await aiZoomResp.json();
+                  const rawZoom = aiZoomJson.choices?.[0]?.message?.content || "";
+                  let itensZoom: any[] = [];
+                  try {
+                    itensZoom = JSON.parse(rawZoom.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
+                  } catch {
+                    const matchZ = rawZoom.match(/\[[\s\S]*\]/);
+                    if (matchZ) {
+                      try { itensZoom = JSON.parse(matchZ[0]); } catch {}
+                    }
+                  }
+
+                  if (Array.isArray(itensZoom) && itensZoom.length > itensIniciais.length) {
+                    console.log(`[telegram-webhook] Segunda passagem melhorou: ${itensIniciais.length} -> ${itensZoom.length} itens extraídos!`);
+                    documentData.itens = itensZoom;
                   }
                 }
-
-                if (Array.isArray(itensZoom) && itensZoom.length > itensIniciais.length) {
-                  console.log(`[telegram-webhook] Segunda passagem melhorou: ${itensIniciais.length} -> ${itensZoom.length} itens extraídos!`);
-                  documentData.itens = itensZoom;
-                }
+              } catch (zoomErr: any) {
+                console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
               }
-            } catch (zoomErr: any) {
-              console.warn("[telegram-webhook] Erro na segunda passagem zoom:", zoomErr.message);
             }
           }
         }
@@ -3906,14 +4089,15 @@ Retorne APENAS um array JSON de itens no formato:
         if (documentData && (documentData.tipo === "nf_compra" || (documentData.itens && documentData.itens.length > 0))) {
           console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA <<< Itens:", documentData.itens?.length);
 
-          const { data: wsMember } = await supabase
-            .from("workspace_members")
-            .select("workspace_id")
+          const { data: wsData } = await supabase
+            .from("workspaces")
+            .select("id")
             .eq("user_id", userId)
+            .order("is_default", { ascending: false })
             .limit(1)
             .maybeSingle();
 
-          const wsId = wsMember?.workspace_id || workspaceId || null;
+          const wsId = wsData?.id || workspaceId || null;
 
           const fmt = (v: any) =>
             v != null && !isNaN(Number(v))
