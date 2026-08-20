@@ -881,7 +881,7 @@ serve(async (req) => {
         }
 
         if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
-          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi confirmada anteriormente.");
+          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
           await answerCallback(callbackQuery.id, "NF já confirmada!");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -892,26 +892,24 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("notas_fiscais_compra").update({ status: "confirmada" }).eq("id", nfId);
-        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
-
         const { data: itens } = await supabase
           .from("nf_itens")
           .select("*")
           .eq("nf_id", nfId);
 
-        let msgConf = `✅ <b>Nota Fiscal Confirmada!</b>\n\n`;
-        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
-        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
-        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n`;
-        msgConf += `📦 <b>Itens processados:</b> ${itens?.length || 0}\n\n`;
-
-        let itensProcessados = 0;
+        let itensJaProcessados = 0;
+        let itensRecemProcessados = 0;
         let itensPendentes = 0;
 
         const alertasCriados: any[] = [];
         if (itens && itens.length > 0) {
           for (const item of itens) {
+            // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
+            if (item.status_estoque === "processado") {
+              itensJaProcessados++;
+              continue;
+            }
+
             const { data: prodEye } = await supabase
               .from("produtos_eyemobile")
               .select("*")
@@ -927,7 +925,7 @@ serve(async (req) => {
             }).eq("id", item.id);
 
             if (avaliacaoEstoque.status_estoque === "processado" && avaliacaoEstoque.podeGravarHistoricoCusto && prodEye) {
-              itensProcessados++;
+              itensRecemProcessados++;
               const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
 
               await supabase.from("produtos_eyemobile").update({
@@ -1009,6 +1007,37 @@ serve(async (req) => {
               itensPendentes++;
             }
           }
+        }
+
+        // Determina status final da NF baseado no resultado real do processamento
+        let statusFinalNF = "pendente";
+        if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
+          statusFinalNF = "confirmada";
+        } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
+          statusFinalNF = "parcialmente_processada";
+        } else {
+          statusFinalNF = "pendente";
+        }
+
+        await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nfId);
+        if (statusFinalNF === "confirmada") {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
+        }
+
+        let msgConf = statusFinalNF === "confirmada"
+          ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
+          : `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`;
+
+        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
+        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
+        msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
+        if (itensJaProcessados > 0) {
+          msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
+        }
+        if (itensPendentes > 0) {
+          msgConf += `⚠️ <b>Itens pendentes (sem produto ou sem fator CX):</b> ${itensPendentes}\n`;
+          msgConf += `<i>(Esses itens poderão ser processados assim que o cadastro/fator for ajustado no PDV).</i>\n`;
         }
 
         await editMessageText(cbChatId, callbackMessageId, msgConf);
@@ -3929,18 +3958,106 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         }
 
         // ================================================================
-        // PIPELINE DANFE v1.0.47 (Orientação Real + Recortes + JSON Direto + Validação)
+        // PIPELINE DANFE v1.0.47 (Orientação Real + Normalização + Recortes + JSON Direto + Validação)
         // ================================================================
         if (!documentData && finalImageBase64Uri) {
           console.log("[telegram-webhook] [NF] Iniciando análise estruturada de documento...");
 
-          // ─── PASSO 1: Cabeçalho, Totais, Detecção de Orientação e Região da Tabela ───
-          const promptCabecalhoEOrientacao = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
+          // ─── PASSO 1: Detecção de Orientação de Leitura e Tipo do Documento ───
+          const promptOrientacaoETipo = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
 
 Analise esta imagem e retorne APENAS um JSON no seguinte formato:
 {
   "tipo_documento": "danfe" | "boleto" | "outro",
   "orientacao_leitura": 0 | 90 | 180 | 270,
+  "boleto_dados": {
+    "beneficiario": "string ou null",
+    "valor": 0.00,
+    "data_vencimento": "YYYY-MM-DD ou null",
+    "linha_digitavel": "string ou null"
+  }
+}
+
+REGRAS:
+1. Se houver qualquer elemento de Nota Fiscal / DANFE / produtos / fornecedor / impostos, defina "tipo_documento": "danfe".
+2. Se o texto da folha estiver deitado ou lateral para ler, indique em "orientacao_leitura" quantos graus (90, 180, 270) a folha precisa girar no sentido horário para ficar perfeitamente vertical em pé (normal = 0).
+3. Se for boleto bancário sem tabela de produtos, preencha "tipo_documento": "boleto" e "boleto_dados".
+4. Retorne APENAS o JSON puro.`;
+
+          const aiResp1 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              user_id: userId,
+              tools: [],
+              temperature: 0.0,
+              messages: [
+                { role: "system", content: promptOrientacaoETipo },
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: promptText || "Identifique o tipo e a orientação de leitura deste documento fiscal. Retorne JSON puro."
+                    },
+                    { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                  ],
+                },
+              ],
+            }),
+          });
+
+          let orientacaoAnalysis: any = null;
+          if (aiResp1.ok) {
+            const aiJson1 = await aiResp1.json();
+            const raw1 = aiJson1.choices?.[0]?.message?.content || "";
+            try {
+              orientacaoAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+            } catch {
+              const m = raw1.match(/\{[\s\S]*\}/);
+              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch {} }
+            }
+          }
+
+          const orientacaoDetectada = calculateRotationNeeded(orientacaoAnalysis?.orientacao_leitura);
+          console.log(`[NF] orientação detectada por conteúdo: ${orientacaoDetectada}°`);
+
+          // ─── NORMALIZAÇÃO DA MATRIZ ORIGINAL (UMA ÚNICA ROTAÇÃO) ───
+          let normalizedOverviewUri = finalImageBase64Uri;
+          if (loadedDecodedImage && orientacaoDetectada > 0) {
+            console.log(`[NF] rotação aplicada: ${orientacaoDetectada}°`);
+            loadedDecodedImage.rotate(orientacaoDetectada);
+
+            // Gera visão geral normalizada (em pé) para análise de cabeçalho e região de tabela
+            const normOverview = loadedDecodedImage.clone();
+            if (normOverview.width > 2048) {
+              const targetW = 2048;
+              const scale = targetW / normOverview.width;
+              normOverview.resize(targetW, Math.round(normOverview.height * scale));
+            }
+            const normB64 = base64Encode(await normOverview.encodeJPEG(95));
+            normalizedOverviewUri = `data:image/jpeg;base64,${normB64}`;
+          } else {
+            console.log(`[NF] rotação aplicada: 0°`);
+          }
+
+          const ehTipoDanfe = orientacaoAnalysis?.tipo_documento === "danfe" ||
+            (!orientacaoAnalysis?.tipo_documento || orientacaoAnalysis.tipo_documento !== "boleto");
+
+          if (ehTipoDanfe) {
+            console.log("[NF] DANFE identificada");
+
+            // ─── PASSO 2: Cabeçalho, Totais e Região da Tabela na Imagem já Normalizada (Em Pé) ───
+            const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
+Esta imagem já está na orientação vertical correta (em pé).
+
+Analise o documento e retorne APENAS um JSON no seguinte formato:
+{
+  "tipo_documento": "danfe",
   "regiao_tabela_produtos": {
     "detectada": true,
     "top": 0.28,
@@ -3963,77 +4080,52 @@ Analise esta imagem e retorne APENAS um JSON no seguinte formato:
     "valor_ipi": 0.00,
     "valor_frete": 0.00,
     "valor_desconto": 0.00
-  },
-  "boleto_dados": {
-    "beneficiario": "string ou null",
-    "valor": 0.00,
-    "data_vencimento": "YYYY-MM-DD ou null",
-    "linha_digitavel": "string ou null"
   }
 }
 
 REGRAS:
-1. Se for DANFE (Nota Fiscal de Compra), defina "tipo_documento": "danfe".
-2. Se o texto da folha estiver deitado ou lateral para ler, indique em "orientacao_leitura" quantos graus (90, 180, 270) a folha precisa girar no sentido horário para ficar perfeitamente vertical (normal = 0).
-3. "regiao_tabela_produtos": indique as posições verticais aproximadas onde a seção "DADOS DO PRODUTO / SERVIÇO" começa ("top") e termina ("bottom"), com valores decimais de 0.0 (topo da folha) a 1.0 (base da folha). Se não tiver certeza, use "detectada": false.
-4. "valor_produtos": extraia o campo VALOR TOTAL DOS PRODUTOS da DANFE.
-5. "valor_total_nf": extraia o campo VALOR TOTAL DA NOTA da DANFE.
-6. Retorne APENAS o JSON puro.`;
+1. "regiao_tabela_produtos": indique as posições verticais aproximadas onde a seção "DADOS DO PRODUTO / SERVIÇO" começa ("top") e termina ("bottom"), com valores decimais de 0.0 (topo da folha) a 1.0 (base da folha). Se não tiver certeza, use "detectada": false.
+2. "valor_produtos": extraia o campo VALOR TOTAL DOS PRODUTOS da DANFE.
+3. "valor_total_nf": extraia o campo VALOR TOTAL DA NOTA da DANFE.
+4. Retorne APENAS o JSON puro.`;
 
-          const aiResp1 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              user_id: userId,
-              tools: [],
-              temperature: 0.0,
-              messages: [
-                { role: "system", content: promptCabecalhoEOrientacao },
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: promptText || "Analise o cabeçalho, totais, orientação e região da tabela de produtos deste documento fiscal. Retorne JSON puro."
-                    },
-                    { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
-                  ],
-                },
-              ],
-            }),
-          });
+            const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${supabaseServiceKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                user_id: userId,
+                tools: [],
+                temperature: 0.0,
+                messages: [
+                  { role: "system", content: promptCabecalhoTotaisETabela },
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: promptText || "Analise o cabeçalho, totais e região da tabela de produtos desta DANFE já normalizada. Retorne JSON puro."
+                      },
+                      { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                    ],
+                  },
+                ],
+              }),
+            });
 
-          let docAnalysis: any = null;
-          if (aiResp1.ok) {
-            const aiJson1 = await aiResp1.json();
-            const raw1 = aiJson1.choices?.[0]?.message?.content || "";
-            try {
-              docAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
-            } catch {
-              const m = raw1.match(/\{[\s\S]*\}/);
-              if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
-            }
-          }
-
-          const ehTipoDanfe = docAnalysis?.tipo_documento === "danfe" ||
-            Boolean(docAnalysis?.cabecalho?.numero_nf || docAnalysis?.cabecalho?.cnpj_fornecedor || docAnalysis?.valores_totais?.valor_produtos);
-
-          if (ehTipoDanfe) {
-            console.log("[NF] DANFE identificada");
-
-            // ─── CORREÇÃO DE ORIENTAÇÃO POR CONTEÚDO (UMA ÚNICA ROTAÇÃO) ───
-            const orientacaoDetectada = calculateRotationNeeded(docAnalysis?.orientacao_leitura);
-            console.log(`[NF] orientação detectada por conteúdo: ${orientacaoDetectada}°`);
-
-            if (loadedDecodedImage && orientacaoDetectada > 0) {
-              console.log(`[NF] rotação aplicada: ${orientacaoDetectada}°`);
-              loadedDecodedImage.rotate(orientacaoDetectada);
-            } else {
-              console.log(`[NF] rotação aplicada: 0°`);
+            let docAnalysis: any = null;
+            if (aiResp2.ok) {
+              const aiJson2 = await aiResp2.json();
+              const raw2 = aiJson2.choices?.[0]?.message?.content || "";
+              try {
+                docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+              } catch {
+                const m = raw2.match(/\{[\s\S]*\}/);
+                if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+              }
             }
 
             // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO ───

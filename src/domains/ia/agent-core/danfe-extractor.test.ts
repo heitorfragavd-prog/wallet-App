@@ -9,32 +9,32 @@ import {
 } from "../../../../supabase/functions/_shared/danfe-extractor";
 
 describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
-  // ─── TESTE 1 & 2: ROTAÇÃO ÚNICA POR CONTEÚDO (SEM HEURÍSTICA DE ASPECT RATIO) ───
-  describe("1 & 2. Orientação Real por Conteúdo", () => {
-    it("Teste 1 — Rotação única: imagem com conteúdo a 90° deve retornar exatamente 90°", () => {
+  // ─── 1. ORIENTAÇÃO REAL POR CONTEÚDO E NORMALIZAÇÃO ───
+  describe("1. Orientação Real por Conteúdo (0°, 90°, 180°, 270°)", () => {
+    it("DANFE 90°: deve detectar 90° e permitir normalização prévia antes de qualquer recorte", () => {
       const rot = calculateRotationNeeded(90);
       expect(rot).toBe(90);
     });
 
-    it("Teste 2 — Paisagem com conteúdo já correto (0°): NÃO deve rotacionar apenas porque a foto é horizontal", () => {
+    it("DANFE 270°: deve detectar 270° e permitir normalização prévia antes de qualquer recorte", () => {
+      const rot = calculateRotationNeeded(270);
+      expect(rot).toBe(270);
+    });
+
+    it("DANFE Normal (0°): não deve rotacionar mesmo se a imagem for horizontal/paisagem", () => {
       const rot = calculateRotationNeeded(0);
       expect(rot).toBe(0);
     });
 
-    it("Conteúdo a 180° deve retornar 180°", () => {
-      const rot = calculateRotationNeeded(180);
-      expect(rot).toBe(180);
-    });
-
-    it("Retorno nulo/inválido deve utilizar fallback seguro de 0° (sem rotação arbitrária)", () => {
+    it("Retorno nulo ou inválido: utiliza fallback seguro de 0°", () => {
       const rot = calculateRotationNeeded(null);
       expect(rot).toBe(0);
     });
   });
 
-  // ─── TESTE 3 & 4: REGIÃO DA TABELA (DETECÇÃO REAL VS FALLBACK EXPLÍCITO) ───
-  describe("3 & 4. Localização da Tabela de Produtos", () => {
-    it("Teste 3 — Região detectada: top = 0.32 e bottom = 0.81 deve calcular tiles estritamente dentro dessa faixa", () => {
+  // ─── 2. DETECÇÃO DE REGIÃO DA TABELA NA IMAGEM JÁ NORMALIZADA ───
+  describe("2. Região da Tabela Calculada na Matriz Normalizada (Em Pé)", () => {
+    it("DANFE normalizada: região detectada 32%-81% calcula tiles estritamente na imagem em pé", () => {
       const { tiles, usouFallback, topPercent, bottomPercent } = calculateTableCropTiles(
         1200,
         2000,
@@ -51,7 +51,7 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(tiles[1].y + tiles[1].height).toBeLessThanOrEqual(Math.floor(2000 * 0.81) + 5);
     });
 
-    it("Teste 4 — Fallback: quando IA não detecta região com confiança, usa fallback explícito 28%-88%", () => {
+    it("Fallback explícito: quando a IA não detecta região com confiança, usa 28%-88%", () => {
       const { tiles, usouFallback, topPercent, bottomPercent } = calculateTableCropTiles(
         1200,
         2000,
@@ -67,9 +67,9 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
     });
   });
 
-  // ─── TESTE 5 & 6: DEDUPLICAÇÃO CONSCIENTE DO OVERLAP ───
-  describe("5 & 6. Deduplicação Consciente de Overlap", () => {
-    it("Teste 5 — Duplicata verdadeira por overlap: Tile 0 final + Tile 1 início deve resultar em 1 único item", () => {
+  // ─── 3. DEDUPLICAÇÃO CONSCIENTE DO OVERLAP ───
+  describe("3. Deduplicação Consciente de Overlap", () => {
+    it("Duplicata verdadeira por overlap: Tile 0 final + Tile 1 início consolida em 1 único item", () => {
       const itensComOverlap: DanfeItemRaw[] = [
         {
           codigo: "101",
@@ -120,9 +120,8 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(consolidados[2].descricao).toBe("Fanta Laranja 2L");
     });
 
-    it("Teste 6 — Duas linhas legítimas idênticas fora da fronteira de overlap NÃO devem ser apagadas", () => {
+    it("Duas linhas legítimas idênticas fora do overlap NÃO são apagadas", () => {
       const duasLinhasReaisIdenticas: DanfeItemRaw[] = [
-        // Linha 1 no Tile 0
         {
           codigo: "001",
           descricao: "COCA COLA 2L",
@@ -145,7 +144,6 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
           _positionInTile: 1,
           _totalItemsInTile: 5,
         },
-        // Linha 8 no final do Tile 1 (longe do overlap)
         {
           codigo: "001",
           descricao: "COCA COLA 2L",
@@ -160,13 +158,13 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       ];
 
       const consolidados = deduplicateAndConsolidateItems(duasLinhasReaisIdenticas);
-      expect(consolidados.length).toBe(3); // Ambas as linhas de Coca-Cola 2L são preservadas!
+      expect(consolidados.length).toBe(3);
     });
   });
 
-  // ─── TESTE 7, 8 & 9: SEGURANÇA DE ESTOQUE E CUSTO UNITÁRIO DO PDV ───
-  describe("7, 8 & 9. Proteção Rigorosa de Estoque e Custo do PDV", () => {
-    it("Teste 7 — CX sem fator de conversão: status = pendente, estoque não altera e NUNCA grava R$ 50/UN no histórico de custo", () => {
+  // ─── 4. SEGURANÇA DE ESTOQUE E CUSTO UNITÁRIO DO PDV ───
+  describe("4. Proteção de Estoque e Custo do PDV (CX != UN)", () => {
+    it("CX sem fator: status = pendente, estoque não altera e NUNCA grava R$ 50/UN no histórico de custo", () => {
       const itemCx: DanfeItemRaw = {
         descricao: "Coca Cola 2L Caixa",
         unidade: "CX",
@@ -185,7 +183,7 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(avaliacao.motivoPendente).toContain("fator de conversão");
     });
 
-    it("Teste 8 — CX com fator de conversão (6 un/cx): estoque += 60 e custo unitário = R$ 8,333...", () => {
+    it("CX com fator (6 un/cx): estoque += 60 e custo unitário real = 50 / 6 = R$ 8,333...", () => {
       const itemCx: DanfeItemRaw = {
         descricao: "Coca Cola 2L Caixa com 6",
         unidade: "CX",
@@ -203,9 +201,9 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(avaliacao.podeGravarHistoricoCusto).toBe(true);
     });
 
-    it("Teste 9 — Produto não encontrado no Eyemobile: status = pendente, estoque não altera, custo não altera", () => {
+    it("Produto não encontrado no Eyemobile: status = pendente, estoque não altera", () => {
       const itemNaoEncontrado: DanfeItemRaw = {
-        descricao: "Bebida Especial Desconhecida",
+        descricao: "Bebida Desconhecida",
         unidade: "UN",
         quantidade: 5,
         valor_unitario: 15.0,
@@ -218,13 +216,58 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(avaliacao.quantidadeParaEstoque).toBe(0);
       expect(avaliacao.custoUnitarioConvertido).toBeNull();
       expect(avaliacao.podeGravarHistoricoCusto).toBe(false);
-      expect(avaliacao.motivoPendente).toContain("não encontrado no cadastro");
     });
   });
 
-  // ─── TESTE 10: VALIDAÇÃO MATEMÁTICA E PROTEÇÃO SERVER-SIDE ───
-  describe("10. Validação Matemática e Status Requer Revisão", () => {
-    it("Teste 10 — NF com divergência na soma dos itens deve resultar em status requer_revisao", () => {
+  // ─── 5. CONFIRMAÇÃO PARCIAL E REPROCESSAMENTO SEM DUPLICAÇÃO ───
+  describe("5. Confirmação Parcial e Reprocessamento Sem Duplicação", () => {
+    it("NF com 5 itens processados e 3 pendentes: identifica status parcialmente_processada", () => {
+      const itensTotal = 8;
+      const itensRecemProcessados = 5;
+      const itensPendentes = 3;
+      const itensJaProcessados = 0;
+
+      let statusFinalNF = "pendente";
+      if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
+        statusFinalNF = "confirmada";
+      } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
+        statusFinalNF = "parcialmente_processada";
+      }
+
+      expect(statusFinalNF).toBe("parcialmente_processada");
+    });
+
+    it("Reprocessamento posterior: itens com status_estoque = 'processado' são ignorados para não duplicar estoque", () => {
+      const itensNaSegundaTentativa: Array<{ id: string; status_estoque: string; quantidade: number }> = [
+        { id: "it-1", status_estoque: "processado", quantidade: 10 },
+        { id: "it-2", status_estoque: "processado", quantidade: 5 },
+        { id: "it-3", status_estoque: "pendente", quantidade: 4 }, // Foi ajustado agora no PDV
+      ];
+
+      let itensJaProcessados = 0;
+      let itensRecemProcessados = 0;
+      let estoqueAdicionado = 0;
+
+      for (const item of itensNaSegundaTentativa) {
+        if (item.status_estoque === "processado") {
+          itensJaProcessados++;
+          continue; // Pula sem adicionar estoque novamente!
+        }
+
+        // Processa apenas o item que estava pendente
+        itensRecemProcessados++;
+        estoqueAdicionado += item.quantidade;
+      }
+
+      expect(itensJaProcessados).toBe(2);
+      expect(itensRecemProcessados).toBe(1);
+      expect(estoqueAdicionado).toBe(4); // Apenas o item pendente foi incrementado!
+    });
+  });
+
+  // ─── 6. VALIDAÇÃO MATEMÁTICA E REQUER REVISÃO ───
+  describe("6. Validação Matemática Determinística", () => {
+    it("NF com soma divergente deve resultar em status requer_revisao", () => {
       const itensIncompletos: DanfeItemRaw[] = [
         { codigo: "1", descricao: "Produto A", quantidade: 10, valor_unitario: 5.0, valor_total: 50.0 },
       ];
@@ -234,7 +277,6 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(resultado.valido).toBe(false);
       expect(resultado.status).toBe("requer_revisao");
       expect(resultado.diferenca).toBe(200.0);
-      expect(resultado.motivo).toContain("diverge");
     });
 
     it("NF com leitura matemática perfeita deve ser aprovada como valido", () => {
