@@ -3617,17 +3617,27 @@ serve(async (req) => {
             const decodedImage = await Image.decode(finalBase64Bytes);
             console.log(`[telegram-webhook] Dimensões originais da imagem: ${decodedImage.width}x${decodedImage.height}`);
 
-            // Se a imagem for em paisagem (largura > altura * 1.15), como DANFEs e notas fiscais são folhas A4 verticais,
+            // 1. Se a imagem for em paisagem (largura > altura * 1.15), como DANFEs e notas fiscais são folhas A4 verticais,
             // rotacionamos 90° para a orientação retrato perfeita antes de passar pelo GPT-4o:
             if (decodedImage.width > decodedImage.height * 1.15) {
               console.log("[telegram-webhook] 🔄 Imagem em paisagem detectada! Auto-rotacionando 90° para formato vertical/retrato...");
               decodedImage.rotate(90);
-              finalBase64Bytes = await decodedImage.encodeJPEG(95);
-              mime = "image/jpeg";
-              console.log(`[telegram-webhook] Imagem rotacionada com sucesso: ${decodedImage.width}x${decodedImage.height}`);
+              console.log(`[telegram-webhook] Imagem rotacionada: ${decodedImage.width}x${decodedImage.height}`);
             }
+
+            // 2. Redimensionar para até 2048px se a foto for gigantesca (48MP/108MP de celulares modernos)
+            if (decodedImage.width > 2048) {
+              const targetW = 2048;
+              const scale = targetW / decodedImage.width;
+              decodedImage.resize(targetW, Math.round(decodedImage.height * scale));
+              console.log(`[telegram-webhook] Imagem redimensionada para otimização OCR: ${decodedImage.width}x${decodedImage.height}`);
+            }
+
+            // 3. Re-encodificar como JPEG em altíssima qualidade (95)
+            finalBase64Bytes = await decodedImage.encodeJPEG(95);
+            mime = "image/jpeg";
           } catch (imgErr: any) {
-            console.log("[telegram-webhook] Não foi possível decodificar ou rotacionar imagem:", imgErr.message);
+            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
           }
 
           const b64 = base64Encode(finalBase64Bytes);
