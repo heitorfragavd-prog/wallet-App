@@ -3898,6 +3898,8 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           }
         }
 
+        let descricaoBruta = "";
+
         // ================================================================
         // EXTRATOR EM 2 PASSOS (Chain-of-Thought Vision):
         // Passo 1: GPT-4o descreve em texto livre tudo o que vê (sem alucinação)
@@ -3910,6 +3912,9 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
 
 Sua tarefa é DESCREVER em português com máxima fidelidade tudo o que você consegue ler com certeza no documento impresso.
 NUNCA invente dados. NUNCA adivinhe. Se algo não estiver visível, não mencione.
+
+Identifique primeiro:
+TIPO_DE_DOCUMENTO: (DANFE / Nota Fiscal de Compra, Boleto Bancário, Recibo, Outro)
 
 Se for DANFE (Nota Fiscal de Compra):
 CABEÇALHO:
@@ -3975,7 +3980,7 @@ Se for BOLETO BANCÁRIO:
           }
 
           const aiJson1 = await aiResp1.json();
-          const descricaoBruta = aiJson1.choices?.[0]?.message?.content || "";
+          descricaoBruta = aiJson1.choices?.[0]?.message?.content || "";
           console.log("[telegram-webhook] [NF] Passo 1 concluído! Prévia da descrição:\n", descricaoBruta.slice(0, 400));
 
           // Passo 2: Extração JSON estruturada a partir da descrição
@@ -3987,7 +3992,9 @@ Sua tarefa é extrair os dados em formato JSON.
 Use APENAS os dados presentes na descrição. NUNCA invente dados.
 Se um campo não estiver na descrição, use null.
 
-FORMATO JSON:
+Se houver menção a DANFE, Nota Fiscal, produtos, bebidas ou fornecedores (ex: SPAL, Ambev, Coca-Cola), defina SEMPRE "tipo": "nf_compra".
+
+FORMATO JSON PARA DANFE:
 {
   "tipo": "nf_compra",
   "confianca_geral": "alta",
@@ -4029,7 +4036,7 @@ FORMATO JSON:
   "linha_digitavel": null
 }
 
-Se for BOLETO BANCÁRIO, defina "tipo": "boleto" e preencha "beneficiario", "valor", "data_vencimento", "linha_digitavel".
+Se for estritamente um BOLETO BANCÁRIO (sem itens de produtos), defina "tipo": "boleto" e preencha "beneficiario", "valor", "data_vencimento", "linha_digitavel".
 Retorne APENAS o JSON puro.`;
 
           const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
@@ -4045,7 +4052,7 @@ Retorne APENAS o JSON puro.`;
               temperature: 0.0,
               messages: [
                 { role: "system", content: promptJSON },
-                { role: "user", content: `Extraia JSON desta descrição de documento fiscal:\n\n${descricaoBruta}` },
+                { role: "user", content: `Extraia JSON desta descrição de documento:\n\n${descricaoBruta}` },
               ],
             }),
           });
@@ -4065,11 +4072,31 @@ Retorne APENAS o JSON puro.`;
           }
         }
 
+        const descLower = (descricaoBruta || "").toLowerCase();
+        const ehDANFE = Boolean(
+          documentData?.tipo === "nf_compra" ||
+          (documentData?.itens && documentData.itens.length > 0) ||
+          descLower.includes("danfe") ||
+          descLower.includes("nota fiscal") ||
+          descLower.includes("nfe") ||
+          descLower.includes("produtos") ||
+          descLower.includes("cfop") ||
+          descLower.includes("chave de acesso")
+        );
+
+        console.log("[telegram-webhook] Foto analisada:", {
+          isGroup,
+          chatId,
+          ehDANFE,
+          tipoDocumento: documentData?.tipo,
+          itensCount: documentData?.itens?.length || 0,
+        });
+
         // ================================================================
-        // 1. FLUXO NOTA FISCAL DE COMPRA (DANFE)
+        // PRIORIDADE 1: NOTA FISCAL DE COMPRA (DANFE)
         // ================================================================
-        if (documentData && (documentData.tipo === "nf_compra" || (documentData.itens && documentData.itens.length > 0))) {
-          console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA <<< Itens:", documentData.itens?.length);
+        if (documentData && ehDANFE) {
+          console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA (PRIORIDADE 1) <<< Itens:", documentData.itens?.length);
 
           const { data: wsData } = await supabase
             .from("workspaces")
@@ -4090,37 +4117,6 @@ Retorne APENAS o JSON puro.`;
           const itensExtraidos = documentData.itens || [];
           const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
           const valorProdutosNF = Number(documentData.valores_totais?.valor_produtos || 0);
-
-          // REGRA 1: Valor total razoável (R$ 1 a R$ 200.000)
-          const valorAbsurdo = valorTotalNF < 1 || valorTotalNF > 200000;
-
-          // REGRA 2 & 3: Coerência de Fornecedor x Marca de Produto
-          const fornecedorLido = documentData.cabecalho?.fornecedor || "";
-          const ehSpalVal = fornecedorLido.toLowerCase().includes("spal") || fornecedorLido.toLowerCase().includes("coca");
-          const ehAmbevVal = fornecedorLido.toLowerCase().includes("ambev") || fornecedorLido.toLowerCase().includes("brasnor") || fornecedorLido.toLowerCase().includes("brahma");
-
-          const descricoesVal = itensExtraidos.map((i: any) => (i.descricao || "").toLowerCase());
-          const marcasSpal = [
-            "monster", "eisenbahn", "guarana", "coca", "schweppes", "del valle",
-            "kuat", "tonica", "crystal", "burn", "matte", "leao", "heineken",
-            "amstel", "tiger", "bavaria", "kaiser", "sol", "fresh", "kapo"
-          ];
-          const marcasAmbev = [
-            "brahma", "skol", "antarctica", "original", "stella", "bohemia",
-            "budweiser", "corona", "spaten", "beck", "colorado", "patagonia",
-            "fusion", "gatorade", "pepsi", "sukita", "h2oh"
-          ];
-
-          const temProdutoSpalVal = descricoesVal.some((d: string) => marcasSpal.some(m => d.includes(m)));
-          const temProdutoAmbevVal = descricoesVal.some((d: string) => marcasAmbev.some(m => d.includes(m)));
-
-          const incoerenteFornecedor = (ehSpalVal && temProdutoAmbevVal && !temProdutoSpalVal) || (ehAmbevVal && temProdutoSpalVal && !temProdutoAmbevVal);
-
-          // REGRA 4: Valores unitários razoáveis (R$ 0,10 a R$ 10.000)
-          const valoresUnitariosAbsurdos = itensExtraidos.some((i: any) => {
-            const vu = Number(i.valor_unitario);
-            return vu > 10000 || (vu < 0.10 && vu > 0);
-          });
 
           const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
           const baseComparacao = valorProdutosNF > 0 ? valorProdutosNF : valorTotalNF;
@@ -4199,7 +4195,7 @@ Retorne APENAS o JSON puro.`;
             msg += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
             msg += `📋 <b>NF:</b> ${documentData.cabecalho?.numero_nf || "N/A"} ${documentData.cabecalho?.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
             msg += `📅 <b>Emissão:</b> ${documentData.cabecalho?.data_emissao ? documentData.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
-            msg += `💰 <b>Valor Total:</b> <b>${fmt(documentData.valores_totais?.valor_total_nf)}</b>\n`;
+            msg += `💰 <b>Valor Total:</b> <b>${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}</b>\n`;
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
             documentData.itens.slice(0, 8).forEach((item: any, i: number) => {
@@ -4235,7 +4231,7 @@ Retorne APENAS o JSON puro.`;
               chat_id: Number(chatId) || null,
               tipo: "atualizar_estoque_nf",
               dados: { nf_id: nfSalva.id, message_id: messageId },
-              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf)}`,
+              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
             }).select("id").single();
@@ -4257,7 +4253,10 @@ Retorne APENAS o JSON puro.`;
           }
         }
 
-        if (documentData && (documentData.tipo === "boleto" || documentData.valor || documentData.beneficiario)) {
+        // ================================================================
+        // PRIORIDADE 2: BOLETO BANCÁRIO (Somente se NÃO for DANFE)
+        // ================================================================
+        if (documentData && !ehDANFE && (documentData.tipo === "boleto" || documentData.beneficiario || documentData.linha_digitavel)) {
           // Normaliza campos caso venham com nomes alternativos
           if (!documentData.tipo) documentData.tipo = "boleto";
           if (!documentData.data_vencimento && documentData.vencimento) {
