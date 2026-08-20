@@ -4140,154 +4140,24 @@ Retorne APENAS um array JSON de itens no formato:
             return vu > 10000 || (vu < 0.10 && vu > 0);
           });
 
-          // REGRA 5: Soma dos itens vs total da NF
-          // Em notas de bebidas (SPAL/Ambev), o ICMS-ST e IPI podem representar 15% a 30% do total da NF acima dos produtos.
           const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
           const baseComparacao = valorProdutosNF > 0 ? valorProdutosNF : valorTotalNF;
           const diferencaValor = Math.abs(valorTotalItens - baseComparacao);
           const percentualDiferenca = baseComparacao > 0 ? (diferencaValor / baseComparacao) * 100 : 0;
-          const limiteDiff = valorProdutosNF > 0 ? 25 : 35;
-          const somaIncoerente = percentualDiferenca > limiteDiff && itensExtraidos.length > 1;
 
-          // SE QUALQUER REGRA DE SANIDADE FALHAR → REJEITAR E OFERECER CHAVE DE ACESSO OU SEFAZ
-          if (valorAbsurdo || incoerenteFornecedor || valoresUnitariosAbsurdos || somaIncoerente || itensExtraidos.length === 0) {
-            console.error("[NF] SANIDADE FALHOU:", {
-              valorAbsurdo,
-              incoerenteFornecedor,
-              valoresUnitariosAbsurdos,
-              somaIncoerente,
-              itensCount: itensExtraidos.length,
-              fornecedor: fornecedorLido,
-              valorTotal: valorTotalNF,
-              valorTotalItens,
-            });
-
-            // Tentar extrair CHAVE DE ACESSO (44 dígitos)
-            const rawChave = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
-            if (rawChave && rawChave.length === 44) {
-              const botoesSefaz = [
-                [{ text: "🔍 CONSULTAR NO SEFAZ", callback_data: `sefaz_consultar:${rawChave}` }],
-              ];
-
-              await sendReplyWithButtons(
-                chatId,
-                `⚠️ <b>Leitura automática falhou</b>, mas encontrei a chave de acesso!\n\n` +
-                `📋 Chave: <code>${rawChave}</code>\n\n` +
-                `💡 Posso indicar a consulta dos dados oficiais no SEFAZ.\n` +
-                `Clique no botão abaixo ou responda <b>SEFAZ</b> para consultar.`,
-                botoesSefaz
-              );
-
-              await supabase.from("telegram_conversas").upsert(
-                {
-                  user_id: userId,
-                  chat_id: Number(chatId),
-                  estado: "aguardando_consulta_sefaz",
-                  proposta_id: null,
-                  updated_at: new Date().toISOString(),
-                },
-                { onConflict: "chat_id" }
-              );
-
-              return new Response("OK", { status: 200, headers: corsHeaders });
-            }
-
-            let msgSanidade = `⚠️ <b>Não consegui ler a nota corretamente.</b>\n\n`;
-            msgSanidade += `🔍 Problemas detectados:\n`;
-            if (valorAbsurdo) msgSanidade += `• Valor total da nota lido parece incorreto\n`;
-            if (incoerenteFornecedor) msgSanidade += `• Fornecedor (${fornecedorLido}) e produtos não batem\n`;
-            if (valoresUnitariosAbsurdos) msgSanidade += `• Valores unitários parecem incorretos\n`;
-            if (somaIncoerente) msgSanidade += `• Soma dos itens (${fmt(valorTotalItens)}) difere do total (${fmt(valorTotalNF)})\n`;
-            if (itensExtraidos.length === 0) msgSanidade += `• Nenhum item encontrado na tabela\n`;
-
-            // Se foi enviado como foto comprimida pelo Telegram → qualidade limitada
+          // Se nenhum item foi extraído
+          if (itensExtraidos.length === 0) {
+            let msgSemItens = `⚠️ <b>Não foi possível identificar os produtos da Nota Fiscal nesta imagem.</b>\n\n`;
             if (isTelegramCompressedPhoto) {
-              msgSanidade += `\n📂 <b>Solução principal — envie como ARQUIVO:</b>\n`;
-              msgSanidade += `O Telegram comprime fotos e reduz a resolução, dificultando a leitura de DANFEs.\n`;
-              msgSanidade += `Para melhor qualidade:\n`;
-              msgSanidade += `① Toque no clipe 📎 → selecione <b>Arquivo</b> (não Galeria/Foto)\n`;
-              msgSanidade += `② Navegue até a foto da DANFE e envie como arquivo\n`;
-              msgSanidade += `③ O bot receberá a imagem em resolução original ✅\n\n`;
+              msgSemItens += `📂 <b>Dica de alta precisão:</b> O Telegram comprime fotos por padrão.\n`;
+              msgSemItens += `Toque no clipe 📎 → selecione <b>Arquivo</b> → envie a foto como arquivo original ou envie o <b>XML</b> da nota fiscal ✅\n\n`;
             } else {
-              msgSanidade += `\n💡 <b>Soluções:</b>\n`;
-              msgSanidade += `1. Envie a foto mais próxima da tabela de produtos\n`;
-              msgSanidade += `2. Tire a foto com mais luz e sem reflexo\n`;
-              msgSanidade += `3. Envie apenas a tabela de produtos (corte a imagem)\n\n`;
-              msgSanidade += `📸 <b>Dicas para tirar uma boa foto da DANFE:</b>\n`;
-              msgSanidade += `• Aproxime a câmera da tabela de produtos\n`;
-              msgSanidade += `• Tire a foto de cima, sem inclinação\n`;
-              msgSanidade += `• Evite reflexos de luz no papel\n`;
-              msgSanidade += `• Se a nota estiver dobrada, abra completamente\n`;
-              msgSanidade += `• Envie a foto no formato retrato (vertical) se possível`;
+              msgSemItens += `💡 <b>Dicas:</b>\n`;
+              msgSemItens += `1. Aproxime a câmera da tabela de produtos (DADOS DO PRODUTO/SERVIÇO)\n`;
+              msgSemItens += `2. Você também pode enviar o arquivo <b>.XML</b> da nota para importação instantânea!\n`;
             }
 
-            await sendReply(msgSanidade);
-            return new Response("OK", { status: 200, headers: corsHeaders });
-          }
-
-          // Se a diferença for maior que 10% e houver menos de 3 itens em nota de alto valor:
-          const alertaItensFaltando = percentualDiferenca > 10 && valorTotalNF > 300 && itensExtraidos.length < 3;
-
-          if (alertaItensFaltando) {
-            console.warn(`[telegram-webhook] Validação NF falhou: ${itensExtraidos.length} itens, soma=${valorTotalItens}, totalNF=${valorTotalNF}, diff=${percentualDiferenca.toFixed(1)}%`);
-
-            const { data: nfFalha } = await supabase
-              .from("notas_fiscais_compra")
-              .insert({
-                user_id: userId,
-                workspace_id: wsId,
-                chat_id: Number(chatId) || null,
-                numero_nf: documentData.cabecalho?.numero_nf,
-                serie_nf: documentData.cabecalho?.serie_nf,
-                fornecedor: documentData.cabecalho?.fornecedor,
-                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
-                data_emissao: documentData.cabecalho?.data_emissao,
-                data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
-                valor_total: valorTotalNF,
-                status: "validacao_falhou",
-                origem: "foto",
-              })
-              .select("id")
-              .single();
-
-            if (nfFalha && itensExtraidos.length > 0) {
-              const itensParc = itensExtraidos.map((it: any) => ({
-                nf_id: nfFalha.id,
-                codigo_produto: it.codigo,
-                descricao: it.descricao,
-                quantidade: it.quantidade,
-                valor_unitario: it.valor_unitario,
-                valor_total: it.valor_total,
-                custo_unitario_liquido: it.custo_unitario_liquido || it.valor_unitario,
-                status_estoque: "pendente",
-              }));
-              await supabase.from("nf_itens").insert(itensParc);
-            }
-
-            let msgAlerta = `⚠️ <b>Atenção: Possível erro na leitura completa da Nota Fiscal!</b>\n\n`;
-            msgAlerta += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
-            msgAlerta += `💰 <b>Valor Total da NF:</b> ${fmt(valorTotalNF)}\n`;
-            msgAlerta += `📦 <b>Itens lidos:</b> ${itensExtraidos.length} produto(s)\n`;
-            msgAlerta += `💰 <b>Soma dos itens:</b> ${fmt(valorTotalItens)}\n`;
-            msgAlerta += `📊 <b>Diferença:</b> ${percentualDiferenca.toFixed(1)}%\n\n`;
-            msgAlerta += `🔍 <i>A tabela é extensa e podem faltar itens na leitura automática.</i>\n\n`;
-            msgAlerta += `👉 <b>Opções:</b>\n`;
-            msgAlerta += `1. Envie a foto mais próxima e focada na tabela de produtos.\n`;
-            msgAlerta += `2. Digite <b>PROSSEGUIR</b> para cadastrar apenas os ${itensExtraidos.length} itens lidos.\n`;
-            msgAlerta += `3. Digite <b>MANUAL</b> para registrar manualmente.`;
-
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "aguardando_correcao_nf",
-                proposta_id: nfFalha?.id || null,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-
-            await sendReply(msgAlerta);
+            await sendReply(msgSemItens);
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
@@ -4303,14 +4173,14 @@ Retorne APENAS um array JSON de itens no formato:
               cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
               data_emissao: documentData.cabecalho?.data_emissao,
               data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
-              valor_total: documentData.valores_totais?.valor_total_nf,
+              valor_total: valorTotalNF || valorTotalItens,
               valor_icms: documentData.valores_totais?.valor_icms,
               valor_ipi: documentData.valores_totais?.valor_ipi,
               valor_frete: documentData.valores_totais?.valor_frete,
-              valor_produtos: documentData.valores_totais?.valor_produtos,
+              valor_produtos: documentData.valores_totais?.valor_produtos || valorTotalItens,
               chave_acesso: documentData.cabecalho?.chave_acesso,
               status: "pendente",
-              origem: "foto",
+              origem: documentData.origem || "foto",
             })
             .select("id")
             .single();
