@@ -784,23 +784,65 @@ serve(async (req) => {
       const callbackData = callbackQuery.data || "";
       const callbackUserId = callbackQuery.from?.id;
 
-      let { data: userData } = await supabase
-        .from("usuarios_telegram")
-        .select("user_id, telegram_chat_id")
-        .eq("telegram_chat_id", String(callbackChatId))
-        .maybeSingle();
+      let cbUserId: string = "";
+      const cbChatId = callbackChatId;
 
-      if (!userData && callbackUserId) {
+      // 1. Busca pelo Telegram User ID de quem clicou no botão
+      if (callbackUserId) {
         const { data: uData } = await supabase
           .from("usuarios_telegram")
-          .select("user_id, telegram_chat_id")
-          .eq("telegram_user_id", String(callbackUserId))
+          .select("user_id")
+          .eq("telegram_chat_id", String(callbackUserId))
+          .eq("ativo", true)
           .maybeSingle();
-        userData = uData;
+        if (uData?.user_id) cbUserId = uData.user_id;
       }
 
-      const cbUserId = userData?.user_id;
-      const cbChatId = userData?.telegram_chat_id || callbackChatId;
+      // 2. Se for chat privado, busca pelo Chat ID
+      if (!cbUserId && callbackChatId) {
+        const { data: cData } = await supabase
+          .from("usuarios_telegram")
+          .select("user_id")
+          .eq("telegram_chat_id", String(callbackChatId))
+          .eq("ativo", true)
+          .maybeSingle();
+        if (cData?.user_id) cbUserId = cData.user_id;
+      }
+
+      // 3. Se for grupo, busca pelo grupo em telegram_grupos_config
+      if (!cbUserId && callbackChatId) {
+        const { data: gc } = await supabase
+          .from("telegram_grupos_config")
+          .select("workspace_id")
+          .eq("chat_id", String(callbackChatId))
+          .maybeSingle();
+
+        if (gc?.workspace_id) {
+          const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", gc.workspace_id).maybeSingle();
+          if (ws?.user_id) cbUserId = ws.user_id;
+        }
+      }
+
+      // 4. Se a ação for confirmação de NF existente, busca o user_id da própria NF
+      if (!cbUserId && callbackData.startsWith("nf_")) {
+        const nfId = callbackData.split(":")[1];
+        const { data: nfRow } = await supabase.from("notas_fiscais_compra").select("user_id").eq("id", nfId).maybeSingle();
+        if (nfRow?.user_id) cbUserId = nfRow.user_id;
+      }
+
+      // 5. Se a ação for alerta de preço, busca o user_id do alerta
+      if (!cbUserId && callbackData.startsWith("preco_")) {
+        const parts = callbackData.split(":");
+        const alertaId = parts[1];
+        const { data: alertaRow } = await supabase.from("alertas_preco_pendentes").select("user_id").eq("id", alertaId).maybeSingle();
+        if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
+      }
+
+      // 6. Fallback para qualquer usuário ativo no sistema
+      if (!cbUserId) {
+        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
+        cbUserId = anyUser?.user_id || "";
+      }
 
       if (!cbUserId) {
         await answerCallback(callbackQuery.id, "Usuário não encontrado.");
