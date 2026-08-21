@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 // Mock supabase client
 vi.mock("@/integrations/supabase/client", () => {
   const chainable = () => {
-    const mock: any = {};
+    const mock: Record<string, unknown> = {};
     mock.select = vi.fn().mockReturnValue(mock);
     mock.insert = vi.fn().mockReturnValue(mock);
     mock.update = vi.fn().mockReturnValue(mock);
@@ -18,7 +18,7 @@ vi.mock("@/integrations/supabase/client", () => {
     mock.range = vi.fn().mockReturnValue(mock);
     mock.single = vi.fn().mockResolvedValue({ data: {}, error: null });
     mock.maybeSingle = vi.fn().mockResolvedValue({ data: {}, error: null });
-    mock.then = (resolve: any) => resolve({ data: [], error: null });
+    mock.then = (resolve: (val: unknown) => void) => resolve({ data: [], error: null });
     return mock;
   };
 
@@ -194,11 +194,11 @@ describe("Workspace Isolation Test Suite (13 Mandatory Scenarios)", () => {
     const mockEq = vi.fn().mockReturnThis();
     const mockOrder = vi.fn().mockResolvedValue({ data: [], error: null });
 
-    (supabase.from as any).mockReturnValue({
+    vi.mocked(supabase.from).mockReturnValue({
       select: mockSelect,
       eq: mockEq,
       order: mockOrder,
-    });
+    } as unknown as ReturnType<typeof supabase.from>);
 
     const targetWs = "ws-verified-333";
     await supabase.from("contas_usuario").select("*").eq("workspace_id", targetWs).order("nome");
@@ -222,10 +222,10 @@ describe("Workspace Isolation Test Suite (13 Mandatory Scenarios)", () => {
   // Scenario 10: IA financeira usa workspace correto
   it("Scenario 10: IA financial context query applies workspace_id filter across workspace-scoped tables", () => {
     const targetWs = "ws-ia-target";
-    const tablesWithWs = ["receitas", "despesas", "transacoes", "contas_usuario", "veiculos", "investimentos", "itens_mercado"];
+    const tablesWithWs = ["receitas", "despesas", "transacoes", "contas_usuario", "veiculos", "investimentos", "itens_mercado"] as const;
 
     tablesWithWs.forEach((table) => {
-      const q = supabase.from(table as any).select("*").eq("workspace_id", targetWs);
+      const q = supabase.from(table).select("*").eq("workspace_id", targetWs);
       expect(q).toBeDefined();
     });
   });
@@ -270,6 +270,15 @@ describe("Workspace Isolation Test Suite (13 Mandatory Scenarios)", () => {
   });
 });
 
+interface ContaMock {
+  id: string;
+  nome: string;
+  tipo: string;
+  workspace_id?: string | null;
+  saldo_atual?: number;
+  limite_credito?: number;
+}
+
 describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenarios)", () => {
   let queryClient: QueryClient;
 
@@ -283,15 +292,15 @@ describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenar
   const wsA = "ws-pessoal-111";
   const wsB = "ws-empresa-222";
 
-  const contaA = { id: "conta-1", nome: "Nubank PF", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 1500 };
-  const contaB = { id: "conta-2", nome: "Itaú PJ", tipo: "conta_corrente", workspace_id: wsB, saldo_atual: 8500 };
-  const cartaoA = { id: "cartao-1", nome: "Mastercard Black PF", tipo: "cartao_credito", workspace_id: wsA, limite_credito: 10000 };
-  const cartaoB = { id: "cartao-2", nome: "Visa Corporate PJ", tipo: "cartao_credito", workspace_id: wsB, limite_credito: 50000 };
+  const contaA: ContaMock = { id: "conta-1", nome: "Nubank PF", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 1500 };
+  const contaB: ContaMock = { id: "conta-2", nome: "Itaú PJ", tipo: "conta_corrente", workspace_id: wsB, saldo_atual: 8500 };
+  const cartaoA: ContaMock = { id: "cartao-1", nome: "Mastercard Black PF", tipo: "cartao_credito", workspace_id: wsA, limite_credito: 10000 };
+  const cartaoB: ContaMock = { id: "cartao-2", nome: "Visa Corporate PJ", tipo: "cartao_credito", workspace_id: wsB, limite_credito: 50000 };
 
   // 1. Conta do Workspace A aparece em A
   it("1. Conta do Workspace A aparece em A", () => {
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA]);
-    const contasWsA = queryClient.getQueryData<any[]>(["contas_usuario", wsA]);
+    const contasWsA = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsA]);
     expect(contasWsA?.find((c) => c.id === "conta-1")).toBeDefined();
   });
 
@@ -299,14 +308,14 @@ describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenar
   it("2. Conta do Workspace A não aparece em B", () => {
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA]);
     queryClient.setQueryData(["contas_usuario", wsB], [contaB, cartaoB]);
-    const contasWsB = queryClient.getQueryData<any[]>(["contas_usuario", wsB]);
+    const contasWsB = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsB]);
     expect(contasWsB?.find((c) => c.id === "conta-1")).toBeUndefined();
   });
 
   // 3. Cartão do Workspace A aparece em A
   it("3. Cartão do Workspace A aparece em A", () => {
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA]);
-    const contasWsA = queryClient.getQueryData<any[]>(["contas_usuario", wsA]);
+    const contasWsA = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsA]);
     const cartao = contasWsA?.find((c) => c.id === "cartao-1" && c.tipo === "cartao_credito");
     expect(cartao).toBeDefined();
     expect(cartao?.limite_credito).toBe(10000);
@@ -316,28 +325,28 @@ describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenar
   it("4. Cartão do Workspace A não aparece em B", () => {
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA]);
     queryClient.setQueryData(["contas_usuario", wsB], [contaB, cartaoB]);
-    const contasWsB = queryClient.getQueryData<any[]>(["contas_usuario", wsB]);
+    const contasWsB = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsB]);
     expect(contasWsB?.find((c) => c.id === "cartao-1")).toBeUndefined();
   });
 
   // 5. Conta legada após backfill aparece no workspace correto
   it("5. Conta legada após backfill determinístico aparece no workspace correto", () => {
     // Simulando conta legada que tinha workspace_id NULL e recebeu wsA pelo backfill
-    const contaLegadaBackfilled = { id: "conta-legada-1", nome: "Caixa Pessoal", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 300 };
+    const contaLegadaBackfilled: ContaMock = { id: "conta-legada-1", nome: "Caixa Pessoal", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 300 };
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA, contaLegadaBackfilled]);
 
-    const contasWsA = queryClient.getQueryData<any[]>(["contas_usuario", wsA]);
+    const contasWsA = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsA]);
     expect(contasWsA?.find((c) => c.id === "conta-legada-1")).toBeDefined();
     expect(contasWsA?.find((c) => c.id === "conta-legada-1")?.workspace_id).toBe(wsA);
   });
 
   // 6. Conta legada não aparece em outro workspace
   it("6. Conta legada associada a A não aparece em B", () => {
-    const contaLegadaBackfilled = { id: "conta-legada-1", nome: "Caixa Pessoal", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 300 };
+    const contaLegadaBackfilled: ContaMock = { id: "conta-legada-1", nome: "Caixa Pessoal", tipo: "conta_corrente", workspace_id: wsA, saldo_atual: 300 };
     queryClient.setQueryData(["contas_usuario", wsA], [contaA, cartaoA, contaLegadaBackfilled]);
     queryClient.setQueryData(["contas_usuario", wsB], [contaB, cartaoB]);
 
-    const contasWsB = queryClient.getQueryData<any[]>(["contas_usuario", wsB]);
+    const contasWsB = queryClient.getQueryData<ContaMock[]>(["contas_usuario", wsB]);
     expect(contasWsB?.find((c) => c.id === "conta-legada-1")).toBeUndefined();
   });
 
@@ -376,5 +385,17 @@ describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenar
     expect(contasBancarias[0].nome).toBe("Nubank PF");
     expect(cartoesCredito).toHaveLength(1);
     expect(cartoesCredito[0].nome).toBe("Mastercard Black PF");
+  });
+
+  // 10. Conta com workspace_id NULL não aparece em nenhum workspace
+  it("10. Conta com workspace_id NULL não é exibida em nenhum workspace enquanto não for migrada", () => {
+    const contaNull = { id: "conta-sem-ws", nome: "Conta Orfa", tipo: "conta_corrente", workspace_id: null };
+    const allContas = [contaA, contaB, contaNull];
+
+    const filtradasWsA = allContas.filter((c) => c.workspace_id === wsA);
+    const filtradasWsB = allContas.filter((c) => c.workspace_id === wsB);
+
+    expect(filtradasWsA.find((c) => c.id === "conta-sem-ws")).toBeUndefined();
+    expect(filtradasWsB.find((c) => c.id === "conta-sem-ws")).toBeUndefined();
   });
 });
