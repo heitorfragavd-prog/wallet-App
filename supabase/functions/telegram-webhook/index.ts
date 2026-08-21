@@ -4192,7 +4192,10 @@ FORMATO:
   ]
 }`;
 
-              const extractTileItemsWithRetry = async (tile: CropTileCoordinate, label: string): Promise<DanfeItemRaw[]> => {
+              const extractTileItemsWithRetry = async (
+                tile: CropTileCoordinate,
+                label: string
+              ): Promise<{ effectiveTile: CropTileCoordinate; items: DanfeItemRaw[] }> => {
                 const callVisionOnCrop = async (t: CropTileCoordinate): Promise<{ rawText: string; httpStatus: number }> => {
                   try {
                     const crop = loadedDecodedImage.clone().crop(t.x, t.y, t.width, t.height);
@@ -4237,7 +4240,7 @@ FORMATO:
                 const classif1 = classifyVisionResponse(attempt1.rawText, attempt1.httpStatus);
 
                 if (classif1.status === "success" || classif1.status === "empty_valid") {
-                  return classif1.itens;
+                  return { effectiveTile: tile, items: classif1.itens };
                 }
 
                 // Em caso de refusal, invalid_json ou api_error: RETRY COM CONTEXTO AMPLIADO (margem vertical)
@@ -4247,16 +4250,16 @@ FORMATO:
                 const classif2 = classifyVisionResponse(attempt2.rawText, attempt2.httpStatus);
 
                 console.log(`[NF] Resultado do retry no recorte ${label}: status=${classif2.status}, itens=${classif2.itens.length}`);
-                return classif2.itens;
+                return { effectiveTile: expandedTile, items: classif2.itens };
               };
 
               const tilesItemsCollected: Array<{ tile: CropTileCoordinate; items: DanfeItemRaw[] }> = [];
 
               for (let i = 0; i < tiles.length; i++) {
                 const tile = tiles[i];
-                const rawArray = await extractTileItemsWithRetry(tile, `${i + 1}/${tiles.length}`);
-                console.log(`[NF] recorte ${i + 1}: ${rawArray.length} itens brutos lidos (core Y: ${tile.coreStartY}-${tile.coreEndY})`);
-                tilesItemsCollected.push({ tile, items: rawArray });
+                const res = await extractTileItemsWithRetry(tile, `${i + 1}/${tiles.length}`);
+                console.log(`[NF] recorte ${i + 1}: ${res.items.length} itens brutos lidos (core Y: ${res.effectiveTile.coreStartY}-${res.effectiveTile.coreEndY})`);
+                tilesItemsCollected.push({ tile: res.effectiveTile, items: res.items });
               }
 
               // ─── CONSOLIDAÇÃO GEOMÉTRICA COM VALIDADOR ESTRUTURAL DE PRODUTO ───

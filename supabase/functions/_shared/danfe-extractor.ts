@@ -710,64 +710,6 @@ export function consolidateDanfeItems(
     }
   }
 
-  // ─── RESGATE SEGURO DE LINHAS ÓRFÃS NO OVERLAP ───
-  const orfaosParaResgatar: DanfeItemRaw[] = [];
-
-  for (const { tile, items } of tilesItems) {
-    if (!items || !Array.isArray(items)) continue;
-
-    for (let pos = 0; pos < items.length; pos++) {
-      const it = items[pos];
-      const validRow = validateProductRow(it);
-      if (!validRow.isValid) continue;
-
-      const rawCenter = it._row_center != null ? Number(it._row_center) : null;
-      if (rawCenter == null || isNaN(rawCenter) || rawCenter < 0 || rawCenter > 1) continue;
-
-      const absY = Math.round(tile.y + rawCenter * tile.height);
-      const isLastTile = tile.index === tile.totalTiles - 1 || tile.coreEndY >= Math.max(...tilesItems.map((t) => t.tile.coreEndY));
-      const isCoreOwner = isLastTile
-        ? absY >= tile.coreStartY && absY <= tile.coreEndY
-        : absY >= tile.coreStartY && absY < tile.coreEndY;
-
-      if (!isCoreOwner) {
-        // Verifica se algum item já aceito no Core cobre esta MESMA linha física
-        const jaExisteAceito = itensAceitosPorCore.some((aceito) => {
-          const acAbsY = aceito._absoluteY ?? 0;
-          return isSamePhysicalItem(it, absY, aceito, acAbsY, 45);
-        });
-
-        if (!jaExisteAceito) {
-          // Verifica se já não resgatamos esta mesma linha órfã
-          const jaResgatado = orfaosParaResgatar.some((resg) => {
-            const resgAbsY = resg._absoluteY ?? 0;
-            return isSamePhysicalItem(it, absY, resg, resgAbsY, 45);
-          });
-
-          if (!jaResgatado) {
-            orfaosParaResgatar.push({
-              ...it,
-              _row_center: rawCenter,
-              _absoluteY: absY,
-              _sourceTile: tile.index,
-              _positionInTile: pos,
-              _totalItemsInTile: items.length,
-              _isCoreOwner: true,
-            });
-
-            const diagEntry = diagnostico.find((d) => d.tileIndex === tile.index && d.itemIndex === pos);
-            if (diagEntry) {
-              diagEntry.accepted = true;
-              diagEntry.reason = "rescued_orphan_overlap";
-            }
-          }
-        }
-      }
-    }
-  }
-
-  itensAceitosPorCore.push(...orfaosParaResgatar);
-
   let itensProcessados = itensAceitosPorCore;
   if (itensComPosicaoGeometricaCount < totalItensLidos * 0.5) {
     itensProcessados = deduplicateAndConsolidateItems(itensAceitosPorCore);

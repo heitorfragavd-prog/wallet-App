@@ -298,11 +298,8 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(validacao.diferenca).toBe(0.0);
     });
 
-    // Caso F: Resgate de Órfão no Overlap (Cross-boundary jitter original)
-    it("Caso F (Resgate de Órfão): Mesma linha aparece nos dois tiles mas ambos _row_center possuem pequeno erro cruzado e nenhum cai no core esperado -> resultado final contém 1 linha (não 0)", () => {
-      // Fronteira entre Core 0 e Core 1: Y = 556
-      // No Tile 0: row_center = 0.90 -> absoluteY = 268 + 0.90 * 331 = 565.9 (> 556, rejeitado como Core 0)
-      // No Tile 1: row_center = 0.10 -> absoluteY = 513 + 0.10 * 331 = 546.1 (< 556, rejeitado como Core 1)
+    // Caso F: Item fora do Core é tratado como overlap_context
+    it("Caso F (Overlap Context): Item com centro vertical fora do Core é tratado puramente como contexto visual (overlap_context)", () => {
       const itemsTile0: DanfeItemRaw[] = [
         {
           codigo: "9901",
@@ -310,40 +307,24 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
           quantidade: 3,
           valor_unitario: 4.0,
           valor_total: 12.0,
-          _row_center: 0.90, // abs_y: 565.9 (> 556)
-        },
-      ];
-
-      const itemsTile1: DanfeItemRaw[] = [
-        {
-          codigo: "9901",
-          descricao: "FANTA GUARANA 350ML",
-          quantidade: 3,
-          valor_unitario: 4.0,
-          valor_total: 12.0,
-          _row_center: 0.10, // abs_y: 546.1 (< 556)
+          _row_center: 0.90, // abs_y: 565.9 (> Core 0 556)
         },
       ];
 
       const { itensFinais, diagnostico } = consolidateDanfeItems([
         { tile: tile0, items: itemsTile0 },
-        { tile: tile1, items: itemsTile1 },
       ]);
 
-      // Esperado: A linha NÃO é perdida! É resgatada exatamente 1 vez com reason 'rescued_orphan_overlap'
-      expect(itensFinais.length).toBe(1);
-      expect(itensFinais[0].descricao).toBe("FANTA GUARANA 350ML");
-      expect(itensFinais[0].valor_total).toBe(12.0);
-
-      const diagOrfao = diagnostico.find((d) => d.accepted && d.reason === "rescued_orphan_overlap");
-      expect(diagOrfao).toBeDefined();
+      expect(itensFinais.length).toBe(0);
+      expect(diagnostico[0].accepted).toBe(false);
+      expect(diagnostico[0].reason).toBe("overlap_context");
     });
 
     // Caso G: Dois produtos diferentes com mesmo valor total e próximos da fronteira NÃO podem ser mesclados
     it("Caso G: Dois produtos diferentes com mesmo valor total próximos da fronteira devem gerar 2 linhas distintas", () => {
-      // Tile 0 possui COCA COLA por R$ 24,00 no Core 0 (abs_y = 530)
-      // Tile 1 possui FANTA por R$ 24,00 rejeitada no Tile 1 (abs_y = 545, overlap do Tile 1)
-      // Ambas estão a apenas 15px de distância (distY = 15 < 35), mas com descrições/produtos diferentes!
+      // Tile 0 possui COCA COLA por R$ 24,00 no Core 0 (abs_y = 540)
+      // Tile 1 possui FANTA por R$ 24,00 no Core 1 (abs_y = 570)
+      // Ambas possuem mesmo valor (R$ 24,00), mas produtos diferentes em seus respectivos Cores!
       const itemsTile0: DanfeItemRaw[] = [
         {
           codigo: "101",
@@ -351,18 +332,18 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
           quantidade: 4,
           valor_unitario: 6.0,
           valor_total: 24.0,
-          _row_center: 0.79, // abs_y = 529.49 (Core 0: 268-556 -> ACEITO)
+          _row_center: (540 - tile0.y) / tile0.height, // abs_y = 540 (Core 0: 268-556 -> ACEITO)
         },
       ];
 
       const itemsTile1: DanfeItemRaw[] = [
         {
           codigo: "102",
-          descricao: "FANTA 350ML", // Produto diferente!
+          descricao: "FANTA 350ML",
           quantidade: 4,
           valor_unitario: 6.0,
           valor_total: 24.0,
-          _row_center: 0.10, // abs_y = 546.10 (< 556, rejeitado no Core 1 -> Órfão)
+          _row_center: (570 - tile1.y) / tile1.height, // abs_y = 570 (Core 1: 556-844 -> ACEITO)
         },
       ];
 
@@ -713,6 +694,173 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       expect(validacao.status).toBe("requer_revisao");
       expect(validacao.diferenca).toBe(400.0);
       expect(itens[0].valor_total).toBe(100); // Intacto, nunca forçado para 500!
+    });
+
+    // Caso U: Item somente no overlap é rejeitado no tile vizinho e aceito no tile dono
+    it("Caso U (Overlap Contextual): Tile 0 enxerga linha do Core 1, Tile 1 possui a linha em seu Core -> exatamente 1 item final", () => {
+      const res = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 2);
+      const t0 = res.tiles[0]; // coreStartY = 268, coreEndY = 556
+      const t1 = res.tiles[1]; // coreStartY = 556, coreEndY = 844
+
+      // Linha em Y = 570 (pertence ao Core 1)
+      const it_t0: DanfeItemRaw = {
+        codigo: "10",
+        descricao: "COCA COLA 2L",
+        unidade: "UN",
+        quantidade: 1,
+        valor_unitario: 10,
+        valor_total: 10,
+        _row_center: (570 - t0.y) / t0.height, // abs_y = 570 (> 556)
+      };
+
+      const it_t1: DanfeItemRaw = {
+        codigo: "10",
+        descricao: "COCA COLA 2L",
+        unidade: "UN",
+        quantidade: 1,
+        valor_unitario: 10,
+        valor_total: 10,
+        _row_center: (570 - t1.y) / t1.height, // abs_y = 570 (Core 1)
+      };
+
+      const { itensFinais, diagnostico } = consolidateDanfeItems([
+        { tile: t0, items: [it_t0] },
+        { tile: t1, items: [it_t1] },
+      ]);
+
+      expect(itensFinais.length).toBe(1);
+      expect(itensFinais[0].descricao).toBe("COCA COLA 2L");
+
+      const diagT0 = diagnostico.find((d) => d.tileIndex === t0.index);
+      const diagT1 = diagnostico.find((d) => d.tileIndex === t1.index);
+      expect(diagT0?.accepted).toBe(false);
+      expect(diagT0?.reason).toBe("overlap_context");
+      expect(diagT1?.accepted).toBe(true);
+      expect(diagT1?.reason).toBe("core_owner");
+    });
+
+    // Caso V: OCR completamente diferente no overlap não pode gerar resgate indevido
+    it("Caso V (Sem Resgate Espúrio de Órfãos): OCR divergente no overlap não gera falso produto adicional", () => {
+      const res = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 2);
+      const t0 = res.tiles[0];
+      const t1 = res.tiles[1];
+
+      // Tile 0 leu "KERO COCO" no overlap inferior (Y = 570 > 556)
+      const it_t0: DanfeItemRaw = {
+        codigo: "1",
+        descricao: "KERO COCO PET 1L",
+        unidade: "CX",
+        quantidade: 1,
+        valor_unitario: 43.26,
+        valor_total: 43.26,
+        _row_center: (570 - t0.y) / t0.height,
+      };
+
+      // Tile 1 leu "BISCOITO RECHEADO" no Core 1 (Y = 570)
+      const it_t1: DanfeItemRaw = {
+        codigo: "2",
+        descricao: "BISCOITO RECHEADO 130G",
+        unidade: "CX",
+        quantidade: 1,
+        valor_unitario: 43.20,
+        valor_total: 43.20,
+        _row_center: (570 - t1.y) / t1.height,
+      };
+
+      const { itensFinais } = consolidateDanfeItems([
+        { tile: t0, items: [it_t0] },
+        { tile: t1, items: [it_t1] },
+      ]);
+
+      // Apenas o item pertencente ao Core 1 é aceito! O item do Tile 0 no overlap é descartado!
+      expect(itensFinais.length).toBe(1);
+      expect(itensFinais[0].descricao).toBe("BISCOITO RECHEADO 130G");
+    });
+
+    // Caso W: Dois produtos legítimos próximos da fronteira (um em cada core)
+    it("Caso W (Fronteira Legítima): um produto no Core 0 e outro no Core 1 geram exatamente 2 produtos", () => {
+      const res = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 2);
+      const t0 = res.tiles[0]; // 268-556
+      const t1 = res.tiles[1]; // 556-844
+
+      const itCore0: DanfeItemRaw = {
+        codigo: "1",
+        descricao: "PRODUTO FINAL CORE 0",
+        unidade: "UN",
+        quantidade: 1,
+        valor_unitario: 10,
+        valor_total: 10,
+        _row_center: (550 - t0.y) / t0.height, // abs_y = 550 (< 556, Core 0)
+      };
+
+      const itCore1: DanfeItemRaw = {
+        codigo: "2",
+        descricao: "PRODUTO INICIO CORE 1",
+        unidade: "UN",
+        quantidade: 1,
+        valor_unitario: 20,
+        valor_total: 20,
+        _row_center: (560 - t1.y) / t1.height, // abs_y = 560 (>= 556, Core 1)
+      };
+
+      const { itensFinais } = consolidateDanfeItems([
+        { tile: t0, items: [itCore0] },
+        { tile: t1, items: [itCore1] },
+      ]);
+
+      expect(itensFinais.length).toBe(2);
+      expect(itensFinais.map((i) => i.codigo)).toEqual(["1", "2"]);
+    });
+
+    // Caso X: Retry expandido converte coordenada usando o crop expandido e valida contra o Core original
+    it("Caso X (Retry Expandido): _row_center do retry usa dimensões do crop expandido e avalia no Core original", () => {
+      const tileOrig: CropTileCoordinate = {
+        index: 0,
+        totalTiles: 3,
+        x: 0,
+        y: 268,
+        width: 1280,
+        height: 220,
+        overlapY: 0,
+        coreStartY: 268,
+        coreEndY: 460,
+      };
+
+      const expandedTile = expandCropTileWithMargin(tileOrig, 1280, 960, 0.25);
+      // expandedTile: y = 213, height = 330, coreStartY = 268, coreEndY = 460
+
+      // Suponha que o modelo leu uma linha em row_center = 0.50 do crop expandido
+      // absoluteY = 213 + 0.50 * 330 = 378 (dentro do Core original 268-460)
+      const itemRetry: DanfeItemRaw = {
+        codigo: "55448",
+        descricao: "COCA COLA LT 350ML FL",
+        unidade: "CX",
+        quantidade: 2,
+        valor_unitario: 33,
+        valor_total: 66,
+        _row_center: 0.50,
+      };
+
+      const { itensFinais, diagnostico } = consolidateDanfeItems([
+        { tile: expandedTile, items: [itemRetry] },
+      ]);
+
+      expect(itensFinais.length).toBe(1);
+      expect(diagnostico[0].accepted).toBe(true);
+      expect(diagnostico[0].reason).toBe("core_owner");
+      expect(diagnostico[0].absoluteY).toBe(378);
+    });
+
+    // Caso Y: Cobertura integral sem lacunas nem sobreposições de Core
+    it("Caso Y (Partição Estrita de Core): Cores adjacentes formam partição exata e contígua sem gaps nem overlaps de ownership", () => {
+      const res = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 3);
+      expect(res.tiles.length).toBe(3);
+
+      const [t0, t1, t2] = res.tiles;
+      expect(t0.coreStartY).toBe(Math.floor(960 * 0.28)); // 268
+      expect(t0.coreEndY).toBe(t1.coreStartY);           // Contíguo: fim do Core 0 == início do Core 1
+      expect(t1.coreEndY).toBe(t2.coreStartY);           // Contíguo: fim do Core 1 == início do Core 2
+      expect(t2.coreEndY).toBe(Math.floor(960 * 0.88)); // 844
     });
   });
 
