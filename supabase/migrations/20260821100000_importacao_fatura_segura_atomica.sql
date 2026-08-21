@@ -141,20 +141,16 @@ BEGIN
   END IF;
 
   IF p_workspace_id IS NOT NULL THEN
-    -- Validar que o workspace pertence ao usuário
-    IF NOT EXISTS (
-      SELECT 1 FROM public.workspaces
-      WHERE id = p_workspace_id AND user_id = v_user_id
-    ) THEN
-      RAISE EXCEPTION 'Workspace inválido ou não pertence ao usuário autenticado';
+    -- Validar que o usuário é proprietário ou membro ativo com role admin
+    IF NOT public.tem_acesso_workspace(p_workspace_id) THEN
+      RAISE EXCEPTION 'Acesso negado: você não tem permissão para administrar este workspace';
     END IF;
 
-    -- Validar que o cartão pertence ao usuário E ao workspace informado
+    -- Validar que o cartão pertence ao workspace informado ou é legado pessoal do usuário
     SELECT EXISTS(
       SELECT 1 FROM public.contas_usuario
       WHERE id = p_cartao_id 
-        AND user_id = v_user_id 
-        AND (workspace_id = p_workspace_id OR workspace_id IS NULL)
+        AND (workspace_id = p_workspace_id OR (workspace_id IS NULL AND user_id = v_user_id))
     ) INTO v_cartao_valido;
 
     IF NOT v_cartao_valido THEN
@@ -316,7 +312,7 @@ BEGIN
       RAISE EXCEPTION 'Parcelamento inválido (%/%) na linha %', v_item.parcela_atual, v_item.total_parcelas, v_item.numero_linha;
     END IF;
 
-    -- Validação de categoria (se informada)
+    -- Validação de categoria (se informada): deve pertencer ao usuário autenticado ou ser do sistema (user_id IS NULL)
     IF v_item.categoria_id IS NOT NULL THEN
       SELECT EXISTS(
         SELECT 1 FROM public.categorias 
@@ -324,7 +320,7 @@ BEGIN
       ) INTO v_categoria_valida;
 
       IF NOT v_categoria_valida THEN
-        RAISE EXCEPTION 'Categoria inválida ou não pertencente ao usuário na linha %', v_item.numero_linha;
+        RAISE EXCEPTION 'Categoria inválida ou não pertencente ao usuário/workspace na linha %', v_item.numero_linha;
       END IF;
     END IF;
 

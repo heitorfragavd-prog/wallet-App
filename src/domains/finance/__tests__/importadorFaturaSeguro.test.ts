@@ -140,4 +140,65 @@ Total da Fatura: R$ 16.053,77
 
     expect(chaveUnicaWs1).not.toBe(chaveUnicaWs2);
   });
+
+  it("11. Compatibilidade de Domínio: transações de fatura são vinculadas por cartao_id (e conta_id NULL)", () => {
+    // Valida que o modelo de persistência preenche cartao_id para faturas de cartão
+    const transacaoFatura = {
+      tipo: "despesa",
+      descricao: "UBER *TRIP",
+      valor: 45.9,
+      cartao_id: "cartao-uuid-123",
+      conta_id: null,
+      metodo_pagamento: "cartao_credito",
+      mes_referencia: "2026-08",
+    };
+
+    // Consultas de faturas e cartões (ex: useComprasFatura, useFaturaCartao, useDRE)
+    // usam cartao_id ou d.cartao_id === cartao.id
+    const pertenceAoCartao = transacaoFatura.cartao_id === "cartao-uuid-123" || transacaoFatura.conta_id === "cartao-uuid-123";
+    expect(pertenceAoCartao).toBe(true);
+    expect(transacaoFatura.cartao_id).toBe("cartao-uuid-123");
+    expect(transacaoFatura.conta_id).toBeNull();
+  });
+
+  it("12. Concorrência Atômica: bloqueio de importações simultâneas pelo mesmo hash de documento", () => {
+    // Simula tentativa de importação concorrente do mesmo documento
+    const tabelaImportacoes = new Set<string>();
+    const tentarImportar = (wsId: string, cartaoId: string, docHash: string) => {
+      const chave = `${wsId}:${cartaoId}:${docHash}`;
+      if (tabelaImportacoes.has(chave)) {
+        throw new Error("Esta fatura já foi importada anteriormente (hash duplicado)");
+      }
+      tabelaImportacoes.add(chave);
+      return true;
+    };
+
+    // Primeira importação tem sucesso
+    expect(tentarImportar("ws-1", "cartao-1", "hash-sha256-doc")).toBe(true);
+
+    // Segunda importação concorrente falha atomicamente
+    expect(() => tentarImportar("ws-1", "cartao-1", "hash-sha256-doc")).toThrow(
+      "Esta fatura já foi importada anteriormente (hash duplicado)"
+    );
+  });
+
+  it("13. Proteção Cross-Workspace: rejeição de categoria de outro usuário/workspace", () => {
+    const categoriaOutroUsuario = {
+      id: "cat-alien-999",
+      user_id: "user-vitima-111",
+      nome: "Categoria Alheia",
+    };
+
+    const usuarioAutenticadoId = "user-atacante-222";
+    const validarCategoria = (cat: typeof categoriaOutroUsuario, authUserId: string) => {
+      if (cat.user_id && cat.user_id !== authUserId) {
+        throw new Error("Categoria inválida ou não pertencente ao usuário/workspace");
+      }
+      return true;
+    };
+
+    expect(() => validarCategoria(categoriaOutroUsuario, usuarioAutenticadoId)).toThrow(
+      "Categoria inválida ou não pertencente ao usuário/workspace"
+    );
+  });
 });

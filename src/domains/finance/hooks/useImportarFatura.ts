@@ -701,48 +701,21 @@ export function useImportarFatura() {
       const totalFat = totais?.totalFatura ?? (totalFaturaOficial || (totalLanc + (totais?.ajustes || ajustesEncargos)));
       const ajusFat = totais?.ajustes ?? ajustesEncargos;
 
-      // 1. Tentar executar via Edge Function importar-fatura
-      let rpcData: any = null;
-      try {
-        const { data: edgeData, error: edgeError } = await supabase.functions.invoke("importar-fatura", {
-          body: {
-            workspace_id: activeWorkspace?.id || null,
-            cartao_id: contaId,
-            mes_referencia: mesReferencia,
-            vencimento: vencimento || dataVencimentoExtraida || null,
-            fechamento: dataFechamentoExtraida || null,
-            total_lancamentos: totalLanc,
-            total_fatura: totalFat,
-            ajustes_fatura: ajusFat,
-            hash_documento: hashDocumento || null,
-            transacoes: payloadTransacoes,
-          },
-        });
+      // Executar a RPC Atômica diretamente no PostgreSQL com sessão autenticada e RLS
+      const { data: rpcData, error: rpcError } = await supabase.rpc("importar_fatura_atomica", {
+        p_workspace_id: activeWorkspace?.id || null,
+        p_cartao_id: contaId,
+        p_mes_referencia: mesReferencia,
+        p_vencimento: vencimento || dataVencimentoExtraida || null,
+        p_total_lancamentos: totalLanc,
+        p_total_fatura: totalFat,
+        p_ajustes_fatura: ajusFat,
+        p_hash_documento: hashDocumento || null,
+        p_transacoes: payloadTransacoes,
+        p_fechamento: dataFechamentoExtraida || null,
+      });
 
-        if (edgeError) {
-          throw edgeError;
-        }
-        rpcData = edgeData;
-      } catch (edgeCallErr) {
-        console.warn("[useImportarFatura] Edge Function indisponível, executando RPC direta com segurança:", edgeCallErr);
-        
-        // 2. Fallback seguro para RPC direta com PostgreSQL Security Definer & RLS
-        const { data: directRpcData, error: directRpcError } = await supabase.rpc("importar_fatura_atomica", {
-          p_workspace_id: activeWorkspace?.id || null,
-          p_cartao_id: contaId,
-          p_mes_referencia: mesReferencia,
-          p_vencimento: vencimento || dataVencimentoExtraida || null,
-          p_total_lancamentos: totalLanc,
-          p_total_fatura: totalFat,
-          p_ajustes_fatura: ajusFat,
-          p_hash_documento: hashDocumento || null,
-          p_transacoes: payloadTransacoes,
-          p_fechamento: dataFechamentoExtraida || null,
-        });
-
-        if (directRpcError) throw directRpcError;
-        rpcData = directRpcData;
-      }
+      if (rpcError) throw rpcError;
 
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
       await qc.invalidateQueries({ queryKey: ["despesas"] });
