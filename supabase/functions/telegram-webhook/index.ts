@@ -5,10 +5,12 @@ import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
+  consolidateDanfeItems,
   deduplicateAndConsolidateItems,
   validateDanfeMath,
   evaluateStockStatus,
   type DanfeItemRaw,
+  type CropTileCoordinate,
 } from "../_shared/danfe-extractor.ts";
 
 const corsHeaders = {
@@ -4129,8 +4131,6 @@ REGRAS:
             }
 
             // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO ───
-            const todosItensRecortados: DanfeItemRaw[] = [];
-
             if (loadedDecodedImage) {
               const { tiles, usouFallback, topPercent, bottomPercent } = calculateTableCropTiles(
                 loadedDecodedImage.width,
@@ -4166,15 +4166,19 @@ FORMATO:
       "valor_total": 0.00,
       "icms_aliquota": 0.00,
       "ipi_aliquota": 0.00,
-      "custo_unitario_liquido": 0.00
+      "custo_unitario_liquido": 0.00,
+      "_row_center": 0.50
     }
   ]
 }
 
 REGRAS CRÍTICAS:
 1. NUNCA INVENTE VALORES. Se não conseguir ler um campo, use null (ex: "quantidade": null).
-2. Não omita nenhum produto visível na imagem.
-3. Retorne APENAS o JSON puro.`;
+2. "_row_center": número decimal entre 0.0 (topo deste recorte) e 1.0 (base deste recorte) indicando o centro vertical aproximado desta linha no recorte.
+3. Não omita nenhum produto visível na imagem.
+4. Retorne APENAS o JSON puro.`;
+
+              const tilesItemsCollected: Array<{ tile: any; items: any[] }> = [];
 
               for (let i = 0; i < tiles.length; i++) {
                 const tile = tiles[i];
@@ -4219,44 +4223,43 @@ REGRAS CRÍTICAS:
                     }
 
                     const rawArray: DanfeItemRaw[] = Array.isArray(parsedTile?.itens) ? parsedTile.itens : [];
-                    const itemsFound: DanfeItemRaw[] = rawArray.map((it: DanfeItemRaw, pos: number) => ({
-                      ...it,
-                      _sourceTile: i,
-                      _positionInTile: pos,
-                      _totalItemsInTile: rawArray.length,
-                    }));
-
-                    console.log(`[NF] recorte ${i + 1}: ${itemsFound.length} itens`);
-                    todosItensRecortados.push(...itemsFound);
+                    console.log(`[NF] recorte ${i + 1}: ${rawArray.length} itens brutos lidos (core Y: ${tile.coreStartY}-${tile.coreEndY})`);
+                    tilesItemsCollected.push({ tile, items: rawArray });
                   }
                 } catch (tileErr: any) {
                   console.warn(`[NF] Aviso ao processar recorte ${i + 1}:`, tileErr.message);
                 }
               }
+
+              const { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
+
+              for (const diag of diagnostico) {
+                console.log(
+                  `[NF] tile ${diag.tileIndex} item ${diag.itemIndex}: desc="${diag.descricao}" row_center=${diag.rowCenter} abs_y=${diag.absoluteY} core=${diag.coreRange} accepted=${diag.accepted} (${diag.reason})`
+                );
+              }
+
+              console.log(`[NF] itens finais após consolidação geométrica: ${itensConsolidados.length}`);
+
+              // ─── VALIDAÇÃO MATEMÁTICA DETERMINÍSTICA ───
+              const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+              console.log(`[NF] itens encontrados: ${validacao.itensValidosCount}`);
+              console.log(`[NF] soma dos itens: R$ ${validacao.somaItens.toFixed(2)}`);
+              console.log(`[NF] valor produtos NF: R$ ${validacao.valorReferencia.toFixed(2)}`);
+              console.log(`[NF] diferença: R$ ${validacao.diferenca.toFixed(2)}`);
+              console.log(`[NF] confiança: ${validacao.valido ? "alta" : "baixa"}`);
+              console.log(`[NF] validação: ${validacao.valido ? "OK" : "REQUER_REVISAO"}`);
+
+              documentData = {
+                tipo: "nf_compra",
+                confianca_geral: validacao.valido ? "alta" : "baixa",
+                status_validacao: validacao.status,
+                validacao_detalhes: validacao,
+                cabecalho: docAnalysis?.cabecalho || {},
+                valores_totais: docAnalysis?.valores_totais || {},
+                itens: itensConsolidados,
+              };
             }
-
-            console.log(`[NF] itens antes da deduplicação: ${todosItensRecortados.length}`);
-            const itensConsolidados = deduplicateAndConsolidateItems(todosItensRecortados);
-            console.log(`[NF] itens finais: ${itensConsolidados.length}`);
-
-            // ─── VALIDAÇÃO MATEMÁTICA DETERMINÍSTICA ───
-            const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
-            console.log(`[NF] itens encontrados: ${validacao.itensValidosCount}`);
-            console.log(`[NF] soma dos itens: R$ ${validacao.somaItens.toFixed(2)}`);
-            console.log(`[NF] valor produtos NF: R$ ${validacao.valorReferencia.toFixed(2)}`);
-            console.log(`[NF] diferença: R$ ${validacao.diferenca.toFixed(2)}`);
-            console.log(`[NF] confiança: ${validacao.valido ? "alta" : "baixa"}`);
-            console.log(`[NF] validação: ${validacao.valido ? "OK" : "REQUER_REVISAO"}`);
-
-            documentData = {
-              tipo: "nf_compra",
-              confianca_geral: validacao.valido ? "alta" : "baixa",
-              status_validacao: validacao.status,
-              validacao_detalhes: validacao,
-              cabecalho: docAnalysis?.cabecalho || {},
-              valores_totais: docAnalysis?.valores_totais || {},
-              itens: itensConsolidados,
-            };
           } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
             documentData = {
               tipo: "boleto",
