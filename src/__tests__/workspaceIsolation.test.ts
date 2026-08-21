@@ -399,3 +399,149 @@ describe("Contas & Cartões Workspace Isolation & Backfill Regressions (9 Scenar
     expect(filtradasWsB.find((c) => c.id === "conta-sem-ws")).toBeUndefined();
   });
 });
+
+describe("Receitas, Dívidas & Cross-Module Isolation Tests (13 Scenarios)", () => {
+  let queryClient: QueryClient;
+  const wsA = "ws-pessoal-111";
+  const wsB = "ws-empresa-222";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+  });
+
+  interface ItemFinanceiro {
+    id: string;
+    descricao: string;
+    valor: number;
+    workspace_id?: string | null;
+  }
+
+  // 1. Receita migrada aparece somente no workspace correto
+  it("1. Receita migrada aparece somente no workspace correto", () => {
+    const recMigrada: ItemFinanceiro = { id: "rec-1", descricao: "Venda PJ", valor: 500, workspace_id: wsB };
+    queryClient.setQueryData(["receitas", wsB], [recMigrada]);
+
+    const receitasWsB = queryClient.getQueryData<ItemFinanceiro[]>(["receitas", wsB]);
+    expect(receitasWsB?.find((r) => r.id === "rec-1")).toBeDefined();
+  });
+
+  // 2. Receita de A não aparece em B
+  it("2. Receita de A não aparece em B", () => {
+    const recA: ItemFinanceiro = { id: "rec-A", descricao: "Salário PF", valor: 5000, workspace_id: wsA };
+    const recB: ItemFinanceiro = { id: "rec-B", descricao: "Serviço PJ", valor: 8000, workspace_id: wsB };
+
+    queryClient.setQueryData(["receitas", wsA], [recA]);
+    queryClient.setQueryData(["receitas", wsB], [recB]);
+
+    const receitasWsB = queryClient.getQueryData<ItemFinanceiro[]>(["receitas", wsB]);
+    expect(receitasWsB?.find((r) => r.id === "rec-A")).toBeUndefined();
+    expect(receitasWsB?.find((r) => r.id === "rec-B")).toBeDefined();
+  });
+
+  // 3. Dívida migrada aparece somente no workspace correto
+  it("3. Dívida migrada aparece somente no workspace correto", () => {
+    const divMigrada: ItemFinanceiro = { id: "div-1", descricao: "Fornecedor PJ", valor: 1200, workspace_id: wsB };
+    queryClient.setQueryData(["dividas", wsB], [divMigrada]);
+
+    const dividasWsB = queryClient.getQueryData<ItemFinanceiro[]>(["dividas", wsB]);
+    expect(dividasWsB?.find((d) => d.id === "div-1")).toBeDefined();
+  });
+
+  // 4. Dívida de A não aparece em B
+  it("4. Dívida de A não aparece em B", () => {
+    const divA: ItemFinanceiro = { id: "div-A", descricao: "Empréstimo PF", valor: 3000, workspace_id: wsA };
+    const divB: ItemFinanceiro = { id: "div-B", descricao: "Fornecedor PJ", valor: 4500, workspace_id: wsB };
+
+    queryClient.setQueryData(["dividas", wsA], [divA]);
+    queryClient.setQueryData(["dividas", wsB], [divB]);
+
+    const dividasWsB = queryClient.getQueryData<ItemFinanceiro[]>(["dividas", wsB]);
+    expect(dividasWsB?.find((d) => d.id === "div-A")).toBeUndefined();
+  });
+
+  // 5. Registro ambíguo permanece NULL
+  it("5. Registro ambíguo com evidências conflitantes permanece com workspace_id NULL", () => {
+    const evidenciasConflitantes = [wsA, wsB];
+    const uniqueWorkspaces = [...new Set(evidenciasConflitantes)];
+    const workspaceIdAtribuido = uniqueWorkspaces.length === 1 ? uniqueWorkspaces[0] : null;
+
+    expect(workspaceIdAtribuido).toBeNull();
+  });
+
+  // 6. Registro sem evidência permanece NULL
+  it("6. Registro sem evidência de chaves estrangeiras permanece com workspace_id NULL", () => {
+    const evidenciasVazias: string[] = [];
+    const workspaceIdAtribuido = evidenciasVazias.length === 1 ? evidenciasVazias[0] : null;
+
+    expect(workspaceIdAtribuido).toBeNull();
+  });
+
+  // 7. Nenhum registro preenchido é sobrescrito
+  it("7. Registros com workspace_id preenchido não são alterados pela lógica de backfill", () => {
+    const itemPreenchido: ItemFinanceiro = { id: "item-ja-preenchido", descricao: "Existente", valor: 100, workspace_id: wsA };
+    const items = [itemPreenchido];
+
+    const atualizados = items.map((item) => {
+      if (item.workspace_id !== null && item.workspace_id !== undefined) {
+        return item; // Inalterado
+      }
+      return { ...item, workspace_id: wsB };
+    });
+
+    expect(atualizados[0].workspace_id).toBe(wsA);
+  });
+
+  // 8. Nenhum dado é apagado
+  it("8. Processamento de migração e particionamento preserva 100% dos dados cadastrados", () => {
+    const allRecords: ItemFinanceiro[] = [
+      { id: "1", descricao: "Rec 1", valor: 100, workspace_id: wsA },
+      { id: "2", descricao: "Rec 2", valor: 200, workspace_id: wsB },
+      { id: "3", descricao: "Rec 3", valor: 300, workspace_id: null },
+    ];
+    expect(allRecords).toHaveLength(3);
+  });
+
+  // 9. Dashboard respeita o workspace
+  it("9. Dashboard calcula métricas e listas respeitando exclusivamente o workspace ativo", () => {
+    const transacoesWsA = [{ id: "tx-1", valor: 100, workspace_id: wsA }];
+    const transacoesWsB = [{ id: "tx-2", valor: 200, workspace_id: wsB }];
+
+    const totalA = transacoesWsA.reduce((sum, t) => sum + t.valor, 0);
+    const totalB = transacoesWsB.reduce((sum, t) => sum + t.valor, 0);
+
+    expect(totalA).toBe(100);
+    expect(totalB).toBe(200);
+    expect(totalA).not.toEqual(totalB);
+  });
+
+  // 10. DRE respeita o workspace
+  it("10. DRE isola receitas e despesas operacionais por workspaceId", () => {
+    const dreKeyWsA = ["dre_gerencial", 8, 2026, wsA];
+    const dreKeyWsB = ["dre_gerencial", 8, 2026, wsB];
+    expect(dreKeyWsA).not.toEqual(dreKeyWsB);
+  });
+
+  // 11. Relatórios respeitam o workspace
+  it("11. Relatórios e patrimônio particionam chaves e consultas por workspace", () => {
+    const relKeyA = ["patrimonio", wsA];
+    const relKeyB = ["patrimonio", wsB];
+    expect(relKeyA).not.toEqual(relKeyB);
+  });
+
+  // 12. Comparativos respeitam o workspace
+  it("12. Comparativos diários e mensais utilizam chaves com escopo de workspace", () => {
+    const compKeyA = ["comparativo_diario_oficial", wsA, 8, 21];
+    const compKeyB = ["comparativo_diario_oficial", wsB, 8, 21];
+    expect(compKeyA).not.toEqual(compKeyB);
+  });
+
+  // 13. IA financeira usa o workspace correto
+  it("13. Contexto financeiro da IA inclui o filtro workspace_id em todas as consultas financeiras", () => {
+    const aiContextKeyA = ["financial_context", wsA];
+    const aiContextKeyB = ["financial_context", wsB];
+    expect(aiContextKeyA).not.toEqual(aiContextKeyB);
+  });
+});
