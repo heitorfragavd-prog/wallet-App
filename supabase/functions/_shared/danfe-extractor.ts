@@ -4,10 +4,12 @@
  * Módulo puro e determinístico para extração estruturada de DANFE:
  * 1. calculateRotationNeeded: detecção de orientação por conteúdo (0°, 90°, 180°, 270°)
  * 2. calculateTableCropTiles: cálculo adaptativo de recortes com Core vs Overlap
- * 3. analyzeTileCoverage & subdivideCropTile: diagnóstico de omissão e subdivisão seletiva
- * 4. consolidateDanfeItems: ownership geométrico de linhas baseado no Core do Tile + resgate seguro de órfãos + deduplicação
- * 5. validateDanfeMath: validação matemática estrita da soma e tolerâncias por item
- * 6. evaluateStockStatus: proteção de estoque e custo unitário para unidades fracionadas (CX != UN)
+ * 3. expandCropTileWithMargin: ampliação de contexto vertical para retry de visão
+ * 4. classifyVisionResponse: classificação explícita de status (success, empty_valid, refusal, invalid_json, api_error)
+ * 5. validateProductRow: validador estrutural de linha de produto (rejeição de textos/rodapés legais)
+ * 6. consolidateDanfeItems: ownership geométrico de linhas baseado no Core do Tile + resgate seguro de órfãos + deduplicação
+ * 7. validateDanfeMath: validação matemática estrita da soma e tolerâncias por item
+ * 8. evaluateStockStatus: proteção de estoque e custo unitário para unidades fracionadas (CX != UN)
  */
 
 export interface DanfeItemRaw {
@@ -116,6 +118,8 @@ export interface TileCoverageAnalysis {
   possivelOmissaoFinal: boolean;
 }
 
+export type VisionResponseStatus = "success" | "empty_valid" | "refusal" | "invalid_json" | "api_error";
+
 /**
  * 1. ORIENTAÇÃO DO DOCUMENTO (UMA ÚNICA ROTAÇÃO POR CONTEÚDO)
  * Retorna exatamente o ângulo que a imagem deve ser rotacionada baseando-se no conteúdo textual.
@@ -131,10 +135,10 @@ export function calculateRotationNeeded(
 
 /**
  * 2. DETERMINAÇÃO ADAPTATIVA DE TILES
- * Determina o número ótimo de recortes baseado na altura física da tabela:
+ * Determina o número de recortes baseado na altura física da tabela:
  * - Altura < 220px: 1 tile (tabela compacta de 1 a 4 itens)
  * - Altura 220px - 440px: 2 tiles (tabela média de 5 a 8 itens)
- * - Altura 441px - 650px: 3 tiles (tabela densa de 8 a 12 itens)
+ * - Altura 441px - 650px: 3 tiles (tabela densa de 8 a 14 itens)
  * - Altura > 650px: 4 tiles (tabela muito densa / folha cheia)
  */
 export function determineAdaptiveTilesCount(tableHeightPx: number): number {
@@ -246,7 +250,33 @@ export function calculateTableCropTiles(
 }
 
 /**
- * 2.2 DIAGNÓSTICO DE COBERTURA VERTICAL POR TILE
+ * 2.2 AMPLIAÇÃO DE CONTEXTO VERTICAL PARA RETRY DE VISÃO
+ * Adiciona margem vertical superior e inferior sem alterar o Core original
+ */
+export function expandCropTileWithMargin(
+  tile: CropTileCoordinate,
+  imageWidth: number,
+  imageHeight: number,
+  marginPercent: number = 0.25
+): CropTileCoordinate {
+  const marginPx = Math.floor(tile.height * marginPercent);
+  const newY = Math.max(0, tile.y - marginPx);
+  const newEndY = Math.min(imageHeight, tile.y + tile.height + marginPx);
+
+  return {
+    ...tile,
+    x: 0,
+    y: newY,
+    width: imageWidth,
+    height: newEndY - newY,
+    overlapY: tile.coreStartY - newY,
+    coreStartY: tile.coreStartY,
+    coreEndY: tile.coreEndY,
+  };
+}
+
+/**
+ * 2.3 DIAGNÓSTICO DE COBERTURA VERTICAL POR TILE
  */
 export function analyzeTileCoverage(
   tile: CropTileCoordinate,
@@ -259,14 +289,6 @@ export function analyzeTileCoverage(
   const minRowCenter = validCenters.length > 0 ? Math.min(...validCenters) : null;
   const maxRowCenter = validCenters.length > 0 ? Math.max(...validCenters) : null;
 
-  // Se o tile tem altura significativa (> 120px), retornou itens, mas o último item lido parou antes de 65% da altura
-  // (deixando > 35% de espaço visual no final do recorte sem leitura), sinaliza possível omissão no final do tile
-  const possivelOmissaoFinal =
-    tile.height > 120 &&
-    items.length > 0 &&
-    maxRowCenter != null &&
-    maxRowCenter < 0.65;
-
   return {
     tileIndex: tile.index,
     yStart: tile.y,
@@ -276,13 +298,12 @@ export function analyzeTileCoverage(
     itemsCount: items.length,
     minRowCenter,
     maxRowCenter,
-    possivelOmissaoFinal,
+    possivelOmissaoFinal: false,
   };
 }
 
 /**
- * 2.3 SUBDIVISÃO DE TILE SUSPEITO (REEXTRAÇÃO SELETIVA)
- * Subdivide um tile suspeito em 2 subtiles menores com seus próprios cores e overlaps
+ * 2.4 SUBDIVISÃO DE TILE SUSPEITO (REEXTRAÇÃO SELETIVA)
  */
 export function subdivideCropTile(
   parentTile: CropTileCoordinate,
@@ -322,6 +343,154 @@ export function subdivideCropTile(
   subTileB.height = Math.min(imageHeight, parentTile.coreEndY + (parentTile.index < parentTile.totalTiles - 1 ? overlapPx : 0)) - subTileB.y;
 
   return [subTileA, subTileB];
+}
+
+/**
+ * 2.5 CLASSIFICAÇÃO EXPLÍCITA DA RESPOSTA DE VISÃO
+ * Diferencia sucesso, recusa (refusal), JSON inválido e erro de API.
+ * NUNCA trata recusa de segurança ou erro como "0 produtos legítimos".
+ */
+export function classifyVisionResponse(
+  rawContent: string | null | undefined,
+  httpStatus: number = 200
+): {
+  status: VisionResponseStatus;
+  itens: DanfeItemRaw[];
+  reason?: string;
+} {
+  if (httpStatus !== 200) {
+    return { status: "api_error", itens: [], reason: `HTTP status ${httpStatus}` };
+  }
+
+  if (!rawContent || rawContent.trim().length === 0) {
+    return { status: "refusal", itens: [], reason: "Resposta vazia da API de Visão" };
+  }
+
+  const clean = rawContent.trim();
+  const lower = clean.toLowerCase();
+
+  // Detecção de Canned Refusal / Guardrail de Segurança da OpenAI
+  const refusalPhrases = [
+    "desculpe",
+    "não consigo ajudar",
+    "nao consigo ajudar",
+    "como um modelo de linguagem",
+    "i cannot help",
+    "i'm sorry",
+    "i am sorry",
+    "cannot fulfill",
+    "não posso transcrever",
+    "nao posso transcrever",
+    "não posso ajudar",
+  ];
+
+  for (const phrase of refusalPhrases) {
+    if (lower.includes(phrase) && !lower.includes('"itens"')) {
+      return { status: "refusal", itens: [], reason: `Recusa do modelo: "${clean.slice(0, 100)}"` };
+    }
+  }
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(clean.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+  } catch {
+    const m = clean.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        parsed = JSON.parse(m[0]);
+      } catch {
+        // failed JSON
+      }
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return { status: "invalid_json", itens: [], reason: "JSON inválido retornado pelo modelo" };
+  }
+
+  const rawArray: DanfeItemRaw[] = Array.isArray(parsed.itens) ? parsed.itens : [];
+  if (rawArray.length === 0) {
+    return { status: "empty_valid", itens: [], reason: "Nenhum produto listado no JSON válido" };
+  }
+
+  return { status: "success", itens: rawArray };
+}
+
+/**
+ * 2.6 VALIDADOR ESTRUTURAL DE LINHA DE PRODUTO
+ * Rejeita textos fiscais de rodapé, dados adicionais e observações que não são mercadorias.
+ */
+export function validateProductRow(item: DanfeItemRaw): { isValid: boolean; reason?: string } {
+  if (!item) {
+    return { isValid: false, reason: "Item vazio ou nulo" };
+  }
+
+  const desc = (item.descricao || "").trim();
+  const descNorm = normalizeString(desc);
+
+  // 1. Rejeição de Textos Legais, Observações e Rodapés Fiscais
+  const termosFiscaisProibidos = [
+    "resolucao do senado",
+    "numero da fci",
+    "informacoes complementares",
+    "dados adicionais",
+    "reservado ao fisco",
+    "base de calculo",
+    "icms st retido",
+    "lei 12741",
+    "trib aprox",
+    "valor aproximado dos tributos",
+    "decreto",
+    "portaria",
+    "beneficio fiscal",
+    "recolhimento antecipado",
+    "total dos produtos",
+    "valor total da nota",
+  ];
+
+  for (const termo of termosFiscaisProibidos) {
+    if (descNorm.includes(termo)) {
+      return { isValid: false, reason: `Texto fiscal/rodapé detectado na descrição (${termo})` };
+    }
+  }
+
+  // 2. Validação da Descrição
+  if (desc.length < 2) {
+    return { isValid: false, reason: "Descrição muito curta ou ausente" };
+  }
+
+  // 3. Validação de Quantidade e Valores
+  const vt = item.valor_total != null ? Number(item.valor_total) : null;
+  if (vt == null || isNaN(vt) || vt <= 0) {
+    return { isValid: false, reason: "Valor total zerado ou ausente" };
+  }
+
+  // 4. Evidências Estruturais de Linha Fiscal de Produto
+  const unidadeNorm = (item.unidade || "").toUpperCase().trim();
+  const unidadesPlausiveis = [
+    "UN", "UND", "CX", "FD", "PCT", "PC", "LT", "LATA", "KG", "G", "M", "L", "DZ", "GF",
+    "GARRAFA", "FARDO", "PACK", "CJ", "PAR", "CPJ", "TB", "BL", "ROLO", "AMP", "FR", "POTE"
+  ];
+  const temUnidadeValida = unidadeNorm.length > 0 && (unidadesPlausiveis.includes(unidadeNorm) || (unidadeNorm.length <= 4 && !/\d/.test(unidadeNorm)));
+
+  const temCodigoOuEan = Boolean(
+    (item.codigo && item.codigo.trim().length >= 1 && !item.codigo.includes(" ")) ||
+    (item.ean && item.ean.trim().length >= 7)
+  );
+
+  const ncmNorm = (item.ncm || "").replace(/\D/g, "");
+  const temNcm = ncmNorm.length >= 4 && ncmNorm.length <= 8;
+
+  const cfopNorm = (item.cfop || "").replace(/\D/g, "");
+  const temCfop = cfopNorm.length === 4 && ["1", "2", "3", "5", "6", "7"].includes(cfopNorm[0]);
+
+  const temEstruturaFiscal = temUnidadeValida || temCodigoOuEan || temNcm || temCfop;
+
+  if (!temEstruturaFiscal) {
+    return { isValid: false, reason: "Linha sem evidência de estrutura fiscal de produto (sem unidade, código, NCM ou CFOP)" };
+  }
+
+  return { isValid: true };
 }
 
 /**
@@ -367,12 +536,6 @@ function calculateTokenSimilarity(strA: string, strB: string): number {
 
 /**
  * Avalia se dois candidatos da fronteira física representam a mesma linha da nota
- * 
- * REGRAS CRÍTICAS DE SEGURANÇA:
- * 1. Proximidade vertical (distY < maxDistY) é APENAS uma restrição espacial, NUNCA identificador isolado.
- * 2. Exige IDENTIDADE FORTE (mesmo EAN ou mesmo Código não vazio) OU IDENTIDADE MODERADA
- *    (descrição compatível + quantidade compatível + valor unitário/total compatível).
- * 3. NUNCA mescla produtos diferentes apenas por terem o mesmo valor.
  */
 function isSamePhysicalItem(
   itemA: DanfeItemRaw,
@@ -436,15 +599,7 @@ function isSamePhysicalItem(
 }
 
 /**
- * 3. ATRIBUIÇÃO GEOMÉTRICA DE OWNERSHIP POR CORE DO TILE + RESGATE SEGURO DE ÓRFÃOS + DEDUPLICAÇÃO
- * 
- * Cada linha do recorte é mapeada para sua coordenada vertical absoluta na imagem:
- *   absoluteY = tile.y + (_row_center * tile.height)
- * 
- * 1. Linha com absoluteY no Core do Tile -> Aceita como dono principal.
- * 2. Linha com absoluteY fora do Core -> Rejeitada como overlap_context.
- * 3. Resgate Seguro de Órfãos: Se uma linha na região de fronteira foi rejeitada em ambos os tiles por jitter
- *    do _row_center e nenhum Core a aceitou, resgatamos a melhor representação EXIGINDO identidade do produto.
+ * 3. ATRIBUIÇÃO GEOMÉTRICA DE OWNERSHIP POR CORE DO TILE + VALIDADOR ESTRUTURAL DE PRODUTO + RESGATE SEGURO
  */
 export function consolidateDanfeItems(
   tilesItems: Array<{ tile: CropTileCoordinate; items: DanfeItemRaw[] }>
@@ -463,6 +618,23 @@ export function consolidateDanfeItems(
     for (let pos = 0; pos < items.length; pos++) {
       const item = items[pos];
       totalItensLidos++;
+
+      // ─── VALIDADOR ESTRUTURAL DE PRODUTO ───
+      const validRow = validateProductRow(item);
+      if (!validRow.isValid) {
+        diagnostico.push({
+          tileIndex: tile.index,
+          itemIndex: pos,
+          descricao: item.descricao || "",
+          codigo: item.codigo,
+          rowCenter: item._row_center != null ? Number(item._row_center) : null,
+          absoluteY: null,
+          coreRange: `${tile.coreStartY}-${tile.coreEndY}`,
+          accepted: false,
+          reason: `rejected_not_product_row: ${validRow.reason}`,
+        });
+        continue;
+      }
 
       const rawCenter = item._row_center != null ? Number(item._row_center) : null;
       const temPosicaoValida = rawCenter != null && !isNaN(rawCenter) && rawCenter >= 0.0 && rawCenter <= 1.0;
@@ -538,9 +710,7 @@ export function consolidateDanfeItems(
     }
   }
 
-  // ─── RESGATE SEGURO DE LINHAS ÓRFÃS NO OVERLAP (CROSS-BOUNDARY JITTER) ───
-  // Se uma linha no overlap foi rejeitada por todos os tiles adjacentes devido a pequenas variações
-  // no _row_center, ela não possui dono no core. Resgatamos a representação exigindo identidade segura.
+  // ─── RESGATE SEGURO DE LINHAS ÓRFÃS NO OVERLAP ───
   const orfaosParaResgatar: DanfeItemRaw[] = [];
 
   for (const { tile, items } of tilesItems) {
@@ -548,6 +718,9 @@ export function consolidateDanfeItems(
 
     for (let pos = 0; pos < items.length; pos++) {
       const it = items[pos];
+      const validRow = validateProductRow(it);
+      if (!validRow.isValid) continue;
+
       const rawCenter = it._row_center != null ? Number(it._row_center) : null;
       if (rawCenter == null || isNaN(rawCenter) || rawCenter < 0 || rawCenter > 1) continue;
 
@@ -565,7 +738,7 @@ export function consolidateDanfeItems(
         });
 
         if (!jaExisteAceito) {
-          // Verifica se já não resgatamos esta mesma linha órfã vinda de outro tile vizinho
+          // Verifica se já não resgatamos esta mesma linha órfã
           const jaResgatado = orfaosParaResgatar.some((resg) => {
             const resgAbsY = resg._absoluteY ?? 0;
             return isSamePhysicalItem(it, absY, resg, resgAbsY, 45);
@@ -595,8 +768,6 @@ export function consolidateDanfeItems(
 
   itensAceitosPorCore.push(...orfaosParaResgatar);
 
-  // Se mais da metade dos itens continha coordenada geométrica, a separação geométrica filtrou os overlaps.
-  // Caso contrário, roda a deduplicação de fronteira para segurança adicional.
   let itensProcessados = itensAceitosPorCore;
   if (itensComPosicaoGeometricaCount < totalItensLidos * 0.5) {
     itensProcessados = deduplicateAndConsolidateItems(itensAceitosPorCore);
@@ -831,11 +1002,6 @@ export function validateDanfeMath(
 
 /**
  * 5. SEGURANÇA DE ESTOQUE E CUSTO UNITÁRIO DO PDV
- * Separa a unidade de compra (CX) da unidade vendida (UN) no PDV.
- * Se o fator de conversão for desconhecido:
- * - status_estoque = "pendente"
- * - estoque NÃO é alterado
- * - podeGravarHistoricoCusto = false (NUNCA grava R$ 50/CX como R$ 50/UN no histórico de custo do PDV!)
  */
 export function evaluateStockStatus(
   item: DanfeItemRaw,

@@ -7,6 +7,9 @@ import {
   calculateTableCropTiles,
   analyzeTileCoverage,
   subdivideCropTile,
+  expandCropTileWithMargin,
+  classifyVisionResponse,
+  validateProductRow,
   consolidateDanfeItems,
   deduplicateAndConsolidateItems,
   validateDanfeMath,
@@ -4189,124 +4192,76 @@ FORMATO:
   ]
 }`;
 
-              const extractTileItems = async (tile: CropTileCoordinate, label: string): Promise<DanfeItemRaw[]> => {
-                try {
-                  const crop = loadedDecodedImage.clone().crop(tile.x, tile.y, tile.width, tile.height);
-                  const cropB64 = base64Encode(await crop.encodeJPEG(95));
-                  const tileUri = `data:image/jpeg;base64,${cropB64}`;
+              const extractTileItemsWithRetry = async (tile: CropTileCoordinate, label: string): Promise<DanfeItemRaw[]> => {
+                const callVisionOnCrop = async (t: CropTileCoordinate): Promise<{ rawText: string; httpStatus: number }> => {
+                  try {
+                    const crop = loadedDecodedImage.clone().crop(t.x, t.y, t.width, t.height);
+                    const cropB64 = base64Encode(await crop.encodeJPEG(95));
+                    const tileUri = `data:image/jpeg;base64,${cropB64}`;
 
-                  const tileResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-                    method: "POST",
-                    headers: {
-                      Authorization: `Bearer ${supabaseServiceKey}`,
-                      "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({
-                      model: "gpt-4o",
-                      user_id: userId,
-                      tools: [],
-                      temperature: 0.0,
-                      messages: [
-                        { role: "system", content: promptRecorte },
-                        {
-                          role: "user",
-                          content: [
-                            { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${label} da DANFE.` },
-                            { type: "image_url", image_url: { url: tileUri, detail: "high" } },
-                          ],
-                        },
-                      ],
-                    }),
-                  });
+                    const tileResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${supabaseServiceKey}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: JSON.stringify({
+                        model: "gpt-4o",
+                        user_id: userId,
+                        tools: [],
+                        temperature: 0.0,
+                        messages: [
+                          { role: "system", content: promptRecorte },
+                          {
+                            role: "user",
+                            content: [
+                              { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${label} da DANFE.` },
+                              { type: "image_url", image_url: { url: tileUri, detail: "high" } },
+                            ],
+                          },
+                        ],
+                      }),
+                    });
 
-                  if (tileResp.ok) {
-                    const tileJson = await tileResp.json();
-                    const rawTile = tileJson.choices?.[0]?.message?.content || "";
-                    let parsedTile: any = null;
-                    try {
-                      parsedTile = JSON.parse(rawTile.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
-                    } catch {
-                      const m = rawTile.match(/\{[\s\S]*\}/);
-                      if (m) { try { parsedTile = JSON.parse(m[0]); } catch {} }
-                    }
-
-                    return Array.isArray(parsedTile?.itens) ? parsedTile.itens : [];
+                    const tileJson = tileResp.ok ? await tileResp.json() : null;
+                    const rawTile = tileJson?.choices?.[0]?.message?.content || "";
+                    return { rawText: rawTile, httpStatus: tileResp.status };
+                  } catch (tileErr: any) {
+                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
+                    return { rawText: "", httpStatus: 500 };
                   }
-                } catch (tileErr: any) {
-                  console.warn(`[NF] Aviso ao processar recorte ${label}:`, tileErr.message);
+                };
+
+                // 1ª Tentativa
+                const attempt1 = await callVisionOnCrop(tile);
+                const classif1 = classifyVisionResponse(attempt1.rawText, attempt1.httpStatus);
+
+                if (classif1.status === "success" || classif1.status === "empty_valid") {
+                  return classif1.itens;
                 }
-                return [];
+
+                // Em caso de refusal, invalid_json ou api_error: RETRY COM CONTEXTO AMPLIADO (margem vertical)
+                console.warn(`[NF] Falha de leitura no recorte ${label} (status: ${classif1.status}, motivo: ${classif1.reason}). Executando retry com contexto ampliado...`);
+                const expandedTile = expandCropTileWithMargin(tile, loadedDecodedImage.width, loadedDecodedImage.height, 0.25);
+                const attempt2 = await callVisionOnCrop(expandedTile);
+                const classif2 = classifyVisionResponse(attempt2.rawText, attempt2.httpStatus);
+
+                console.log(`[NF] Resultado do retry no recorte ${label}: status=${classif2.status}, itens=${classif2.itens.length}`);
+                return classif2.itens;
               };
 
               const tilesItemsCollected: Array<{ tile: CropTileCoordinate; items: DanfeItemRaw[] }> = [];
 
               for (let i = 0; i < tiles.length; i++) {
                 const tile = tiles[i];
-                const rawArray = await extractTileItems(tile, `${i + 1}/${tiles.length}`);
+                const rawArray = await extractTileItemsWithRetry(tile, `${i + 1}/${tiles.length}`);
                 console.log(`[NF] recorte ${i + 1}: ${rawArray.length} itens brutos lidos (core Y: ${tile.coreStartY}-${tile.coreEndY})`);
-                
-                // Análise de cobertura vertical do tile
-                const cov = analyzeTileCoverage(tile, rawArray);
-                console.log(`[NF] cobertura tile ${cov.tileIndex}: Y ${cov.yStart}-${cov.yEnd}, Core ${cov.coreStart}-${cov.coreEnd}, itens: ${cov.itemsCount}, row_center min: ${cov.minRowCenter ?? "N/A"}, max: ${cov.maxRowCenter ?? "N/A"}`);
-                if (cov.possivelOmissaoFinal) {
-                  console.warn(`[NF] POSSIVEL_OMISSAO_FINAL_TILE (tile ${cov.tileIndex}, max_row_center: ${cov.maxRowCenter})`);
-                }
-
                 tilesItemsCollected.push({ tile, items: rawArray });
               }
 
-              // ─── PRIMEIRA CONSOLIDAÇÃO GEOMÉTRICA ───
-              let { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
-              let validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
-
-              // ─── RETRY SELETIVO (MÁXIMO 1 RODADA ADICIONAL) ───
-              // Se a soma divergir significativamente ou houver sinal de omissão no final de um tile:
-              // Reprocessa APENAS o tile suspeito dividindo-o em 2 subtiles com mais zoom
-              const tilesComOmissao = tilesItemsCollected
-                .map(({ tile, items }) => ({ tile, cov: analyzeTileCoverage(tile, items) }))
-                .filter(({ cov }) => cov.possivelOmissaoFinal);
-
-              const precisaRetry = (!validacao.valido || tilesComOmissao.length > 0) && tilesItemsCollected.length > 0;
-
-              if (precisaRetry) {
-                // Identifica o tile suspeito prioritário (com omissão no final ou o último/maior tile)
-                const suspeitoTarget = tilesComOmissao.length > 0
-                  ? tilesComOmissao[0].tile
-                  : tilesItemsCollected[tilesItemsCollected.length - 1].tile;
-
-                const idxNoArray = tilesItemsCollected.findIndex((t) => t.tile.index === suspeitoTarget.index);
-
-                if (idxNoArray >= 0 && suspeitoTarget.height > 100) {
-                  console.log(`[NF] Iniciando retry seletivo para tile ${suspeitoTarget.index} (divisão em 2 subtiles)`);
-                  const [subTileA, subTileB] = subdivideCropTile(
-                    suspeitoTarget,
-                    loadedDecodedImage.width,
-                    loadedDecodedImage.height,
-                    0.15
-                  );
-
-                  const itensSubA = await extractTileItems(subTileA, `subtile ${suspeitoTarget.index}A`);
-                  const itensSubB = await extractTileItems(subTileB, `subtile ${suspeitoTarget.index}B`);
-
-                  console.log(`[NF] retry subtile A: ${itensSubA.length} itens (core Y: ${subTileA.coreStartY}-${subTileA.coreEndY})`);
-                  console.log(`[NF] retry subtile B: ${itensSubB.length} itens (core Y: ${subTileB.coreStartY}-${subTileB.coreEndY})`);
-
-                  // Substitui o tile suspeito pelos 2 subtiles subdivididos
-                  tilesItemsCollected.splice(
-                    idxNoArray,
-                    1,
-                    { tile: subTileA, items: itensSubA },
-                    { tile: subTileB, items: itensSubB }
-                  );
-
-                  // Reconsolidação geométrica estrita com os subtiles
-                  const reconsolida = consolidateDanfeItems(tilesItemsCollected);
-                  itensConsolidados = reconsolida.itensFinais;
-                  diagnostico = reconsolida.diagnostico;
-                  validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
-                  console.log(`[NF] reconsolidação pós-retry: ${itensConsolidados.length} itens, soma: R$ ${validacao.somaItens.toFixed(2)}`);
-                }
-              }
+              // ─── CONSOLIDAÇÃO GEOMÉTRICA COM VALIDADOR ESTRUTURAL DE PRODUTO ───
+              const { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
+              const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
 
               for (const diag of diagnostico) {
                 console.log(

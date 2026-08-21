@@ -1,9 +1,13 @@
+import { describe, expect, it } from "vitest";
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
   determineAdaptiveTilesCount,
   analyzeTileCoverage,
   subdivideCropTile,
+  expandCropTileWithMargin,
+  classifyVisionResponse,
+  validateProductRow,
   consolidateDanfeItems,
   deduplicateAndConsolidateItems,
   validateDanfeMath,
@@ -506,13 +510,6 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       const tile0 = res2.tiles[0];
       const tile1 = res2.tiles[1];
 
-      // Diagnóstico de cobertura do Tile 1: itens param em row_center = 0.50 -> possivelOmissaoFinal
-      const itemsIncompletosTile1: DanfeItemRaw[] = [
-        { codigo: "10", descricao: "COCA 2L", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.3 },
-      ];
-      const cov1 = analyzeTileCoverage(tile1, itemsIncompletosTile1);
-      expect(cov1.possivelOmissaoFinal).toBe(true);
-
       // Subdivide Tile 1 em 1A e 1B
       const [sub1A, sub1B] = subdivideCropTile(tile1, 1280, 960, 0.15);
       expect(sub1A.coreStartY).toBe(tile1.coreStartY);
@@ -554,6 +551,168 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       }
 
       expect(retryCount).toBe(1);
+    });
+
+    // Caso O: Validador Estrutural de Linha de Produto - Rejeição de Rodapé Fiscal
+    it("Caso O (Rejeição de Rodapé Fiscal): texto fiscal 'Resolucao do Senado Federal...' é rejeitado como não-produto", () => {
+      const itemRodape: DanfeItemRaw = {
+        codigo: "18876",
+        descricao: "Resolucao do Senado Federal 13/12, Numero da FCI 662",
+        quantidade: 1,
+        unidade: "CX",
+        valor_unitario: 43.26,
+        valor_total: 43.26,
+        _row_center: 0.5,
+      };
+
+      const validacaoEstrutural = validateProductRow(itemRodape);
+      expect(validacaoEstrutural.isValid).toBe(false);
+      expect(validacaoEstrutural.reason).toContain("Texto fiscal/rodapé detectado");
+
+      const res = consolidateDanfeItems([
+        {
+          tile: {
+            index: 0,
+            totalTiles: 1,
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 500,
+            overlapY: 0,
+            coreStartY: 0,
+            coreEndY: 500,
+          },
+          items: [itemRodape],
+        },
+      ]);
+
+      expect(res.itensFinais.length).toBe(0);
+      expect(res.diagnostico[0].accepted).toBe(false);
+      expect(res.diagnostico[0].reason).toContain("rejected_not_product_row");
+    });
+
+    // Caso P: Validador Estrutural de Linha de Produto - Produto Verdadeiro
+    it("Caso P (Produto Verdadeiro): linha com NCM, CFOP, unidade e valores coerentes é aceita", () => {
+      const itemValido: DanfeItemRaw = {
+        codigo: "55401",
+        descricao: "COCA COLA LT 350ML",
+        ncm: "22021000",
+        cfop: "5401",
+        unidade: "CX",
+        quantidade: 2,
+        valor_unitario: 37.31,
+        valor_total: 74.62,
+        _row_center: 0.3,
+      };
+
+      const validacaoEstrutural = validateProductRow(itemValido);
+      expect(validacaoEstrutural.isValid).toBe(true);
+
+      const res = consolidateDanfeItems([
+        {
+          tile: {
+            index: 0,
+            totalTiles: 1,
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 500,
+            overlapY: 0,
+            coreStartY: 0,
+            coreEndY: 500,
+          },
+          items: [itemValido],
+        },
+      ]);
+
+      expect(res.itensFinais.length).toBe(1);
+      expect(res.itensFinais[0].descricao).toBe("COCA COLA LT 350ML");
+    });
+
+    // Caso Q: Classificação de Refusal da OpenAI
+    it("Caso Q (Refusal da OpenAI): 'Desculpe, não consigo ajudar...' é classificado como refusal, nunca como vazio válido", () => {
+      const refusalContent = "Desculpe, não consigo ajudar com isso.";
+      const classif = classifyVisionResponse(refusalContent, 200);
+
+      expect(classif.status).toBe("refusal");
+      expect(classif.itens.length).toBe(0);
+      expect(classif.reason).toContain("Recusa do modelo");
+    });
+
+    // Caso R: Retry de Falha de Visão com Contexto Ampliado
+    it("Caso R (Retry de Falha de Visão): tile com refusal é ampliado com margem e consolida produto exatamente 1 vez", () => {
+      const tileOriginal: CropTileCoordinate = {
+        index: 0,
+        totalTiles: 2,
+        x: 0,
+        y: 268,
+        width: 1280,
+        height: 220,
+        overlapY: 0,
+        coreStartY: 268,
+        coreEndY: 460,
+      };
+
+      // Expande com 25% de margem vertical
+      const tileAmpliado = expandCropTileWithMargin(tileOriginal, 1280, 960, 0.25);
+      expect(tileAmpliado.y).toBeLessThan(tileOriginal.y);
+      expect(tileAmpliado.height).toBeGreaterThan(tileOriginal.height);
+      expect(tileAmpliado.coreStartY).toBe(tileOriginal.coreStartY);
+      expect(tileAmpliado.coreEndY).toBe(tileOriginal.coreEndY);
+
+      // Produto lido após retry no tile ampliado
+      const itemLido: DanfeItemRaw = {
+        codigo: "55401",
+        descricao: "COCA COLA LATA 350ML",
+        unidade: "CX",
+        quantidade: 2,
+        valor_unitario: 37.31,
+        valor_total: 74.62,
+        _row_center: 0.45, // dentro do core original
+      };
+
+      const res = consolidateDanfeItems([
+        { tile: tileAmpliado, items: [itemLido] },
+      ]);
+
+      expect(res.itensFinais.length).toBe(1);
+      expect(res.itensFinais[0].valor_total).toBe(74.62);
+    });
+
+    // Caso S: Fim Legítimo da Tabela (Sem Subdivisão por row_center)
+    it("Caso S (Fim Legítimo da Tabela): tabela terminando em row_center = 0.70 não dispara falso alerta de omissão", () => {
+      const tileFinal: CropTileCoordinate = {
+        index: 1,
+        totalTiles: 2,
+        x: 0,
+        y: 500,
+        width: 1280,
+        height: 344,
+        overlapY: 30,
+        coreStartY: 556,
+        coreEndY: 844,
+      };
+
+      const itemsTileFinal: DanfeItemRaw[] = [
+        { codigo: "1", descricao: "PROD 1", unidade: "UN", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.3 },
+        { codigo: "2", descricao: "PROD 2", unidade: "UN", quantidade: 1, valor_unitario: 20, valor_total: 20, _row_center: 0.7 },
+      ];
+
+      const cov = analyzeTileCoverage(tileFinal, itemsTileFinal);
+      expect(cov.possivelOmissaoFinal).toBe(false);
+    });
+
+    // Caso T: Divergência Matemática Marca Revisão sem Alterar Itens
+    it("Caso T (Validação Matemática Estrita): divergência marca requer_revisao mas NÃO remove ou altera itens", () => {
+      const itens: DanfeItemRaw[] = [
+        { codigo: "1", descricao: "PROD 1", unidade: "UN", quantidade: 1, valor_unitario: 100, valor_total: 100 },
+      ];
+
+      const validacao = validateDanfeMath(itens, { valor_produtos: 500.0 });
+      expect(validacao.valido).toBe(false);
+      expect(validacao.status).toBe("requer_revisao");
+      expect(validacao.diferenca).toBe(400.0);
+      expect(itens[0].valor_total).toBe(100); // Intacto, nunca forçado para 500!
     });
   });
 
