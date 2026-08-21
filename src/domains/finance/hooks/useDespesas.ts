@@ -99,21 +99,22 @@ async function fetchDivipayDespesas(startDate?: string | null, endDate?: string 
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
   const { startDate, endDate, workspaceId } = params;
+  if (!workspaceId) return [];
 
   let despesasQuery: any = supabase
     .from("despesas")
-    .select("*, categorias!despesas_categoria_id_fkey(nome, cor, icone), despesa_tags (tags (id, nome, cor))");
+    .select("*, categorias!despesas_categoria_id_fkey(nome, cor, icone), despesa_tags (tags (id, nome, cor))")
+    .eq("workspace_id", workspaceId);
 
-  if (workspaceId) despesasQuery = despesasQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
   if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
 
   let transacoesQuery: any = supabase
     .from("transacoes")
     .select("*, categorias(nome, cor, icone)")
-    .eq("tipo", "despesa");
+    .eq("tipo", "despesa")
+    .eq("workspace_id", workspaceId);
 
-  if (workspaceId) transacoesQuery = transacoesQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
   if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
 
@@ -211,6 +212,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
   const { data: despesas = [], isLoading: loading } = useQuery({
     queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
     queryFn: () => fetchDespesas({ startDate, endDate, workspaceId: currentWorkspaceId }),
+    enabled: !!currentWorkspaceId,
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
@@ -225,6 +227,9 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       despesa: Omit<Despesa, "id" | "user_id" | "created_at" | "updated_at" | "categorias">;
       tagNames?: string[];
     }) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar despesa.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       let faturaIdToLink = (despesa as any).fatura_id || null;
 
@@ -235,6 +240,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
             .from("contas_usuario")
             .select("id, tipo, dia_fechamento, dia_vencimento")
             .eq("id", despesa.conta_id)
+            .eq("workspace_id", currentWorkspaceId)
             .maybeSingle();
 
           if (contaObj && contaObj.tipo === "cartao_credito") {
@@ -245,6 +251,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
               .from("faturas_cartao")
               .select("id")
               .eq("cartao_id", contaObj.id)
+              .eq("workspace_id", currentWorkspaceId)
               .eq("mes_fatura", mes_fatura)
               .eq("ano_fatura", ano_fatura)
               .maybeSingle();
@@ -257,7 +264,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
                 .from("faturas_cartao")
                 .insert({
                   user_id: userId,
-                  workspace_id: currentWorkspaceId || null,
+                  workspace_id: currentWorkspaceId,
                   cartao_id: contaObj.id,
                   mes_fatura,
                   ano_fatura,
@@ -289,6 +296,9 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
+      qc.invalidateQueries({ queryKey: ["faturas_cartao"] });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
       toast({ title: "Despesa criada", description: "Despesa criada com sucesso!" });
     },
     onError: (error) => {
@@ -307,10 +317,14 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       updates: Partial<Despesa>;
       tagNames?: string[];
     }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("despesas")
         .update(updates)
-        .eq("id", id)
+        .eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await q
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -319,6 +333,9 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
+      qc.invalidateQueries({ queryKey: ["faturas_cartao"] });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
       toast({ title: "Despesa atualizada", description: "Despesa atualizada com sucesso!" });
     },
     onError: (error) => {
@@ -329,11 +346,18 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
 
   const deleteDespesa = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("despesas").delete().eq("id", id);
+      let q = supabase.from("despesas").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DESPESAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
+      qc.invalidateQueries({ queryKey: ["faturas_cartao"] });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
       toast({ title: "Despesa removida", description: "Despesa removida com sucesso!" });
     },
     onError: (error) => {

@@ -511,15 +511,18 @@ export function useImportarFatura() {
   const [dataVencimentoExtraida, setDataVencimentoExtraida] = useState<string | null>(null);
   
   const cartoesQuery = useQuery({
-    queryKey: ["contas-cartoes"],
+    queryKey: ["contas-cartoes", activeWorkspace?.id],
     queryFn: async () => {
+      if (!activeWorkspace?.id) return [];
       const { data, error } = await supabase
         .from("contas_usuario")
         .select("*")
-        .eq("tipo", "cartao_credito");
+        .eq("tipo", "cartao_credito")
+        .eq("workspace_id", activeWorkspace.id);
       if (error) throw error;
       return data || [];
     },
+    enabled: !!activeWorkspace?.id,
     staleTime: 1000 * 60 * 5,
   });
   
@@ -701,9 +704,13 @@ export function useImportarFatura() {
       const totalFat = totais?.totalFatura ?? (totalFaturaOficial || (totalLanc + (totais?.ajustes || ajustesEncargos)));
       const ajusFat = totais?.ajustes ?? ajustesEncargos;
 
+      if (!activeWorkspace?.id) {
+        throw new Error("Workspace não selecionado para importar fatura.");
+      }
+
       // Executar a RPC Atômica diretamente no PostgreSQL com sessão autenticada e RLS
       const { data: rpcData, error: rpcError } = await supabase.rpc("importar_fatura_atomica", {
-        p_workspace_id: activeWorkspace?.id || null,
+        p_workspace_id: activeWorkspace.id,
         p_cartao_id: contaId,
         p_mes_referencia: mesReferencia,
         p_vencimento: vencimento || dataVencimentoExtraida || null,
@@ -719,6 +726,7 @@ export function useImportarFatura() {
 
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
       await qc.invalidateQueries({ queryKey: ["despesas"] });
+      await qc.invalidateQueries({ queryKey: ["faturas_cartao"] });
       await qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
       await qc.invalidateQueries({ queryKey: ["contas_usuario"] });
       await qc.invalidateQueries({ queryKey: ["contas-cartoes"] });

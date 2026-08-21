@@ -39,6 +39,7 @@ export function useConfiguracoesInvestimentos() {
         .from("configuracoes_investimentos")
         .select("*")
         .eq("user_id", user.id)
+        .eq("workspace_id", workspaceId)
         .maybeSingle();
 
       if (error) {
@@ -73,6 +74,7 @@ export function useConfiguracoesInvestimentos() {
 
   const saveConfiguracao = useMutation({
     mutationFn: async (payload: Partial<ConfiguracaoInvestimento>) => {
+      if (!workspaceId) throw new Error("Workspace não selecionado");
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
@@ -80,6 +82,7 @@ export function useConfiguracoesInvestimentos() {
         .from("configuracoes_investimentos")
         .update(payload)
         .eq("user_id", user.id)
+        .eq("workspace_id", workspaceId)
         .select()
         .single();
 

@@ -23,12 +23,13 @@ export interface Contato {
 export const CONTATOS_QUERY_KEY = ["contatos"] as const;
 
 async function fetchContatos(workspaceId: string | null): Promise<Contato[]> {
+  if (!workspaceId) return [];
+
   let query = supabase
     .from("contatos")
     .select("*")
+    .eq("workspace_id", workspaceId)
     .order("nome", { ascending: true });
-
-  if (workspaceId) query = query.eq("workspace_id", workspaceId);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -44,11 +45,15 @@ export const useContatos = () => {
   const { data: contatos = [], isLoading: loading } = useQuery({
     queryKey: [...CONTATOS_QUERY_KEY, { workspaceId: currentWorkspaceId }],
     queryFn: () => fetchContatos(currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createContato = useMutation({
     mutationFn: async (c: Omit<Contato, "id" | "user_id" | "created_at">) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar contato.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("contatos")
@@ -70,10 +75,14 @@ export const useContatos = () => {
 
   const updateContato = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<Contato> & { id: string }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("contatos")
         .update(updates)
-        .eq("id", id)
+        .eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await q
         .select()
         .single();
       if (error) throw error;
@@ -91,7 +100,11 @@ export const useContatos = () => {
 
   const deleteContato = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("contatos").delete().eq("id", id);
+      let q = supabase.from("contatos").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {

@@ -25,14 +25,13 @@ export interface Meta {
 }
 
 const fetchMetasData = async (workspaceId?: string) => {
-  let q = supabase
+  if (!workspaceId) return [];
+
+  const q = supabase
     .from("metas")
     .select(`*, categorias_metas (nome, cor, descricao)`)
+    .eq("workspace_id", workspaceId)
     .order("data_limite", { ascending: true });
-
-  if (workspaceId) {
-    q = q.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-  }
 
   const { data, error } = await q;
   if (error) throw error;
@@ -49,6 +48,7 @@ export const useMetas = () => {
   const query = useQuery({
     queryKey,
     queryFn: () => fetchMetasData(activeWorkspace?.id),
+    enabled: !!activeWorkspace?.id,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
@@ -63,6 +63,9 @@ export const useMetas = () => {
     >
   ) => {
     try {
+      if (!activeWorkspace?.id) {
+        throw new Error("Workspace não selecionado para criar meta.");
+      }
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Usuário não autenticado");
 
@@ -72,7 +75,7 @@ export const useMetas = () => {
           {
             ...meta,
             user_id: user.id,
-            workspace_id: activeWorkspace?.id || null,
+            workspace_id: activeWorkspace.id,
           },
         ])
         .select(`*, categorias_metas (nome, cor, descricao)`)
@@ -107,10 +110,15 @@ export const useMetas = () => {
         ...updateData
       } = updates;
 
-      const { data, error } = await supabase
+      let q = supabase
         .from("metas")
         .update(updateData)
-        .eq("id", id)
+        .eq("id", id);
+      if (activeWorkspace?.id) {
+        q = q.eq("workspace_id", activeWorkspace.id);
+      }
+
+      const { data, error } = await q
         .select(`*, categorias_metas (nome, cor, descricao)`)
         .single();
 
@@ -135,7 +143,11 @@ export const useMetas = () => {
 
   const deleteMeta = async (id: string) => {
     try {
-      const { error } = await supabase.from("metas").delete().eq("id", id);
+      let q = supabase.from("metas").delete().eq("id", id);
+      if (activeWorkspace?.id) {
+        q = q.eq("workspace_id", activeWorkspace.id);
+      }
+      const { error } = await q;
 
       if (error) throw error;
       await qc.invalidateQueries({ queryKey: ["metas"] });
@@ -162,6 +174,6 @@ export const useMetas = () => {
     createMeta,
     updateMeta,
     deleteMeta,
-    refetch: () => qc.invalidateQueries({ queryKey: ["metas"] }),
+    refetch: () => qc.invalidateQueries({ queryKey }),
   };
 };

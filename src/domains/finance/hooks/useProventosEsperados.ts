@@ -35,7 +35,8 @@ export function useProventosEsperados() {
 
       const { data, error } = await supabase
         .from("proventos_esperados")
-        .select("*, investimentos(nome, codigo_b3)")
+        .select("*, investimentos!inner(nome, codigo_b3, workspace_id)")
+        .eq("investimentos.workspace_id", workspaceId)
         .order("data_pagamento", { ascending: true });
 
       if (error) {

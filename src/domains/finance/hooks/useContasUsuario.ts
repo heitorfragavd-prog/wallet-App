@@ -3,10 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 export interface ContaUsuario {
   id: string;
   user_id: string;
+  workspace_id?: string;
   nome: string;
   tipo: "conta_corrente" | "poupanca" | "carteira" | "cartao_credito" | "outro";
   saldo_inicial?: number;
@@ -22,10 +24,13 @@ export interface ContaUsuario {
 
 export const CONTAS_QUERY_KEY = ["contas_usuario"] as const;
 
-async function fetchContas(): Promise<ContaUsuario[]> {
+async function fetchContas(workspaceId?: string | null): Promise<ContaUsuario[]> {
+  if (!workspaceId) return [];
+
   const { data, error } = await supabase
     .from("contas_usuario")
     .select("*")
+    .eq("workspace_id", workspaceId)
     .order("nome", { ascending: true });
 
   if (error) {
@@ -46,8 +51,6 @@ async function fetchContas(): Promise<ContaUsuario[]> {
       if (balances.length > 0) {
         divipayConta.saldo_atual = saldoReal;
         // Fire-and-forget: atualiza o banco sem bloquear a tela
-        // (tipos gerados do Supabase estão desatualizados: a coluna saldo_atual
-        // existe na tabela real, verificado via information_schema)
         void supabase
           .from("contas_usuario")
           .update({ saldo_atual: saldoReal } as never)
@@ -64,23 +67,30 @@ async function fetchContas(): Promise<ContaUsuario[]> {
   return contas;
 }
 
-
 export const useContasUsuario = () => {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const currentWorkspaceId = activeWorkspace?.id || null;
+
+  const queryKey = [...CONTAS_QUERY_KEY, currentWorkspaceId];
 
   const { data: contas = [], isLoading: loading } = useQuery({
-    queryKey: CONTAS_QUERY_KEY,
-    queryFn: fetchContas,
+    queryKey,
+    queryFn: () => fetchContas(currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createConta = useMutation({
     mutationFn: async (conta: Omit<ContaUsuario, "id" | "user_id" | "created_at">) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar conta.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("contas_usuario")
-        .insert([{ ...conta, user_id: userId }])
+        .insert([{ ...conta, user_id: userId, workspace_id: currentWorkspaceId }])
         .select()
         .single();
       if (error) throw error;
@@ -88,6 +98,7 @@ export const useContasUsuario = () => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
       toast({ title: "Conta Criada", description: "Conta/Cartão registrado com sucesso!" });
     },
     onError: (error) => {
@@ -102,17 +113,17 @@ export const useContasUsuario = () => {
 
   const updateConta = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: Partial<ContaUsuario> }) => {
-      const { data, error } = await supabase
-        .from("contas_usuario")
-        .update(updates)
-        .eq("id", id)
-        .select()
-        .single();
+      let query = supabase.from("contas_usuario").update(updates).eq("id", id);
+      if (currentWorkspaceId) {
+        query = query.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await query.select().single();
       if (error) throw error;
       return data as ContaUsuario;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
       toast({ title: "Conta Atualizada", description: "Dados atualizados com sucesso!" });
     },
     onError: (error) => {
@@ -127,11 +138,16 @@ export const useContasUsuario = () => {
 
   const deleteConta = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("contas_usuario").delete().eq("id", id);
+      let query = supabase.from("contas_usuario").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        query = query.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await query;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
       toast({ title: "Conta Removida", description: "Conta removida com sucesso!" });
     },
     onError: (error) => {
@@ -160,5 +176,6 @@ export const useContasUsuario = () => {
     updateConta: (id: string, updates: Partial<ContaUsuario>) =>
       updateConta.mutateAsync({ id, updates }),
     deleteConta: (id: string) => deleteConta.mutateAsync(id),
+    refetch: () => qc.invalidateQueries({ queryKey: queryKey }),
   };
 };

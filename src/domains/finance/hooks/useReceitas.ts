@@ -213,6 +213,8 @@ export async function fetchReceitas(
   options: { onDivipayError?: (message: string) => void } = {},
   workspaceId?: string | null
 ): Promise<Receita[]> {
+  if (!workspaceId) return [];
+
   const { startDate, endDate, regime = "liquido" } = params;
 
   const applyFilters = (q: ReturnType<typeof supabase.from>) => {
@@ -223,11 +225,7 @@ export async function fetchReceitas(
   };
 
   const applyWorkspace = (q: ReturnType<typeof supabase.from>) => {
-    let query = q;
-    if (workspaceId) {
-      query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-    }
-    return query;
+    return q.eq("workspace_id", workspaceId);
   };
 
   // A tabela `receitas` tem DUAS FKs para `categorias` (categoria_id e
@@ -241,7 +239,7 @@ export async function fetchReceitas(
 
   // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
-    fetchAllRows<any>(buildReceitas, applyFilters, RECEITAS_COLS, 100000),
+    fetchAllRows<any>(buildReceitas, (q) => applyWorkspace(applyFilters(q)), RECEITAS_COLS, 100000),
     fetchAllRows<any>(buildTransacoes, (q) => applyWorkspace(applyFilters(q)).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
   ]);
 
@@ -343,6 +341,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
             variant: "default",
           }),
       }, workspaceId),
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 30,
   });
@@ -355,10 +354,13 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
       receita: Omit<Receita, "id" | "user_id" | "created_at" | "updated_at" | "categorias">;
       tagNames?: string[];
     }) => {
+      if (!workspaceId) {
+        throw new Error("Workspace não selecionado para criar receita.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("receitas")
-        .insert([{ ...receita, user_id: userId }])
+        .insert([{ ...receita, user_id: userId, workspace_id: workspaceId }])
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -367,6 +369,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Receita criada", description: "Receita criada com sucesso!" });
     },
     onError: (error) => {
@@ -385,10 +388,14 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
       updates: Partial<Receita>;
       tagNames?: string[];
     }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("receitas")
         .update(updates)
-        .eq("id", id)
+        .eq("id", id);
+      if (workspaceId) {
+        q = q.eq("workspace_id", workspaceId);
+      }
+      const { data, error } = await q
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -397,6 +404,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Receita atualizada", description: "Receita atualizada com sucesso!" });
     },
     onError: (error) => {
@@ -407,11 +415,16 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
 
   const deleteReceita = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("receitas").delete().eq("id", id);
+      let q = supabase.from("receitas").delete().eq("id", id);
+      if (workspaceId) {
+        q = q.eq("workspace_id", workspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: RECEITAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Receita removida", description: "Receita removida com sucesso!" });
     },
     onError: (error) => {

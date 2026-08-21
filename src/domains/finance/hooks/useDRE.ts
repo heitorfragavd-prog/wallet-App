@@ -66,7 +66,7 @@ async function fetchAllRows(
     }
 
     if (workspaceId) {
-      q = q.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
+      q = q.eq("workspace_id", workspaceId);
     }
 
     const { data, error } = await q.range(from, from + PAGE_SIZE - 1);
@@ -247,6 +247,7 @@ export function useDRE(mes?: number, ano?: number) {
   const { data: dre, isLoading: loadingDRE } = useQuery({
     queryKey: [...DRE_QUERY_KEY, mesAtual, anoAtual, workspaceId],
     queryFn: () => calcularDRE({ mes: mesAtual, ano: anoAtual, workspaceId }),
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 5,
   });
 
@@ -254,7 +255,7 @@ export function useDRE(mes?: number, ano?: number) {
     queryKey: [...DRE_QUERY_KEY, "historico", mesAtual, anoAtual, workspaceId],
     queryFn: () => buscarHistoricoDRE(mesAtual, anoAtual, 6, workspaceId),
     staleTime: 1000 * 60 * 10,
-    enabled: !!dre,
+    enabled: !!dre && !!workspaceId,
   });
 
   return { dre, historico, loading: loadingDRE, loadingHistorico };

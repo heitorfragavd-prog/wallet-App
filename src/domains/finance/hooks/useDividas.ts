@@ -81,15 +81,16 @@ function resolveDividaStatus(d: any): Divida {
 // ─── Fetcher com fallback (debt_reminders pode não existir) ─────────────
 async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> {
   const { startDate, endDate, workspaceId } = params;
+  if (!workspaceId) return [];
 
   let query = supabase
     .from("dividas")
     .select(
       "*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor), debt_reminders (id, reminder_hours, trigger_at, status, sent_at)"
     )
+    .eq("workspace_id", workspaceId)
     .order("data_vencimento", { ascending: true });
 
-  if (workspaceId) query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
   if (startDate) query = query.gte("data_vencimento", startDate);
   if (endDate) query = query.lte("data_vencimento", endDate);
 
@@ -100,9 +101,9 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
     let fallbackQuery = supabase
       .from("dividas")
       .select("*, categorias!categoria_id (nome, cor, icone), contas_usuario (id, nome, tipo, cor)")
+      .eq("workspace_id", workspaceId)
       .order("data_vencimento", { ascending: true });
 
-    if (workspaceId) fallbackQuery = fallbackQuery.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
     if (startDate) fallbackQuery = fallbackQuery.gte("data_vencimento", startDate);
     if (endDate) fallbackQuery = fallbackQuery.lte("data_vencimento", endDate);
 
@@ -127,6 +128,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
   const { data: dividas = [], isLoading: loading } = useQuery({
     queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
     queryFn: () => fetchDividas({ startDate, endDate, workspaceId: currentWorkspaceId }),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
@@ -138,13 +140,16 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     mutationFn: async (
       divida: Omit<Divida, "id" | "user_id" | "created_at" | "updated_at" | "categorias">
     ) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar dívida.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
 
       if (divida.parcelas && divida.parcelas > 1) {
         return await financeService.createDebt({
           userId,
-          workspaceId: currentWorkspaceId || undefined,
+          workspaceId: currentWorkspaceId,
           descricao: divida.descricao,
           valorTotal: divida.valor_total,
           dataVencimentoInicial: divida.data_vencimento,
@@ -168,7 +173,7 @@ export const useDividas = (params: DividasQueryParams = {}) => {
         .insert([{
           ...divida,
           user_id: userId,
-          workspace_id: currentWorkspaceId || null,
+          workspace_id: currentWorkspaceId,
           parcela_atual: 1,
           total_parcelas: 1,
         }])
@@ -179,6 +184,8 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["despesas"] });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Dívida criada", description: "Dívida criada com sucesso!" });
     },
     onError: (error) => {
@@ -189,10 +196,11 @@ export const useDividas = (params: DividasQueryParams = {}) => {
 
   const updateDivida = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: Partial<Divida> }) => {
-      const { data, error } = await supabase
-        .from("dividas")
-        .update(updates)
-        .eq("id", id)
+      let q = supabase.from("dividas").update(updates).eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await q
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -200,6 +208,8 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["despesas"] });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Dívida atualizada", description: "Dívida atualizada com sucesso!" });
     },
     onError: (error) => {
@@ -210,11 +220,17 @@ export const useDividas = (params: DividasQueryParams = {}) => {
 
   const deleteDivida = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("dividas").delete().eq("id", id);
+      let q = supabase.from("dividas").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["despesas"] });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Dívida removida", description: "Dívida removida com sucesso!" });
     },
     onError: (error) => {
@@ -232,6 +248,6 @@ export const useDividas = (params: DividasQueryParams = {}) => {
     updateDivida: (id: string, updates: Partial<Divida>) =>
       updateDivida.mutateAsync({ id, updates }),
     deleteDivida: (id: string) => deleteDivida.mutateAsync(id),
-    refetch: () => qc.invalidateQueries({ queryKey: DIVIDAS_QUERY_KEY }),
+    refetch: () => qc.invalidateQueries({ queryKey: [...DIVIDAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }] }),
   };
 };
