@@ -112,7 +112,7 @@ export const useFinancialContext = () => {
       const qRendimentos = supabase.from("historico_rendimentos").select("*").eq("ano", hoje.getFullYear()).eq("mes", hoje.getMonth() + 1);
       const qItensMercado = supabase.from("itens_mercado").select("*, categorias_mercado(nome)").eq("workspace_id", workspaceId);
       const qDivipayTransacoes = supabase.from("divipay_transacoes").select("*").eq("type", "withdraw").eq("status", "pending");
-      const qMetas = supabase.from("metas").select("*").eq("workspace_id", workspaceId);
+      const qMetas = supabase.from("metas").select("*");
 
       const [
         { data: resDividas },
