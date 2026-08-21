@@ -5,6 +5,8 @@ import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
+  analyzeTileCoverage,
+  subdivideCropTile,
   consolidateDanfeItems,
   deduplicateAndConsolidateItems,
   validateDanfeMath,
@@ -4130,13 +4132,13 @@ REGRAS:
               }
             }
 
-            // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO ───
+            // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO COM FATIAMENTO ADAPTATIVO ───
             if (loadedDecodedImage) {
-              const { tiles, usouFallback, topPercent, bottomPercent } = calculateTableCropTiles(
+              const { tiles, usouFallback, topPercent, bottomPercent, adaptiveTilesCount } = calculateTableCropTiles(
                 loadedDecodedImage.width,
                 loadedDecodedImage.height,
                 docAnalysis?.regiao_tabela_produtos,
-                2,
+                "auto",
                 0.15
               );
 
@@ -4147,10 +4149,25 @@ REGRAS:
                 console.log("[NF] usando fallback geométrico: 28%-88%");
               }
 
-              console.log(`[NF] recortes gerados: ${tiles.length}`);
+              console.log(`[NF] recortes adaptativos gerados: ${tiles.length} (modo: ${adaptiveTilesCount} tiles)`);
 
               const promptRecorte = `Você é um extrator fiscal especializado na tabela DADOS DO PRODUTO / SERVIÇO da DANFE.
-Extraia CADA LINHA de produto visível neste recorte da tabela diretamente em JSON.
+Este recorte contém uma PARTE de uma tabela de produtos de uma DANFE.
+Sua tarefa é a TRANSCRIÇÃO EXAUSTIVA linha por linha.
+
+Percorra visualmente o recorte de CIMA PARA BAIXO.
+Extraia TODA linha de produto visível, inclusive a última linha na parte inferior.
+
+REGRAS CRÍTICAS:
+1. NÃO resuma.
+2. NÃO pule produtos repetidos.
+3. NÃO deduplique.
+4. NÃO tente fazer a soma fechar.
+5. NÃO invente campos ilegíveis (use null).
+6. Se uma linha estiver parcialmente visível devido ao overlap, ainda retorne-a se conseguir identificar seus dados. O sistema fará a deduplicação posteriormente.
+7. "_row_center": número decimal entre 0.0 (topo deste recorte) e 1.0 (base deste recorte) indicando o centro vertical aproximado desta linha no recorte.
+8. Antes de finalizar o JSON, faça uma segunda varredura visual do recorte de cima para baixo e confirme internamente que nenhuma linha visível foi omitida.
+9. Retorne APENAS o JSON puro.
 
 FORMATO:
 {
@@ -4170,18 +4187,9 @@ FORMATO:
       "_row_center": 0.50
     }
   ]
-}
+}`;
 
-REGRAS CRÍTICAS:
-1. NUNCA INVENTE VALORES. Se não conseguir ler um campo, use null (ex: "quantidade": null).
-2. "_row_center": número decimal entre 0.0 (topo deste recorte) e 1.0 (base deste recorte) indicando o centro vertical aproximado desta linha no recorte.
-3. Não omita nenhum produto visível na imagem.
-4. Retorne APENAS o JSON puro.`;
-
-              const tilesItemsCollected: Array<{ tile: any; items: any[] }> = [];
-
-              for (let i = 0; i < tiles.length; i++) {
-                const tile = tiles[i];
+              const extractTileItems = async (tile: CropTileCoordinate, label: string): Promise<DanfeItemRaw[]> => {
                 try {
                   const crop = loadedDecodedImage.clone().crop(tile.x, tile.y, tile.width, tile.height);
                   const cropB64 = base64Encode(await crop.encodeJPEG(95));
@@ -4203,7 +4211,7 @@ REGRAS CRÍTICAS:
                         {
                           role: "user",
                           content: [
-                            { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${i + 1}/${tiles.length} da DANFE.` },
+                            { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${label} da DANFE.` },
                             { type: "image_url", image_url: { url: tileUri, detail: "high" } },
                           ],
                         },
@@ -4222,16 +4230,83 @@ REGRAS CRÍTICAS:
                       if (m) { try { parsedTile = JSON.parse(m[0]); } catch {} }
                     }
 
-                    const rawArray: DanfeItemRaw[] = Array.isArray(parsedTile?.itens) ? parsedTile.itens : [];
-                    console.log(`[NF] recorte ${i + 1}: ${rawArray.length} itens brutos lidos (core Y: ${tile.coreStartY}-${tile.coreEndY})`);
-                    tilesItemsCollected.push({ tile, items: rawArray });
+                    return Array.isArray(parsedTile?.itens) ? parsedTile.itens : [];
                   }
                 } catch (tileErr: any) {
-                  console.warn(`[NF] Aviso ao processar recorte ${i + 1}:`, tileErr.message);
+                  console.warn(`[NF] Aviso ao processar recorte ${label}:`, tileErr.message);
                 }
+                return [];
+              };
+
+              const tilesItemsCollected: Array<{ tile: CropTileCoordinate; items: DanfeItemRaw[] }> = [];
+
+              for (let i = 0; i < tiles.length; i++) {
+                const tile = tiles[i];
+                const rawArray = await extractTileItems(tile, `${i + 1}/${tiles.length}`);
+                console.log(`[NF] recorte ${i + 1}: ${rawArray.length} itens brutos lidos (core Y: ${tile.coreStartY}-${tile.coreEndY})`);
+                
+                // Análise de cobertura vertical do tile
+                const cov = analyzeTileCoverage(tile, rawArray);
+                console.log(`[NF] cobertura tile ${cov.tileIndex}: Y ${cov.yStart}-${cov.yEnd}, Core ${cov.coreStart}-${cov.coreEnd}, itens: ${cov.itemsCount}, row_center min: ${cov.minRowCenter ?? "N/A"}, max: ${cov.maxRowCenter ?? "N/A"}`);
+                if (cov.possivelOmissaoFinal) {
+                  console.warn(`[NF] POSSIVEL_OMISSAO_FINAL_TILE (tile ${cov.tileIndex}, max_row_center: ${cov.maxRowCenter})`);
+                }
+
+                tilesItemsCollected.push({ tile, items: rawArray });
               }
 
-              const { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
+              // ─── PRIMEIRA CONSOLIDAÇÃO GEOMÉTRICA ───
+              let { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
+              let validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+
+              // ─── RETRY SELETIVO (MÁXIMO 1 RODADA ADICIONAL) ───
+              // Se a soma divergir significativamente ou houver sinal de omissão no final de um tile:
+              // Reprocessa APENAS o tile suspeito dividindo-o em 2 subtiles com mais zoom
+              const tilesComOmissao = tilesItemsCollected
+                .map(({ tile, items }) => ({ tile, cov: analyzeTileCoverage(tile, items) }))
+                .filter(({ cov }) => cov.possivelOmissaoFinal);
+
+              const precisaRetry = (!validacao.valido || tilesComOmissao.length > 0) && tilesItemsCollected.length > 0;
+
+              if (precisaRetry) {
+                // Identifica o tile suspeito prioritário (com omissão no final ou o último/maior tile)
+                const suspeitoTarget = tilesComOmissao.length > 0
+                  ? tilesComOmissao[0].tile
+                  : tilesItemsCollected[tilesItemsCollected.length - 1].tile;
+
+                const idxNoArray = tilesItemsCollected.findIndex((t) => t.tile.index === suspeitoTarget.index);
+
+                if (idxNoArray >= 0 && suspeitoTarget.height > 100) {
+                  console.log(`[NF] Iniciando retry seletivo para tile ${suspeitoTarget.index} (divisão em 2 subtiles)`);
+                  const [subTileA, subTileB] = subdivideCropTile(
+                    suspeitoTarget,
+                    loadedDecodedImage.width,
+                    loadedDecodedImage.height,
+                    0.15
+                  );
+
+                  const itensSubA = await extractTileItems(subTileA, `subtile ${suspeitoTarget.index}A`);
+                  const itensSubB = await extractTileItems(subTileB, `subtile ${suspeitoTarget.index}B`);
+
+                  console.log(`[NF] retry subtile A: ${itensSubA.length} itens (core Y: ${subTileA.coreStartY}-${subTileA.coreEndY})`);
+                  console.log(`[NF] retry subtile B: ${itensSubB.length} itens (core Y: ${subTileB.coreStartY}-${subTileB.coreEndY})`);
+
+                  // Substitui o tile suspeito pelos 2 subtiles subdivididos
+                  tilesItemsCollected.splice(
+                    idxNoArray,
+                    1,
+                    { tile: subTileA, items: itensSubA },
+                    { tile: subTileB, items: itensSubB }
+                  );
+
+                  // Reconsolidação geométrica estrita com os subtiles
+                  const reconsolida = consolidateDanfeItems(tilesItemsCollected);
+                  itensConsolidados = reconsolida.itensFinais;
+                  diagnostico = reconsolida.diagnostico;
+                  validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+                  console.log(`[NF] reconsolidação pós-retry: ${itensConsolidados.length} itens, soma: R$ ${validacao.somaItens.toFixed(2)}`);
+                }
+              }
 
               for (const diag of diagnostico) {
                 console.log(
@@ -4241,8 +4316,7 @@ REGRAS CRÍTICAS:
 
               console.log(`[NF] itens finais após consolidação geométrica: ${itensConsolidados.length}`);
 
-              // ─── VALIDAÇÃO MATEMÁTICA DETERMINÍSTICA ───
-              const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+              // ─── LOGS FINAIS DA VALIDAÇÃO MATEMÁTICA ───
               console.log(`[NF] itens encontrados: ${validacao.itensValidosCount}`);
               console.log(`[NF] soma dos itens: R$ ${validacao.somaItens.toFixed(2)}`);
               console.log(`[NF] valor produtos NF: R$ ${validacao.valorReferencia.toFixed(2)}`);

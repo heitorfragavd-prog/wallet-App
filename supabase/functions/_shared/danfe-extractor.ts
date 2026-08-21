@@ -3,10 +3,11 @@
  * 
  * Módulo puro e determinístico para extração estruturada de DANFE:
  * 1. calculateRotationNeeded: detecção de orientação por conteúdo (0°, 90°, 180°, 270°)
- * 2. calculateTableCropTiles: cálculo de recortes de alta resolução com demarcação de Core vs Overlap
- * 3. consolidateDanfeItems: ownership geométrico de linhas baseado no Core do Tile + resgate seguro de órfãos + fallback
- * 4. validateDanfeMath: validação matemática estrita da soma e tolerâncias por item
- * 5. evaluateStockStatus: proteção de estoque e custo unitário para unidades fracionadas (CX != UN)
+ * 2. calculateTableCropTiles: cálculo adaptativo de recortes com Core vs Overlap
+ * 3. analyzeTileCoverage & subdivideCropTile: diagnóstico de omissão e subdivisão seletiva
+ * 4. consolidateDanfeItems: ownership geométrico de linhas baseado no Core do Tile + resgate seguro de órfãos + deduplicação
+ * 5. validateDanfeMath: validação matemática estrita da soma e tolerâncias por item
+ * 6. evaluateStockStatus: proteção de estoque e custo unitário para unidades fracionadas (CX != UN)
  */
 
 export interface DanfeItemRaw {
@@ -103,6 +104,18 @@ export interface ItemConsolidationDiagnostic {
   reason: string;
 }
 
+export interface TileCoverageAnalysis {
+  tileIndex: number;
+  yStart: number;
+  yEnd: number;
+  coreStart: number;
+  coreEnd: number;
+  itemsCount: number;
+  minRowCenter: number | null;
+  maxRowCenter: number | null;
+  possivelOmissaoFinal: boolean;
+}
+
 /**
  * 1. ORIENTAÇÃO DO DOCUMENTO (UMA ÚNICA ROTAÇÃO POR CONTEÚDO)
  * Retorna exatamente o ângulo que a imagem deve ser rotacionada baseando-se no conteúdo textual.
@@ -117,15 +130,30 @@ export function calculateRotationNeeded(
 }
 
 /**
- * 2. RECORTES DA TABELA COM DIVISÃO DE CORE (ÁREA VÁLIDA) E OVERLAP DE CONTEXTO
+ * 2. DETERMINAÇÃO ADAPTATIVA DE TILES
+ * Determina o número ótimo de recortes baseado na altura física da tabela:
+ * - Altura < 220px: 1 tile (tabela compacta de 1 a 4 itens)
+ * - Altura 220px - 440px: 2 tiles (tabela média de 5 a 8 itens)
+ * - Altura 441px - 650px: 3 tiles (tabela densa de 8 a 12 itens)
+ * - Altura > 650px: 4 tiles (tabela muito densa / folha cheia)
+ */
+export function determineAdaptiveTilesCount(tableHeightPx: number): number {
+  if (tableHeightPx < 220) return 1;
+  if (tableHeightPx <= 440) return 2;
+  if (tableHeightPx <= 650) return 3;
+  return 4;
+}
+
+/**
+ * 2.1 RECORTES DA TABELA COM FATIAMENTO ADAPTATIVO (CORE VS OVERLAP)
  */
 export function calculateTableCropTiles(
   imageWidth: number,
   imageHeight: number,
   regiaoDetectada?: RegiaoTabelaDetectada | null,
-  tilesCount: number = 2,
+  tilesCountInput?: number | "auto",
   overlapPercent: number = 0.15
-): { tiles: CropTileCoordinate[]; usouFallback: boolean; topPercent: number; bottomPercent: number } {
+): { tiles: CropTileCoordinate[]; usouFallback: boolean; topPercent: number; bottomPercent: number; adaptiveTilesCount: number } {
   let topPercent = 0.28;
   let bottomPercent = 0.88;
   let usouFallback = true;
@@ -156,6 +184,11 @@ export function calculateTableCropTiles(
   const endY = Math.floor(imageHeight * bottomPercent);
   const totalTableHeight = Math.max(100, endY - startY);
 
+  const tilesCount =
+    typeof tilesCountInput === "number" && tilesCountInput >= 1
+      ? Math.min(4, Math.max(1, Math.floor(tilesCountInput)))
+      : determineAdaptiveTilesCount(totalTableHeight);
+
   if (tilesCount <= 1) {
     return {
       tiles: [
@@ -174,6 +207,7 @@ export function calculateTableCropTiles(
       usouFallback,
       topPercent,
       bottomPercent,
+      adaptiveTilesCount: 1,
     };
   }
 
@@ -207,7 +241,87 @@ export function calculateTableCropTiles(
     usouFallback,
     topPercent,
     bottomPercent,
+    adaptiveTilesCount: tilesCount,
   };
+}
+
+/**
+ * 2.2 DIAGNÓSTICO DE COBERTURA VERTICAL POR TILE
+ */
+export function analyzeTileCoverage(
+  tile: CropTileCoordinate,
+  items: DanfeItemRaw[]
+): TileCoverageAnalysis {
+  const validCenters = (items || [])
+    .map((it) => (it._row_center != null ? Number(it._row_center) : null))
+    .filter((c): c is number => c != null && !isNaN(c) && c >= 0 && c <= 1);
+
+  const minRowCenter = validCenters.length > 0 ? Math.min(...validCenters) : null;
+  const maxRowCenter = validCenters.length > 0 ? Math.max(...validCenters) : null;
+
+  // Se o tile tem altura significativa (> 120px), retornou itens, mas o último item lido parou antes de 65% da altura
+  // (deixando > 35% de espaço visual no final do recorte sem leitura), sinaliza possível omissão no final do tile
+  const possivelOmissaoFinal =
+    tile.height > 120 &&
+    items.length > 0 &&
+    maxRowCenter != null &&
+    maxRowCenter < 0.65;
+
+  return {
+    tileIndex: tile.index,
+    yStart: tile.y,
+    yEnd: tile.y + tile.height,
+    coreStart: tile.coreStartY,
+    coreEnd: tile.coreEndY,
+    itemsCount: items.length,
+    minRowCenter,
+    maxRowCenter,
+    possivelOmissaoFinal,
+  };
+}
+
+/**
+ * 2.3 SUBDIVISÃO DE TILE SUSPEITO (REEXTRAÇÃO SELETIVA)
+ * Subdivide um tile suspeito em 2 subtiles menores com seus próprios cores e overlaps
+ */
+export function subdivideCropTile(
+  parentTile: CropTileCoordinate,
+  imageWidth: number,
+  imageHeight: number,
+  overlapPercent: number = 0.15
+): [CropTileCoordinate, CropTileCoordinate] {
+  const parentCoreHeight = parentTile.coreEndY - parentTile.coreStartY;
+  const halfCore = Math.floor(parentCoreHeight / 2);
+  const midY = parentTile.coreStartY + halfCore;
+  const overlapPx = Math.floor(halfCore * overlapPercent);
+
+  const subTileA: CropTileCoordinate = {
+    index: parentTile.index * 10,
+    totalTiles: parentTile.totalTiles * 2,
+    x: 0,
+    y: Math.max(0, parentTile.coreStartY - (parentTile.index > 0 ? overlapPx : 0)),
+    width: imageWidth,
+    height: 0,
+    overlapY: parentTile.index > 0 ? overlapPx : 0,
+    coreStartY: parentTile.coreStartY,
+    coreEndY: midY,
+  };
+  subTileA.height = Math.min(imageHeight, midY + overlapPx) - subTileA.y;
+
+  const subTileB: CropTileCoordinate = {
+    index: parentTile.index * 10 + 1,
+    totalTiles: parentTile.totalTiles * 2,
+    x: 0,
+    y: Math.max(0, midY - overlapPx),
+    width: imageWidth,
+    height: 0,
+    overlapY: overlapPx,
+    coreStartY: midY,
+    coreEndY: parentTile.coreEndY,
+  };
+  subTileB.height = Math.min(imageHeight, parentTile.coreEndY + (parentTile.index < parentTile.totalTiles - 1 ? overlapPx : 0)) - subTileB.y;
+
+  return [subTileA, subTileB];
 }
 
 /**
@@ -356,7 +470,7 @@ export function consolidateDanfeItems(
       if (temPosicaoValida) {
         itensComPosicaoGeometricaCount++;
         const absoluteY = Math.round(tile.y + rawCenter * tile.height);
-        const isLastTile = tile.index === tile.totalTiles - 1;
+        const isLastTile = tile.index === tile.totalTiles - 1 || tile.coreEndY >= Math.max(...tilesItems.map((t) => t.tile.coreEndY));
 
         // Pertence ao Core do Tile se: coreStartY <= absoluteY < coreEndY (ou <= coreEndY no último tile)
         const isCoreOwner = isLastTile
@@ -438,7 +552,7 @@ export function consolidateDanfeItems(
       if (rawCenter == null || isNaN(rawCenter) || rawCenter < 0 || rawCenter > 1) continue;
 
       const absY = Math.round(tile.y + rawCenter * tile.height);
-      const isLastTile = tile.index === tile.totalTiles - 1;
+      const isLastTile = tile.index === tile.totalTiles - 1 || tile.coreEndY >= Math.max(...tilesItems.map((t) => t.tile.coreEndY));
       const isCoreOwner = isLastTile
         ? absY >= tile.coreStartY && absY <= tile.coreEndY
         : absY >= tile.coreStartY && absY < tile.coreEndY;

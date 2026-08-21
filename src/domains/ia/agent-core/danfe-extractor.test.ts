@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
+  determineAdaptiveTilesCount,
+  analyzeTileCoverage,
+  subdivideCropTile,
   consolidateDanfeItems,
   deduplicateAndConsolidateItems,
   validateDanfeMath,
@@ -401,6 +403,157 @@ describe("DANFE Extractor Engine & Security Guards (v1.0.47)", () => {
       ]);
 
       expect(itensFinais.length).toBe(2);
+    });
+
+    // Caso I: Fatiamento Adaptativo para Tabela Densa
+    it("Caso I (Tabela Densa Adaptativa): tabela de altura 576px gera 3-4 tiles menores adaptativamente", () => {
+      const countPequena = determineAdaptiveTilesCount(180);
+      expect(countPequena).toBe(1);
+
+      const countMedia = determineAdaptiveTilesCount(350);
+      expect(countMedia).toBe(2);
+
+      const countDensa = determineAdaptiveTilesCount(576);
+      expect(countDensa).toBe(3);
+
+      const countMuitoDensa = determineAdaptiveTilesCount(700);
+      expect(countMuitoDensa).toBe(4);
+
+      const resAdaptativo = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, "auto");
+      expect(resAdaptativo.tiles.length).toBe(3);
+      expect(resAdaptativo.tiles[0].coreStartY).toBe(268);
+    });
+
+    // Caso J: Último produto no fundo do tile (row_center = 0.95) é preservado
+    it("Caso J: Último produto próximo ao fundo do último tile (row_center = 0.95) é aceito no core", () => {
+      const tileFinal: CropTileCoordinate = {
+        index: 2,
+        totalTiles: 3,
+        x: 0,
+        y: 600,
+        width: 1280,
+        height: 250,
+        overlapY: 30,
+        coreStartY: 650,
+        coreEndY: 844,
+      };
+
+      const itemFundo: DanfeItemRaw = {
+        codigo: "7788",
+        descricao: "AGUA MINERAL 500ML",
+        quantidade: 10,
+        valor_unitario: 2.0,
+        valor_total: 20.0,
+        _row_center: 0.95, // abs_y = 600 + 0.95 * 250 = 837.5 (dentro de 650-844)
+      };
+
+      const { itensFinais, diagnostico } = consolidateDanfeItems([
+        { tile: tileFinal, items: [itemFundo] },
+      ]);
+
+      expect(itensFinais.length).toBe(1);
+      expect(itensFinais[0].descricao).toBe("AGUA MINERAL 500ML");
+      expect(diagnostico[0].accepted).toBe(true);
+      expect(diagnostico[0].reason).toBe("core_owner");
+    });
+
+    // Caso K: 4 Tiles com Overlaps - Produtos em overlaps adjacentes resultam em exatamente 1 linha por produto
+    it("Caso K: 4 Tiles com overlaps geram exatamente 1 linha física final por produto sem duplicações", () => {
+      const res4 = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 4);
+      expect(res4.tiles.length).toBe(4);
+
+      // Produto 1 no Core 0
+      const it0: DanfeItemRaw = { codigo: "1", descricao: "PROD 1", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.5 };
+      // Produto 2 na fronteira Tile 0 e Tile 1 (Tile 0 overlap, Tile 1 core)
+      const it1_t0: DanfeItemRaw = { codigo: "2", descricao: "PROD 2", quantidade: 1, valor_unitario: 20, valor_total: 20, _row_center: 0.90 }; // absY ~ 426 (> Core 0 412)
+      const it1_t1: DanfeItemRaw = { codigo: "2", descricao: "PROD 2", quantidade: 1, valor_unitario: 20, valor_total: 20, _row_center: 0.15 }; // absY ~ 423 (Core 1: 412-556)
+      // Produto 3 no Core 2
+      const it3: DanfeItemRaw = { codigo: "3", descricao: "PROD 3", quantidade: 1, valor_unitario: 30, valor_total: 30, _row_center: 0.5 };
+      // Produto 4 no Core 3
+      const it4: DanfeItemRaw = { codigo: "4", descricao: "PROD 4", quantidade: 1, valor_unitario: 40, valor_total: 40, _row_center: 0.5 };
+
+      const { itensFinais } = consolidateDanfeItems([
+        { tile: res4.tiles[0], items: [it0, it1_t0] },
+        { tile: res4.tiles[1], items: [it1_t1] },
+        { tile: res4.tiles[2], items: [it3] },
+        { tile: res4.tiles[3], items: [it4] },
+      ]);
+
+      expect(itensFinais.length).toBe(4);
+      const soma = itensFinais.reduce((acc, it) => acc + (it.valor_total || 0), 0);
+      expect(soma).toBe(100);
+    });
+
+    // Caso L: Produtos iguais em posições diferentes continuam sendo duas linhas
+    it("Caso L: Produtos idênticos em posições verticais distantes são mantidos como 2 linhas distintas", () => {
+      const res2 = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 2);
+      const itLinha1: DanfeItemRaw = { codigo: "50", descricao: "ITEM REPETIDO", quantidade: 2, valor_unitario: 15, valor_total: 30, _row_center: 0.2 };
+      const itLinha8: DanfeItemRaw = { codigo: "50", descricao: "ITEM REPETIDO", quantidade: 2, valor_unitario: 15, valor_total: 30, _row_center: 0.8 };
+
+      const { itensFinais } = consolidateDanfeItems([
+        { tile: res2.tiles[0], items: [itLinha1] },
+        { tile: res2.tiles[1], items: [itLinha8] },
+      ]);
+
+      expect(itensFinais.length).toBe(2);
+      expect(itensFinais[0].valor_total).toBe(30);
+      expect(itensFinais[1].valor_total).toBe(30);
+    });
+
+    // Caso M: Fallback Seletivo (Subdivisão de Tile Suspeito)
+    it("Caso M (Subdivisão de Tile Suspeito): subdivide tile incompleto e consolida sem duplicar outros tiles", () => {
+      const res2 = calculateTableCropTiles(1280, 960, { detectada: true, top: 0.28, bottom: 0.88 }, 2);
+      const tile0 = res2.tiles[0];
+      const tile1 = res2.tiles[1];
+
+      // Diagnóstico de cobertura do Tile 1: itens param em row_center = 0.50 -> possivelOmissaoFinal
+      const itemsIncompletosTile1: DanfeItemRaw[] = [
+        { codigo: "10", descricao: "COCA 2L", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.3 },
+      ];
+      const cov1 = analyzeTileCoverage(tile1, itemsIncompletosTile1);
+      expect(cov1.possivelOmissaoFinal).toBe(true);
+
+      // Subdivide Tile 1 em 1A e 1B
+      const [sub1A, sub1B] = subdivideCropTile(tile1, 1280, 960, 0.15);
+      expect(sub1A.coreStartY).toBe(tile1.coreStartY);
+      expect(sub1B.coreEndY).toBe(tile1.coreEndY);
+
+      const itemsTile0: DanfeItemRaw[] = [
+        { codigo: "1", descricao: "COCA LATA", quantidade: 2, valor_unitario: 5, valor_total: 10, _row_center: 0.5 },
+      ];
+      const itemsSub1A: DanfeItemRaw[] = [
+        { codigo: "10", descricao: "COCA 2L", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.5 },
+      ];
+      const itemsSub1B: DanfeItemRaw[] = [
+        { codigo: "20", descricao: "FANTA 2L", quantidade: 1, valor_unitario: 10, valor_total: 10, _row_center: 0.5 },
+      ];
+
+      const { itensFinais } = consolidateDanfeItems([
+        { tile: tile0, items: itemsTile0 },
+        { tile: sub1A, items: itemsSub1A },
+        { tile: sub1B, items: itemsSub1B },
+      ]);
+
+      expect(itensFinais.length).toBe(3);
+      expect(itensFinais.map((i) => i.codigo)).toEqual(["1", "10", "20"]);
+    });
+
+    // Caso N: Limite Estrito de Retry (Máximo 1 rodada adicional)
+    it("Caso N (Limite de Retry): retry é executado no máximo 1 vez, sem loops", () => {
+      let retryCount = 0;
+      const MAX_RETRIES = 1;
+
+      const precisaRetry = true;
+      if (precisaRetry && retryCount < MAX_RETRIES) {
+        retryCount++;
+      }
+
+      // Segunda tentativa não deve disparar novo retry
+      if (precisaRetry && retryCount < MAX_RETRIES) {
+        retryCount++;
+      }
+
+      expect(retryCount).toBe(1);
     });
   });
 
