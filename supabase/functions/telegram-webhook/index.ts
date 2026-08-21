@@ -17,6 +17,16 @@ import {
   type DanfeItemRaw,
   type CropTileCoordinate,
 } from "../_shared/danfe-extractor.ts";
+import {
+  validateProductRowV2,
+  validateDanfeMathV2,
+  reconcileAndDeduplicateV2,
+  sanitizeProductDescription,
+  GEMINI_V2_PROMPT_TABELA,
+  parseFiscalNumber,
+  type DanfeItemV2,
+  type DanfeValidationResultV2,
+} from "../_shared/danfe-gemini-v2.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -4135,8 +4145,200 @@ REGRAS:
               }
             }
 
-            // ─── RECORTES DE ALTA RESOLUÇÃO DA TABELA DADOS DO PRODUTO/SERVIÇO COM FATIAMENTO ADAPTATIVO ───
-            if (loadedDecodedImage) {
+            // ─── PIPELINE DANFE GEMINI V2 (Tabela Contínua sem Tiles) ───
+            const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
+            const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
+            const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+
+            if (loadedDecodedImage && isGeminiV2Enabled) {
+              console.log(`[NF_PIPELINE] pipeline=gemini_v2 fileType=${isTelegramCompressedPhoto ? "photo" : "document"} dim=${loadedDecodedImage.width}x${loadedDecodedImage.height}`);
+
+              if (!geminiApiKey) {
+                console.error("[NF_V2_ERROR] DANFE_GEMINI_V2_ENABLED=true mas GEMINI_API_KEY não está configurada.");
+                documentData = {
+                  tipo: "nf_compra",
+                  pipeline: "gemini_v2",
+                  confianca_geral: "baixa",
+                  status_validacao: "requer_revisao",
+                  motivo_revisao: "gemini_missing_api_key",
+                  validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: Number(docAnalysis?.valores_totais?.valor_produtos || 0), diferenca: 0 },
+                  cabecalho: docAnalysis?.cabecalho || {},
+                  valores_totais: docAnalysis?.valores_totais || {},
+                  itens: [],
+                  isTelegramCompressedPhoto
+                };
+              } else {
+                // 1. Recorte Contínuo da Tabela
+                const regiao = docAnalysis?.regiao_tabela_produtos;
+                const topRatio = (regiao && typeof regiao.top === "number" && regiao.top >= 0.1 && regiao.top <= 0.6) ? regiao.top : 0.24;
+                const bottomRatio = (regiao && typeof regiao.bottom === "number" && regiao.bottom >= 0.5 && regiao.bottom <= 0.98) ? regiao.bottom : 0.90;
+
+                const cropY = Math.max(0, Math.floor(loadedDecodedImage.height * topRatio));
+                const cropH = Math.min(loadedDecodedImage.height - cropY, Math.floor(loadedDecodedImage.height * (bottomRatio - topRatio)));
+
+                const tableContinuousCrop = loadedDecodedImage.clone().crop(0, cropY, loadedDecodedImage.width, cropH);
+                const tableContinuousB64 = base64Encode(await tableContinuousCrop.encodeJPEG(95));
+
+                console.log(`[NF_V2_CROP] continuous table crop: ${loadedDecodedImage.width}x${cropH} (top ${Math.round(topRatio*100)}% - bottom ${Math.round(bottomRatio*100)}%)`);
+
+                // 2. Chamada Vision ao Gemini com Timeout e Tratamento de Erros
+                let geminiRawText = "";
+                let geminiDurationMs = 0;
+                let geminiErrorCode = "";
+
+                try {
+                  const v2Start = Date.now();
+                  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`;
+
+                  const geminiResp = await fetch(geminiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{
+                        parts: [
+                          { text: GEMINI_V2_PROMPT_TABELA },
+                          { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
+                        ]
+                      }],
+                      generationConfig: {
+                        temperature: 0.0,
+                        responseMimeType: "application/json"
+                      }
+                    }),
+                    signal: AbortSignal.timeout(45000)
+                  });
+
+                  geminiDurationMs = Date.now() - v2Start;
+
+                  if (geminiResp.ok) {
+                    const geminiJson = await geminiResp.json();
+                    geminiRawText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                    console.log(`[NF_V2_VISION] model=${GEMINI_DANFE_MODEL} duration=${geminiDurationMs}ms status=200 rawLen=${geminiRawText.length}`);
+                  } else if (geminiResp.status === 429) {
+                    geminiErrorCode = "gemini_rate_limit";
+                    console.error(`[NF_V2_ERROR] Gemini Rate Limit HTTP 429 em ${geminiDurationMs}ms`);
+                  } else {
+                    geminiErrorCode = "gemini_processing_error";
+                    const errText = await geminiResp.text();
+                    console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
+                  }
+                } catch (gemErr: any) {
+                  if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
+                    geminiErrorCode = "gemini_timeout";
+                  } else {
+                    geminiErrorCode = "gemini_processing_error";
+                  }
+                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, gemErr.message);
+                }
+
+                if (!geminiErrorCode && geminiRawText) {
+                  let rawList: any[] | null = null;
+                  try {
+                    const clean = geminiRawText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+                    const p = JSON.parse(clean);
+                    if (Array.isArray(p)) rawList = p;
+                    else if (Array.isArray(p.itens)) rawList = p.itens;
+                    else if (Array.isArray(p.produtos)) rawList = p.produtos;
+                  } catch {
+                    const m = geminiRawText.match(/\{[\s\S]*\}/);
+                    if (m) {
+                      try {
+                        const p = JSON.parse(m[0]);
+                        if (Array.isArray(p.itens)) rawList = p.itens;
+                        else if (Array.isArray(p.produtos)) rawList = p.produtos;
+                      } catch (_) {}
+                    }
+                  }
+
+                  if (rawList === null) {
+                    // Texto não-JSON retornado pelo modelo: erro explícito de parsing
+                    console.error("[NF_V2_ERROR] Gemini retornou texto mas falhou ao parsear JSON estruturado.");
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: "baixa",
+                      status_validacao: "requer_revisao",
+                      motivo_revisao: "gemini_invalid_json",
+                      validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: [],
+                      isTelegramCompressedPhoto
+                    };
+                  } else if (rawList.length === 0) {
+                    // JSON estruturado válido, mas lista vazia de produtos em DANFE
+                    console.warn("[NF_V2_WARN] Gemini retornou lista vazia de produtos para DANFE.");
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: "baixa",
+                      status_validacao: "requer_revisao",
+                      motivo_revisao: "gemini_empty_products",
+                      validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: [],
+                      isTelegramCompressedPhoto
+                    };
+                  } else {
+                    // 3. Validação Estrutural Estrita com Sanitização de FCI
+                    const itensValidados: DanfeItemV2[] = [];
+                    const itensRejeitados: any[] = [];
+
+                    rawList.forEach((r, idx) => {
+                      const v = validateProductRowV2(r);
+                      if (v.isValid && v.item) {
+                        itensValidados.push(v.item);
+                      } else {
+                        itensRejeitados.push({ index: idx, motivo: v.motivo });
+                      }
+                    });
+
+                    console.log(`[NF_V2_VALIDATION] raw=${rawList.length} valid=${itensValidados.length} rejected=${itensRejeitados.length}`);
+
+                    // 4. Validação Matemática Determinística
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    const validacaoV2 = validateDanfeMathV2(itensValidados, valorProdutosNF);
+
+                    console.log(`[NF_V2_MATH] valorProdutosNF=R$${validacaoV2.valorReferencia.toFixed(2)} somaItens=R$${validacaoV2.somaItens.toFixed(2)} diff=R$${validacaoV2.diferenca.toFixed(2)} status=${validacaoV2.valido ? "VALIDO" : "REVISAR"}`);
+
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: validacaoV2.valido ? "alta" : "baixa",
+                      status_validacao: validacaoV2.valido ? "ok" : "requer_revisao",
+                      validacao_detalhes: validacaoV2,
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: itensValidados,
+                      itensRejeitados,
+                      isTelegramCompressedPhoto
+                    };
+                  }
+                } else {
+                  // Falha técnica no Gemini V2: marca diretamente como requer_revisao SEM chamar o pipeline legado
+                  const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                  documentData = {
+                    tipo: "nf_compra",
+                    pipeline: "gemini_v2",
+                    confianca_geral: "baixa",
+                    status_validacao: "requer_revisao",
+                    motivo_revisao: geminiErrorCode || "gemini_processing_error",
+                    validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                    cabecalho: docAnalysis?.cabecalho || {},
+                    valores_totais: docAnalysis?.valores_totais || {},
+                    itens: [],
+                    isTelegramCompressedPhoto
+                  };
+                }
+              }
+            }
+
+            // ─── PIPELINE LEGADO (Somente quando DANFE_GEMINI_V2_ENABLED !== "true") ───
+            if (!isGeminiV2Enabled && loadedDecodedImage) {
+              console.log("[NF_PIPELINE] pipeline=legacy (GPT-4o tiles adaptativos)...");
               const { tiles, usouFallback, topPercent, bottomPercent, adaptiveTilesCount } = calculateTableCropTiles(
                 loadedDecodedImage.width,
                 loadedDecodedImage.height,
@@ -4284,12 +4486,14 @@ FORMATO:
 
               documentData = {
                 tipo: "nf_compra",
+                pipeline: "legacy",
                 confianca_geral: validacao.valido ? "alta" : "baixa",
                 status_validacao: validacao.status,
                 validacao_detalhes: validacao,
                 cabecalho: docAnalysis?.cabecalho || {},
                 valores_totais: docAnalysis?.valores_totais || {},
                 itens: itensConsolidados,
+                isTelegramCompressedPhoto
               };
             }
           } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
@@ -4347,17 +4551,37 @@ FORMATO:
           if (!validacao.valido || itensExtraidos.length === 0) {
             console.warn("[NF] Leitura duvidosa/divergente detectada. Bloqueando atualização automática de estoque.");
 
-            let msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura.</b>\n\n`;
-            msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
-            msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
-            if (validacao.valorReferencia > 0) {
-              msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
-              msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
+            let msgDivergencia = "";
+            if (documentData.motivo_revisao) {
+              msgDivergencia = `⚠️ <b>Não consegui validar esta nota com segurança no momento.</b>\n\n`;
+              msgDivergencia += `<i>Nenhuma alteração foi feita no estoque.</i>\n\n`;
+              msgDivergencia += `💡 <b>O que você pode fazer:</b>\n`;
+              msgDivergencia += `1. Tente novamente em alguns minutos\n`;
+              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota fiscal para importação instantânea e automática ✅`;
+            } else if (isTelegramCompressedPhoto) {
+              msgDivergencia = `⚠️ <b>Consegui ler a nota, mas a imagem enviada pelo Telegram perdeu resolução e não consegui confirmar todos os produtos com segurança.</b>\n\n`;
+              msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
+              msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
+              if (validacao.valorReferencia > 0) {
+                msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
+                msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
+              }
+              msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
+              msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
+              msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo/Documento</b> (não foto) para manter 100% da resolução\n`;
+              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
+            } else {
+              msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura do documento original.</b>\n\n`;
+              msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
+              msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
+              if (validacao.valorReferencia > 0) {
+                msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
+                msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
+              }
+              msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
+              msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
+              msgDivergencia += `1. Envie o arquivo <b>.XML</b> da nota para importação instantânea e 100% automática ✅`;
             }
-            msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
-            msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
-            msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo</b> (não foto) para manter 100% da resolução\n`;
-            msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
 
             await supabase
               .from("notas_fiscais_compra")
