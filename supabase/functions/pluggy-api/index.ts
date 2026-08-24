@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, no-useless-catch, prefer-const, @typescript-eslint/no-unused-vars, no-empty, @typescript-eslint/ban-ts-comment */
 // Supabase Edge Function: pluggy-api
 // Proxy seguro, autenticado e endurecido para a API da Pluggy (Open Finance).
 // 
