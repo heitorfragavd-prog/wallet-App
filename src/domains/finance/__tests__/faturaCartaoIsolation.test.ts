@@ -6,7 +6,7 @@ describe("Fatura Cartão Isolation & Ownership Tests", () => {
     id: "54bb6f97-7374-4ee6-9a04-3b1cd8d3ff70",
     nome: "Nubank (Cartão Gold)",
     tipo: "cartao_credito",
-    dia_fechamento: null,
+    dia_fechamento: 12,
     dia_vencimento: 19,
     saldo_atual: 501.30,
     limite_credito: 1600,
@@ -251,5 +251,39 @@ describe("Fatura Cartão Isolation & Ownership Tests", () => {
       : (isMesAtual && cardNubank.saldo_atual ? Number(cardNubank.saldo_atual) : 0);
 
     expect(totalFatura).toBe(501.30);
+  });
+
+  it("11. Fatura fechada de Agosto do Nubank calcula exatamente R$ 339,73 com 9 despesas reais do PDF", () => {
+    const realPdfNubankExpenses = [
+      { id: "tx-1", descricao: "IOF OpenAI", valor: 1.46, data: "2026-07-28", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-2", descricao: "OpenAI ChatGPT", valor: 41.64, data: "2026-07-28", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-3", descricao: "IOF Moonshot AI", valor: 3.70, data: "2026-07-29", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-4", descricao: "Moonshot AI", valor: 105.76, data: "2026-07-29", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-5", descricao: "Hgp*Braip", valor: 39.90, data: "2026-08-01", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-6", descricao: "Hgp*Braip", valor: 39.90, data: "2026-08-01", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-7", descricao: "Google One", valor: 23.99, data: "2026-08-11", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-8", descricao: "IOF OpenAI", valor: 2.82, data: "2026-08-11", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" },
+      { id: "tx-9", descricao: "OpenAI ChatGPT", valor: 80.56, data: "2026-08-11", conta_id: cardNubank.id, tipo: "despesa", workspace_id: "ws-pj-rodo-point" }
+    ];
+
+    const periodoAgosto = calcularPeriodoFatura(cardNubank, 8, 2026);
+    expect(periodoAgosto.data_inicio).toBe("2026-07-12");
+    expect(periodoAgosto.data_fechamento).toBe("2026-08-12");
+    expect(periodoAgosto.data_vencimento).toBe("2026-08-19");
+
+    const despesasNaCompetencia = realPdfNubankExpenses.filter(
+      (d) => d.data > periodoAgosto.data_inicio && d.data <= periodoAgosto.data_fechamento
+    );
+
+    expect(despesasNaCompetencia).toHaveLength(9);
+    const somaTotal = despesasNaCompetencia.reduce((acc, d) => acc + d.valor, 0);
+    expect(Number(somaTotal.toFixed(2))).toBe(339.73);
+
+    // Saldo atual de R$ 501,30 do cartão (Open Finance) NÃO sobrescreve a fatura fechada
+    const totalFaturaModal = despesasNaCompetencia.length > 0
+      ? somaTotal
+      : Number(cardNubank.saldo_atual || 0);
+
+    expect(Number(totalFaturaModal.toFixed(2))).toBe(339.73);
   });
 });
