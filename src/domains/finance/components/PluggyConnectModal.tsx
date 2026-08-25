@@ -2,8 +2,9 @@ import React, { useState, useEffect } from "react";
 import { PluggyConnect } from "react-pluggy-connect";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/shared/hooks/use-toast";
-import { syncPluggyItemToSupabase } from "@/domains/finance/services/pluggyService";
+import { createPluggyConnectToken, syncPluggyItemToSupabase } from "@/domains/finance/services/pluggyService";
 import { CONTAS_QUERY_KEY } from "@/domains/finance/hooks/useContasUsuario";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface PluggyConnectModalProps {
   open: boolean;
@@ -22,30 +23,50 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id;
 
   useEffect(() => {
+    let isMounted = true;
+
     if (open) {
+      if (!workspaceId) {
+        setError("Nenhum workspace ativo selecionado.");
+        return;
+      }
+
       setLoading(true);
       setError(null);
       setConnectToken(null);
 
-      fetch("/api/pluggy/connect-token", { method: "POST" })
-        .then((res) => res.json())
+      createPluggyConnectToken(workspaceId)
         .then((data) => {
-          if (data.accessToken) {
-            setConnectToken(data.accessToken);
-          } else {
-            setError(data.error || "Erro ao conectar com a Pluggy.");
+          if (isMounted) {
+            if (data?.accessToken) {
+              setConnectToken(data.accessToken);
+            } else {
+              setError("Erro ao gerar token da Pluggy.");
+            }
           }
         })
-        .catch(() => setError("Erro na requisição da API local."))
-        .finally(() => setLoading(false));
+        .catch((err) => {
+          if (isMounted) {
+            setError(err instanceof Error ? err.message : "Erro na requisição da API segura.");
+          }
+        })
+        .finally(() => {
+          if (isMounted) setLoading(false);
+        });
     } else {
       setConnectToken(null);
       setError(null);
       setLoading(false);
     }
-  }, [open]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [open, workspaceId]);
 
   if (!open) return null;
 
@@ -55,25 +76,26 @@ export const PluggyConnectModal: React.FC<PluggyConnectModalProps> = ({
     onOpenChange(false);
   };
 
-  const handleSuccess = async (data: { item: any }) => {
-    console.log("Pluggy Connection Success:", data);
+  const handleSuccess = async (data: { item?: { id?: string; connector?: { name?: string } } }) => {
     const item = data?.item;
-    if (item?.id) {
+    if (item?.id && workspaceId) {
       toast({
         title: "Sincronizando Open Finance...",
         description: "Buscando saldos e transações do banco conectado...",
       });
       try {
-        const result = await syncPluggyItemToSupabase(item.id, item.connector?.name);
+        const result = await syncPluggyItemToSupabase(workspaceId, item.id, item.connector?.name);
         toast({
           title: "Sincronização Concluída!",
-          description: `${result.accountsCount} conta(s), ${result.transactionsCount} transação(ões) e ${result.investmentsCount} investimento(s) importados com sucesso.`,
+          description: `${result.accountsCount} conta(s) e ${result.transactionsCount} transação(ões) importadas com sucesso.`,
         });
+        queryClient.invalidateQueries({ queryKey: [CONTAS_QUERY_KEY, workspaceId] });
         queryClient.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : "Banco conectado, mas falhou a sincronização automática dos dados.";
         toast({
           title: "Aviso na Importação",
-          description: "Banco conectado, mas falhou a sincronização automática dos dados.",
+          description: errorMessage,
           variant: "destructive",
         });
       }
