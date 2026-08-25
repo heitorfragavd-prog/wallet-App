@@ -4603,6 +4603,118 @@ FORMATO:
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
 
+          // ─── GESTÃO DE SESSÃO MULTIPÁGINA (FOLHA X / Y) COM RPC ATÔMICA ───
+          const paginaAtual = Math.max(1, Number(documentData.cabecalho?.pagina_atual) || 1);
+          const totalPaginas = Math.max(1, Number(documentData.cabecalho?.total_paginas) || 1);
+          let multipageSessaoId: string | null = null;
+
+          if (totalPaginas > 1) {
+            const chaveAcesso = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
+            const numeroNF = documentData.cabecalho?.numero_nf;
+            const serieNF = documentData.cabecalho?.serie_nf;
+            const cnpjFornecedor = documentData.cabecalho?.cnpj_fornecedor;
+            const fornecedor = documentData.cabecalho?.fornecedor;
+
+            const paginaObj = {
+              pagina_atual: paginaAtual,
+              itens: documentData.itens || [],
+              cabecalho: documentData.cabecalho || {},
+              valores_totais: documentData.valores_totais || {},
+              telegram_file_id: fileId || null,
+              recebida_em: new Date().toISOString(),
+            };
+
+            // 1. Chamada atômica via RPC com pg_advisory_xact_lock e SELECT FOR UPDATE
+            const { data: rpcRes, error: rpcErr } = await supabase.rpc("merge_nf_multipage_page", {
+              p_user_id: userId,
+              p_chat_id: String(chatId),
+              p_workspace_id: wsId,
+              p_chave_acesso: chaveAcesso,
+              p_numero_nf: numeroNF,
+              p_serie_nf: serieNF,
+              p_cnpj_fornecedor: cnpjFornecedor,
+              p_fornecedor: fornecedor,
+              p_total_paginas: totalPaginas,
+              p_pagina_atual: paginaAtual,
+              p_pagina_dados: paginaObj,
+              p_valores_totais: documentData.valores_totais || {},
+              p_cabecalho: documentData.cabecalho || {},
+            });
+
+            if (rpcErr) {
+              console.error("[NF_MULTIPAGE] Erro na RPC merge_nf_multipage_page:", rpcErr);
+            }
+
+            multipageSessaoId = rpcRes?.sessao_id || null;
+            const dadosSessao = rpcRes?.dados || {};
+            const isDuplicada = !!rpcRes?.is_duplicada;
+            const faltantes = rpcRes?.faltantes || [];
+            const completo = !!rpcRes?.completo;
+
+            // 2. Se a página já foi recebida anteriormente nesta sessão
+            if (isDuplicada) {
+              await sendReply(
+                `ℹ️ <b>A página ${paginaAtual} desta NF já foi recebida.</b>\n\n` +
+                (faltantes.length > 0
+                  ? `⏳ <b>Ainda aguardando:</b> Página(s) ${faltantes.join(", ")} de ${totalPaginas}.`
+                  : `✅ Todas as páginas já foram recebidas e estão prontas.`)
+              );
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+
+            // 3. Se ainda faltam páginas -> responde informativo e aguarda
+            if (!completo || faltantes.length > 0) {
+              let msgPendente = `📄 <b>Nota Fiscal multipágina identificada</b>\n\n`;
+              if (dadosSessao.cabecalho?.fornecedor || fornecedor) {
+                msgPendente += `🏢 <b>Fornecedor:</b> ${dadosSessao.cabecalho?.fornecedor || fornecedor}\n`;
+              }
+              if (numeroNF) {
+                msgPendente += `📋 <b>NF:</b> ${numeroNF} ${serieNF ? `(Série ${serieNF})` : ""}\n`;
+              }
+              msgPendente += `📑 <b>Página recebida:</b> ${paginaAtual} de ${totalPaginas}\n\n`;
+              msgPendente += `⏳ <b>Aguardando:</b> Página(s) ${faltantes.join(", ")}\n\n`;
+              msgPendente += `<i>Nenhuma alteração foi feita no estoque.</i>`;
+              await sendReply(msgPendente);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+
+            // 4. Todas as páginas recebidas -> CONSOLIDAÇÃO ATÔMICA
+            const todosItens: any[] = [];
+            for (let pNum = 1; pNum <= totalPaginas; pNum++) {
+              const pData = dadosSessao.paginas?.[String(pNum)];
+              if (pData?.itens) {
+                todosItens.push(...pData.itens);
+              }
+            }
+
+            documentData.itens = todosItens;
+            if (dadosSessao.cabecalho) documentData.cabecalho = dadosSessao.cabecalho;
+            if (dadosSessao.valores_totais) documentData.valores_totais = dadosSessao.valores_totais;
+            const valorProdutosNFConsolidado = Number(documentData.valores_totais?.valor_produtos || 0);
+            documentData.validacao_detalhes = validateDanfeMathV2(todosItens, valorProdutosNFConsolidado);
+          }
+
+          // ─── VERIFICAR IDEMPOTÊNCIA: SE NF JÁ FOI CADASTRADA ANTERIORMENTE ───
+          const chaveAcessoFinal = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
+          if (chaveAcessoFinal && chaveAcessoFinal.length === 44) {
+            const { data: nfJaExiste } = await supabase
+              .from("notas_fiscais_compra")
+              .select("id, status, created_at")
+              .eq("user_id", userId)
+              .eq("chave_acesso", chaveAcessoFinal)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (nfJaExiste && nfJaExiste.status === "confirmada") {
+              await sendReply(`ℹ️ <b>Esta Nota Fiscal (Chave: ...${chaveAcessoFinal.slice(-8)}) já foi importada e confirmada anteriormente.</b>`);
+              if (multipageSessaoId) {
+                await supabase.from("telegram_propostas").update({ status: "processada" }).eq("id", multipageSessaoId);
+              }
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+          }
+
           const itensExtraidos = documentData.itens || [];
           const validacao = documentData.validacao_detalhes || validateDanfeMath(itensExtraidos, documentData.valores_totais);
           const valorTotalNotaNF = (documentData.valores_totais?.valor_total_nf != null && !isNaN(Number(documentData.valores_totais.valor_total_nf)) && Number(documentData.valores_totais.valor_total_nf) > 0)

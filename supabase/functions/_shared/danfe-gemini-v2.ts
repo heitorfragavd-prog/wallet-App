@@ -349,7 +349,7 @@ export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado
 }
 
 export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
-Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal e o quadro CÁLCULO DO IMPOSTO (Totais).
+Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
 
 Retorne APENAS um JSON no seguinte formato:
 {
@@ -360,7 +360,9 @@ Retorne APENAS um JSON no seguinte formato:
     "serie_nf": "série da NF (ex: 26) ou null",
     "data_emissao": "data de emissão YYYY-MM-DD ou null",
     "data_entrada": "data de entrada/saída YYYY-MM-DD ou null",
-    "chave_acesso": "chave de acesso de 44 dígitos ou null"
+    "chave_acesso": "chave de acesso de 44 dígitos ou null",
+    "pagina_atual": 1,
+    "total_paginas": 1
   },
   "valores_totais": {
     "valor_produtos": 0.00,
@@ -377,10 +379,11 @@ Retorne APENAS um JSON no seguinte formato:
 }
 
 REGRAS CRÍTICAS:
-1. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
-2. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
-3. Não invente dados. Se não estiver legível na folha, retorne null.
-4. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
+1. "pagina_atual" e "total_paginas": identifique no cabeçalho/topo da DANFE o campo de folha (ex: "FOLHA 1/2" -> pagina_atual: 1, total_paginas: 2; "FOLHA 2/2" -> pagina_atual: 2, total_paginas: 2). Se for folha única ("FOLHA 1/1" ou sem indicação de múltiplas folhas), use pagina_atual: 1 e total_paginas: 1.
+2. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
+3. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
+4. Não invente dados. Se não estiver legível na folha, retorne null.
+5. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
 
 export const GEMINI_V2_PROMPT_TABELA = `Você é um extrator fiscal especializado em DANFE brasileira.
 
