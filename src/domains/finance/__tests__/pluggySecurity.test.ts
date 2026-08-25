@@ -57,6 +57,17 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       );
       expect(supabase.functions.invoke).not.toHaveBeenCalled();
     });
+
+    it('retorna mensagem amigável em português quando Edge Function não está publicada ou offline', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
+        data: null,
+        error: new Error('Failed to send a request to the Edge Function'),
+      });
+
+      await expect(createPluggyConnectToken(mockWorkspaceId)).rejects.toThrow(
+        'O serviço Open Finance está em fase de ativação e ainda não foi publicado no servidor.'
+      );
+    });
   });
 
   describe('2. Políticas de Autenticação e Autorização (JWT / Workspace / Ownership)', () => {

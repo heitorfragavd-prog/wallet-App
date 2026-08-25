@@ -35,6 +35,19 @@ export interface PluggyTransaction {
   type?: "DEBIT" | "CREDIT";
 }
 
+function formatEdgeFunctionError(error: unknown, data: unknown, defaultMsg: string): string {
+  if (data && typeof data === "object" && "error" in data && typeof (data as { error: unknown }).error === "string") {
+    return (data as { error: string }).error;
+  }
+  const msg = error && typeof error === "object" && "message" in error && typeof (error as { message: unknown }).message === "string"
+    ? (error as { message: string }).message
+    : "";
+  if (msg.includes("Failed to send a request to the Edge Function") || msg.includes("FunctionsFetchError") || msg.includes("Failed to fetch")) {
+    return "O serviço Open Finance está em fase de ativação e ainda não foi publicado no servidor. Por favor, tente novamente após a implantação.";
+  }
+  return msg || defaultMsg;
+}
+
 /**
  * Gera o connectToken de forma segura via Edge Function autenticada
  */
@@ -51,7 +64,7 @@ export async function createPluggyConnectToken(workspaceId: string): Promise<{ a
   });
 
   if (error || !data?.success) {
-    const errorMsg = data?.error || error?.message || "Erro ao obter Connect Token da Pluggy.";
+    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao obter Connect Token da Pluggy.");
     throw new Error(errorMsg);
   }
 
@@ -82,7 +95,7 @@ export async function registerPluggyItem(
   });
 
   if (error || !data?.success) {
-    const errorMsg = data?.error || error?.message || "Erro ao registrar Item da Pluggy.";
+    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao registrar Item da Pluggy.");
     throw new Error(errorMsg);
   }
 
@@ -201,7 +214,7 @@ export async function syncPluggyItemToSupabase(
   });
 
   if (error || !data?.success) {
-    const errorMsg = data?.error || error?.message || "Erro ao sincronizar Item da Pluggy.";
+    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao sincronizar Item da Pluggy.");
     throw new Error(errorMsg);
   }
 
