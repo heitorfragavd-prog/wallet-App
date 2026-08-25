@@ -619,7 +619,27 @@ serve(async (req: Request) => {
           if (acc.type === "CREDIT") tipoConta = "cartao_credito";
           else if (acc.type === "SAVINGS") tipoConta = "poupanca";
 
-          const nomeConta = params.connectorName ? `${params.connectorName} (${acc.name})` : acc.name;
+          let nomeConta = acc.name || "Conta Bancária";
+          const conn = (params.connectorName || "").trim();
+          const accLower = (acc.name || "").toLowerCase();
+
+          if (conn === "MeuPluggy" || conn.toLowerCase().includes("nu pagamentos") || conn.toLowerCase().includes("nubank")) {
+            if (accLower.includes("nu pagamentos") || accLower.includes("nubank") || tipoConta === "conta_corrente") {
+              nomeConta = "Nubank (Conta Corrente)";
+            } else if (accLower === "gold") {
+              nomeConta = "Nubank (Cartão Gold)";
+            } else if (accLower === "platinum") {
+              nomeConta = "Nubank (Cartão Platinum)";
+            } else if (accLower === "black" || accLower.includes("ultravioleta")) {
+              nomeConta = "Nubank (Ultravioleta)";
+            } else if (tipoConta === "cartao_credito") {
+              nomeConta = `Nubank (Cartão ${acc.name})`;
+            } else {
+              nomeConta = `Nubank (${acc.name})`;
+            }
+          } else if (conn) {
+            nomeConta = `${conn} (${acc.name})`;
+          }
 
           let diaFechamento = null;
           let diaVencimento = null;
