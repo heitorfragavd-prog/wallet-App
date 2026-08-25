@@ -197,10 +197,7 @@ export default function ContasCartoes() {
 
     const despCartao = despesas.filter(
       (d: any) => {
-        const pertenceCartao =
-          d.conta_id === cartao.id ||
-          d.cartao_id === cartao.id ||
-          ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+        const pertenceCartao = d.conta_id === cartao.id || d.cartao_id === cartao.id;
         if (!pertenceCartao) return false;
 
         const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
@@ -436,10 +433,7 @@ export default function ContasCartoes() {
                     const periodo = calcularPeriodoFatura(conta, mes_fatura, ano_fatura);
 
                     const despesasDoCartao = despesas.filter((d: any) => {
-                      const pertenceCartao =
-                        d.conta_id === conta.id ||
-                        d.cartao_id === conta.id ||
-                        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id));
+                      const pertenceCartao = d.conta_id === conta.id || d.cartao_id === conta.id;
                       if (!pertenceCartao) return false;
 
                       const mesRefAtual = `${ano_fatura}-${String(mes_fatura).padStart(2, "0")}`;
@@ -452,14 +446,13 @@ export default function ContasCartoes() {
                     totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
                   } else {
                     const despesasDoCartao = despesas.filter(
-                      (d: any) =>
-                        d.conta_id === conta.id ||
-                        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === conta.id))
+                      (d: any) => d.conta_id === conta.id || d.cartao_id === conta.id
                     );
                     totalDespesasCartao = despesasDoCartao.reduce((acc, d) => acc + Number(d.valor || 0), 0);
                   }
 
-                  const totalFaturaUsado = totalDividas + totalDespesasCartao;
+                  const totalCalculado = totalDividas + totalDespesasCartao;
+                  const totalFaturaUsado = totalCalculado > 0 ? totalCalculado : Number(conta.saldo_atual || 0);
                   const limiteTotal = Number(conta.limite_credito || 0);
                   const limiteDisponivel = Math.max(0, limiteTotal - totalFaturaUsado);
 

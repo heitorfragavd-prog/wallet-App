@@ -39,14 +39,13 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
     const periodo = calcularPeriodoFatura(cartao, mes_fatura, ano_fatura);
 
     const despesasDoCartao = despesas.filter((d: any) => {
-      const pertenceCartao =
-        d.conta_id === cartao.id ||
-        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+      const pertenceCartao = d.conta_id === cartao.id || d.cartao_id === cartao.id;
       if (!pertenceCartao) return false;
       return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
     });
     const totalDesp = despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
-    return acc + totalDivs + totalDesp;
+    const totalFaturaCartao = (totalDivs + totalDesp) > 0 ? (totalDivs + totalDesp) : Number(cartao.saldo_atual || 0);
+    return acc + totalFaturaCartao;
   }, 0);
 
   const formatarValor = (valor: number) => {
@@ -202,13 +201,12 @@ export const ContasCartoesDashboardWidget: React.FC = () => {
                 const periodo = calcularPeriodoFatura(cartao, mes_fatura, ano_fatura);
 
                 const despesasDoCartao = despesas.filter((d: any) => {
-                  const pertenceCartao =
-                    d.conta_id === cartao.id ||
-                    ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartao.id));
+                  const pertenceCartao = d.conta_id === cartao.id || d.cartao_id === cartao.id;
                   if (!pertenceCartao) return false;
                   return d.data > periodo.data_inicio && d.data <= periodo.data_fechamento;
                 });
-                const faturaAtual = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0) + despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
+                const faturaCalculada = dividasDoCartao.reduce((sum, d) => sum + Number(d.valor_restante), 0) + despesasDoCartao.reduce((sum, d) => sum + Number(d.valor), 0);
+                const faturaAtual = faturaCalculada > 0 ? faturaCalculada : Number(cartao.saldo_atual || 0);
                 const limiteTotal = Number(cartao.limite_credito) || 0;
                 const limiteDisponivel = Math.max(0, limiteTotal - faturaAtual);
 
