@@ -190,17 +190,23 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     let items = fonteBase.map((d: any) => {
       const dataDesp = new Date(d.data + "T12:00:00");
       const categoryInfo = getLucideCategoryInfo(d.categorias?.nome);
+      const parcelaInfo = (d.parcela_numero && d.parcela_total)
+        ? `(${d.parcela_numero}/${d.parcela_total})`
+        : d.parcela_numero
+          ? `(Parcela ${d.parcela_numero})`
+          : null;
       return {
         id: d.id,
         tipo: "despesa",
-        isParcelado: false,
+        isParcelado: !!parcelaInfo,
         descricao: d.descricao,
         categoria: d.categorias?.nome || "Despesa Cartão",
         valor: Number(d.valor || 0),
         data: d.data,
         dataFormatted: format(dataDesp, "dd/MM/yy"),
-        parcelaInfo: null,
+        parcelaInfo,
         status: d.pago ? "quitada" : "pendente",
+        statusTransacao: d.status_transacao || null,
         categoryInfo,
       };
     });
@@ -584,11 +590,18 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
                         {item.dataFormatted}
                       </span>
                       <div>
-                        <p className="font-semibold text-sm text-foreground">
-                          {item.descricao}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-sm text-foreground">
+                            {item.descricao}
+                          </p>
+                          {item.statusTransacao === "PENDING" && (
+                            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                              Pendente
+                            </span>
+                          )}
+                        </div>
                         {item.parcelaInfo && (
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-[11px] font-medium text-sky-400">
                             {item.parcelaInfo}
                           </span>
                         )}

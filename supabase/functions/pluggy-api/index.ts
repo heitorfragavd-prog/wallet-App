@@ -145,47 +145,42 @@ async function getPluggyApiKey(forceRefresh = false): Promise<string> {
   return authPromiseInFlight;
 }
 
-// ─── HELPER PARA BUSCA PAGINADA DE TRANSAÇÕES ───
-interface PaginatedTransactionsResult {
-  transactions: any[];
-  hasMore: boolean;
-  partial: boolean;
-  total: number;
-}
-
-async function fetchAllPluggyTransactions(apiKey: string, itemId: string): Promise<PaginatedTransactionsResult> {
+// ─── HELPER PARA BUSCA DE TRANSAÇÕES POR CONTA (API v2, cursor-based) ───
+async function fetchTransactionsForAccount(apiKey: string, accountId: string): Promise<any[]> {
   const allTxs: any[] = [];
-  let page = 1;
-  let totalPages = 1;
-  let totalCount = 0;
-  const maxPages = 10; // Até 5.000 transações por ciclo de sincronização
+  let url: string | null = `https://api.pluggy.ai/transactions?accountId=${encodeURIComponent(accountId)}&pageSize=500`;
+  let pages = 0;
+  const maxPages = 20; // Até 10.000 transações por conta
 
-  while (page <= totalPages && page <= maxPages) {
-    const url = `https://api.pluggy.ai/transactions?itemId=${encodeURIComponent(itemId)}&pageSize=500&page=${page}`;
+  while (url && pages < maxPages) {
     const resp = await fetchWithTimeout(url, {
       headers: { "X-API-KEY": apiKey },
-      timeout: 15000,
+      timeout: 20000,
     });
 
-    if (!resp.ok) break;
+    if (!resp.ok) {
+      console.warn(`[pluggy-api] fetchTransactionsForAccount: HTTP ${resp.status} para account=${maskId(accountId)} page=${pages + 1}`);
+      break;
+    }
 
     const data = await resp.json().catch(() => ({}));
-    const pageResults = data.results || data.transactions || [];
-    allTxs.push(...pageResults);
+    const results = data.results || [];
+    allTxs.push(...results);
 
-    totalCount = Number(data.total) || allTxs.length;
-    totalPages = Number(data.totalPages) || 1;
-    if (page >= totalPages || pageResults.length === 0) break;
-    page++;
+    // Suporta tanto cursor v2 (next) quanto paginação v1 (page/totalPages)
+    if (data.next) {
+      url = data.next;
+    } else if (data.totalPages && data.page < data.totalPages) {
+      url = `https://api.pluggy.ai/transactions?accountId=${encodeURIComponent(accountId)}&pageSize=500&page=${data.page + 1}`;
+    } else {
+      url = null;
+    }
+
+    pages++;
+    if (results.length === 0) break;
   }
 
-  const hasMore = totalPages > maxPages;
-  return {
-    transactions: allTxs,
-    hasMore,
-    partial: hasMore,
-    total: totalCount,
-  };
+  return allTxs;
 }
 
 serve(async (req: Request) => {
@@ -472,40 +467,78 @@ serve(async (req: Request) => {
 
       // ─── CONSULTA DE TRANSAÇÕES PAGINADAS COM VALIDAÇÃO DE OWNERSHIP ───
       case "getTransactions": {
-        if (!itemId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+        if (!itemId && !params.accountId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' ou 'accountId' é obrigatório." }, 400);
         }
 
-        const { data: itemValid } = await supabaseAdmin
-          .from("pluggy_items")
-          .select("id")
-          .eq("item_id", String(itemId))
-          .eq("workspace_id", workspace_id)
-          .eq("user_id", userId)
-          .maybeSingle();
+        // Valida ownership do item
+        if (itemId) {
+          const { data: itemValid } = await supabaseAdmin
+            .from("pluggy_items")
+            .select("id")
+            .eq("item_id", String(itemId))
+            .eq("workspace_id", workspace_id)
+            .eq("user_id", userId)
+            .maybeSingle();
 
-        if (!itemValid) {
-          return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+          if (!itemValid) {
+            return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+          }
+        }
+
+        // Valida ownership da conta se accountId fornecido
+        if (params.accountId) {
+          const { data: accValid } = await supabaseAdmin
+            .from("contas_usuario")
+            .select("id")
+            .eq("pluggy_account_id", String(params.accountId))
+            .eq("workspace_id", workspace_id)
+            .maybeSingle();
+
+          if (!accValid) {
+            return jsonResponse(req, { success: false, error: "Conta não encontrada ou não pertence a este workspace." }, 403);
+          }
         }
 
         const apiKey = await getPluggyApiKey();
-        const result = await fetchAllPluggyTransactions(apiKey, String(itemId));
 
-        const sanitizedTransactions = result.transactions.map((t: any) => ({
+        // Se accountId fornecido, busca por conta; senão busca todas contas do item
+        let allTransactions: any[] = [];
+        if (params.accountId) {
+          allTransactions = await fetchTransactionsForAccount(apiKey, String(params.accountId));
+        } else {
+          // Fallback: busca contas do item e itera
+          const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
+            headers: { "X-API-KEY": apiKey },
+            timeout: 15000,
+          });
+          const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
+          const accounts = accData.results || accData.accounts || [];
+          for (const acc of accounts) {
+            if (!acc.id) continue;
+            const txs = await fetchTransactionsForAccount(apiKey, String(acc.id));
+            allTransactions.push(...txs);
+          }
+        }
+
+        const sanitizedTransactions = allTransactions.map((t: any) => ({
           id: t.id,
+          accountId: t.accountId,
           description: t.description,
           amount: t.amount,
           date: t.date,
           category: t.category,
           type: t.type,
+          status: t.status,
+          billId: t.billId || t.creditCardMetadata?.billId || null,
+          installmentNumber: t.creditCardMetadata?.installmentNumber || null,
+          totalInstallments: t.creditCardMetadata?.totalInstallments || null,
         }));
 
         return jsonResponse(req, {
           success: true,
           data: sanitizedTransactions,
-          hasMore: result.hasMore,
-          partial: result.partial,
-          total: result.total,
+          total: sanitizedTransactions.length,
         });
       }
 
@@ -594,11 +627,7 @@ serve(async (req: Request) => {
         const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
         const accountsList = accData.results || accData.accounts || [];
 
-        // 2. Busca transações com paginação completa
-        const txResult = await fetchAllPluggyTransactions(apiKey, String(itemId));
-        const txList = txResult.transactions;
-
-        // 3. Busca categorias existentes do usuário para match
+        // 2. Busca categorias existentes do usuário para match
         const { data: categoriasExistentes } = await supabaseAdmin
           .from("categorias")
           .select("id, nome")
@@ -611,6 +640,7 @@ serve(async (req: Request) => {
 
         let syncedAccountsCount = 0;
         let syncedTxCount = 0;
+        let totalTxFetched = 0;
 
         for (const acc of accountsList) {
           if (!acc.id) continue;
@@ -709,64 +739,93 @@ serve(async (req: Request) => {
 
           syncedAccountsCount++;
 
-          // Inserção idempotente de transações vinculadas à conta do mesmo workspace
-          if (txList.length > 0) {
-            for (const tx of txList) {
-              if (!tx.id || tx.amount === undefined || !tx.date) continue;
+          // ─── BUSCA TRANSAÇÕES DESTA CONTA ESPECÍFICA (v2 API, por accountId) ───
+          const txList = await fetchTransactionsForAccount(apiKey, String(acc.id));
+          totalTxFetched += txList.length;
 
-              const { data: existingTx } = await supabaseAdmin
-                .from("transacoes")
+          console.log(`[pluggy-api] syncItem: conta=${nomeConta} tipo=${tipoConta} pluggyAccId=${maskId(acc.id)} txs=${txList.length}`);
+
+          for (const tx of txList) {
+            if (!tx.id || tx.amount === undefined || !tx.date) continue;
+
+            const isDespesa = tx.amount < 0 || tx.type === "DEBIT";
+            const valorAbs = Math.abs(tx.amount || 0);
+            const tipo = isDespesa ? "despesa" : "receita";
+            const catNome = tx.category || (isDespesa ? "Despesas Diversas" : "Rendas Diversas");
+            const catKey = catNome.toLowerCase().trim();
+
+            let categoriaId = catMap.get(catKey);
+            if (!categoriaId) {
+              const { data: newCat } = await supabaseAdmin
+                .from("categorias")
+                .insert({
+                  user_id: userId,
+                  nome: catNome,
+                  tipo,
+                  cor: tipo === "receita" ? "#10B981" : "#F43F5E",
+                  icone: "Tag",
+                })
                 .select("id")
-                .eq("workspace_id", workspace_id)
-                .eq("pluggy_transaction_id", String(tx.id))
-                .maybeSingle();
+                .single();
 
-              if (existingTx) {
-                continue;
+              if (newCat) {
+                categoriaId = newCat.id;
+                catMap.set(catKey, newCat.id);
               }
+            }
 
-              const isDespesa = tx.amount < 0 || tx.type === "DEBIT";
-              const valorAbs = Math.abs(tx.amount || 0);
-              const tipo = isDespesa ? "despesa" : "receita";
-              const catNome = tx.category || (isDespesa ? "Despesas Diversas" : "Rendas Diversas");
-              const catKey = catNome.toLowerCase().trim();
+            // Metadados de fatura e parcelas (específicos de cartão de crédito)
+            const billId = tx.billId || tx.creditCardMetadata?.billId || null;
+            const parcelaNumero = tx.creditCardMetadata?.installmentNumber || null;
+            const parcelaTotal = tx.creditCardMetadata?.totalInstallments || null;
+            const statusTransacao = tx.status || null; // PENDING | POSTED
 
-              let categoriaId = catMap.get(catKey);
-              if (!categoriaId) {
-                const { data: newCat } = await supabaseAdmin
-                  .from("categorias")
-                  .insert({
-                    user_id: userId,
-                    nome: catNome,
-                    tipo,
-                    cor: tipo === "receita" ? "#10B981" : "#F43F5E",
-                    icone: "Tag",
-                  })
-                  .select("id")
-                  .single();
+            // Upsert: insere ou atualiza (PENDING → POSTED, billId atribuído, etc.)
+            const txData = {
+              user_id: userId,
+              workspace_id,
+              conta_id: targetAccountId,
+              categoria_id: categoriaId || null,
+              pluggy_transaction_id: String(tx.id),
+              tipo,
+              descricao: tx.description || "Transação Open Finance",
+              valor: valorAbs,
+              data: tx.date ? String(tx.date).substring(0, 10) : new Date().toISOString().substring(0, 10),
+              metodo_pagamento: tipoConta === "cartao_credito" ? "cartao_credito" : "pix",
+              observacoes: `Importado via Pluggy Open Finance (${catNome})`,
+              status_transacao: statusTransacao,
+              pluggy_bill_id: billId,
+              parcela_numero: parcelaNumero,
+              parcela_total: parcelaTotal,
+            };
 
-                if (newCat) {
-                  categoriaId = newCat.id;
-                  catMap.set(catKey, newCat.id);
-                }
-              }
+            // Tenta upsert: se pluggy_transaction_id já existe, atualiza campos relevantes
+            const { data: existingTx } = await supabaseAdmin
+              .from("transacoes")
+              .select("id")
+              .eq("workspace_id", workspace_id)
+              .eq("pluggy_transaction_id", String(tx.id))
+              .maybeSingle();
 
-              const { error: insertTxErr } = await supabaseAdmin.from("transacoes").insert({
-                user_id: userId,
-                workspace_id,
-                conta_id: targetAccountId,
-                categoria_id: categoriaId || null,
-                pluggy_transaction_id: String(tx.id),
-                tipo,
-                descricao: tx.description || "Transação Open Finance",
-                valor: valorAbs,
-                data: tx.date ? String(tx.date).substring(0, 10) : new Date().toISOString().substring(0, 10),
-                metodo_pagamento: tipoConta === "cartao_credito" ? "cartao_credito" : "pix",
-                observacoes: `Importado via Pluggy Open Finance (${catNome})`,
-              });
-
+            if (existingTx) {
+              // Atualiza campos que podem mudar (PENDING→POSTED, billId atribuído)
+              await supabaseAdmin
+                .from("transacoes")
+                .update({
+                  status_transacao: statusTransacao,
+                  pluggy_bill_id: billId,
+                  valor: valorAbs,
+                  data: txData.data,
+                  descricao: txData.descricao,
+                })
+                .eq("id", existingTx.id);
+              syncedTxCount++;
+            } else {
+              const { error: insertTxErr } = await supabaseAdmin.from("transacoes").insert(txData);
               if (!insertTxErr) {
                 syncedTxCount++;
+              } else {
+                console.warn(`[pluggy-api] Erro ao inserir tx ${maskId(tx.id)}:`, insertTxErr.message);
               }
             }
           }
@@ -778,9 +837,7 @@ serve(async (req: Request) => {
             accountsCount: syncedAccountsCount,
             transactionsCount: syncedTxCount,
             investmentsCount: 0,
-            hasMore: txResult.hasMore,
-            partial: txResult.partial,
-            totalTransactions: txResult.total,
+            totalTransactionsFetched: totalTxFetched,
           },
         });
       }
