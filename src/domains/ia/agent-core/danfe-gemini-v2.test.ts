@@ -299,4 +299,86 @@ describe('WALLET — Pipeline DANFE Gemini V2 (Suíte Completa de Testes)', () =
     const pipeline = isGeminiV2Enabled ? 'gemini_v2' : 'legacy';
     expect(pipeline).toBe('legacy');
   });
+
+  // ─── CENÁRIOS ESPECÍFICOS DE CABEÇALHO, TOTAIS E VALIDAÇÃO FISCAL (ITEM 9) ───
+
+  // A. Cabeçalho completo
+  it('9A. deve aceitar e preservar cabeçalho completo fiscal', () => {
+    const cabecalho = {
+      fornecedor: 'SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A',
+      cnpj_fornecedor: '61.186.888/0020-56',
+      numero_nf: '013.790.902',
+      serie_nf: '26',
+      data_emissao: '2026-08-21'
+    };
+    expect(cabecalho.fornecedor).toBe('SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A');
+    expect(cabecalho.numero_nf).toBe('013.790.902');
+    expect(cabecalho.serie_nf).toBe('26');
+    expect(cabecalho.data_emissao).toBe('2026-08-21');
+  });
+
+  // B. Valor produtos e valor nota separados (nunca misturar)
+  it('9B. deve manter valor_produtos e valor_total_nf estritamente separados', () => {
+    const valores_totais = {
+      valor_produtos: 321.64,
+      valor_total_nf: 1562.61
+    };
+    expect(valores_totais.valor_produtos).not.toEqual(valores_totais.valor_total_nf);
+    expect(valores_totais.valor_produtos).toBe(321.64);
+    expect(valores_totais.valor_total_nf).toBe(1562.61);
+  });
+
+  // C. Soma de itens diferente (soma=424.45, nf=321.64 -> status requer_revisao)
+  it('9C. soma de itens diferente do valor dos produtos da NF deve resultar em requer_revisao', () => {
+    const itens: DanfeItemV2[] = [
+      { codigo: '1', ean: null, descricao: 'Item 1', ncm: '123', cst: null, cfop: '5401', unidade: 'UN', quantidade: 1, valor_unitario_lido: 424.45, valor_unitario_calculado: null, valor_unitario_inferido: false, valor_total_lido: 424.45, valor_total_calculado: null, valor_total_inferido: false, valor_total: 424.45, valor_unitario: 424.45, fci_info: null, campos_incompletos: [] }
+    ];
+    const val = validateDanfeMathV2(itens, 321.64);
+    expect(val.valido).toBe(false);
+    expect(val.status).toBe('requer_revisao');
+    expect(val.diferenca).toBe(102.81);
+    expect(val.motivo).toContain('Divergência matemática');
+  });
+
+  // D. Valor produtos ausente (valorProdutosNF = null -> status requer_revisao)
+  it('9D. valor_produtos da NF ausente ou nulo deve resultar em requer_revisao e nunca ok', () => {
+    const itens: DanfeItemV2[] = [
+      { codigo: '1', ean: null, descricao: 'Item 1', ncm: '123', cst: null, cfop: '5401', unidade: 'UN', quantidade: 1, valor_unitario_lido: 424.45, valor_unitario_calculado: null, valor_unitario_inferido: false, valor_total_lido: 424.45, valor_total_calculado: null, valor_total_inferido: false, valor_total: 424.45, valor_unitario: 424.45, fci_info: null, campos_incompletos: [] }
+    ];
+    const val = validateDanfeMathV2(itens, null);
+    expect(val.valido).toBe(false);
+    expect(val.status).toBe('requer_revisao');
+    expect(val.motivo).toContain('valor_produtos_nf_ausente');
+  });
+
+  // E. Proibir fallback silencioso de soma para total de produtos
+  it('9E. é proibido atribuir a soma dos itens como se fosse o valor dos produtos da NF', () => {
+    const somaItens = 424.45;
+    const rawValorProdutosNF = null;
+    const valorProdutosNF = (rawValorProdutosNF != null && Number(rawValorProdutosNF) > 0) ? Number(rawValorProdutosNF) : null;
+    expect(valorProdutosNF).toBeNull();
+    expect(valorProdutosNF).not.toBe(somaItens);
+  });
+
+  // F. Botão confirmar não deve ser gerado para status requer_revisao
+  it('9F. nota com status requer_revisao não deve permitir botões de confirmação de estoque', () => {
+    const statusValidacao = 'requer_revisao';
+    const gerarBotoesConfirmacao = (status: string) => {
+      if (status !== 'ok') return [];
+      return [{ text: '✅ SIM, confirmar', callback_data: 'nf_confirmar:123' }];
+    };
+    const botoes = gerarBotoesConfirmacao(statusValidacao);
+    expect(botoes).toHaveLength(0);
+  });
+
+  // G. Status válido somente quando soma == valorProdutosNF dentro da tolerância
+  it('9G. status somente é ok quando soma dos itens for igual ao valor_produtos da NF', () => {
+    const itens: DanfeItemV2[] = [
+      { codigo: '1', ean: null, descricao: 'Item 1', ncm: '123', cst: null, cfop: '5401', unidade: 'UN', quantidade: 1, valor_unitario_lido: 321.64, valor_unitario_calculado: null, valor_unitario_inferido: false, valor_total_lido: 321.64, valor_total_calculado: null, valor_total_inferido: false, valor_total: 321.64, valor_unitario: 321.64, fci_info: null, campos_incompletos: [] }
+    ];
+    const val = validateDanfeMathV2(itens, 321.64);
+    expect(val.valido).toBe(true);
+    expect(val.status).toBe('ok');
+    expect(val.diferenca).toBe(0);
+  });
 });

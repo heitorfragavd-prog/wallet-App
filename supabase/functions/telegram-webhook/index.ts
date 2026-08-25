@@ -4068,8 +4068,56 @@ REGRAS:
           if (ehTipoDanfe) {
             console.log("[NF] DANFE identificada");
 
-            // ─── PASSO 2: Cabeçalho, Totais e Região da Tabela na Imagem já Normalizada (Em Pé) ───
-            const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
+            // ─── PASSO 2: Cabeçalho, Totais e Região da Tabela na Imagem Normalizada ───
+            const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
+            const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
+            const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+
+            let docAnalysis: any = null;
+
+            if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
+              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
+              try {
+                const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
+                const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                        { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
+                      ]
+                    }],
+                    generationConfig: {
+                      temperature: 0.0,
+                      responseMimeType: "application/json"
+                    }
+                  }),
+                  signal: AbortSignal.timeout(30000)
+                });
+
+                if (geminiResp.ok) {
+                  const gJson = await geminiResp.json();
+                  const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                  docAnalysis = JSON.parse(gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+                  console.log("[NF_V2_HEADER_TOTALS] Extração de cabeçalho e totais concluída:", {
+                    fornecedor: docAnalysis?.cabecalho?.fornecedor,
+                    numero_nf: docAnalysis?.cabecalho?.numero_nf,
+                    serie_nf: docAnalysis?.cabecalho?.serie_nf,
+                    data_emissao: docAnalysis?.cabecalho?.data_emissao,
+                    valor_produtos: docAnalysis?.valores_totais?.valor_produtos,
+                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
+                  });
+                } else {
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais`);
+                }
+              } catch (hErr: any) {
+                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
+              }
+            } else {
+              // ─── PASSO 2 (LEGADO): GPT-4o Overview ───
+              const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
 Esta imagem já está na orientação vertical correta (em pé).
 
 Analise o documento e retorne APENAS um JSON no seguinte formato:
@@ -4106,48 +4154,46 @@ REGRAS:
 3. "valor_total_nf": extraia o campo VALOR TOTAL DA NOTA da DANFE.
 4. Retorne APENAS o JSON puro.`;
 
-            const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${supabaseServiceKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "gpt-4o",
-                user_id: userId,
-                tools: [],
-                temperature: 0.0,
-                messages: [
-                  { role: "system", content: promptCabecalhoTotaisETabela },
-                  {
-                    role: "user",
-                    content: [
-                      {
-                        type: "text",
-                        text: promptText || "Analise o cabeçalho, totais e região da tabela de produtos desta DANFE já normalizada. Retorne JSON puro."
-                      },
-                      { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
-                    ],
-                  },
-                ],
-              }),
-            });
+              const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${supabaseServiceKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o",
+                  user_id: userId,
+                  tools: [],
+                  temperature: 0.0,
+                  messages: [
+                    { role: "system", content: promptCabecalhoTotaisETabela },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "text",
+                          text: promptText || "Analise o cabeçalho, totais e região da tabela de produtos desta DANFE já normalizada. Retorne JSON puro."
+                        },
+                        { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                      ],
+                    },
+                  ],
+                }),
+              });
 
-            let docAnalysis: any = null;
-            if (aiResp2.ok) {
-              const aiJson2 = await aiResp2.json();
-              const raw2 = aiJson2.choices?.[0]?.message?.content || "";
-              try {
-                docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
-              } catch {
-                const m = raw2.match(/\{[\s\S]*\}/);
-                if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+              if (aiResp2.ok) {
+                const aiJson2 = await aiResp2.json();
+                const raw2 = aiJson2.choices?.[0]?.message?.content || "";
+                try {
+                  docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+                } catch {
+                  const m = raw2.match(/\{[\s\S]*\}/);
+                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+                }
               }
             }
 
             // ─── PIPELINE DANFE GEMINI V2 (Tabela Contínua sem Tiles) ───
-            const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
-            const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
             const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 
             if (loadedDecodedImage && isGeminiV2Enabled) {
@@ -4543,8 +4589,12 @@ FORMATO:
 
           const itensExtraidos = documentData.itens || [];
           const validacao = documentData.validacao_detalhes || validateDanfeMath(itensExtraidos, documentData.valores_totais);
-          const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
-          const valorProdutosNF = Number(documentData.valores_totais?.valor_produtos || 0);
+          const valorTotalNotaNF = (documentData.valores_totais?.valor_total_nf != null && !isNaN(Number(documentData.valores_totais.valor_total_nf)) && Number(documentData.valores_totais.valor_total_nf) > 0)
+            ? Number(documentData.valores_totais.valor_total_nf)
+            : null;
+          const valorTotalProdutosNF = (documentData.valores_totais?.valor_produtos != null && !isNaN(Number(documentData.valores_totais.valor_produtos)) && Number(documentData.valores_totais.valor_produtos) > 0)
+            ? Number(documentData.valores_totais.valor_produtos)
+            : null;
           const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
 
           // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
@@ -4552,35 +4602,42 @@ FORMATO:
             console.warn("[NF] Leitura duvidosa/divergente detectada. Bloqueando atualização automática de estoque.");
 
             let msgDivergencia = "";
-            if (documentData.motivo_revisao) {
+            if (documentData.motivo_revisao && documentData.motivo_revisao !== "gemini_empty_products") {
               msgDivergencia = `⚠️ <b>Não consegui validar esta nota com segurança no momento.</b>\n\n`;
               msgDivergencia += `<i>Nenhuma alteração foi feita no estoque.</i>\n\n`;
               msgDivergencia += `💡 <b>O que você pode fazer:</b>\n`;
               msgDivergencia += `1. Tente novamente em alguns minutos\n`;
               msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota fiscal para importação instantânea e automática ✅`;
-            } else if (isTelegramCompressedPhoto) {
-              msgDivergencia = `⚠️ <b>Consegui ler a nota, mas a imagem enviada pelo Telegram perdeu resolução e não consegui confirmar todos os produtos com segurança.</b>\n\n`;
-              msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
-              msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
-              if (validacao.valorReferencia > 0) {
-                msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
-                msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
-              }
-              msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
-              msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
-              msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo/Documento</b> (não foto) para manter 100% da resolução\n`;
-              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
             } else {
-              msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura do documento original.</b>\n\n`;
-              msgDivergencia += `📦 <b>Produtos identificados:</b> ${itensExtraidos.length}\n`;
-              msgDivergencia += `💰 <b>Soma dos produtos identificados:</b> ${fmt(valorTotalItens)}\n`;
+              msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura dos valores.</b>\n\n`;
+              if (documentData.cabecalho?.fornecedor) {
+                msgDivergencia += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho.fornecedor}\n`;
+              }
+              if (documentData.cabecalho?.numero_nf) {
+                msgDivergencia += `📋 <b>NF:</b> ${documentData.cabecalho.numero_nf} ${documentData.cabecalho.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
+              }
+              if (documentData.cabecalho?.data_emissao) {
+                msgDivergencia += `📅 <b>Emissão:</b> ${documentData.cabecalho.data_emissao.split("-").reverse().join("/")}\n`;
+              }
+              if (valorTotalNotaNF) {
+                msgDivergencia += `💵 <b>Valor Total da Nota:</b> ${fmt(valorTotalNotaNF)}\n`;
+              }
+              if (valorTotalProdutosNF) {
+                msgDivergencia += `📄 <b>Valor dos Produtos na NF:</b> ${fmt(valorTotalProdutosNF)}\n`;
+              }
+              msgDivergencia += `📦 <b>Produtos Identificados:</b> ${itensExtraidos.length}\n`;
+              msgDivergencia += `💰 <b>Soma dos Produtos Extraídos:</b> ${fmt(valorTotalItens)}\n`;
               if (validacao.valorReferencia > 0) {
-                msgDivergencia += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
                 msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
+              } else {
+                msgDivergencia += `⚠️ <b>Aviso:</b> Valor total dos produtos não pôde ser confirmado no cabeçalho da NF.\n\n`;
               }
               msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
               msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
-              msgDivergencia += `1. Envie o arquivo <b>.XML</b> da nota para importação instantânea e 100% automática ✅`;
+              if (isTelegramCompressedPhoto) {
+                msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo/Documento</b> (não foto) para manter 100% da resolução\n`;
+              }
+              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
             }
 
             await supabase
@@ -4589,15 +4646,15 @@ FORMATO:
                 user_id: userId,
                 workspace_id: wsId,
                 chat_id: Number(chatId) || null,
-                numero_nf: documentData.cabecalho?.numero_nf,
-                serie_nf: documentData.cabecalho?.serie_nf,
-                fornecedor: documentData.cabecalho?.fornecedor,
-                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
-                data_emissao: documentData.cabecalho?.data_emissao,
+                numero_nf: documentData.cabecalho?.numero_nf || null,
+                serie_nf: documentData.cabecalho?.serie_nf || null,
+                fornecedor: documentData.cabecalho?.fornecedor || null,
+                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor || null,
+                data_emissao: documentData.cabecalho?.data_emissao || null,
                 data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
-                valor_total: valorTotalNF || valorTotalItens,
-                valor_produtos: valorProdutosNF || valorTotalItens,
-                chave_acesso: documentData.cabecalho?.chave_acesso,
+                valor_total: valorTotalNotaNF || valorTotalProdutosNF || null,
+                valor_produtos: valorTotalProdutosNF || null,
+                chave_acesso: documentData.cabecalho?.chave_acesso || null,
                 status: "requer_revisao",
                 origem: documentData.origem || "foto",
               });
@@ -4613,18 +4670,18 @@ FORMATO:
               user_id: userId,
               workspace_id: wsId,
               chat_id: Number(chatId) || null,
-              numero_nf: documentData.cabecalho?.numero_nf,
-              serie_nf: documentData.cabecalho?.serie_nf,
-              fornecedor: documentData.cabecalho?.fornecedor,
-              cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
-              data_emissao: documentData.cabecalho?.data_emissao,
+              numero_nf: documentData.cabecalho?.numero_nf || null,
+              serie_nf: documentData.cabecalho?.serie_nf || null,
+              fornecedor: documentData.cabecalho?.fornecedor || null,
+              cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor || null,
+              data_emissao: documentData.cabecalho?.data_emissao || null,
               data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
-              valor_total: valorTotalNF || valorTotalItens,
-              valor_icms: documentData.valores_totais?.valor_icms,
-              valor_ipi: documentData.valores_totais?.valor_ipi,
-              valor_frete: documentData.valores_totais?.valor_frete,
-              valor_produtos: valorProdutosNF || valorTotalItens,
-              chave_acesso: documentData.cabecalho?.chave_acesso,
+              valor_total: valorTotalNotaNF || valorTotalProdutosNF || valorTotalItens,
+              valor_icms: documentData.valores_totais?.valor_icms || null,
+              valor_ipi: documentData.valores_totais?.valor_ipi || null,
+              valor_frete: documentData.valores_totais?.valor_frete || null,
+              valor_produtos: valorTotalProdutosNF || valorTotalItens,
+              chave_acesso: documentData.cabecalho?.chave_acesso || null,
               status: "pendente",
               origem: documentData.origem || "foto",
             })
@@ -4658,7 +4715,12 @@ FORMATO:
             msg += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
             msg += `📋 <b>NF:</b> ${documentData.cabecalho?.numero_nf || "N/A"} ${documentData.cabecalho?.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
             msg += `📅 <b>Emissão:</b> ${documentData.cabecalho?.data_emissao ? documentData.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
-            msg += `💰 <b>Valor Total:</b> <b>${fmt(valorTotalNF || valorTotalItens)}</b>\n`;
+            if (valorTotalNotaNF) {
+              msg += `💵 <b>Valor Total da Nota:</b> ${fmt(valorTotalNotaNF)}\n`;
+            }
+            if (valorTotalProdutosNF) {
+              msg += `📄 <b>Valor dos Produtos na NF:</b> ${fmt(valorTotalProdutosNF)}\n`;
+            }
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
             documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
@@ -4676,7 +4738,7 @@ FORMATO:
             }
 
             msg += `────────────────\n`;
-            msg += `💰 <b>Soma dos produtos:</b> ${fmt(validacao.somaItens)}\n`;
+            msg += `💰 <b>Soma dos produtos extraídos:</b> ${fmt(validacao.somaItens)}\n`;
             if (validacao.valorReferencia > 0) {
               msg += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
             }
@@ -4702,7 +4764,7 @@ FORMATO:
               chat_id: Number(chatId) || null,
               tipo: "atualizar_estoque_nf",
               dados: { nf_id: nfSalva.id, message_id: messageId },
-              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(valorTotalNF || valorTotalItens)}`,
+              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(valorTotalNotaNF || valorTotalProdutosNF || valorTotalItens)}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
             }).select("id").single();

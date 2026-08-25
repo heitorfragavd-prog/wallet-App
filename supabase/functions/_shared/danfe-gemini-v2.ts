@@ -317,18 +317,22 @@ export function reconcileAndDeduplicateV2(itens1: DanfeItemV2[], itens2: DanfeIt
 
 // ─── 5. VALIDAÇÃO MATEMÁTICA DETERMINÍSTICA ───
 
-export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado?: number): DanfeValidationResultV2 {
+export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado?: number | null): DanfeValidationResultV2 {
   const somaItens = +(itens.reduce((acc, it) => acc + (Number(it.valor_total) || 0), 0)).toFixed(2);
-  const valorReferencia = +(Number(valorProdutosDeclarado) || 0).toFixed(2);
+  const temValorReferencia = typeof valorProdutosDeclarado === 'number' && !isNaN(valorProdutosDeclarado) && valorProdutosDeclarado > 0;
+  const valorReferencia = temValorReferencia ? +(Number(valorProdutosDeclarado)).toFixed(2) : 0;
   const diferenca = +(somaItens - valorReferencia).toFixed(2);
 
   const tolerancia = 0.05;
-  const valido = valorReferencia > 0 ? Math.abs(diferenca) <= tolerancia : somaItens > 0;
+  // Validação estrita: EXIGE valor de referência positivo lido da NF e itens transcritos
+  const valido = temValorReferencia && itens.length > 0 && Math.abs(diferenca) <= tolerancia;
 
   const totalIncompletos = itens.filter(it => it.campos_incompletos.length > 0).length;
 
   let motivo: string | undefined;
-  if (!valido && valorReferencia > 0) {
+  if (!temValorReferencia) {
+    motivo = 'valor_produtos_nf_ausente: Valor Total dos Produtos não foi identificado no quadro de totais da NF';
+  } else if (!valido) {
     motivo = `Divergência matemática: soma dos itens (${somaItens}) difere do valor declarado na NF (${valorReferencia}) em ${diferenca}`;
   }
 
@@ -343,6 +347,40 @@ export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado
     totalItensComCamposIncompletos: totalIncompletos
   };
 }
+
+export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
+Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal e o quadro CÁLCULO DO IMPOSTO (Totais).
+
+Retorne APENAS um JSON no seguinte formato:
+{
+  "cabecalho": {
+    "fornecedor": "razão social do emitente/fornecedor ou null",
+    "cnpj_fornecedor": "CNPJ do emitente ou null",
+    "numero_nf": "número da NF formatado (ex: 013.790.902) ou null",
+    "serie_nf": "série da NF (ex: 26) ou null",
+    "data_emissao": "data de emissão YYYY-MM-DD ou null",
+    "data_entrada": "data de entrada/saída YYYY-MM-DD ou null",
+    "chave_acesso": "chave de acesso de 44 dígitos ou null"
+  },
+  "valores_totais": {
+    "valor_produtos": 0.00,
+    "valor_total_nf": 0.00,
+    "valor_icms": 0.00,
+    "valor_ipi": 0.00,
+    "valor_frete": 0.00,
+    "valor_desconto": 0.00
+  },
+  "regiao_tabela_produtos": {
+    "top": 0.25,
+    "bottom": 0.85
+  }
+}
+
+REGRAS CRÍTICAS:
+1. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
+2. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
+3. Não invente dados. Se não estiver legível na folha, retorne null.
+4. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
 
 export const GEMINI_V2_PROMPT_TABELA = `Você é um extrator fiscal especializado em DANFE brasileira.
 
