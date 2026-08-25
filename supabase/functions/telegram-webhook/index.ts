@@ -4195,8 +4195,6 @@ REGRAS:
             }
 
             // ─── PIPELINE DANFE GEMINI V2 (Tabela Contínua sem Tiles) ───
-            const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
-
             if (loadedDecodedImage && isGeminiV2Enabled) {
               console.log(`[NF_PIPELINE] pipeline=gemini_v2 fileType=${isTelegramCompressedPhoto ? "photo" : "document"} dim=${loadedDecodedImage.width}x${loadedDecodedImage.height}`);
 
