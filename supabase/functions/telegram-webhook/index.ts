@@ -4079,6 +4079,7 @@ REGRAS:
             if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
               // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
               try {
+                const headerStart = Date.now();
                 const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
                 const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
                   method: "POST",
@@ -4092,14 +4093,23 @@ REGRAS:
                     }],
                     generationConfig: {
                       temperature: 0.0,
-                      responseMimeType: "application/json"
+                      responseMimeType: "application/json",
+                      thinkingConfig: {
+                        thinkingBudget: 1
+                      }
                     }
                   }),
                   signal: AbortSignal.timeout(30000)
                 });
 
+                const headerDurationMs = Date.now() - headerStart;
+                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp.status}`);
+
                 if (geminiResp.ok) {
                   const gJson = await geminiResp.json();
+                  if (gJson.usageMetadata) {
+                    console.log(`[NF_V2_USAGE] target=header promptTokenCount=${gJson.usageMetadata.promptTokenCount} candidatesTokenCount=${gJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${gJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${gJson.usageMetadata.totalTokenCount}`);
+                  }
                   const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
                   docAnalysis = JSON.parse(gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
                   console.log("[NF_V2_HEADER_TOTALS] Extração de cabeçalho e totais concluída:", {
@@ -4111,7 +4121,7 @@ REGRAS:
                     valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
                   });
                 } else {
-                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais`);
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
               } catch (hErr: any) {
                 console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
@@ -4247,16 +4257,23 @@ REGRAS:
                       }],
                       generationConfig: {
                         temperature: 0.0,
-                        responseMimeType: "application/json"
+                        responseMimeType: "application/json",
+                        thinkingConfig: {
+                          thinkingBudget: 1
+                        }
                       }
                     }),
                     signal: AbortSignal.timeout(45000)
                   });
 
                   geminiDurationMs = Date.now() - v2Start;
+                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp.status}`);
 
                   if (geminiResp.ok) {
                     const geminiJson = await geminiResp.json();
+                    if (geminiJson.usageMetadata) {
+                      console.log(`[NF_V2_USAGE] target=products promptTokenCount=${geminiJson.usageMetadata.promptTokenCount} candidatesTokenCount=${geminiJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${geminiJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${geminiJson.usageMetadata.totalTokenCount}`);
+                    }
                     geminiRawText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
                     console.log(`[NF_V2_VISION] model=${GEMINI_DANFE_MODEL} duration=${geminiDurationMs}ms status=200 rawLen=${geminiRawText.length}`);
                   } else if (geminiResp.status === 429) {

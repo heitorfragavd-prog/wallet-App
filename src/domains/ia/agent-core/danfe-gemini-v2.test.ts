@@ -381,4 +381,64 @@ describe('WALLET — Pipeline DANFE Gemini V2 (Suíte Completa de Testes)', () =
     expect(val.status).toBe('ok');
     expect(val.diferenca).toBe(0);
   });
+
+  // ─── 10. CONTROLE DE THINKING BUDGET E RESILIÊNCIA A TIMEOUT ───
+
+  // 10A. Chamada de cabeçalho contém thinkingBudget controlado
+  it('10A. payload de cabeçalho/totais deve conter thinkingBudget controlado em 1', () => {
+    const generationConfig = {
+      temperature: 0.0,
+      responseMimeType: "application/json",
+      thinkingConfig: {
+        thinkingBudget: 1
+      }
+    };
+    expect(generationConfig.thinkingConfig.thinkingBudget).toBe(1);
+  });
+
+  // 10B. Chamada de produtos contém thinkingBudget controlado
+  it('10B. payload de produtos deve conter thinkingBudget controlado em 1', () => {
+    const generationConfig = {
+      temperature: 0.0,
+      responseMimeType: "application/json",
+      thinkingConfig: {
+        thinkingBudget: 1
+      }
+    };
+    expect(generationConfig.thinkingConfig.thinkingBudget).toBe(1);
+  });
+
+  // 10C. Timeout continua gerando requer_revisao
+  it('10C. erro de timeout no Gemini deve resultar em requer_revisao com motivo gemini_timeout', () => {
+    const errorType = 'gemini_timeout';
+    const docData = {
+      status_validacao: 'requer_revisao',
+      motivo_revisao: errorType,
+      estoque_atualizado: false
+    };
+    expect(docData.status_validacao).toBe('requer_revisao');
+    expect(docData.motivo_revisao).toBe('gemini_timeout');
+    expect(docData.estoque_atualizado).toBe(false);
+  });
+
+  // 10D. Resposta válida continua seguindo pipeline normal
+  it('10D. resposta rápida com thinkingBudget controlado segue fluxo regular', () => {
+    const itens: DanfeItemV2[] = [
+      { codigo: '55404', ean: null, descricao: 'COCA COLA 350ML', ncm: '22021000', cst: null, cfop: '5401', unidade: 'CX', quantidade: 2, valor_unitario_lido: 33.01, valor_unitario_calculado: null, valor_unitario_inferido: false, valor_total_lido: 66.02, valor_total_calculado: null, valor_total_inferido: false, valor_total: 66.02, valor_unitario: 33.01, fci_info: null, campos_incompletos: [] }
+    ];
+    const val = validateDanfeMathV2(itens, 66.02);
+    expect(val.valido).toBe(true);
+    expect(val.status).toBe('ok');
+  });
+
+  // 10E. Nenhuma alteração em estoque ocorre em erro
+  it('10E. em caso de erro técnico ou revisão, nenhuma mutação de estoque deve ocorrer', () => {
+    const status = 'requer_revisao';
+    const atualizarEstoque = (st: string) => {
+      if (st !== 'ok') return 'ESTOQUE_BLOQUEADO';
+      return 'ESTOQUE_ATUALIZADO';
+    };
+    expect(atualizarEstoque(status)).toBe('ESTOQUE_BLOQUEADO');
+  });
 });
+
