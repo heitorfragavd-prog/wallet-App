@@ -22,6 +22,7 @@ import {
   validateDanfeMathV2,
   reconcileAndDeduplicateV2,
   sanitizeProductDescription,
+  GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
   parseFiscalNumber,
   type DanfeItemV2,
