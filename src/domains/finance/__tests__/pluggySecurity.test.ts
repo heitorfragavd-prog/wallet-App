@@ -145,18 +145,40 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       );
     });
 
-    it('8. Rejeita registrar item já pertencente a outro workspace (403)', async () => {
+    it('8. Rejeita registrar item com clientUserId ausente na resposta da Pluggy (403)', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
-        data: { success: false, error: 'Item já vinculado a outro workspace.' },
+        data: { success: false, error: 'Item Pluggy inválido: clientUserId ausente na instituição.' },
+        error: null,
+      });
+
+      await expect(registerPluggyItem(mockWorkspaceId, 'item-without-client-user-id')).rejects.toThrow(
+        'Item Pluggy inválido: clientUserId ausente na instituição.'
+      );
+    });
+
+    it('9. Rejeita registrar item com clientUserId mismatch / outra sessão (403)', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
+        data: { success: false, error: 'O Item informado pertence a outra sessão ou usuário.' },
+        error: null,
+      });
+
+      await expect(registerPluggyItem(mockWorkspaceId, 'item-mismatched-user')).rejects.toThrow(
+        'O Item informado pertence a outra sessão ou usuário.'
+      );
+    });
+
+    it('10. Rejeita registrar item já pertencente a outro workspace (403)', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
+        data: { success: false, error: 'Item já vinculado a outro usuário ou workspace.' },
         error: null,
       });
 
       await expect(registerPluggyItem(mockWorkspaceId, 'item-from-other-workspace')).rejects.toThrow(
-        'Item já vinculado a outro workspace.'
+        'Item já vinculado a outro usuário ou workspace.'
       );
     });
 
-    it('9. Registrar o mesmo item duas vezes é idempotente e atualiza o registro', async () => {
+    it('11. Registrar o mesmo item duas vezes é idempotente e atualiza o registro', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: true, data: { item_id: mockItemId, status: 'UPDATED' } },
         error: null,
@@ -176,7 +198,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
   });
 
   describe('3. Proteção de Credenciais, Logs e Tratamento de Erros da Pluggy', () => {
-    it('10. Connect Token gera identidade isolada por usuário e workspace', async () => {
+    it('12. Connect Token gera identidade isolada por usuário e workspace', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: true, data: { accessToken: 'secure-connect-token-xyz' } },
         error: null,
@@ -192,7 +214,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       });
     });
 
-    it('11. Garante que secrets nunca aparecem na resposta', async () => {
+    it('13. Garante que secrets nunca aparecem na resposta', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: {
           success: true,
@@ -209,7 +231,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       expect(res).not.toHaveProperty('apiKey');
     });
 
-    it('12. Trata ausência de PLUGGY_CLIENT_ID ou PLUGGY_CLIENT_SECRET no servidor', async () => {
+    it('14. Trata ausência de PLUGGY_CLIENT_ID ou PLUGGY_CLIENT_SECRET no servidor', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: false, error: 'Credenciais da Pluggy (PLUGGY_CLIENT_ID/PLUGGY_CLIENT_SECRET) não configuradas no servidor.' },
         error: null,
@@ -220,7 +242,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       );
     });
 
-    it('13. Trata erro 429 da Pluggy (Rate Limit) de forma controlada', async () => {
+    it('15. Trata erro 429 da Pluggy (Rate Limit) de forma controlada', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: false, error: 'Limite de requisições da Pluggy atingido.' },
         error: null,
@@ -231,7 +253,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       );
     });
 
-    it('14. Trata timeout na conexão externa de forma controlada', async () => {
+    it('16. Trata timeout na conexão externa de forma controlada', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: false, error: 'Tempo limite excedido ao comunicar com o Open Finance.' },
         error: null,
@@ -242,7 +264,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       );
     });
 
-    it('15. Trata erro 500 da API da Pluggy de forma controlada', async () => {
+    it('17. Trata erro 500 da API da Pluggy de forma controlada', async () => {
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: { success: false, error: 'Falha interna na API da instituição financeira (Pluggy).' },
         error: null,
@@ -255,7 +277,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
   });
 
   describe('4. Idempotência e Operações Autorizadas de Contas, Transações e Investimentos', () => {
-    it('16. Sucesso na consulta de contas autorizadas', async () => {
+    it('18. Sucesso na consulta de contas autorizadas', async () => {
       const mockAccounts = [
         { id: 'acc-1', name: 'Conta Corrente Itaú', type: 'BANK' as const, balance: 1500.5 },
       ];
@@ -276,13 +298,13 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       });
     });
 
-    it('17. Sucesso na consulta de transações autorizadas', async () => {
+    it('19. Sucesso na consulta de transações autorizadas com suporte a paginação', async () => {
       const mockTxs = [
         { id: 'tx-1', description: 'Supermercado', amount: -150.0, date: '2026-08-25', type: 'DEBIT' as const },
       ];
 
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
-        data: { success: true, data: mockTxs },
+        data: { success: true, data: mockTxs, hasMore: false, partial: false, total: 1 },
         error: null,
       });
 
@@ -297,7 +319,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       });
     });
 
-    it('18. Sucesso na consulta de investimentos autorizados', async () => {
+    it('20. Sucesso na consulta de investimentos autorizados', async () => {
       const mockInvs = [
         { id: 'inv-1', name: 'CDB 100% CDI', value: 10000.0, type: 'FIXED_INCOME' },
       ];
@@ -318,7 +340,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       });
     });
 
-    it('19. Sincronização repetida (idempotência): segunda execução não duplica contas ou transações', async () => {
+    it('21. Sincronização repetida (idempotência): segunda execução não duplica contas ou transações', async () => {
       // 1ª Execução: insere 2 contas e 10 transações
       vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
         data: {
@@ -327,6 +349,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
             accountsCount: 2,
             transactionsCount: 10,
             investmentsCount: 0,
+            hasMore: false,
           },
         },
         error: null,
@@ -337,6 +360,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
         accountsCount: 2,
         transactionsCount: 10,
         investmentsCount: 0,
+        hasMore: false,
       });
 
       // 2ª Execução imediata: reutiliza as 2 contas e não insere transações duplicadas (0 novas)
@@ -347,6 +371,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
             accountsCount: 2,
             transactionsCount: 0,
             investmentsCount: 0,
+            hasMore: false,
           },
         },
         error: null,
@@ -357,6 +382,7 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
         accountsCount: 2,
         transactionsCount: 0,
         investmentsCount: 0,
+        hasMore: false,
       });
     });
   });
