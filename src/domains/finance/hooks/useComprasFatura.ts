@@ -39,11 +39,8 @@ export const useComprasFatura = ({
       if (d.tipo && d.tipo !== "despesa") return false;
       if (Number(d.valor) <= 0) return false;
 
-      // 2. Deve pertencer a este cartão (por cartao_id ou conta_id)
-      const pertenceCartao =
-        d.cartao_id === cartaoId ||
-        d.conta_id === cartaoId ||
-        ((d.metodo_pagamento === "cartao_credito" || d.forma_pagamento === "cartao_credito") && (!d.conta_id || d.conta_id === cartaoId));
+      // 2. Deve pertencer ESTRITAMENTE a este cartão (por cartao_id ou conta_id)
+      const pertenceCartao = d.cartao_id === cartaoId || d.conta_id === cartaoId;
 
       if (!pertenceCartao) return false;
 
