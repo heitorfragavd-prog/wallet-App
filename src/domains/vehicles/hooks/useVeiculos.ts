@@ -18,10 +18,13 @@ export interface Veiculo {
   updated_at?: string;
 }
 
-const fetchVeiculosData = async () => {
+const fetchVeiculosData = async (workspaceId?: string) => {
+  if (!workspaceId) return [];
+
   const { data, error } = await supabase
     .from('veiculos')
     .select('*')
+    .eq('workspace_id', workspaceId)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -40,7 +43,8 @@ export const useVeiculos = () => {
 
   const query = useQuery({
     queryKey,
-    queryFn: fetchVeiculosData,
+    queryFn: () => fetchVeiculosData(activeWorkspace?.id),
+    enabled: !!activeWorkspace?.id,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
@@ -50,6 +54,14 @@ export const useVeiculos = () => {
 
   const adicionarVeiculo = async (novoVeiculo: Omit<Veiculo, 'id'>) => {
     try {
+      if (!activeWorkspace?.id) {
+        toast({
+          title: "Erro",
+          description: "Workspace não selecionado",
+          variant: "destructive"
+        });
+        return;
+      }
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         toast({
@@ -64,7 +76,8 @@ export const useVeiculos = () => {
         .from('veiculos')
         .insert([{
           ...novoVeiculo,
-          user_id: user.id
+          user_id: user.id,
+          workspace_id: activeWorkspace.id
         }]);
 
       if (error) {
@@ -92,7 +105,7 @@ export const useVeiculos = () => {
 
   const editarVeiculo = async (veiculoEditado: Veiculo) => {
     try {
-      const { error } = await supabase
+      let q = supabase
         .from('veiculos')
         .update({
           marca: veiculoEditado.marca,
@@ -105,6 +118,11 @@ export const useVeiculos = () => {
           quilometragem: veiculoEditado.quilometragem
         })
         .eq('id', veiculoEditado.id);
+      if (activeWorkspace?.id) {
+        q = q.eq('workspace_id', activeWorkspace.id);
+      }
+
+      const { error } = await q;
 
       if (error) {
         logger.error('useVeiculos', 'Erro ao editar veículo', { error: error.message });
@@ -131,10 +149,15 @@ export const useVeiculos = () => {
 
   const excluirVeiculo = async (id: string) => {
     try {
-      const { error } = await supabase
+      let q = supabase
         .from('veiculos')
         .delete()
         .eq('id', id);
+      if (activeWorkspace?.id) {
+        q = q.eq('workspace_id', activeWorkspace.id);
+      }
+
+      const { error } = await q;
 
       if (error) {
         logger.error('useVeiculos', 'Erro ao excluir veículo', { error: error.message });

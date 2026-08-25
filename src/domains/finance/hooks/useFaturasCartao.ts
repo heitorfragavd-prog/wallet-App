@@ -118,26 +118,24 @@ export const FATURAS_QUERY_KEY = ["faturas_cartao"] as const;
 export const useFaturasCartao = (cartaoId?: string) => {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { activeWorkspaceId } = useWorkspace();
+  const { activeWorkspace } = useWorkspace();
+  const activeWorkspaceId = activeWorkspace?.id || null;
 
   // Query: Lista todas as faturas do cartão
   const { data: faturas = [], isLoading, refetch } = useQuery({
     queryKey: [...FATURAS_QUERY_KEY, cartaoId, activeWorkspaceId],
     queryFn: async (): Promise<FaturaCartao[]> => {
-      if (!cartaoId) return [];
+      if (!cartaoId || !activeWorkspaceId) return [];
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) return [];
 
-      let query = supabase
+      const query = supabase
         .from("faturas_cartao")
         .select("*")
         .eq("cartao_id", cartaoId)
+        .eq("workspace_id", activeWorkspaceId)
         .order("ano_fatura", { ascending: false })
         .order("mes_fatura", { ascending: false });
-
-      if (activeWorkspaceId) {
-        query = query.eq("workspace_id", activeWorkspaceId);
-      }
 
       const { data, error } = await query;
       if (error) {
@@ -146,7 +144,7 @@ export const useFaturasCartao = (cartaoId?: string) => {
       }
       return (data || []) as FaturaCartao[];
     },
-    enabled: !!cartaoId,
+    enabled: !!cartaoId && !!activeWorkspaceId,
   });
 
   // Mutation: Criar ou obter fatura (Upsert por período)
@@ -160,17 +158,23 @@ export const useFaturasCartao = (cartaoId?: string) => {
       mes: number;
       ano: number;
     }): Promise<FaturaCartao> => {
+      if (!activeWorkspaceId) throw new Error("Workspace não selecionado");
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Usuário não autenticado");
 
       // 1. Tenta buscar fatura existente
-      const { data: existente } = await supabase
+      let queryExistente = supabase
         .from("faturas_cartao")
         .select("*")
         .eq("cartao_id", cartao.id)
         .eq("mes_fatura", mes)
-        .eq("ano_fatura", ano)
-        .maybeSingle();
+        .eq("ano_fatura", ano);
+
+      if (activeWorkspaceId) {
+        queryExistente = queryExistente.eq("workspace_id", activeWorkspaceId);
+      }
+
+      const { data: existente } = await queryExistente.maybeSingle();
 
       if (existente) {
         return existente as FaturaCartao;
@@ -181,7 +185,7 @@ export const useFaturasCartao = (cartaoId?: string) => {
 
       const novaFaturaPayload = {
         user_id: user.id,
-        workspace_id: activeWorkspaceId || null,
+        workspace_id: activeWorkspaceId,
         cartao_id: cartao.id,
         mes_fatura: mes,
         ano_fatura: ano,
@@ -204,6 +208,7 @@ export const useFaturasCartao = (cartaoId?: string) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: FATURAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
     },
   });
 
@@ -216,10 +221,14 @@ export const useFaturasCartao = (cartaoId?: string) => {
       id: string;
       payload: Partial<FaturaCartao>;
     }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("faturas_cartao")
         .update(payload)
-        .eq("id", id)
+        .eq("id", id);
+      if (activeWorkspaceId) {
+        q = q.eq("workspace_id", activeWorkspaceId);
+      }
+      const { data, error } = await q
         .select()
         .single();
 
@@ -228,17 +237,23 @@ export const useFaturasCartao = (cartaoId?: string) => {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: FATURAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
     },
   });
 
   // Mutation: Excluir fatura (se sem compras vinculadas)
   const deleteFatura = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("faturas_cartao").delete().eq("id", id);
+      let q = supabase.from("faturas_cartao").delete().eq("id", id);
+      if (activeWorkspaceId) {
+        q = q.eq("workspace_id", activeWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: FATURAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["fatura-cartao-detalhe"] });
       toast({ title: "Fatura removida" });
     },
   });

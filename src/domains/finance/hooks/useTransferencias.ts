@@ -20,19 +20,20 @@ export interface Transferencia {
 }
 
 export const TRANSFERENCIAS_QUERY_KEY = ["transferencias"] as const;
-const CONTAS_QUERY_KEY = ["contas-usuario"];
+const CONTAS_QUERY_KEY = ["contas_usuario"] as const;
 
 async function fetchTransferencias(workspaceId: string | null): Promise<Transferencia[]> {
-  let query = supabase
+  if (!workspaceId) return [];
+
+  const query = supabase
     .from("transferencias")
     .select(`
       *,
       conta_origem:contas_usuario!conta_origem_id (nome, tipo),
       conta_destino:contas_usuario!conta_destino_id (nome, tipo)
     `)
+    .eq("workspace_id", workspaceId)
     .order("data", { ascending: false });
-
-  if (workspaceId) query = query.eq("workspace_id", workspaceId);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -48,11 +49,15 @@ export const useTransferencias = () => {
   const { data: transferencias = [], isLoading: loading } = useQuery({
     queryKey: [...TRANSFERENCIAS_QUERY_KEY, { workspaceId: currentWorkspaceId }],
     queryFn: () => fetchTransferencias(currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createTransferencia = useMutation({
     mutationFn: async (t: Omit<Transferencia, "id" | "user_id" | "created_at" | "conta_origem" | "conta_destino">) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar transferência.");
+      }
       if (t.conta_origem_id === t.conta_destino_id) {
         throw new Error("A conta de origem não pode ser igual à conta de destino.");
       }
@@ -72,24 +77,28 @@ export const useTransferencias = () => {
         .from("contas_usuario")
         .select("saldo_atual")
         .eq("id", t.conta_origem_id)
+        .eq("workspace_id", currentWorkspaceId)
         .single();
       const { data: destino } = await supabase
         .from("contas_usuario")
         .select("saldo_atual")
         .eq("id", t.conta_destino_id)
+        .eq("workspace_id", currentWorkspaceId)
         .single();
 
       if (origem) {
         await supabase
           .from("contas_usuario")
           .update({ saldo_atual: Number(origem.saldo_atual ?? 0) - Number(t.valor) })
-          .eq("id", t.conta_origem_id);
+          .eq("id", t.conta_origem_id)
+          .eq("workspace_id", currentWorkspaceId);
       }
       if (destino) {
         await supabase
           .from("contas_usuario")
           .update({ saldo_atual: Number(destino.saldo_atual ?? 0) + Number(t.valor) })
-          .eq("id", t.conta_destino_id);
+          .eq("id", t.conta_destino_id)
+          .eq("workspace_id", currentWorkspaceId);
       }
 
       return data;
@@ -97,6 +106,7 @@ export const useTransferencias = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: TRANSFERENCIAS_QUERY_KEY });
       qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Transferência criada", description: "Transferência realizada com sucesso!" });
     },
     onError: (error) => {
@@ -107,11 +117,17 @@ export const useTransferencias = () => {
 
   const deleteTransferencia = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("transferencias").delete().eq("id", id);
+      let q = supabase.from("transferencias").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: TRANSFERENCIAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: CONTAS_QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ["transacoes"] });
       toast({ title: "Transferência excluída", description: "Transferência excluída com sucesso!" });
     },
     onError: (error) => {

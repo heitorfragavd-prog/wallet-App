@@ -36,6 +36,7 @@ export function useComparativoPeriodos(quantidadeMeses: number = 6) {
   return useQuery<ComparativoMes[]>({
     queryKey: ["comparativo", workspaceId, quantidadeMeses],
     queryFn: async () => {
+      if (!workspaceId) return [];
       const hoje = new Date();
       const resultado: ComparativoMes[] = [];
 
@@ -49,11 +50,7 @@ export function useComparativoPeriodos(quantidadeMeses: number = 6) {
         const endDate = `${ano}-${mesPad}-${String(ultimoDia).padStart(2, "0")}T23:59:59`;
 
         const applyFilter = (q: any) => {
-          let query = q;
-          if (workspaceId) {
-            query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-          }
-          return query.gte("data", startDate).lte("data", endDate);
+          return q.eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
         };
 
         const [somaRec, somaTransRec, somaDesp, somaTransDesp] = await Promise.all([
@@ -82,6 +79,7 @@ export function useComparativoPeriodos(quantidadeMeses: number = 6) {
 
       return resultado;
     },
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 5,
   });
 }

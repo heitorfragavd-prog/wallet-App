@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useRef } from "react";
 import type { DivipayBalance, DivipayTransacao, DivipayMovement } from "@/domains/divipay/types";
 
@@ -62,14 +63,22 @@ function getDefaultDateRange(): { initialDate: string; finalDate: string } {
 }
 
 export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
   const defaultDates = getDefaultDateRange();
   const initialDate = filters?.initialDate || defaultDates.initialDate;
   const finalDate = filters?.finalDate || defaultDates.finalDate;
   const type = filters?.type || null;
 
-  const queryKey = [...DIVIPAY_DASHBOARD_QUERY_KEY, { initialDate, finalDate, type }];
+  const queryKey = [...DIVIPAY_DASHBOARD_QUERY_KEY, workspaceId, { initialDate, finalDate, type }];
   const qc = useQueryClient();
+  const lastValidWorkspaceRef = useRef<string | null>(workspaceId);
   const lastValidResult = useRef<DivipayDashboardResult | null>(null);
+
+  if (lastValidWorkspaceRef.current !== workspaceId) {
+    lastValidWorkspaceRef.current = workspaceId;
+    lastValidResult.current = null;
+  }
 
   const query = useQuery<DivipayDashboardResult>({
     queryKey,

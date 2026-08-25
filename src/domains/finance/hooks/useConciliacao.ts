@@ -21,21 +21,17 @@ const diffDias = (a: string, b: string) =>
   Math.abs(new Date(`${a}T12:00:00`).getTime() - new Date(`${b}T12:00:00`).getTime()) / 86400000;
 
 async function fetchLancamentos(mes: string, workspaceId: string | null): Promise<LancamentoConciliacao[]> {
+  if (!workspaceId) return [];
+
   const startDate = `${mes}-01`;
   const end = new Date(Number(mes.split("-")[0]), Number(mes.split("-")[1]), 0);
   const endDate = end.toISOString().split("T")[0];
 
   const cols = "id, descricao, valor, data, conciliado, metodo_pagamento";
 
-  let receitasQuery = supabase.from("receitas").select(cols).gte("data", startDate).lte("data", endDate);
-  let despesasQuery = supabase.from("despesas").select(cols).gte("data", startDate).lte("data", endDate);
-  let transacoesQuery = supabase.from("transacoes").select(`${cols}, tipo`).gte("data", startDate).lte("data", endDate);
-
-  if (workspaceId) {
-    receitasQuery = receitasQuery.eq("workspace_id", workspaceId);
-    despesasQuery = despesasQuery.eq("workspace_id", workspaceId);
-    transacoesQuery = transacoesQuery.eq("workspace_id", workspaceId);
-  }
+  let receitasQuery = supabase.from("receitas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
+  let despesasQuery = supabase.from("despesas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
+  let transacoesQuery = supabase.from("transacoes").select(`${cols}, tipo`).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
 
   const [r, d, t] = await Promise.all([receitasQuery, despesasQuery, transacoesQuery]);
   if (r.error) throw r.error;
@@ -70,6 +66,7 @@ export const useConciliacao = (mes?: string) => {
   const { data: lancamentos = [], isLoading: loading, refetch } = useQuery({
     queryKey: [...CONCILIACAO_QUERY_KEY, { mes: mesRef, workspaceId: currentWorkspaceId }],
     queryFn: () => fetchLancamentos(mesRef, currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
@@ -78,7 +75,11 @@ export const useConciliacao = (mes?: string) => {
 
   const marcarConciliado = useMutation({
     mutationFn: async ({ id, fonte, conciliado }: { id: string; fonte: LancamentoConciliacao["fonte"]; conciliado: boolean }) => {
-      const { error } = await supabase.from(fonte).update({ conciliado }).eq("id", id);
+      let q = supabase.from(fonte).update({ conciliado }).eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {
@@ -114,8 +115,14 @@ export const useConciliacao = (mes?: string) => {
         if (parceiro) {
           usados.add(a.id);
           usados.add(parceiro.id);
-          await supabase.from(a.fonte).update({ conciliado: true }).eq("id", a.id);
-          await supabase.from(parceiro.fonte).update({ conciliado: true }).eq("id", parceiro.id);
+          let qa = supabase.from(a.fonte).update({ conciliado: true }).eq("id", a.id);
+          let qb = supabase.from(parceiro.fonte).update({ conciliado: true }).eq("id", parceiro.id);
+          if (currentWorkspaceId) {
+            qa = qa.eq("workspace_id", currentWorkspaceId);
+            qb = qb.eq("workspace_id", currentWorkspaceId);
+          }
+          await qa;
+          await qb;
           matches++;
         }
       }
