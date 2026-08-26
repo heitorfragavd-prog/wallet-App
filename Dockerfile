@@ -1,4 +1,4 @@
-﻿# Build Stage
+# Build Stage
 FROM node:22-alpine as build
 
 WORKDIR /app
@@ -48,8 +48,8 @@ LABEL description="Wallet - Consultoria Financeira Inteligente"
 
 EXPOSE 80
 
-# Native healthcheck using wget in Alpine
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
+# Native healthcheck using wget connecting explicitly to IPv4 loopback
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1/health || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
