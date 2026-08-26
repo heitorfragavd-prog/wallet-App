@@ -24,6 +24,14 @@ jobs:
   quality-gates:
     name: Quality Gates (TypeCheck, Tests, Build)
     runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://hdeguzxkdvebdrrutbnx.supabase.co' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhkZWd1enhrZHZlYmRycnV0Ym54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2Nzc5NzcsImV4cCI6MjEwMDI1Mzk3N30.D0tKhKYN8xvwI-PO3ywpngi-J2N56CjAu0z-kWMhqjE' }}
+      VITE_APP_NAME: Wallet
+      VITE_APP_URL: http://localhost:8080
+      VITE_APP_ENVIRONMENT: development
+      VITE_ENABLE_ANALYTICS: false
+      VITE_ENABLE_DEBUG_LOGS: false
 
     steps:
       - name: Checkout repository
@@ -45,14 +53,6 @@ jobs:
         run: npm run test
 
       - name: Production Build (Vite Build Gate)
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
-          VITE_APP_NAME: Wallet
-          VITE_APP_URL: https://wallet.cortexx.online
-          VITE_APP_ENVIRONMENT: production
-          VITE_ENABLE_ANALYTICS: false
-          VITE_ENABLE_DEBUG_LOGS: false
         run: npm run build
 
   lint-changed:

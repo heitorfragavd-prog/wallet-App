@@ -44,3 +44,10 @@ class MockResizeObserver {
 }
 
 global.ResizeObserver = MockResizeObserver;
+
+// Default environment variables for test runners
+process.env.VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
+process.env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key';
+process.env.VITE_APP_NAME = process.env.VITE_APP_NAME || 'Wallet';
+process.env.VITE_APP_URL = process.env.VITE_APP_URL || 'http://localhost:8080';
+process.env.VITE_APP_ENVIRONMENT = process.env.VITE_APP_ENVIRONMENT || 'development';
