@@ -51,3 +51,17 @@ process.env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'plac
 process.env.VITE_APP_NAME = process.env.VITE_APP_NAME || 'Wallet';
 process.env.VITE_APP_URL = process.env.VITE_APP_URL || 'http://localhost:8080';
 process.env.VITE_APP_ENVIRONMENT = process.env.VITE_APP_ENVIRONMENT || 'development';
+
+// Polyfill Promise.withResolvers for Node.js < 22 and PDF.js
+if (typeof (Promise as any).withResolvers === 'undefined') {
+  (Promise as any).withResolvers = function <T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: any) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+}
+
