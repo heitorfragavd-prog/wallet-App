@@ -136,7 +136,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const anoFaturaNum = dataRef.getFullYear();
 
   // Busca lançamentos por PERÍODO DE FECHAMENTO (data_inicio a data_fechamento)
-  const { despesas: despesasFatura, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
+  const { despesas: despesasFatura, fatura: faturaAtualObj, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
     cartaoId: cartao?.id,
     mesFatura: mesFaturaNum,
     anoFatura: anoFaturaNum,
@@ -233,13 +233,16 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     lancamentos.reduce((acc, i) => acc + i.valor, 0)
   , [lancamentos]);
 
-  // Se houver lançamentos detalhados no período, usa a soma dos lançamentos.
-  // Se não houver lançamentos detalhados mas o cartão possuir saldo_atual (ex: Open Finance) no mês vigente, reflete o saldo real.
+  // Prioridade:
+  // 1. Se houver lançamentos detalhados no período, usa a soma dos lançamentos.
+  // 2. Se houver fatura persistida em public.faturas_cartao, usa o valor_total oficial da fatura.
+  // 3. Se for mês vigente sem lançamentos (fatura aberta Open Finance), exibe o saldo_atual do cartão.
   const totalFatura = useMemo(() => {
     if (totalLancamentos > 0) return totalLancamentos;
+    if (faturaAtualObj?.valor_total) return Number(faturaAtualObj.valor_total);
     if (isMesAtual && cartao?.saldo_atual) return Number(cartao.saldo_atual || 0);
     return 0;
-  }, [totalLancamentos, isMesAtual, cartao?.saldo_atual]);
+  }, [totalLancamentos, faturaAtualObj?.valor_total, isMesAtual, cartao?.saldo_atual]);
 
   const handlePagarFatura = () => {
     toast({

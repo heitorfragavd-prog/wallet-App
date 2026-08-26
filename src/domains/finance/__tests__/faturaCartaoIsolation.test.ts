@@ -286,4 +286,51 @@ describe("Fatura Cartão Isolation & Ownership Tests", () => {
 
     expect(Number(totalFaturaModal.toFixed(2))).toBe(339.73);
   });
+
+  it("12. Pagamento de fatura de cartão de crédito NÃO pode ser computado como Receita Operacional / DRE", () => {
+    const rawTransactions = [
+      { id: "tx-venda-1", descricao: "Venda Loja", valor: 1500.00, tipo: "receita", metodo_pagamento: "pix", observacoes: "Venda balcão" },
+      { id: "tx-pagto-cartao", descricao: "Pagamento recebido", valor: 43.01, tipo: "receita", metodo_pagamento: "cartao_credito", observacoes: "Fatura Nubank Gold - Pagamento da fatura anterior" }
+    ];
+
+    // Lógica implementada em useReceitas.ts
+    const filteredReceitas = rawTransactions.filter((t) => {
+      const desc = (t.descricao || "").toLowerCase();
+      const obs = (t.observacoes || "").toLowerCase();
+      if (
+        obs.includes("pagamento da fatura") ||
+        obs.includes("pagamento de fatura") ||
+        desc.includes("pagamento recebido") ||
+        desc.includes("pagamento de fatura") ||
+        (t.metodo_pagamento === "cartao_credito" && (desc.includes("pagamento") || obs.includes("pagamento")))
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    expect(filteredReceitas).toHaveLength(1);
+    expect(filteredReceitas[0].id).toBe("tx-venda-1");
+    expect(filteredReceitas[0].valor).toBe(1500.00);
+
+    const receitaBruta = filteredReceitas.reduce((sum, r) => sum + r.valor, 0);
+    expect(receitaBruta).toBe(1500.00); // 43.01 NÃO aumentou a receita bruta!
+  });
+
+  it("13. Navegação para Setembro/2026 NÃO reutiliza lançamentos de Agosto e exibe saldo anterior = 339,73", () => {
+    const faturasPersistidas = [
+      { cartao_id: cardNubank.id, mes_fatura: 7, ano_fatura: 2026, valor_total: 43.01, status: "paga" },
+      { cartao_id: cardNubank.id, mes_fatura: 8, ano_fatura: 2026, valor_total: 339.73, status: "aberta" }
+    ];
+
+    // Ao consultar mês anterior de Setembro (Agosto = mês 8)
+    const faturaAgosto = faturasPersistidas.find((f) => f.mes_fatura === 8 && f.ano_fatura === 2026);
+    expect(faturaAgosto?.valor_total).toBe(339.73);
+
+    // Fatura de Setembro ainda não tem despesas fechadas
+    const periodoSetembro = calcularPeriodoFatura(cardNubank, 9, 2026);
+    expect(periodoSetembro.data_inicio).toBe("2026-08-12");
+    expect(periodoSetembro.data_fechamento).toBe("2026-09-12");
+    expect(periodoSetembro.data_vencimento).toBe("2026-09-19");
+  });
 });

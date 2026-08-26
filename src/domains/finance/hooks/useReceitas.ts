@@ -256,6 +256,19 @@ export async function fetchReceitas(
     ...t,
     metodo_pagamento: normalizeMetodoPagamento(t.metodo_pagamento),
   })).filter((t) => {
+    // Pagamentos de fatura de cartão de crédito e baixas não são receitas operacionais da empresa
+    const desc = (t.descricao || "").toLowerCase();
+    const obs = (t.observacoes || "").toLowerCase();
+    if (
+      obs.includes("pagamento da fatura") ||
+      obs.includes("pagamento de fatura") ||
+      desc.includes("pagamento recebido") ||
+      desc.includes("pagamento de fatura") ||
+      (t.metodo_pagamento === "cartao_credito" && (desc.includes("pagamento") || obs.includes("pagamento")))
+    ) {
+      return false;
+    }
+
     if (regime !== "bruto" && isEyemobilePDVTransaction(t)) {
       return t.metodo_pagamento === "dinheiro";
     }

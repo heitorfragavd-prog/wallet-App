@@ -1,10 +1,10 @@
 import { useMemo } from "react";
-import { calcularPeriodoFatura, PeriodoFaturaInfo } from "./useFaturasCartao";
+import { calcularPeriodoFatura, PeriodoFaturaInfo, useFaturasCartao, FaturaCartao } from "./useFaturasCartao";
 import { useDespesas, Despesa } from "./useDespesas";
 
 export interface ComprasFaturaResult {
   despesas: Despesa[];
-  fatura: null;
+  fatura: FaturaCartao | null;
   periodo: PeriodoFaturaInfo;
   totalFatura: number;
   isLoading: boolean;
@@ -13,7 +13,8 @@ export interface ComprasFaturaResult {
 
 /**
  * Hook que filtra despesas já carregadas pelo useDespesas
- * para exibir somente as que pertencem à fatura de um mês/ano específico.
+ * para exibir somente as que pertencem à fatura de um mês/ano específico,
+ * integrando também faturas consolidadas persistidas em public.faturas_cartao.
  */
 export const useComprasFatura = ({
   cartaoId,
@@ -27,7 +28,12 @@ export const useComprasFatura = ({
   cartaoInfo?: { dia_fechamento?: number | null; dia_vencimento?: number | null } | null;
 }): ComprasFaturaResult => {
   const periodo = calcularPeriodoFatura(cartaoInfo || {}, mesFatura, anoFatura);
-  const { despesas: todasDespesas, loading, refetch } = useDespesas();
+  const { despesas: todasDespesas, loading: loadingDespesas, refetch: refetchDespesas } = useDespesas();
+  const { faturas, isLoading: loadingFaturas, refetch: refetchFaturas } = useFaturasCartao(cartaoId || undefined);
+
+  const faturaPersistida = useMemo(() => {
+    return (faturas || []).find((f) => f.mes_fatura === mesFatura && f.ano_fatura === anoFatura) || null;
+  }, [faturas, mesFatura, anoFatura]);
 
   const despesasFiltradas = useMemo(() => {
     if (!cartaoId || !todasDespesas) return [];
@@ -54,14 +60,28 @@ export const useComprasFatura = ({
     });
   }, [cartaoId, todasDespesas, mesFatura, anoFatura, periodo.data_inicio, periodo.data_fechamento]);
 
-  const totalFatura = despesasFiltradas.reduce((acc, d) => acc + (Number(d.valor) || 0), 0);
+  const somaDespesas = despesasFiltradas.reduce((acc, d) => acc + (Number(d.valor) || 0), 0);
+
+  // Prioridade de total da fatura:
+  // 1. Se houver despesas detalhadas calculadas no período, usa a soma dos itens
+  // 2. Se não houver despesas detalhadas mas houver fatura persistida (ex: fatura fechada histórica), usa o valor da fatura
+  // 3. 0
+  const totalFatura = somaDespesas > 0
+    ? somaDespesas
+    : (faturaPersistida?.valor_total ? Number(faturaPersistida.valor_total) : 0);
+
+  const refetch = () => {
+    refetchDespesas();
+    refetchFaturas();
+  };
 
   return {
     despesas: despesasFiltradas,
-    fatura: null,
+    fatura: faturaPersistida,
     periodo,
     totalFatura,
-    isLoading: loading,
+    isLoading: loadingDespesas || loadingFaturas,
     refetch,
   };
 };
+
