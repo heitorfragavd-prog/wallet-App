@@ -53,10 +53,16 @@ process.env.VITE_APP_URL = process.env.VITE_APP_URL || 'http://localhost:8080';
 process.env.VITE_APP_ENVIRONMENT = process.env.VITE_APP_ENVIRONMENT || 'development';
 
 // Polyfill Promise.withResolvers for Node.js < 22 and PDF.js
-if (typeof (Promise as any).withResolvers === 'undefined') {
-  (Promise as any).withResolvers = function <T>() {
+interface PromiseWithResolvers<T> {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+}
+
+if (typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers === 'undefined') {
+  (Promise as unknown as { withResolvers: <T>() => PromiseWithResolvers<T> }).withResolvers = function <T>(): PromiseWithResolvers<T> {
     let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason?: any) => void;
+    let reject!: (reason?: unknown) => void;
     const promise = new Promise<T>((res, rej) => {
       resolve = res;
       reject = rej;
