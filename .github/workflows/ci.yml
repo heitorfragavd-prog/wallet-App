@@ -4,12 +4,10 @@ on:
   pull_request:
     branches:
       - develop
-      - main
       - master
   push:
     branches:
       - develop
-      - main
       - master
   workflow_dispatch:
 
@@ -79,10 +77,11 @@ jobs:
 
       - name: Lint changed files in PR
         run: |
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD | grep -E '\.(ts|tsx|js|jsx)$' || true)
-          if [ -n "$CHANGED_FILES" ]; then
-            echo "Linting changed files: $CHANGED_FILES"
-            npx eslint $CHANGED_FILES
+          git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD | grep -E '\.(ts|tsx|js|jsx)$' > /tmp/changed_files.txt || true
+          if [ -s /tmp/changed_files.txt ]; then
+            echo "Linting changed files:"
+            cat /tmp/changed_files.txt
+            xargs -a /tmp/changed_files.txt npx eslint
           else
             echo "No TS/JS files changed in this PR."
           fi
