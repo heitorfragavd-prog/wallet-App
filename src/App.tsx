@@ -32,7 +32,8 @@ const Metas               = lazyWithRetry(() => import("./pages/Metas"));
 const Mercado             = lazyWithRetry(() => import("./pages/Mercado"));
 const Veiculos            = lazyWithRetry(() => import("./pages/Veiculos"));
 const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
-const IAPage              = lazyWithRetry(() => import("./pages/IAPage"));
+const IAPage              = lazyWithRetry(() => import("./pages/IAPage")); // Legacy — mantido como fallback
+const WalletIAPage        = lazyWithRetry(() => import("./pages/WalletIAPage")); // Wallet IA Unificada — Etapa 1
 const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
 const InvestimentoDetalhe = lazyWithRetry(() => import("./pages/InvestimentoDetalhe"));
@@ -109,7 +110,9 @@ function App() {
                   <Route path="/mercado"    element={<ProtectedRoute><Mercado /></ProtectedRoute>} />
                   <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
                   <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
-                  <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
+                  <Route path="/ia"         element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} /> {/* Wallet IA Unificada — Etapa 1 */}
+                  <Route path="/ia-legacy"  element={<ProtectedRoute><IAPage /></ProtectedRoute>} />       {/* IAPage legada — mantida para rollback */}
+                  <Route path="/ia-chat"    element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} />
                   <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
                   <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
                   <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
