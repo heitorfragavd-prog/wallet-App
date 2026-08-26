@@ -1,16 +1,14 @@
 /**
- * WalletAIRouter — Etapa 1 da Wallet IA Unificada
+ * WalletAIRouter — Etapa 1.1 (auditoria e correção)
  *
- * Responsabilidade: Rotear uma mensagem do usuário para o motor interno correto,
- * de forma totalmente transparente para a interface.
+ * CORREÇÃO CRÍTICA:
+ *   Padrões de análise complexa agora são avaliados ANTES dos padrões
+ *   de consulta rápida. Isso evita que "Quanto vendi hoje e por que caiu?"
+ *   seja tratado como FAST_QUERY quando deveria ir para AGENT_V2.
  *
- * Rotas disponíveis:
- *  - FAST_QUERY   : Consulta determinística local (antigo Consulta Rápida)
- *  - AGENT_V2     : Agente financeiro avançado com ferramentas (antigo Agent V2)
- *  - DOCUMENT     : Pipeline de documentos (imagem/PDF)
- *  - CONVERSATIONAL: Resposta genérica via modelo de linguagem
- *
- * O usuário vê apenas "Wallet IA". O backend decide internamente.
+ * REGRA FUNDAMENTAL:
+ *   FAST_QUERY é uma OTIMIZAÇÃO, nunca uma REDUÇÃO de inteligência.
+ *   Em caso de dúvida, AGENT_V2.
  */
 
 export type WalletAIRoute =
@@ -32,7 +30,7 @@ export interface RouterDecision {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Heurísticas determinísticas para classificação (sem LLM)
+// Normalização
 // ─────────────────────────────────────────────────────────────────────────────
 
 const norm = (s: string): string =>
@@ -41,40 +39,10 @@ const norm = (s: string): string =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 
-/** Padrões que indicam consulta rápida determinística (sem análise profunda) */
-const FAST_QUERY_PATTERNS: RegExp[] = [
-  /quanto (vendi|vendeu|faturei|faturou)/,
-  /quanto (gastei|gastou|despesa)/,
-  /saldo (atual|agora|hoje|em conta)/,
-  /quanto tenho (em conta|disponivel|na conta)/,
-  /(caixa|saldo) (agora|hoje|atual)/,
-  /vendas (hoje|ontem|essa semana|este mes|deste mes)/,
-  /receita (hoje|ontem|essa semana|este mes|deste mes)/,
-  /despesa (hoje|ontem|essa semana|este mes|deste mes)/,
-  /lucro (hoje|ontem|essa semana|este mes|deste mes)/,
-  /posso (comprar|gastar|pagar)/,
-  /qual meu (saldo|lucro|resultado)/,
-  /quanto (tenho|sobrou|entrou)/,
-  /resumo (rapido|financeiro)/,
-];
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. AÇÕES — mutações de dados (Agent V2 com ActionProposal)
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Padrões que indicam análise complexa (Agent V2 com ferramentas) */
-const AGENT_V2_PATTERNS: RegExp[] = [
-  /compare|compara(r)?/,
-  /(analise|analisa|analisa(r)?)/,
-  /evolucao|historico|tendencia/,
-  /(grafico|grafico|chart|visualiz)/,
-  /fluxo de caixa/,
-  /projecao|previsao|proximo mes/,
-  /(maiores|principais) (despesas|receitas|gastos)/,
-  /trimestre|semestre|anual/,
-  /mais (detalhes|informacoes)/,
-  /me mostr(e|a)/,
-  /quero (ver|entender|saber mais)/,
-  /por (metodo|forma de pagamento|categoria)/,
-];
-
-/** Padrões de ação (cadastrar, criar, atualizar dados) */
 const ACTION_PATTERNS: RegExp[] = [
   /cadastr(a|e|ar)/,
   /registr(a|e|ar)/,
@@ -86,9 +54,72 @@ const ACTION_PATTERNS: RegExp[] = [
   /pag(a|e|ar|amento)/,
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. ANÁLISE COMPLEXA — avaliada ANTES de FAST_QUERY
+//    Inclui modificadores que tornam uma consulta simples em análise profunda
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AGENT_V2_PATTERNS: RegExp[] = [
+  // Comparativos
+  /compare|compara(r)?|comparativo|versus|vs\./,
+  // Análise e detalhamento
+  /(analise|analisa|analisar|analise)/,
+  /(explique|explica|explicar|explica(r)?)/,
+  /mais (detalhes|informacoes|informacao)/,
+  /detalha(r|ndo)?|detalhe/,
+  // Motivos / causas — CRÍTICO: captura "quanto vendi e por que caiu?"
+  /por que|porque|motivo|causa|razao/,
+  // Categorização e agrupamento — CRÍTICO: captura "por categoria", "por forma"
+  /por (categoria|metodo|forma de pagamento|fornecedor|cliente|produto|tipo)/,
+  /quebr(a|e|ar) por|agrupar? por|separa(r|r por)/,
+  // Tendências e projeções
+  /evolucao|historico|tendencia|tendencias|crescimento|queda/,
+  /projecao|previsao|proximo mes|proximos meses|forecast/,
+  // Gráficos e visualizações
+  /(grafico|chart|visualiz|mostre (em|como)|plote)/,
+  // Multi-período — análise temporal
+  /trimestre|semestre|anual|ano todo|12 meses/,
+  // Rankings
+  /(maiores|menores|principais|top [0-9]+) (despesas|receitas|gastos|categorias)/,
+  /mais (gasto|vendido|pago|caro)/,
+  // Fluxo de caixa
+  /fluxo de caixa/,
+  // Pedidos de explicação e resumo elaborado
+  /me (conta|explica|diz|fale sobre|ajuda)/,
+  /quero (ver|entender|saber mais|uma analise)/,
+  /qual (a diferenca|o impacto|o motivo)/,
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. CONSULTA RÁPIDA — só após confirmar ausência de análise complexa
+//    Apenas consultas pontuais e simples que podem ser respondidas localmente
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FAST_QUERY_PATTERNS: RegExp[] = [
+  /^quanto (vendi|vendeu|faturei|faturou)( (hoje|ontem|essa semana|este mes|deste mes|essa semana))?$/,
+  /^quanto (gastei|gastou|despesa)( (hoje|ontem|esse mes))?$/,
+  /saldo (atual|agora|hoje|em conta)/,
+  /quanto tenho (em conta|disponivel|na conta)/,
+  /(caixa|saldo) (agora|hoje|atual)/,
+  /^vendas (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^receita (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^despesa (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^lucro (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /posso (comprar|gastar|pagar) (r\$|ate|isso)?/,
+  /qual meu (saldo|lucro|resultado) (hoje|agora|atual)/,
+  /^quanto (tenho|sobrou|entrou)( agora| hoje)?$/,
+  /^resumo (rapido|financeiro|de hoje|do dia)$/,
+];
+
 /**
  * Decide a rota com base em heurísticas determinísticas.
- * Evita chamar LLM para decisões que podem ser tomadas localmente.
+ *
+ * Ordem de prioridade (da maior para a menor):
+ *   1. Documento anexado → DOCUMENT
+ *   2. Intenção de ação/mutação → AGENT_V2
+ *   3. Análise complexa / modificadores → AGENT_V2 (avaliada ANTES de FAST_QUERY)
+ *   4. Consulta pontual simples → FAST_QUERY
+ *   5. Default → AGENT_V2 (fallback seguro)
  */
 export function routeMessage(input: RouterInput): RouterDecision {
   const { message, attachments } = input;
@@ -111,19 +142,22 @@ export function routeMessage(input: RouterInput): RouterDecision {
     };
   }
 
-  // 3. Análise complexa / comparação / gráfico → Agent V2
+  // 3. Análise complexa → Agent V2 (PRIORIDADE SOBRE FAST_QUERY)
+  //    Captura modificadores como "por que", "por categoria", "compare", "detalhe"
+  //    mesmo quando a mensagem começa com padrão de consulta simples.
   if (AGENT_V2_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "AGENT_V2",
-      reason: "Consulta analítica complexa detectada → Agent V2 com ferramentas",
+      reason: "Consulta analítica complexa ou modificador detectado → Agent V2 com ferramentas",
     };
   }
 
   // 4. Consulta simples e pontual → Fast Query (determinístico, sem token)
+  //    Somente atingida se nenhum modificador de análise foi detectado acima.
   if (FAST_QUERY_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "FAST_QUERY",
-      reason: "Consulta financeira pontual → Consulta Rápida determinística",
+      reason: "Consulta financeira pontual e simples → Consulta Rápida determinística",
     };
   }
 

@@ -287,8 +287,16 @@ export default function WalletIAPage() {
 
   // ── Dados financeiros para a Consulta Rápida ──────────────────────────────
   const inicioJanela = useMemo(() => {
+    // CORREÇÃO (Etapa 1.1): Usa Date aritmético real.
+    // ORDEM IMPORTANTE: setDate(1) ANTES de setMonth() para evitar overflow.
+    // Ex: 31/Dez → setMonth(11-3=8=Set): Set não tem 31 dias → overflow para Out.
+    // Com setDate(1) primeiro: 1/Dez → setMonth(8=Set) → 1/Set ✅
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() - 2).padStart(2, "0")}-01`;
+    d.setDate(1);                   // primeiro dia do mês atual (evita overflow)
+    d.setMonth(d.getMonth() - 3);  // 3 meses atrás
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0"); // +1 porque getMonth() é 0-indexed
+    return `${y}-${m}-01`;
   }, []);
 
   const { receitas } = useReceitas({ startDate: inicioJanela });
@@ -358,6 +366,34 @@ export default function WalletIAPage() {
         logger.error("WalletIAPage", "Erro do assistente", { message: err.message });
       },
     });
+
+  // ── Action Proposal callbacks ─────────────────────────────────────────────
+  // REGRA ABSOLUTA: o card da proposta ser renderizado NÃO executa nada.
+  // A execução só ocorre quando o usuário confirmar explicitamente via onConfirmAction.
+  // Por enquanto, exibe toast informativo e aguarda infraestrutura do Action Gateway
+  // (Etapa 4) para execução real. Nenhuma mutação financeira ocorre aqui.
+  const handleConfirmAction = useCallback(
+    (proposalId: string, _payload?: Record<string, unknown>) => {
+      logger.info("WalletIAPage", "Proposta de ação confirmada pelo usuário", { proposalId });
+      toast({
+        title: "Ação registrada",
+        description: "A proposta foi confirmada. A execução automática chegará na Etapa 4 — Action Gateway.",
+      });
+    },
+    [toast]
+  );
+
+  const handleCancelAction = useCallback(
+    (proposalId: string) => {
+      logger.info("WalletIAPage", "Proposta de ação cancelada pelo usuário", { proposalId });
+      toast({
+        title: "Ação cancelada",
+        description: "A proposta foi descartada.",
+        variant: "destructive",
+      });
+    },
+    [toast]
+  );
 
   // ── Carregar histórico ao trocar de conversa ──────────────────────────────
   useEffect(() => {
@@ -578,7 +614,12 @@ export default function WalletIAPage() {
 
             {/* Mensagens */}
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} />
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                onConfirmAction={handleConfirmAction}
+                onCancelAction={handleCancelAction}
+              />
             ))}
 
             {/* Status de loading */}
