@@ -11,7 +11,7 @@ on:
       - completed
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -32,35 +32,41 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
-      - name: Validate Release Version
+      - name: Validate Release Version and Existing Tags/Releases
         id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG_NAME="v${VERSION}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+
           echo "Release version: ${VERSION}"
           echo "Target tag: ${TAG_NAME}"
+          echo "Target SHA: ${HEAD_SHA}"
 
-          # Prevenção contra tag/release duplicada
+          # 1. Prevenção: Verificar se tag Git já existe
           if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
-            echo "ERROR: Git tag ${TAG_NAME} already exists! Aborting release to prevent duplication."
+            echo "ERROR: Git tag ${TAG_NAME} already exists in repository! Aborting release."
+            exit 1
+          fi
+
+          # 2. Prevenção: Verificar se GitHub Release já existe
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "ERROR: GitHub Release ${TAG_NAME} already exists! Aborting release."
             exit 1
           fi
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Create Git Tag and Push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-
-      - name: Generate Release Notes and Create GitHub Release
+      - name: Atomic GitHub Release & Tag Creation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Cria a GitHub Release e a Git Tag atomicamente apontando para o SHA exato do commit aprovado
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "Wallet ${{ steps.version.outputs.tag }}" \
-            --generate-notes \
-            --target "${{ github.event.workflow_run.head_sha }}"
+            --target "${{ steps.version.outputs.head_sha }}" \
+            --generate-notes
