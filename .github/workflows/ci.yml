@@ -25,8 +25,8 @@ jobs:
     name: Quality Gates (TypeCheck, Tests, Build)
     runs-on: ubuntu-latest
     env:
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://hdeguzxkdvebdrrutbnx.supabase.co' }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhkZWd1enhrZHZlYmRycnV0Ym54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2Nzc5NzcsImV4cCI6MjEwMDI1Mzk3N30.D0tKhKYN8xvwI-PO3ywpngi-J2N56CjAu0z-kWMhqjE' }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsYWNlaG9sZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE2MDAwMDAwMDAsImV4cCI6MjAwMDAwMDAwMH0.placeholder' }}
       VITE_APP_NAME: Wallet
       VITE_APP_URL: http://localhost:8080
       VITE_APP_ENVIRONMENT: development
@@ -43,8 +43,8 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci || npm install --no-audit
+      - name: Install dependencies (strict clean install)
+        run: npm ci --legacy-peer-deps
 
       - name: TypeScript Check (TypeCheck Gate)
         run: npm run typecheck
@@ -72,8 +72,8 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci || npm install --no-audit
+      - name: Install dependencies (strict clean install)
+        run: npm ci --legacy-peer-deps
 
       - name: Lint changed files in PR
         run: |
