@@ -243,10 +243,20 @@ export function useWalletIA(options: UseWalletIAOptions) {
 
         const isWorkspaceError = !workspaceId;
         const isOrchestratorError = error instanceof WalletAiOrchestratorError;
+        const isQuotaError =
+          isOrchestratorError && (error as WalletAiOrchestratorError).code === "openai_quota_exceeded";
+        const isKeyError =
+          isOrchestratorError && (error as WalletAiOrchestratorError).code === "openai_invalid_key";
 
         let userFacingContent: string;
         if (isWorkspaceError) {
           userFacingContent = "⚠️ Nenhum workspace selecionado. Selecione um workspace e tente novamente.";
+        } else if (isQuotaError) {
+          userFacingContent =
+            "⚠️ Limite de créditos OpenAI atingido.\n\nPara usar o assistente, adicione créditos em platform.openai.com ou reconfigure a chave em Configurações → IA.";
+        } else if (isKeyError) {
+          userFacingContent =
+            "⚠️ Chave OpenAI inválida ou expirada.\n\nReconfigure em Configurações → IA.";
         } else if (isOrchestratorError) {
           userFacingContent = `⚠️ Não consegui concluir esta análise.\n\nCódigo: ${correlationId.slice(0, 8).toUpperCase()}`;
         } else {

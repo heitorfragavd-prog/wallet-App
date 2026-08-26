@@ -91,6 +91,12 @@ export class OpenAiLlmRunner implements LlmRunner {
       });
 
       if (!res.ok) {
+        if (res.status === 429) {
+          throw new Error("openai_quota_exceeded");
+        }
+        if (res.status === 401) {
+          throw new Error("openai_invalid_key");
+        }
         throw new Error(`openai_api_error_${res.status}`);
       }
 

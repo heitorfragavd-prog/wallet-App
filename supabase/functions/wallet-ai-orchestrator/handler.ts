@@ -150,6 +150,13 @@ export async function handleOrchestratorHttpRequest(
       errorCode = err.code;
     } else if (err instanceof Error) {
       errorCode = err.message;
+      // Propagar status HTTP semântico para erros conhecidos do OpenAI
+      if (err.message === "openai_quota_exceeded") {
+        status = 429;
+      } else if (err.message === "openai_invalid_key") {
+        status = 401;
+        errorCode = "openai_invalid_key";
+      }
     }
 
     if (context && dependencies.auditLogger) {
