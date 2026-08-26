@@ -333,4 +333,25 @@ describe("Fatura Cartão Isolation & Ownership Tests", () => {
     expect(periodoSetembro.data_fechamento).toBe("2026-09-12");
     expect(periodoSetembro.data_vencimento).toBe("2026-09-19");
   });
+
+  it("14. Regra genérica de Saldo Anterior: max(valor_total - valor_pago, 0)", () => {
+    function calcularSaldoAnterior(faturaAnterior?: { valor_total?: number; valor_pago?: number } | null) {
+      if (!faturaAnterior) return 0;
+      const total = Number(faturaAnterior.valor_total || 0);
+      const pago = Number(faturaAnterior.valor_pago || 0);
+      return Math.max(0, total - pago);
+    }
+
+    // Cenário A: Julho (43,01 total, 43,01 pago) -> Agosto exibe 0,00
+    expect(calcularSaldoAnterior({ valor_total: 43.01, valor_pago: 43.01 })).toBe(0);
+
+    // Cenário B: Agosto (339,73 total, 0,00 pago) -> Setembro exibe 339,73
+    expect(calcularSaldoAnterior({ valor_total: 339.73, valor_pago: 0 })).toBe(339.73);
+
+    // Cenário C: Pagamento Parcial (339,73 total, 200,00 pago) -> Setembro exibe 139,73
+    expect(Number(calcularSaldoAnterior({ valor_total: 339.73, valor_pago: 200.00 }).toFixed(2))).toBe(139.73);
+
+    // Cenário D: Agosto 100% quitado (339,73 total, 339,73 pago) -> Setembro exibe 0,00
+    expect(calcularSaldoAnterior({ valor_total: 339.73, valor_pago: 339.73 })).toBe(0);
+  });
 });

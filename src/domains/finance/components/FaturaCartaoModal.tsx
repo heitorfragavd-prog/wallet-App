@@ -148,12 +148,23 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const mesAnteriorNum = mesAnteriorDate.getMonth() + 1;
   const anoAnteriorNum = mesAnteriorDate.getFullYear();
 
-  const { totalFatura: totalFaturaMesAnterior } = useComprasFatura({
+  const { totalFatura: totalFaturaMesAnterior, fatura: faturaMesAnteriorObj } = useComprasFatura({
     cartaoId: cartao?.id,
     mesFatura: mesAnteriorNum,
     anoFatura: anoAnteriorNum,
     cartaoInfo: cartao,
   });
+
+  // Saldo transportado da fatura anterior (apenas o saldo em aberto / pendente de quitação)
+  // Se a fatura anterior foi 100% paga (valor_pago >= valor_total), o saldo anterior é R$ 0,00!
+  const saldoMesAnterior = useMemo(() => {
+    if (faturaMesAnteriorObj) {
+      const total = Number(faturaMesAnteriorObj.valor_total || 0);
+      const pago = Number(faturaMesAnteriorObj.valor_pago || 0);
+      return Math.max(0, total - pago);
+    }
+    return totalFaturaMesAnterior || 0;
+  }, [faturaMesAnteriorObj, totalFaturaMesAnterior]);
 
   const { despesas: todasDespesasCartao, refetch: refetchDespesas } = useDespesas();
 
@@ -351,7 +362,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             <div className="flex items-center justify-between text-muted-foreground">
               <span>SALDO MÊS ANTERIOR</span>
               <span className="font-semibold text-foreground">
-                R$ {totalFaturaMesAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                R$ {saldoMesAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex items-center justify-between text-muted-foreground">
