@@ -136,7 +136,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const anoFaturaNum = dataRef.getFullYear();
 
   // Busca lançamentos por PERÍODO DE FECHAMENTO (data_inicio a data_fechamento)
-  const { despesas: despesasFatura, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
+  const { despesas: despesasFatura, fatura: faturaAtualObj, periodo, isLoading, refetch: refetchFatura } = useComprasFatura({
     cartaoId: cartao?.id,
     mesFatura: mesFaturaNum,
     anoFatura: anoFaturaNum,
@@ -148,12 +148,23 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const mesAnteriorNum = mesAnteriorDate.getMonth() + 1;
   const anoAnteriorNum = mesAnteriorDate.getFullYear();
 
-  const { totalFatura: totalFaturaMesAnterior } = useComprasFatura({
+  const { totalFatura: totalFaturaMesAnterior, fatura: faturaMesAnteriorObj } = useComprasFatura({
     cartaoId: cartao?.id,
     mesFatura: mesAnteriorNum,
     anoFatura: anoAnteriorNum,
     cartaoInfo: cartao,
   });
+
+  // Saldo transportado da fatura anterior (apenas o saldo em aberto / pendente de quitação)
+  // Se a fatura anterior foi 100% paga (valor_pago >= valor_total), o saldo anterior é R$ 0,00!
+  const saldoMesAnterior = useMemo(() => {
+    if (faturaMesAnteriorObj) {
+      const total = Number(faturaMesAnteriorObj.valor_total || 0);
+      const pago = Number(faturaMesAnteriorObj.valor_pago || 0);
+      return Math.max(0, total - pago);
+    }
+    return totalFaturaMesAnterior || 0;
+  }, [faturaMesAnteriorObj, totalFaturaMesAnterior]);
 
   const { despesas: todasDespesasCartao, refetch: refetchDespesas } = useDespesas();
 
@@ -190,17 +201,23 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     let items = fonteBase.map((d: any) => {
       const dataDesp = new Date(d.data + "T12:00:00");
       const categoryInfo = getLucideCategoryInfo(d.categorias?.nome);
+      const parcelaInfo = (d.parcela_numero && d.parcela_total)
+        ? `(${d.parcela_numero}/${d.parcela_total})`
+        : d.parcela_numero
+          ? `(Parcela ${d.parcela_numero})`
+          : null;
       return {
         id: d.id,
         tipo: "despesa",
-        isParcelado: false,
+        isParcelado: !!parcelaInfo,
         descricao: d.descricao,
         categoria: d.categorias?.nome || "Despesa Cartão",
         valor: Number(d.valor || 0),
         data: d.data,
         dataFormatted: format(dataDesp, "dd/MM/yy"),
-        parcelaInfo: null,
+        parcelaInfo,
         status: d.pago ? "quitada" : "pendente",
+        statusTransacao: d.status_transacao || null,
         categoryInfo,
       };
     });
@@ -227,13 +244,16 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
     lancamentos.reduce((acc, i) => acc + i.valor, 0)
   , [lancamentos]);
 
-  // Se houver lançamentos detalhados no período, usa a soma dos lançamentos.
-  // Se não houver lançamentos detalhados mas o cartão possuir saldo_atual (ex: Open Finance) no mês vigente, reflete o saldo real.
+  // Prioridade:
+  // 1. Se houver lançamentos detalhados no período, usa a soma dos lançamentos.
+  // 2. Se houver fatura persistida em public.faturas_cartao, usa o valor_total oficial da fatura.
+  // 3. Se for mês vigente sem lançamentos (fatura aberta Open Finance), exibe o saldo_atual do cartão.
   const totalFatura = useMemo(() => {
     if (totalLancamentos > 0) return totalLancamentos;
+    if (faturaAtualObj?.valor_total) return Number(faturaAtualObj.valor_total);
     if (isMesAtual && cartao?.saldo_atual) return Number(cartao.saldo_atual || 0);
     return 0;
-  }, [totalLancamentos, isMesAtual, cartao?.saldo_atual]);
+  }, [totalLancamentos, faturaAtualObj?.valor_total, isMesAtual, cartao?.saldo_atual]);
 
   const handlePagarFatura = () => {
     toast({
@@ -342,7 +362,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
             <div className="flex items-center justify-between text-muted-foreground">
               <span>SALDO MÊS ANTERIOR</span>
               <span className="font-semibold text-foreground">
-                R$ {totalFaturaMesAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                R$ {saldoMesAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex items-center justify-between text-muted-foreground">
@@ -584,11 +604,18 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
                         {item.dataFormatted}
                       </span>
                       <div>
-                        <p className="font-semibold text-sm text-foreground">
-                          {item.descricao}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-sm text-foreground">
+                            {item.descricao}
+                          </p>
+                          {item.statusTransacao === "PENDING" && (
+                            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                              Pendente
+                            </span>
+                          )}
+                        </div>
                         {item.parcelaInfo && (
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-[11px] font-medium text-sky-400">
                             {item.parcelaInfo}
                           </span>
                         )}
