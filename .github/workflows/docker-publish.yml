@@ -1,23 +1,62 @@
-name: Build & Push Docker Image
+﻿name: Build & Push Docker Image
 
-# Builda a imagem multi-arquitetura e publica no Docker Hub.
-# Secrets necessários no repositório (Settings > Secrets and variables > Actions):
-#   DOCKERHUB_USERNAME     - usuário do Docker Hub (heltonfraga)
-#   DOCKERHUB_TOKEN        - access token do Docker Hub
-#   VITE_SUPABASE_URL      - URL do projeto Supabase
-#   VITE_SUPABASE_ANON_KEY - anon key do Supabase
+# Publica no Docker Hub SOMENTE após o CI Quality Gates concluir com sucesso no push para develop ou master.
+# Impede que PRs ou commits que falhem nos testes gerem/substituam imagens Docker.
 
 on:
-  push:
-    branches: [develop, master]
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI Quality Gates"]
+    branches:
+      - develop
+      - master
+    types:
+      - completed
+
+concurrency:
+  group: docker-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build-and-push:
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.head_branch == 'develop' || github.event.workflow_run.head_branch == 'master')
+
     steps:
-      - name: Checkout
+      - name: Checkout exact approved commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Determine Docker Image Tags
+        id: meta
+        run: |
+          TARGET_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA=$(echo "${HEAD_SHA}" | cut -c1-7)
+          APP_VERSION=$(node -p "require('./package.json').version")
+          DOCKER_USER="${{ secrets.DOCKERHUB_USERNAME }}"
+
+          echo "Target branch: ${TARGET_BRANCH}"
+          echo "Commit SHA: ${HEAD_SHA} (${SHORT_SHA})"
+          echo "App Version: ${APP_VERSION}"
+
+          if [ "${TARGET_BRANCH}" = "master" ]; then
+            TAGS="${DOCKER_USER}/wallet:latest,${DOCKER_USER}/wallet:${APP_VERSION},${DOCKER_USER}/wallet:master-${SHORT_SHA}"
+          elif [ "${TARGET_BRANCH}" = "develop" ]; then
+            TAGS="${DOCKER_USER}/wallet:develop,${DOCKER_USER}/wallet:develop-${SHORT_SHA}"
+          else
+            TAGS="${DOCKER_USER}/wallet:${TARGET_BRANCH}-${SHORT_SHA}"
+          fi
+
+          echo "Computed tags: ${TAGS}"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -28,8 +67,8 @@ jobs:
       - name: Login no Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME || 'heltonfraga' }}
-          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKER_TOKEN || secrets.DOCKER_PASSWORD || secrets.DOCKERHUB_PASSWORD }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build e push (linux/amd64 + linux/arm64)
         uses: docker/build-push-action@v6
@@ -37,9 +76,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            heltonfraga/wallet:1.0.3
-            heltonfraga/wallet:latest
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
             VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
