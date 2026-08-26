@@ -1,4 +1,4 @@
-﻿name: CI Quality Gates
+name: CI Quality Gates
 
 on:
   pull_request:
@@ -77,6 +77,13 @@ jobs:
 
       - name: Lint changed files in PR
         run: |
+          if [ "${{ github.base_ref }}" = "master" ] && [ "${{ github.head_ref }}" = "develop" ]; then
+            echo "Release promotion develop → master."
+            echo "Progressive lint incremental already enforced on PRs merged into develop."
+            echo "Skipping historical accumulated diff."
+            exit 0
+          fi
+
           git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD | grep -E '\.(ts|tsx|js|jsx)$' > /tmp/changed_files.txt || true
           if [ -s /tmp/changed_files.txt ]; then
             echo "Linting changed files:"
