@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 set -e
 
@@ -18,9 +18,10 @@ docker buildx build \
   --build-arg VITE_APP_ENVIRONMENT="production" \
   --build-arg VITE_ENABLE_ANALYTICS="false" \
   --build-arg VITE_ENABLE_DEBUG_LOGS="false" \
-  --tag heltonfraga/wallet:1.0.1 \
-  --tag heltonfraga/wallet:latest \
+  --tag heitor84/wallet:1.0.1 \
+  --tag heitor84/wallet:latest \
   --push \
   .
 
-echo "✅ Build e push concluídos!"
+echo "âœ… Build e push concluÃ­dos!"
+
