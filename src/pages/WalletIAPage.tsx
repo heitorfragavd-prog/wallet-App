@@ -48,6 +48,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 import { cn } from "@/lib/utils";
+import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 
 // ─── Fast Query determinístico (reutiliza a lógica da Consulta Rápida) ────────
 
@@ -224,13 +225,15 @@ const MessageBubble: React.FC<{
           </div>
         )}
 
-        {/* Proposta de Ação */}
+        {/* Proposta de Acao - GAP Etapa 4: orchestrator nao produz proposals ainda */}
         {msg.actionProposal && !isUser && onConfirmAction && onCancelAction && (
           <div className="mt-2">
             <AgentActionProposalCard
-              proposal={msg.actionProposal as any}
+              proposal={msg.actionProposal as ActionProposal}
               onConfirm={onConfirmAction}
               onCancel={onCancelAction}
+              disabled={true}
+              disabledReason="Execucao via Wallet IA chegara na Etapa 4 - Action Gateway. Nenhuma acao foi realizada."
             />
           </div>
         )}
@@ -305,7 +308,7 @@ export default function WalletIAPage() {
     queryKey: ["wallet-ia-contas"],
     queryFn: async () => {
       const { data } = await supabase.from("contas_usuario").select("*");
-      return (data ?? []).map((c: any) => ({
+      return (data ?? []).map((c: { nome?: unknown; saldo_atual?: unknown; saldo?: unknown; tipo?: unknown }) => ({
         nome: String(c.nome || ""),
         saldo_atual: Number(c.saldo_atual ?? c.saldo ?? 0),
         tipo: String(c.tipo || ""),
