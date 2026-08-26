@@ -37,7 +37,9 @@ const norm = (s: string): string =>
   s
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[?!.,;:]+$/g, "") // remove pontuacao terminal
+    .trim();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. AÇÕES — mutações de dados (Agent V2 com ActionProposal)
