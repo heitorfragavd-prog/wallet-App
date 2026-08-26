@@ -1,0 +1,66 @@
+﻿name: Release Automation
+
+# Cria Git Tag e GitHub Release SOMENTE após o build e publicação Docker em master concluírem com sucesso.
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Docker Image"]
+    branches:
+      - master
+    types:
+      - completed
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release and Git Tag
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master'
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Validate Release Version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_NAME="v${VERSION}"
+          echo "Release version: ${VERSION}"
+          echo "Target tag: ${TAG_NAME}"
+
+          # Prevenção contra tag/release duplicada
+          if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "ERROR: Git tag ${TAG_NAME} already exists! Aborting release to prevent duplication."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Git Tag and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Generate Release Notes and Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Wallet ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            --target "${{ github.event.workflow_run.head_sha }}"

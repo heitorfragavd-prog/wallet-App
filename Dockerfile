@@ -1,4 +1,4 @@
-# Build Stage
+﻿# Build Stage
 FROM node:20-alpine as build
 
 WORKDIR /app
@@ -6,8 +6,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies (deterministic)
+RUN npm ci --legacy-peer-deps
 
 # Copy source code
 COPY . .
@@ -45,8 +45,11 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Add labels for Docker Hub
 LABEL maintainer="Cortexx"
 LABEL description="Wallet - Consultoria Financeira Inteligente"
-LABEL version="1.0.1"
 
 EXPOSE 80
+
+# Native healthcheck using wget in Alpine
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
