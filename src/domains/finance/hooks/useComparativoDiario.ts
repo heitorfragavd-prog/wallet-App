@@ -74,6 +74,30 @@ export function useComparativoDiario({ monthsCount = 6, selectedDay }: UseCompar
   return useQuery({
     queryKey: ["comparativo_diario_oficial", workspaceId, monthsCount, selectedDay],
     queryFn: async () => {
+      if (!workspaceId) {
+        return {
+          dailyPoints: [],
+          cards: {
+            diaSelecionado: 1,
+            maxDiaDisponivel: 1,
+            receitaAtual: 0,
+            receitaMedia: 0,
+            receitaDiffRs: 0,
+            receitaDiffPct: 0,
+            despesaAtual: 0,
+            despesaMedia: 0,
+            despesaDiffRs: 0,
+            despesaDiffPct: 0,
+            saldoAtual: 0,
+            saldoMedio: 0,
+            saldoDiffRs: 0,
+            saldoDiffPct: 0,
+          },
+          insight: { status: "neutro" as const, mensagem: "Selecione um workspace" },
+          mediaHistoricaMes: 0,
+        };
+      }
+
       const agora = new Date();
       const anoAtual = agora.getFullYear();
       const mesAtualIndex = agora.getMonth(); // 0..11
@@ -104,11 +128,7 @@ export function useComparativoDiario({ monthsCount = 6, selectedDay }: UseCompar
 
       // 3. Buscar Despesas usando a mesma consulta padrão da tela Despesas
       const applyWorkspaceFilter = (q: any) => {
-        let query = q;
-        if (workspaceId) {
-          query = query.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-        }
-        return query.gte("data", startStr).lte("data", `${endStr}T23:59:59`);
+        return q.eq("workspace_id", workspaceId).gte("data", startStr).lte("data", `${endStr}T23:59:59`);
       };
 
       const [despesasRows, transacoesDespesasRows] = await Promise.all([
@@ -294,6 +314,7 @@ export function useComparativoDiario({ monthsCount = 6, selectedDay }: UseCompar
         },
       };
     },
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 5,
   });
 }

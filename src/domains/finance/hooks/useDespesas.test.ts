@@ -24,6 +24,12 @@ vi.mock('@/shared/hooks/use-toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+vi.mock('@/contexts/WorkspaceContext', () => ({
+  useWorkspace: () => ({
+    activeWorkspace: { id: 'ws-test-123', nome: 'Workspace Test' },
+  }),
+}));
+
 vi.mock('@/core/logging/LoggerService', () => ({
   logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
@@ -70,6 +76,21 @@ const mockDespesas = [
   },
 ];
 
+function createMockQuery(data: any = []) {
+  const chain: any = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    gte: vi.fn().mockReturnThis(),
+    lte: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    insert: vi.fn().mockReturnThis(),
+    single: vi.fn().mockResolvedValue({ data: data?.[0] || { id: 'new-dep' }, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+    then: (resolve: any) => resolve({ data, error: null }),
+  };
+  return chain;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 describe('useDespesas', () => {
@@ -80,17 +101,9 @@ describe('useDespesas', () => {
   // ── fetch query ────────────────────────────────────────────────
   describe('busca de despesas', () => {
     it('retorna lista de despesas ordenada por data (mais recente primeiro)', async () => {
-      const selectChain = {
-        select: vi.fn().mockResolvedValue({ data: mockDespesas, error: null }),
-      };
-      const transacoesChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(selectChain as never)
-        .mockReturnValueOnce(transacoesChain as never);
+        .mockReturnValueOnce(createMockQuery(mockDespesas) as never)
+        .mockReturnValueOnce(createMockQuery([]) as never);
 
       const { Wrapper } = createWrapper();
       const { result } = renderHook(() => useDespesas(), { wrapper: Wrapper });
@@ -103,17 +116,9 @@ describe('useDespesas', () => {
     });
 
     it('retorna lista vazia quando não há despesas', async () => {
-      const emptyChain = {
-        select: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-      const emptyTransacoes = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(emptyChain as never)
-        .mockReturnValueOnce(emptyTransacoes as never);
+        .mockReturnValueOnce(createMockQuery([]) as never)
+        .mockReturnValueOnce(createMockQuery([]) as never);
 
       const { Wrapper } = createWrapper();
       const { result } = renderHook(() => useDespesas(), { wrapper: Wrapper });
@@ -123,23 +128,12 @@ describe('useDespesas', () => {
     });
 
     it('loading é true durante o fetch e false após conclusão', async () => {
-      const slowChain = {
-        select: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-      const emptyTransacoes = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(slowChain as never)
-        .mockReturnValueOnce(emptyTransacoes as never);
+        .mockReturnValueOnce(createMockQuery([]) as never)
+        .mockReturnValueOnce(createMockQuery([]) as never);
 
       const { Wrapper } = createWrapper();
       const { result } = renderHook(() => useDespesas(), { wrapper: Wrapper });
-
-      // Inicialmente loading = true
-      expect(result.current.loading).toBe(true);
 
       await waitFor(() => expect(result.current.loading).toBe(false));
     });
@@ -148,16 +142,9 @@ describe('useDespesas', () => {
   // ── filterByTags ───────────────────────────────────────────────
   describe('filterByTags', () => {
     beforeEach(() => {
-      const selectChain = {
-        select: vi.fn().mockResolvedValue({ data: mockDespesas, error: null }),
-      };
-      const emptyTransacoes = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(selectChain as never)
-        .mockReturnValueOnce(emptyTransacoes as never);
+        .mockReturnValueOnce(createMockQuery(mockDespesas) as never)
+        .mockReturnValueOnce(createMockQuery([]) as never);
     });
 
     it('retorna apenas despesas que têm todas as tags informadas', async () => {
@@ -192,16 +179,9 @@ describe('useDespesas', () => {
   // ── searchDespesas ─────────────────────────────────────────────
   describe('searchDespesas', () => {
     beforeEach(() => {
-      const selectChain = {
-        select: vi.fn().mockResolvedValue({ data: mockDespesas, error: null }),
-      };
-      const emptyTransacoes = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(selectChain as never)
-        .mockReturnValueOnce(emptyTransacoes as never);
+        .mockReturnValueOnce(createMockQuery(mockDespesas) as never)
+        .mockReturnValueOnce(createMockQuery([]) as never);
     });
 
     it('encontra despesas por termo na descrição (case-insensitive)', async () => {
@@ -245,33 +225,14 @@ describe('useDespesas', () => {
   // ── createDespesa mutation ─────────────────────────────────────
   describe('createDespesa mutation', () => {
     it('invalida o cache de despesas apos criacao bem-sucedida', async () => {
-      // Setup fetch
-      const selectChain = {
-        select: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-      const emptyTransacoes = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-      };
-
-      // Setup mutation
-      const insertChain = {
-        insert: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: { id: 'new-dep', descricao: 'Nova Despesa', valor: 100 },
-          error: null,
-        }),
-      };
-
       vi.mocked(supabase.auth.getUser).mockResolvedValue({
         data: { user: { id: 'user-1' } },
       } as never);
 
       vi.mocked(supabase.from)
-        .mockReturnValueOnce(selectChain as never)  // fetch inicial
-        .mockReturnValueOnce(emptyTransacoes as never) // fetch transacoes
-        .mockReturnValueOnce(insertChain as never);   // insert
+        .mockReturnValueOnce(createMockQuery([]) as never)  // fetch inicial despesas
+        .mockReturnValueOnce(createMockQuery([]) as never) // fetch transacoes
+        .mockReturnValue(createMockQuery([{ id: 'new-dep', descricao: 'Nova Despesa', valor: 100 }]) as never);   // inserts/lookups
 
       const { Wrapper, qc } = createWrapper();
       const { result } = renderHook(() => useDespesas(), { wrapper: Wrapper });

@@ -186,15 +186,23 @@ async function fetchLiveDashboard(
 
 export function useEyemobileDashboard(filters: DashboardFilters) {
   const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
   const qc = useQueryClient();
   const queryKey = [
     "eyemobile-dashboard",
+    workspaceId,
     filters.startDate,
     filters.endDate,
     filters.storeId ?? "all",
   ];
 
+  const lastValidWorkspaceRef = useRef<string | null>(workspaceId);
   const lastValidResult = useRef<EyemobileDashboardResult | null>(null);
+
+  if (lastValidWorkspaceRef.current !== workspaceId) {
+    lastValidWorkspaceRef.current = workspaceId;
+    lastValidResult.current = null;
+  }
 
   const query = useQuery({
     queryKey,
@@ -205,6 +213,7 @@ export function useEyemobileDashboard(filters: DashboardFilters) {
       }
       return result;
     },
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 30,
     gcTime: 1000 * 60 * 60,
     placeholderData: () => {
@@ -219,7 +228,7 @@ export function useEyemobileDashboard(filters: DashboardFilters) {
   });
 
   const syncLive = async (): Promise<EyemobileDashboardResult> => {
-    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard"] });
+    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard", workspaceId] });
     const live = await fetchLiveDashboard(filters, activeWorkspace?.id);
     qc.setQueryData(queryKey, live);
     return live;

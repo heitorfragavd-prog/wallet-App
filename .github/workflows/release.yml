@@ -1,0 +1,72 @@
+﻿name: Release Automation
+
+# Cria Git Tag e GitHub Release SOMENTE após o build e publicação Docker em master concluírem com sucesso.
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Docker Image"]
+    branches:
+      - master
+    types:
+      - completed
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release and Git Tag
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master'
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Validate Release Version and Existing Tags/Releases
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_NAME="v${VERSION}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+
+          echo "Release version: ${VERSION}"
+          echo "Target tag: ${TAG_NAME}"
+          echo "Target SHA: ${HEAD_SHA}"
+
+          # 1. Prevenção: Verificar se tag Git já existe
+          if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "ERROR: Git tag ${TAG_NAME} already exists in repository! Aborting release."
+            exit 1
+          fi
+
+          # 2. Prevenção: Verificar se GitHub Release já existe
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "ERROR: GitHub Release ${TAG_NAME} already exists! Aborting release."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Atomic GitHub Release & Tag Creation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Cria a GitHub Release e a Git Tag atomicamente apontando para o SHA exato do commit aprovado
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Wallet ${{ steps.version.outputs.tag }}" \
+            --target "${{ steps.version.outputs.head_sha }}" \
+            --generate-notes

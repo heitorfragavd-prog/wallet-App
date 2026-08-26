@@ -19,12 +19,13 @@ export interface Subcategoria {
 export const SUBCATEGORIAS_QUERY_KEY = ["subcategorias"] as const;
 
 async function fetchSubcategorias(workspaceId: string | null): Promise<Subcategoria[]> {
-  let query = supabase
+  if (!workspaceId) return [];
+
+  const query = supabase
     .from("subcategorias")
     .select("*, categorias!categoria_id (nome, cor, icone)")
+    .eq("workspace_id", workspaceId)
     .order("nome", { ascending: true });
-
-  if (workspaceId) query = query.eq("workspace_id", workspaceId);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -40,11 +41,15 @@ export const useSubcategorias = () => {
   const { data: subcategorias = [], isLoading: loading } = useQuery({
     queryKey: [...SUBCATEGORIAS_QUERY_KEY, { workspaceId: currentWorkspaceId }],
     queryFn: () => fetchSubcategorias(currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createSubcategoria = useMutation({
     mutationFn: async (sub: Omit<Subcategoria, "id" | "user_id" | "created_at" | "categorias">) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar subcategoria.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("subcategorias")
@@ -66,10 +71,14 @@ export const useSubcategorias = () => {
 
   const updateSubcategoria = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<Subcategoria> & { id: string }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("subcategorias")
         .update(updates)
-        .eq("id", id)
+        .eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await q
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
       if (error) throw error;
@@ -87,7 +96,11 @@ export const useSubcategorias = () => {
 
   const deleteSubcategoria = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("subcategorias").delete().eq("id", id);
+      let q = supabase.from("subcategorias").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {

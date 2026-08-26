@@ -22,7 +22,7 @@ const base: Colaborador = {
   foto_url: null,
   tipo: "funcionario",
   cargo: "Atendente",
-  data_admissao: "2026-05-24",
+  data_admissao: "2026-06-06",
   data_demissao: null,
   salario_bruto: 1621,
   vale_transporte: 0,

@@ -19,12 +19,13 @@ export interface CentroCusto {
 export const CENTROS_CUSTO_QUERY_KEY = ["centros-custo"] as const;
 
 async function fetchCentrosCusto(workspaceId: string | null): Promise<CentroCusto[]> {
+  if (!workspaceId) return [];
+
   let query = supabase
     .from("centros_custo")
     .select("*")
+    .eq("workspace_id", workspaceId)
     .order("nome", { ascending: true });
-
-  if (workspaceId) query = query.eq("workspace_id", workspaceId);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -40,11 +41,15 @@ export const useCentrosCusto = () => {
   const { data: centrosCusto = [], isLoading: loading } = useQuery({
     queryKey: [...CENTROS_CUSTO_QUERY_KEY, { workspaceId: currentWorkspaceId }],
     queryFn: () => fetchCentrosCusto(currentWorkspaceId),
+    enabled: !!currentWorkspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createCentroCusto = useMutation({
     mutationFn: async (c: Omit<CentroCusto, "id" | "user_id" | "created_at">) => {
+      if (!currentWorkspaceId) {
+        throw new Error("Workspace não selecionado para criar centro de custo.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("centros_custo")
@@ -66,10 +71,14 @@ export const useCentrosCusto = () => {
 
   const updateCentroCusto = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<CentroCusto> & { id: string }) => {
-      const { data, error } = await supabase
+      let q = supabase
         .from("centros_custo")
         .update(updates)
-        .eq("id", id)
+        .eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { data, error } = await q
         .select()
         .single();
       if (error) throw error;
@@ -87,7 +96,11 @@ export const useCentrosCusto = () => {
 
   const deleteCentroCusto = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("centros_custo").delete().eq("id", id);
+      let q = supabase.from("centros_custo").delete().eq("id", id);
+      if (currentWorkspaceId) {
+        q = q.eq("workspace_id", currentWorkspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {

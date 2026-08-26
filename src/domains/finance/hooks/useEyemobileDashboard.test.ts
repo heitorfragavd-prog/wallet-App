@@ -8,6 +8,12 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { functions: { invoke: vi.fn() }, from: vi.fn() },
 }));
 
+vi.mock("@/contexts/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    activeWorkspace: { id: "ws-test-123", nome: "Workspace Test" },
+  }),
+}));
+
 import { supabase } from "@/integrations/supabase/client";
 
 beforeEach(() => vi.clearAllMocks());
@@ -58,7 +64,7 @@ describe("useEyemobileDashboard", () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(supabase.functions.invoke).toHaveBeenCalledWith("eyemobile-sync", {
-      body: { mode: "DASHBOARD", start_date: "2026-07-01", end_date: "2026-07-31", store_id: "store-1" },
+      body: { mode: "DASHBOARD", start_date: "2026-07-01", end_date: "2026-07-31", store_id: "store-1", workspace_id: "ws-test-123" },
     });
     expect(result.current.data?.stores).toEqual([{ id: "store-1", name: "Centro" }]);
   });

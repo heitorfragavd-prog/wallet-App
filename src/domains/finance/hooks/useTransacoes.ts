@@ -34,14 +34,13 @@ export interface TransacoesQueryParams {
 }
 
 const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: string) => {
+  if (!workspaceId) return [];
+
   const { startDate = null, endDate = null, limit = 2000 } = params;
   const CATEGORIAS_EMBED = `categorias!categoria_id (nome, cor, icone)`;
 
   const applyCommon = (query: any) => {
-    let q = query;
-    if (workspaceId) {
-      q = q.or(`workspace_id.eq.${workspaceId},workspace_id.is.null`);
-    }
+    let q = query.eq("workspace_id", workspaceId);
     if (startDate) q = q.gte("data", startDate);
     if (endDate) q = q.lte("data", endDate);
     return q.order("data", { ascending: false }).limit(limit);
@@ -75,6 +74,7 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
   const query = useQuery({
     queryKey,
     queryFn: () => fetchTransacoesData(params, activeWorkspace?.id),
+    enabled: !!activeWorkspace?.id,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
@@ -86,13 +86,16 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
     transacao: Omit<Transacao, "id" | "user_id" | "created_at" | "updated_at" | "categorias"> & { total_parcelas?: number }
   ) => {
     try {
+      if (!activeWorkspace?.id) {
+        throw new Error("Workspace não selecionado para criar transação.");
+      }
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Usuário não autenticado");
 
       if (transacao.total_parcelas && transacao.total_parcelas > 1) {
         await financeService.createTransaction({
           userId: user.id,
-          workspaceId: activeWorkspace?.id,
+          workspaceId: activeWorkspace.id,
           tipo: transacao.tipo,
           descricao: transacao.descricao,
           valorTotal: transacao.valor,
@@ -101,6 +104,8 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
           totalParcelas: transacao.total_parcelas,
         });
         await qc.invalidateQueries({ queryKey: ["transacoes"] });
+        await qc.invalidateQueries({ queryKey: ["despesas"] });
+        await qc.invalidateQueries({ queryKey: ["receitas"] });
         toast({ title: "Transações parceladas criadas", description: `${transacao.total_parcelas} parcelas geradas com sucesso!` });
         return { data: true, error: null };
       }
@@ -110,7 +115,7 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
         .insert([{
           ...transacao,
           user_id: user.id,
-          workspace_id: activeWorkspace?.id || null,
+          workspace_id: activeWorkspace.id,
           parcela_atual: 1,
           total_parcelas: 1,
         }])
@@ -119,6 +124,8 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
 
       if (error) throw error;
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
+      await qc.invalidateQueries({ queryKey: ["despesas"] });
+      await qc.invalidateQueries({ queryKey: ["receitas"] });
       toast({ title: "Transação criada", description: "Transação criada com sucesso!" });
       return { data, error: null };
     } catch (error) {
@@ -129,9 +136,15 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
 
   const updateTransacao = async (id: string, updates: Partial<Transacao>) => {
     try {
-      const { data, error } = await supabase.from("transacoes").update(updates).eq("id", id).select(`*, categorias!categoria_id (nome, cor, icone)`).single();
+      let q = supabase.from("transacoes").update(updates).eq("id", id);
+      if (activeWorkspace?.id) {
+        q = q.eq("workspace_id", activeWorkspace.id);
+      }
+      const { data, error } = await q.select(`*, categorias!categoria_id (nome, cor, icone)`).single();
       if (error) throw error;
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
+      await qc.invalidateQueries({ queryKey: ["despesas"] });
+      await qc.invalidateQueries({ queryKey: ["receitas"] });
       toast({ title: "Transação atualizada", description: "Transação atualizada com sucesso!" });
       return { data, error: null };
     } catch (error) {
@@ -142,9 +155,15 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
 
   const deleteTransacao = async (id: string) => {
     try {
-      const { error } = await supabase.from("transacoes").delete().eq("id", id);
+      let q = supabase.from("transacoes").delete().eq("id", id);
+      if (activeWorkspace?.id) {
+        q = q.eq("workspace_id", activeWorkspace.id);
+      }
+      const { error } = await q;
       if (error) throw error;
       await qc.invalidateQueries({ queryKey: ["transacoes"] });
+      await qc.invalidateQueries({ queryKey: ["despesas"] });
+      await qc.invalidateQueries({ queryKey: ["receitas"] });
       toast({ title: "Transação removida", description: "Transação removida com sucesso!" });
       return { error: null };
     } catch (error) {
@@ -165,6 +184,6 @@ export const useTransacoes = (params: TransacoesQueryParams = {}) => {
     createTransacao,
     updateTransacao,
     deleteTransacao,
-    refetch: () => qc.invalidateQueries({ queryKey: ["transacoes"] }),
+    refetch: () => qc.invalidateQueries({ queryKey: queryKey }),
   };
 };

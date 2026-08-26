@@ -1,0 +1,94 @@
+name: CI Quality Gates
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - master
+  push:
+    branches:
+      - develop
+      - master
+  workflow_dispatch:
+
+# Cancela execuções anteriores em andamento na mesma branch/PR
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Princípio do menor privilégio
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    name: Quality Gates (TypeCheck, Tests, Build)
+    runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsYWNlaG9sZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE2MDAwMDAwMDAsImV4cCI6MjAwMDAwMDAwMH0.placeholder' }}
+      VITE_APP_NAME: Wallet
+      VITE_APP_URL: http://localhost:8080
+      VITE_APP_ENVIRONMENT: development
+      VITE_ENABLE_ANALYTICS: false
+      VITE_ENABLE_DEBUG_LOGS: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js LTS (22)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies (strict clean install)
+        run: npm ci --legacy-peer-deps
+
+      - name: TypeScript Check (TypeCheck Gate)
+        run: npm run typecheck
+
+      - name: Unit & Integration Tests (Vitest Gate)
+        run: npm run test
+
+      - name: Production Build (Vite Build Gate)
+        run: npm run build
+
+  lint-changed:
+    name: Progressive Lint (Changed Files)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js LTS (22)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies (strict clean install)
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint changed files in PR
+        run: |
+          if [ "${{ github.base_ref }}" = "master" ] && [ "${{ github.head_ref }}" = "develop" ]; then
+            echo "Release promotion develop → master."
+            echo "Progressive lint incremental already enforced on PRs merged into develop."
+            echo "Skipping historical accumulated diff."
+            exit 0
+          fi
+
+          git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD | grep -E '\.(ts|tsx|js|jsx)$' > /tmp/changed_files.txt || true
+          if [ -s /tmp/changed_files.txt ]; then
+            echo "Linting changed files:"
+            cat /tmp/changed_files.txt
+            xargs -a /tmp/changed_files.txt npx eslint
+          else
+            echo "No TS/JS files changed in this PR."
+          fi

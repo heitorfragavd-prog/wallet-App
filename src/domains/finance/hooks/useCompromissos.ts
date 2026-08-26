@@ -28,8 +28,8 @@ export const useCompromissos = (mesRef?: string) => {
   const { data: compromissos = [], isLoading: loading } = useQuery({
     queryKey: [...COMPROMISSOS_QUERY_KEY, { mesRef, workspaceId }],
     queryFn: async (): Promise<CompromissoManual[]> => {
-      let query = supabase.from("compromissos").select("*").order("data").order("hora");
-      if (workspaceId) query = query.eq("workspace_id", workspaceId);
+      if (!workspaceId) return [];
+      let query = supabase.from("compromissos").select("*").eq("workspace_id", workspaceId).order("data").order("hora");
       if (mesRef) {
         const [ano, m] = mesRef.split("-").map(Number);
         const endDate = new Date(ano, m, 0).toISOString().split("T")[0];
@@ -39,11 +39,15 @@ export const useCompromissos = (mesRef?: string) => {
       if (error) throw error;
       return (data ?? []) as CompromissoManual[];
     },
+    enabled: !!workspaceId,
     staleTime: 1000 * 60 * 2,
   });
 
   const createCompromisso = useMutation({
     mutationFn: async (compromisso: Omit<CompromissoManual, "id" | "user_id" | "created_at">) => {
+      if (!workspaceId) {
+        throw new Error("Workspace não selecionado para criar compromisso.");
+      }
       const userId = (await supabase.auth.getUser()).data.user?.id;
       const { data, error } = await supabase
         .from("compromissos")
@@ -65,7 +69,11 @@ export const useCompromissos = (mesRef?: string) => {
 
   const deleteCompromisso = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("compromissos").delete().eq("id", id);
+      let q = supabase.from("compromissos").delete().eq("id", id);
+      if (workspaceId) {
+        q = q.eq("workspace_id", workspaceId);
+      }
+      const { error } = await q;
       if (error) throw error;
     },
     onSuccess: () => {

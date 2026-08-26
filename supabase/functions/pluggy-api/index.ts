@@ -1,0 +1,853 @@
+// Supabase Edge Function: pluggy-api
+// Proxy seguro, autenticado e endurecido para a API da Pluggy (Open Finance).
+// 
+// Arquitetura de Autorização Estrita:
+// 1. O JWT do usuário é validado no cliente de usuário (userClient) com Authorization: Bearer <token> e SUPABASE_ANON_KEY.
+// 2. public.tem_acesso_workspace() é executada sob auth.uid() do usuário autenticado no userClient.
+// 3. Validação estrita de clientUserId na Pluggy (GET /items/{id}) contra expectedClientUserId.
+// 4. O cliente service_role (supabaseAdmin) é utilizado SOMENTE APÓS autorização confirmada
+//    para garantir a integridade de escrita e leitura de pluggy_items, contas_usuario e transacoes.
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// ─── CONFIGURAÇÃO DE CORS COM ALLOWLIST ───
+const ALLOWED_ORIGINS_DEFAULT = [
+  "http://localhost:8080",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:8080",
+  "http://127.0.0.1:5173",
+];
+
+function isOriginAllowed(origin: string): boolean {
+  if (!origin) return true;
+  const envAllowed = (Deno.env.get("ALLOWED_ORIGINS") || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allowList = [...ALLOWED_ORIGINS_DEFAULT, ...envAllowed];
+
+  return (
+    allowList.includes(origin) ||
+    origin.endsWith(".supabase.co") ||
+    origin.endsWith(".lovable.app") ||
+    origin.endsWith(".vercel.app")
+  );
+}
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") || "";
+  const allowed = isOriginAllowed(origin);
+
+  return {
+    "Access-Control-Allow-Origin": allowed && origin ? origin : ALLOWED_ORIGINS_DEFAULT[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+
+function jsonResponse(req: Request, body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+  });
+}
+
+function maskId(id?: string | null): string {
+  if (!id) return "NULL";
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 8)}...${id.slice(-4)}`;
+}
+
+// ─── GERAÇÃO DETERMINÍSTICA E NÃO-REVERSÍVEL DE clientUserId ───
+async function generateClientUserId(userId: string, workspaceId: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(`wallet_pluggy_v1_${userId}_${workspaceId}`);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `usr_${hashHex.slice(0, 28)}`;
+}
+
+function fetchWithTimeout(url: string, init: RequestInit & { timeout?: number } = {}): Promise<Response> {
+  const { timeout = 15000, ...fetchInit } = init;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  return fetch(url, { ...fetchInit, signal: controller.signal }).finally(() => clearTimeout(id));
+}
+
+// ─── CACHE E GERENCIAMENTO DE API KEY DA PLUGGY EM MEMÓRIA ───
+let cachedApiKey: { key: string; expiresAt: number } | null = null;
+let authPromiseInFlight: Promise<string> | null = null;
+
+async function getPluggyApiKey(forceRefresh = false): Promise<string> {
+  if (!forceRefresh && cachedApiKey && cachedApiKey.expiresAt > Date.now() + 60_000) {
+    return cachedApiKey.key;
+  }
+
+  if (authPromiseInFlight) {
+    return authPromiseInFlight;
+  }
+
+  authPromiseInFlight = (async () => {
+    try {
+      const clientId = (Deno.env.get("PLUGGY_CLIENT_ID") ?? "").trim();
+      const clientSecret = (Deno.env.get("PLUGGY_CLIENT_SECRET") ?? "").trim();
+
+      if (!clientId || !clientSecret) {
+        throw new Error("Credenciais da Pluggy (PLUGGY_CLIENT_ID/PLUGGY_CLIENT_SECRET) não configuradas no servidor.");
+      }
+
+      let resp: Response;
+      try {
+        resp = await fetchWithTimeout("https://api.pluggy.ai/auth", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId, clientSecret }),
+          timeout: 15000,
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("abort") || msg.includes("timeout")) {
+          throw new Error("Tempo limite excedido ao autenticar na Pluggy.");
+        }
+        throw new Error(`Erro de conexão com a Pluggy: ${msg}`);
+      }
+
+      if (resp.status === 429) {
+        throw new Error("Limite de requisições da Pluggy atingido (Rate Limit 429). Tente novamente em instantes.");
+      }
+
+      const rawBody = await resp.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        throw new Error(`Resposta inválida da autenticação Pluggy (status ${resp.status}).`);
+      }
+
+      if (!resp.ok || !data.apiKey) {
+        const errorMsg = data.message || data.error || data.detail || `Falha na autenticação Pluggy (status ${resp.status})`;
+        throw new Error(String(errorMsg));
+      }
+
+      const apiKey = String(data.apiKey);
+      const expiresInSec = typeof data.expiresIn === "number" ? data.expiresIn : 5400; // 90 min default
+      cachedApiKey = { key: apiKey, expiresAt: Date.now() + expiresInSec * 1000 };
+      return apiKey;
+    } finally {
+      authPromiseInFlight = null;
+    }
+  })();
+
+  return authPromiseInFlight;
+}
+
+// ─── HELPER PARA BUSCA DE TRANSAÇÕES POR CONTA (API v2, cursor-based) ───
+async function fetchTransactionsForAccount(apiKey: string, accountId: string): Promise<any[]> {
+  const allTxs: any[] = [];
+  let url: string | null = `https://api.pluggy.ai/transactions?accountId=${encodeURIComponent(accountId)}&pageSize=500`;
+  let pages = 0;
+  const maxPages = 20; // Até 10.000 transações por conta
+
+  while (url && pages < maxPages) {
+    const resp = await fetchWithTimeout(url, {
+      headers: { "X-API-KEY": apiKey },
+      timeout: 20000,
+    });
+
+    if (!resp.ok) {
+      console.warn(`[pluggy-api] fetchTransactionsForAccount: HTTP ${resp.status} para account=${maskId(accountId)} page=${pages + 1}`);
+      break;
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    const results = data.results || [];
+    allTxs.push(...results);
+
+    // Suporta tanto cursor v2 (next) quanto paginação v1 (page/totalPages)
+    if (data.next) {
+      url = data.next;
+    } else if (data.totalPages && data.page < data.totalPages) {
+      url = `https://api.pluggy.ai/transactions?accountId=${encodeURIComponent(accountId)}&pageSize=500&page=${data.page + 1}`;
+    } else {
+      url = null;
+    }
+
+    pages++;
+    if (results.length === 0) break;
+  }
+
+  return allTxs;
+}
+
+serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: getCorsHeaders(req) });
+  }
+
+  const origin = req.headers.get("Origin");
+  if (origin && !isOriginAllowed(origin)) {
+    return jsonResponse(req, { success: false, error: "Origem CORS não autorizada." }, 403);
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse(req, { success: false, error: `Método ${req.method} não permitido` }, 405);
+  }
+
+  try {
+    // 1. Extração do Token JWT do Usuário
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return jsonResponse(req, { success: false, error: "Token de autenticação ausente." }, 401);
+    }
+
+    const token = authHeader.replace("Bearer ", "").trim();
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
+      return jsonResponse(req, { success: false, error: "Configuração do Supabase ausente ou incompleta no servidor." }, 500);
+    }
+
+    // 2. Cliente Autenticado com JWT do Usuário (NÃO usa service_role como fallback)
+    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: authError } = await userClient.auth.getUser(token);
+
+    if (authError || !user) {
+      return jsonResponse(req, { success: false, error: "Usuário não autenticado ou token inválido." }, 401);
+    }
+
+    const userId = user.id;
+
+    // 3. Leitura e Validação do Payload
+    const requestBody = await req.json().catch(() => ({}));
+    const { action, workspace_id, itemId, ...params } = requestBody;
+
+    if (!action) {
+      return jsonResponse(req, { success: false, error: "Parâmetro 'action' é obrigatório." }, 400);
+    }
+
+    if (!workspace_id) {
+      return jsonResponse(req, { success: false, error: "Parâmetro 'workspace_id' é obrigatório." }, 400);
+    }
+
+    // 4. Validação de Acesso ao Workspace no Contexto Real do Usuário (auth.uid() = userId)
+    const { data: hasAccess } = await userClient
+      .rpc("tem_acesso_workspace", { p_workspace_id: workspace_id })
+      .maybeSingle();
+
+    let authorized = hasAccess === true;
+
+    if (!authorized) {
+      const { data: wsDirect } = await userClient
+        .from("workspaces")
+        .select("id")
+        .eq("id", workspace_id)
+        .maybeSingle();
+
+      if (wsDirect) {
+        authorized = true;
+      }
+    }
+
+    if (!authorized) {
+      console.warn(`[pluggy-api] Acesso negado: user=${maskId(userId)} workspace=${maskId(workspace_id)}`);
+      return jsonResponse(req, { success: false, error: "Acesso negado ao workspace especificado." }, 403);
+    }
+
+    // 5. Inicialização do Cliente Service Role SOMENTE APÓS Autorização Confirmada
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    // 6. Execução das Ações Seguras
+    switch (action) {
+      // ─── GERAÇÃO DE CONNECT TOKEN COM CLIENT USER ID DERIVADO ───
+      case "getConnectToken": {
+        const apiKey = await getPluggyApiKey();
+        const clientUserId = await generateClientUserId(userId, workspace_id);
+
+        let tokenRes: Response;
+        try {
+          tokenRes = await fetchWithTimeout("https://api.pluggy.ai/connect_token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-KEY": apiKey,
+            },
+            body: JSON.stringify({
+              options: {
+                clientUserId,
+              },
+            }),
+            timeout: 15000,
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`Erro ao gerar Connect Token na Pluggy: ${msg}`);
+        }
+
+        if (tokenRes.status === 401) {
+          const freshApiKey = await getPluggyApiKey(true);
+          tokenRes = await fetchWithTimeout("https://api.pluggy.ai/connect_token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-KEY": freshApiKey,
+            },
+            body: JSON.stringify({ options: { clientUserId } }),
+            timeout: 15000,
+          });
+        }
+
+        if (tokenRes.status === 429) {
+          return jsonResponse(req, { success: false, error: "Limite de requisições da Pluggy atingido." }, 429);
+        }
+
+        const tokenData = await tokenRes.json().catch(() => ({}));
+        if (!tokenRes.ok || !tokenData.accessToken) {
+          const errDetail = tokenData.message || tokenData.error || "Falha ao gerar accessToken na Pluggy.";
+          return jsonResponse(req, { success: false, error: String(errDetail) }, 400);
+        }
+
+        return jsonResponse(req, { success: true, data: { accessToken: tokenData.accessToken } });
+      }
+
+      // ─── REGISTRO E VALIDAÇÃO SERVER-SIDE DO ITEM ───
+      case "registerItem": {
+        if (!itemId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+        }
+
+        const apiKey = await getPluggyApiKey();
+
+        // 1. Valida na API da Pluggy se o item existe de fato
+        let itemVerifyRes: Response;
+        try {
+          itemVerifyRes = await fetchWithTimeout(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, {
+            headers: { "X-API-KEY": apiKey },
+            timeout: 15000,
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return jsonResponse(req, { success: false, error: `Erro ao consultar Item na Pluggy: ${msg}` }, 500);
+        }
+
+        if (!itemVerifyRes.ok) {
+          return jsonResponse(req, { success: false, error: "Item Pluggy não encontrado ou inválido na instituição financeira." }, 400);
+        }
+
+        const itemRemoteData = await itemVerifyRes.json().catch(() => ({}));
+        const expectedClientUserId = await generateClientUserId(userId, workspace_id);
+        const remoteClientUserId = itemRemoteData.clientUserId || itemRemoteData.user;
+
+        // Validação estrita e obrigatória do clientUserId
+        if (!remoteClientUserId) {
+          console.warn(`[pluggy-api] Item ${maskId(itemId)} não possui clientUserId retornado pela Pluggy`);
+          return jsonResponse(req, { success: false, error: "Item Pluggy inválido: clientUserId ausente na instituição." }, 403);
+        }
+
+        if (remoteClientUserId !== expectedClientUserId) {
+          console.warn(`[pluggy-api] clientUserId mismatch: remote=${maskId(remoteClientUserId)} expected=${maskId(expectedClientUserId)}`);
+          return jsonResponse(req, { success: false, error: "O Item informado pertence a outra sessão ou usuário." }, 403);
+        }
+
+        // 2. Proteção contra transferência indevida de ownership
+        const { data: existingItem } = await supabaseAdmin
+          .from("pluggy_items")
+          .select("id, workspace_id, user_id, status, connector_name, item_id")
+          .eq("item_id", String(itemId))
+          .maybeSingle();
+
+        if (existingItem) {
+          if (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId) {
+            return jsonResponse(req, { success: false, error: "Item já vinculado a outro usuário ou workspace." }, 403);
+          }
+          // Idempotência: mesmo usuário e workspace retorna sucesso
+          return jsonResponse(req, {
+            success: true,
+            data: {
+              id: existingItem.id,
+              item_id: existingItem.item_id,
+              status: existingItem.status,
+              connector_name: existingItem.connector_name,
+            },
+          });
+        }
+
+        const connectorId = params.connectorId ? Number(params.connectorId) : (itemRemoteData.connector?.id ?? null);
+        const connectorName = params.connectorName ? String(params.connectorName) : (itemRemoteData.connector?.name ?? null);
+
+        // 3. Inserção com proteção final de UNIQUE(item_id)
+        const { data: itemRecord, error: itemError } = await supabaseAdmin
+          .from("pluggy_items")
+          .insert({
+            user_id: userId,
+            workspace_id,
+            item_id: String(itemId),
+            connector_id: connectorId,
+            connector_name: connectorName,
+            client_user_id: expectedClientUserId,
+            status: itemRemoteData.status || "UPDATED",
+          })
+          .select()
+          .single();
+
+        if (itemError) {
+          if (itemError.code === "23505") {
+            return jsonResponse(req, { success: false, error: "Este item já está registrado em outro contexto." }, 409);
+          }
+          console.error(`[pluggy-api] Erro ao registrar item:`, itemError);
+          return jsonResponse(req, { success: false, error: "Erro ao registrar Item no banco de dados." }, 500);
+        }
+
+        return jsonResponse(req, {
+          success: true,
+          data: {
+            id: itemRecord.id,
+            item_id: itemRecord.item_id,
+            status: itemRecord.status,
+            connector_name: itemRecord.connector_name,
+          },
+        });
+      }
+
+      // ─── CONSULTA DE CONTAS SANITIZADAS COM VALIDAÇÃO DE OWNERSHIP ───
+      case "getAccounts": {
+        if (!itemId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+        }
+
+        const { data: itemValid } = await supabaseAdmin
+          .from("pluggy_items")
+          .select("id")
+          .eq("item_id", String(itemId))
+          .eq("workspace_id", workspace_id)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (!itemValid) {
+          console.warn(`[pluggy-api] Item não autorizado: itemId=${maskId(itemId)} user=${maskId(userId)}`);
+          return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+        }
+
+        const apiKey = await getPluggyApiKey();
+        const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
+          headers: { "X-API-KEY": apiKey },
+          timeout: 15000,
+        });
+
+        if (!accRes.ok) {
+          const errBody = await accRes.json().catch(() => ({}));
+          return jsonResponse(req, { success: false, error: errBody.message || `Erro ${accRes.status} ao buscar contas na Pluggy.` }, accRes.status);
+        }
+
+        const accData = await accRes.json().catch(() => ({}));
+        const rawAccounts = accData.results || accData.accounts || [];
+
+        const sanitizedAccounts = rawAccounts.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type,
+          balance: a.balance,
+          currencyCode: a.currencyCode,
+          number: a.number ? `****${String(a.number).slice(-4)}` : undefined,
+        }));
+
+        return jsonResponse(req, { success: true, data: sanitizedAccounts });
+      }
+
+      // ─── CONSULTA DE TRANSAÇÕES PAGINADAS COM VALIDAÇÃO DE OWNERSHIP ───
+      case "getTransactions": {
+        if (!itemId && !params.accountId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' ou 'accountId' é obrigatório." }, 400);
+        }
+
+        // Valida ownership do item
+        if (itemId) {
+          const { data: itemValid } = await supabaseAdmin
+            .from("pluggy_items")
+            .select("id")
+            .eq("item_id", String(itemId))
+            .eq("workspace_id", workspace_id)
+            .eq("user_id", userId)
+            .maybeSingle();
+
+          if (!itemValid) {
+            return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+          }
+        }
+
+        // Valida ownership da conta se accountId fornecido
+        if (params.accountId) {
+          const { data: accValid } = await supabaseAdmin
+            .from("contas_usuario")
+            .select("id")
+            .eq("pluggy_account_id", String(params.accountId))
+            .eq("workspace_id", workspace_id)
+            .maybeSingle();
+
+          if (!accValid) {
+            return jsonResponse(req, { success: false, error: "Conta não encontrada ou não pertence a este workspace." }, 403);
+          }
+        }
+
+        const apiKey = await getPluggyApiKey();
+
+        // Se accountId fornecido, busca por conta; senão busca todas contas do item
+        let allTransactions: any[] = [];
+        if (params.accountId) {
+          allTransactions = await fetchTransactionsForAccount(apiKey, String(params.accountId));
+        } else {
+          // Fallback: busca contas do item e itera
+          const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
+            headers: { "X-API-KEY": apiKey },
+            timeout: 15000,
+          });
+          const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
+          const accounts = accData.results || accData.accounts || [];
+          for (const acc of accounts) {
+            if (!acc.id) continue;
+            const txs = await fetchTransactionsForAccount(apiKey, String(acc.id));
+            allTransactions.push(...txs);
+          }
+        }
+
+        const sanitizedTransactions = allTransactions.map((t: any) => ({
+          id: t.id,
+          accountId: t.accountId,
+          description: t.description,
+          amount: t.amount,
+          date: t.date,
+          category: t.category,
+          type: t.type,
+          status: t.status,
+          billId: t.billId || t.creditCardMetadata?.billId || null,
+          installmentNumber: t.creditCardMetadata?.installmentNumber || null,
+          totalInstallments: t.creditCardMetadata?.totalInstallments || null,
+        }));
+
+        return jsonResponse(req, {
+          success: true,
+          data: sanitizedTransactions,
+          total: sanitizedTransactions.length,
+        });
+      }
+
+      // ─── CONSULTA DE INVESTIMENTOS SANITIZADOS COM VALIDAÇÃO DE OWNERSHIP ───
+      case "getInvestments": {
+        if (!itemId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+        }
+
+        const { data: itemValid } = await supabaseAdmin
+          .from("pluggy_items")
+          .select("id")
+          .eq("item_id", String(itemId))
+          .eq("workspace_id", workspace_id)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (!itemValid) {
+          return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+        }
+
+        const apiKey = await getPluggyApiKey();
+        const invRes = await fetchWithTimeout(`https://api.pluggy.ai/investments?itemId=${encodeURIComponent(String(itemId))}`, {
+          headers: { "X-API-KEY": apiKey },
+          timeout: 15000,
+        });
+
+        if (!invRes.ok) {
+          const errBody = await invRes.json().catch(() => ({}));
+          return jsonResponse(req, { success: false, error: errBody.message || `Erro ${invRes.status} ao buscar investimentos na Pluggy.` }, invRes.status);
+        }
+
+        const invData = await invRes.json().catch(() => ({}));
+        const rawInvestments = invData.results || invData.investments || [];
+
+        const sanitizedInvestments = rawInvestments.map((inv: any) => ({
+          id: inv.id,
+          name: inv.name,
+          value: inv.value,
+          type: inv.type,
+          currencyCode: inv.currencyCode,
+        }));
+
+        return jsonResponse(req, { success: true, data: sanitizedInvestments });
+      }
+
+      // ─── SINCRONIZAÇÃO IDEMPOTENTE DE CONTAS E TRANSAÇÕES ───
+      case "syncItem": {
+        if (!itemId) {
+          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+        }
+
+        const expectedClientUserId = await generateClientUserId(userId, workspace_id);
+
+        // Confere se o item pertence a outro workspace
+        const { data: existingItem } = await supabaseAdmin
+          .from("pluggy_items")
+          .select("id, workspace_id, user_id")
+          .eq("item_id", String(itemId))
+          .maybeSingle();
+
+        if (existingItem && (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId)) {
+          return jsonResponse(req, { success: false, error: "Item já vinculado a outro workspace." }, 403);
+        }
+
+        // Garante que o item está registrado no workspace
+        if (!existingItem) {
+          await supabaseAdmin.from("pluggy_items").insert({
+            user_id: userId,
+            workspace_id,
+            item_id: String(itemId),
+            connector_name: params.connectorName ? String(params.connectorName) : null,
+            client_user_id: expectedClientUserId,
+            status: "UPDATED",
+          });
+        }
+
+        const apiKey = await getPluggyApiKey();
+
+        // 1. Busca contas na Pluggy
+        const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
+          headers: { "X-API-KEY": apiKey },
+          timeout: 15000,
+        });
+
+        const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
+        const accountsList = accData.results || accData.accounts || [];
+
+        // 2. Busca categorias existentes do usuário para match
+        const { data: categoriasExistentes } = await supabaseAdmin
+          .from("categorias")
+          .select("id, nome")
+          .eq("user_id", userId);
+
+        const catMap = new Map<string, string>();
+        (categoriasExistentes || []).forEach((c: { id: string; nome?: string }) => {
+          if (c.nome) catMap.set(c.nome.toLowerCase().trim(), c.id);
+        });
+
+        let syncedAccountsCount = 0;
+        let syncedTxCount = 0;
+        let totalTxFetched = 0;
+
+        for (const acc of accountsList) {
+          if (!acc.id) continue;
+
+          let tipoConta = "conta_corrente";
+          if (acc.type === "CREDIT") tipoConta = "cartao_credito";
+          else if (acc.type === "SAVINGS") tipoConta = "poupanca";
+
+          let nomeConta = acc.name || "Conta Bancária";
+          const conn = (params.connectorName || "").trim();
+          const accLower = (acc.name || "").toLowerCase();
+
+          if (conn === "MeuPluggy" || conn.toLowerCase().includes("nu pagamentos") || conn.toLowerCase().includes("nubank")) {
+            if (accLower.includes("nu pagamentos") || accLower.includes("nubank") || tipoConta === "conta_corrente") {
+              nomeConta = "Nubank (Conta Corrente)";
+            } else if (accLower === "gold") {
+              nomeConta = "Nubank (Cartão Gold)";
+            } else if (accLower === "platinum") {
+              nomeConta = "Nubank (Cartão Platinum)";
+            } else if (accLower === "black" || accLower.includes("ultravioleta")) {
+              nomeConta = "Nubank (Ultravioleta)";
+            } else if (tipoConta === "cartao_credito") {
+              nomeConta = `Nubank (Cartão ${acc.name})`;
+            } else {
+              nomeConta = `Nubank (${acc.name})`;
+            }
+          } else if (conn) {
+            nomeConta = `${conn} (${acc.name})`;
+          }
+
+          let diaFechamento = null;
+          let diaVencimento = null;
+          let limiteCredito = null;
+
+          if (acc.creditData) {
+            limiteCredito = acc.creditData.creditLimit ? Number(acc.creditData.creditLimit) : null;
+            if (acc.creditData.balanceCloseDate) {
+              const closeDay = parseInt(acc.creditData.balanceCloseDate.substring(8, 10));
+              if (!isNaN(closeDay)) diaFechamento = closeDay;
+            }
+            if (acc.creditData.balanceDueDate) {
+              const dueDay = parseInt(acc.creditData.balanceDueDate.substring(8, 10));
+              if (!isNaN(dueDay)) diaVencimento = dueDay;
+            }
+          } else if (tipoConta === "cartao_credito") {
+            limiteCredito = 5000;
+            diaFechamento = 1;
+            diaVencimento = 10;
+          }
+
+          // Inserção/Atualização idempotente no workspace
+          const { data: existingAccount } = await supabaseAdmin
+            .from("contas_usuario")
+            .select("id")
+            .eq("workspace_id", workspace_id)
+            .eq("pluggy_account_id", String(acc.id))
+            .maybeSingle();
+
+          let targetAccountId = existingAccount?.id;
+
+          if (!targetAccountId) {
+            const { data: novaConta, error: accErr } = await supabaseAdmin
+              .from("contas_usuario")
+              .insert({
+                user_id: userId,
+                workspace_id,
+                pluggy_account_id: String(acc.id),
+                nome: nomeConta,
+                tipo: tipoConta,
+                saldo_inicial: Math.abs(acc.balance || 0),
+                saldo_atual: Math.abs(acc.balance || 0),
+                limite_credito: limiteCredito,
+                dia_fechamento: diaFechamento,
+                dia_vencimento: diaVencimento,
+                cor: tipoConta === "cartao_credito" ? "#820AD1" : "#10B981",
+              })
+              .select("id")
+              .single();
+
+            if (accErr || !novaConta) {
+              console.error("[pluggy-api] Erro ao criar conta:", accErr);
+              continue;
+            }
+            targetAccountId = novaConta.id;
+          } else {
+            await supabaseAdmin
+              .from("contas_usuario")
+              .update({
+                saldo_atual: Math.abs(acc.balance || 0),
+                limite_credito: limiteCredito,
+                dia_fechamento: diaFechamento,
+                dia_vencimento: diaVencimento,
+              })
+              .eq("id", targetAccountId);
+          }
+
+          syncedAccountsCount++;
+
+          // ─── BUSCA TRANSAÇÕES DESTA CONTA ESPECÍFICA (v2 API, por accountId) ───
+          const txList = await fetchTransactionsForAccount(apiKey, String(acc.id));
+          totalTxFetched += txList.length;
+
+          console.log(`[pluggy-api] syncItem: conta=${nomeConta} tipo=${tipoConta} pluggyAccId=${maskId(acc.id)} txs=${txList.length}`);
+
+          for (const tx of txList) {
+            if (!tx.id || tx.amount === undefined || !tx.date) continue;
+
+            const isDespesa = tx.amount < 0 || tx.type === "DEBIT";
+            const valorAbs = Math.abs(tx.amount || 0);
+            const tipo = isDespesa ? "despesa" : "receita";
+            const catNome = tx.category || (isDespesa ? "Despesas Diversas" : "Rendas Diversas");
+            const catKey = catNome.toLowerCase().trim();
+
+            let categoriaId = catMap.get(catKey);
+            if (!categoriaId) {
+              const { data: newCat } = await supabaseAdmin
+                .from("categorias")
+                .insert({
+                  user_id: userId,
+                  nome: catNome,
+                  tipo,
+                  cor: tipo === "receita" ? "#10B981" : "#F43F5E",
+                  icone: "Tag",
+                })
+                .select("id")
+                .single();
+
+              if (newCat) {
+                categoriaId = newCat.id;
+                catMap.set(catKey, newCat.id);
+              }
+            }
+
+            // Metadados de fatura e parcelas (específicos de cartão de crédito)
+            const billId = tx.billId || tx.creditCardMetadata?.billId || null;
+            const parcelaNumero = tx.creditCardMetadata?.installmentNumber || null;
+            const parcelaTotal = tx.creditCardMetadata?.totalInstallments || null;
+            const statusTransacao = tx.status || null; // PENDING | POSTED
+
+            // Upsert: insere ou atualiza (PENDING → POSTED, billId atribuído, etc.)
+            const txData = {
+              user_id: userId,
+              workspace_id,
+              conta_id: targetAccountId,
+              categoria_id: categoriaId || null,
+              pluggy_transaction_id: String(tx.id),
+              tipo,
+              descricao: tx.description || "Transação Open Finance",
+              valor: valorAbs,
+              data: tx.date ? String(tx.date).substring(0, 10) : new Date().toISOString().substring(0, 10),
+              metodo_pagamento: tipoConta === "cartao_credito" ? "cartao_credito" : "pix",
+              observacoes: `Importado via Pluggy Open Finance (${catNome})`,
+              status_transacao: statusTransacao,
+              pluggy_bill_id: billId,
+              parcela_numero: parcelaNumero,
+              parcela_total: parcelaTotal,
+            };
+
+            // Tenta upsert: se pluggy_transaction_id já existe, atualiza campos relevantes
+            const { data: existingTx } = await supabaseAdmin
+              .from("transacoes")
+              .select("id")
+              .eq("workspace_id", workspace_id)
+              .eq("pluggy_transaction_id", String(tx.id))
+              .maybeSingle();
+
+            if (existingTx) {
+              // Atualiza campos que podem mudar (PENDING→POSTED, billId atribuído)
+              await supabaseAdmin
+                .from("transacoes")
+                .update({
+                  status_transacao: statusTransacao,
+                  pluggy_bill_id: billId,
+                  valor: valorAbs,
+                  data: txData.data,
+                  descricao: txData.descricao,
+                })
+                .eq("id", existingTx.id);
+              syncedTxCount++;
+            } else {
+              const { error: insertTxErr } = await supabaseAdmin.from("transacoes").insert(txData);
+              if (!insertTxErr) {
+                syncedTxCount++;
+              } else {
+                console.warn(`[pluggy-api] Erro ao inserir tx ${maskId(tx.id)}:`, insertTxErr.message);
+              }
+            }
+          }
+        }
+
+        return jsonResponse(req, {
+          success: true,
+          data: {
+            accountsCount: syncedAccountsCount,
+            transactionsCount: syncedTxCount,
+            investmentsCount: 0,
+            totalTransactionsFetched: totalTxFetched,
+          },
+        });
+      }
+
+      default:
+        return jsonResponse(req, { success: false, error: `Ação desconhecida: ${action}` }, 400);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[pluggy-api] Erro inesperado:", msg);
+    return jsonResponse(req, { success: false, error: msg }, 500);
+  }
+});

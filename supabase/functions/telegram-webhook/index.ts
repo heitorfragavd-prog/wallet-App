@@ -2,6 +2,32 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+import {
+  calculateRotationNeeded,
+  calculateTableCropTiles,
+  analyzeTileCoverage,
+  subdivideCropTile,
+  expandCropTileWithMargin,
+  classifyVisionResponse,
+  validateProductRow,
+  consolidateDanfeItems,
+  deduplicateAndConsolidateItems,
+  validateDanfeMath,
+  evaluateStockStatus,
+  type DanfeItemRaw,
+  type CropTileCoordinate,
+} from "../_shared/danfe-extractor.ts";
+import {
+  validateProductRowV2,
+  validateDanfeMathV2,
+  reconcileAndDeduplicateV2,
+  sanitizeProductDescription,
+  GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
+  GEMINI_V2_PROMPT_TABELA,
+  parseFiscalNumber,
+  type DanfeItemV2,
+  type DanfeValidationResultV2,
+} from "../_shared/danfe-gemini-v2.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -873,42 +899,34 @@ serve(async (req) => {
         }
 
         if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
-          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi confirmada anteriormente.");
+          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
           await answerCallback(callbackQuery.id, "NF já confirmada!");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("notas_fiscais_compra").update({ status: "confirmada" }).eq("id", nfId);
-        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
+        if (nf.status === "requer_revisao") {
+          await editMessageText(cbChatId, callbackMessageId, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+          await answerCallback(callbackQuery.id, "NF requer revisão e não pode ser confirmada automaticamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
 
         const { data: itens } = await supabase
           .from("nf_itens")
           .select("*")
           .eq("nf_id", nfId);
 
-        let msgConf = `✅ <b>Nota Fiscal Confirmada!</b>\n\n`;
-        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
-        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
-        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n`;
-        msgConf += `📦 <b>Itens processados:</b> ${itens?.length || 0}\n\n`;
+        let itensJaProcessados = 0;
+        let itensRecemProcessados = 0;
+        let itensPendentes = 0;
 
         const alertasCriados: any[] = [];
         if (itens && itens.length > 0) {
           for (const item of itens) {
-            await supabase.from("nf_itens").update({ status_estoque: "processado" }).eq("id", item.id);
-
-            await supabase.from("historico_custo_produto").insert({
-              user_id: cbUserId,
-              workspace_id: nf.workspace_id,
-              produto_descricao: item.descricao,
-              codigo_produto: item.codigo_produto,
-              fornecedor: nf.fornecedor,
-              cnpj_fornecedor: nf.cnpj_fornecedor,
-              custo_unitario_bruto: item.valor_unitario,
-              custo_unitario_liquido: item.custo_unitario_liquido,
-              data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
-              nf_id: nfId,
-            });
+            // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
+            if (item.status_estoque === "processado") {
+              itensJaProcessados++;
+              continue;
+            }
 
             const { data: prodEye } = await supabase
               .from("produtos_eyemobile")
@@ -918,71 +936,126 @@ serve(async (req) => {
               .limit(1)
               .maybeSingle();
 
-            if (prodEye) {
+            const avaliacaoEstoque = evaluateStockStatus(item, prodEye);
+
+            await supabase.from("nf_itens").update({
+              status_estoque: avaliacaoEstoque.status_estoque,
+            }).eq("id", item.id);
+
+            if (avaliacaoEstoque.status_estoque === "processado" && avaliacaoEstoque.podeGravarHistoricoCusto && prodEye) {
+              itensRecemProcessados++;
+              const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
+
               await supabase.from("produtos_eyemobile").update({
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: (Number(prodEye.estoque_atual) || 0) + (Number(item.quantidade) || 0),
+                custo_atual: custoConvertido,
+                estoque_atual: (Number(prodEye.estoque_atual) || 0) + avaliacaoEstoque.quantidadeParaEstoque,
                 ultima_atualizacao_custo: new Date().toISOString(),
               }).eq("id", prodEye.id);
-            }
 
-            const dozeMesesAtras = new Date();
-            dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
+              await supabase.from("historico_custo_produto").insert({
+                user_id: cbUserId,
+                workspace_id: nf.workspace_id,
+                produto_descricao: item.descricao,
+                codigo_produto: item.codigo_produto,
+                fornecedor: nf.fornecedor,
+                cnpj_fornecedor: nf.cnpj_fornecedor,
+                custo_unitario_bruto: item.valor_unitario,
+                custo_unitario_liquido: custoConvertido,
+                data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
+                nf_id: nfId,
+              });
 
-            const { data: histAnterior } = await supabase
-              .from("historico_custo_produto")
-              .select("custo_unitario_liquido, created_at")
-              .eq("user_id", cbUserId)
-              .ilike("produto_descricao", `%${item.descricao.trim()}%`)
-              .lt("created_at", nf.created_at || new Date().toISOString())
-              .gte("created_at", dozeMesesAtras.toISOString())
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
+              const dozeMesesAtras = new Date();
+              dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
 
-            if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
-              const custoAnt = Number(histAnterior.custo_unitario_liquido);
-              const custoNovo = Number(item.custo_unitario_liquido);
-              const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
+              const { data: histAnterior } = await supabase
+                .from("historico_custo_produto")
+                .select("custo_unitario_liquido, created_at")
+                .eq("user_id", cbUserId)
+                .ilike("produto_descricao", `%${item.descricao.trim()}%`)
+                .lt("created_at", nf.created_at || new Date().toISOString())
+                .gte("created_at", dozeMesesAtras.toISOString())
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
 
-              if (variacao > 10) {
-                let precoVendaAtual = Number(prodEye?.preco_venda || 0);
-                let margemReal = Number(prodEye?.margem_real_percentual || 0);
-                let precoSugerido = 0;
+              if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
+                const custoAnt = Number(histAnterior.custo_unitario_liquido);
+                const custoNovo = Number(custoConvertido);
+                const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
 
-                if (precoVendaAtual > 0 && custoAnt > 0) {
-                  margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
-                  precoSugerido = custoNovo * (1 + margemReal / 100);
-                } else {
-                  precoSugerido = custoNovo * 1.3;
-                }
+                if (variacao > 10) {
+                  let precoVendaAtual = Number(prodEye?.preco_venda || 0);
+                  let margemReal = Number(prodEye?.margem_real_percentual || 0);
+                  let precoSugerido = 0;
 
-                const { data: novoAlerta } = await supabase
-                  .from("alertas_preco_pendentes")
-                  .insert({
-                    user_id: cbUserId,
-                    workspace_id: nf.workspace_id,
-                    nf_id: nfId,
-                    produto_eyemobile_id: prodEye?.eyemobile_id || null,
-                    produto_codigo: item.codigo_produto,
-                    produto_descricao: item.descricao,
-                    custo_anterior: custoAnt,
-                    custo_novo: custoNovo,
-                    variacao_custo_percentual: variacao,
-                    preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
-                    margem_real_percentual: margemReal > 0 ? margemReal : null,
-                    preco_sugerido: precoSugerido,
-                    status: "pendente",
-                  })
-                  .select("*")
-                  .single();
+                  if (precoVendaAtual > 0 && custoAnt > 0) {
+                    margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
+                    precoSugerido = custoNovo * (1 + margemReal / 100);
+                  } else {
+                    precoSugerido = custoNovo * 1.3;
+                  }
 
-                if (novoAlerta) {
-                  alertasCriados.push(novoAlerta);
+                  const { data: novoAlerta } = await supabase
+                    .from("alertas_preco_pendentes")
+                    .insert({
+                      user_id: cbUserId,
+                      workspace_id: nf.workspace_id,
+                      nf_id: nfId,
+                      produto_eyemobile_id: prodEye?.eyemobile_id || null,
+                      produto_codigo: item.codigo_produto,
+                      produto_descricao: item.descricao,
+                      custo_anterior: custoAnt,
+                      custo_novo: custoNovo,
+                      variacao_custo_percentual: variacao,
+                      preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
+                      margem_real_percentual: margemReal > 0 ? margemReal : null,
+                      preco_sugerido: precoSugerido,
+                      status: "pendente",
+                    })
+                    .select("*")
+                    .single();
+
+                  if (novoAlerta) {
+                    alertasCriados.push(novoAlerta);
+                  }
                 }
               }
+            } else {
+              itensPendentes++;
             }
           }
+        }
+
+        // Determina status final da NF baseado no resultado real do processamento
+        let statusFinalNF = "pendente";
+        if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
+          statusFinalNF = "confirmada";
+        } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
+          statusFinalNF = "parcialmente_processada";
+        } else {
+          statusFinalNF = "pendente";
+        }
+
+        await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nfId);
+        if (statusFinalNF === "confirmada") {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
+        }
+
+        let msgConf = statusFinalNF === "confirmada"
+          ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
+          : `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`;
+
+        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
+        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
+        msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
+        if (itensJaProcessados > 0) {
+          msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
+        }
+        if (itensPendentes > 0) {
+          msgConf += `⚠️ <b>Itens pendentes (sem produto ou sem fator CX):</b> ${itensPendentes}\n`;
+          msgConf += `<i>(Esses itens poderão ser processados assim que o cadastro/fator for ajustado no PDV).</i>\n`;
         }
 
         await editMessageText(cbChatId, callbackMessageId, msgConf);
@@ -3370,6 +3443,7 @@ serve(async (req) => {
 
         // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
+        let loadedDecodedImage: any = null;
         let documentData: any = null;
 
         // ============================================
@@ -3615,26 +3689,19 @@ serve(async (req) => {
 
           try {
             const decodedImage = await Image.decode(finalBase64Bytes);
-            console.log(`[telegram-webhook] Dimensões originais da imagem: ${decodedImage.width}x${decodedImage.height}`);
+            loadedDecodedImage = decodedImage;
+            console.log(`[NF] imagem original: ${decodedImage.width}x${decodedImage.height}`);
 
-            // 1. Se a imagem for em paisagem (largura > altura * 1.15), como DANFEs e notas fiscais são folhas A4 verticais,
-            // rotacionamos 90° para a orientação retrato perfeita antes de passar pelo GPT-4o:
-            if (decodedImage.width > decodedImage.height * 1.15) {
-              console.log("[telegram-webhook] 🔄 Imagem em paisagem detectada! Auto-rotacionando 90° para formato vertical/retrato...");
-              decodedImage.rotate(90);
-              console.log(`[telegram-webhook] Imagem rotacionada: ${decodedImage.width}x${decodedImage.height}`);
-            }
-
-            // 2. Redimensionar para até 2048px se a foto for gigantesca (48MP/108MP de celulares modernos)
-            if (decodedImage.width > 2048) {
+            // Redimensionar apenas para visão geral de análise inicial (preservando loadedDecodedImage intacto sem rotação)
+            const overviewImage = decodedImage.clone();
+            if (overviewImage.width > 2048) {
               const targetW = 2048;
-              const scale = targetW / decodedImage.width;
-              decodedImage.resize(targetW, Math.round(decodedImage.height * scale));
-              console.log(`[telegram-webhook] Imagem redimensionada para otimização OCR: ${decodedImage.width}x${decodedImage.height}`);
+              const scale = targetW / overviewImage.width;
+              overviewImage.resize(targetW, Math.round(overviewImage.height * scale));
             }
 
-            // 3. Re-encodificar como JPEG em altíssima qualidade (95)
-            finalBase64Bytes = await decodedImage.encodeJPEG(95);
+            // Re-encodificar overview como JPEG em alta qualidade (95)
+            finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
           } catch (imgErr: any) {
             console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
@@ -3908,52 +3975,32 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           }
         }
 
-        let descricaoBruta = "";
-
         // ================================================================
-        // EXTRATOR EM 2 PASSOS (Chain-of-Thought Vision):
-        // Passo 1: GPT-4o descreve em texto livre tudo o que vê (sem alucinação)
-        // Passo 2: GPT-4o extrai JSON estruturado com precisão máxima
+        // PIPELINE DANFE v1.0.47 (Orientação Real + Normalização + Recortes + JSON Direto + Validação)
         // ================================================================
         if (!documentData && finalImageBase64Uri) {
-          console.log("[telegram-webhook] [NF] Passo 1: Descrição livre em texto do documento...");
+          console.log("[telegram-webhook] [NF] Iniciando análise estruturada de documento...");
 
-          const promptDescricao = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
+          // ─── PASSO 1: Detecção de Orientação de Leitura e Tipo do Documento ───
+          const promptOrientacaoETipo = `Você é um conferente especialista em documentos fiscais (DANFE) e boletos bancários brasileiros.
 
-Sua tarefa é DESCREVER em português com máxima fidelidade tudo o que você consegue ler com certeza no documento impresso.
-NUNCA invente dados. NUNCA adivinhe. Se algo não estiver visível, não mencione.
+Analise esta imagem e retorne APENAS um JSON no seguinte formato:
+{
+  "tipo_documento": "danfe" | "boleto" | "outro",
+  "orientacao_leitura": 0 | 90 | 180 | 270,
+  "boleto_dados": {
+    "beneficiario": "string ou null",
+    "valor": 0.00,
+    "data_vencimento": "YYYY-MM-DD ou null",
+    "linha_digitavel": "string ou null"
+  }
+}
 
-Identifique primeiro:
-TIPO_DE_DOCUMENTO: (DANFE / Nota Fiscal de Compra, Boleto Bancário, Recibo, Outro)
-
-Se for DANFE (Nota Fiscal de Compra):
-CABEÇALHO:
-- Emitente (fornecedor/razão social): ...
-- CNPJ do emitente: ...
-- Número da NF: ...
-- Série: ...
-- Data de emissão: ...
-- Chave de acesso (44 dígitos): ...
-
-VALORES TOTAIS:
-- Valor total da NF: ...
-- Valor dos produtos: ...
-- ICMS: ...
-- ICMS-ST / Substituição: ...
-- IPI: ...
-- Frete: ...
-
-TABELA DE PRODUTOS (DADOS DO PRODUTO / SERVIÇO):
-Descreva CADA LINHA individual da tabela de produtos:
-1. Código: ... | Descrição: ... | NCM: ... | CFOP: ... | Unidade: ... | Quantidade: ... | Valor unitário: ... | Valor total / Custo Total: ... | ICMS %: ... | IPI %: ...
-2. Código: ... | Descrição: ...
-(continue linha por linha até o último produto visível da tabela)
-
-Se for BOLETO BANCÁRIO:
-- Beneficiário / Cedente: ...
-- Valor do documento: ...
-- Data de vencimento: ...
-- Linha digitável (47 dígitos): ...`;
+REGRAS:
+1. Se houver qualquer elemento de Nota Fiscal / DANFE / produtos / fornecedor / impostos, defina "tipo_documento": "danfe".
+2. Se o texto da folha estiver deitado ou lateral para ler, indique em "orientacao_leitura" quantos graus (90, 180, 270) a folha precisa girar no sentido horário para ficar perfeitamente vertical em pé (normal = 0).
+3. Se for boleto bancário sem tabela de produtos, preencha "tipo_documento": "boleto" e "boleto_dados".
+4. Retorne APENAS o JSON puro.`;
 
           const aiResp1 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
             method: "POST",
@@ -3967,13 +4014,13 @@ Se for BOLETO BANCÁRIO:
               tools: [],
               temperature: 0.0,
               messages: [
-                { role: "system", content: promptDescricao },
+                { role: "system", content: promptOrientacaoETipo },
                 {
                   role: "user",
                   content: [
                     {
                       type: "text",
-                      text: promptText || "Descreva este documento fiscal / fatura detalhando cada linha de produto visível com máxima fidelidade. NUNCA invente dados."
+                      text: promptText || "Identifique o tipo e a orientação de leitura deste documento fiscal. Retorne JSON puro."
                     },
                     { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
                   ],
@@ -3982,40 +4029,124 @@ Se for BOLETO BANCÁRIO:
             }),
           });
 
-          if (!aiResp1.ok) {
-            const errText = await aiResp1.text();
-            console.error("[telegram-webhook] Erro no Passo 1 (Visão):", errText);
-            await sendReply("❌ Erro ao analisar a imagem com a IA. Tente novamente.");
-            return new Response("OK", { status: 200, headers: corsHeaders });
+          let orientacaoAnalysis: any = null;
+          if (aiResp1.ok) {
+            const aiJson1 = await aiResp1.json();
+            const raw1 = aiJson1.choices?.[0]?.message?.content || "";
+            try {
+              orientacaoAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+            } catch {
+              const m = raw1.match(/\{[\s\S]*\}/);
+              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch {} }
+            }
           }
 
-          const aiJson1 = await aiResp1.json();
-          descricaoBruta = aiJson1.choices?.[0]?.message?.content || "";
-          console.log("[telegram-webhook] [NF] Passo 1 concluído! Prévia da descrição:\n", descricaoBruta.slice(0, 400));
+          const orientacaoDetectada = calculateRotationNeeded(orientacaoAnalysis?.orientacao_leitura);
+          console.log(`[NF] orientação detectada por conteúdo: ${orientacaoDetectada}°`);
 
-          // Passo 2: Extração JSON estruturada a partir da descrição
-          console.log("[telegram-webhook] [NF] Passo 2: Extraindo JSON estruturado da descrição...");
+          // ─── NORMALIZAÇÃO DA MATRIZ ORIGINAL (UMA ÚNICA ROTAÇÃO) ───
+          let normalizedOverviewUri = finalImageBase64Uri;
+          if (loadedDecodedImage && orientacaoDetectada > 0) {
+            console.log(`[NF] rotação aplicada: ${orientacaoDetectada}°`);
+            loadedDecodedImage.rotate(orientacaoDetectada);
 
-          const promptJSON = `Você recebeu uma descrição de um documento fiscal (DANFE) ou boleto bancário brasileiro.
+            // Gera visão geral normalizada (em pé) para análise de cabeçalho e região de tabela
+            const normOverview = loadedDecodedImage.clone();
+            if (normOverview.width > 2048) {
+              const targetW = 2048;
+              const scale = targetW / normOverview.width;
+              normOverview.resize(targetW, Math.round(normOverview.height * scale));
+            }
+            const normB64 = base64Encode(await normOverview.encodeJPEG(95));
+            normalizedOverviewUri = `data:image/jpeg;base64,${normB64}`;
+          } else {
+            console.log(`[NF] rotação aplicada: 0°`);
+          }
 
-Sua tarefa é extrair os dados em formato JSON.
-Use APENAS os dados presentes na descrição. NUNCA invente dados.
-Se um campo não estiver na descrição, use null.
+          const ehTipoDanfe = orientacaoAnalysis?.tipo_documento === "danfe" ||
+            (!orientacaoAnalysis?.tipo_documento || orientacaoAnalysis.tipo_documento !== "boleto");
 
-Se houver menção a DANFE, Nota Fiscal, produtos, bebidas ou fornecedores (ex: SPAL, Ambev, Coca-Cola), defina SEMPRE "tipo": "nf_compra".
+          if (ehTipoDanfe) {
+            console.log("[NF] DANFE identificada");
 
-FORMATO JSON PARA DANFE:
+            // ─── PASSO 2: Cabeçalho, Totais e Região da Tabela na Imagem Normalizada ───
+            const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
+            const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
+            const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+
+            let docAnalysis: any = null;
+
+            if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
+              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
+              try {
+                const headerStart = Date.now();
+                const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
+                const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                        { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
+                      ]
+                    }],
+                    generationConfig: {
+                      temperature: 0.0,
+                      responseMimeType: "application/json",
+                      thinkingConfig: {
+                        thinkingBudget: 1
+                      }
+                    }
+                  }),
+                  signal: AbortSignal.timeout(30000)
+                });
+
+                const headerDurationMs = Date.now() - headerStart;
+                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp.status}`);
+
+                if (geminiResp.ok) {
+                  const gJson = await geminiResp.json();
+                  if (gJson.usageMetadata) {
+                    console.log(`[NF_V2_USAGE] target=header promptTokenCount=${gJson.usageMetadata.promptTokenCount} candidatesTokenCount=${gJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${gJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${gJson.usageMetadata.totalTokenCount}`);
+                  }
+                  const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                  docAnalysis = JSON.parse(gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+                  console.log("[NF_V2_HEADER_TOTALS] Extração de cabeçalho e totais concluída:", {
+                    fornecedor: docAnalysis?.cabecalho?.fornecedor,
+                    numero_nf: docAnalysis?.cabecalho?.numero_nf,
+                    serie_nf: docAnalysis?.cabecalho?.serie_nf,
+                    data_emissao: docAnalysis?.cabecalho?.data_emissao,
+                    valor_produtos: docAnalysis?.valores_totais?.valor_produtos,
+                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
+                  });
+                } else {
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
+                }
+              } catch (hErr: any) {
+                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
+              }
+            } else {
+              // ─── PASSO 2 (LEGADO): GPT-4o Overview ───
+              const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
+Esta imagem já está na orientação vertical correta (em pé).
+
+Analise o documento e retorne APENAS um JSON no seguinte formato:
 {
-  "tipo": "nf_compra",
-  "confianca_geral": "alta",
+  "tipo_documento": "danfe",
+  "regiao_tabela_produtos": {
+    "detectada": true,
+    "top": 0.28,
+    "bottom": 0.88
+  },
   "cabecalho": {
-    "numero_nf": "...",
-    "serie_nf": "...",
-    "data_emissao": "YYYY-MM-DD",
-    "data_entrada": "YYYY-MM-DD",
-    "fornecedor": "...",
-    "cnpj_fornecedor": "...",
-    "chave_acesso": "..."
+    "numero_nf": "string ou null",
+    "serie_nf": "string ou null",
+    "data_emissao": "YYYY-MM-DD ou null",
+    "data_entrada": "YYYY-MM-DD ou null",
+    "fornecedor": "string ou null",
+    "cnpj_fornecedor": "string ou null",
+    "chave_acesso": "string de 44 dígitos ou null"
   },
   "valores_totais": {
     "valor_total_nf": 0.00,
@@ -4023,75 +4154,424 @@ FORMATO JSON PARA DANFE:
     "valor_icms": 0.00,
     "valor_icms_st": 0.00,
     "valor_ipi": 0.00,
-    "valor_frete": 0.00
-  },
+    "valor_frete": 0.00,
+    "valor_desconto": 0.00
+  }
+}
+
+REGRAS:
+1. "regiao_tabela_produtos": indique as posições verticais aproximadas onde a seção "DADOS DO PRODUTO / SERVIÇO" começa ("top") e termina ("bottom"), com valores decimais de 0.0 (topo da folha) a 1.0 (base da folha). Se não tiver certeza, use "detectada": false.
+2. "valor_produtos": extraia o campo VALOR TOTAL DOS PRODUTOS da DANFE.
+3. "valor_total_nf": extraia o campo VALOR TOTAL DA NOTA da DANFE.
+4. Retorne APENAS o JSON puro.`;
+
+              const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${supabaseServiceKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o",
+                  user_id: userId,
+                  tools: [],
+                  temperature: 0.0,
+                  messages: [
+                    { role: "system", content: promptCabecalhoTotaisETabela },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "text",
+                          text: promptText || "Analise o cabeçalho, totais e região da tabela de produtos desta DANFE já normalizada. Retorne JSON puro."
+                        },
+                        { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                      ],
+                    },
+                  ],
+                }),
+              });
+
+              if (aiResp2.ok) {
+                const aiJson2 = await aiResp2.json();
+                const raw2 = aiJson2.choices?.[0]?.message?.content || "";
+                try {
+                  docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+                } catch {
+                  const m = raw2.match(/\{[\s\S]*\}/);
+                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+                }
+              }
+            }
+
+            // ─── PIPELINE DANFE GEMINI V2 (Tabela Contínua sem Tiles) ───
+            if (loadedDecodedImage && isGeminiV2Enabled) {
+              console.log(`[NF_PIPELINE] pipeline=gemini_v2 fileType=${isTelegramCompressedPhoto ? "photo" : "document"} dim=${loadedDecodedImage.width}x${loadedDecodedImage.height}`);
+
+              if (!geminiApiKey) {
+                console.error("[NF_V2_ERROR] DANFE_GEMINI_V2_ENABLED=true mas GEMINI_API_KEY não está configurada.");
+                documentData = {
+                  tipo: "nf_compra",
+                  pipeline: "gemini_v2",
+                  confianca_geral: "baixa",
+                  status_validacao: "requer_revisao",
+                  motivo_revisao: "gemini_missing_api_key",
+                  validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: Number(docAnalysis?.valores_totais?.valor_produtos || 0), diferenca: 0 },
+                  cabecalho: docAnalysis?.cabecalho || {},
+                  valores_totais: docAnalysis?.valores_totais || {},
+                  itens: [],
+                  isTelegramCompressedPhoto
+                };
+              } else {
+                // 1. Recorte Contínuo da Tabela
+                const regiao = docAnalysis?.regiao_tabela_produtos;
+                const topRatio = (regiao && typeof regiao.top === "number" && regiao.top >= 0.1 && regiao.top <= 0.6) ? regiao.top : 0.24;
+                const bottomRatio = (regiao && typeof regiao.bottom === "number" && regiao.bottom >= 0.5 && regiao.bottom <= 0.98) ? regiao.bottom : 0.90;
+
+                const cropY = Math.max(0, Math.floor(loadedDecodedImage.height * topRatio));
+                const cropH = Math.min(loadedDecodedImage.height - cropY, Math.floor(loadedDecodedImage.height * (bottomRatio - topRatio)));
+
+                const tableContinuousCrop = loadedDecodedImage.clone().crop(0, cropY, loadedDecodedImage.width, cropH);
+                const tableContinuousB64 = base64Encode(await tableContinuousCrop.encodeJPEG(95));
+
+                console.log(`[NF_V2_CROP] continuous table crop: ${loadedDecodedImage.width}x${cropH} (top ${Math.round(topRatio*100)}% - bottom ${Math.round(bottomRatio*100)}%)`);
+
+                // 2. Chamada Vision ao Gemini com Timeout e Tratamento de Erros
+                let geminiRawText = "";
+                let geminiDurationMs = 0;
+                let geminiErrorCode = "";
+
+                try {
+                  const v2Start = Date.now();
+                  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`;
+
+                  const geminiResp = await fetch(geminiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{
+                        parts: [
+                          { text: GEMINI_V2_PROMPT_TABELA },
+                          { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
+                        ]
+                      }],
+                      generationConfig: {
+                        temperature: 0.0,
+                        responseMimeType: "application/json",
+                        thinkingConfig: {
+                          thinkingBudget: 1
+                        }
+                      }
+                    }),
+                    signal: AbortSignal.timeout(45000)
+                  });
+
+                  geminiDurationMs = Date.now() - v2Start;
+                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp.status}`);
+
+                  if (geminiResp.ok) {
+                    const geminiJson = await geminiResp.json();
+                    if (geminiJson.usageMetadata) {
+                      console.log(`[NF_V2_USAGE] target=products promptTokenCount=${geminiJson.usageMetadata.promptTokenCount} candidatesTokenCount=${geminiJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${geminiJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${geminiJson.usageMetadata.totalTokenCount}`);
+                    }
+                    geminiRawText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                    console.log(`[NF_V2_VISION] model=${GEMINI_DANFE_MODEL} duration=${geminiDurationMs}ms status=200 rawLen=${geminiRawText.length}`);
+                  } else if (geminiResp.status === 429) {
+                    geminiErrorCode = "gemini_rate_limit";
+                    console.error(`[NF_V2_ERROR] Gemini Rate Limit HTTP 429 em ${geminiDurationMs}ms`);
+                  } else {
+                    geminiErrorCode = "gemini_processing_error";
+                    const errText = await geminiResp.text();
+                    console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
+                  }
+                } catch (gemErr: any) {
+                  if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
+                    geminiErrorCode = "gemini_timeout";
+                  } else {
+                    geminiErrorCode = "gemini_processing_error";
+                  }
+                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, gemErr.message);
+                }
+
+                if (!geminiErrorCode && geminiRawText) {
+                  let rawList: any[] | null = null;
+                  try {
+                    const clean = geminiRawText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
+                    const p = JSON.parse(clean);
+                    if (Array.isArray(p)) rawList = p;
+                    else if (Array.isArray(p.itens)) rawList = p.itens;
+                    else if (Array.isArray(p.produtos)) rawList = p.produtos;
+                  } catch {
+                    const m = geminiRawText.match(/\{[\s\S]*\}/);
+                    if (m) {
+                      try {
+                        const p = JSON.parse(m[0]);
+                        if (Array.isArray(p.itens)) rawList = p.itens;
+                        else if (Array.isArray(p.produtos)) rawList = p.produtos;
+                      } catch (_) {}
+                    }
+                  }
+
+                  if (rawList === null) {
+                    // Texto não-JSON retornado pelo modelo: erro explícito de parsing
+                    console.error("[NF_V2_ERROR] Gemini retornou texto mas falhou ao parsear JSON estruturado.");
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: "baixa",
+                      status_validacao: "requer_revisao",
+                      motivo_revisao: "gemini_invalid_json",
+                      validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: [],
+                      isTelegramCompressedPhoto
+                    };
+                  } else if (rawList.length === 0) {
+                    // JSON estruturado válido, mas lista vazia de produtos em DANFE
+                    console.warn("[NF_V2_WARN] Gemini retornou lista vazia de produtos para DANFE.");
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: "baixa",
+                      status_validacao: "requer_revisao",
+                      motivo_revisao: "gemini_empty_products",
+                      validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: [],
+                      isTelegramCompressedPhoto
+                    };
+                  } else {
+                    // 3. Validação Estrutural Estrita com Sanitização de FCI
+                    const itensValidados: DanfeItemV2[] = [];
+                    const itensRejeitados: any[] = [];
+
+                    rawList.forEach((r, idx) => {
+                      const v = validateProductRowV2(r);
+                      if (v.isValid && v.item) {
+                        itensValidados.push(v.item);
+                      } else {
+                        itensRejeitados.push({ index: idx, motivo: v.motivo });
+                      }
+                    });
+
+                    console.log(`[NF_V2_VALIDATION] raw=${rawList.length} valid=${itensValidados.length} rejected=${itensRejeitados.length}`);
+
+                    // 4. Validação Matemática Determinística
+                    const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                    const validacaoV2 = validateDanfeMathV2(itensValidados, valorProdutosNF);
+
+                    console.log(`[NF_V2_MATH] valorProdutosNF=R$${validacaoV2.valorReferencia.toFixed(2)} somaItens=R$${validacaoV2.somaItens.toFixed(2)} diff=R$${validacaoV2.diferenca.toFixed(2)} status=${validacaoV2.valido ? "VALIDO" : "REVISAR"}`);
+
+                    documentData = {
+                      tipo: "nf_compra",
+                      pipeline: "gemini_v2",
+                      confianca_geral: validacaoV2.valido ? "alta" : "baixa",
+                      status_validacao: validacaoV2.valido ? "ok" : "requer_revisao",
+                      validacao_detalhes: validacaoV2,
+                      cabecalho: docAnalysis?.cabecalho || {},
+                      valores_totais: docAnalysis?.valores_totais || {},
+                      itens: itensValidados,
+                      itensRejeitados,
+                      isTelegramCompressedPhoto
+                    };
+                  }
+                } else {
+                  // Falha técnica no Gemini V2: marca diretamente como requer_revisao SEM chamar o pipeline legado
+                  const valorProdutosNF = Number(docAnalysis?.valores_totais?.valor_produtos || 0);
+                  documentData = {
+                    tipo: "nf_compra",
+                    pipeline: "gemini_v2",
+                    confianca_geral: "baixa",
+                    status_validacao: "requer_revisao",
+                    motivo_revisao: geminiErrorCode || "gemini_processing_error",
+                    validacao_detalhes: { valido: false, status: "requer_revisao", somaItens: 0, valorReferencia: valorProdutosNF, diferenca: valorProdutosNF },
+                    cabecalho: docAnalysis?.cabecalho || {},
+                    valores_totais: docAnalysis?.valores_totais || {},
+                    itens: [],
+                    isTelegramCompressedPhoto
+                  };
+                }
+              }
+            }
+
+            // ─── PIPELINE LEGADO (Somente quando DANFE_GEMINI_V2_ENABLED !== "true") ───
+            if (!isGeminiV2Enabled && loadedDecodedImage) {
+              console.log("[NF_PIPELINE] pipeline=legacy (GPT-4o tiles adaptativos)...");
+              const { tiles, usouFallback, topPercent, bottomPercent, adaptiveTilesCount } = calculateTableCropTiles(
+                loadedDecodedImage.width,
+                loadedDecodedImage.height,
+                docAnalysis?.regiao_tabela_produtos,
+                "auto",
+                0.15
+              );
+
+              if (!usouFallback) {
+                console.log(`[NF] região da tabela detectada por conteúdo: ${Math.round(topPercent * 100)}%-${Math.round(bottomPercent * 100)}%`);
+              } else {
+                console.log("[NF] região da tabela não detectada");
+                console.log("[NF] usando fallback geométrico: 28%-88%");
+              }
+
+              console.log(`[NF] recortes adaptativos gerados: ${tiles.length} (modo: ${adaptiveTilesCount} tiles)`);
+
+              const promptRecorte = `Você é um extrator fiscal especializado na tabela DADOS DO PRODUTO / SERVIÇO da DANFE.
+Este recorte contém uma PARTE de uma tabela de produtos de uma DANFE.
+Sua tarefa é a TRANSCRIÇÃO EXAUSTIVA linha por linha.
+
+Percorra visualmente o recorte de CIMA PARA BAIXO.
+Extraia TODA linha de produto visível, inclusive a última linha na parte inferior.
+
+REGRAS CRÍTICAS:
+1. NÃO resuma.
+2. NÃO pule produtos repetidos.
+3. NÃO deduplique.
+4. NÃO tente fazer a soma fechar.
+5. NÃO invente campos ilegíveis (use null).
+6. Se uma linha estiver parcialmente visível devido ao overlap, ainda retorne-a se conseguir identificar seus dados. O sistema fará a deduplicação posteriormente.
+7. "_row_center": número decimal entre 0.0 (topo deste recorte) e 1.0 (base deste recorte) indicando o centro vertical aproximado desta linha no recorte.
+8. Antes de finalizar o JSON, faça uma segunda varredura visual do recorte de cima para baixo e confirme internamente que nenhuma linha visível foi omitida.
+9. Retorne APENAS o JSON puro.
+
+FORMATO:
+{
   "itens": [
     {
-      "codigo": "...",
-      "descricao": "...",
-      "ncm": "...",
-      "cfop": "...",
-      "unidade": "CX",
+      "codigo": "string ou null",
+      "descricao": "string com descrição exata do produto",
+      "ncm": "string ou null",
+      "cfop": "string ou null",
+      "unidade": "CX" | "UN" | "LT" | "PCT" | "string",
       "quantidade": 1.0,
       "valor_unitario": 0.00,
       "valor_total": 0.00,
       "icms_aliquota": 0.00,
       "ipi_aliquota": 0.00,
-      "custo_unitario_liquido": 0.00
+      "custo_unitario_liquido": 0.00,
+      "_row_center": 0.50
     }
-  ],
-  "beneficiario": null,
-  "valor": null,
-  "data_vencimento": null,
-  "linha_digitavel": null
-}
+  ]
+}`;
 
-Se for estritamente um BOLETO BANCÁRIO (sem itens de produtos), defina "tipo": "boleto" e preencha "beneficiario", "valor", "data_vencimento", "linha_digitavel".
-Retorne APENAS o JSON puro.`;
+              const extractTileItemsWithRetry = async (
+                tile: CropTileCoordinate,
+                label: string
+              ): Promise<{ effectiveTile: CropTileCoordinate; items: DanfeItemRaw[] }> => {
+                const callVisionOnCrop = async (t: CropTileCoordinate): Promise<{ rawText: string; httpStatus: number }> => {
+                  try {
+                    const crop = loadedDecodedImage.clone().crop(t.x, t.y, t.width, t.height);
+                    const cropB64 = base64Encode(await crop.encodeJPEG(95));
+                    const tileUri = `data:image/jpeg;base64,${cropB64}`;
 
-          const aiResp2 = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              user_id: userId,
-              tools: [],
-              temperature: 0.0,
-              messages: [
-                { role: "system", content: promptJSON },
-                { role: "user", content: `Extraia JSON desta descrição de documento:\n\n${descricaoBruta}` },
-              ],
-            }),
-          });
+                    const tileResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${supabaseServiceKey}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: JSON.stringify({
+                        model: "gpt-4o",
+                        user_id: userId,
+                        tools: [],
+                        temperature: 0.0,
+                        messages: [
+                          { role: "system", content: promptRecorte },
+                          {
+                            role: "user",
+                            content: [
+                              { type: "text", text: `Extraia todos os produtos da tabela deste recorte ${label} da DANFE.` },
+                              { type: "image_url", image_url: { url: tileUri, detail: "high" } },
+                            ],
+                          },
+                        ],
+                      }),
+                    });
 
-          if (aiResp2.ok) {
-            const aiJson2 = await aiResp2.json();
-            const rawJSON = aiJson2.choices?.[0]?.message?.content || "";
-            try {
-              const cleaned = rawJSON.replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
-              documentData = JSON.parse(cleaned);
-            } catch {
-              const objMatch = rawJSON.match(/\{[\s\S]*\}/);
-              if (objMatch) {
-                try { documentData = JSON.parse(objMatch[0]); } catch {}
+                    const tileJson = tileResp.ok ? await tileResp.json() : null;
+                    const rawTile = tileJson?.choices?.[0]?.message?.content || "";
+                    return { rawText: rawTile, httpStatus: tileResp.status };
+                  } catch (tileErr: any) {
+                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
+                    return { rawText: "", httpStatus: 500 };
+                  }
+                };
+
+                // 1ª Tentativa
+                const attempt1 = await callVisionOnCrop(tile);
+                const classif1 = classifyVisionResponse(attempt1.rawText, attempt1.httpStatus);
+
+                if (classif1.status === "success" || classif1.status === "empty_valid") {
+                  return { effectiveTile: tile, items: classif1.itens };
+                }
+
+                // Em caso de refusal, invalid_json ou api_error: RETRY COM CONTEXTO AMPLIADO (margem vertical)
+                console.warn(`[NF] Falha de leitura no recorte ${label} (status: ${classif1.status}, motivo: ${classif1.reason}). Executando retry com contexto ampliado...`);
+                const expandedTile = expandCropTileWithMargin(tile, loadedDecodedImage.width, loadedDecodedImage.height, 0.25);
+                const attempt2 = await callVisionOnCrop(expandedTile);
+                const classif2 = classifyVisionResponse(attempt2.rawText, attempt2.httpStatus);
+
+                console.log(`[NF] Resultado do retry no recorte ${label}: status=${classif2.status}, itens=${classif2.itens.length}`);
+                return { effectiveTile: expandedTile, items: classif2.itens };
+              };
+
+              const tilesItemsCollected: Array<{ tile: CropTileCoordinate; items: DanfeItemRaw[] }> = [];
+
+              for (let i = 0; i < tiles.length; i++) {
+                const tile = tiles[i];
+                const res = await extractTileItemsWithRetry(tile, `${i + 1}/${tiles.length}`);
+                console.log(`[NF] recorte ${i + 1}: ${res.items.length} itens brutos lidos (core Y: ${res.effectiveTile.coreStartY}-${res.effectiveTile.coreEndY})`);
+                tilesItemsCollected.push({ tile: res.effectiveTile, items: res.items });
               }
+
+              // ─── CONSOLIDAÇÃO GEOMÉTRICA COM VALIDADOR ESTRUTURAL DE PRODUTO ───
+              const { itensFinais: itensConsolidados, diagnostico } = consolidateDanfeItems(tilesItemsCollected);
+              const validacao = validateDanfeMath(itensConsolidados, docAnalysis?.valores_totais);
+
+              for (const diag of diagnostico) {
+                console.log(
+                  `[NF] tile ${diag.tileIndex} item ${diag.itemIndex}: desc="${diag.descricao}" row_center=${diag.rowCenter} abs_y=${diag.absoluteY} core=${diag.coreRange} accepted=${diag.accepted} (${diag.reason})`
+                );
+              }
+
+              console.log(`[NF] itens finais após consolidação geométrica: ${itensConsolidados.length}`);
+
+              // ─── LOGS FINAIS DA VALIDAÇÃO MATEMÁTICA ───
+              console.log(`[NF] itens encontrados: ${validacao.itensValidosCount}`);
+              console.log(`[NF] soma dos itens: R$ ${validacao.somaItens.toFixed(2)}`);
+              console.log(`[NF] valor produtos NF: R$ ${validacao.valorReferencia.toFixed(2)}`);
+              console.log(`[NF] diferença: R$ ${validacao.diferenca.toFixed(2)}`);
+              console.log(`[NF] confiança: ${validacao.valido ? "alta" : "baixa"}`);
+              console.log(`[NF] validação: ${validacao.valido ? "OK" : "REQUER_REVISAO"}`);
+
+              documentData = {
+                tipo: "nf_compra",
+                pipeline: "legacy",
+                confianca_geral: validacao.valido ? "alta" : "baixa",
+                status_validacao: validacao.status,
+                validacao_detalhes: validacao,
+                cabecalho: docAnalysis?.cabecalho || {},
+                valores_totais: docAnalysis?.valores_totais || {},
+                itens: itensConsolidados,
+                isTelegramCompressedPhoto
+              };
             }
+          } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
+            documentData = {
+              tipo: "boleto",
+              beneficiario: docAnalysis?.boleto_dados?.beneficiario,
+              valor: docAnalysis?.boleto_dados?.valor,
+              data_vencimento: docAnalysis?.boleto_dados?.data_vencimento,
+              linha_digitavel: docAnalysis?.boleto_dados?.linha_digitavel,
+            };
           }
         }
 
-        const descLower = (descricaoBruta || "").toLowerCase();
         const ehDANFE = Boolean(
           documentData?.tipo === "nf_compra" ||
-          (documentData?.itens && documentData.itens.length > 0) ||
-          descLower.includes("danfe") ||
-          descLower.includes("nota fiscal") ||
-          descLower.includes("nfe") ||
-          descLower.includes("produtos") ||
-          descLower.includes("cfop") ||
-          descLower.includes("chave de acesso")
+          (documentData?.itens && documentData.itens.length > 0)
         );
 
         console.log("[telegram-webhook] Foto analisada:", {
@@ -4123,50 +4603,213 @@ Retorne APENAS o JSON puro.`;
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
 
-          // ─── VALIDAÇÃO DE SANIDADE: Rejeitar apenas leituras comprovadamente absurdas ───
-          const itensExtraidos = documentData.itens || [];
-          const valorTotalNF = Number(documentData.valores_totais?.valor_total_nf || 0);
-          const valorProdutosNF = Number(documentData.valores_totais?.valor_produtos || 0);
+          // ─── GESTÃO DE SESSÃO MULTIPÁGINA (FOLHA X / Y) COM RPC ATÔMICA ───
+          const paginaAtual = Math.max(1, Number(documentData.cabecalho?.pagina_atual) || 1);
+          const totalPaginas = Math.max(1, Number(documentData.cabecalho?.total_paginas) || 1);
+          let multipageSessaoId: string | null = null;
 
-          const valorTotalItens = itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
-          const baseComparacao = valorProdutosNF > 0 ? valorProdutosNF : valorTotalNF;
-          const diferencaValor = Math.abs(valorTotalItens - baseComparacao);
-          const percentualDiferenca = baseComparacao > 0 ? (diferencaValor / baseComparacao) * 100 : 0;
+          if (totalPaginas > 1) {
+            const chaveAcesso = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
+            const numeroNF = documentData.cabecalho?.numero_nf;
+            const serieNF = documentData.cabecalho?.serie_nf;
+            const cnpjFornecedor = documentData.cabecalho?.cnpj_fornecedor;
+            const fornecedor = documentData.cabecalho?.fornecedor;
 
-          // Se nenhum item foi extraído
-          if (itensExtraidos.length === 0) {
-            let msgSemItens = `⚠️ <b>Não foi possível identificar os produtos da Nota Fiscal nesta imagem.</b>\n\n`;
-            if (isTelegramCompressedPhoto) {
-              msgSemItens += `📂 <b>Dica de alta precisão:</b> O Telegram comprime fotos por padrão.\n`;
-              msgSemItens += `Toque no clipe 📎 → selecione <b>Arquivo</b> → envie a foto como arquivo original ou envie o <b>XML</b> da nota fiscal ✅\n\n`;
-            } else {
-              msgSemItens += `💡 <b>Dicas:</b>\n`;
-              msgSemItens += `1. Aproxime a câmera da tabela de produtos (DADOS DO PRODUTO/SERVIÇO)\n`;
-              msgSemItens += `2. Você também pode enviar o arquivo <b>.XML</b> da nota para importação instantânea!\n`;
+            const paginaObj = {
+              pagina_atual: paginaAtual,
+              itens: documentData.itens || [],
+              cabecalho: documentData.cabecalho || {},
+              valores_totais: documentData.valores_totais || {},
+              telegram_file_id: fileId || null,
+              recebida_em: new Date().toISOString(),
+            };
+
+            // 1. Chamada atômica via RPC com pg_advisory_xact_lock e SELECT FOR UPDATE
+            const { data: rpcRes, error: rpcErr } = await supabase.rpc("merge_nf_multipage_page", {
+              p_user_id: userId,
+              p_chat_id: String(chatId),
+              p_workspace_id: wsId,
+              p_chave_acesso: chaveAcesso,
+              p_numero_nf: numeroNF,
+              p_serie_nf: serieNF,
+              p_cnpj_fornecedor: cnpjFornecedor,
+              p_fornecedor: fornecedor,
+              p_total_paginas: totalPaginas,
+              p_pagina_atual: paginaAtual,
+              p_pagina_dados: paginaObj,
+              p_valores_totais: documentData.valores_totais || {},
+              p_cabecalho: documentData.cabecalho || {},
+            });
+
+            if (rpcErr) {
+              console.error("[NF_MULTIPAGE] Erro na RPC merge_nf_multipage_page:", rpcErr);
             }
 
-            await sendReply(msgSemItens);
+            multipageSessaoId = rpcRes?.sessao_id || null;
+            const dadosSessao = rpcRes?.dados || {};
+            const isDuplicada = !!rpcRes?.is_duplicada;
+            const faltantes = rpcRes?.faltantes || [];
+            const completo = !!rpcRes?.completo;
+
+            // 2. Se a página já foi recebida anteriormente nesta sessão
+            if (isDuplicada) {
+              await sendReply(
+                `ℹ️ <b>A página ${paginaAtual} desta NF já foi recebida.</b>\n\n` +
+                (faltantes.length > 0
+                  ? `⏳ <b>Ainda aguardando:</b> Página(s) ${faltantes.join(", ")} de ${totalPaginas}.`
+                  : `✅ Todas as páginas já foram recebidas e estão prontas.`)
+              );
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+
+            // 3. Se ainda faltam páginas -> responde informativo e aguarda
+            if (!completo || faltantes.length > 0) {
+              let msgPendente = `📄 <b>Nota Fiscal multipágina identificada</b>\n\n`;
+              if (dadosSessao.cabecalho?.fornecedor || fornecedor) {
+                msgPendente += `🏢 <b>Fornecedor:</b> ${dadosSessao.cabecalho?.fornecedor || fornecedor}\n`;
+              }
+              if (numeroNF) {
+                msgPendente += `📋 <b>NF:</b> ${numeroNF} ${serieNF ? `(Série ${serieNF})` : ""}\n`;
+              }
+              msgPendente += `📑 <b>Página recebida:</b> ${paginaAtual} de ${totalPaginas}\n\n`;
+              msgPendente += `⏳ <b>Aguardando:</b> Página(s) ${faltantes.join(", ")}\n\n`;
+              msgPendente += `<i>Nenhuma alteração foi feita no estoque.</i>`;
+              await sendReply(msgPendente);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+
+            // 4. Todas as páginas recebidas -> CONSOLIDAÇÃO ATÔMICA
+            const todosItens: any[] = [];
+            for (let pNum = 1; pNum <= totalPaginas; pNum++) {
+              const pData = dadosSessao.paginas?.[String(pNum)];
+              if (pData?.itens) {
+                todosItens.push(...pData.itens);
+              }
+            }
+
+            documentData.itens = todosItens;
+            if (dadosSessao.cabecalho) documentData.cabecalho = dadosSessao.cabecalho;
+            if (dadosSessao.valores_totais) documentData.valores_totais = dadosSessao.valores_totais;
+            const valorProdutosNFConsolidado = Number(documentData.valores_totais?.valor_produtos || 0);
+            documentData.validacao_detalhes = validateDanfeMathV2(todosItens, valorProdutosNFConsolidado);
+          }
+
+          // ─── VERIFICAR IDEMPOTÊNCIA: SE NF JÁ FOI CADASTRADA ANTERIORMENTE ───
+          const chaveAcessoFinal = (documentData.cabecalho?.chave_acesso || "").replace(/\D/g, "");
+          if (chaveAcessoFinal && chaveAcessoFinal.length === 44) {
+            const { data: nfJaExiste } = await supabase
+              .from("notas_fiscais_compra")
+              .select("id, status, created_at")
+              .eq("user_id", userId)
+              .eq("chave_acesso", chaveAcessoFinal)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (nfJaExiste && nfJaExiste.status === "confirmada") {
+              await sendReply(`ℹ️ <b>Esta Nota Fiscal (Chave: ...${chaveAcessoFinal.slice(-8)}) já foi importada e confirmada anteriormente.</b>`);
+              if (multipageSessaoId) {
+                await supabase.from("telegram_propostas").update({ status: "processada" }).eq("id", multipageSessaoId);
+              }
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+          }
+
+          const itensExtraidos = documentData.itens || [];
+          const validacao = documentData.validacao_detalhes || validateDanfeMath(itensExtraidos, documentData.valores_totais);
+          const valorTotalNotaNF = (documentData.valores_totais?.valor_total_nf != null && !isNaN(Number(documentData.valores_totais.valor_total_nf)) && Number(documentData.valores_totais.valor_total_nf) > 0)
+            ? Number(documentData.valores_totais.valor_total_nf)
+            : null;
+          const valorTotalProdutosNF = (documentData.valores_totais?.valor_produtos != null && !isNaN(Number(documentData.valores_totais.valor_produtos)) && Number(documentData.valores_totais.valor_produtos) > 0)
+            ? Number(documentData.valores_totais.valor_produtos)
+            : null;
+          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
+
+          // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
+          if (!validacao.valido || itensExtraidos.length === 0) {
+            console.warn("[NF] Leitura duvidosa/divergente detectada. Bloqueando atualização automática de estoque.");
+
+            let msgDivergencia = "";
+            if (documentData.motivo_revisao && documentData.motivo_revisao !== "gemini_empty_products") {
+              msgDivergencia = `⚠️ <b>Não consegui validar esta nota com segurança no momento.</b>\n\n`;
+              msgDivergencia += `<i>Nenhuma alteração foi feita no estoque.</i>\n\n`;
+              msgDivergencia += `💡 <b>O que você pode fazer:</b>\n`;
+              msgDivergencia += `1. Tente novamente em alguns minutos\n`;
+              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota fiscal para importação instantânea e automática ✅`;
+            } else {
+              msgDivergencia = `⚠️ <b>Nota Fiscal identificada, mas encontrei uma divergência na leitura dos valores.</b>\n\n`;
+              if (documentData.cabecalho?.fornecedor) {
+                msgDivergencia += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho.fornecedor}\n`;
+              }
+              if (documentData.cabecalho?.numero_nf) {
+                msgDivergencia += `📋 <b>NF:</b> ${documentData.cabecalho.numero_nf} ${documentData.cabecalho.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
+              }
+              if (documentData.cabecalho?.data_emissao) {
+                msgDivergencia += `📅 <b>Emissão:</b> ${documentData.cabecalho.data_emissao.split("-").reverse().join("/")}\n`;
+              }
+              if (valorTotalNotaNF) {
+                msgDivergencia += `💵 <b>Valor Total da Nota:</b> ${fmt(valorTotalNotaNF)}\n`;
+              }
+              if (valorTotalProdutosNF) {
+                msgDivergencia += `📄 <b>Valor dos Produtos na NF:</b> ${fmt(valorTotalProdutosNF)}\n`;
+              }
+              msgDivergencia += `📦 <b>Produtos Identificados:</b> ${itensExtraidos.length}\n`;
+              msgDivergencia += `💰 <b>Soma dos Produtos Extraídos:</b> ${fmt(valorTotalItens)}\n`;
+              if (validacao.valorReferencia > 0) {
+                msgDivergencia += `⚠️ <b>Diferença:</b> ${fmt(validacao.diferenca)}\n\n`;
+              } else {
+                msgDivergencia += `⚠️ <b>Aviso:</b> Valor total dos produtos não pôde ser confirmado no cabeçalho da NF.\n\n`;
+              }
+              msgDivergencia += `<i>Não atualizei o estoque.</i>\n\n`;
+              msgDivergencia += `💡 <b>Dicas para uma leitura perfeita:</b>\n`;
+              if (isTelegramCompressedPhoto) {
+                msgDivergencia += `1. Toque no clipe 📎 → selecione <b>Arquivo/Documento</b> (não foto) para manter 100% da resolução\n`;
+              }
+              msgDivergencia += `2. Ou envie o arquivo <b>.XML</b> da nota para importação instantânea e automática ✅`;
+            }
+
+            await supabase
+              .from("notas_fiscais_compra")
+              .insert({
+                user_id: userId,
+                workspace_id: wsId,
+                chat_id: Number(chatId) || null,
+                numero_nf: documentData.cabecalho?.numero_nf || null,
+                serie_nf: documentData.cabecalho?.serie_nf || null,
+                fornecedor: documentData.cabecalho?.fornecedor || null,
+                cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor || null,
+                data_emissao: documentData.cabecalho?.data_emissao || null,
+                data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
+                valor_total: valorTotalNotaNF || valorTotalProdutosNF || null,
+                valor_produtos: valorTotalProdutosNF || null,
+                chave_acesso: documentData.cabecalho?.chave_acesso || null,
+                status: "requer_revisao",
+                origem: documentData.origem || "foto",
+              });
+
+            await sendReply(msgDivergencia);
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
+          // ─── LEITURA VÁLIDA: Salvar NF e Exibir Card de Confirmação ───
           const { data: nfSalva, error: errNF } = await supabase
             .from("notas_fiscais_compra")
             .insert({
               user_id: userId,
               workspace_id: wsId,
               chat_id: Number(chatId) || null,
-              numero_nf: documentData.cabecalho?.numero_nf,
-              serie_nf: documentData.cabecalho?.serie_nf,
-              fornecedor: documentData.cabecalho?.fornecedor,
-              cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor,
-              data_emissao: documentData.cabecalho?.data_emissao,
+              numero_nf: documentData.cabecalho?.numero_nf || null,
+              serie_nf: documentData.cabecalho?.serie_nf || null,
+              fornecedor: documentData.cabecalho?.fornecedor || null,
+              cnpj_fornecedor: documentData.cabecalho?.cnpj_fornecedor || null,
+              data_emissao: documentData.cabecalho?.data_emissao || null,
               data_entrada: documentData.cabecalho?.data_entrada || hojeStr,
-              valor_total: valorTotalNF || valorTotalItens,
-              valor_icms: documentData.valores_totais?.valor_icms,
-              valor_ipi: documentData.valores_totais?.valor_ipi,
-              valor_frete: documentData.valores_totais?.valor_frete,
-              valor_produtos: documentData.valores_totais?.valor_produtos || valorTotalItens,
-              chave_acesso: documentData.cabecalho?.chave_acesso,
+              valor_total: valorTotalNotaNF || valorTotalProdutosNF || valorTotalItens,
+              valor_icms: documentData.valores_totais?.valor_icms || null,
+              valor_ipi: documentData.valores_totais?.valor_ipi || null,
+              valor_frete: documentData.valores_totais?.valor_frete || null,
+              valor_produtos: valorTotalProdutosNF || valorTotalItens,
+              chave_acesso: documentData.cabecalho?.chave_acesso || null,
               status: "pendente",
               origem: documentData.origem || "foto",
             })
@@ -4180,7 +4823,7 @@ Retorne APENAS o JSON puro.`;
               descricao: item.descricao,
               ncm: item.ncm,
               cfop: item.cfop,
-              unidade: item.unidade,
+              unidade: item.unidade || "UN",
               quantidade: item.quantidade,
               valor_unitario: item.valor_unitario,
               valor_total: item.valor_total,
@@ -4196,30 +4839,38 @@ Retorne APENAS o JSON puro.`;
               await supabase.from("nf_itens").insert(itensParaInserir);
             }
 
-            const fmt = (v: any) =>
-              v != null && !isNaN(Number(v))
-                ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                : "R$ 0,00";
-
             let msg = `📄 <b>Nota Fiscal de Compra Identificada!</b>\n\n`;
             msg += `🏢 <b>Fornecedor:</b> ${documentData.cabecalho?.fornecedor || "N/A"}\n`;
             msg += `📋 <b>NF:</b> ${documentData.cabecalho?.numero_nf || "N/A"} ${documentData.cabecalho?.serie_nf ? `(Série ${documentData.cabecalho.serie_nf})` : ""}\n`;
             msg += `📅 <b>Emissão:</b> ${documentData.cabecalho?.data_emissao ? documentData.cabecalho.data_emissao.split("-").reverse().join("/") : hojeStr}\n`;
-            msg += `💰 <b>Valor Total:</b> <b>${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}</b>\n`;
+            if (valorTotalNotaNF) {
+              msg += `💵 <b>Valor Total da Nota:</b> ${fmt(valorTotalNotaNF)}\n`;
+            }
+            if (valorTotalProdutosNF) {
+              msg += `📄 <b>Valor dos Produtos na NF:</b> ${fmt(valorTotalProdutosNF)}\n`;
+            }
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
-            documentData.itens.slice(0, 8).forEach((item: any, i: number) => {
-              const qtd = Number(item.quantidade) || 1;
-              const vUnit = Number(item.valor_unitario) || 0;
-              const vLiq = Number(item.custo_unitario_liquido) || vUnit;
+            documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
+              const qtd = item.quantidade != null ? `${item.quantidade} ${item.unidade || "UN"}` : "Qtd N/A";
+              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario) : "N/A";
+              const vTot = item.valor_total != null ? fmt(item.valor_total) : "N/A";
+              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido) : vUnit;
               msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
-              msg += `   📦 ${qtd} ${item.unidade || "UN"} × ${fmt(vUnit)}\n`;
-              msg += `   💰 Total: ${fmt(item.valor_total)} | Custo Líquido: <b>${fmt(vLiq)}</b>\n\n`;
+              msg += `   📦 ${qtd} × ${vUnit}\n`;
+              msg += `   💰 Total: ${vTot} | Custo Líquido: <b>${vLiq}</b>\n\n`;
             });
 
-            if (documentData.itens.length > 8) {
-              msg += `<i>... e mais ${documentData.itens.length - 8} produtos</i>\n\n`;
+            if (documentData.itens.length > 10) {
+              msg += `<i>... e mais ${documentData.itens.length - 10} produtos</i>\n\n`;
             }
+
+            msg += `────────────────\n`;
+            msg += `💰 <b>Soma dos produtos extraídos:</b> ${fmt(validacao.somaItens)}\n`;
+            if (validacao.valorReferencia > 0) {
+              msg += `📄 <b>Valor dos produtos na NF:</b> ${fmt(validacao.valorReferencia)}\n`;
+            }
+            msg += `✅ <b>Valores conferidos</b>\n\n`;
 
             msg += `⚠️ <b>Deseja confirmar e atualizar estoque e custos?</b>\n\n`;
             msg += `👉 Responda <b>CONFIRMAR</b> para atualizar o sistema.\n`;
@@ -4241,7 +4892,7 @@ Retorne APENAS o JSON puro.`;
               chat_id: Number(chatId) || null,
               tipo: "atualizar_estoque_nf",
               dados: { nf_id: nfSalva.id, message_id: messageId },
-              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(documentData.valores_totais?.valor_total_nf || valorTotalNF || valorTotalItens)}`,
+              resumo: `NF ${documentData.cabecalho?.numero_nf} - ${documentData.cabecalho?.fornecedor} - ${fmt(valorTotalNotaNF || valorTotalProdutosNF || valorTotalItens)}`,
               status: "pendente",
               expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
             }).select("id").single();
