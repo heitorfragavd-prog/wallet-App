@@ -358,13 +358,17 @@ export function formatNFeNumber(nNF: string | number | null | undefined): string
   const digits = String(nNF).replace(/\D/g, "");
   if (!digits) return null;
 
-  // Se tiver até 9 dígitos, faz padStart com zeros à esquerda
-  const padded = digits.length <= 9 ? digits.padStart(9, "0") : digits;
-  if (padded.length === 9) {
-    return padded.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1.$2.$3");
+  // REGRA ESTRITA: nNF tem exatamente 9 dígitos (padStart se menor, rejeitar se maior).
+  // CNPJ tem 14 dígitos e NUNCA pode ser aceito como número de NF.
+  if (digits.length > 9) {
+    // Número de dígitos inválido para nNF — rejeitar silenciosamente.
+    return null;
   }
-  return digits;
+
+  const padded = digits.padStart(9, "0");
+  return padded.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1.$2.$3");
 }
+
 
 export interface AccessKeyNFeInfo {
   cUF: string;
@@ -380,49 +384,81 @@ export interface AccessKeyNFeInfo {
 }
 
 /**
- * Busca uma chave de acesso válida de 44 dígitos em múltiplos campos do objeto de resposta
- * ou via expressão regular no texto bruto, com máxima tolerância a espaços e pontuações.
+ * Calcula o dígito verificador (cDV) de uma chave NF-e de 44 dígitos usando módulo 11 SEFAZ.
+ * Retorna true se o DV calculado coincidir com o DV do último dígito da chave.
+ */
+function validateNFeAccessKeyDV(digits44: string): boolean {
+  if (digits44.length !== 44) return false;
+  const keyDigits = digits44.substring(0, 43);
+  const expectedDV = parseInt(digits44[43], 10);
+
+  let sum = 0;
+  let weight = 2;
+  for (let i = keyDigits.length - 1; i >= 0; i--) {
+    sum += parseInt(keyDigits[i], 10) * weight;
+    weight = weight === 9 ? 2 : weight + 1;
+  }
+  const remainder = sum % 11;
+  const calculatedDV = remainder < 2 ? 0 : 11 - remainder;
+  return calculatedDV === expectedDV;
+}
+
+/**
+ * Valida minimamente se uma sequência de 44 dígitos é uma chave NF-e plausível.
+ * Critérios: exatamente 44 dígitos, modelo = "55" (NF-e) ou "65" (NFC-e), DV válido.
+ */
+function isPlausibleNFeAccessKey(digits44: string): boolean {
+  if (digits44.length !== 44) return false;
+  const modelo = digits44.substring(20, 22);
+  if (modelo !== "55" && modelo !== "65") return false;
+  return validateNFeAccessKeyDV(digits44);
+}
+
+/**
+ * Busca uma chave de acesso válida de 44 dígitos em campos específicos do payload.
+ * NÃO serializa o JSON inteiro nem usa regex de blocos que possa concatenar CNPJ + NF.
+ * Cada candidato é avaliado individualmente. Deve ter exatamente 44 dígitos após limpeza.
  */
 export function findAccessKeyInPayload(payload: any, rawText?: string): string | null {
   if (!payload && !rawText) return null;
 
-  const candidates: any[] = [
+  // Lista explícita de campos onde a chave de acesso pode estar — nunca o payload inteiro
+  const candidateValues: any[] = [
     payload?.chave_acesso,
     payload?.chave,
+    payload?.chave_de_acesso,
+    payload?.nfe_chave,
+    payload?.access_key,
     payload?.cabecalho?.chave_acesso,
     payload?.cabecalho?.chave,
     payload?.cabecalho?.chave_de_acesso,
     payload?.cabecalho?.nfe_chave,
     payload?.cabecalho?.access_key,
-    payload?.access_key,
   ];
 
-  for (const cand of candidates) {
-    if (cand) {
-      const clean = String(cand).replace(/\D/g, "");
-      if (clean.length === 44) {
-        return clean;
-      }
+  for (const cand of candidateValues) {
+    if (cand == null) continue;
+    const raw = String(cand);
+    const clean = raw.replace(/\D/g, "");
+    // Só aceitar se EXATAMENTE 44 dígitos, modelo = 55/65 e DV válido
+    if (clean.length === 44 && isPlausibleNFeAccessKey(clean)) {
+      return clean;
     }
   }
 
-  // Busca por regex no texto bruto ou JSON serializado
-  const textToSearch = rawText || (payload ? JSON.stringify(payload) : "");
-  if (textToSearch) {
-    // 1. Sequência contínua de 44 dígitos
-    const match44 = textToSearch.match(/\b\d{44}\b/);
-    if (match44) return match44[0];
-
-    // 2. 11 blocos de 4 dígitos separados por espaços/pontos
-    const matchBlocks = textToSearch.match(/(?:\d{4}[\s\.\-]*){11}/);
-    if (matchBlocks) {
-      const clean = matchBlocks[0].replace(/\D/g, "");
-      if (clean.length === 44) return clean;
+  // Busca no rawText fornecido explicitamente (ex: resposta bruta do OCR) —
+  // NUNCA usa JSON.stringify do payload completo, para não concatenar campos separados.
+  if (rawText) {
+    // Sequência contínua de exatamente 44 dígitos (não 43, não 45)
+    const matches = rawText.match(/\b\d{44}\b/g) || [];
+    for (const m of matches) {
+      if (isPlausibleNFeAccessKey(m)) return m;
     }
   }
 
   return null;
 }
+
 
 /**
  * Extrai deterministicamente as partes estruturais e o número da NF-e (nNF)
@@ -482,12 +518,32 @@ export function reconcileNFeNumber(
 ): ReconciledNFeNumber {
   const keyInfo = extractNFeNumberFromAccessKey(accessKey);
   const visualClean = visualNumber ? String(visualNumber).replace(/\D/g, "") : null;
-  const visualNormalized = visualClean ? (visualClean.length <= 9 ? visualClean.padStart(9, "0") : visualClean) : null;
+
+  // REGRA ESTRITA: numero_nf deve ter no máximo 9 dígitos.
+  // CNPJ tem 14 dígitos — se chegou aqui com 14 dígitos, o modelo confundiu CNPJ com NF.
+  const visualIsValid = visualClean && visualClean.length <= 9;
+  const visualNormalized = visualIsValid ? visualClean.padStart(9, "0") : null;
 
   const digitsOnly = accessKey ? String(accessKey).replace(/\D/g, "") : "";
   const maskedKey = digitsOnly.length >= 10
     ? `${digitsOnly.substring(0, 4)}...${digitsOnly.substring(digitsOnly.length - 6)}`
     : (digitsOnly ? "invalid_len" : "none");
+
+  // Log DANFE_REAL_HEADER_TRACE — payload estrutural sem dados sensíveis
+  console.log(JSON.stringify({
+    log: "DANFE_REAL_HEADER_TRACE",
+    correlation_id: correlationId,
+    channel,
+    numero_nf_raw: visualNumber ?? null,
+    numero_nf_digits_count: visualClean?.length ?? 0,
+    numero_nf_valid_length: visualIsValid,
+    access_key_field_present: !!accessKey,
+    access_key_candidate_digits_count: digitsOnly.length,
+    access_key_candidate_masked: maskedKey,
+    access_key_candidate_valid: !!keyInfo,
+    access_key_modelo: keyInfo?.modelo ?? null,
+    access_key_dv_valid: !!keyInfo,
+  }));
 
   if (keyInfo) {
     const keyNum = keyInfo.nNF;
@@ -495,13 +551,25 @@ export function reconcileNFeNumber(
     const source_selected: "access_key" | "visual" = match ? "visual" : "access_key";
     const serie_final = visualSerie ? String(visualSerie).trim() : String(Number(keyInfo.serie));
 
-    console.log(
-      `[DANFE_NF_TRACE] correlation_id=${correlationId} channel=${channel} ` +
-      `access_key_present=true access_key_digits_count=${digitsOnly.length} access_key_masked="${maskedKey}" ` +
-      `numero_nf_model="${visualNumber || 'null'}" numero_nf_from_access_key="${keyNum}" ` +
-      `numero_nf_reconciled="${keyInfo.nNFFormatado}" source_selected=${source_selected} ` +
-      `numero_nf_formatter="${keyInfo.nNFFormatado}"`
-    );
+    // Log DANFE_NF_RECONCILIATION_TRACE
+    console.log(JSON.stringify({
+      log: "DANFE_NF_RECONCILIATION_TRACE",
+      correlation_id: correlationId,
+      channel,
+      numero_nf_model: visualNumber ?? null,
+      numero_nf_model_valid: visualIsValid,
+      access_key_found: true,
+      access_key_digits_count: digitsOnly.length,
+      access_key_source: "field",
+      access_key_masked: maskedKey,
+      access_key_modelo: keyInfo.modelo,
+      numero_nf_from_access_key: keyNum,
+      numero_nf_reconciled: keyInfo.nNFFormatado,
+      source_selected,
+      numero_nf_before_formatter: keyNum,
+      numero_nf_after_formatter: keyInfo.nNFFormatado,
+      match,
+    }));
 
     return {
       numero_nf: keyNum,
@@ -514,13 +582,26 @@ export function reconcileNFeNumber(
 
   if (visualNormalized) {
     const formatted = formatNFeNumber(visualNormalized);
-    console.log(
-      `[DANFE_NF_TRACE] correlation_id=${correlationId} channel=${channel} ` +
-      `access_key_present=${!!accessKey} access_key_digits_count=${digitsOnly.length} access_key_masked="${maskedKey}" ` +
-      `numero_nf_model="${visualNumber || 'null'}" numero_nf_from_access_key="null" ` +
-      `numero_nf_reconciled="${formatted}" source_selected=visual ` +
-      `numero_nf_formatter="${formatted}"`
-    );
+
+    // Log DANFE_NF_RECONCILIATION_TRACE — sem chave
+    console.log(JSON.stringify({
+      log: "DANFE_NF_RECONCILIATION_TRACE",
+      correlation_id: correlationId,
+      channel,
+      numero_nf_model: visualNumber ?? null,
+      numero_nf_model_valid: visualIsValid,
+      access_key_found: false,
+      access_key_digits_count: digitsOnly.length,
+      access_key_source: "none",
+      access_key_masked: maskedKey,
+      access_key_modelo: null,
+      numero_nf_from_access_key: null,
+      numero_nf_reconciled: formatted,
+      source_selected: "visual",
+      numero_nf_before_formatter: visualNormalized,
+      numero_nf_after_formatter: formatted,
+      match: false,
+    }));
 
     return {
       numero_nf: visualNormalized,
@@ -531,6 +612,27 @@ export function reconcileNFeNumber(
     };
   }
 
+  // Sem chave e sem número visual válido — nenhum dado confiável
+  console.log(JSON.stringify({
+    log: "DANFE_NF_RECONCILIATION_TRACE",
+    correlation_id: correlationId,
+    channel,
+    numero_nf_model: visualNumber ?? null,
+    numero_nf_model_valid: false,
+    access_key_found: false,
+    access_key_digits_count: digitsOnly.length,
+    access_key_source: "none",
+    access_key_masked: maskedKey,
+    access_key_modelo: null,
+    numero_nf_from_access_key: null,
+    numero_nf_reconciled: null,
+    source_selected: "none",
+    numero_nf_before_formatter: null,
+    numero_nf_after_formatter: null,
+    match: false,
+    invalid_nf_number_length: visualClean ? visualClean.length : 0,
+  }));
+
   return {
     numero_nf: null,
     numero_nf_formatado: null,
@@ -539,6 +641,7 @@ export function reconcileNFeNumber(
     match: false,
   };
 }
+
 
 export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
 
