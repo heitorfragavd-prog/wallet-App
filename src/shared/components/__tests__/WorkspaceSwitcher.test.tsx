@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import React from "react";
 import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { useWorkspace, Workspace } from "@/contexts/WorkspaceContext";
@@ -37,12 +37,18 @@ describe("WorkspaceSwitcher Component", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (useToast as any).mockReturnValue({ toast: toastMock });
-    (useWorkspace as any).mockReturnValue({
+    vi.mocked(useToast).mockReturnValue({
+      toast: toastMock,
+      toasts: [],
+      dismiss: vi.fn(),
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
       workspaces: mockWorkspaces,
       activeWorkspace: mockWorkspaces[0],
       setActiveWorkspace: setActiveWorkspaceMock,
       createWorkspace: createWorkspaceMock,
+      loading: false,
+      refreshWorkspaces: vi.fn(),
     });
   });
 
@@ -55,11 +61,13 @@ describe("WorkspaceSwitcher Component", () => {
   });
 
   it("renders PF active workspace with correct badge and label", () => {
-    (useWorkspace as any).mockReturnValue({
+    vi.mocked(useWorkspace).mockReturnValue({
       workspaces: mockWorkspaces,
       activeWorkspace: mockWorkspaces[1],
       setActiveWorkspace: setActiveWorkspaceMock,
       createWorkspace: createWorkspaceMock,
+      loading: false,
+      refreshWorkspaces: vi.fn(),
     });
 
     render(<WorkspaceSwitcher />);
@@ -78,11 +86,13 @@ describe("WorkspaceSwitcher Component", () => {
   });
 
   it("renders fallback state when no workspace is active", () => {
-    (useWorkspace as any).mockReturnValue({
+    vi.mocked(useWorkspace).mockReturnValue({
       workspaces: [],
       activeWorkspace: null,
       setActiveWorkspace: setActiveWorkspaceMock,
       createWorkspace: createWorkspaceMock,
+      loading: false,
+      refreshWorkspaces: vi.fn(),
     });
 
     render(<WorkspaceSwitcher />);
