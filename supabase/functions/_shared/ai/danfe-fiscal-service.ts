@@ -48,6 +48,7 @@ export interface ProcessDanfeInput {
   base64: string;
   mimeType: string;
   geminiApiKey: string;
+  geminiApiKeyBackup?: string;
   openaiApiKey?: string;
   supabaseUrl?: string;
   supabaseServiceKey?: string;
@@ -82,7 +83,9 @@ export interface ProcessDanfeOutput {
   metadata?: {
     providerPrimary: string;
     providerUsed: string;
+    credentialSlot: "gemini_primary" | "gemini_backup" | "openai_fallback";
     fallbackUsed: boolean;
+    fallbackCount: number;
     fallbackReason?: string;
     durationMs: number;
     correlationId: string;
@@ -108,10 +111,12 @@ interface VisionCallOptions {
   mimeType: string;
   base64: string;
   geminiApiKey: string;
+  geminiApiKeyBackup?: string;
   openaiApiKey?: string;
   model?: string;
   fetchFn: typeof fetch;
   timeoutMs?: number;
+  correlationId?: string;
 }
 
 interface VisionCallResponse {
@@ -119,28 +124,31 @@ interface VisionCallResponse {
   status: number;
   text: string;
   providerUsed: "gemini" | "openai";
+  credentialSlot: "gemini_primary" | "gemini_backup" | "openai_fallback";
   fallbackUsed: boolean;
+  fallbackCount: number;
   fallbackReason?: string;
   durationMs: number;
 }
 
 async function callVisionWithFailover(options: VisionCallOptions): Promise<VisionCallResponse> {
-  const { prompt, mimeType, base64, geminiApiKey, openaiApiKey, fetchFn } = options;
+  const { prompt, mimeType, base64, geminiApiKey, geminiApiKeyBackup, openaiApiKey, fetchFn, correlationId } = options;
   const geminiModel = options.model || DEFAULT_DANFE_MODEL;
   const timeoutMs = options.timeoutMs || 35000;
   const start = Date.now();
 
-  let geminiStatus = 200;
-  let geminiErrorReason: string | undefined;
+  let primaryStatus = 200;
+  let primaryErrorReason: string | undefined;
+  let fallbackCount = 0;
 
-  // 1. Provedor Primário: Google Gemini Vision
-  if (geminiApiKey) {
+  // Helper para chamar a API do Gemini
+  const executeGeminiCall = async (apiKey: string, slotName: "gemini_primary" | "gemini_backup"): Promise<{ ok: boolean; status: number; text: string; errorReason?: string }> => {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
       const resp = await fetchFn(
-        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -164,50 +172,107 @@ async function callVisionWithFailover(options: VisionCallOptions): Promise<Visio
       );
 
       clearTimeout(timer);
-      geminiStatus = resp ? resp.status : 500;
+      const status = resp ? resp.status : 500;
 
       if (resp && resp.ok) {
         const json = await resp.json();
         const text = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        return {
-          ok: true,
-          status: resp.status,
-          text,
-          providerUsed: "gemini",
-          fallbackUsed: false,
-          durationMs: Date.now() - start,
-        };
+        return { ok: true, status: resp.status, text };
       }
 
-      if (resp) {
-        if (resp.status === 429) geminiErrorReason = "gemini_http_429_rate_limit";
-        else if (resp.status >= 500) geminiErrorReason = `gemini_http_${resp.status}_server_error`;
-        else geminiErrorReason = `gemini_http_${resp.status}`;
-      }
+      let reason = `gemini_http_${status}`;
+      if (status === 429) reason = "rate_limit_429";
+      else if (status === 401 || status === 403) reason = `auth_error_${status}`;
+      else if (status >= 500) reason = `server_error_${status}`;
+
+      return { ok: false, status, text: "", errorReason: reason };
     } catch (err: any) {
       if (err?.name === "AbortError" || String(err?.message).includes("timeout") || String(err?.message).includes("aborted")) {
-        geminiErrorReason = "gemini_timeout";
-      } else {
-        geminiErrorReason = `gemini_network_error: ${err instanceof Error ? err.message : String(err)}`;
+        return { ok: false, status: 504, text: "", errorReason: "timeout" };
       }
-      geminiStatus = 504;
+      return { ok: false, status: 500, text: "", errorReason: `network_error` };
     }
+  };
+
+  // ── 1. TENTATIVA 1: Gemini Primário (GEMINI_API_KEY) ──
+  if (geminiApiKey) {
+    const resPrimary = await executeGeminiCall(geminiApiKey, "gemini_primary");
+    primaryStatus = resPrimary.status;
+
+    if (resPrimary.ok) {
+      console.log(`[DANFE_PROVIDER] correlation_id=${correlationId || 'anon'} provider=gemini credential_slot=gemini_primary fallback_count=0 fallback_reason=none`);
+      return {
+        ok: true,
+        status: resPrimary.status,
+        text: resPrimary.text,
+        providerUsed: "gemini",
+        credentialSlot: "gemini_primary",
+        fallbackUsed: false,
+        fallbackCount: 0,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    primaryErrorReason = resPrimary.errorReason;
   } else {
-    geminiErrorReason = "gemini_api_key_missing";
+    primaryErrorReason = "gemini_api_key_missing";
   }
 
-  // 2. Provedor Fallback: OpenAI GPT-4o Vision (acionado SOMENTE em falha de infraestrutura 429/timeout/5xx)
+  // ── 2. TENTATIVA 2: Gemini Reserva (GEMINI_API_KEY_BACKUP) ──
   const isRecoverableInfrastructureError =
-    geminiStatus === 429 ||
-    geminiStatus >= 500 ||
-    geminiErrorReason?.includes("timeout") ||
-    geminiErrorReason?.includes("rate_limit") ||
-    geminiErrorReason?.includes("network_error") ||
-    geminiErrorReason === "gemini_api_key_missing";
+    primaryStatus === 429 ||
+    primaryStatus === 401 ||
+    primaryStatus === 403 ||
+    primaryStatus >= 500 ||
+    primaryErrorReason === "timeout" ||
+    primaryErrorReason === "rate_limit_429" ||
+    primaryErrorReason === "network_error" ||
+    primaryErrorReason === "gemini_api_key_missing";
 
-  if (isRecoverableInfrastructureError && openaiApiKey) {
+  let backupStatus = 500;
+  let backupErrorReason: string | undefined;
+
+  if (isRecoverableInfrastructureError && geminiApiKeyBackup) {
+    fallbackCount = 1;
+    console.log(`[DANFE_PROVIDER] correlation_id=${correlationId || 'anon'} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=${primaryErrorReason}`);
+
+    const resBackup = await executeGeminiCall(geminiApiKeyBackup, "gemini_backup");
+    backupStatus = resBackup.status;
+
+    if (resBackup.ok) {
+      return {
+        ok: true,
+        status: resBackup.status,
+        text: resBackup.text,
+        providerUsed: "gemini",
+        credentialSlot: "gemini_backup",
+        fallbackUsed: true,
+        fallbackCount: 1,
+        fallbackReason: primaryErrorReason,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    backupErrorReason = resBackup.errorReason;
+  }
+
+  // ── 3. TENTATIVA 3: OpenAI GPT-4o Vision (OPENAI_API_KEY) ──
+  const isBackupAlsoRecoverable =
+    backupStatus === 429 ||
+    backupStatus === 401 ||
+    backupStatus === 403 ||
+    backupStatus >= 500 ||
+    backupErrorReason === "timeout" ||
+    backupErrorReason === "rate_limit_429" ||
+    backupErrorReason === "network_error" ||
+    !geminiApiKeyBackup;
+
+  if (isRecoverableInfrastructureError && isBackupAlsoRecoverable && openaiApiKey) {
+    fallbackCount = geminiApiKeyBackup ? 2 : 1;
+    const reportedReason = backupErrorReason || primaryErrorReason;
+    console.log(`[DANFE_PROVIDER] correlation_id=${correlationId || 'anon'} provider=openai credential_slot=openai_fallback fallback_count=${fallbackCount} fallback_reason=${reportedReason}`);
+
     try {
-      console.log(`[DANFE_FAILOVER] Acionando fallback OpenAI Vision (motivo: ${geminiErrorReason})...`);
       const fallbackStart = Date.now();
       const openAiUrl = "https://api.openai.com/v1/chat/completions";
 
@@ -248,8 +313,10 @@ async function callVisionWithFailover(options: VisionCallOptions): Promise<Visio
           status: 200,
           text,
           providerUsed: "openai",
+          credentialSlot: "openai_fallback",
           fallbackUsed: true,
-          fallbackReason: geminiErrorReason,
+          fallbackCount,
+          fallbackReason: reportedReason,
           durationMs: Date.now() - fallbackStart,
         };
       }
@@ -258,16 +325,20 @@ async function callVisionWithFailover(options: VisionCallOptions): Promise<Visio
     }
   }
 
+  // ── 4. FAIL-CLOSED: Todas as tentativas falharam ──
   return {
     ok: false,
-    status: geminiStatus,
+    status: primaryStatus,
     text: "",
     providerUsed: "gemini",
+    credentialSlot: "gemini_primary",
     fallbackUsed: false,
-    fallbackReason: geminiErrorReason,
+    fallbackCount,
+    fallbackReason: primaryErrorReason,
     durationMs: Date.now() - start,
   };
 }
+
 
 export async function processDanfeDocument(
   input: ProcessDanfeInput,
@@ -275,7 +346,9 @@ export async function processDanfeDocument(
   const fetchFn = input.fetchImpl || fetch;
   const model = input.model || DEFAULT_DANFE_MODEL;
   const effectiveOpenAiKey = input.openaiApiKey || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("OPENAI_API_KEY") : undefined);
-  
+  const effectiveGeminiBackupKey = input.geminiApiKeyBackup || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("GEMINI_API_KEY_BACKUP") : undefined);
+  const correlationId = input.workspaceId || "anon";
+
   // Normalizar MIME type (suportar PDF e imagens corretamente)
   let cleanMimeType = "image/jpeg";
   const isPdf = input.mimeType === "application/pdf";
@@ -313,7 +386,10 @@ export async function processDanfeDocument(
   let rotatedWidth = 0;
   let rotatedHeight = 0;
   let fallbackUsedInAnyStep = false;
+  let fallbackCountReported = 0;
   let fallbackReasonReported: string | undefined;
+  let finalCredentialSlot: "gemini_primary" | "gemini_backup" | "openai_fallback" = "gemini_primary";
+  let finalProviderUsed = "gemini";
 
   if (!isPdf) {
     // 1. Tentar detecção de orientação precisa com failover
@@ -323,15 +399,20 @@ export async function processDanfeDocument(
         mimeType: cleanMimeType,
         base64: cleanBase64,
         geminiApiKey: input.geminiApiKey,
+        geminiApiKeyBackup: effectiveGeminiBackupKey,
         openaiApiKey: effectiveOpenAiKey,
         model,
         fetchFn,
+        correlationId,
       });
 
       if (orientCall.ok && orientCall.text) {
         if (orientCall.fallbackUsed) {
           fallbackUsedInAnyStep = true;
+          fallbackCountReported = Math.max(fallbackCountReported, orientCall.fallbackCount);
           fallbackReasonReported = orientCall.fallbackReason;
+          finalCredentialSlot = orientCall.credentialSlot;
+          finalProviderUsed = orientCall.providerUsed;
         }
         orientationSource = orientCall.providerUsed as any;
 
@@ -380,15 +461,20 @@ export async function processDanfeDocument(
         mimeType: cleanMimeType,
         base64: cleanBase64,
         geminiApiKey: input.geminiApiKey,
+        geminiApiKeyBackup: effectiveGeminiBackupKey,
         openaiApiKey: effectiveOpenAiKey,
         model,
         fetchFn,
+        correlationId,
       });
 
       headerHttpStatus = headerCall.status;
       if (headerCall.fallbackUsed) {
         fallbackUsedInAnyStep = true;
+        fallbackCountReported = Math.max(fallbackCountReported, headerCall.fallbackCount);
         fallbackReasonReported = headerCall.fallbackReason;
+        finalCredentialSlot = headerCall.credentialSlot;
+        finalProviderUsed = headerCall.providerUsed;
       }
 
       if (headerCall.ok && headerCall.text) {
@@ -396,7 +482,7 @@ export async function processDanfeDocument(
         docAnalysis = JSON.parse(
           headerCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
         );
-        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso (provider=${headerCall.providerUsed}): fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
+        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso (provider=${headerCall.providerUsed}, slot=${headerCall.credentialSlot}): fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
       }
     } catch (err) {
       console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
@@ -442,15 +528,20 @@ export async function processDanfeDocument(
       mimeType: cleanMimeType,
       base64: tableImageBase64,
       geminiApiKey: input.geminiApiKey,
+      geminiApiKeyBackup: effectiveGeminiBackupKey,
       openaiApiKey: effectiveOpenAiKey,
       model,
       fetchFn,
+      correlationId,
     });
 
     productsHttpStatus = productsCall.status;
     if (productsCall.fallbackUsed) {
       fallbackUsedInAnyStep = true;
+      fallbackCountReported = Math.max(fallbackCountReported, productsCall.fallbackCount);
       fallbackReasonReported = productsCall.fallbackReason;
+      finalCredentialSlot = productsCall.credentialSlot;
+      finalProviderUsed = productsCall.providerUsed;
     }
 
     if (productsCall.ok && productsCall.text) {
@@ -461,11 +552,12 @@ export async function processDanfeDocument(
       if (Array.isArray(parsed)) rawItemsList = parsed;
       else if (Array.isArray(parsed?.itens)) rawItemsList = parsed.itens;
       else if (Array.isArray(parsed?.produtos)) rawItemsList = parsed.produtos;
-      console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída (provider=${productsCall.providerUsed}): ${rawItemsList.length} itens brutos`);
+      console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída (provider=${productsCall.providerUsed}, slot=${productsCall.credentialSlot}): ${rawItemsList.length} itens brutos`);
     }
   } catch (err) {
     console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
   }
+
 
   // ── 5. Validação Estrutural Estrita de Produtos ───────────────────────────
   const itensValidados: DanfeItemV2[] = [];
@@ -724,7 +816,18 @@ export async function processDanfeDocument(
     validacao,
     mensagemFormatada: msgLines.filter((l) => l !== null && l !== undefined).join("\n"),
     sessionState: session,
+    metadata: {
+      providerPrimary: "gemini",
+      providerUsed: finalProviderUsed,
+      credentialSlot: finalCredentialSlot,
+      fallbackUsed: fallbackUsedInAnyStep,
+      fallbackCount: fallbackCountReported,
+      fallbackReason: fallbackReasonReported,
+      durationMs: 0,
+      correlationId: correlationId,
+    },
   };
 }
+
 
 

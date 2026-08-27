@@ -4073,27 +4073,15 @@ REGRAS:
             const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
             const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
             const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+            const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 
             let docAnalysis: any = null;
 
-            if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
-              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
+            if (isGeminiV2Enabled && (geminiApiKey || geminiApiKeyBackup) && loadedDecodedImage) {
+              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Failover de Chave ───
               try {
                 const headerStart = Date.now();
                 const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
-                const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    contents: [{
-                      parts: [
-                        { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                        { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
-                      ]
-                    }],
-                    generationConfig: {
-                      temperature: 0.0,
-                      responseMimeType: "application/json",
                       thinkingConfig: {
                         thinkingBudget: 1
                       }
@@ -4236,38 +4224,66 @@ REGRAS:
 
                 console.log(`[NF_V2_CROP] continuous table crop: ${loadedDecodedImage.width}x${cropH} (top ${Math.round(topRatio*100)}% - bottom ${Math.round(bottomRatio*100)}%)`);
 
-                // 2. Chamada Vision ao Gemini com Timeout e Tratamento de Erros
+                // 2. Chamada Vision ao Gemini com Timeout, Tratamento de Erros e Failover de Chaves
                 let geminiRawText = "";
                 let geminiDurationMs = 0;
                 let geminiErrorCode = "";
+                let productsActiveSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
                 try {
                   const v2Start = Date.now();
-                  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`;
-
-                  const geminiResp = await fetch(geminiUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      contents: [{
-                        parts: [
-                          { text: GEMINI_V2_PROMPT_TABELA },
-                          { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
-                        ]
-                      }],
-                      generationConfig: {
-                        temperature: 0.0,
-                        responseMimeType: "application/json",
-                        thinkingConfig: {
-                          thinkingBudget: 1
-                        }
+                  const productsPayload = JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: GEMINI_V2_PROMPT_TABELA },
+                        { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
+                      ]
+                    }],
+                    generationConfig: {
+                      temperature: 0.0,
+                      responseMimeType: "application/json",
+                      thinkingConfig: {
+                        thinkingBudget: 1
                       }
-                    }),
-                    signal: AbortSignal.timeout(45000)
+                    }
                   });
 
+                  let geminiResp: Response | null = null;
+
+                  // Tentativa 1: Chave Primária
+                  if (geminiApiKey) {
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                    } catch (pErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave primária:", pErr);
+                    }
+                  }
+
+                  // Tentativa 2: Chave Reserva
+                  if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                    const pStatus = geminiResp ? geminiResp.status : "timeout";
+                    console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                      productsActiveSlot = "gemini_backup";
+                    } catch (bErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave reserva:", bErr);
+                    }
+                  }
+
                   geminiDurationMs = Date.now() - v2Start;
-                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp.status}`);
+                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp?.status} slot=${productsActiveSlot}`);
+
 
                   if (geminiResp.ok) {
                     const geminiJson = await geminiResp.json();
