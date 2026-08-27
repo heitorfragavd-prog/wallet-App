@@ -3,6 +3,7 @@ import { FailoverLlmRunner } from "../_shared/ai/failover-runner.ts";
 import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
 import { GeminiLlmRunner } from "../_shared/ai/gemini-adapter.ts";
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
+import { handleFiscalHttpRequest } from "./fiscal-handler.ts";
 import { handleOrchestratorHttpRequest } from "./handler.ts";
 import {
   createEyemobileLiveClient,
@@ -54,26 +55,47 @@ const runnerFactory = (model?: string) => {
   });
 };
 
-
 const auditLogger = {
   logEvent: async (event: Parameters<typeof writeSupabaseAiAudit>[1]) => {
     await writeSupabaseAiAudit(adminClient, event);
   },
 };
 
-// O adminClient do Supabase JS expõe functions.invoke() nativamente.
-// O cast para SupabaseClientLike já inclui o campo optional `functions`.
-// createEyemobileLiveClient usa o service_role para invocar eyemobile-sync
-// passando user_id no body (aceito pelo eyemobile-sync quando isServiceRole=true).
 const eyemobileLiveClientFactory = () => createEyemobileLiveClient(adminClient);
 
-Deno.serve((req: Request) =>
-  handleOrchestratorHttpRequest(req, {
+Deno.serve(async (req: Request) => {
+  const url = new URL(req.url);
+  if (url.pathname.endsWith("/danfe") || url.pathname.endsWith("/fiscal")) {
+    return handleFiscalHttpRequest(req, {
+      authDeps,
+      geminiApiKey: geminiApiKey || "",
+      adminClient,
+    });
+  }
+
+  if (req.method === "POST") {
+    try {
+      const clone = req.clone();
+      const peek = await clone.json();
+      if (peek?.action === "process_danfe" || peek?.mode === "DANFE_PROCESS") {
+        return handleFiscalHttpRequest(req, {
+          authDeps,
+          geminiApiKey: geminiApiKey || "",
+          adminClient,
+        });
+      }
+    } catch {
+      // Ignora erro de JSON e continua para o orchestrator
+    }
+  }
+
+  return handleOrchestratorHttpRequest(req, {
     authDeps,
     repoFactory,
     runnerFactory,
     auditLogger,
     eyemobileLiveClientFactory,
-  })
-);
+  });
+});
+
 

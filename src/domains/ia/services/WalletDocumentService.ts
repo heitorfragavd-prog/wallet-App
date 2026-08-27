@@ -57,23 +57,20 @@ export async function processWalletDocument(
     return { tipo: "COMPROVANTE", content: msg };
   }
 
-  // ── 3. DANFE FISCAL SERVICE V2 ────────────────────────────────────────────
+  // ── 3. DANFE FISCAL SERVICE V2 (Backend Edge Function) ───────────────────
   if (classification.tipo === "DANFE") {
     try {
-      const { data, error } = await supabase.functions.invoke("openai-proxy", {
+      const { data, error } = await supabase.functions.invoke("wallet-ai-orchestrator", {
         body: {
-          mode: "DANFE_PROCESS",
+          action: "process_danfe",
           base64: input.base64,
           mime_type: input.mimeType,
           workspace_id: input.workspaceId,
-          existing_session: existingSession,
+          conversation_id: input.conversationId,
         },
       });
 
       if (!error && data?.mensagemFormatada) {
-        if (data.sessionState) {
-          multiPageSessions.set(sessionKey, data.sessionState);
-        }
         return {
           tipo: "DANFE",
           content: data.mensagemFormatada,
@@ -81,7 +78,7 @@ export async function processWalletDocument(
         };
       }
     } catch {
-      // Fallback gracioso se a edge function específica de proxy não estiver disponível
+      // Fallback gracioso se a edge function estiver offline
     }
 
     // Resposta estruturada padrão e segura para DANFE quando processada via IA
@@ -98,6 +95,7 @@ export async function processWalletDocument(
 
     return { tipo: "DANFE", content: msg };
   }
+
 
   // ── 4. OUTRO / DESCONHECIDO ───────────────────────────────────────────────
   const msg = [

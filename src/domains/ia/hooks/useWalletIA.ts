@@ -45,8 +45,13 @@ export interface WalletIAMessage {
   visualization?: unknown;
   /** Proposta de ação do Agent V2 */
   actionProposal?: unknown;
-  /** URL de preview de imagem anexada */
+  /** URL de preview de imagem anexada (legada ou signed URL) */
   imageDataUrl?: string;
+  storagePath?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
+  mimeType?: string | null;
+  attachmentFile?: File | Blob | null;
   isError?: boolean;
   correlationId?: string;
 }
@@ -57,7 +62,11 @@ export interface WalletIAAttachment {
   base64: string;
   dataUrl: string;
   name: string;
+  file?: File | Blob;
+  storagePath?: string;
+  size?: number;
 }
+
 
 export interface UseWalletIAOptions {
   workspaceId?: string;
@@ -130,6 +139,8 @@ export function useWalletIA(options: UseWalletIAOptions) {
 
       const correlationId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
 
+      const firstAtt = attachments?.[0];
+
       // 1. Montar mensagem do usuário
       const userMessage: WalletIAMessage = {
         id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
@@ -137,10 +148,16 @@ export function useWalletIA(options: UseWalletIAOptions) {
         content: trimmed || (attachments?.length ? "Analise este arquivo." : ""),
         createdAt: new Date(),
         imageDataUrl: attachments?.find((a) => a.type === "image")?.dataUrl,
+        storagePath: firstAtt?.storagePath,
+        fileName: firstAtt?.name,
+        fileSize: firstAtt?.size,
+        mimeType: firstAtt?.mimeType,
+        attachmentFile: firstAtt?.file,
         correlationId,
       };
 
       setMessages((prev) => [...prev, userMessage]);
+
       setIsLoading(true);
 
       // 2. Persistir mensagem do usuário

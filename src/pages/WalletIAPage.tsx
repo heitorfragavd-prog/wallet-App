@@ -40,7 +40,9 @@ import { AgentVisualizationRenderer } from "@/domains/ia/components/AgentVisuali
 import { AgentActionProposalCard } from "@/domains/ia/components/AgentActionProposalCard";
 import { useConversas } from "@/domains/ia/hooks/useConversas";
 import { useWalletIA, type WalletIAMessage, type WalletIAAttachment } from "@/domains/ia/hooks/useWalletIA";
+import { WalletStorageService } from "@/domains/ia/services/WalletStorageService";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { useEyemobileDashboard } from "@/domains/finance/hooks/useEyemobileDashboard";
@@ -516,7 +518,7 @@ export default function WalletIAPage() {
     const loadConversaHistory = async () => {
       const { data, error } = await supabase
         .from("chat_mensagens")
-        .select("id, role, conteudo, imagem_base64, created_at")
+        .select("id, role, conteudo, imagem_base64, storage_path, file_name, mime_type, file_size, created_at")
         .eq("conversa_id", conversaAtiva)
         .order("created_at", { ascending: true });
 
@@ -525,18 +527,37 @@ export default function WalletIAPage() {
         return;
       }
 
-      const history: WalletIAMessage[] = (data ?? []).map((row) => ({
-        id: row.id,
-        role: row.role as "user" | "assistant",
-        content: row.conteudo,
-        createdAt: new Date(row.created_at),
-        imageDataUrl: row.imagem_base64
-          ? `data:image/jpeg;base64,${row.imagem_base64}`
-          : undefined,
-      }));
+      const history: WalletIAMessage[] = await Promise.all(
+        (data ?? []).map(async (row) => {
+          let resolvedImageUrl: string | undefined = undefined;
+
+          // Anexo novo em Storage privado: gera Signed URL temporária
+          if (row.storage_path) {
+            const signed = await WalletStorageService.getSignedUrl(row.storage_path);
+            if (signed) resolvedImageUrl = signed;
+          }
+          // Anexo legado em base64: renderiza normalmente
+          else if (row.imagem_base64) {
+            resolvedImageUrl = `data:image/jpeg;base64,${row.imagem_base64}`;
+          }
+
+          return {
+            id: row.id,
+            role: row.role as "user" | "assistant",
+            content: row.conteudo,
+            createdAt: new Date(row.created_at),
+            imageDataUrl: resolvedImageUrl,
+            storagePath: row.storage_path,
+            fileName: row.file_name,
+            mimeType: row.mime_type,
+            fileSize: row.file_size,
+          };
+        })
+      );
 
       loadHistory(history);
     };
+
 
     clearChat();
     loadConversaHistory();
@@ -635,11 +656,14 @@ export default function WalletIAPage() {
         base64: dataUrl.split(",")[1],
         dataUrl,
         name: file.name,
+        file: file,
+        size: file.size,
       });
     };
     reader.readAsDataURL(file);
     e.target.value = "";
   };
+
 
   // ── Render ────────────────────────────────────────────────────────────────
 
