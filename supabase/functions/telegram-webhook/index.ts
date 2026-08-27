@@ -4082,18 +4082,60 @@ REGRAS:
               try {
                 const headerStart = Date.now();
                 const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
-                      thinkingConfig: {
-                        thinkingBudget: 1
-                      }
+                const headerPayload = JSON.stringify({
+                  contents: [{
+                    parts: [
+                      { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                      { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
+                    ]
+                  }],
+                  generationConfig: {
+                    temperature: 0.0,
+                    responseMimeType: "application/json",
+                    thinkingConfig: {
+                      thinkingBudget: 1
                     }
-                  }),
-                  signal: AbortSignal.timeout(30000)
+                  }
                 });
 
-                const headerDurationMs = Date.now() - headerStart;
-                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp.status}`);
+                let geminiResp: Response | null = null;
+                let activeSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
-                if (geminiResp.ok) {
+                // Tentativa 1: Chave Primária
+                if (geminiApiKey) {
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                  } catch (pErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave primária:", pErr);
+                  }
+                }
+
+                // Tentativa 2: Chave Reserva (se primária falhou por 429, timeout ou 5xx)
+                if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                  const pStatus = geminiResp ? geminiResp.status : "timeout";
+                  console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                    activeSlot = "gemini_backup";
+                  } catch (bErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave reserva:", bErr);
+                  }
+                }
+
+                const headerDurationMs = Date.now() - headerStart;
+                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp?.status} slot=${activeSlot}`);
+
+                if (geminiResp && geminiResp.ok) {
                   const gJson = await geminiResp.json();
                   if (gJson.usageMetadata) {
                     console.log(`[NF_V2_USAGE] target=header promptTokenCount=${gJson.usageMetadata.promptTokenCount} candidatesTokenCount=${gJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${gJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${gJson.usageMetadata.totalTokenCount}`);
@@ -4106,15 +4148,17 @@ REGRAS:
                     serie_nf: docAnalysis?.cabecalho?.serie_nf,
                     data_emissao: docAnalysis?.cabecalho?.data_emissao,
                     valor_produtos: docAnalysis?.valores_totais?.valor_produtos,
-                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
+                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf,
+                    slot: activeSlot,
                   });
                 } else {
-                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp?.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
               } catch (hErr: any) {
                 console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
               }
-            } else {
+            }
+ else {
               // ─── PASSO 2 (LEGADO): GPT-4o Overview ───
               const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
 Esta imagem já está na orientação vertical correta (em pé).
