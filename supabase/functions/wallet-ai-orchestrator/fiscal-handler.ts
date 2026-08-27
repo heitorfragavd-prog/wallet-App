@@ -81,14 +81,16 @@ export async function handleFiscalHttpRequest(
     // 1. Autorização Server-Side Obrigatória
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
-    // 2. Processar Folha Atual via Gemini Fiscal Service V2
+    // 2. Processar Folha Atual via Gemini Fiscal Service V2 com Failover para OpenAI Vision
     const extractionResult: ProcessDanfeOutput = await processDanfeDocument({
       base64,
       mimeType,
       geminiApiKey: dependencies.geminiApiKey,
+      openaiApiKey: (dependencies.authDeps as any)?.openAiApiKey || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("OPENAI_API_KEY") : undefined),
       workspaceId: context.workspaceId,
       existingSession: null, // Deixamos a RPC atômica gerenciar o merge de estado no banco
     });
+
 
     let finalOutput: ProcessDanfeOutput = extractionResult;
 

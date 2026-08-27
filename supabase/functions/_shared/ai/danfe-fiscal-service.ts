@@ -48,6 +48,10 @@ export interface ProcessDanfeInput {
   base64: string;
   mimeType: string;
   geminiApiKey: string;
+  openaiApiKey?: string;
+  supabaseUrl?: string;
+  supabaseServiceKey?: string;
+  userId?: string;
   workspaceId: string;
   existingSession?: DanfeSessionState | null;
   fetchImpl?: typeof fetch;
@@ -75,6 +79,14 @@ export interface ProcessDanfeOutput {
   validacao: DanfeValidationResultV2;
   mensagemFormatada: string;
   sessionState?: DanfeSessionState;
+  metadata?: {
+    providerPrimary: string;
+    providerUsed: string;
+    fallbackUsed: boolean;
+    fallbackReason?: string;
+    durationMs: number;
+    correlationId: string;
+  };
 }
 
 import {
@@ -91,11 +103,178 @@ export {
 
 const DEFAULT_DANFE_MODEL = "gemini-3.6-flash";
 
+interface VisionCallOptions {
+  prompt: string;
+  mimeType: string;
+  base64: string;
+  geminiApiKey: string;
+  openaiApiKey?: string;
+  model?: string;
+  fetchFn: typeof fetch;
+  timeoutMs?: number;
+}
+
+interface VisionCallResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+  providerUsed: "gemini" | "openai";
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+  durationMs: number;
+}
+
+async function callVisionWithFailover(options: VisionCallOptions): Promise<VisionCallResponse> {
+  const { prompt, mimeType, base64, geminiApiKey, openaiApiKey, fetchFn } = options;
+  const geminiModel = options.model || DEFAULT_DANFE_MODEL;
+  const timeoutMs = options.timeoutMs || 35000;
+  const start = Date.now();
+
+  let geminiStatus = 200;
+  let geminiErrorReason: string | undefined;
+
+  // 1. Provedor Primário: Google Gemini Vision
+  if (geminiApiKey) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const resp = await fetchFn(
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inline_data: { mime_type: mimeType, data: base64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+              thinkingConfig: { thinkingBudget: 1 },
+            },
+          }),
+        },
+      );
+
+      clearTimeout(timer);
+      geminiStatus = resp ? resp.status : 500;
+
+      if (resp && resp.ok) {
+        const json = await resp.json();
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return {
+          ok: true,
+          status: resp.status,
+          text,
+          providerUsed: "gemini",
+          fallbackUsed: false,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      if (resp) {
+        if (resp.status === 429) geminiErrorReason = "gemini_http_429_rate_limit";
+        else if (resp.status >= 500) geminiErrorReason = `gemini_http_${resp.status}_server_error`;
+        else geminiErrorReason = `gemini_http_${resp.status}`;
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError" || String(err?.message).includes("timeout") || String(err?.message).includes("aborted")) {
+        geminiErrorReason = "gemini_timeout";
+      } else {
+        geminiErrorReason = `gemini_network_error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      geminiStatus = 504;
+    }
+  } else {
+    geminiErrorReason = "gemini_api_key_missing";
+  }
+
+  // 2. Provedor Fallback: OpenAI GPT-4o Vision (acionado SOMENTE em falha de infraestrutura 429/timeout/5xx)
+  const isRecoverableInfrastructureError =
+    geminiStatus === 429 ||
+    geminiStatus >= 500 ||
+    geminiErrorReason?.includes("timeout") ||
+    geminiErrorReason?.includes("rate_limit") ||
+    geminiErrorReason?.includes("network_error") ||
+    geminiErrorReason === "gemini_api_key_missing";
+
+  if (isRecoverableInfrastructureError && openaiApiKey) {
+    try {
+      console.log(`[DANFE_FAILOVER] Acionando fallback OpenAI Vision (motivo: ${geminiErrorReason})...`);
+      const fallbackStart = Date.now();
+      const openAiUrl = "https://api.openai.com/v1/chat/completions";
+
+      const openAiResp = await fetchFn(openAiUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          temperature: 0.0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: prompt },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Extraia os dados deste documento fiscal com precisão estrita em JSON." },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64}`,
+                    detail: "high",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (openAiResp && openAiResp.ok) {
+        const oJson = await openAiResp.json();
+        const text = oJson.choices?.[0]?.message?.content || "";
+        return {
+          ok: true,
+          status: 200,
+          text,
+          providerUsed: "openai",
+          fallbackUsed: true,
+          fallbackReason: geminiErrorReason,
+          durationMs: Date.now() - fallbackStart,
+        };
+      }
+    } catch (openAiErr) {
+      console.error("[DANFE_FAILOVER] Provedor fallback OpenAI também falhou:", openAiErr);
+    }
+  }
+
+  return {
+    ok: false,
+    status: geminiStatus,
+    text: "",
+    providerUsed: "gemini",
+    fallbackUsed: false,
+    fallbackReason: geminiErrorReason,
+    durationMs: Date.now() - start,
+  };
+}
+
 export async function processDanfeDocument(
   input: ProcessDanfeInput,
 ): Promise<ProcessDanfeOutput> {
-  const fetchFn = input.fetchImpl ?? globalThis.fetch;
+  const fetchFn = input.fetchImpl || fetch;
   const model = input.model || DEFAULT_DANFE_MODEL;
+  const effectiveOpenAiKey = input.openaiApiKey || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("OPENAI_API_KEY") : undefined);
   
   // Normalizar MIME type (suportar PDF e imagens corretamente)
   let cleanMimeType = "image/jpeg";
@@ -127,49 +306,41 @@ export async function processDanfeDocument(
   // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
   let rotationApplied: 0 | 90 | 180 | 270 = 0;
   let detectedRotation = 0;
-  let orientationSource: "openai_proxy" | "gemini" | "none" = "none";
+  let orientationSource: "openai_proxy" | "gemini" | "openai" | "none" = "none";
   let docAnalysis: Record<string, any> | null = null;
   let originalWidth = 0;
   let originalHeight = 0;
   let rotatedWidth = 0;
   let rotatedHeight = 0;
+  let fallbackUsedInAnyStep = false;
+  let fallbackReasonReported: string | undefined;
 
   if (!isPdf) {
-    // 1. Tentar detecção de orientação precisa
+    // 1. Tentar detecção de orientação precisa com failover
     try {
-      const orientResp = await fetchFn(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: PROMPT_ORIENTACAO_DANFE },
-                  { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
-                ],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.0,
-              responseMimeType: "application/json",
-              thinkingConfig: { thinkingBudget: 1 },
-            },
-          }),
-        },
-      );
+      const orientCall = await callVisionWithFailover({
+        prompt: PROMPT_ORIENTACAO_DANFE,
+        mimeType: cleanMimeType,
+        base64: cleanBase64,
+        geminiApiKey: input.geminiApiKey,
+        openaiApiKey: effectiveOpenAiKey,
+        model,
+        fetchFn,
+      });
 
-      if (orientResp && orientResp.ok) {
-        const oJson = await orientResp.json();
-        const oText = oJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        const parsed = JSON.parse(oText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+      if (orientCall.ok && orientCall.text) {
+        if (orientCall.fallbackUsed) {
+          fallbackUsedInAnyStep = true;
+          fallbackReasonReported = orientCall.fallbackReason;
+        }
+        orientationSource = orientCall.providerUsed as any;
+
+        const parsed = JSON.parse(orientCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
 
         const degrees = Number(parsed?.orientacao_leitura ?? parsed?.orientacao ?? parsed?.rotacao);
         if ([90, 180, 270].includes(degrees)) {
           rotationApplied = degrees as 90 | 180 | 270;
           detectedRotation = degrees;
-          orientationSource = "gemini";
           console.log(`[DANFE_FISCAL_SERVICE] Orientação detectada: ${rotationApplied}°. Aplicando rotação matricial...`);
         } else {
           detectedRotation = 0;
@@ -198,51 +369,35 @@ export async function processDanfeDocument(
     }
   }
 
-  // ── 2. Extração de Cabeçalho e Totais com Gemini (SEMPRE sobre a imagem já rotacionada em pé) ──
+  // ── 2. Extração de Cabeçalho e Totais (SEMPRE sobre a imagem já rotacionada em pé) ──
   let headerHttpStatus = 200;
   let headerResponseLength = 0;
 
   if (!docAnalysis) {
     try {
-      const headerResp = await fetchFn(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                  { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
-                ],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.0,
-              responseMimeType: "application/json",
-              thinkingConfig: { thinkingBudget: 1 },
-            },
-          }),
-        },
-      );
+      const headerCall = await callVisionWithFailover({
+        prompt: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
+        mimeType: cleanMimeType,
+        base64: cleanBase64,
+        geminiApiKey: input.geminiApiKey,
+        openaiApiKey: effectiveOpenAiKey,
+        model,
+        fetchFn,
+      });
 
-
-    if (headerResp) {
-      headerHttpStatus = headerResp.status;
-      if (headerResp.ok) {
-        const gJson = await headerResp.json();
-        const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        headerResponseLength = gText.length;
-        docAnalysis = JSON.parse(
-          gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
-        );
-        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
-      } else {
-        const errText = await headerResp.text();
-        console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
+      headerHttpStatus = headerCall.status;
+      if (headerCall.fallbackUsed) {
+        fallbackUsedInAnyStep = true;
+        fallbackReasonReported = headerCall.fallbackReason;
       }
-    }
+
+      if (headerCall.ok && headerCall.text) {
+        headerResponseLength = headerCall.text.length;
+        docAnalysis = JSON.parse(
+          headerCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+        );
+        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso (provider=${headerCall.providerUsed}): fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
+      }
     } catch (err) {
       console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
     }
@@ -276,52 +431,37 @@ export async function processDanfeDocument(
     }
   }
 
-  // ── 4. Extração de Itens da Tabela com Gemini ───────────────────────────
+  // ── 4. Extração de Itens da Tabela com Failover ───────────────────────────
   let rawItemsList: any[] = [];
   let productsHttpStatus = 200;
   let productsResponseLength = 0;
 
   try {
-    const tableResp = await fetchFn(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: GEMINI_V2_PROMPT_TABELA },
-                { inline_data: { mime_type: cleanMimeType, data: tableImageBase64 } },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.0,
-            responseMimeType: "application/json",
-            thinkingConfig: { thinkingBudget: 1 },
-          },
-        }),
-      },
-    );
+    const productsCall = await callVisionWithFailover({
+      prompt: GEMINI_V2_PROMPT_TABELA,
+      mimeType: cleanMimeType,
+      base64: tableImageBase64,
+      geminiApiKey: input.geminiApiKey,
+      openaiApiKey: effectiveOpenAiKey,
+      model,
+      fetchFn,
+    });
 
-    if (tableResp) {
-      productsHttpStatus = tableResp.status;
-      if (tableResp.ok) {
-        const tJson = await tableResp.json();
-        const tText = tJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        productsResponseLength = tText.length;
-        const parsed = JSON.parse(
-          tText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
-        );
-        if (Array.isArray(parsed)) rawItemsList = parsed;
-        else if (Array.isArray(parsed?.itens)) rawItemsList = parsed.itens;
-        else if (Array.isArray(parsed?.produtos)) rawItemsList = parsed.produtos;
-        console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída: ${rawItemsList.length} itens brutos`);
-      } else {
-        const errText = await tableResp.text();
-        console.warn(`[DANFE_FISCAL_SERVICE] Gemini table retornou HTTP ${tableResp.status}: ${errText.slice(0, 200)}`);
-      }
+    productsHttpStatus = productsCall.status;
+    if (productsCall.fallbackUsed) {
+      fallbackUsedInAnyStep = true;
+      fallbackReasonReported = productsCall.fallbackReason;
+    }
+
+    if (productsCall.ok && productsCall.text) {
+      productsResponseLength = productsCall.text.length;
+      const parsed = JSON.parse(
+        productsCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+      );
+      if (Array.isArray(parsed)) rawItemsList = parsed;
+      else if (Array.isArray(parsed?.itens)) rawItemsList = parsed.itens;
+      else if (Array.isArray(parsed?.produtos)) rawItemsList = parsed.produtos;
+      console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída (provider=${productsCall.providerUsed}): ${rawItemsList.length} itens brutos`);
     }
   } catch (err) {
     console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
@@ -351,6 +491,7 @@ export async function processDanfeDocument(
     `rawItemsCount=${rawItemsList.length} parsedItemsCount=${rawItemsList.length} ` +
     `validatedItemsCount=${itensValidados.length} ` +
     `discardReasons="${discardReasons.slice(0, 3).join('; ') || 'none'}" ` +
+    `fallbackUsed=${fallbackUsedInAnyStep} fallbackReason="${fallbackReasonReported || 'none'}" ` +
     `correlation_id=${input.workspaceId || 'anon'}`
   );
 
