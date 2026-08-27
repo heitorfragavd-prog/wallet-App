@@ -81,7 +81,33 @@ export async function processDanfeDocument(
 ): Promise<ProcessDanfeOutput> {
   const fetchFn = input.fetchImpl ?? globalThis.fetch;
   const model = input.model || DEFAULT_DANFE_MODEL;
-  const cleanMimeType = input.mimeType.startsWith("image/") ? input.mimeType : "image/jpeg";
+  
+  // Normalizar MIME type (suportar PDF e imagens corretamente)
+  let cleanMimeType = "image/jpeg";
+  if (input.mimeType === "application/pdf") {
+    cleanMimeType = "application/pdf";
+  } else if (input.mimeType.startsWith("image/")) {
+    cleanMimeType = input.mimeType;
+  }
+
+  // Sanitizar Base64: remover data URL prefix e caracteres de quebra de linha
+  const cleanBase64 = String(input.base64 || "")
+    .replace(/^data:[^;]+;base64,/i, "")
+    .replace(/[\r\n\s]+/g, "");
+
+  console.log(`[DANFE_FISCAL_SERVICE] Processando documento: mime=${cleanMimeType}, base64_len=${cleanBase64.length}, model=${model}`);
+
+  if (!cleanBase64 || cleanBase64.length < 4) {
+    console.warn("[DANFE_FISCAL_SERVICE] Base64 inválido ou vazio recebido");
+    return {
+      success: false,
+      status: "erro",
+      itens: [],
+      validacao: { valido: false, somaItens: 0, valorReferencia: 0, diferenca: 0, status: "requer_revisao", toleranciaUtilizada: 0.05, totalItensComCamposIncompletos: 0 },
+      mensagemFormatada: "⚠️ Não foi possível processar o arquivo anexado. Envie uma foto nítida ou PDF da Nota Fiscal.",
+    };
+  }
+
 
   // ── 1. Extração de Cabeçalho e Totais com Gemini ─────────────────────────
   let docAnalysis: Record<string, any> | null = null;
@@ -96,7 +122,7 @@ export async function processDanfeDocument(
             {
               parts: [
                 { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                { inline_data: { mime_type: cleanMimeType, data: input.base64 } },
+                { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
               ],
             },
           ],
@@ -114,9 +140,13 @@ export async function processDanfeDocument(
       docAnalysis = JSON.parse(
         gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
       );
+      console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf}`);
+    } else {
+      const errText = await headerResp.text();
+      console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
     }
   } catch (err) {
-    console.error("[danfe-fiscal-service] Erro ao extrair cabeçalho:", err);
+    console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
   }
 
   // ── 2. Extração de Itens da Tabela com Gemini ───────────────────────────
@@ -132,7 +162,7 @@ export async function processDanfeDocument(
             {
               parts: [
                 { text: GEMINI_V2_PROMPT_TABELA },
-                { inline_data: { mime_type: cleanMimeType, data: input.base64 } },
+                { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
               ],
             },
           ],
@@ -153,10 +183,15 @@ export async function processDanfeDocument(
       if (Array.isArray(parsed)) rawItemsList = parsed;
       else if (Array.isArray(parsed.itens)) rawItemsList = parsed.itens;
       else if (Array.isArray(parsed.produtos)) rawItemsList = parsed.produtos;
+      console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída: ${rawItemsList.length} itens brutos`);
+    } else {
+      const errText = await tableResp.text();
+      console.warn(`[DANFE_FISCAL_SERVICE] Gemini table retornou HTTP ${tableResp.status}: ${errText.slice(0, 200)}`);
     }
   } catch (err) {
-    console.error("[danfe-fiscal-service] Erro ao extrair tabela:", err);
+    console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
   }
+
 
   // ── 3. Validação Estrutural Estrita ──────────────────────────────────────
   const itensValidados: DanfeItemV2[] = [];

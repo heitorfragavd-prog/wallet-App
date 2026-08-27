@@ -41,7 +41,9 @@ import { AgentActionProposalCard } from "@/domains/ia/components/AgentActionProp
 import { useConversas } from "@/domains/ia/hooks/useConversas";
 import { useWalletIA, type WalletIAMessage, type WalletIAAttachment } from "@/domains/ia/hooks/useWalletIA";
 import { WalletStorageService } from "@/domains/ia/services/WalletStorageService";
+import { optimizeImageForVision } from "@/domains/ia/utils/imageOptimizer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+
 
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
@@ -636,33 +638,36 @@ export default function WalletIAPage() {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
       toast({ title: "Tipo não suportado", description: "Envie imagens (PNG, JPG) ou PDF.", variant: "destructive" });
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      toast({ title: "Arquivo muito grande", description: "Máximo 10MB.", variant: "destructive" });
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "Arquivo muito grande", description: "Máximo 15MB.", variant: "destructive" });
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
+
+    try {
+      const opt = await optimizeImageForVision(file);
       setAttachment({
         type: file.type.startsWith("image/") ? "image" : "pdf",
-        mimeType: file.type,
-        base64: dataUrl.split(",")[1],
-        dataUrl,
+        mimeType: opt.mimeType,
+        base64: opt.base64,
+        dataUrl: opt.dataUrl,
         name: file.name,
-        file: file,
-        size: file.size,
+        file: opt.blob,
+        size: opt.size,
       });
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      logger.error("WalletIAPage", "Erro ao otimizar imagem para anexo", { error: String(err) });
+      toast({ title: "Erro ao processar anexo", variant: "destructive" });
+    }
     e.target.value = "";
   };
+
 
 
   // ── Render ────────────────────────────────────────────────────────────────
