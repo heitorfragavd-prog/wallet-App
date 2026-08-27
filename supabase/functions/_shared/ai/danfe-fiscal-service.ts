@@ -126,9 +126,15 @@ export async function processDanfeDocument(
 
   // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
   let rotationApplied: 0 | 90 | 180 | 270 = 0;
+  let orientationSource: "openai_proxy" | "gemini" | "none" = "none";
   let docAnalysis: Record<string, any> | null = null;
+  let originalWidth = 0;
+  let originalHeight = 0;
+  let processedWidth = 0;
+  let processedHeight = 0;
 
   if (!isPdf) {
+    // 1. Tentar detecção de orientação precisa
     try {
       const orientResp = await fetchFn(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
@@ -160,13 +166,13 @@ export async function processDanfeDocument(
 
         if (parsed?.cabecalho || parsed?.valores_totais) {
           docAnalysis = parsed;
+          orientationSource = "gemini";
         } else {
           const degrees = Number(parsed?.orientacao_leitura);
           if ([90, 180, 270].includes(degrees)) {
             rotationApplied = degrees as 90 | 180 | 270;
+            orientationSource = "gemini";
             console.log(`[DANFE_FISCAL_SERVICE] Orientação detectada: ${rotationApplied}°. Aplicando rotação matricial...`);
-            const rotatedMatrix = await normalizeAndRotateImageMatrix(cleanBase64, rotationApplied);
-            cleanBase64 = rotatedMatrix.base64;
           } else {
             console.log(`[DANFE_FISCAL_SERVICE] Orientação normal (0°).`);
           }
@@ -175,9 +181,24 @@ export async function processDanfeDocument(
     } catch (err) {
       console.warn("[DANFE_FISCAL_SERVICE] Falha na detecção de orientação, prosseguindo com original:", err);
     }
+
+    // Normalização da matriz original (rotação + resize 2048px se necessário)
+    try {
+      const matrixRes = await normalizeAndRotateImageMatrix(cleanBase64, rotationApplied);
+      cleanBase64 = matrixRes.base64;
+      originalWidth = matrixRes.width;
+      originalHeight = matrixRes.height;
+      processedWidth = matrixRes.width;
+      processedHeight = matrixRes.height;
+    } catch (mErr) {
+      console.warn("[DANFE_FISCAL_SERVICE] Normalização matricial falhou:", mErr);
+    }
   }
 
   // ── 2. Extração de Cabeçalho e Totais com Gemini (se não processado anteriormente) ──
+  let headerHttpStatus = 200;
+  let headerResponseLength = 0;
+
   if (!docAnalysis) {
     try {
       const headerResp = await fetchFn(
@@ -203,31 +224,46 @@ export async function processDanfeDocument(
         },
       );
 
-      if (headerResp && headerResp.ok) {
-        const gJson = await headerResp.json();
-        const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        docAnalysis = JSON.parse(
-          gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
-        );
-        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf}`);
-      } else if (headerResp) {
-        const errText = await headerResp.text();
-        console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
+      if (headerResp) {
+        headerHttpStatus = headerResp.status;
+        if (headerResp.ok) {
+          const gJson = await headerResp.json();
+          const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          headerResponseLength = gText.length;
+          docAnalysis = JSON.parse(
+            gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+          );
+          console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
+        } else {
+          const errText = await headerResp.text();
+          console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
+        }
       }
     } catch (err) {
       console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
     }
   }
 
-
-  // ── 3. Recorte (Crop) da Tabela de Produtos ──────────────────────────────
+  // ── 3. Recorte (Crop) Contínuo da Tabela com Fallback Garantido (0.24 - 0.90) ──
   let tableImageBase64 = cleanBase64;
-  if (!isPdf && docAnalysis?.regiao_tabela_produtos) {
+  let cropSource: "detected" | "fallback" = "fallback";
+  let topRatio = 0.24;
+  let bottomRatio = 0.90;
+
+  if (!isPdf) {
+    const regiao = docAnalysis?.regiao_tabela_produtos;
+    if (regiao && typeof regiao.top === "number" && regiao.top >= 0.05 && regiao.top <= 0.60) {
+      topRatio = regiao.top;
+      cropSource = "detected";
+    }
+    if (regiao && typeof regiao.bottom === "number" && regiao.bottom >= 0.50 && regiao.bottom <= 0.98) {
+      bottomRatio = regiao.bottom;
+    }
+
     try {
-      const { top, bottom } = docAnalysis.regiao_tabela_produtos;
-      const cropRes = await cropTableRegionMatrix(cleanBase64, top, bottom);
+      const cropRes = await cropTableRegionMatrix(cleanBase64, topRatio, bottomRatio);
       tableImageBase64 = cropRes.base64;
-      console.log(`[DANFE_FISCAL_SERVICE] Recorte contínuo da tabela aplicado (top: ${top}, bottom: ${bottom})`);
+      console.log(`[DANFE_FISCAL_SERVICE] Recorte da tabela aplicado (${cropSource}: top ${Math.round(topRatio * 100)}% - bottom ${Math.round(bottomRatio * 100)}%)`);
     } catch (err) {
       console.warn("[DANFE_FISCAL_SERVICE] Falha ao recortar tabela, usando imagem completa:", err);
     }
@@ -235,6 +271,9 @@ export async function processDanfeDocument(
 
   // ── 4. Extração de Itens da Tabela com Gemini ───────────────────────────
   let rawItemsList: any[] = [];
+  let productsHttpStatus = 200;
+  let productsResponseLength = 0;
+
   try {
     const tableResp = await fetchFn(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
@@ -259,23 +298,28 @@ export async function processDanfeDocument(
       },
     );
 
-    if (tableResp.ok) {
-      const tJson = await tableResp.json();
-      const tText = tJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      const parsed = JSON.parse(
-        tText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
-      );
-      if (Array.isArray(parsed)) rawItemsList = parsed;
-      else if (Array.isArray(parsed.itens)) rawItemsList = parsed.itens;
-      else if (Array.isArray(parsed.produtos)) rawItemsList = parsed.produtos;
-      console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída: ${rawItemsList.length} itens brutos`);
-    } else {
-      const errText = await tableResp.text();
-      console.warn(`[DANFE_FISCAL_SERVICE] Gemini table retornou HTTP ${tableResp.status}: ${errText.slice(0, 200)}`);
+    if (tableResp) {
+      productsHttpStatus = tableResp.status;
+      if (tableResp.ok) {
+        const tJson = await tableResp.json();
+        const tText = tJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        productsResponseLength = tText.length;
+        const parsed = JSON.parse(
+          tText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+        );
+        if (Array.isArray(parsed)) rawItemsList = parsed;
+        else if (Array.isArray(parsed?.itens)) rawItemsList = parsed.itens;
+        else if (Array.isArray(parsed?.produtos)) rawItemsList = parsed.produtos;
+        console.log(`[DANFE_FISCAL_SERVICE] Tabela de itens extraída: ${rawItemsList.length} itens brutos`);
+      } else {
+        const errText = await tableResp.text();
+        console.warn(`[DANFE_FISCAL_SERVICE] Gemini table retornou HTTP ${tableResp.status}: ${errText.slice(0, 200)}`);
+      }
     }
   } catch (err) {
     console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
   }
+
 
 
 
@@ -467,8 +511,21 @@ export async function processDanfeDocument(
     currency: "BRL",
   });
 
-  // Log diagnóstico seguro
-  console.log(`[DANFE_HEADER_DEBUG] provider=${model}, fornecedor="${session.fornecedor || fornecedor}", cnpj="${session.cnpjFornecedor || cnpjFornecedor}", numeroNF="${session.numeroNf || numeroNf}", serie="${serieNf}", dataEmissao="${session.dataEmissao || dataEmissao}", valorTotalNF=${valorTotalNf}, valorProdutosDeclaradoNF=${refProdutos}, valorProdutosCalculadoItens=${valorProdutosCalculadoItens}, quantidadeItens=${itensFinais.length}, validationStatus="${statusFinal}", validationReasons="${validacao.motivo || 'OK'}"`);
+  // Log diagnóstico seguro DANFE_TRACE
+  console.log(
+    `[DANFE_TRACE] source=${input.workspaceId ? "wallet" : "telegram"} ` +
+    `original_bytes=${cleanBase64.length} original_width=${originalWidth} original_height=${originalHeight} ` +
+    `orientation_provider=${orientationSource} rotation=${rotationApplied} ` +
+    `processed_width=${processedWidth} processed_height=${processedHeight} ` +
+    `crop_source=${cropSource} crop_coordinates=${topRatio.toFixed(2)}-${bottomRatio.toFixed(2)} ` +
+    `model_header=${model} model_products=${model} ` +
+    `gemini_header_status=${headerHttpStatus} gemini_products_status=${productsHttpStatus} ` +
+    `header_response_length=${headerResponseLength} products_response_length=${productsResponseLength} ` +
+    `products_before_validation=${rawItemsList.length} products_after_validation=${itensFinais.length} ` +
+    `fiscal_validation=${validacao.valido ? "OK" : validacao.motivo} ` +
+    `correlation_id=${input.workspaceId || "anon"}`
+  );
+
 
   const previewItens = itensFinais
     .slice(0, 5)
