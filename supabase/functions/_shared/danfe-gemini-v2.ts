@@ -380,6 +380,51 @@ export interface AccessKeyNFeInfo {
 }
 
 /**
+ * Busca uma chave de acesso válida de 44 dígitos em múltiplos campos do objeto de resposta
+ * ou via expressão regular no texto bruto, com máxima tolerância a espaços e pontuações.
+ */
+export function findAccessKeyInPayload(payload: any, rawText?: string): string | null {
+  if (!payload && !rawText) return null;
+
+  const candidates: any[] = [
+    payload?.chave_acesso,
+    payload?.chave,
+    payload?.cabecalho?.chave_acesso,
+    payload?.cabecalho?.chave,
+    payload?.cabecalho?.chave_de_acesso,
+    payload?.cabecalho?.nfe_chave,
+    payload?.cabecalho?.access_key,
+    payload?.access_key,
+  ];
+
+  for (const cand of candidates) {
+    if (cand) {
+      const clean = String(cand).replace(/\D/g, "");
+      if (clean.length === 44) {
+        return clean;
+      }
+    }
+  }
+
+  // Busca por regex no texto bruto ou JSON serializado
+  const textToSearch = rawText || (payload ? JSON.stringify(payload) : "");
+  if (textToSearch) {
+    // 1. Sequência contínua de 44 dígitos
+    const match44 = textToSearch.match(/\b\d{44}\b/);
+    if (match44) return match44[0];
+
+    // 2. 11 blocos de 4 dígitos separados por espaços/pontos
+    const matchBlocks = textToSearch.match(/(?:\d{4}[\s\.\-]*){11}/);
+    if (matchBlocks) {
+      const clean = matchBlocks[0].replace(/\D/g, "");
+      if (clean.length === 44) return clean;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Extrai deterministicamente as partes estruturais e o número da NF-e (nNF)
  * a partir de uma chave de acesso oficial de 44 dígitos da SEFAZ.
  * 
@@ -396,7 +441,7 @@ export function extractNFeNumberFromAccessKey(chaveAcesso: string | null | undef
   const CNPJ = digits.substring(6, 20);
   const modelo = digits.substring(20, 22);
   const serie = digits.substring(22, 25);
-  const nNF = digits.substring(25, 34); // 9 dígitos da posição 25 a 33
+  const nNF = digits.substring(25, 34); // 9 dígitos da posição 25 a 33 (índice 25 a 34)
   const tpEmis = digits.substring(34, 35);
   const cNF = digits.substring(35, 43);
   const cDV = digits.substring(43, 44);
@@ -433,10 +478,16 @@ export function reconcileNFeNumber(
   visualSerie: string | null | undefined,
   accessKey: string | null | undefined,
   correlationId = "anon",
+  channel: "telegram" | "wallet" = "wallet",
 ): ReconciledNFeNumber {
   const keyInfo = extractNFeNumberFromAccessKey(accessKey);
   const visualClean = visualNumber ? String(visualNumber).replace(/\D/g, "") : null;
   const visualNormalized = visualClean ? (visualClean.length <= 9 ? visualClean.padStart(9, "0") : visualClean) : null;
+
+  const digitsOnly = accessKey ? String(accessKey).replace(/\D/g, "") : "";
+  const maskedKey = digitsOnly.length >= 10
+    ? `${digitsOnly.substring(0, 4)}...${digitsOnly.substring(digitsOnly.length - 6)}`
+    : (digitsOnly ? "invalid_len" : "none");
 
   if (keyInfo) {
     const keyNum = keyInfo.nNF;
@@ -445,12 +496,11 @@ export function reconcileNFeNumber(
     const serie_final = visualSerie ? String(visualSerie).trim() : String(Number(keyInfo.serie));
 
     console.log(
-      `[DANFE_NF_NUMBER_TRACE] correlation_id=${correlationId} ` +
-      `numero_nf_model_raw="${visualNumber || 'null'}" ` +
-      `numero_nf_normalized="${visualNormalized || 'null'}" ` +
-      `numero_nf_access_key="${keyNum}" ` +
-      `numero_nf_final="${keyInfo.nNFFormatado}" ` +
-      `source_selected=${source_selected} match=${match}`
+      `[DANFE_NF_TRACE] correlation_id=${correlationId} channel=${channel} ` +
+      `access_key_present=true access_key_digits_count=${digitsOnly.length} access_key_masked="${maskedKey}" ` +
+      `numero_nf_model="${visualNumber || 'null'}" numero_nf_from_access_key="${keyNum}" ` +
+      `numero_nf_reconciled="${keyInfo.nNFFormatado}" source_selected=${source_selected} ` +
+      `numero_nf_formatter="${keyInfo.nNFFormatado}"`
     );
 
     return {
@@ -465,12 +515,11 @@ export function reconcileNFeNumber(
   if (visualNormalized) {
     const formatted = formatNFeNumber(visualNormalized);
     console.log(
-      `[DANFE_NF_NUMBER_TRACE] correlation_id=${correlationId} ` +
-      `numero_nf_model_raw="${visualNumber || 'null'}" ` +
-      `numero_nf_normalized="${visualNormalized}" ` +
-      `numero_nf_access_key="none" ` +
-      `numero_nf_final="${formatted}" ` +
-      `source_selected=visual match=false`
+      `[DANFE_NF_TRACE] correlation_id=${correlationId} channel=${channel} ` +
+      `access_key_present=${!!accessKey} access_key_digits_count=${digitsOnly.length} access_key_masked="${maskedKey}" ` +
+      `numero_nf_model="${visualNumber || 'null'}" numero_nf_from_access_key="null" ` +
+      `numero_nf_reconciled="${formatted}" source_selected=visual ` +
+      `numero_nf_formatter="${formatted}"`
     );
 
     return {
@@ -493,18 +542,18 @@ export function reconcileNFeNumber(
 
 export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
 
-Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
+Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a CHAVE DE ACESSO (44 dígitos numéricos localizada no quadro superior direito abaixo do código de barras), a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
 
 Retorne APENAS um JSON no seguinte formato:
 {
   "cabecalho": {
     "fornecedor": "razão social do emitente/fornecedor ou null",
     "cnpj_fornecedor": "CNPJ do emitente ou null",
-    "numero_nf": "número da NF formatado (ex: 013.790.902) ou null",
-    "serie_nf": "série da NF (ex: 26) ou null",
+    "numero_nf": "número da NF impresso no campo Nº (ex: 000.083.208) ou null",
+    "serie_nf": "série da NF (ex: 1) ou null",
     "data_emissao": "data de emissão YYYY-MM-DD ou null",
     "data_entrada": "data de entrada/saída YYYY-MM-DD ou null",
-    "chave_acesso": "chave de acesso de 44 dígitos ou null",
+    "chave_acesso": "transcrição dos 44 dígitos da CHAVE DE ACESSO abaixo do código de barras ou null",
     "pagina_atual": 1,
     "total_paginas": 1
   },
@@ -523,11 +572,14 @@ Retorne APENAS um JSON no seguinte formato:
 }
 
 REGRAS CRÍTICAS:
-1. "pagina_atual" e "total_paginas": identifique no cabeçalho/topo da DANFE o campo de folha (ex: "FOLHA 1/2" -> pagina_atual: 1, total_paginas: 2; "FOLHA 2/2" -> pagina_atual: 2, total_paginas: 2). Se for folha única ("FOLHA 1/1" ou sem indicação de múltiplas folhas), use pagina_atual: 1 e total_paginas: 1.
-2. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
-3. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
-4. Não invente dados. Se não estiver legível na folha, retorne null.
-5. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
+1. "chave_acesso": no quadro superior direito, abaixo do código de barras da DANFE, transcreva a sequência completa de 44 dígitos da CHAVE DE ACESSO. Remova espaços ou transcreva os dígitos.
+2. "numero_nf": leia com atenção o campo "Nº" no cabeçalho da DANFE.
+3. "pagina_atual" e "total_paginas": identifique no cabeçalho/topo da DANFE o campo de folha (ex: "FOLHA 1/2" -> pagina_atual: 1, total_paginas: 2; "FOLHA 2/2" -> pagina_atual: 2, total_paginas: 2). Se for folha única ("FOLHA 1/1" ou sem indicação de múltiplas folhas), use pagina_atual: 1 e total_paginas: 1.
+4. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
+5. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
+6. Não invente dados. Se não estiver legível na folha, retorne null.
+7. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
+
 
 export const GEMINI_V2_PROMPT_TABELA = `Você é um extrator fiscal especializado em DANFE brasileira.
 

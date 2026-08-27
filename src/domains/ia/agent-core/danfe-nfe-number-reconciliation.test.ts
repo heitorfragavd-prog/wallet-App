@@ -6,12 +6,14 @@
  * 2. Posição estrutural dos 9 dígitos de nNF: cUF(2) + AAMM(4) + CNPJ(14) + mod(2) + serie(3) = 25 dígitos iniciais, nNF são os 9 dígitos seguintes (25 a 34).
  * 3. Se modelo visual ler "000.832.082" mas a chave contiver "000083208", a chave vence e o número final será "000.083.208".
  * 4. O formatador jamais move ou reorganiza dígitos.
+ * 5. Busca resiliente de chave de acesso via findAccessKeyInPayload.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   extractNFeNumberFromAccessKey,
   formatNFeNumber,
+  findAccessKeyInPayload,
   reconcileNFeNumber,
 } from "../../../../supabase/functions/_shared/danfe-gemini-v2";
 import { processDanfeDocument } from "../../../../supabase/functions/_shared/ai/danfe-fiscal-service";
@@ -21,7 +23,7 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
     vi.clearAllMocks();
   });
 
-  describe("Funções Puras de Extração e Formatação", () => {
+  describe("Funções Puras de Extração, Busca e Formatação", () => {
     it("A: formatNFeNumber formata corretamente sem reorganizar dígitos", () => {
       expect(formatNFeNumber("83208")).toBe("000.083.208");
       expect(formatNFeNumber("000083208")).toBe("000.083.208");
@@ -54,16 +56,33 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
       expect(info?.nNFFormatado).toBe("000.083.208");
     });
 
-    it("D: chave inválida ou com menos de 44 dígitos retorna null sem inventar", () => {
+    it("D: findAccessKeyInPayload localiza chave em múltiplos campos ou via regex", () => {
+      // 1. Campo direto
+      expect(findAccessKeyInPayload({ chave_acesso: "51260831908617000133550010000832081123456789" }))
+        .toBe("51260831908617000133550010000832081123456789");
+
+      // 2. Campo aninhado com espaços
+      expect(findAccessKeyInPayload({ cabecalho: { chave: "5126 0831 9086 1700 0133 5500 1000 0832 0811 2345 6789" } }))
+        .toBe("51260831908617000133550010000832081123456789");
+
+      // 3. No texto bruto serializado
+      expect(findAccessKeyInPayload({}, "Texto da DANFE com CHAVE DE ACESSO: 5126 0831 9086 1700 0133 5500 1000 0832 0811 2345 6789 emitida com sucesso"))
+        .toBe("51260831908617000133550010000832081123456789");
+
+      // 4. Sem chave válida
+      expect(findAccessKeyInPayload({ cabecalho: { chave: "12345" } })).toBeNull();
+    });
+
+    it("E: chave inválida ou com menos de 44 dígitos retorna null sem inventar", () => {
       expect(extractNFeNumberFromAccessKey("12345")).toBeNull();
       expect(extractNFeNumberFromAccessKey("5126083190861700013355001000083208112345678")).toBeNull(); // 43 dígitos
       expect(extractNFeNumberFromAccessKey(null)).toBeNull();
       expect(extractNFeNumberFromAccessKey("")).toBeNull();
     });
 
-    it("E: reconcileNFeNumber — modelo correto + chave correta -> mantém número com match=true", () => {
+    it("F: reconcileNFeNumber — modelo correto + chave correta -> mantém número com match=true", () => {
       const chave = "51260831908617000133550010000832081123456789";
-      const res = reconcileNFeNumber("000.083.208", "1", chave, "test-corr");
+      const res = reconcileNFeNumber("000.083.208", "1", chave, "test-corr", "wallet");
 
       expect(res.numero_nf).toBe("000083208");
       expect(res.numero_nf_formatado).toBe("000.083.208");
@@ -72,9 +91,9 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
       expect(res.match).toBe(true);
     });
 
-    it("F: reconcileNFeNumber — modelo visual ERRADO (000.832.082) + chave válida (000083208) -> chave VENCE", () => {
+    it("G: reconcileNFeNumber — modelo visual ERRADO (000.832.082) + chave válida (000083208) -> chave VENCE", () => {
       const chave = "51260831908617000133550010000832081123456789";
-      const res = reconcileNFeNumber("000.832.082", "1", chave, "test-corr");
+      const res = reconcileNFeNumber("000.832.082", "1", chave, "test-corr", "wallet");
 
       expect(res.numero_nf).toBe("000083208");
       expect(res.numero_nf_formatado).toBe("000.083.208");
@@ -82,8 +101,8 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
       expect(res.match).toBe(false);
     });
 
-    it("G: reconcileNFeNumber — sem chave de acesso + número visual válido -> usa visual", () => {
-      const res = reconcileNFeNumber("83208", "1", null, "test-corr");
+    it("H: reconcileNFeNumber — sem chave de acesso + número visual válido -> usa visual", () => {
+      const res = reconcileNFeNumber("83208", "1", null, "test-corr", "wallet");
 
       expect(res.numero_nf).toBe("000083208");
       expect(res.numero_nf_formatado).toBe("000.083.208");
@@ -93,8 +112,9 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
   });
 
   describe("Pipeline Completo — Regressão Brasnorte com Conciliação de Número de NF", () => {
-    it("DANFE Brasnorte: modelo visual leu 000.832.082, mas a chave de acesso corrige para 000.083.208 mantendo 11 itens e R$ 1.105,25", async () => {
-      const chaveBrasnorteReal = "51260831908617000133550010000832081123456789";
+    it("DANFE Brasnorte: modelo visual leu 000.832.082, mas a chave de acesso (com espaços) corrige para 000.083.208 mantendo 11 itens e R$ 1.105,25", async () => {
+      // Chave real com espaços como costuma vir na DANFE impressa
+      const chaveBrasnorteReal = "5126 0831 9086 1700 0133 5500 1000 0832 0811 2345 6789";
 
       const mockFetch = vi.fn().mockImplementation((_url, init) => {
         const body = JSON.parse(init.body);
@@ -111,7 +131,7 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
           });
         }
 
-        // 2. Cabeçalho com o erro visual que ocorreu no OCR real ("000.832.082") e a chave oficial
+        // 2. Cabeçalho com o erro visual que ocorreu no OCR real ("000.832.082") e a chave com espaços
         if (prompt.includes("quadro CÁLCULO DO IMPOSTO")) {
           return Promise.resolve({
             ok: true,
@@ -207,8 +227,10 @@ describe("DANFE — Conciliação Determinística do Número da NF-e", () => {
       expect(result.itens).toHaveLength(11);
       expect(result.validacao.somaItens).toBe(1105.25);
       expect(result.validacao.valido).toBe(true);
+      expect(result.valores_totais?.valor_produtos).toBe(1105.25);
       expect(result.mensagemFormatada).toContain("000.083.208");
-
+      expect(result.mensagemFormatada).not.toContain("000.832.082");
+      expect(result.mensagemFormatada).toContain("11. **TONICA SCHWEPPES 350ML**");
       expect(result.mensagemFormatada).toContain("Nenhuma alteração foi feita no estoque");
     });
   });

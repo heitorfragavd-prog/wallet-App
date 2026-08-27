@@ -13,6 +13,8 @@ import {
   validateDanfeMathV2,
   parseFiscalNumber,
   formatNFeNumber,
+  extractNFeNumberFromAccessKey,
+  findAccessKeyInPayload,
   reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
@@ -26,10 +28,13 @@ export {
   validateDanfeMathV2,
   parseFiscalNumber,
   formatNFeNumber,
+  extractNFeNumberFromAccessKey,
+  findAccessKeyInPayload,
   reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 };
+
 
 
 
@@ -645,6 +650,8 @@ export async function processDanfeDocument(
   );
 
   const chaveAcesso = (
+    findAccessKeyInPayload(rawCabecalho) ||
+    findAccessKeyInPayload(docAnalysis) ||
     rawCabecalho.chave_acesso ||
     rawCabecalho.chave ||
     docAnalysis?.chave_acesso ||
@@ -653,9 +660,10 @@ export async function processDanfeDocument(
   );
 
   // Conciliação Determinística do Número da NF e Série com a Chave de Acesso Oficial (44 dígitos)
-  const reconciledNfe = reconcileNFeNumber(numeroNf, serieNf, chaveAcesso, input.workspaceId || "anon");
+  const reconciledNfe = reconcileNFeNumber(numeroNf, serieNf, chaveAcesso, input.workspaceId || "anon", "wallet");
   const numeroNfFinal = reconciledNfe.numero_nf_formatado || formatNFeNumber(numeroNf) || numeroNf;
   const serieNfFinal = reconciledNfe.serie_nf || serieNf;
+
 
   const paginaAtual = Number(rawCabecalho.pagina_atual || docAnalysis?.pagina_atual) || 1;
   const totalPaginas = Number(rawCabecalho.total_paginas || docAnalysis?.total_paginas) || 1;

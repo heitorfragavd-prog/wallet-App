@@ -26,10 +26,12 @@ import {
   GEMINI_V2_PROMPT_TABELA,
   parseFiscalNumber,
   formatNFeNumber,
+  findAccessKeyInPayload,
   reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
+
 
 
 const corsHeaders = {
@@ -4653,11 +4655,22 @@ FORMATO:
 
           // Conciliação Determinística do Número da NF com a Chave de Acesso Oficial (44 dígitos)
           if (documentData.cabecalho) {
+            const chaveDetectada = (
+              findAccessKeyInPayload(documentData) ||
+              findAccessKeyInPayload(documentData.cabecalho) ||
+              documentData.cabecalho.chave_acesso ||
+              null
+            );
+            if (chaveDetectada) {
+              documentData.cabecalho.chave_acesso = chaveDetectada;
+            }
+
             const rec = reconcileNFeNumber(
               documentData.cabecalho.numero_nf,
               documentData.cabecalho.serie_nf,
-              documentData.cabecalho.chave_acesso,
-              String(chatId)
+              chaveDetectada,
+              String(chatId),
+              "telegram"
             );
             if (rec.numero_nf_formatado) {
               documentData.cabecalho.numero_nf = rec.numero_nf_formatado;
@@ -4666,6 +4679,7 @@ FORMATO:
               documentData.cabecalho.serie_nf = rec.serie_nf;
             }
           }
+
 
           const { data: wsData } = await supabase
             .from("workspaces")
