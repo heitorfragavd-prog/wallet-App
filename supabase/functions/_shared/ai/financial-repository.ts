@@ -83,14 +83,14 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       const [recRows, txRows] = await Promise.all([
         execute(scopedQuery(
           "receitas",
-          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          "id,user_id,workspace_id,descricao,valor,data",
           context,
           period,
         )),
         execute({
           ...scopedQuery(
             "transacoes",
-            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            "id,user_id,workspace_id,descricao,valor,data,tipo",
             context,
             period,
           ),
@@ -105,14 +105,14 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       const [despRows, txRows] = await Promise.all([
         execute(scopedQuery(
           "despesas",
-          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          "id,user_id,workspace_id,descricao,valor,data",
           context,
           period,
         )),
         execute({
           ...scopedQuery(
             "transacoes",
-            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            "id,user_id,workspace_id,descricao,valor,data,tipo",
             context,
             period,
           ),
@@ -126,7 +126,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
     async listTransactions(context, period) {
       const rows = await execute(scopedQuery(
         "transacoes",
-        "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+        "id,user_id,workspace_id,descricao,valor,data,tipo",
         context,
         period,
       ));

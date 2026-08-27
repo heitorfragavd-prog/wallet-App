@@ -302,7 +302,7 @@ export default function WalletIAPage() {
     return `${y}-${m}-01`;
   }, []);
 
-  const { receitas } = useReceitas({ startDate: inicioJanela });
+  const { receitas, loading: receitasLoading } = useReceitas({ startDate: inicioJanela });
   const { despesas } = useDespesas({ startDate: inicioJanela });
   const { data: contas = [] } = useQuery({
     queryKey: ["wallet-ia-contas"],
@@ -322,10 +322,14 @@ export default function WalletIAPage() {
     [receitas, despesas, contas]
   );
 
+  // Só passa fastQueryFn quando os dados de receitas estão prontos.
+  // Se ainda estiver carregando (Divipay incluso), a pergunta vai para Agent V2
+  // e retorna dados reais do banco em vez de R$ 0,00 por dados incompletos.
   const fastQueryFn = useCallback(
     (pergunta: string) => gerarRespostaRapida(pergunta, dadosFinanceiros),
     [dadosFinanceiros]
   );
+  const fastQueryFnReady = receitasLoading ? undefined : fastQueryFn;
 
   // ── Persistência de mensagens ─────────────────────────────────────────────
   const onMessagePersist = useCallback(
@@ -362,7 +366,7 @@ export default function WalletIAPage() {
       workspaceId: activeWorkspace?.id,
       conversaId: conversaAtiva ?? undefined,
       dadosFinanceiros,
-      fastQueryFn,
+      fastQueryFn: fastQueryFnReady,
       onMessagePersist,
       onMessageSent,
       onError: (err) => {

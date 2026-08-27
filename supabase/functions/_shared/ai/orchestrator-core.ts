@@ -51,7 +51,18 @@ export interface OrchestratorTurnResult {
   maxIterationsReached?: boolean;
 }
 
-export const FINANCIAL_AGENT_SYSTEM_PROMPT = `Você é o Wallet Finance Agent V2, um assistente e consultor financeiro corporativo inteligente, determinístico, auditável e altamente confiável.
+function buildSystemPrompt(): string {
+  // Data de hoje no fuso do Brasil (America/Sao_Paulo = UTC-3)
+  const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+  const hojeBrasil = nowBrasil.toISOString().split("T")[0]; // YYYY-MM-DD
+
+  return `Você é o Wallet Finance Agent V2, um assistente e consultor financeiro corporativo inteligente, determinístico, auditável e altamente confiável.
+
+DATA DE HOJE (Brasil/BRT): ${hojeBrasil}
+Use SEMPRE essa data como referência para "hoje", "ontem" e períodos relativos.
+Para "hoje": start=${hojeBrasil}, end=${hojeBrasil}.
+Para "ontem": calcule o dia anterior.
+Para "este mês": start=YYYY-MM-01, end=${hojeBrasil} (mês corrente até hoje).
 
 REGRAS DE CONDUTA E SEGURANÇA:
 1. Cálculos e dados numéricos devem vir SEMPRE das ferramentas determinísticas fornecidas. NUNCA invente números, deduções ou métricas.
@@ -67,7 +78,11 @@ REGRAS DE CONDUTA E SEGURANÇA:
    - Avisos ou limitações se existirem dados pendentes de conciliação.
 4. Formate todos os valores monetários em formato Real Brasileiro: R$ 1.234,56.
 5. Se a solicitação do usuário estiver ambígua em relação ao período ou contexto, use o período padrão do mês corrente ou peça esclarecimento com cortesia e brevidade.
-6. Nunca solicite nem exiba senhas, tokens ou dados sigilosos.`;
+6. Nunca solicite nem exiba senhas, tokens ou dados sigilosos.
+7. IMPORTANTE: as ferramentas de banco (buscar_receitas, buscar_despesas) consultam somente lançamentos manuais e transações importadas. Entradas via maquininha Divipay (Pix, Cartão) podem não aparecer nestas fontes — informe essa limitação quando relevante.`;
+}
+
+export const FINANCIAL_AGENT_SYSTEM_PROMPT = buildSystemPrompt();
 
 export async function runOrchestratorTurn(
   incomingMessages: LlmMessage[],
@@ -77,7 +92,7 @@ export async function runOrchestratorTurn(
   options: OrchestratorOptions = {},
 ): Promise<OrchestratorTurnResult> {
   const maxIterations = options.maxToolIterations ?? 5;
-  const systemPrompt = options.systemPromptOverride ?? FINANCIAL_AGENT_SYSTEM_PROMPT;
+  const systemPrompt = options.systemPromptOverride ?? buildSystemPrompt();
 
   const messages: LlmMessage[] = [];
 
