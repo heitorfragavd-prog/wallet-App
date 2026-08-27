@@ -126,12 +126,13 @@ export async function processDanfeDocument(
 
   // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
   let rotationApplied: 0 | 90 | 180 | 270 = 0;
+  let detectedRotation = 0;
   let orientationSource: "openai_proxy" | "gemini" | "none" = "none";
   let docAnalysis: Record<string, any> | null = null;
   let originalWidth = 0;
   let originalHeight = 0;
-  let processedWidth = 0;
-  let processedHeight = 0;
+  let rotatedWidth = 0;
+  let rotatedHeight = 0;
 
   if (!isPdf) {
     // 1. Tentar detecção de orientação precisa
@@ -164,38 +165,40 @@ export async function processDanfeDocument(
         const oText = oJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
         const parsed = JSON.parse(oText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
 
+        const degrees = Number(parsed?.orientacao_leitura ?? parsed?.orientacao ?? parsed?.rotacao);
+        if ([90, 180, 270].includes(degrees)) {
+          rotationApplied = degrees as 90 | 180 | 270;
+          detectedRotation = degrees;
+          orientationSource = "gemini";
+          console.log(`[DANFE_FISCAL_SERVICE] Orientação detectada: ${rotationApplied}°. Aplicando rotação matricial...`);
+        } else {
+          detectedRotation = 0;
+          console.log(`[DANFE_FISCAL_SERVICE] Orientação normal (0°).`);
+        }
+
+        // Se a resposta contiver cabeçalho fiscal (ex: em mocks ou resposta direta), captura
         if (parsed?.cabecalho || parsed?.valores_totais) {
           docAnalysis = parsed;
-          orientationSource = "gemini";
-        } else {
-          const degrees = Number(parsed?.orientacao_leitura);
-          if ([90, 180, 270].includes(degrees)) {
-            rotationApplied = degrees as 90 | 180 | 270;
-            orientationSource = "gemini";
-            console.log(`[DANFE_FISCAL_SERVICE] Orientação detectada: ${rotationApplied}°. Aplicando rotação matricial...`);
-          } else {
-            console.log(`[DANFE_FISCAL_SERVICE] Orientação normal (0°).`);
-          }
         }
       }
     } catch (err) {
       console.warn("[DANFE_FISCAL_SERVICE] Falha na detecção de orientação, prosseguindo com original:", err);
     }
 
-    // Normalização da matriz original (rotação + resize 2048px se necessário)
+    // Normalização da matriz original (SEMPRE rotacionar e redimensionar antes de cabeçalho e crop)
     try {
       const matrixRes = await normalizeAndRotateImageMatrix(cleanBase64, rotationApplied);
       cleanBase64 = matrixRes.base64;
       originalWidth = matrixRes.width;
       originalHeight = matrixRes.height;
-      processedWidth = matrixRes.width;
-      processedHeight = matrixRes.height;
+      rotatedWidth = matrixRes.width;
+      rotatedHeight = matrixRes.height;
     } catch (mErr) {
       console.warn("[DANFE_FISCAL_SERVICE] Normalização matricial falhou:", mErr);
     }
   }
 
-  // ── 2. Extração de Cabeçalho e Totais com Gemini (se não processado anteriormente) ──
+  // ── 2. Extração de Cabeçalho e Totais com Gemini (SEMPRE sobre a imagem já rotacionada em pé) ──
   let headerHttpStatus = 200;
   let headerResponseLength = 0;
 
@@ -224,21 +227,22 @@ export async function processDanfeDocument(
         },
       );
 
-      if (headerResp) {
-        headerHttpStatus = headerResp.status;
-        if (headerResp.ok) {
-          const gJson = await headerResp.json();
-          const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          headerResponseLength = gText.length;
-          docAnalysis = JSON.parse(
-            gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
-          );
-          console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
-        } else {
-          const errText = await headerResp.text();
-          console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
-        }
+
+    if (headerResp) {
+      headerHttpStatus = headerResp.status;
+      if (headerResp.ok) {
+        const gJson = await headerResp.json();
+        const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        headerResponseLength = gText.length;
+        docAnalysis = JSON.parse(
+          gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+        );
+        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor || docAnalysis?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf || docAnalysis?.numero_nf}`);
+      } else {
+        const errText = await headerResp.text();
+        console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
       }
+    }
     } catch (err) {
       console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
     }
@@ -249,6 +253,8 @@ export async function processDanfeDocument(
   let cropSource: "detected" | "fallback" = "fallback";
   let topRatio = 0.24;
   let bottomRatio = 0.90;
+  let cropWidth = rotatedWidth || originalWidth || 2048;
+  let cropHeight = Math.floor((rotatedHeight || originalHeight || 2048) * (bottomRatio - topRatio));
 
   if (!isPdf) {
     const regiao = docAnalysis?.regiao_tabela_produtos;
@@ -263,6 +269,7 @@ export async function processDanfeDocument(
     try {
       const cropRes = await cropTableRegionMatrix(cleanBase64, topRatio, bottomRatio);
       tableImageBase64 = cropRes.base64;
+      cropHeight = Math.floor((rotatedHeight || 2048) * (bottomRatio - topRatio));
       console.log(`[DANFE_FISCAL_SERVICE] Recorte da tabela aplicado (${cropSource}: top ${Math.round(topRatio * 100)}% - bottom ${Math.round(bottomRatio * 100)}%)`);
     } catch (err) {
       console.warn("[DANFE_FISCAL_SERVICE] Falha ao recortar tabela, usando imagem completa:", err);
@@ -320,17 +327,33 @@ export async function processDanfeDocument(
     console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
   }
 
-
-
-
-  // ── 3. Validação Estrutural Estrita de Produtos ───────────────────────────
+  // ── 5. Validação Estrutural Estrita de Produtos ───────────────────────────
   const itensValidados: DanfeItemV2[] = [];
+  const discardReasons: string[] = [];
+
   for (const raw of rawItemsList) {
     const res = validateProductRowV2(raw);
     if (res.isValid && res.item) {
       itensValidados.push(res.item);
+    } else if (res.motivo) {
+      discardReasons.push(res.motivo);
     }
   }
+
+  // Log detalhado [DANFE_TABLE_TRACE]
+  console.log(
+    `[DANFE_TABLE_TRACE] ` +
+    `originalWidth=${originalWidth} originalHeight=${originalHeight} ` +
+    `detectedRotation=${detectedRotation} rotationApplied=${rotationApplied} ` +
+    `rotatedWidth=${rotatedWidth} rotatedHeight=${rotatedHeight} ` +
+    `cropTop=${topRatio.toFixed(2)} cropBottom=${bottomRatio.toFixed(2)} ` +
+    `cropWidth=${cropWidth} cropHeight=${cropHeight} ` +
+    `rawItemsCount=${rawItemsList.length} parsedItemsCount=${rawItemsList.length} ` +
+    `validatedItemsCount=${itensValidados.length} ` +
+    `discardReasons="${discardReasons.slice(0, 3).join('; ') || 'none'}" ` +
+    `correlation_id=${input.workspaceId || 'anon'}`
+  );
+
 
   // ── 4. Normalização Determinística de Cabeçalho e Totais (com Aliases) ────
   const rawCabecalho = docAnalysis?.cabecalho || docAnalysis || {};
