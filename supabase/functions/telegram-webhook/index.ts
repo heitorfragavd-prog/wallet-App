@@ -4035,6 +4035,7 @@ REGRAS:
           });
 
           let orientacaoAnalysis: any = null;
+          let docAnalysis: any = null;
           if (aiResp1.ok) {
             const aiJson1 = await aiResp1.json();
             const raw1 = aiJson1.choices?.[0]?.message?.content || "";
@@ -4080,7 +4081,6 @@ REGRAS:
             const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
             const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 
-            let docAnalysis: any = null;
 
             if (isGeminiV2Enabled && (geminiApiKey || geminiApiKeyBackup) && loadedDecodedImage) {
               // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Failover de Chave ───
@@ -4623,15 +4623,22 @@ FORMATO:
                 isTelegramCompressedPhoto
               };
             }
-          } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
+          } else if (
+            orientacaoAnalysis?.tipo_documento === "boleto" ||
+            orientacaoAnalysis?.boleto_dados ||
+            docAnalysis?.tipo_documento === "boleto" ||
+            docAnalysis?.boleto_dados
+          ) {
+            const bInfo = orientacaoAnalysis?.boleto_dados || docAnalysis?.boleto_dados;
             documentData = {
               tipo: "boleto",
-              beneficiario: docAnalysis?.boleto_dados?.beneficiario,
-              valor: docAnalysis?.boleto_dados?.valor,
-              data_vencimento: docAnalysis?.boleto_dados?.data_vencimento,
-              linha_digitavel: docAnalysis?.boleto_dados?.linha_digitavel,
+              beneficiario: bInfo?.beneficiario,
+              valor: bInfo?.valor,
+              data_vencimento: bInfo?.data_vencimento,
+              linha_digitavel: bInfo?.linha_digitavel,
             };
           }
+
         }
 
         const ehDANFE = Boolean(
