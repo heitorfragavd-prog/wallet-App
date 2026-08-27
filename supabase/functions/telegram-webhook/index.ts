@@ -4629,13 +4629,228 @@ FORMATO:
             docAnalysis?.tipo_documento === "boleto" ||
             docAnalysis?.boleto_dados
           ) {
-            const bInfo = orientacaoAnalysis?.boleto_dados || docAnalysis?.boleto_dados;
+            // ─── PASSO 2 BOLETO: Extração completa na imagem normalizada (pós-rotação) ───
+            // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correcta
+            // mesmo quando a foto foi tirada de lado (90° / 270°).
+            // Cadeia: Gemini Primary → Gemini Backup → OpenAI Vision → Fail-Closed
+            const correlationIdBoleto = `tg-boleto-${userId}-${Date.now()}`;
+            const geminiKeyBoleto = Deno.env.get("GEMINI_API_KEY") || "";
+            const geminiBackupBoleto = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
+            const openAiKeyBoleto = Deno.env.get("OPENAI_API_KEY") || "";
+
+            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} orientacao_detectada=${orientacaoDetectada}° orientacao_aplicada=${orientacaoDetectada}°`);
+
+            // Extrai base64 limpo da imagem normalizada para o boleto-service
+            const normalizedB64Boleto = normalizedOverviewUri.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
+            const mimeTypeBoleto = "image/jpeg";
+
+            const GEMINI_BOLETO_PROMPT_TG = `Você é um especialista em leitura e extração de boletos bancários e guias de arrecadação brasileiras.
+
+Analise esta imagem de boleto (já orientada corretamente, pode estar em qualquer ângulo original) e extraia os campos com máxima fidelidade:
+
+1. BANCO: Nome do banco e código (ex: "Itaú Unibanco (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
+2. BENEFICIÁRIO (CEDENTE): Nome/Razão Social da empresa ou pessoa que receberá o valor.
+3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
+4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
+5. CNPJ/CPF DO PAGADOR: Se visível.
+6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY).
+7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1250.00). NÃO leia o CNPJ ou código numérico como valor.
+8. LINHA DIGITÁVEL: A sequência de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
+9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
+10. NOSSO NÚMERO: Código de identificação do título.
+11. NÚMERO DO DOCUMENTO / SEU NÚMERO: Número da fatura ou documento de referência.
+
+Retorne EXCLUSIVAMENTE um objeto JSON válido:
+{
+  "banco": "string ou null",
+  "beneficiario": "string ou null",
+  "cnpj_cpf_beneficiario": "string ou null",
+  "pagador": "string ou null",
+  "cnpj_cpf_pagador": "string ou null",
+  "data_vencimento": "YYYY-MM-DD ou DD/MM/YYYY ou null",
+  "valor": 0.00,
+  "linha_digitavel": "string ou null",
+  "codigo_barras": "string ou null",
+  "nosso_numero": "string ou null",
+  "numero_documento": "string ou null"
+}`;
+
+            interface BoletoGeminiResponse { ok: boolean; status: number; text: string; providerUsed: string; credentialSlot: string; fallbackUsed: boolean; fallbackCount: number; fallbackReason?: string; durationMs: number; }
+            let boletoVisionResult: BoletoGeminiResponse | null = null;
+
+            // ── Gemini Primary ──
+            if (geminiKeyBoleto) {
+              const tStart = Date.now();
+              try {
+                const gResp = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiKeyBoleto}`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{ parts: [
+                        { text: GEMINI_BOLETO_PROMPT_TG },
+                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
+                      ]}],
+                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024 },
+                    }),
+                  }
+                );
+                const gJson = await gResp.json();
+                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                boletoVisionResult = {
+                  ok: gResp.ok && !!rawText,
+                  status: gResp.status,
+                  text: rawText,
+                  providerUsed: "gemini",
+                  credentialSlot: "gemini_primary",
+                  fallbackUsed: false,
+                  fallbackCount: 0,
+                  durationMs: Date.now() - tStart,
+                };
+                console.log(`[BOLETO_TRACE] provider=gemini_primary ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
+              } catch (eGp) {
+                console.warn(`[BOLETO_TRACE] provider=gemini_primary ERRO: ${eGp}`);
+              }
+            }
+
+            // ── Gemini Backup ──
+            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && geminiBackupBoleto) {
+              const tStart = Date.now();
+              try {
+                const gResp = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiBackupBoleto}`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{ parts: [
+                        { text: GEMINI_BOLETO_PROMPT_TG },
+                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
+                      ]}],
+                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024 },
+                    }),
+                  }
+                );
+                const gJson = await gResp.json();
+                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                boletoVisionResult = {
+                  ok: gResp.ok && !!rawText,
+                  status: gResp.status,
+                  text: rawText,
+                  providerUsed: "gemini",
+                  credentialSlot: "gemini_backup",
+                  fallbackUsed: true,
+                  fallbackCount: 1,
+                  durationMs: Date.now() - tStart,
+                };
+                console.log(`[BOLETO_TRACE] provider=gemini_backup ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
+              } catch (eGb) {
+                console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
+              }
+            }
+
+            // ── OpenAI Vision Fallback ──
+            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && openAiKeyBoleto) {
+              const tStart = Date.now();
+              try {
+                const oResp = await fetch("https://api.openai.com/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${openAiKeyBoleto}`,
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4o",
+                    temperature: 0.0,
+                    max_tokens: 1024,
+                    messages: [
+                      { role: "system", content: GEMINI_BOLETO_PROMPT_TG },
+                      {
+                        role: "user",
+                        content: [
+                          { type: "text", text: "Extraia os dados deste boleto e retorne JSON puro." },
+                          { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                        ],
+                      },
+                    ],
+                  }),
+                });
+                const oJson = await oResp.json();
+                const rawText = oJson?.choices?.[0]?.message?.content || "";
+                boletoVisionResult = {
+                  ok: oResp.ok && !!rawText,
+                  status: oResp.status,
+                  text: rawText,
+                  providerUsed: "openai",
+                  credentialSlot: "openai_fallback",
+                  fallbackUsed: true,
+                  fallbackCount: 2,
+                  durationMs: Date.now() - tStart,
+                };
+                console.log(`[BOLETO_TRACE] provider=openai_fallback ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
+              } catch (eOai) {
+                console.warn(`[BOLETO_TRACE] provider=openai_fallback ERRO: ${eOai}`);
+              }
+            }
+
+            // ── Parse do JSON retornado pelo provider ──
+            let bParsed: Record<string, any> = {};
+            if (boletoVisionResult?.ok && boletoVisionResult.text) {
+              try {
+                const cleaned = boletoVisionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
+                bParsed = JSON.parse(cleaned);
+              } catch {
+                const m = boletoVisionResult.text.match(/\{[\s\S]*\}/);
+                if (m) { try { bParsed = JSON.parse(m[0]); } catch {} }
+              }
+            }
+
+            // ── Derivação determinística via linha digitável (Febraban) ──
+            const linhaDigitavelRaw = String(bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || "").replace(/\s/g, "");
+            const linhaDigitavelMasked = linhaDigitavelRaw.length > 10
+              ? `${linhaDigitavelRaw.slice(0, 5)}***${linhaDigitavelRaw.slice(-4)}`
+              : linhaDigitavelRaw;
+
+            let valorDerivado: number | null = null;
+            let vencimentoDerivado: string | null = null;
+            let linhaDigitavelValida = false;
+
+            if (linhaDigitavelRaw) {
+              const febraban = parseLinhaDigitavelFebraban(linhaDigitavelRaw);
+              valorDerivado = febraban.valor;
+              vencimentoDerivado = febraban.vencimento;
+              const digits = linhaDigitavelRaw.replace(/\D/g, "");
+              linhaDigitavelValida = digits.length === 47 || digits.length === 48;
+            }
+
+            const valorOCR = (typeof bParsed.valor === "number") ? bParsed.valor
+              : bParsed.valor ? parseFloat(String(bParsed.valor).replace(/[^\d,.]/g, "").replace(",", ".")) || null
+              : (orientacaoAnalysis?.boleto_dados?.valor ?? null);
+
+            const vencimentoOCR = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
+
+            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} linha_digitavel_masked=${linhaDigitavelMasked} linha_valida=${linhaDigitavelValida} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} provider=${boletoVisionResult?.credentialSlot || "nenhum"}`);
+
+            // Valor final: preferência ao derivado da linha digitável (determinístico), senão OCR
+            const valorFinal = valorDerivado ?? valorOCR;
+            const vencFinal = vencimentoDerivado ?? vencimentoOCR;
+            const beneficiarioFinal = bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null;
+
+            console.log(`[BOLETO_TRACE] valor_final=${valorFinal} venc_final=${vencFinal} beneficiario="${beneficiarioFinal}" motivo_rejeicao=${valorFinal ? "nenhum" : "valor_nulo"}`);
+
             documentData = {
               tipo: "boleto",
-              beneficiario: bInfo?.beneficiario,
-              valor: bInfo?.valor,
-              data_vencimento: bInfo?.data_vencimento,
-              linha_digitavel: bInfo?.linha_digitavel,
+              banco: bParsed.banco || null,
+              beneficiario: beneficiarioFinal,
+              cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
+              pagador: bParsed.pagador || bParsed.sacado || null,
+              valor: valorFinal,
+              data_vencimento: vencFinal,
+              linha_digitavel: linhaDigitavelRaw || null,
+              codigo_barras: bParsed.codigo_barras || null,
+              nosso_numero: bParsed.nosso_numero || null,
+              numero_documento: bParsed.numero_documento || null,
             };
           }
 
