@@ -17,6 +17,7 @@ import {
   createQueryToolCatalog,
   type FinancialQueryRepository,
 } from "../_shared/ai/query-tools.ts";
+import type { EyemobileLiveClient } from "../wallet-ai-query/supabase-adapter.ts";
 
 export interface AuditEventLogger {
   logEvent(event: {
@@ -36,7 +37,10 @@ export interface OrchestratorHandlerDependencies {
   repoFactory: (context: AiExecutionContext) => FinancialQueryRepository;
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
+  /** Factory para o cliente ao vivo do Eyemobile. Opcional — se ausente, usa cache sincronizado. */
+  eyemobileLiveClientFactory?: (context: AiExecutionContext) => EyemobileLiveClient;
 }
+
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -96,8 +100,10 @@ export async function handleOrchestratorHttpRequest(
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
     const repository = dependencies.repoFactory(context);
-    const catalog = createQueryToolCatalog(repository);
+    const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
+    const catalog = createQueryToolCatalog(repository, eyemobileClient);
     const runner = dependencies.runnerFactory(requestedModel);
+
 
     const turnResult = await runOrchestratorTurn(messages, context, catalog, runner);
     const durationMs = Date.now() - startTime;

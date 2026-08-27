@@ -3,6 +3,7 @@ import { createFinancialRepository } from "../_shared/ai/financial-repository.ts
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { handleOrchestratorHttpRequest } from "./handler.ts";
 import {
+  createEyemobileLiveClient,
   createSupabaseAuthorizationDependencies,
   executeSupabaseFinancialQuery,
   type SupabaseClientLike,
@@ -40,11 +41,19 @@ const auditLogger = {
   },
 };
 
+// O adminClient do Supabase JS expõe functions.invoke() nativamente.
+// O cast para SupabaseClientLike já inclui o campo optional `functions`.
+// createEyemobileLiveClient usa o service_role para invocar eyemobile-sync
+// passando user_id no body (aceito pelo eyemobile-sync quando isServiceRole=true).
+const eyemobileLiveClientFactory = () => createEyemobileLiveClient(adminClient);
+
 Deno.serve((req: Request) =>
   handleOrchestratorHttpRequest(req, {
     authDeps,
     repoFactory,
     runnerFactory,
     auditLogger,
+    eyemobileLiveClientFactory,
   })
 );
+
