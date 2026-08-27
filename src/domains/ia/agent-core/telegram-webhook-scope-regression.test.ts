@@ -619,4 +619,75 @@ describe("Melhorias de Robustez — Boleto OCR (Etapa 2.2C)", () => {
     expect(reconciled.numero_nf).toBe("000832082");
     expect(reconciled.match).toBe(true);
   });
+
+  // ─── H: Caso Real Boleto SPAL — Divergência OCR (562,61 / 20/08) vs Linha (1.562,61 / 28/08) ───
+  it("H: Linha válida (R$ 1.562,61 / 28/08) com OCR divergente (R$ 562,61 / 20/08) → requer_revisao com aviso explícito", () => {
+    const linhaDigits = LINHA_SPAL;
+    const linhaValida = validarDVsLinhaDigitavel47(linhaDigits);
+    expect(linhaValida).toBe(true);
+
+    const febraban = parseLinhaDigitavelFebr(linhaDigits);
+    expect(febraban.valor).toBe(1562.61);
+    expect(febraban.vencimento).toBe("2026-08-28");
+
+    const valorOCR = 562.61;
+    const vencimentoOCR = "2026-08-20";
+
+    const warnings: string[] = [];
+    let hasValorDivergence = false;
+    let hasVencimentoDivergence = false;
+
+    if (valorOCR && Math.abs(valorOCR - febraban.valor!) > 0.05) {
+      warnings.push(`divergencia_valor_ocr_${valorOCR}_vs_derivado_${febraban.valor}`);
+      hasValorDivergence = true;
+    }
+
+    if (vencimentoOCR && febraban.vencimento && vencimentoOCR.split("T")[0] !== febraban.vencimento.split("T")[0]) {
+      warnings.push(`divergencia_vencimento_ocr_${vencimentoOCR}_vs_derivado_${febraban.vencimento}`);
+      hasVencimentoDivergence = true;
+    }
+
+    const validationStatus = (hasValorDivergence || hasVencimentoDivergence) ? "requer_revisao" : "validado";
+
+    expect(validationStatus).toBe("requer_revisao");
+    expect(warnings).toContain("divergencia_valor_ocr_562.61_vs_derivado_1562.61");
+    expect(warnings).toContain("divergencia_vencimento_ocr_2026-08-20_vs_derivado_2026-08-28");
+
+    // Monta documentData e proposta
+    const documentData = {
+      tipo: "boleto",
+      valor: febraban.valor,
+      valor_ocr: valorOCR,
+      valor_derivado: febraban.valor,
+      data_vencimento: febraban.vencimento,
+      vencimento_ocr: vencimentoOCR,
+      vencimento_derivado: febraban.vencimento,
+      linha_digitavel: linhaDigits,
+      validation_status: validationStatus,
+      warnings,
+    };
+
+    // Validação da mensagem
+    const valOcrNum = documentData.valor_ocr;
+    const valDerivNum = documentData.valor_derivado;
+    const vencOcrStr = documentData.vencimento_ocr;
+    const vencDerivStr = documentData.vencimento_derivado;
+
+    const temDivergenciaValor = valOcrNum !== null && valDerivNum !== null && Math.abs(valOcrNum - valDerivNum) > 0.05;
+    const temDivergenciaVenc = vencOcrStr !== null && vencDerivStr !== null && vencOcrStr !== vencDerivStr;
+    const temDivergencia = temDivergenciaValor || temDivergenciaVenc;
+
+    expect(temDivergencia).toBe(true);
+
+    const valOcrFmt = valOcrNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    const valDerivFmt = valDerivNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    const vencOcrFmt = vencOcrStr.split("-").reverse().join("/");
+    const vencDerivFmt = vencDerivStr.split("-").reverse().join("/");
+
+    expect(valOcrFmt).toContain("562,61");
+    expect(valDerivFmt).toContain("1.562,61");
+    expect(vencOcrFmt).toBe("20/08/2026");
+    expect(vencDerivFmt).toBe("28/08/2026");
+  });
 });
+

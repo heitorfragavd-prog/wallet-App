@@ -5007,9 +5007,21 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 vencimentoSource = "ocr_visual";
               }
 
+              let hasValorDivergence = false;
+              let hasVencimentoDivergence = false;
+
               // Comparar com OCR se disponível
               if (valorOCR && Math.abs(valorOCR - valorDerivado) > 0.05) {
                 warnings.push(`divergencia_valor_ocr_${valorOCR}_vs_derivado_${valorDerivado}`);
+                hasValorDivergence = true;
+              }
+
+              if (vencimentoOCR && vencimentoDerivado && vencimentoOCR.split("T")[0] !== vencimentoDerivado.split("T")[0]) {
+                warnings.push(`divergencia_vencimento_ocr_${vencimentoOCR}_vs_derivado_${vencimentoDerivado}`);
+                hasVencimentoDivergence = true;
+              }
+
+              if (hasValorDivergence || hasVencimentoDivergence) {
                 validationStatus = "requer_revisao";
               } else {
                 validationStatus = "validado";
@@ -5604,6 +5616,14 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
             const isBoletoValidado = documentData.validation_status === "validado";
+            const valOcrNum = documentData.valor_ocr ?? null;
+            const valDerivNum = documentData.valor_derivado ?? null;
+            const vencOcrStr = documentData.vencimento_ocr ?? null;
+            const vencDerivStr = documentData.vencimento_derivado ?? null;
+
+            const temDivergenciaValor = valOcrNum !== null && valDerivNum !== null && Math.abs(valOcrNum - valDerivNum) > 0.05;
+            const temDivergenciaVenc = vencOcrStr !== null && vencDerivStr !== null && vencOcrStr.split("T")[0] !== vencDerivStr.split("T")[0];
+            const temDivergencia = temDivergenciaValor || temDivergenciaVenc;
 
             let mensagemProposta = "";
 
@@ -5619,6 +5639,37 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `\n✅ <b>Linha digitável validada matematicamente.</b>\n` +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
                 `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
+                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else if (temDivergencia) {
+              const valOcrFmt = valOcrNum !== null ? valOcrNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "Não identificado";
+              const valDerivFmt = valDerivNum !== null ? valDerivNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "Não derivado";
+              const vencOcrFmt = vencOcrStr ? vencOcrStr.split("T")[0].split("-").reverse().join("/") : "Não identificado";
+              const vencDerivFmt = vencDerivStr ? vencDerivStr.split("T")[0].split("-").reverse().join("/") : "Não derivado";
+
+              const dicaArquivo = isTelegramCompressedPhoto
+                ? `\n💡 <i>Para leitura mais precisa, envie o boleto como arquivo:\n📎 → Arquivo/Documento</i>\n`
+                : "";
+
+              mensagemProposta =
+                `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `\n` +
+                (temDivergenciaValor
+                  ? `💰 Valor lido visualmente: <b>${valOcrFmt}</b>\n🔢 Valor derivado da linha digitável: <b>${valDerivFmt}</b>\n`
+                  : `💰 Valor identificado: <b>${valFmt}</b>\n`) +
+                `\n` +
+                (temDivergenciaVenc
+                  ? `📅 Vencimento lido visualmente: <b>${vencOcrFmt}</b>\n🔢 Vencimento derivado da linha digitável: <b>${vencDerivFmt}</b>\n`
+                  : `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n`) +
+                (linhaFmt ? `\n🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n⚠️ <b>Os dados não coincidem.</b>\n` +
+                `<i>Confira o documento antes de cadastrar.</i>\n` +
+                dicaArquivo +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
+                `👉 Responda <b>SIM</b> para confirmar o cadastro manual.\n` +
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             } else {
