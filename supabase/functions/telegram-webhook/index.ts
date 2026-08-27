@@ -4947,7 +4947,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
               pagador: bParsed.pagador || bParsed.sacado || null,
               valor: valorFinal,
-              data_vencimento: vencFinal,
+              data_vencimento: vencimentoFinal,
               linha_digitavel: linhaDigitavelFinal,
               linha_digitavel_raw: linhaDigitavelRaw || null,
               linha_digitavel_raw_digits: linhaDigitavelDigits.length,

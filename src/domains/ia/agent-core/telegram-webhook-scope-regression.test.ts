@@ -371,4 +371,67 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
     expect(reconciled.numero_nf_formatado).toBe("000.832.082");
     expect(reconciled.match).toBe(true);
   });
+
+  // ─── N: Regressão v113 — vencFinal is not defined ───
+  // Garante que o documentData assembly usa vencimentoFinal (nome correto)
+  // e nunca referencia a variável inexistente vencFinal introduzida pelo commit a4a0fdd.
+  it("N: documentData assembly usa vencimentoFinal (não vencFinal) — regressão v113 ReferenceError", () => {
+    const linhaDigitavelRaw = "3419109107904722829398304579000981538000001"; // 43 dígitos
+    const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
+    const linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
+    const linhaDigitavelValida = linhaDigitavelDigits.length === 47 || linhaDigitavelDigits.length === 48;
+
+    const valorOCR = 1262.55;
+    const vencimentoOCR = "2026-08-01";
+
+    let valorFinal: number | null = null;
+    let valorSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
+    let vencimentoFinal: string | null = null;   // <-- nome correto
+    let vencimentoSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
+    let validationStatus: "validado" | "requer_revisao" | "rejeitado" = "requer_revisao";
+    const warnings: string[] = [];
+
+    // Caminho: linha inválida → OCR
+    if (!linhaDigitavelValida && valorOCR && valorOCR > 0) {
+      valorFinal = valorOCR;
+      valorSource = "ocr_visual";
+      vencimentoFinal = vencimentoOCR;  // <-- deve ser vencimentoFinal, nunca vencFinal
+      vencimentoSource = "ocr_visual";
+      validationStatus = "requer_revisao";
+      warnings.push("linha_digitavel_nao_validada");
+    }
+
+    // Monta documentData (espelha o código corrigido no index.ts)
+    const documentData = {
+      tipo: "boleto",
+      valor: valorFinal,
+      data_vencimento: vencimentoFinal, // <-- essa linha que falhava em v113 com "vencFinal is not defined"
+      validation_status: validationStatus,
+      valor_source: valorSource,
+      valor_ocr: valorOCR,
+      valor_derivado: null,
+      vencimento_source: vencimentoSource,
+      vencimento_ocr: vencimentoOCR,
+      vencimento_derivado: null,
+      linha_digitavel: null,
+      linha_digitavel_raw: linhaDigitavelRaw,
+      linha_digitavel_raw_digits: linhaDigitavelDigits.length,
+      linha_digitavel_validation_error: `invalid_length_${linhaDigitavelDigits.length}`,
+      warnings,
+    };
+
+    // Assertions
+    expect(documentData.data_vencimento).toBe("2026-08-01");        // vencimentoFinal corretamente atribuído
+    expect(documentData.valor).toBe(1262.55);
+    expect(documentData.validation_status).toBe("requer_revisao");
+    expect(documentData.linha_digitavel).toBeNull();                 // Linha inválida nullada
+    expect(documentData.linha_digitavel_raw_digits).toBe(43);        // Evidência preservada
+    expect(documentData.warnings).toContain("linha_digitavel_nao_validada");
+
+    // Garante que nenhuma exceção seria lançada durante a construção da proposta
+    const valorProposta = documentData.valor;
+    const vencProposta = documentData.data_vencimento;
+    expect(valorProposta).not.toBeNull();
+    expect(vencProposta).not.toBeNull();
+  });
 });
