@@ -26,7 +26,9 @@ import {
   WalletAiOrchestratorClient,
   WalletAiOrchestratorError,
 } from "../services/WalletAiOrchestratorClient";
+import { processWalletDocument } from "../services/WalletDocumentService";
 import type { ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -189,7 +191,33 @@ export function useWalletIA(options: UseWalletIAOptions) {
           };
         }
 
-        // ── AGENT_V2 (+ DOCUMENT via Agent V2) ─────────────────────────────
+        // ── DOCUMENT (Document Intelligence) ────────────────────────────────
+        else if (routeDecision.route === "DOCUMENT" && attachments && attachments.length > 0) {
+          if (!workspaceId) {
+            throw new Error("Workspace não selecionado. Selecione um workspace para continuar.");
+          }
+
+          const att = attachments[0];
+          const docResponse = await processWalletDocument({
+            fileName: att.name || "documento",
+            mimeType: att.mimeType,
+            base64: att.base64 || "",
+            workspaceId,
+            conversationId: conversaId,
+            textContext: trimmed,
+          });
+
+          assistantMessage = {
+            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + 1),
+            role: "assistant",
+            content: docResponse.content,
+            createdAt: new Date(),
+            routeUsed: "DOCUMENT",
+            correlationId,
+          };
+        }
+
+        // ── AGENT_V2 ────────────────────────────────────────────────────────
         else {
           if (!workspaceId) {
             throw new Error("Workspace não selecionado. Selecione um workspace para continuar.");
@@ -224,6 +252,7 @@ export function useWalletIA(options: UseWalletIAOptions) {
             correlationId,
           };
         }
+
 
         setMessages((prev) => [...prev, assistantMessage]);
 

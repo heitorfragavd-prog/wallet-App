@@ -433,14 +433,21 @@ export default function WalletIAPage() {
     async (msg: WalletIAMessage, conversaId: string) => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.user) return;
+        const rawB64 = msg.imageDataUrl
+          ? msg.imageDataUrl.includes(",")
+            ? msg.imageDataUrl.split(",")[1]
+            : msg.imageDataUrl
+          : null;
+
         await supabase.from("chat_mensagens").insert({
           id: msg.id,
           conversa_id: conversaId,
           user_id: session.user.id,
           role: msg.role,
           conteudo: msg.content,
+          imagem_base64: rawB64,
         });
+
       } catch (err) {
         logger.error("WalletIAPage", "Erro ao persistir mensagem", {
           error: err instanceof Error ? err.message : String(err),
