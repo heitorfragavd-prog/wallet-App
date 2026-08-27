@@ -15,6 +15,18 @@ import {
   type DanfeValidationResultV2,
 } from "../danfe-gemini-v2.ts";
 
+export {
+  GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
+  GEMINI_V2_PROMPT_TABELA,
+  validateProductRowV2,
+  reconcileAndDeduplicateV2,
+  validateDanfeMathV2,
+  type DanfeItemV2,
+  type DanfeValidationResultV2,
+};
+
+
+
 export interface DanfeSessionState {
   chaveAcesso?: string | null;
   numeroNf?: string | null;

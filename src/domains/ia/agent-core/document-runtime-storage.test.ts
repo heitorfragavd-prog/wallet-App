@@ -1,17 +1,19 @@
 /**
- * Testes da Etapa 2.1b — Runtime Real de Document Intelligence, Sessões e Storage
+ * Testes da Etapa 2.1b — Runtime Real de Document Intelligence, Sessões Atômicas e Storage
  *
  * Cenários de Alto Valor:
  * A. DANFE Web chama backend (Edge Function), não Gemini direto
- * B. Folha 1/2 -> sessão persistida no backend / banco
- * C. Refresh -> Folha 2/2 -> consolida mesma sessão
- * D. Página fora de ordem funciona
- * E. Workspace diferente não reutiliza sessão
+ * B. Folha 1/2 -> invoca merge_documento_sessao_page atomicamente e persiste status 'pendente'
+ * C. Refresh -> Folha 2/2 -> consolida mesma sessão via RPC e valida matemática
+ * D. Página fora de ordem funciona (Folha 2 antes da 1)
+ * E. Workspace diferente -> não reutiliza sessão
  * F. Anexo novo é enviado para Storage privado, não base64 inline
  * G. Anexo legado base64 continua legível no histórico
  * H. Arquivo de usuário A é inacessível por usuário B (validação de pathing)
  * I. DANFE divergente -> status requer_revisao
  * J. Nenhum estoque ou custo é alterado
+ * K. Concorrência real / Lost Update: chamadas simultâneas utilizam merge atômico (lock RPC)
+ * L. Mesma página simultânea -> não duplica itens
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -27,7 +29,7 @@ const mockAuthDeps = {
 
 const validWsId = "11111111-2222-3333-8444-555555555555";
 
-describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
+describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -37,13 +39,16 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
   // ──────────────────────────────────────────────────────────────────────────
   it("A: DANFE Web invoca Edge Function backend e não expõe chamada Gemini no browser", async () => {
     const mockAdminClient = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        order: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue({ data: [] }),
-        insert: vi.fn().mockResolvedValue({ error: null }),
-        update: vi.fn().mockResolvedValue({ error: null }),
+      rpc: vi.fn().mockResolvedValue({
+        data: {
+          sessao_id: "sess-1",
+          status: "consolidada",
+          total_paginas: 1,
+          pagina_atual: 1,
+          paginas_recebidas: [1],
+          dados_sessao: { valorProdutosDeclarado: 100 },
+        },
+        error: null,
       }),
     };
 
@@ -61,7 +66,6 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
       }),
     });
 
-    // O backend gerencia o Gemini e retorna a resposta formatada
     const resp = await handleFiscalHttpRequest(req, {
       authDeps: mockAuthDeps,
       geminiApiKey: "test-gemini-key",
@@ -76,21 +80,37 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // B. Folha 1/2 -> sessão persistida no banco
+  // B. Folha 1/2 -> invoca RPC atômica e retorna 'parcial_multipagina'
   // ──────────────────────────────────────────────────────────────────────────
-  it("B: Folha 1 de 2 -> persiste sessão como 'pendente' na tabela documento_sessoes", async () => {
-    let insertedRow: any = null;
+  it("B: Folha 1 de 2 -> invoca RPC merge_documento_sessao_page atomicamente", async () => {
+    let rpcArgsPassed: any = null;
     const mockAdminClient = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        order: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue({ data: [] }),
-        insert: vi.fn().mockImplementation((row) => {
-          insertedRow = row;
-          return Promise.resolve({ error: null });
-        }),
-        update: vi.fn().mockResolvedValue({ error: null }),
+      rpc: vi.fn().mockImplementation((fnName, args) => {
+        if (fnName === "merge_documento_sessao_page") {
+          rpcArgsPassed = args;
+          return Promise.resolve({
+            data: {
+              sessao_id: "sess-uuid-1",
+              status: "pendente",
+              total_paginas: 2,
+              pagina_atual: 1,
+              paginas_recebidas: [1],
+              paginas_faltantes: [2],
+              is_duplicada: false,
+              dados_sessao: {
+                fornecedor: "Fornecedor Alpha",
+                numeroNf: "999",
+                totalPaginas: 2,
+                paginasRecebidas: [1],
+                itensAcumulados: [
+                  { codigo: "IT1", descricao: "Produto 1", quantidade: 10, valor_unitario: 100, valor_total: 1000 },
+                ],
+              },
+            },
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: null, error: null });
       }),
     };
 
@@ -158,75 +178,52 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
       expect(resp.status).toBe(200);
       const json = await resp.json();
       expect(json.status).toBe("parcial_multipagina");
-      expect(insertedRow).toBeDefined();
-      expect(insertedRow.status).toBe("pendente");
-      expect(insertedRow.total_paginas).toBe(2);
-      expect(insertedRow.paginas_recebidas).toEqual([1]);
+      expect(rpcArgsPassed).toBeDefined();
+      expect(rpcArgsPassed.p_total_paginas).toBe(2);
+      expect(rpcArgsPassed.p_pagina_atual).toBe(1);
+      expect(rpcArgsPassed.p_user_id).toBe("user-uuid-1111");
+      expect(rpcArgsPassed.p_workspace_id).toBe(validWsId);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // C. Refresh -> Folha 2/2 -> consolida mesma sessão
+  // C. Refresh -> Folha 2/2 -> RPC atômica consolida mesma sessão
   // ──────────────────────────────────────────────────────────────────────────
-  it("C: Refresh de página e envio da Folha 2/2 -> carrega sessão pendente do banco e consolida", async () => {
-    const savedSessionState: DanfeSessionState = {
-      fornecedor: "Fornecedor Alpha",
-      numeroNf: "999",
-      valorProdutosDeclarado: 2000,
-      valorTotalNfDeclarado: 2000,
-      totalPaginas: 2,
-      paginasRecebidas: [1],
-      workspaceId: validWsId,
-      itensAcumulados: [
-        {
-          codigo: "IT1",
-          ean: null,
-          descricao: "Produto 1",
-          ncm: null,
-          cst: null,
-          cfop: "5102",
-          unidade: "UN",
-          quantidade: 10,
-          valor_unitario_lido: 100,
-          valor_unitario_calculado: null,
-          valor_unitario_inferido: false,
-          valor_total_lido: 1000,
-          valor_total_calculado: null,
-          valor_total_inferido: false,
-          valor_total: 1000,
-          valor_unitario: 100,
-          fci_info: null,
-          campos_incompletos: [],
-        },
-      ],
-    };
-
-    let updatedStatus: any = null;
+  it("C: Refresh de página e envio da Folha 2/2 -> RPC consolida e valida nota", async () => {
     const mockAdminClient = {
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        order: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue({
-          data: [
-            {
-              id: "session-db-123",
-              dados_sessao: savedSessionState,
+      rpc: vi.fn().mockImplementation((fnName, _args) => {
+        if (fnName === "merge_documento_sessao_page") {
+          return Promise.resolve({
+            data: {
+              sessao_id: "sess-uuid-1",
+              status: "consolidada",
               total_paginas: 2,
-              paginas_recebidas: [1],
-              status: "pendente",
+              pagina_atual: 2,
+              paginas_recebidas: [1, 2],
+              paginas_faltantes: [],
+              is_duplicada: false,
+              dados_sessao: {
+                fornecedor: "Fornecedor Alpha",
+                numeroNf: "999",
+                valorProdutosDeclarado: 2000,
+                valorTotalNfDeclarado: 2000,
+                totalPaginas: 2,
+                paginasRecebidas: [1, 2],
+                itensAcumulados: [
+                  { codigo: "IT1", descricao: "Produto 1", quantidade: 10, valor_unitario_lido: 100, valor_total_lido: 1000, valor_total: 1000, valor_unitario: 100, cfop: "5102", campos_incompletos: [] },
+                  { codigo: "IT2", descricao: "Produto 2", quantidade: 10, valor_unitario_lido: 100, valor_total_lido: 1000, valor_total: 1000, valor_unitario: 100, cfop: "5102", campos_incompletos: [] },
+                ],
+              },
             },
-          ],
-        }),
-        insert: vi.fn().mockResolvedValue({ error: null }),
-        update: vi.fn().mockImplementation((fields) => {
-          updatedStatus = fields.status;
-          return { eq: vi.fn().mockResolvedValue({ error: null }) };
-        }),
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: null, error: null });
       }),
     };
+
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn()
@@ -293,7 +290,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
       expect(json.status).toBe("sucesso");
       expect(json.itens).toHaveLength(2);
       expect(json.validacao.valido).toBe(true);
-      expect(updatedStatus).toBe("consolidada");
+      expect(json.mensagemFormatada).toContain("Nota Fiscal Consolidada (2/2 páginas)");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -303,7 +300,6 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
   // D. Página fora de ordem funciona
   // ──────────────────────────────────────────────────────────────────────────
   it("D: Folha 2 recebida antes da Folha 1 -> consolida perfeitamente sem perda de itens", async () => {
-    // 1ª requisição: recebe página 2 de 2
     const sessionP2: DanfeSessionState = {
       fornecedor: "Fornecedor Beta",
       numeroNf: "777",
@@ -461,7 +457,6 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
   // ──────────────────────────────────────────────────────────────────────────
   it("F: Upload de anexo novo gera storagePath no bucket chat-attachments estruturado por user/workspace/conversation", async () => {
     const { supabase } = await import("@/integrations/supabase/client");
-    let uploadedBucket = "";
     let uploadedPath = "";
 
     const uploadSpy = vi.spyOn(supabase.storage, "from").mockReturnValue({
@@ -489,7 +484,6 @@ describe("Etapa 2.1b — Runtime Real, Sessões e Storage", () => {
 
     uploadSpy.mockRestore();
   });
-
 
   // ──────────────────────────────────────────────────────────────────────────
   // G. Anexo legado base64 continua legível

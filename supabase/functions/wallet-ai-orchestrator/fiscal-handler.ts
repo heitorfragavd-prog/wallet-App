@@ -1,7 +1,8 @@
 /**
  * Fiscal Handler — Processamento de Documentos Fiscais no Backend (Etapa 2.1b)
  * 
- * Executa o DANFE Fiscal Service V2 com Gemini no backend e persiste sessões multipágina no banco.
+ * Executa o DANFE Fiscal Service V2 com Gemini no backend e realiza o merge atômico
+ * de sessões multipágina no PostgreSQL via RPC merge_documento_sessao_page (com pg_advisory_xact_lock).
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   processDanfeDocument,
   type DanfeSessionState,
   type ProcessDanfeOutput,
+  validateDanfeMathV2,
 } from "../_shared/ai/danfe-fiscal-service.ts";
 import type { SupabaseClientLike } from "../wallet-ai-query/supabase-adapter.ts";
 
@@ -44,7 +46,6 @@ export async function handleFiscalHttpRequest(
     });
   }
 
-  const startTime = Date.now();
   let context: AiExecutionContext | null = null;
 
   try {
@@ -80,91 +81,113 @@ export async function handleFiscalHttpRequest(
     // 1. Autorização Server-Side Obrigatória
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
-    // 2. Recuperar Sessão Multipágina Persistida do Banco (se adminClient disponível)
-    let existingSession: DanfeSessionState | null = null;
-    let sessaoIdDb: string | null = null;
-
-    if (dependencies.adminClient) {
-      try {
-        const { data: rows } = await (dependencies.adminClient.from("documento_sessoes") as any)
-          .select("id, dados_sessao, total_paginas, paginas_recebidas, status")
-          .eq("user_id", context.userId)
-          .eq("workspace_id", context.workspaceId)
-          .eq("status", "pendente")
-          .order("updated_at", { ascending: false })
-          .limit(1);
-
-        if (rows && rows.length > 0) {
-          sessaoIdDb = rows[0].id;
-          existingSession = rows[0].dados_sessao as DanfeSessionState;
-        }
-      } catch (dbErr) {
-        console.warn("[fiscal-handler] Aviso ao buscar sessão multipágina no banco:", dbErr);
-      }
-    }
-
-    // 3. Executar o DANFE Fiscal Service V2 com Gemini no Backend
-    const result: ProcessDanfeOutput = await processDanfeDocument({
+    // 2. Processar Folha Atual via Gemini Fiscal Service V2
+    const extractionResult: ProcessDanfeOutput = await processDanfeDocument({
       base64,
       mimeType,
       geminiApiKey: dependencies.geminiApiKey,
       workspaceId: context.workspaceId,
-      existingSession,
+      existingSession: null, // Deixamos a RPC atômica gerenciar o merge de estado no banco
     });
 
-    // 4. Persistir / Atualizar Estado da Sessão no Banco
-    if (dependencies.adminClient && result.sessionState) {
+    let finalOutput: ProcessDanfeOutput = extractionResult;
+
+    // 3. Se for documento multipágina, executar Merge Atômico no PostgreSQL via RPC
+    const totalPaginas = extractionResult.sessionState?.totalPaginas || extractionResult.cabecalho?.total_paginas || 1;
+    const paginaAtual = extractionResult.cabecalho?.pagina_atual || 1;
+
+    if (dependencies.adminClient && totalPaginas > 1) {
       try {
-        if (result.status === "parcial_multipagina") {
-          if (sessaoIdDb) {
-            await (dependencies.adminClient.from("documento_sessoes") as any)
-              .update({
-                paginas_recebidas: result.sessionState.paginasRecebidas,
-                total_paginas: result.sessionState.totalPaginas,
-                dados_sessao: result.sessionState,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", sessaoIdDb);
+        const { data: mergeResult, error: rpcErr } = await (dependencies.adminClient.rpc as any)(
+          "merge_documento_sessao_page",
+          {
+            p_user_id: context.userId,
+            p_workspace_id: context.workspaceId,
+            p_conversation_id: conversationId || null,
+            p_chave_acesso: extractionResult.cabecalho?.chave_acesso || null,
+            p_numero_nf: extractionResult.cabecalho?.numero_nf || null,
+            p_fornecedor: extractionResult.cabecalho?.fornecedor || null,
+            p_total_paginas: totalPaginas,
+            p_pagina_atual: paginaAtual,
+            p_itens_pagina: extractionResult.itens,
+            p_valores_totais: extractionResult.valores_totais || {},
+            p_cabecalho: extractionResult.cabecalho || {},
+          },
+        );
+
+        if (!rpcErr && mergeResult?.dados_sessao) {
+          const dadosSessao = mergeResult.dados_sessao as DanfeSessionState;
+          const isConsolidada = mergeResult.status === "consolidada";
+          const paginasRecebidas: number[] = mergeResult.paginas_recebidas || [];
+          const paginasFaltantes: number[] = mergeResult.paginas_faltantes || [];
+
+          if (!isConsolidada) {
+            finalOutput = {
+              success: true,
+              status: "parcial_multipagina",
+              cabecalho: extractionResult.cabecalho,
+              valores_totais: extractionResult.valores_totais,
+              itens: dadosSessao.itensAcumulados || [],
+              validacao: { valido: true, somaItens: 0, valorProdutosDeclarado: dadosSessao.valorProdutosDeclarado || 0, diferenca: 0 },
+              sessionState: dadosSessao,
+              mensagemFormatada: [
+                `📑 **Nota Fiscal Multipágina — Página ${paginaAtual} de ${totalPaginas} Recebida**`,
+                ``,
+                `• **Fornecedor:** ${dadosSessao.fornecedor || "Não identificado"}`,
+                `• **Número NF:** ${dadosSessao.numeroNf || "S/N"}`,
+                `• **Páginas Recebidas:** ${paginasRecebidas.join(", ")} de ${totalPaginas}`,
+                `• **Páginas Faltantes:** ${paginasFaltantes.join(", ")}`,
+                `• **Itens Acumulados nesta sessão:** ${(dadosSessao.itensAcumulados || []).length}`,
+                ``,
+                `Estou aguardando a página ${paginasFaltantes[0] || "seguinte"} para consolidar a nota e validar os totais fiscais.`,
+                ``,
+                `🔒 *Nenhuma alteração foi feita no estoque.*`,
+              ].join("\n"),
+            };
           } else {
-            await (dependencies.adminClient.from("documento_sessoes") as any).insert({
-              user_id: context.userId,
-              workspace_id: context.workspaceId,
-              conversation_id: conversationId,
-              documento_tipo: "DANFE",
-              chave_acesso: result.sessionState.chaveAcesso,
-              numero_nf: result.sessionState.numeroNf,
-              fornecedor: result.sessionState.fornecedor,
-              total_paginas: result.sessionState.totalPaginas,
-              paginas_recebidas: result.sessionState.paginasRecebidas,
-              dados_sessao: result.sessionState,
-              status: "pendente",
-            });
+            // Nota completa: todas as folhas recebidas! Validar matemática total
+            const validacaoTotal = validateDanfeMathV2(
+              dadosSessao.itensAcumulados || [],
+              dadosSessao.valorProdutosDeclarado || 0,
+            );
+
+            finalOutput = {
+              success: true,
+              status: validacaoTotal.valido ? "sucesso" : "requer_revisao",
+              cabecalho: dadosSessao.cabecalho || extractionResult.cabecalho,
+              valores_totais: dadosSessao.valores_totais || extractionResult.valores_totais,
+              itens: dadosSessao.itensAcumulados || [],
+              validacao: validacaoTotal,
+              sessionState: dadosSessao,
+              mensagemFormatada: [
+                `🧾 **Nota Fiscal Consolidada (${totalPaginas}/${totalPaginas} páginas)**`,
+                ``,
+                `• **Fornecedor:** ${dadosSessao.fornecedor || "Identificado"}`,
+                `• **Número NF:** ${dadosSessao.numeroNf || "S/N"}`,
+                `• **Total de Itens Reconciliados:** ${(dadosSessao.itensAcumulados || []).length}`,
+                `• **Valor Total dos Produtos:** R$ ${(dadosSessao.valorProdutosDeclarado || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+                `• **Status Fiscal:** ${validacaoTotal.valido ? "✅ Validação Matemática OK" : "⚠️ Requer Revisão (Divergência de valores)"}`,
+                ``,
+                `🔒 *Nenhuma alteração foi feita no estoque.*`,
+              ].join("\n"),
+            };
           }
-        } else if (sessaoIdDb) {
-          // Sessão finalizada / consolidada
-          await (dependencies.adminClient.from("documento_sessoes") as any)
-            .update({
-              status: "consolidada",
-              dados_sessao: result.sessionState,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", sessaoIdDb);
         }
-      } catch (persistErr) {
-        console.warn("[fiscal-handler] Erro ao persistir sessão multipágina no banco:", persistErr);
+      } catch (rpcCatchErr) {
+        console.warn("[fiscal-handler] Erro ao invocar RPC atômica merge_documento_sessao_page:", rpcCatchErr);
       }
     }
 
     return new Response(
       JSON.stringify({
         success: true,
-        status: result.status,
-        mensagemFormatada: result.mensagemFormatada,
-        cabecalho: result.cabecalho,
-        valores_totais: result.valores_totais,
-        itens: result.itens,
-        validacao: result.validacao,
-        sessionState: result.sessionState,
+        status: finalOutput.status,
+        mensagemFormatada: finalOutput.mensagemFormatada,
+        cabecalho: finalOutput.cabecalho,
+        valores_totais: finalOutput.valores_totais,
+        itens: finalOutput.itens,
+        validacao: finalOutput.validacao,
+        sessionState: finalOutput.sessionState,
       }),
       {
         status: 200,
