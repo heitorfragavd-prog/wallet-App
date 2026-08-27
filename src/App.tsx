@@ -127,9 +127,9 @@ function App() {
                   <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
                   <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
                   <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
-                  <Route path="/ia-chat"       element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
                   <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
                   <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
+
                   <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
                   <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
                   <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />
