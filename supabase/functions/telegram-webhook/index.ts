@@ -4808,20 +4808,22 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
 
             // ── Derivação determinística via linha digitável (Febraban) ──
             const linhaDigitavelRaw = String(bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || "").replace(/\s/g, "");
-            const linhaDigitavelMasked = linhaDigitavelRaw.length > 10
-              ? `${linhaDigitavelRaw.slice(0, 5)}***${linhaDigitavelRaw.slice(-4)}`
-              : linhaDigitavelRaw;
+            const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
+            // Sanitiza: só aceita linha com 47 ou 48 dígitos; caso contrário, nula para não travar validação
+            const linhaDigitavelValida = linhaDigitavelDigits.length === 47 || linhaDigitavelDigits.length === 48;
+            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelDigits : "";
+
+            const linhaDigitavelMasked = linhaDigitavelFinal.length > 10
+              ? `${linhaDigitavelFinal.slice(0, 5)}***${linhaDigitavelFinal.slice(-4)}`
+              : (linhaDigitavelRaw.length > 0 ? `raw:${linhaDigitavelDigits.length}digits(INVALID)` : "ausente");
 
             let valorDerivado: number | null = null;
             let vencimentoDerivado: string | null = null;
-            let linhaDigitavelValida = false;
 
-            if (linhaDigitavelRaw) {
-              const febraban = parseLinhaDigitavelFebraban(linhaDigitavelRaw);
+            if (linhaDigitavelValida) {
+              const febraban = parseLinhaDigitavelFebraban(linhaDigitavelFinal);
               valorDerivado = febraban.valor;
               vencimentoDerivado = febraban.vencimento;
-              const digits = linhaDigitavelRaw.replace(/\D/g, "");
-              linhaDigitavelValida = digits.length === 47 || digits.length === 48;
             }
 
             const valorOCR = (typeof bParsed.valor === "number") ? bParsed.valor
@@ -4830,7 +4832,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
 
             const vencimentoOCR = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
 
-            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} linha_digitavel_masked=${linhaDigitavelMasked} linha_valida=${linhaDigitavelValida} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} provider=${boletoVisionResult?.credentialSlot || "nenhum"}`);
+            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} linha_digitavel_masked=${linhaDigitavelMasked} linha_valida=${linhaDigitavelValida} linha_raw_digits=${linhaDigitavelDigits.length} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} provider=${boletoVisionResult?.credentialSlot || "nenhum"}`);
 
             // Valor final: preferência ao derivado da linha digitável (determinístico), senão OCR
             const valorFinal = valorDerivado ?? valorOCR;
@@ -4847,11 +4849,13 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               pagador: bParsed.pagador || bParsed.sacado || null,
               valor: valorFinal,
               data_vencimento: vencFinal,
-              linha_digitavel: linhaDigitavelRaw || null,
+              // Só passa linha digitável se validada com 47 ou 48 dígitos; não propaga ruído de OCR
+              linha_digitavel: linhaDigitavelFinal || null,
               codigo_barras: bParsed.codigo_barras || null,
               nosso_numero: bParsed.nosso_numero || null,
               numero_documento: bParsed.numero_documento || null,
             };
+
           }
 
         }
