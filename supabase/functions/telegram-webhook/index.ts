@@ -3311,6 +3311,21 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
+        // ─── CASO C: CADASTRO DE DÍVIDA / BOLETO BANCÁRIO ───
+        // Proteção contra duplicação: se a proposta já foi executada ou já tem dívida associada, aborta idempotentemente
+        if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
+          console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=confirm_sim status=already_confirmed divida_id=${dados?.divida_id_gerada}`);
+          await supabase.from("telegram_conversas").upsert(
+            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+            { onConflict: "chat_id" }
+          );
+          await sendReply(
+            `ℹ️ <b>Este boleto já foi confirmado e cadastrado anteriormente.</b>\n` +
+            `Nenhuma dívida duplicada foi gerada.`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         const valorNum = parseNum(dados.valor_total || dados.valor);
         const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
         const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
@@ -3335,9 +3350,7 @@ serve(async (req) => {
           status: "pendente",
           parcelas: 1,
           parcelas_pagas: 0,
-          metodo_pagamento_esperado: "boleto",
-          linha_digitavel: dados.linha_digitavel || null,
-          codigo_barras: dados.codigo_barras || null,
+          documento_favorecido: dados.cnpj_cpf_beneficiario || null,
         };
 
         if (dados.categoria_id) {
@@ -3348,7 +3361,7 @@ serve(async (req) => {
           insertPayload.workspace_id = wsMember.workspace_id;
         }
 
-        console.log("[telegram-webhook] Inserindo divida confirmada:", JSON.stringify(insertPayload));
+        console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=insert_divida credor="${credorNome}" valor=${valorNum} vencimento=${vencIso}`);
 
         const { data: dividaInserida, error: errDivida } = await supabase
           .from("dividas")
@@ -3366,7 +3379,30 @@ serve(async (req) => {
           salvarCacheCategoria(supabase, userId, credorNome, dividaInserida.categoria_id).catch(() => {});
         }
 
-        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
+        // Atualização de status e rastreamento de confirmação humana
+        const finalValidationStatus = dados.validation_status === "requer_revisao"
+          ? "manual_confirmed"
+          : (dados.validation_status || "validado");
+
+        const updatedDados = {
+          ...dados,
+          divida_id_gerada: dividaInserida.id,
+          validation_status: finalValidationStatus,
+          confirmed_manually: dados.validation_status === "requer_revisao",
+          confirmed_at: new Date().toISOString(),
+        };
+
+        await supabase
+          .from("telegram_propostas")
+          .update({
+            status: "confirmada",
+            executed_at: new Date().toISOString(),
+            dados: updatedDados,
+          })
+          .eq("id", proposta.id);
+
+        console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} validation_status=${finalValidationStatus} divida_id_gerada=${dividaInserida.id} action=confirmed_ok`);
+
         await supabase.from("telegram_conversas").upsert(
           { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }
@@ -3375,16 +3411,22 @@ serve(async (req) => {
         const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
         const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
 
+        const avisoRevisao = dados.validation_status === "requer_revisao"
+          ? `\n✍️ <i>Cadastro confirmado manualmente pelo usuário.</i>\n`
+          : "";
+
         await sendReply(
           `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
           `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
           (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
           `💰 Valor: <b>${valFmt}</b>\n` +
-          `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
-          `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
+          `🗓️ Vencimento: <b>${vencFmt}</b>\n` +
+          avisoRevisao +
+          `\n🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
           `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
         );
         return new Response("OK", { status: 200, headers: corsHeaders });
+
       } else if (isNao) {
         if (proposta) {
           await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
@@ -4630,7 +4672,7 @@ FORMATO:
             docAnalysis?.boleto_dados
           ) {
             // ─── PASSO 2 BOLETO: Extração completa na imagem normalizada (pós-rotação) ───
-            // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correcta
+            // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correta
             // mesmo quando a foto foi tirada de lado (90° / 270°).
             // Cadeia: Gemini Primary → Gemini Backup → OpenAI Vision → Fail-Closed
             const correlationIdBoleto = `tg-boleto-${userId}-${Date.now()}`;
@@ -4638,24 +4680,22 @@ FORMATO:
             const geminiBackupBoleto = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
             const openAiKeyBoleto = Deno.env.get("OPENAI_API_KEY") || "";
 
-            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} orientacao_detectada=${orientacaoDetectada}° orientacao_aplicada=${orientacaoDetectada}°`);
-
-            // Extrai base64 limpo da imagem normalizada para o boleto-service
+            // Extrai base64 limpo da imagem normalizada
             const normalizedB64Boleto = normalizedOverviewUri.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
             const mimeTypeBoleto = "image/jpeg";
 
             const GEMINI_BOLETO_PROMPT_TG = `Você é um especialista em leitura e extração de boletos bancários e guias de arrecadação brasileiras.
 
-Analise esta imagem de boleto (já orientada corretamente, pode estar em qualquer ângulo original) e extraia os campos com máxima fidelidade:
+Analise esta imagem de boleto (já orientada perfeitamente na vertical) e extraia os campos com máxima fidelidade e exatidão:
 
-1. BANCO: Nome do banco e código (ex: "Itaú Unibanco (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
-2. BENEFICIÁRIO (CEDENTE): Nome/Razão Social da empresa ou pessoa que receberá o valor.
+1. BANCO: Nome do banco e código (ex: "Banco Itaú S.A. (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
+2. BENEFICIÁRIO (CEDENTE): Razão Social ou Nome COMPLETO do beneficiário/cedente. Se o nome ocupar múltiplas linhas no documento (ex: "SPAL INDUSTRIA BRASILEIRA DE" e na linha seguinte "BEBIDAS S/A"), capture TODAS as linhas juntas para formar o nome completo (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A"). NÃO invente palavras que não estejam no papel.
 3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
 4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
 5. CNPJ/CPF DO PAGADOR: Se visível.
 6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY).
-7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1250.00). NÃO leia o CNPJ ou código numérico como valor.
-8. LINHA DIGITÁVEL: A sequência de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
+7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1262.55). NÃO leia CNPJ, CPF ou código numérico de barras como valor.
+8. LINHA DIGITÁVEL: A sequência completa de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
 9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
 10. NOSSO NÚMERO: Código de identificação do título.
 11. NÚMERO DO DOCUMENTO / SEU NÚMERO: Número da fatura ou documento de referência.
@@ -4708,7 +4748,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                   fallbackCount: 0,
                   durationMs: Date.now() - tStart,
                 };
-                console.log(`[BOLETO_TRACE] provider=gemini_primary ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
               } catch (eGp) {
                 console.warn(`[BOLETO_TRACE] provider=gemini_primary ERRO: ${eGp}`);
               }
@@ -4744,7 +4783,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                   fallbackCount: 1,
                   durationMs: Date.now() - tStart,
                 };
-                console.log(`[BOLETO_TRACE] provider=gemini_backup ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
               } catch (eGb) {
                 console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
               }
@@ -4788,7 +4826,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                   fallbackCount: 2,
                   durationMs: Date.now() - tStart,
                 };
-                console.log(`[BOLETO_TRACE] provider=openai_fallback ok=${boletoVisionResult.ok} duration=${boletoVisionResult.durationMs}ms`);
               } catch (eOai) {
                 console.warn(`[BOLETO_TRACE] provider=openai_fallback ERRO: ${eOai}`);
               }
@@ -4806,57 +4843,130 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               }
             }
 
-            // ── Derivação determinística via linha digitável (Febraban) ──
+            // ─── PROCESSAMENTO DETERMINÍSTICO E NÍVEIS DE CONFIANÇA ───
+            const warnings: string[] = [];
             const linhaDigitavelRaw = String(bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || "").replace(/\s/g, "");
             const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
-            // Sanitiza: só aceita linha com 47 ou 48 dígitos; caso contrário, nula para não travar validação
-            const linhaDigitavelValida = linhaDigitavelDigits.length === 47 || linhaDigitavelDigits.length === 48;
-            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelDigits : "";
-
-            const linhaDigitavelMasked = linhaDigitavelFinal.length > 10
-              ? `${linhaDigitavelFinal.slice(0, 5)}***${linhaDigitavelFinal.slice(-4)}`
-              : (linhaDigitavelRaw.length > 0 ? `raw:${linhaDigitavelDigits.length}digits(INVALID)` : "ausente");
-
+            const linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
+            
+            let linhaDigitavelValida = false;
+            let linhaDigitavelValidationError: string | null = null;
             let valorDerivado: number | null = null;
             let vencimentoDerivado: string | null = null;
 
-            if (linhaDigitavelValida) {
-              const febraban = parseLinhaDigitavelFebraban(linhaDigitavelFinal);
-              valorDerivado = febraban.valor;
-              vencimentoDerivado = febraban.vencimento;
+            if (linhaDigitavelPresente) {
+              if (linhaDigitavelDigits.length === 47) {
+                const febraban = parseLinhaDigitavelFebraban(linhaDigitavelDigits);
+                if (febraban.valor && febraban.valor > 0) {
+                  valorDerivado = febraban.valor;
+                  vencimentoDerivado = febraban.vencimento;
+                  linhaDigitavelValida = true;
+                } else {
+                  linhaDigitavelValidationError = "febraban_campos_invalidos";
+                  warnings.push("linha_digitavel_febraban_invalida");
+                }
+              } else if (linhaDigitavelDigits.length === 48) {
+                // Guia de arrecadação / tributos
+                linhaDigitavelValida = true;
+              } else {
+                linhaDigitavelValidationError = `invalid_length_${linhaDigitavelDigits.length}`;
+                warnings.push("linha_digitavel_comprimento_incorreto");
+              }
+            } else {
+              linhaDigitavelValidationError = "linha_digitavel_ausente";
+              warnings.push("linha_digitavel_ausente");
             }
 
+            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelDigits : null;
+            const linhaDigitavelMasked = linhaDigitavelDigits.length > 10
+              ? `${linhaDigitavelDigits.slice(0, 5)}***${linhaDigitavelDigits.slice(-4)}`
+              : (linhaDigitavelDigits.length > 0 ? `raw:${linhaDigitavelDigits.length}dig` : "ausente");
+
+            // Valores de OCR
             const valorOCR = (typeof bParsed.valor === "number") ? bParsed.valor
               : bParsed.valor ? parseFloat(String(bParsed.valor).replace(/[^\d,.]/g, "").replace(",", ".")) || null
               : (orientacaoAnalysis?.boleto_dados?.valor ?? null);
 
             const vencimentoOCR = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
 
-            console.log(`[BOLETO_TRACE] correlation_id=${correlationIdBoleto} linha_digitavel_masked=${linhaDigitavelMasked} linha_valida=${linhaDigitavelValida} linha_raw_digits=${linhaDigitavelDigits.length} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} provider=${boletoVisionResult?.credentialSlot || "nenhum"}`);
+            // Determinação de fontes e conformidade
+            let valorFinal: number | null = null;
+            let valorSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
+            let vencimentoFinal: string | null = null;
+            let vencimentoSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
+            let validationStatus: "validado" | "requer_revisao" | "rejeitado" = "requer_revisao";
 
-            // Valor final: preferência ao derivado da linha digitável (determinístico), senão OCR
-            const valorFinal = valorDerivado ?? valorOCR;
-            const vencFinal = vencimentoDerivado ?? vencimentoOCR;
+            if (linhaDigitavelValida && valorDerivado && valorDerivado > 0) {
+              valorFinal = valorDerivado;
+              valorSource = "febraban_linha";
+
+              if (vencimentoDerivado) {
+                vencimentoFinal = vencimentoDerivado;
+                vencimentoSource = "febraban_linha";
+              } else {
+                vencimentoFinal = vencimentoOCR;
+                vencimentoSource = "ocr_visual";
+              }
+
+              // Comparar com OCR se disponível
+              if (valorOCR && Math.abs(valorOCR - valorDerivado) > 0.05) {
+                warnings.push(`divergencia_valor_ocr_${valorOCR}_vs_derivado_${valorDerivado}`);
+                validationStatus = "requer_revisao";
+              } else {
+                validationStatus = "validado";
+              }
+            } else if (valorOCR && valorOCR > 0) {
+              valorFinal = valorOCR;
+              valorSource = "ocr_visual";
+              vencimentoFinal = vencimentoOCR;
+              vencimentoSource = "ocr_visual";
+              validationStatus = "requer_revisao";
+              warnings.push("linha_digitavel_nao_validada");
+            } else {
+              validationStatus = "rejeitado";
+            }
+
             const beneficiarioFinal = bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null;
+            const bancoFinal = bParsed.banco || null;
 
-            console.log(`[BOLETO_TRACE] valor_final=${valorFinal} venc_final=${vencFinal} beneficiario="${beneficiarioFinal}" motivo_rejeicao=${valorFinal ? "nenhum" : "valor_nulo"}`);
+            console.log(
+              `[BOLETO_TRACE] correlation_id=${correlationIdBoleto} ` +
+              `orientation_detected=${orientacaoDetectada}° rotation_applied=${orientacaoDetectada}° ` +
+              `provider=${boletoVisionResult?.credentialSlot || "nenhum"} validation_status=${validationStatus} ` +
+              `linha_present=${linhaDigitavelPresente} linha_raw_digits=${linhaDigitavelDigits.length} linha_valid=${linhaDigitavelValida} ` +
+              `linha_digitavel_masked=${linhaDigitavelMasked} ` +
+              `valor_source=${valorSource} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} ` +
+              `vencimento_source=${vencimentoSource} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} ` +
+              `warnings=${JSON.stringify(warnings)}`
+            );
 
             documentData = {
               tipo: "boleto",
-              banco: bParsed.banco || null,
+              banco: bancoFinal,
               beneficiario: beneficiarioFinal,
               cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
               pagador: bParsed.pagador || bParsed.sacado || null,
               valor: valorFinal,
               data_vencimento: vencFinal,
-              // Só passa linha digitável se validada com 47 ou 48 dígitos; não propaga ruído de OCR
-              linha_digitavel: linhaDigitavelFinal || null,
+              linha_digitavel: linhaDigitavelFinal,
+              linha_digitavel_raw: linhaDigitavelRaw || null,
+              linha_digitavel_raw_digits: linhaDigitavelDigits.length,
+              linha_digitavel_validation_error: linhaDigitavelValidationError,
               codigo_barras: bParsed.codigo_barras || null,
               nosso_numero: bParsed.nosso_numero || null,
               numero_documento: bParsed.numero_documento || null,
+              validation_status: validationStatus,
+              valor_source: valorSource,
+              valor_ocr: valorOCR,
+              valor_derivado: valorDerivado,
+              vencimento_source: vencimentoSource,
+              vencimento_ocr: vencimentoOCR,
+              vencimento_derivado: vencimentoDerivado,
+              warnings,
+              correlation_id: correlationIdBoleto,
             };
-
           }
+
 
         }
 
@@ -5347,10 +5457,25 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 valor_restante: valor,
                 data_vencimento: dataVencimento || hojeStr,
                 credor: beneficiario,
+                banco: documentData.banco || null,
+                cnpj_cpf_beneficiario: documentData.cnpj_cpf_beneficiario || null,
                 categoria_id: categoriaId,
                 categoria_nome: categoriaNome,
                 status: "pendente",
                 linha_digitavel: linhaFmt || null,
+                linha_digitavel_raw: documentData.linha_digitavel_raw || null,
+                linha_digitavel_raw_digits: documentData.linha_digitavel_raw_digits ?? null,
+                linha_digitavel_validation_error: documentData.linha_digitavel_validation_error || null,
+                codigo_barras: documentData.codigo_barras || null,
+                validation_status: documentData.validation_status || "requer_revisao",
+                valor_source: documentData.valor_source || "ocr_visual",
+                valor_ocr: documentData.valor_ocr ?? null,
+                valor_derivado: documentData.valor_derivado ?? null,
+                vencimento_source: documentData.vencimento_source || "ocr_visual",
+                vencimento_ocr: documentData.vencimento_ocr ?? null,
+                vencimento_derivado: documentData.vencimento_derivado ?? null,
+                warnings: documentData.warnings || [],
+                correlation_id: documentData.correlation_id || null,
               },
               resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${dataVencimento || hojeStr}`,
               status: "pendente",
@@ -5378,20 +5503,40 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
             const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
+            const isBoletoValidado = documentData.validation_status === "validado";
 
-            let mensagemProposta =
-              `📄 <b>Boleto identificado!</b>\n\n` +
-              `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
-              (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
-              `💰 Valor: <b>${valFmt}</b>\n` +
-              `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
-              (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
+            let mensagemProposta = "";
 
-            mensagemProposta +=
-              `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-              `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-              `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-              `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            if (isBoletoValidado) {
+              mensagemProposta =
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor: <b>${valFmt}</b>\n` +
+                `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Linha digitável validada matematicamente.</b>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
+                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else {
+              mensagemProposta =
+                `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor identificado: <b>${valFmt}</b>\n` +
+                `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                `\n⚠️ <b>Não foi possível validar a linha digitável com precisão.</b>\n` +
+                `<i>Os valores acima foram lidos visualmente do documento.</i>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
+                `👉 Responda <b>SIM</b> para confirmar o cadastro manual.\n` +
+                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            }
+
 
             await sendReply(mensagemProposta);
             return new Response("OK", { status: 200, headers: corsHeaders });
