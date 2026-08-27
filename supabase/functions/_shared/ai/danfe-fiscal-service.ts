@@ -74,7 +74,19 @@ export interface ProcessDanfeOutput {
   sessionState?: DanfeSessionState;
 }
 
-const DEFAULT_DANFE_MODEL = "gemini-2.5-flash";
+import {
+  normalizeAndRotateImageMatrix,
+  cropTableRegionMatrix,
+  PROMPT_ORIENTACAO_DANFE,
+} from "./danfe-visual-pipeline.ts";
+
+export {
+  normalizeAndRotateImageMatrix,
+  cropTableRegionMatrix,
+  PROMPT_ORIENTACAO_DANFE,
+};
+
+const DEFAULT_DANFE_MODEL = "gemini-3.6-flash";
 
 export async function processDanfeDocument(
   input: ProcessDanfeInput,
@@ -84,14 +96,15 @@ export async function processDanfeDocument(
   
   // Normalizar MIME type (suportar PDF e imagens corretamente)
   let cleanMimeType = "image/jpeg";
-  if (input.mimeType === "application/pdf") {
+  const isPdf = input.mimeType === "application/pdf";
+  if (isPdf) {
     cleanMimeType = "application/pdf";
   } else if (input.mimeType.startsWith("image/")) {
     cleanMimeType = input.mimeType;
   }
 
   // Sanitizar Base64: remover data URL prefix e caracteres de quebra de linha
-  const cleanBase64 = String(input.base64 || "")
+  let cleanBase64 = String(input.base64 || "")
     .replace(/^data:[^;]+;base64,/i, "")
     .replace(/[\r\n\s]+/g, "");
 
@@ -108,48 +121,116 @@ export async function processDanfeDocument(
     };
   }
 
-
-  // ── 1. Extração de Cabeçalho e Totais com Gemini ─────────────────────────
+  // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
+  let rotationApplied: 0 | 90 | 180 | 270 = 0;
   let docAnalysis: Record<string, any> | null = null;
-  try {
-    const headerResp = await fetchFn(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.0,
-            responseMimeType: "application/json",
-          },
-        }),
-      },
-    );
 
-    if (headerResp.ok) {
-      const gJson = await headerResp.json();
-      const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      docAnalysis = JSON.parse(
-        gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+  if (!isPdf) {
+    try {
+      const orientResp = await fetchFn(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: PROMPT_ORIENTACAO_DANFE },
+                  { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+              thinkingConfig: { thinkingBudget: 1 },
+            },
+          }),
+        },
       );
-      console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf}`);
-    } else {
-      const errText = await headerResp.text();
-      console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
+
+      if (orientResp && orientResp.ok) {
+        const oJson = await orientResp.json();
+        const oText = oJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const parsed = JSON.parse(oText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
+
+        if (parsed?.cabecalho || parsed?.valores_totais) {
+          docAnalysis = parsed;
+        } else {
+          const degrees = Number(parsed?.orientacao_leitura);
+          if ([90, 180, 270].includes(degrees)) {
+            rotationApplied = degrees as 90 | 180 | 270;
+            console.log(`[DANFE_FISCAL_SERVICE] Orientação detectada: ${rotationApplied}°. Aplicando rotação matricial...`);
+            const rotatedMatrix = await normalizeAndRotateImageMatrix(cleanBase64, rotationApplied);
+            cleanBase64 = rotatedMatrix.base64;
+          } else {
+            console.log(`[DANFE_FISCAL_SERVICE] Orientação normal (0°).`);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[DANFE_FISCAL_SERVICE] Falha na detecção de orientação, prosseguindo com original:", err);
     }
-  } catch (err) {
-    console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
   }
 
-  // ── 2. Extração de Itens da Tabela com Gemini ───────────────────────────
+  // ── 2. Extração de Cabeçalho e Totais com Gemini (se não processado anteriormente) ──
+  if (!docAnalysis) {
+    try {
+      const headerResp = await fetchFn(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${input.geminiApiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                  { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+              thinkingConfig: { thinkingBudget: 1 },
+            },
+          }),
+        },
+      );
+
+      if (headerResp && headerResp.ok) {
+        const gJson = await headerResp.json();
+        const gText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        docAnalysis = JSON.parse(
+          gText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
+        );
+        console.log(`[DANFE_FISCAL_SERVICE] Cabeçalho extraído com sucesso: fornecedor=${docAnalysis?.cabecalho?.fornecedor}, NF=${docAnalysis?.cabecalho?.numero_nf}`);
+      } else if (headerResp) {
+        const errText = await headerResp.text();
+        console.warn(`[DANFE_FISCAL_SERVICE] Gemini header retornou HTTP ${headerResp.status}: ${errText.slice(0, 200)}`);
+      }
+    } catch (err) {
+      console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair cabeçalho:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+
+  // ── 3. Recorte (Crop) da Tabela de Produtos ──────────────────────────────
+  let tableImageBase64 = cleanBase64;
+  if (!isPdf && docAnalysis?.regiao_tabela_produtos) {
+    try {
+      const { top, bottom } = docAnalysis.regiao_tabela_produtos;
+      const cropRes = await cropTableRegionMatrix(cleanBase64, top, bottom);
+      tableImageBase64 = cropRes.base64;
+      console.log(`[DANFE_FISCAL_SERVICE] Recorte contínuo da tabela aplicado (top: ${top}, bottom: ${bottom})`);
+    } catch (err) {
+      console.warn("[DANFE_FISCAL_SERVICE] Falha ao recortar tabela, usando imagem completa:", err);
+    }
+  }
+
+  // ── 4. Extração de Itens da Tabela com Gemini ───────────────────────────
   let rawItemsList: any[] = [];
   try {
     const tableResp = await fetchFn(
@@ -162,13 +243,14 @@ export async function processDanfeDocument(
             {
               parts: [
                 { text: GEMINI_V2_PROMPT_TABELA },
-                { inline_data: { mime_type: cleanMimeType, data: cleanBase64 } },
+                { inline_data: { mime_type: cleanMimeType, data: tableImageBase64 } },
               ],
             },
           ],
           generationConfig: {
             temperature: 0.0,
             responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 1 },
           },
         }),
       },
@@ -191,6 +273,7 @@ export async function processDanfeDocument(
   } catch (err) {
     console.error("[DANFE_FISCAL_SERVICE] Erro ao extrair tabela:", err instanceof Error ? err.message : String(err));
   }
+
 
 
   // ── 3. Validação Estrutural Estrita ──────────────────────────────────────
