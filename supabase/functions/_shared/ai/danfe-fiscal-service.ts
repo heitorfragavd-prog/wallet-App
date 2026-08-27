@@ -11,6 +11,7 @@ import {
   validateProductRowV2,
   reconcileAndDeduplicateV2,
   validateDanfeMathV2,
+  parseFiscalNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../danfe-gemini-v2.ts";
@@ -21,9 +22,11 @@ export {
   validateProductRowV2,
   reconcileAndDeduplicateV2,
   validateDanfeMathV2,
+  parseFiscalNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 };
+
 
 
 
@@ -276,7 +279,7 @@ export async function processDanfeDocument(
 
 
 
-  // ── 3. Validação Estrutural Estrita ──────────────────────────────────────
+  // ── 3. Validação Estrutural Estrita de Produtos ───────────────────────────
   const itensValidados: DanfeItemV2[] = [];
   for (const raw of rawItemsList) {
     const res = validateProductRowV2(raw);
@@ -285,14 +288,92 @@ export async function processDanfeDocument(
     }
   }
 
-  const cabecalho = docAnalysis?.cabecalho || {};
-  const valoresTotais = docAnalysis?.valores_totais || {};
-  const paginaAtual = Number(cabecalho.pagina_atual) || 1;
-  const totalPaginas = Number(cabecalho.total_paginas) || 1;
-  const valorProdutos = Number(valoresTotais.valor_produtos || 0);
-  const valorTotalNf = Number(valoresTotais.valor_total_nf || valorProdutos);
+  // ── 4. Normalização Determinística de Cabeçalho e Totais (com Aliases) ────
+  const rawCabecalho = docAnalysis?.cabecalho || docAnalysis || {};
+  const rawTotais = docAnalysis?.valores_totais || docAnalysis?.totais || docAnalysis || {};
 
-  // ── 4. Gestão de Multipágina ─────────────────────────────────────────────
+  const fornecedor = (
+    rawCabecalho.fornecedor ||
+    rawCabecalho.emitente ||
+    rawCabecalho.razao_social ||
+    rawCabecalho.nome_fornecedor ||
+    docAnalysis?.fornecedor ||
+    docAnalysis?.emitente ||
+    docAnalysis?.razao_social ||
+    null
+  );
+
+  const cnpjFornecedor = (
+    rawCabecalho.cnpj_fornecedor ||
+    rawCabecalho.cnpj_emitente ||
+    rawCabecalho.cnpj ||
+    docAnalysis?.cnpj_fornecedor ||
+    docAnalysis?.cnpj_emitente ||
+    docAnalysis?.cnpj ||
+    null
+  );
+
+  const numeroNf = (
+    rawCabecalho.numero_nf ||
+    rawCabecalho.numero ||
+    rawCabecalho.n_nf ||
+    docAnalysis?.numero_nf ||
+    docAnalysis?.numero ||
+    docAnalysis?.n_nf ||
+    null
+  );
+
+  const serieNf = (
+    rawCabecalho.serie_nf ||
+    rawCabecalho.serie ||
+    docAnalysis?.serie_nf ||
+    docAnalysis?.serie ||
+    null
+  );
+
+  const dataEmissao = (
+    rawCabecalho.data_emissao ||
+    rawCabecalho.emissao ||
+    docAnalysis?.data_emissao ||
+    docAnalysis?.emissao ||
+    null
+  );
+
+  const chaveAcesso = (
+    rawCabecalho.chave_acesso ||
+    rawCabecalho.chave ||
+    docAnalysis?.chave_acesso ||
+    docAnalysis?.chave ||
+    null
+  );
+
+  const paginaAtual = Number(rawCabecalho.pagina_atual || docAnalysis?.pagina_atual) || 1;
+  const totalPaginas = Number(rawCabecalho.total_paginas || docAnalysis?.total_paginas) || 1;
+
+  // Parsing Monetário com parseFiscalNumber (suporta "1.105,25", "1105.25", 1105.25)
+  const valorProdutosRaw = rawTotais.valor_produtos ?? rawTotais.total_produtos ?? rawTotais.valor_total_produtos ?? docAnalysis?.valor_produtos;
+  const valorTotalNfRaw = rawTotais.valor_total_nf ?? rawTotais.valor_total ?? rawTotais.total_nota ?? docAnalysis?.valor_total_nf;
+
+  const valorProdutosDeclaradoNF = valorProdutosRaw != null ? parseFiscalNumber(valorProdutosRaw) : 0;
+  const valorTotalNf = valorTotalNfRaw != null ? parseFiscalNumber(valorTotalNfRaw) : valorProdutosDeclaradoNF;
+
+  const cabecalhoConsolidado = {
+    fornecedor,
+    cnpj_fornecedor: cnpjFornecedor,
+    numero_nf: numeroNf,
+    serie_nf: serieNf,
+    data_emissao: dataEmissao,
+    chave_acesso: chaveAcesso,
+    pagina_atual: paginaAtual,
+    total_paginas: totalPaginas,
+  };
+
+  const valoresTotaisConsolidados = {
+    valor_produtos: valorProdutosDeclaradoNF,
+    valor_total_nf: valorTotalNf,
+  };
+
+  // ── 5. Gestão de Multipágina ─────────────────────────────────────────────
   let itensFinais: DanfeItemV2[] = itensValidados;
   let session: DanfeSessionState;
 
@@ -308,12 +389,12 @@ export async function processDanfeDocument(
   } else {
     // Nova sessão
     session = {
-      chaveAcesso: cabecalho.chave_acesso,
-      numeroNf: cabecalho.numero_nf,
-      fornecedor: cabecalho.fornecedor,
-      cnpjFornecedor: cabecalho.cnpj_fornecedor,
-      dataEmissao: cabecalho.data_emissao,
-      valorProdutosDeclarado: valorProdutos,
+      chaveAcesso,
+      numeroNf,
+      fornecedor,
+      cnpjFornecedor,
+      dataEmissao,
+      valorProdutosDeclarado: valorProdutosDeclaradoNF,
       valorTotalNfDeclarado: valorTotalNf,
       totalPaginas,
       paginasRecebidas: [paginaAtual],
@@ -349,14 +430,14 @@ export async function processDanfeDocument(
     return {
       success: true,
       status: "parcial_multipagina",
-      cabecalho: { ...cabecalho, pagina_atual: paginaAtual, total_paginas: session.totalPaginas },
-      valores_totais: valoresTotais,
+      cabecalho: { ...cabecalhoConsolidado, pagina_atual: paginaAtual, total_paginas: session.totalPaginas },
+      valores_totais: valoresTotaisConsolidados,
       itens: itensFinais,
       validacao: {
         valido: false,
         status: "requer_revisao",
         somaItens: itensFinais.reduce((s, it) => s + it.valor_total, 0),
-        valorReferencia: valorProdutos,
+        valorReferencia: valorProdutosDeclaradoNF,
         diferenca: 0,
         toleranciaUtilizada: 0.05,
         motivo: "Aguardando páginas complementares da DANFE",
@@ -367,23 +448,27 @@ export async function processDanfeDocument(
     };
   }
 
-  // ── 5. Validação Matemática Determinística ────────────────────────────────
-  const refProdutos = session.valorProdutosDeclarado || valorProdutos;
+  // ── 6. Validação Matemática Determinística ────────────────────────────────
+  const valorProdutosCalculadoItens = +(itensFinais.reduce((s, it) => s + (Number(it.valor_total) || 0), 0)).toFixed(2);
+  const refProdutos = session.valorProdutosDeclarado || valorProdutosDeclaradoNF;
   const validacao = validateDanfeMathV2(itensFinais, refProdutos);
 
   const statusFinal: "sucesso" | "requer_revisao" = validacao.valido
     ? "sucesso"
     : "requer_revisao";
 
-  const totalFormatado = (refProdutos || validacao.somaItens).toLocaleString("pt-BR", {
+  // Formatação explícita e transparente: NUNCA usar fallback de soma de itens no valor declarado
+  const valorProdutosDeclaradoFormatado = refProdutos > 0
+    ? refProdutos.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+    : "Não identificado no quadro de totais";
+
+  const somaItensFormatada = valorProdutosCalculadoItens.toLocaleString("pt-BR", {
     style: "currency",
     currency: "BRL",
   });
 
-  const somaFormatada = validacao.somaItens.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
+  // Log diagnóstico seguro
+  console.log(`[DANFE_HEADER_DEBUG] provider=${model}, fornecedor="${session.fornecedor || fornecedor}", cnpj="${session.cnpjFornecedor || cnpjFornecedor}", numeroNF="${session.numeroNf || numeroNf}", serie="${serieNf}", dataEmissao="${session.dataEmissao || dataEmissao}", valorTotalNF=${valorTotalNf}, valorProdutosDeclaradoNF=${refProdutos}, valorProdutosCalculadoItens=${valorProdutosCalculadoItens}, quantidadeItens=${itensFinais.length}, validationStatus="${statusFinal}", validationReasons="${validacao.motivo || 'OK'}"`);
 
   const previewItens = itensFinais
     .slice(0, 5)
@@ -399,12 +484,12 @@ export async function processDanfeDocument(
   const msgLines = [
     `🧾 **Nota Fiscal (DANFE) Analisada**`,
     ``,
-    `• **Fornecedor:** ${session.fornecedor || cabecalho.fornecedor || "Não identificado"}`,
-    `• **CNPJ:** ${session.cnpjFornecedor || cabecalho.cnpj_fornecedor || "Não identificado"}`,
-    `• **NF:** ${session.numeroNf || cabecalho.numero_nf || "Sem número"}${cabecalho.serie_nf ? ` (Série ${cabecalho.serie_nf})` : ""}`,
-    `• **Data de Emissão:** ${session.dataEmissao || cabecalho.data_emissao || "Não identificada"}`,
-    `• **Valor dos Produtos:** ${totalFormatado}`,
-    `• **Soma dos Itens:** ${somaFormatada}`,
+    `• **Fornecedor:** ${session.fornecedor || fornecedor || "Não identificado"}`,
+    `• **CNPJ:** ${session.cnpjFornecedor || cnpjFornecedor || "Não identificado"}`,
+    `• **NF:** ${session.numeroNf || numeroNf || "Sem número"}${serieNf ? ` (Série ${serieNf})` : ""}`,
+    `• **Data de Emissão:** ${session.dataEmissao || dataEmissao || "Não identificada"}`,
+    `• **Valor dos Produtos (NF):** ${valorProdutosDeclaradoFormatado}`,
+    `• **Soma dos Itens:** ${somaItensFormatada}`,
     `• **Total de Itens Validados:** ${itensFinais.length}`,
     `• **Status Fiscal:** ${validacao.valido ? "✅ Validação Matemática OK" : `⚠️ Requer Revisão (${validacao.motivo})`}`,
     ``,
@@ -418,7 +503,7 @@ export async function processDanfeDocument(
   return {
     success: true,
     status: statusFinal,
-    cabecalho: { ...cabecalho, pagina_atual: paginaAtual, total_paginas: session.totalPaginas },
+    cabecalho: { ...cabecalhoConsolidado, pagina_atual: paginaAtual, total_paginas: session.totalPaginas },
     valores_totais: { valor_produtos: refProdutos, valor_total_nf: valorTotalNf },
     itens: itensFinais,
     validacao,
@@ -426,3 +511,4 @@ export async function processDanfeDocument(
     sessionState: session,
   };
 }
+
