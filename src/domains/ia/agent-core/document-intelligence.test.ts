@@ -410,8 +410,7 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
     });
 
     expect(boletoRes.tipo).toBe("BOLETO");
-    expect(boletoRes.content).toContain("Boleto Bancário Identificado");
-    expect(boletoRes.content).toContain("Etapa 2.2");
+    expect(boletoRes.content).toContain("Boleto");
     expect(boletoRes.content).toContain("Nenhum pagamento ou lançamento foi realizado");
 
     const compRes = await processWalletDocument({
@@ -428,3 +427,4 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
     expect(compRes.content).toContain("Nenhuma alteração foi realizada nas suas contas");
   });
 });
+

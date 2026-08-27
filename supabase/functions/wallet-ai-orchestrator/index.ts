@@ -3,6 +3,7 @@ import { FailoverLlmRunner } from "../_shared/ai/failover-runner.ts";
 import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
 import { GeminiLlmRunner } from "../_shared/ai/gemini-adapter.ts";
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
+import { handleBoletoHttpRequest } from "./boleto-handler.ts";
 import { handleFiscalHttpRequest } from "./fiscal-handler.ts";
 import { handleOrchestratorHttpRequest } from "./handler.ts";
 import {
@@ -73,6 +74,14 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  if (url.pathname.endsWith("/boleto")) {
+    return handleBoletoHttpRequest(req, {
+      authDeps,
+      geminiApiKey: geminiApiKey || "",
+      adminClient,
+    });
+  }
+
   if (req.method === "POST") {
     try {
       const clone = req.clone();
@@ -84,12 +93,20 @@ Deno.serve(async (req: Request) => {
           adminClient,
         });
       }
+      if (peek?.action === "process_boleto" || peek?.mode === "BOLETO_PROCESS") {
+        return handleBoletoHttpRequest(req, {
+          authDeps,
+          geminiApiKey: geminiApiKey || "",
+          adminClient,
+        });
+      }
     } catch {
       // Ignora erro de JSON e continua para o orchestrator
     }
   }
 
   return handleOrchestratorHttpRequest(req, {
+
     authDeps,
     repoFactory,
     runnerFactory,

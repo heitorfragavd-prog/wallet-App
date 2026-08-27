@@ -116,7 +116,7 @@ export {
 
 const DEFAULT_DANFE_MODEL = "gemini-3.6-flash";
 
-interface VisionCallOptions {
+export interface VisionCallOptions {
   prompt: string;
   mimeType: string;
   base64: string;
@@ -129,7 +129,7 @@ interface VisionCallOptions {
   correlationId?: string;
 }
 
-interface VisionCallResponse {
+export interface VisionCallResponse {
   ok: boolean;
   status: number;
   text: string;
@@ -141,7 +141,8 @@ interface VisionCallResponse {
   durationMs: number;
 }
 
-async function callVisionWithFailover(options: VisionCallOptions): Promise<VisionCallResponse> {
+export async function callVisionWithFailover(options: VisionCallOptions): Promise<VisionCallResponse> {
+
   const { prompt, mimeType, base64, geminiApiKey, geminiApiKeyBackup, openaiApiKey, fetchFn, correlationId } = options;
   const geminiModel = options.model || DEFAULT_DANFE_MODEL;
   const timeoutMs = options.timeoutMs || 35000;

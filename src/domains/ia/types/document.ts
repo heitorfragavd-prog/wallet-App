@@ -1,5 +1,5 @@
 /**
- * Contrato único de Document Intelligence — Etapa 2.1
+ * Contrato único de Document Intelligence — Etapa 2.2A (Boleto & DANFE)
  */
 
 export type DocumentClassification =
@@ -37,7 +37,27 @@ export function classifyDocument(
   const normText = (textContext || "").toLowerCase();
   const combined = `${normFile} ${normText}`;
 
-  // 1. Padrões de DANFE / Nota Fiscal
+  // 1. Padrões explícitos de Boleto Bancário / Arrecadação
+  const boletoExplicitPatterns = [
+    /boleto/,
+    /linha[\s_-]?digit[aá]vel/,
+    /c[oó]digo[\s_-]?barras/,
+    /bloqueto/,
+    /benefici[aá]rio/,
+    /cedente/,
+    /sacado/,
+    /pagador/,
+    /vencimento/,
+    /valor[\s_-]?do[\s_-]?documento/,
+    /nosso[\s_-]?n[uú]mero/,
+    /ag[eê]ncia[\s_-]?(e\s*)?c[oó]digo/,
+    /guia[\s_-]?recolhimento/,
+    /darf/,
+    /das[\s_-]?simples/,
+    /fatura[\s_-]?(banc[aá]ria|cart[aã]o|luz|agua|[aá]gua|energia|telecom|internet)/,
+  ];
+
+  // 2. Padrões explícitos de DANFE / Nota Fiscal
   const danfePatterns = [
     /danfe/,
     /nota[\s_-]?fiscal/,
@@ -48,44 +68,42 @@ export function classifyDocument(
     /xml[\s_-]?nfe/,
     /cupom[\s_-]?fiscal/,
     /faturamento/,
+    /chave[\s_-]?de[\s_-]?acesso/,
+    /c[aá]lculo[\s_-]?do[\s_-]?imposto/,
   ];
 
-  if (danfePatterns.some((p) => p.test(combined))) {
+  // 3. Padrões explícitos de Comprovante de Pagamento
+  const comprovantePatterns = [
+    /comprovante/,
+    /recibo/,
+    /transfer[eê]ncia/,
+    /\bted\b/,
+    /\bdoc\b/,
+    /pix[\s_-]?(recebido|enviado|comprovante|realizado)/,
+    /pagamento[\s_-]?realizado/,
+    /autentica[cç][aã]o[\s_-]?mec[aâ]nica/,
+    /autentica[cç][aã]o[\s_-]?banc[aá]ria/,
+  ];
+
+  // Checagem de DANFE primeiro se houver termos fiscais inequívocos
+  if (danfePatterns.some((p) => p.test(combined)) && !combined.includes("boleto")) {
     return {
       tipo: "DANFE",
-      confianca: 0.9,
+      confianca: 0.95,
       motivo: "Identificado padrão textual/nome associado a Nota Fiscal (DANFE)",
     };
   }
 
-  // 2. Padrões de Boleto Bancário
-  const boletoPatterns = [
-    /boleto/,
-    /linha[\s_-]?digitavel/,
-    /codigo[\s_-]?barras/,
-    /bloqueto/,
-    /fatura[\s_-]?(bancaria|cartao|luz|agua|energia)/,
-  ];
-
-  if (boletoPatterns.some((p) => p.test(combined))) {
+  // Checagem de Boleto
+  if (boletoExplicitPatterns.some((p) => p.test(combined))) {
     return {
       tipo: "BOLETO",
       confianca: 0.9,
-      motivo: "Identificado padrão associado a Boleto Bancário",
+      motivo: "Identificado padrão textual/nome associado a Boleto Bancário",
     };
   }
 
-  // 3. Padrões de Comprovante de Pagamento
-  const comprovantePatterns = [
-    /comprovante/,
-    /recibo/,
-    /transferencia/,
-    /ted/,
-    /doc/,
-    /pix[\s_-]?(recebido|enviado|comprovante)/,
-    /pagamento[\s_-]?realizado/,
-  ];
-
+  // Checagem de Comprovante
   if (comprovantePatterns.some((p) => p.test(combined))) {
     return {
       tipo: "COMPROVANTE",
@@ -94,8 +112,17 @@ export function classifyDocument(
     };
   }
 
+  // Se tiver termos fiscais residuais
+  if (danfePatterns.some((p) => p.test(combined))) {
+    return {
+      tipo: "DANFE",
+      confianca: 0.85,
+      motivo: "Identificado padrão textual associado a Nota Fiscal",
+    };
+  }
+
   // 4. Se for imagem ou PDF sem pistas explícitas de boleto/comprovante:
-  // Em contexto empresarial / PDV, fotos de documentos são predominantemente NFs ou recibos
+  // Em contexto comercial, arquivos visuais genéricos são direcionados para DANFE
   if (mimeType.startsWith("image/") || mimeType === "application/pdf") {
     return {
       tipo: "DANFE",
