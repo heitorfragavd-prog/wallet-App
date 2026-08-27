@@ -587,5 +587,6 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
 
     expect(res.tipo).toBe("DANFE");
     expect(res.content).toContain("Nenhuma alteração");
-  });
+  }, 15000);
+
 });

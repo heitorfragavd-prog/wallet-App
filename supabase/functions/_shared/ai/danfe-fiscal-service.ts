@@ -501,58 +501,52 @@ export async function processDanfeDocument(
     ? "sucesso"
     : "requer_revisao";
 
-  // Formatação explícita e transparente: NUNCA usar fallback de soma de itens no valor declarado
-  const valorProdutosDeclaradoFormatado = refProdutos > 0
-    ? refProdutos.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-    : "Não identificado no quadro de totais";
-
-  const somaItensFormatada = valorProdutosCalculadoItens.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
-
-  // Log diagnóstico seguro DANFE_TRACE
-  console.log(
-    `[DANFE_TRACE] source=${input.workspaceId ? "wallet" : "telegram"} ` +
-    `original_bytes=${cleanBase64.length} original_width=${originalWidth} original_height=${originalHeight} ` +
-    `orientation_provider=${orientationSource} rotation=${rotationApplied} ` +
-    `processed_width=${processedWidth} processed_height=${processedHeight} ` +
-    `crop_source=${cropSource} crop_coordinates=${topRatio.toFixed(2)}-${bottomRatio.toFixed(2)} ` +
-    `model_header=${model} model_products=${model} ` +
-    `gemini_header_status=${headerHttpStatus} gemini_products_status=${productsHttpStatus} ` +
-    `header_response_length=${headerResponseLength} products_response_length=${productsResponseLength} ` +
-    `products_before_validation=${rawItemsList.length} products_after_validation=${itensFinais.length} ` +
-    `fiscal_validation=${validacao.valido ? "OK" : validacao.motivo} ` +
-    `correlation_id=${input.workspaceId || "anon"}`
-  );
+  const fmtCurrency = (val: number | null | undefined) =>
+    val != null && !isNaN(Number(val))
+      ? Number(val).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }).replace(/\s+/g, " ")
+      : "R$ 0,00";
 
 
-  const previewItens = itensFinais
-    .slice(0, 5)
-    .map(
-      (it) =>
-        `  • ${it.descricao} — ${it.quantidade} ${it.unidade || "UN"} x R$ ${it.valor_unitario.toFixed(2)} = R$ ${it.valor_total.toFixed(2)}`,
-    )
-    .join("\n");
+  const dataEmissaoFormatada = (session.dataEmissao || dataEmissao)
+    ? String(session.dataEmissao || dataEmissao).split("T")[0].split("-").reverse().join("/")
+    : "Não identificada";
 
-  const extraItens =
-    itensFinais.length > 5 ? `\n  *... e mais ${itensFinais.length - 5} itens.*` : "";
+  const valorTotalNfFormatado = valorTotalNf > 0 ? fmtCurrency(valorTotalNf) : "Não identificado";
+  const valorProdutosDeclaradoFormatado = refProdutos > 0 ? fmtCurrency(refProdutos) : "Não identificado";
+  const somaItensFormatada = fmtCurrency(valorProdutosCalculadoItens);
+
+  // Lista COMPLETA de todos os produtos (sem limitação artificial)
+  const itensFormatados = itensFinais.map((it, idx) => {
+    const qtd = it.quantidade != null ? `${it.quantidade} ${it.unidade || "UN"}` : "Qtd N/A";
+    const vUnit = fmtCurrency(it.valor_unitario);
+    const vTot = fmtCurrency(it.valor_total);
+    const vLiq = fmtCurrency(it.custo_unitario_liquido || it.valor_unitario);
+    return [
+      `${idx + 1}. **${it.descricao || "Produto"}**`,
+      `   📦 ${qtd} × ${vUnit}`,
+      `   💰 Total: ${vTot} | Custo Líquido: **${vLiq}**`,
+    ].join("\n");
+  }).join("\n\n");
 
   const msgLines = [
-    `🧾 **Nota Fiscal (DANFE) Analisada**`,
+    `📄 **Nota Fiscal de Compra Identificada!**`,
     ``,
-    `• **Fornecedor:** ${session.fornecedor || fornecedor || "Não identificado"}`,
-    `• **CNPJ:** ${session.cnpjFornecedor || cnpjFornecedor || "Não identificado"}`,
-    `• **NF:** ${session.numeroNf || numeroNf || "Sem número"}${serieNf ? ` (Série ${serieNf})` : ""}`,
-    `• **Data de Emissão:** ${session.dataEmissao || dataEmissao || "Não identificada"}`,
-    `• **Valor dos Produtos (NF):** ${valorProdutosDeclaradoFormatado}`,
-    `• **Soma dos Itens:** ${somaItensFormatada}`,
-    `• **Total de Itens Validados:** ${itensFinais.length}`,
-    `• **Status Fiscal:** ${validacao.valido ? "✅ Validação Matemática OK" : `⚠️ Requer Revisão (${validacao.motivo})`}`,
+    `🏢 **Fornecedor:** ${session.fornecedor || fornecedor || "Não identificado"}`,
+    (session.cnpjFornecedor || cnpjFornecedor) ? `🔢 **CNPJ:** ${session.cnpjFornecedor || cnpjFornecedor}` : null,
+    `📋 **NF:** ${session.numeroNf || numeroNf || "Sem número"}${serieNf ? ` (Série ${serieNf})` : ""}`,
+    `📅 **Emissão:** ${dataEmissaoFormatada}`,
+    `💵 **Valor Total da Nota:** ${valorTotalNfFormatado}`,
+    `📄 **Valor dos Produtos na NF:** ${valorProdutosDeclaradoFormatado}`,
+    `📦 **Itens:** ${itensFinais.length} produtos`,
     ``,
-    `📦 **Prévia dos Produtos:**`,
-    previewItens || "  • Nenhum item identificado",
-    extraItens,
+    itensFormatados || "  • Nenhum item identificado",
+    ``,
+    `────────────────`,
+    `💰 **Soma dos produtos extraídos:** ${somaItensFormatada}`,
+    `📄 **Valor dos produtos na NF:** ${valorProdutosDeclaradoFormatado}`,
+    validacao.valido
+      ? `✅ **Valores conferidos**`
+      : `⚠️ **Requer Revisão:** ${validacao.motivo || "Divergência matemática"}`,
     ``,
     `🔒 *Nenhuma alteração foi feita no estoque.*`,
   ];
@@ -564,8 +558,9 @@ export async function processDanfeDocument(
     valores_totais: { valor_produtos: refProdutos, valor_total_nf: valorTotalNf },
     itens: itensFinais,
     validacao,
-    mensagemFormatada: msgLines.filter((l) => l !== undefined).join("\n"),
+    mensagemFormatada: msgLines.filter((l) => l !== null && l !== undefined).join("\n"),
     sessionState: session,
   };
 }
+
 

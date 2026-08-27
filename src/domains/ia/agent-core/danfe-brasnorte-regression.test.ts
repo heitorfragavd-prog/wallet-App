@@ -140,12 +140,27 @@ describe("DANFE Brasnorte — Teste de Regressão Cirúrgico", () => {
     expect(result.validacao.valido).toBe(true);
     expect(result.status).toBe("sucesso");
 
-    // 3. Verificações na Mensagem Formatada
-    expect(result.mensagemFormatada).toContain("Brasnorte Distribuidora de Bebidas Ltda");
-    expect(result.mensagemFormatada).toContain("000.083.208");
-    expect(result.mensagemFormatada).toContain("Validação Matemática OK");
-    expect(result.mensagemFormatada).not.toContain("valor_produtos_nf_ausente");
+    // 3. Verificações na Mensagem Formatada (Paridade Visual com o Telegram)
+    expect(result.mensagemFormatada).toContain("📄 **Nota Fiscal de Compra Identificada!**");
+    expect(result.mensagemFormatada).toContain("🏢 **Fornecedor:** Brasnorte Distribuidora de Bebidas Ltda");
+    expect(result.mensagemFormatada).toContain("📋 **NF:** 000.083.208 (Série 1)");
+    expect(result.mensagemFormatada).toContain("📅 **Emissão:** 20/08/2026");
+    expect(result.mensagemFormatada).toContain("💵 **Valor Total da Nota:** R$ 1.105,25");
+    expect(result.mensagemFormatada).toContain("📄 **Valor dos Produtos na NF:** R$ 1.105,25");
+    expect(result.mensagemFormatada).toContain("📦 **Itens:** 11 produtos");
+
+    // Todos os 11 produtos devem estar listados sem truncamento
+    expect(result.mensagemFormatada).toContain("1. **CERVEJA HEINEKEN 330ML**");
+    expect(result.mensagemFormatada).toContain("11. **TONICA SCHWEPPES 350ML**");
+    expect(result.mensagemFormatada).toContain("Custo Líquido:");
+    expect(result.mensagemFormatada).not.toContain("... e mais");
+
+    // Seção de conferência e segurança
+    expect(result.mensagemFormatada).toContain("💰 **Soma dos produtos extraídos:** R$ 1.105,25");
+    expect(result.mensagemFormatada).toContain("✅ **Valores conferidos**");
+    expect(result.mensagemFormatada).toContain("🔒 *Nenhuma alteração foi feita no estoque.*");
   });
+
 
   it("Normaliza aliases quando os campos vêm com nomes alternativos ou fora de 'cabecalho'", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init) => {

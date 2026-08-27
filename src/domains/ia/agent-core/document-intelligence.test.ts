@@ -264,8 +264,9 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
     expect(result.itens).toHaveLength(2);
     expect(result.validacao.valido).toBe(true);
     expect(result.validacao.somaItens).toBe(5000.0);
-    expect(result.mensagemFormatada).toContain("Validação Matemática OK");
+    expect(result.mensagemFormatada).toContain("Valores conferidos");
     expect(result.mensagemFormatada).toContain("Nenhuma alteração foi feita no estoque");
+
   });
 
   // ──────────────────────────────────────────────────────────────────────────
