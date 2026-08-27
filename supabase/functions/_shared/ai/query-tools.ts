@@ -27,7 +27,15 @@ export interface FinancialQueryRepository {
   listTransactions(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
   listBalances(context: AiExecutionContext): Promise<CanonicalBalance[]>;
   listDebts(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalDebt[]>;
+  /**
+   * Vendas brutas do PDV Eyemobile.
+   * Fonte: tabela `transacoes` WHERE descricao LIKE 'Venda Eyemobile %'.
+   * Retorna o valor BRUTO do que foi vendido no caixa — diferente de receitas
+   * (que incluem Pix/Cartão líquidos, manuais etc.).
+   */
+  listSalesPDV(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
 }
+
 
 export interface QueryToolResult<T = unknown> {
   tool: string;
@@ -109,7 +117,34 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
     buscar_receitas: async (args, context) => {
       const period = validatePeriod(args);
       const records = await repository.listRevenues(context, period);
-      return baseResult("buscar_receitas", context, period, records, sourceReferences(records));
+      return baseResult(
+        "buscar_receitas",
+        context,
+        period,
+        records,
+        sourceReferences(records),
+        {},
+        ["ATENÇÃO: esta tool retorna RECEITAS FINANCEIRAS registradas na Wallet (Pix/Cartão líquidos + dinheiro PDV + manuais). Para VENDAS BRUTAS do PDV Eyemobile, use buscar_vendas_pdv."],
+      );
+    },
+    buscar_vendas_pdv: async (args, context) => {
+      // Vendas brutas do PDV Eyemobile — fonte canônica: tabela transacoes
+      // WHERE tipo='receita' AND descricao LIKE 'Venda Eyemobile %'
+      // É o FATURAMENTO BRUTO — diferente de receitas (que inclui Divipay líquido, manuais etc.)
+      const period = validatePeriod(args);
+      const records = await repository.listSalesPDV(context, period);
+      const totalBruto = records.reduce((sum, r) => sum + r.amount, 0);
+      return baseResult(
+        "buscar_vendas_pdv",
+        context,
+        period,
+        records,
+        sourceReferences(records),
+        { totalBruto: "soma dos valores brutos das vendas PDV Eyemobile no período" },
+        records.length === 0
+          ? ["Nenhuma venda Eyemobile encontrada para o período. Se Eyemobile estiver offline, as vendas do dia podem não ter sido importadas ainda."]
+          : [`Total bruto: R$ ${totalBruto.toFixed(2)}`],
+      );
     },
     buscar_despesas: async (args, context) => {
       const period = validatePeriod(args);

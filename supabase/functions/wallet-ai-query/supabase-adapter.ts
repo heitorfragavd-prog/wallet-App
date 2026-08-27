@@ -15,6 +15,7 @@ interface SupabaseQueryLike extends PromiseLike<QueryResult<FinancialDataRow[]>>
   eq(column: string, value: unknown): SupabaseQueryLike;
   gte(column: string, value: unknown): SupabaseQueryLike;
   lte(column: string, value: unknown): SupabaseQueryLike;
+  like(column: string, pattern: string): SupabaseQueryLike;
   maybeSingle(): Promise<QueryResult<{ id: string }>>;
   insert(value: unknown): PromiseLike<{ error: unknown | null }>;
 }
@@ -43,10 +44,14 @@ export async function executeSupabaseFinancialQuery(
     builder = builder.gte(query.dateRange.column, query.dateRange.start);
     builder = builder.lte(query.dateRange.column, query.dateRange.end);
   }
+  if (query.like) {
+    builder = builder.like(query.like.column, query.like.pattern);
+  }
   const result = await builder;
   if (result.error) throw new Error("financial_query_failed");
   return result.data ?? [];
 }
+
 
 export function createSupabaseAuthorizationDependencies(
   client: SupabaseClientLike,

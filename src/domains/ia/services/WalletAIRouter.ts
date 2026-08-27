@@ -1,10 +1,17 @@
 /**
- * WalletAIRouter — Etapa 1.1 (auditoria e correção)
+ * WalletAIRouter — Etapa 1.1 / Etapa 1.4 (semântica financeira)
  *
- * CORREÇÃO CRÍTICA:
- *   Padrões de análise complexa agora são avaliados ANTES dos padrões
- *   de consulta rápida. Isso evita que "Quanto vendi hoje e por que caiu?"
- *   seja tratado como FAST_QUERY quando deveria ir para AGENT_V2.
+ * CORREÇÃO ETAPA 1.1:
+ *   Padrões de análise complexa avaliados ANTES de FAST_QUERY.
+ *
+ * CORREÇÃO ETAPA 1.4 — SEPARAÇÃO SEMÂNTICA:
+ *   VENDAS = valor bruto do PDV Eyemobile (o que foi vendido).
+ *   RECEITAS = entradas financeiras registradas na Wallet (líquido de taxas).
+ *   São métricas DIFERENTES e não devem ser intercambiadas.
+ *
+ *   - "quanto vendi?" / "faturamento?" → FAST_QUERY (intenção: VENDAS)
+ *   - "quanto recebi?" / "entrou?" → FAST_QUERY (intenção: RECEITAS)
+ *   - "por que receita < vendas?" → AGENT_V2 (cross-métrica)
  *
  * REGRA FUNDAMENTAL:
  *   FAST_QUERY é uma OTIMIZAÇÃO, nunca uma REDUÇÃO de inteligência.
@@ -58,7 +65,10 @@ const ACTION_PATTERNS: RegExp[] = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. ANÁLISE COMPLEXA — avaliada ANTES de FAST_QUERY
-//    Inclui modificadores que tornam uma consulta simples em análise profunda
+//    Inclui:
+//    - Modificadores analíticos (por que, compare, detalhe...)
+//    - CROSS-MÉTRICA: perguntas que envolvem VENDAS e RECEITAS juntas
+//      (precisam consultar Eyemobile + Wallet ao mesmo tempo → Agent V2)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AGENT_V2_PATTERNS: RegExp[] = [
@@ -90,26 +100,57 @@ const AGENT_V2_PATTERNS: RegExp[] = [
   /me (conta|explica|diz|fale sobre|ajuda)/,
   /quero (ver|entender|saber mais|uma analise)/,
   /qual (a diferenca|o impacto|o motivo)/,
+  // CROSS-MÉTRICA (Etapa 1.4): pergunta envolve VENDAS e RECEITAS ao mesmo tempo.
+  // Estas perguntas precisam cruzar Eyemobile + Wallet → obrigatoriamente Agent V2.
+  // Ex: "por que minha receita é menor que minhas vendas?"
+  //     "diferença entre receita e faturamento"
+  //     "receita vs vendas"
+  /vend.*receit|receit.*vend/,
+  /fatur.*receit|receit.*fatur/,
+  /(diferenca|diferença).*(vend|fatur|receit)/,
+  /(vend|fatur|receit).*(diferenca|diferença)/,
+  /porque.*(receit|vend|fatur)/,
+  /menor.*que.*(vend|fatur)|maior.*que.*(receit)/,
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. CONSULTA RÁPIDA — só após confirmar ausência de análise complexa
-//    Apenas consultas pontuais e simples que podem ser respondidas localmente
+//    Apenas consultas pontuais e simples respondidas localmente.
+//
+//    SEPARAÇÃO SEMÂNTICA (Etapa 1.4):
+//    VENDAS_PDV: intenção "vendi/faturei/faturamento/vendas" → fonte Eyemobile
+//    RECEITAS:   intenção "recebi/entrou/receita/entrada"   → fonte Wallet
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FAST_QUERY_PATTERNS: RegExp[] = [
-  /^quanto (vendi|vendeu|faturei|faturou)( (hoje|ontem|essa semana|este mes|deste mes|essa semana))?$/,
+/** Intenção VENDAS — consulta de faturamento bruto do PDV Eyemobile. */
+const FAST_QUERY_VENDAS_PATTERNS: RegExp[] = [
+  /^quanto (vendi|vendeu|faturei|faturou)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
+  /^vendas (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^faturamento (hoje|ontem|esse mes|deste mes|do dia|da semana)?$/,
+  /^quanto (a loja|a empresa) vendeu( (hoje|ontem|este mes))?$/,
+  /como estao as vendas$/,
+];
+
+/** Intenção RECEITAS — consulta de entradas financeiras da Wallet (líquido). */
+const FAST_QUERY_RECEITAS_PATTERNS: RegExp[] = [
+  /^quanto (tive de receita|recebi|entrou)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
+  /^receita (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^quanto entrou( (hoje|ontem|esta semana|este mes))?$/,
+  /^entradas (hoje|ontem|essa semana|este mes)$/,
+  /^quanto recebi (no cartao|no pix|em dinheiro)?( (hoje|ontem|esse mes))?$/,
+];
+
+/** Consultas que não são nem vendas nem receitas mas são pontuais. */
+const FAST_QUERY_OUTROS_PATTERNS: RegExp[] = [
   /^quanto (gastei|gastou|despesa)( (hoje|ontem|esse mes))?$/,
   /saldo (atual|agora|hoje|em conta)/,
   /quanto tenho (em conta|disponivel|na conta)/,
   /(caixa|saldo) (agora|hoje|atual)/,
-  /^vendas (hoje|ontem|essa semana|este mes|deste mes)$/,
-  /^receita (hoje|ontem|essa semana|este mes|deste mes)$/,
   /^despesa (hoje|ontem|essa semana|este mes|deste mes)$/,
   /^lucro (hoje|ontem|essa semana|este mes|deste mes)$/,
   /posso (comprar|gastar|pagar) (r\$|ate|isso)?/,
   /qual meu (saldo|lucro|resultado) (hoje|agora|atual)/,
-  /^quanto (tenho|sobrou|entrou)( agora| hoje)?$/,
+  /^quanto (tenho|sobrou)( agora| hoje)?$/,
   /^resumo (rapido|financeiro|de hoje|do dia)$/,
 ];
 
@@ -119,8 +160,10 @@ const FAST_QUERY_PATTERNS: RegExp[] = [
  * Ordem de prioridade (da maior para a menor):
  *   1. Documento anexado → DOCUMENT
  *   2. Intenção de ação/mutação → AGENT_V2
- *   3. Análise complexa / modificadores → AGENT_V2 (avaliada ANTES de FAST_QUERY)
- *   4. Consulta pontual simples → FAST_QUERY
+ *   3. Análise complexa / cross-métrica → AGENT_V2 (avaliada ANTES de FAST_QUERY)
+ *   4a. Consulta pontual de VENDAS → FAST_QUERY (intenção: vendas PDV)
+ *   4b. Consulta pontual de RECEITAS → FAST_QUERY (intenção: receitas Wallet)
+ *   4c. Consulta pontual outros → FAST_QUERY
  *   5. Default → AGENT_V2 (fallback seguro)
  */
 export function routeMessage(input: RouterInput): RouterDecision {
@@ -144,19 +187,34 @@ export function routeMessage(input: RouterInput): RouterDecision {
     };
   }
 
-  // 3. Análise complexa → Agent V2 (PRIORIDADE SOBRE FAST_QUERY)
-  //    Captura modificadores como "por que", "por categoria", "compare", "detalhe"
-  //    mesmo quando a mensagem começa com padrão de consulta simples.
+  // 3. Análise complexa ou cross-métrica → Agent V2 (PRIORIDADE SOBRE FAST_QUERY)
+  //    Captura modificadores como "por que", "por categoria", "compare",
+  //    e perguntas que cruzam Vendas + Receitas ao mesmo tempo.
   if (AGENT_V2_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "AGENT_V2",
-      reason: "Consulta analítica complexa ou modificador detectado → Agent V2 com ferramentas",
+      reason: "Consulta analítica complexa, cross-métrica ou modificador → Agent V2 com ferramentas",
     };
   }
 
-  // 4. Consulta simples e pontual → Fast Query (determinístico, sem token)
-  //    Somente atingida se nenhum modificador de análise foi detectado acima.
-  if (FAST_QUERY_PATTERNS.some((p) => p.test(normalized))) {
+  // 4a. Consulta pontual de VENDAS (PDV Eyemobile) → FAST_QUERY
+  if (FAST_QUERY_VENDAS_PATTERNS.some((p) => p.test(normalized))) {
+    return {
+      route: "FAST_QUERY",
+      reason: "Consulta de VENDAS (PDV Eyemobile) → Consulta Rápida determinística [intenção: vendas]",
+    };
+  }
+
+  // 4b. Consulta pontual de RECEITAS (Wallet) → FAST_QUERY
+  if (FAST_QUERY_RECEITAS_PATTERNS.some((p) => p.test(normalized))) {
+    return {
+      route: "FAST_QUERY",
+      reason: "Consulta de RECEITAS (Wallet) → Consulta Rápida determinística [intenção: receitas]",
+    };
+  }
+
+  // 4c. Outras consultas pontuais → FAST_QUERY
+  if (FAST_QUERY_OUTROS_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "FAST_QUERY",
       reason: "Consulta financeira pontual e simples → Consulta Rápida determinística",

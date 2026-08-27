@@ -43,6 +43,7 @@ import { useWalletIA, type WalletIAMessage, type WalletIAAttachment } from "@/do
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
+import { useEyemobileDashboard } from "@/domains/finance/hooks/useEyemobileDashboard";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -108,15 +109,34 @@ function somaPorMetodo(lista: Array<{ valor: number; metodo?: string | null }>):
     .join("\n");
 }
 
+/** Linha de vendas brutas do PDV Eyemobile para um período. */
+interface VendasPDV {
+  /** Vendas brutas filtradas para hoje (sem cancelamentos). */
+  hojeTotal: number;
+  /** Vendas brutas do mês atual. */
+  mesTotal: number;
+  /** Vendas brutas de ontem. */
+  ontemTotal: number;
+  /** Vendas brutas dos últimos 7 dias. */
+  semanaTotal: number;
+  /** true = Eyemobile respondeu com dados reais ou fallback local com dados. */
+  disponivel: boolean;
+  /** true = dado veio da tabela local de transações (fallback), não da API ao vivo. */
+  isLocalFallback?: boolean;
+}
+
 interface DadosIA {
   receitas: Array<{ valor: number; data: string; descricao?: string; metodo_pagamento?: string | null }>;
   despesas: Array<{ valor: number; data: string; descricao?: string }>;
   contas: Array<{ nome: string; saldo_atual: number; tipo: string }>;
+  /** Vendas brutas do PDV Eyemobile. NUNCA misturar com receitas. */
+  vendas?: VendasPDV;
 }
+
 
 function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
   const p = norm(pergunta);
-  const { receitas, despesas, contas } = dados;
+  const { receitas, despesas, contas, vendas } = dados;
   const receitasComDia = receitas.map((r) => ({ ...r, dia: dayKey(r.data), valor: Number(r.valor || 0) }));
   const despesasComDia = despesas.map((d) => ({ ...d, dia: dayKey(d.data), valor: Number(d.valor || 0) }));
   const saldoTotal = contas.filter((c) => c.tipo !== "cartao_credito").reduce((a, c) => a + Number(c.saldo_atual || 0), 0);
@@ -129,15 +149,20 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
   const totalReceitasMesPassado = receitasComDia.filter((r) => filtroMesPassado.match(r.dia)).reduce((a, r) => a + r.valor, 0);
   const totalDespesasMesPassado = despesasComDia.filter((d) => filtroMesPassado.match(d.dia)).reduce((a, d) => a + d.valor, 0);
 
+  // ── Saldo ───────────────────────────────────────────────────────────────────
   if (p.includes("saldo") || p.includes("quanto tenho") || p.includes("caixa")) {
     const detalhe = contas.filter((c) => c.tipo !== "cartao_credito").map((c) => `  • **${c.nome}:** ${formatCurrency(Number(c.saldo_atual || 0))}`).join("\n");
     return `💳 **Situação de caixa agora:**\n\n${detalhe || "  • Nenhuma conta cadastrada"}\n\n💰 **Total disponível:** **${formatCurrency(saldoTotal)}**`;
   }
+
+  // ── Resultado/Lucro ─────────────────────────────────────────────────────────
   if (p.includes("lucro") || p.includes("resultado") || p.includes("margem") || p.includes("sobrou")) {
     const lucroMes = totalReceitasMes - totalDespesasMes;
     const lucroMesPassado = totalReceitasMesPassado - totalDespesasMesPassado;
     return `📈 **Resultado (visão de caixa):**\n\n**Este mês:**\n- Receitas: ${formatCurrency(totalReceitasMes)}\n- Despesas: ${formatCurrency(totalDespesasMes)}\n- 💰 **Saldo do mês: ${formatCurrency(lucroMes)}** ${lucroMes >= 0 ? "✅" : "🔴"}\n\n**Mês passado:** ${formatCurrency(lucroMesPassado)}`;
   }
+
+  // ── Despesas ────────────────────────────────────────────────────────────────
   if (p.includes("despesa") || p.includes("gasto") || p.includes("gastei") || p.includes("custo") || p.includes("paguei")) {
     const periodo = detectarPeriodo(p, "mes");
     const filtro = filtroPeriodo(periodo);
@@ -147,14 +172,48 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
     const top = maiores.length ? `\n\n**Maiores gastos:**\n${maiores.map((d) => `  • ${d.descricao || "Despesa"}: **${formatCurrency(d.valor)}**`).join("\n")}` : "";
     return `📊 **Despesas ${filtro.label}:**\n\n- **Total:** **${formatCurrency(total)}** (${lista.length} lançamentos)${top}`;
   }
-  if (p.includes("vend") || p.includes("fatur") || p.includes("receita") || p.includes("receb") || p.includes("entrou")) {
+
+  // ── VENDAS (PDV Eyemobile) — "vendi", "faturei", "faturamento", "vendas" ───
+  // REGRA: perguntas sobre VENDAS usam o PDV Eyemobile (valor BRUTO do que foi vendido).
+  // NUNCA substituir silenciosamente por Receitas se Eyemobile estiver indisponível.
+  const isVendasQuery =
+    p.includes("vend") || p.includes("fatur");
+
+  if (isVendasQuery) {
+    if (!vendas || !vendas.disponivel) {
+      return `🏪 **Vendas do PDV:**\n\n⚠️ Não consegui consultar as vendas do Eyemobile agora.\n\nPosso consultar suas **receitas registradas** (entradas financeiras na Wallet), mas elas representam uma métrica diferente — já líquidas de taxas e com outras fontes incluídas.\n\nTente novamente em instantes ou pergunte sobre **"receitas"** se quiser ver as entradas financeiras.`;
+    }
     const periodo = detectarPeriodo(p, "hoje");
+    let total: number;
+    let label: string;
+    switch (periodo) {
+      case "hoje":   total = vendas.hojeTotal;   label = "hoje";               break;
+      case "ontem":  total = vendas.ontemTotal;  label = "ontem";              break;
+      case "semana": total = vendas.semanaTotal; label = "nos últimos 7 dias"; break;
+      case "mes":    total = vendas.mesTotal;    label = "neste mês";          break;
+      default:       total = vendas.hojeTotal;   label = "hoje";
+    }
+    const localNote = vendas.isLocalFallback ? "\n\n📌 *Dado do histórico local (Eyemobile offline).*" : "";
+    return `🏪 **Vendas ${label} (PDV Eyemobile):**\n\n- **Total bruto vendido:** **${formatCurrency(total)}**\n\n> 💡 Este valor representa o faturamento bruto do PDV. Para ver as **entradas financeiras líquidas** (após taxas), pergunte sobre "receitas".${localNote}`;
+  }
+
+  // ── RECEITAS / ENTRADAS FINANCEIRAS (Wallet) — "receita", "entrou", "recebi" ─
+  // REGRA: perguntas sobre RECEITAS usam a camada financeira da Wallet
+  // (inclui Pix/Cartão líquidos da Divipay + Dinheiro PDV + manuais).
+  // NUNCA substituir por Vendas Eyemobile se Receitas estiverem indisponíveis.
+  const isReceitasQuery =
+    p.includes("receita") || p.includes("receb") || p.includes("entrou") || p.includes("entrada");
+
+  if (isReceitasQuery) {
+    const periodo = detectarPeriodo(p, "mes");
     const filtro = filtroPeriodo(periodo);
     const lista = receitasComDia.filter((r) => filtro.match(r.dia));
     const total = lista.reduce((a, r) => a + r.valor, 0);
     const detalheMetodos = somaPorMetodo(lista.map((r) => ({ valor: r.valor, metodo: r.metodo_pagamento })));
-    return `💵 **Vendas ${filtro.label}:**\n\n- **Total vendido:** **${formatCurrency(total)}**\n- **Quantidade:** ${lista.length} vendas/entradas\n\n${detalheMetodos ? `**Por forma de pagamento:**\n${detalheMetodos}` : ""}`;
+    return `💵 **Receitas ${filtro.label} (Wallet):**\n\n- **Total de entradas:** **${formatCurrency(total)}**\n- **Lançamentos:** ${lista.length}\n\n${detalheMetodos ? `**Por forma de pagamento:**\n${detalheMetodos}` : ""}\n\n> 💡 Este valor representa entradas financeiras registradas (líquido de taxas). Para vendas brutas do PDV, pergunte sobre "vendas".`;
   }
+
+  // ── Análise de compra ───────────────────────────────────────────────────────
   if (p.includes("posso comprar") || p.includes("posso gastar")) {
     const match = p.match(/\d+([.,]\d+)?/);
     const valorCompra = match ? parseFloat(match[0].replace(",", ".")) : 0;
@@ -163,10 +222,13 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
     return `🛍️ **Análise de compra${valorCompra ? ` de ${formatCurrency(valorCompra)}` : ""}:**\n\n- **Saldo em contas:** ${formatCurrency(saldoTotal)}\n- **Saldo após a compra:** ${formatCurrency(saldoApos)}\n- **Avaliação:** ${viavel ? "✅ **COMPRA VIÁVEL**" : "⚠️ **ATENÇÃO AO CAIXA**"}`;
   }
 
+  // ── Resumo padrão ───────────────────────────────────────────────────────────
   const filtroHoje = filtroPeriodo("hoje");
-  const vendasHoje = receitasComDia.filter((r) => filtroHoje.match(r.dia)).reduce((a, r) => a + r.valor, 0);
-  return `🤖 **Resumo financeiro rápido:**\n\n1. **Vendas de hoje:** **${formatCurrency(vendasHoje)}**\n2. **Vendas no mês:** **${formatCurrency(totalReceitasMes)}**\n3. **Despesas no mês:** **${formatCurrency(totalDespesasMes)}**\n4. **Saldo em contas:** **${formatCurrency(saldoTotal)}**`;
+  const receitasHoje = receitasComDia.filter((r) => filtroHoje.match(r.dia)).reduce((a, r) => a + r.valor, 0);
+  const vendasHojeStr = vendas?.disponivel ? formatCurrency(vendas.hojeTotal) : "indisponível (Eyemobile offline)";
+  return `🤖 **Resumo financeiro rápido:**\n\n1. **Vendas de hoje (PDV):** **${vendasHojeStr}**\n2. **Receitas de hoje (Wallet):** **${formatCurrency(receitasHoje)}**\n3. **Receitas no mês:** **${formatCurrency(totalReceitasMes)}**\n4. **Despesas no mês:** **${formatCurrency(totalDespesasMes)}**\n5. **Saldo em contas:** **${formatCurrency(saldoTotal)}**`;
 }
+
 
 // ─── Componente de Mensagem ───────────────────────────────────────────────────
 
@@ -317,9 +379,44 @@ export default function WalletIAPage() {
     staleTime: 1000 * 60 * 5,
   });
 
+  // Eyemobile — vendas brutas do PDV.
+  // Dois hooks separados: um para hoje (preciso), um para o mês corrente.
+  const hoje = new Date();
+  const hojeStr = isoDay(hoje);
+  const ontem = new Date(hoje); ontem.setDate(ontem.getDate() - 1);
+  const ontemStr = isoDay(ontem);
+  const semanaStr = isoDay(new Date(new Date().setDate(hoje.getDate() - 6)));
+  const inicioMes = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-01`;
+
+  const { data: eyemobileHoje } = useEyemobileDashboard({ startDate: hojeStr, endDate: hojeStr });
+  const { data: eyemobileOntem } = useEyemobileDashboard({ startDate: ontemStr, endDate: ontemStr });
+  const { data: eyemobileSemana } = useEyemobileDashboard({ startDate: semanaStr, endDate: hojeStr });
+  const { data: eyemobileMes } = useEyemobileDashboard({ startDate: inicioMes, endDate: hojeStr });
+
+  const vendas: VendasPDV = useMemo(() => {
+    // configured=true → Eyemobile respondeu (online ou fallback local com dados)
+    // configured=false && !isLocalFallback → Eyemobile não configurado ou erro sem dados
+    const disponivel = !!(
+      eyemobileHoje?.configured ||
+      eyemobileHoje?.isLocalFallback ||
+      eyemobileMes?.configured
+    );
+    if (!disponivel) {
+      return { hojeTotal: 0, mesTotal: 0, ontemTotal: 0, semanaTotal: 0, disponivel: false };
+    }
+    return {
+      hojeTotal: eyemobileHoje?.kpis?.totalRevenue ?? 0,
+      ontemTotal: eyemobileOntem?.kpis?.totalRevenue ?? 0,
+      semanaTotal: eyemobileSemana?.kpis?.totalRevenue ?? 0,
+      mesTotal: eyemobileMes?.kpis?.totalRevenue ?? 0,
+      disponivel: true,
+      isLocalFallback: eyemobileHoje?.isLocalFallback || eyemobileMes?.isLocalFallback,
+    };
+  }, [eyemobileHoje, eyemobileOntem, eyemobileSemana, eyemobileMes]);
+
   const dadosFinanceiros = useMemo(
-    () => ({ receitas, despesas, contas }),
-    [receitas, despesas, contas]
+    () => ({ receitas, despesas, contas, vendas }),
+    [receitas, despesas, contas, vendas]
   );
 
   // Só passa fastQueryFn quando os dados de receitas estão prontos.
