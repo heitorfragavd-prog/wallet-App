@@ -25,9 +25,12 @@ import {
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
   parseFiscalNumber,
+  formatNFeNumber,
+  reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -4648,6 +4651,22 @@ FORMATO:
         if (documentData && ehDANFE) {
           console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA (PRIORIDADE 1) <<< Itens:", documentData.itens?.length);
 
+          // Conciliação Determinística do Número da NF com a Chave de Acesso Oficial (44 dígitos)
+          if (documentData.cabecalho) {
+            const rec = reconcileNFeNumber(
+              documentData.cabecalho.numero_nf,
+              documentData.cabecalho.serie_nf,
+              documentData.cabecalho.chave_acesso,
+              String(chatId)
+            );
+            if (rec.numero_nf_formatado) {
+              documentData.cabecalho.numero_nf = rec.numero_nf_formatado;
+            }
+            if (rec.serie_nf) {
+              documentData.cabecalho.serie_nf = rec.serie_nf;
+            }
+          }
+
           const { data: wsData } = await supabase
             .from("workspaces")
             .select("id")
@@ -4657,6 +4676,7 @@ FORMATO:
             .maybeSingle();
 
           const wsId = wsData?.id || workspaceId || null;
+
 
           const fmt = (v: any) =>
             v != null && !isNaN(Number(v))

@@ -348,7 +348,151 @@ export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado
   };
 }
 
+// ─── 4. FORMATAÇÃO E EXTRAÇÃO DETERMINÍSTICA DO NÚMERO DA NF-E ─────────────
+
+/**
+ * Formata um número de NF-e (nNF) para a máscara padrão 000.000.000 sem jamais mover ou trocar dígitos.
+ */
+export function formatNFeNumber(nNF: string | number | null | undefined): string | null {
+  if (nNF === null || nNF === undefined) return null;
+  const digits = String(nNF).replace(/\D/g, "");
+  if (!digits) return null;
+
+  // Se tiver até 9 dígitos, faz padStart com zeros à esquerda
+  const padded = digits.length <= 9 ? digits.padStart(9, "0") : digits;
+  if (padded.length === 9) {
+    return padded.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1.$2.$3");
+  }
+  return digits;
+}
+
+export interface AccessKeyNFeInfo {
+  cUF: string;
+  AAMM: string;
+  CNPJ: string;
+  modelo: string;
+  serie: string;
+  nNF: string; // 9 dígitos
+  nNFFormatado: string; // 000.000.000
+  tpEmis: string;
+  cNF: string;
+  cDV: string;
+}
+
+/**
+ * Extrai deterministicamente as partes estruturais e o número da NF-e (nNF)
+ * a partir de uma chave de acesso oficial de 44 dígitos da SEFAZ.
+ * 
+ * Estrutura:
+ * cUF(2) + AAMM(4) + CNPJ(14) + mod(2) + serie(3) + nNF(9) + tpEmis(1) + cNF(8) + cDV(1) = 44 dígitos
+ */
+export function extractNFeNumberFromAccessKey(chaveAcesso: string | null | undefined): AccessKeyNFeInfo | null {
+  if (!chaveAcesso) return null;
+  const digits = String(chaveAcesso).replace(/\D/g, "");
+  if (digits.length !== 44) return null;
+
+  const cUF = digits.substring(0, 2);
+  const AAMM = digits.substring(2, 6);
+  const CNPJ = digits.substring(6, 20);
+  const modelo = digits.substring(20, 22);
+  const serie = digits.substring(22, 25);
+  const nNF = digits.substring(25, 34); // 9 dígitos da posição 25 a 33
+  const tpEmis = digits.substring(34, 35);
+  const cNF = digits.substring(35, 43);
+  const cDV = digits.substring(43, 44);
+
+  return {
+    cUF,
+    AAMM,
+    CNPJ,
+    modelo,
+    serie,
+    nNF,
+    nNFFormatado: formatNFeNumber(nNF) || nNF,
+    tpEmis,
+    cNF,
+    cDV,
+  };
+}
+
+export interface ReconciledNFeNumber {
+  numero_nf: string | null;
+  numero_nf_formatado: string | null;
+  serie_nf: string | null;
+  source_selected: "access_key" | "visual" | "none";
+  match: boolean;
+}
+
+/**
+ * Realiza a conciliação determinística entre o número visual lido pelo modelo e a chave de acesso da SEFAZ.
+ * Se houver divergência entre o número visual e uma chave de acesso válida de 44 dígitos,
+ * a chave de acesso PREVALECE como fonte canônica fiscal.
+ */
+export function reconcileNFeNumber(
+  visualNumber: string | null | undefined,
+  visualSerie: string | null | undefined,
+  accessKey: string | null | undefined,
+  correlationId = "anon",
+): ReconciledNFeNumber {
+  const keyInfo = extractNFeNumberFromAccessKey(accessKey);
+  const visualClean = visualNumber ? String(visualNumber).replace(/\D/g, "") : null;
+  const visualNormalized = visualClean ? (visualClean.length <= 9 ? visualClean.padStart(9, "0") : visualClean) : null;
+
+  if (keyInfo) {
+    const keyNum = keyInfo.nNF;
+    const match = visualNormalized === keyNum;
+    const source_selected: "access_key" | "visual" = match ? "visual" : "access_key";
+    const serie_final = visualSerie ? String(visualSerie).trim() : String(Number(keyInfo.serie));
+
+    console.log(
+      `[DANFE_NF_NUMBER_TRACE] correlation_id=${correlationId} ` +
+      `numero_nf_model_raw="${visualNumber || 'null'}" ` +
+      `numero_nf_normalized="${visualNormalized || 'null'}" ` +
+      `numero_nf_access_key="${keyNum}" ` +
+      `numero_nf_final="${keyInfo.nNFFormatado}" ` +
+      `source_selected=${source_selected} match=${match}`
+    );
+
+    return {
+      numero_nf: keyNum,
+      numero_nf_formatado: keyInfo.nNFFormatado,
+      serie_nf: serie_final,
+      source_selected,
+      match,
+    };
+  }
+
+  if (visualNormalized) {
+    const formatted = formatNFeNumber(visualNormalized);
+    console.log(
+      `[DANFE_NF_NUMBER_TRACE] correlation_id=${correlationId} ` +
+      `numero_nf_model_raw="${visualNumber || 'null'}" ` +
+      `numero_nf_normalized="${visualNormalized}" ` +
+      `numero_nf_access_key="none" ` +
+      `numero_nf_final="${formatted}" ` +
+      `source_selected=visual match=false`
+    );
+
+    return {
+      numero_nf: visualNormalized,
+      numero_nf_formatado: formatted,
+      serie_nf: visualSerie ? String(visualSerie).trim() : null,
+      source_selected: "visual",
+      match: false,
+    };
+  }
+
+  return {
+    numero_nf: null,
+    numero_nf_formatado: null,
+    serie_nf: visualSerie ? String(visualSerie).trim() : null,
+    source_selected: "none",
+    match: false,
+  };
+}
+
 export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
+
 Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
 
 Retorne APENAS um JSON no seguinte formato:

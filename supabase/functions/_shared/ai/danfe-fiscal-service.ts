@@ -12,6 +12,8 @@ import {
   reconcileAndDeduplicateV2,
   validateDanfeMathV2,
   parseFiscalNumber,
+  formatNFeNumber,
+  reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../danfe-gemini-v2.ts";
@@ -23,9 +25,12 @@ export {
   reconcileAndDeduplicateV2,
   validateDanfeMathV2,
   parseFiscalNumber,
+  formatNFeNumber,
+  reconcileNFeNumber,
   type DanfeItemV2,
   type DanfeValidationResultV2,
 };
+
 
 
 
@@ -647,6 +652,11 @@ export async function processDanfeDocument(
     null
   );
 
+  // Conciliação Determinística do Número da NF e Série com a Chave de Acesso Oficial (44 dígitos)
+  const reconciledNfe = reconcileNFeNumber(numeroNf, serieNf, chaveAcesso, input.workspaceId || "anon");
+  const numeroNfFinal = reconciledNfe.numero_nf_formatado || formatNFeNumber(numeroNf) || numeroNf;
+  const serieNfFinal = reconciledNfe.serie_nf || serieNf;
+
   const paginaAtual = Number(rawCabecalho.pagina_atual || docAnalysis?.pagina_atual) || 1;
   const totalPaginas = Number(rawCabecalho.total_paginas || docAnalysis?.total_paginas) || 1;
 
@@ -660,8 +670,8 @@ export async function processDanfeDocument(
   const cabecalhoConsolidado = {
     fornecedor,
     cnpj_fornecedor: cnpjFornecedor,
-    numero_nf: numeroNf,
-    serie_nf: serieNf,
+    numero_nf: numeroNfFinal,
+    serie_nf: serieNfFinal,
     data_emissao: dataEmissao,
     chave_acesso: chaveAcesso,
     pagina_atual: paginaAtual,
@@ -678,19 +688,25 @@ export async function processDanfeDocument(
   let session: DanfeSessionState;
 
   if (input.existingSession && input.existingSession.workspaceId === input.workspaceId) {
-    // Continuação de sessão multipágina
-    const acumulados = input.existingSession.itensAcumulados || [];
-    itensFinais = reconcileAndDeduplicateV2(acumulados, itensValidados);
+    // Mescla itens da folha complementar
     session = {
       ...input.existingSession,
-      paginasRecebidas: [...new Set([...input.existingSession.paginasRecebidas, paginaAtual])],
-      itensAcumulados: itensFinais,
+      fornecedor: input.existingSession.fornecedor || fornecedor,
+      cnpjFornecedor: input.existingSession.cnpjFornecedor || cnpjFornecedor,
+      numeroNf: input.existingSession.numeroNf || numeroNfFinal,
+      dataEmissao: input.existingSession.dataEmissao || dataEmissao,
+      valorProdutosDeclarado: input.existingSession.valorProdutosDeclarado || valorProdutosDeclaradoNF,
+      valorTotalNfDeclarado: input.existingSession.valorTotalNfDeclarado || valorTotalNf,
+      paginasRecebidas: Array.from(new Set([...input.existingSession.paginasRecebidas, paginaAtual])).sort((a, b) => a - b),
+      itensAcumulados: reconcileAndDeduplicateV2(input.existingSession.itensAcumulados || [], itensValidados || []),
     };
+
+    itensFinais = session.itensAcumulados;
   } else {
     // Nova sessão
     session = {
       chaveAcesso,
-      numeroNf,
+      numeroNf: numeroNfFinal,
       fornecedor,
       cnpjFornecedor,
       dataEmissao,

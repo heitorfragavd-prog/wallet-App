@@ -56,7 +56,8 @@ describe("DANFE Brasnorte — Teste de Regressão Cirúrgico", () => {
                           numero_nf: "000.083.208",
                           serie_nf: "1",
                           data_emissao: "2026-08-20",
-                          chave_acesso: "12345678901234567890123456789012345678901234",
+                          chave_acesso: "51260831908617000133550010000832081123456789",
+
                           pagina_atual: 1,
                           total_paginas: 1,
                         },
