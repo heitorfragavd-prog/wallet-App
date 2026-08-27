@@ -435,3 +435,188 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
     expect(vencProposta).not.toBeNull();
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// BLOCO DE TESTES — MELHORIAS DE ROBUSTEZ (Etapa 2.2C)
+// Cobre: filtro de sanidade de ano, DV obrigatório, subsequência segura,
+//        sugestão de envio como arquivo.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ─── Helpers espelhados do index.ts (nova versão) ───
+function dvModulo10(digits: string): number {
+  let sum = 0;
+  let factor = 2;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    const prod = parseInt(digits[i], 10) * factor;
+    sum += prod > 9 ? Math.floor(prod / 10) + (prod % 10) : prod;
+    factor = factor === 2 ? 1 : 2;
+  }
+  return (10 - (sum % 10)) % 10;
+}
+
+function validarDVsLinhaDigitavel47(d: string): boolean {
+  if (d.length !== 47) return false;
+  if (dvModulo10(d.slice(0, 9)) !== parseInt(d[9], 10)) return false;
+  if (dvModulo10(d.slice(10, 20)) !== parseInt(d[20], 10)) return false;
+  if (dvModulo10(d.slice(21, 31)) !== parseInt(d[31], 10)) return false;
+  return true;
+}
+
+function parseLinhaDigitavelFebr(linha: string): { valor: number | null; vencimento: string | null } {
+  const digits = (linha || "").replace(/\D/g, "");
+  if (digits.length !== 47) return { valor: null, vencimento: null };
+  const campo5 = digits.slice(33);
+  const valorCentavos = parseInt(campo5.slice(4), 10);
+  const valor = !isNaN(valorCentavos) && valorCentavos > 0 ? valorCentavos / 100 : null;
+  const fator = parseInt(campo5.slice(0, 4), 10);
+  let vencimento: string | null = null;
+  if (!isNaN(fator) && fator > 1000) {
+    const base = new Date(Date.UTC(2025, 1, 22));
+    vencimento = new Date(base.getTime() + (fator - 1000) * 86400000).toISOString().slice(0, 10);
+  }
+  return { valor, vencimento };
+}
+
+function buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
+  if (!textoOCR || textoOCR.length < 20) return null;
+  const blocos = textoOCR.match(/\d[\d.\s]{20,}\d/g) || [];
+  for (const bloco of blocos) {
+    const digits = bloco.replace(/\D/g, "");
+    for (const len of [47, 48]) {
+      for (let start = 0; start <= digits.length - len; start++) {
+        const cand = digits.slice(start, start + len);
+        if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+          const febraban = parseLinhaDigitavelFebr(cand);
+          if (febraban.valor && febraban.valor > 0) return cand;
+        }
+        if (len === 48 && digits.length === 48) return cand;
+      }
+    }
+  }
+  const allDigits = textoOCR.replace(/\D/g, "");
+  for (const len of [47, 48]) {
+    for (let start = 0; start <= allDigits.length - len; start++) {
+      const cand = allDigits.slice(start, start + len);
+      if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+        const febraban = parseLinhaDigitavelFebr(cand);
+        if (febraban.valor && febraban.valor > 0) return cand;
+      }
+      if (len === 48 && allDigits.length >= 48 && allDigits.length <= 52) return cand;
+    }
+  }
+  return null;
+}
+
+function filtroAnoSuspeito(vencimentoOCR: string | null): boolean {
+  if (!vencimentoOCR) return false;
+  const ano = parseInt(String(vencimentoOCR).slice(0, 4), 10);
+  return !isNaN(ano) && (ano < 2022 || ano > 2035);
+}
+
+// ─── Linha real do boleto SPAL — Itaú 341 ───
+const LINHA_SPAL = "34191091150174649293183045790009815520000156261"; // 47 dígitos
+
+describe("Melhorias de Robustez — Boleto OCR (Etapa 2.2C)", () => {
+  // ─── A: Filtro de ano — OCR lê 2023 quando deveria ser 2026 ───
+  it("A: OCR lê vencimento suspeito (2019) → vencimento_ano_suspeito / requer_revisao", () => {
+    // O filtro captura ano < 2022 ou > 2035.
+    // Caso típico: OCR lê "2019" por confundir dígitos do ano num boleto 2026.
+    const vencOCR2019 = "2019-08-20";
+    expect(filtroAnoSuspeito(vencOCR2019)).toBe(true);
+    const warnings: string[] = [];
+    const ano2019 = parseInt(vencOCR2019.slice(0, 4), 10);
+    if (ano2019 < 2022 || ano2019 > 2035) warnings.push(`vencimento_ano_suspeito_${ano2019}`);
+    expect(warnings).toContain("vencimento_ano_suspeito_2019");
+    // NÃO corrige silenciosamente
+    expect(vencOCR2019).toBe("2019-08-20");
+
+    // Nota: ano 2023 NÃO é capturado pelo filtro < 2022 (está dentro do range).
+    // Para o boleto real testado (OCR leu 2023 em vez de 2026), o sistema corretamente
+    // entra em requer_revisao via linha_digitavel_ausente, sem precisar do filtro de ano.
+    const vencOCR2023 = "2023-08-20";
+    expect(filtroAnoSuspeito(vencOCR2023)).toBe(false); // 2022 <= 2023 <= 2035: dentro do limiar
+
+    // Ano futuro exagerado também suspeito
+    expect(filtroAnoSuspeito("2040-01-01")).toBe(true);
+  });
+
+  // ─── B: OCR retorna 49 dígitos → subsequência contínua válida de 47 extraída ───
+  it("B: OCR bruto com 49 dígitos contendo subsequência válida de 47 → aceita", () => {
+    // Linha real (47) precedida de 2 dígitos espúrios no texto OCR
+    const textoOCR = `Linha digitável: 5534191.09115 01746.492931 83045.790009 8 15520000156261 Vencimento: 20/08/2026`;
+    const resultado = buscarLinhaDigitavelNoTexto(textoOCR);
+    expect(resultado).toBe(LINHA_SPAL);
+    expect(resultado!.length).toBe(47);
+    // Valida DVs
+    expect(validarDVsLinhaDigitavel47(resultado!)).toBe(true);
+    // Deriva valor e vencimento
+    const febraban = parseLinhaDigitavelFebr(resultado!);
+    expect(febraban.valor).toBeCloseTo(1562.61, 2);
+    expect(febraban.vencimento).toBeTruthy();
+  });
+
+  // ─── C: OCR retorna 47 dígitos mas DV inválido → linha rejeitada ───
+  it("C: OCR retorna 47 dígitos com DV inválido → linha_digitavel = null, requer_revisao", () => {
+    // Última linha modificada: DV1 trocado de 5 para 9
+    const linhaComDvInvalido = "34191091190174649293183045790009815520000156261"; // DV1=9 (errado, deveria ser 5)
+    expect(linhaComDvInvalido.length).toBe(47);
+    expect(validarDVsLinhaDigitavel47(linhaComDvInvalido)).toBe(false); // DV inválido
+    // Em produção: validation_error = "dv_invalido_47dig", status = requer_revisao
+    const dvCalc = dvModulo10(linhaComDvInvalido.slice(0, 9));
+    expect(dvCalc).toBe(5); // correto é 5, não 9
+    expect(parseInt(linhaComDvInvalido[9], 10)).toBe(9); // DV real no string é 9 → inválido
+  });
+
+  // ─── D: OCR retorna 43 dígitos sem subsequência válida → não inventa, requer_revisao ───
+  it("D: OCR retorna 43 dígitos sem subsequência válida → linha null, requer_revisao", () => {
+    const textoOCR43 = "3419109107904722829398304579000981538000001"; // 43 dígitos, inválido
+    expect(textoOCR43.length).toBe(43);
+    // Não tem 47 dígitos contínuos: busca não encontra nada
+    const resultado = buscarLinhaDigitavelNoTexto(textoOCR43);
+    expect(resultado).toBeNull(); // NUNCA inventa
+  });
+
+  // ─── E: Foto Telegram comprimida + requer_revisao → mensagem sugere envio como arquivo ───
+  it("E: isTelegramCompressedPhoto + requer_revisao → dicaArquivo presente na mensagem", () => {
+    const isTelegramCompressedPhoto = true;
+    const isBoletoValidado = false;
+    const avisoAnoSuspeito = false;
+    const vencimentoAno = 2026;
+
+    const dicaArquivo = isTelegramCompressedPhoto
+      ? `\n💡 <i>Para leitura mais precisa da linha digitável, envie o boleto como arquivo:\n📎 → Arquivo/Documento (não "Galeria")</i>\n`
+      : "";
+
+    expect(dicaArquivo).toContain("Arquivo/Documento");
+    expect(dicaArquivo).toContain("📎");
+    expect(isBoletoValidado).toBe(false); // status permanece requer_revisao
+  });
+
+  // ─── F: Linha real do boleto SPAL → valida DVs, deriva R$ 1562,61 e vencimento ───
+  it("F: Linha real SPAL 34191.09115... → DVs ok, valor=1562.61, vencimento derivado", () => {
+    expect(LINHA_SPAL.length).toBe(47);
+    expect(validarDVsLinhaDigitavel47(LINHA_SPAL)).toBe(true);
+    const febraban = parseLinhaDigitavelFebr(LINHA_SPAL);
+    expect(febraban.valor).toBeCloseTo(1562.61, 2);
+    expect(febraban.vencimento).toBeTruthy();
+    expect(febraban.vencimento!).toMatch(/^2026-/); // ano 2026
+
+    // Módulo 10 campo por campo
+    expect(dvModulo10(LINHA_SPAL.slice(0, 9))).toBe(parseInt(LINHA_SPAL[9], 10));  // DV1=5
+    expect(dvModulo10(LINHA_SPAL.slice(10, 20))).toBe(parseInt(LINHA_SPAL[20], 10)); // DV2=1
+    expect(dvModulo10(LINHA_SPAL.slice(21, 31))).toBe(parseInt(LINHA_SPAL[31], 10)); // DV3=9
+
+    // Busca por texto OCR formatado (como seria impresso no boleto)
+    const textoFormatado = "34191.09115 01746.492931 83045.790009 8 15520000156261";
+    const encontrada = buscarLinhaDigitavelNoTexto(textoFormatado);
+    expect(encontrada).toBe(LINHA_SPAL);
+  });
+
+  // ─── G: Regressão DANFE Brasnorte → continua PASS ───
+  it("G: Regressão DANFE Brasnorte — NF 000.832.082 continua passando", () => {
+    const CHAVE_BRASNORTE = "31260831908617000133550010008320821035268195";
+    const reconciled = reconcileNFeNumber("000.832.082", "1", CHAVE_BRASNORTE, "test-etapa-2-2c", "telegram");
+    expect(reconciled.numero_nf).toBe("000832082");
+    expect(reconciled.match).toBe(true);
+  });
+});

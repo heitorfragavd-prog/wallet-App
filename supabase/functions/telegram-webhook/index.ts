@@ -463,6 +463,66 @@ function parseLinhaDigitavelFebraban(linha: string): { valor: number | null; ven
   return { valor, vencimento };
 }
 
+// ─── VALIDAÇÃO DE DV MÓDULO 10 (campos 1, 2, 3 da linha digitável bancária) ───
+function dvModulo10(digits: string): number {
+  let sum = 0;
+  let factor = 2;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    const prod = parseInt(digits[i], 10) * factor;
+    sum += prod > 9 ? Math.floor(prod / 10) + (prod % 10) : prod;
+    factor = factor === 2 ? 1 : 2;
+  }
+  return (10 - (sum % 10)) % 10;
+}
+
+// Valida os DVs dos campos 1, 2 e 3 de uma linha digitável bancária de 47 dígitos.
+// NÃO inventa nem corrige dígitos — apenas verifica.
+function validarDVsLinhaDigitavel47(d: string): boolean {
+  if (d.length !== 47) return false;
+  if (dvModulo10(d.slice(0, 9)) !== parseInt(d[9], 10)) return false;
+  if (dvModulo10(d.slice(10, 20)) !== parseInt(d[20], 10)) return false;
+  if (dvModulo10(d.slice(21, 31)) !== parseInt(d[31], 10)) return false;
+  return true;
+}
+
+// Procura subsequência CONTÍNUA de 47 ou 48 dígitos no texto OCR bruto.
+// NUNCA inventa, reordena ou substitui dígitos.
+// Para 47 dígitos: exige DV de todos os 3 campos + FEBRABAN com valor > 0.
+// Para 48 dígitos (guia de arrecadação): aceita estruturalmente se for o único bloco.
+function buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
+  if (!textoOCR || textoOCR.length < 20) return null;
+
+  // Primeiro: busca em blocos que parecem linha digitável (sequências longas com pontos/espaços)
+  const blocos = textoOCR.match(/\d[\d.\s]{20,}\d/g) || [];
+  for (const bloco of blocos) {
+    const digits = bloco.replace(/\D/g, "");
+    for (const len of [47, 48]) {
+      for (let start = 0; start <= digits.length - len; start++) {
+        const cand = digits.slice(start, start + len);
+        if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+          const febraban = parseLinhaDigitavelFebraban(cand);
+          if (febraban.valor && febraban.valor > 0) return cand;
+        }
+        if (len === 48 && digits.length === 48) return cand;
+      }
+    }
+  }
+
+  // Fallback: janela deslizante no total de dígitos do texto
+  const allDigits = textoOCR.replace(/\D/g, "");
+  for (const len of [47, 48]) {
+    for (let start = 0; start <= allDigits.length - len; start++) {
+      const cand = allDigits.slice(start, start + len);
+      if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+        const febraban = parseLinhaDigitavelFebraban(cand);
+        if (febraban.valor && febraban.valor > 0) return cand;
+      }
+      if (len === 48 && allDigits.length >= 48 && allDigits.length <= 52) return cand;
+    }
+  }
+  return null;
+}
+
 // ─── VALIDAÇÃO DETERMINÍSTICA ANTI-ALUCINAÇÃO DE BOLETOS ───
 function isDataValida(ano: number, mes: number, dia: number): boolean {
   if (isNaN(ano) || isNaN(mes) || isNaN(dia) || mes < 1 || mes > 12 || dia < 1 || dia > 31) return false;
@@ -4848,26 +4908,55 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const linhaDigitavelRaw = String(bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || "").replace(/\s/g, "");
             const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
             const linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
-            
+
             let linhaDigitavelValida = false;
             let linhaDigitavelValidationError: string | null = null;
             let valorDerivado: number | null = null;
             let vencimentoDerivado: string | null = null;
+            let linhaDigitavelFinalDigits = linhaDigitavelDigits; // pode ser substituída por subsequência
 
             if (linhaDigitavelPresente) {
               if (linhaDigitavelDigits.length === 47) {
-                const febraban = parseLinhaDigitavelFebraban(linhaDigitavelDigits);
-                if (febraban.valor && febraban.valor > 0) {
-                  valorDerivado = febraban.valor;
-                  vencimentoDerivado = febraban.vencimento;
-                  linhaDigitavelValida = true;
+                if (validarDVsLinhaDigitavel47(linhaDigitavelDigits)) {
+                  const febraban = parseLinhaDigitavelFebraban(linhaDigitavelDigits);
+                  if (febraban.valor && febraban.valor > 0) {
+                    valorDerivado = febraban.valor;
+                    vencimentoDerivado = febraban.vencimento;
+                    linhaDigitavelValida = true;
+                  } else {
+                    linhaDigitavelValidationError = "febraban_campos_invalidos";
+                    warnings.push("linha_digitavel_febraban_invalida");
+                  }
                 } else {
-                  linhaDigitavelValidationError = "febraban_campos_invalidos";
-                  warnings.push("linha_digitavel_febraban_invalida");
+                  linhaDigitavelValidationError = "dv_invalido_47dig";
+                  warnings.push("linha_digitavel_dv_invalido");
                 }
               } else if (linhaDigitavelDigits.length === 48) {
                 // Guia de arrecadação / tributos
                 linhaDigitavelValida = true;
+              } else if (linhaDigitavelDigits.length >= 43 && linhaDigitavelDigits.length <= 50) {
+                // ── REPARO SEGURO: busca subsequência contínua válida no texto OCR ──
+                // NÃO inventa, NÃO reordena, NÃO substitui caracteres.
+                const textoCompleto = boletoVisionResult?.text || "";
+                const subsequencia = buscarLinhaDigitavelNoTexto(textoCompleto);
+                if (subsequencia) {
+                  linhaDigitavelFinalDigits = subsequencia;
+                  if (subsequencia.length === 47) {
+                    const febraban = parseLinhaDigitavelFebraban(subsequencia);
+                    if (febraban.valor && febraban.valor > 0) {
+                      valorDerivado = febraban.valor;
+                      vencimentoDerivado = febraban.vencimento;
+                      linhaDigitavelValida = true;
+                      warnings.push(`linha_digitavel_reparada_por_subsequencia_${linhaDigitavelDigits.length}dig_ocr`);
+                    }
+                  } else {
+                    linhaDigitavelValida = true; // 48 dígitos aceito
+                  }
+                }
+                if (!linhaDigitavelValida) {
+                  linhaDigitavelValidationError = `invalid_length_${linhaDigitavelDigits.length}`;
+                  warnings.push("linha_digitavel_comprimento_incorreto");
+                }
               } else {
                 linhaDigitavelValidationError = `invalid_length_${linhaDigitavelDigits.length}`;
                 warnings.push("linha_digitavel_comprimento_incorreto");
@@ -4877,17 +4966,27 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               warnings.push("linha_digitavel_ausente");
             }
 
-            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelDigits : null;
-            const linhaDigitavelMasked = linhaDigitavelDigits.length > 10
-              ? `${linhaDigitavelDigits.slice(0, 5)}***${linhaDigitavelDigits.slice(-4)}`
-              : (linhaDigitavelDigits.length > 0 ? `raw:${linhaDigitavelDigits.length}dig` : "ausente");
+            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelFinalDigits : null;
+            const linhaDigitavelMasked = linhaDigitavelFinalDigits.length > 10
+              ? `${linhaDigitavelFinalDigits.slice(0, 5)}***${linhaDigitavelFinalDigits.slice(-4)}`
+              : (linhaDigitavelFinalDigits.length > 0 ? `raw:${linhaDigitavelFinalDigits.length}dig` : "ausente");
 
             // Valores de OCR
             const valorOCR = (typeof bParsed.valor === "number") ? bParsed.valor
               : bParsed.valor ? parseFloat(String(bParsed.valor).replace(/[^\d,.]/g, "").replace(",", ".")) || null
               : (orientacaoAnalysis?.boleto_dados?.valor ?? null);
 
-            const vencimentoOCR = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
+            const vencimentoOCRRaw = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
+
+            // ── FILTRO DE SANIDADE DE ANO ──
+            // Se o ano lido pelo OCR for < 2022 ou > 2035, é suspeito de erro de leitura.
+            // NÃO corrige silenciosamente — preserva o valor bruto e registra warning.
+            const vencimentoAno = vencimentoOCRRaw ? parseInt(String(vencimentoOCRRaw).slice(0, 4), 10) : null;
+            const vencimentoAnoSuspeito = vencimentoAno !== null && !isNaN(vencimentoAno) && (vencimentoAno < 2022 || vencimentoAno > 2035);
+            if (vencimentoAnoSuspeito) {
+              warnings.push(`vencimento_ano_suspeito_${vencimentoAno}`);
+            }
+            const vencimentoOCR = vencimentoOCRRaw; // preservado sem correção silenciosa
 
             // Determinação de fontes e conformidade
             let valorFinal: number | null = null;
@@ -4937,6 +5036,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               `linha_digitavel_masked=${linhaDigitavelMasked} ` +
               `valor_source=${valorSource} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} ` +
               `vencimento_source=${vencimentoSource} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} ` +
+              `vencimento_ano_suspeito=${vencimentoAnoSuspeito} ` +
               `warnings=${JSON.stringify(warnings)}`
             );
 
@@ -5522,6 +5622,12 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             } else {
+              const avisoAnoSuspeito = vencimentoAnoSuspeito
+                ? `\n⚠️ <i>Ano do vencimento (${vencimentoAno}) pode estar incorreto — OCR pode ter lido errado.</i>\n`
+                : "";
+              const dicaArquivo = isTelegramCompressedPhoto
+                ? `\n💡 <i>Para leitura mais precisa da linha digitável, envie o boleto como arquivo:\n📎 → Arquivo/Documento (não "Galeria")</i>\n`
+                : "";
               mensagemProposta =
                 `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
                 `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
@@ -5529,8 +5635,10 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
                 `💰 Valor identificado: <b>${valFmt}</b>\n` +
                 `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                avisoAnoSuspeito +
                 `\n⚠️ <b>Não foi possível validar a linha digitável com precisão.</b>\n` +
                 `<i>Os valores acima foram lidos visualmente do documento.</i>\n` +
+                dicaArquivo +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
                 `👉 Responda <b>SIM</b> para confirmar o cadastro manual.\n` +
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
