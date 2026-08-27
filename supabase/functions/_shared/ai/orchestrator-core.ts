@@ -49,7 +49,11 @@ export interface OrchestratorTurnResult {
   usage: LlmUsage;
   loopDetected?: boolean;
   maxIterationsReached?: boolean;
+  provider?: "openai" | "gemini";
+  fallback?: boolean;
+  fallbackReason?: string;
 }
+
 
 function buildSystemPrompt(): string {
   // Data de hoje no fuso do Brasil (America/Sao_Paulo = UTC-3)
@@ -155,12 +159,20 @@ export async function runOrchestratorTurn(
 
     // Se o modelo não gerou chamadas de ferramenta, encerra com a resposta final
     if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
+      const runnerState = runner as unknown as {
+        activeProvider?: "openai" | "gemini";
+        fallbackUsed?: boolean;
+        fallbackReason?: string;
+      };
       return {
         finalMessage: assistantMsg,
         conversationHistory: messages,
         toolCallsExecuted,
         iterations,
         usage: totalUsage,
+        provider: runnerState.activeProvider ?? "openai",
+        fallback: runnerState.fallbackUsed ?? false,
+        fallbackReason: runnerState.fallbackReason,
       };
     }
 
@@ -215,6 +227,11 @@ export async function runOrchestratorTurn(
       };
       messages.push(loopFallbackMessage);
 
+      const runnerState = runner as unknown as {
+        activeProvider?: "openai" | "gemini";
+        fallbackUsed?: boolean;
+        fallbackReason?: string;
+      };
       return {
         finalMessage: loopFallbackMessage,
         conversationHistory: messages,
@@ -222,6 +239,9 @@ export async function runOrchestratorTurn(
         iterations,
         usage: totalUsage,
         loopDetected: true,
+        provider: runnerState.activeProvider ?? "openai",
+        fallback: runnerState.fallbackUsed ?? false,
+        fallbackReason: runnerState.fallbackReason,
       };
     }
   }
@@ -234,6 +254,11 @@ export async function runOrchestratorTurn(
   };
   messages.push(limitFallbackMessage);
 
+  const runnerState = runner as unknown as {
+    activeProvider?: "openai" | "gemini";
+    fallbackUsed?: boolean;
+    fallbackReason?: string;
+  };
   return {
     finalMessage: limitFallbackMessage,
     conversationHistory: messages,
@@ -241,5 +266,9 @@ export async function runOrchestratorTurn(
     iterations,
     usage: totalUsage,
     maxIterationsReached: true,
+    provider: runnerState.activeProvider ?? "openai",
+    fallback: runnerState.fallbackUsed ?? false,
+    fallbackReason: runnerState.fallbackReason,
   };
 }
+

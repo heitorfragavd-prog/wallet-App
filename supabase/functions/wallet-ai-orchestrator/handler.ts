@@ -125,6 +125,9 @@ export async function handleOrchestratorHttpRequest(
           iterations: turnResult.iterations,
           tokens: turnResult.usage.totalTokens,
           estimatedCostUsd,
+          provider: turnResult.provider ?? "openai",
+          fallback: turnResult.fallback ?? false,
+          fallbackReason: turnResult.fallbackReason ?? null,
         },
       });
     }
@@ -139,6 +142,9 @@ export async function handleOrchestratorHttpRequest(
         estimatedCostUsd,
         loopDetected: turnResult.loopDetected ?? false,
         maxIterationsReached: turnResult.maxIterationsReached ?? false,
+        provider: turnResult.provider ?? "openai",
+        fallback: turnResult.fallback ?? false,
+        fallbackReason: turnResult.fallbackReason ?? null,
       }),
       {
         status: 200,
@@ -147,6 +153,10 @@ export async function handleOrchestratorHttpRequest(
     );
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
+    const correlationId = (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now())
+    ).slice(0, 8).toUpperCase();
 
     let status = 500;
     let errorCode = "internal_server_error";
@@ -156,7 +166,7 @@ export async function handleOrchestratorHttpRequest(
       errorCode = err.code;
     } else if (err instanceof Error) {
       errorCode = err.message;
-      // Propagar status HTTP semântico para erros conhecidos do OpenAI
+      // Propagar status HTTP semântico para erros conhecidos do OpenAI se não houve fallback
       if (err.message === "openai_quota_exceeded") {
         status = 429;
       } else if (err.message === "openai_invalid_key") {
@@ -173,6 +183,7 @@ export async function handleOrchestratorHttpRequest(
         durationMs,
         status: "error",
         errorCode,
+        metadata: { correlationId },
       });
     }
 
@@ -180,6 +191,7 @@ export async function handleOrchestratorHttpRequest(
       JSON.stringify({
         success: false,
         error: errorCode,
+        correlation_id: correlationId,
       }),
       {
         status,
@@ -188,3 +200,4 @@ export async function handleOrchestratorHttpRequest(
     );
   }
 }
+
