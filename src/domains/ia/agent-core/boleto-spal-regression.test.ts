@@ -103,6 +103,62 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
       expect(res.beneficiarioFinal).toBe("SPAL INDUSTRIA BRASILEIRA DE");
       expect(res.beneficiarioFinal).not.toContain("SPAIPA");
     });
+
+    it("Focused Beneficiary: Refina transcrição de 'SPAIPA' -> 'SPAL INDUSTRIA BRASILEIRA DE' mantendo linha, valor e data intactos", async () => {
+      // Mock do retorno do GPT-4o na chamada focalizada
+      const mockFetch = vi.fn().mockImplementation((url) => {
+        if (url.includes("api.openai.com")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      beneficiario: "SPAL INDUSTRIA BRASILEIRA DE",
+                    }),
+                  },
+                },
+              ],
+            }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      const { extractFocusedBeneficiary } = await import("../../../../supabase/functions/_shared/ai/boleto-service");
+
+      const focusedResult = await extractFocusedBeneficiary({
+        base64: "dummy_b64",
+        mimeType: "image/jpeg",
+        openaiApiKey: "fake_key",
+        fetchImpl: mockFetch as any,
+      });
+
+      expect(focusedResult.beneficiario).toBe("SPAL INDUSTRIA BRASILEIRA DE");
+      expect(focusedResult.extraction_type).toBe("focused");
+
+      // Simulação da reconciliação com o beneficiário refinado:
+      const globalOcr = "SPAIPA INDUSTRIA BRASILEIRA DE";
+      const benefRefinado = focusedResult.beneficiario || globalOcr;
+
+      const res = reconcileBoleto({
+        banco: "Banco Itaú S.A.",
+        beneficiario: benefRefinado,
+        valor: "562,61", // valor visual
+        data_vencimento: "2026-08-21", // vencimento visual
+        linha_digitavel: SPAL_LINHA,
+      });
+
+      // Blindagem absoluta dos dados financeiros:
+      expect(res.beneficiarioFinal).toBe("SPAL INDUSTRIA BRASILEIRA DE");
+      expect(res.valorFinal).toBe(1562.61); // Linha autoritativa!
+      expect(res.dataVencimentoFinal).toBe("2026-08-28"); // Linha autoritativa!
+      expect(res.linhaDigitavel?.linhaLimpa).toBe("34191091150174649293183045790009815520000156261");
+      expect(res.evidence.linha_matematicamente_valida).toBe(true);
+      expect(res.evidence.dv_geral_valid).toBe(true);
+    });
   });
 
   describe("2. Arrecadação e Concessionárias (48 dígitos) — Módulo 10 vs Módulo 11", () => {

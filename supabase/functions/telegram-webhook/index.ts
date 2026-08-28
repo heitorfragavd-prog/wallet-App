@@ -40,6 +40,7 @@ import {
   type BoletoValidationResult,
   type BoletoValidationEvidence,
 } from "../_shared/ai/boleto-validator.ts";
+import { extractFocusedBeneficiary } from "../_shared/ai/boleto-service.ts";
 
 
 
@@ -4898,6 +4899,30 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               numero_documento: bParsed.numero_documento || null,
             });
 
+            let beneficiarioFinal = validacaoCanonica.beneficiarioFinal;
+            const beneficiarioOcrGlobal = bParsed.beneficiario || bParsed.cedente || null;
+            let beneficiarioOcrFocused: string | null = null;
+
+            // Transcrição literal focalizada no campo Beneficiário para máxima precisão textual
+            if (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto) {
+              try {
+                const focusedRes = await extractFocusedBeneficiary({
+                  base64: normalizedB64Boleto,
+                  mimeType: mimeTypeBoleto,
+                  openaiApiKey: openAiKeyBoleto,
+                  geminiApiKey: geminiKeyBoleto || geminiBackupBoleto,
+                });
+                beneficiarioOcrFocused = focusedRes.beneficiario;
+                if (beneficiarioOcrFocused && beneficiarioOcrFocused.length >= 2) {
+                  beneficiarioFinal = beneficiarioOcrFocused;
+                } else if (!beneficiarioFinal) {
+                  validacaoCanonica.warnings.push("beneficiario_baixa_confianca");
+                }
+              } catch (fErr) {
+                console.warn(`[BOLETO_TRACE] Falha na extração focalizada de beneficiário: ${fErr}`);
+              }
+            }
+
             const linhaDigits = validacaoCanonica.linhaDigitavel?.linhaLimpa || cleanDigits(rawLinha);
             const linhaMasked = linhaDigits.length > 10
               ? `${linhaDigits.slice(0, 5)}***${linhaDigits.slice(-4)}`
@@ -4911,13 +4936,16 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               `linha_digitavel_masked=${linhaMasked} ` +
               `valor_source=${validacaoCanonica.valorSource} valor_final=${validacaoCanonica.valorFinal} ` +
               `vencimento_source=${validacaoCanonica.vencimentoSource} vencimento_final=${validacaoCanonica.dataVencimentoFinal} ` +
+              `beneficiario_global="${beneficiarioOcrGlobal || ""}" beneficiario_focused="${beneficiarioOcrFocused || ""}" ` +
               `warnings=${JSON.stringify(validacaoCanonica.warnings)}`
             );
 
             documentData = {
               tipo: "boleto",
               banco: validacaoCanonica.bancoFinal,
-              beneficiario: validacaoCanonica.beneficiarioFinal,
+              beneficiario: beneficiarioFinal,
+              beneficiario_ocr_global: beneficiarioOcrGlobal,
+              beneficiario_ocr_focused: beneficiarioOcrFocused,
               cnpj_cpf_beneficiario: validacaoCanonica.cnpjCpfBeneficiarioFinal || null,
               pagador: validacaoCanonica.pagadorFinal || null,
               valor: validacaoCanonica.valorFinal,

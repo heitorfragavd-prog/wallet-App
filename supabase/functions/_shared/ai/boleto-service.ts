@@ -251,6 +251,165 @@ export async function callBoletoVisionWithFailover(options: VisionBoletoCallOpti
   };
 }
 
+export interface FocusedBeneficiaryResult {
+  beneficiario: string | null;
+  provider: string;
+  extraction_type: "focused";
+}
+
+/**
+ * Realiza uma transcrição literal focalizada exclusivamente no campo Beneficiário/Cedente do documento.
+ * Regra: Não altera linha, valor ou vencimento.
+ */
+export async function extractFocusedBeneficiary(params: {
+  base64: string;
+  mimeType: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}): Promise<FocusedBeneficiaryResult> {
+  const {
+    base64,
+    mimeType,
+    openaiApiKey,
+    geminiApiKey,
+    timeoutMs = 25000,
+    fetchImpl = fetch,
+  } = params;
+
+  const prompt = `Localize o campo Beneficiário ou Cedente.
+
+Transcreva EXATAMENTE os caracteres impressos nesse campo.
+
+Regras:
+- copie literalmente;
+- não complete razão social;
+- não corrija nomes;
+- não use conhecimento sobre empresas;
+- não deduza texto cortado;
+- preserve somente caracteres realmente visíveis;
+- se não conseguir ler com segurança, retorne null.
+
+Retorne JSON:
+{
+  "beneficiario": string | null
+}`;
+
+  // 1. Primário: OpenAI GPT-4o
+  if (openaiApiKey) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const resp = await fetchImpl("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: "gpt-4o",
+          temperature: 0.0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "Extrator especialista em transcrição literal de documentos. Responda estritamente com JSON." },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64}`,
+                    detail: "high",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const json = await resp.json();
+        const rawContent = json.choices?.[0]?.message?.content?.trim() || "";
+        const parsed = JSON.parse(rawContent);
+        const benef = typeof parsed.beneficiario === "string" && parsed.beneficiario.trim().length > 0
+          ? parsed.beneficiario.trim()
+          : null;
+
+        return {
+          beneficiario: benef,
+          provider: "openai_gpt4o",
+          extraction_type: "focused",
+        };
+      }
+    } catch (err) {
+      console.warn("[FOCUSED_BENEFICIARY] Falha na extração GPT-4o:", err);
+    }
+  }
+
+  // 2. Fallback: Gemini 3.7 Flash
+  if (geminiApiKey) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const gResp = await fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${geminiApiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inline_data: { mime_type: mimeType, data: base64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+            },
+          }),
+        }
+      );
+
+      clearTimeout(timer);
+
+      if (gResp.ok) {
+        const gJson = await gResp.json();
+        const text = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const parsed = JSON.parse(text);
+        const benef = typeof parsed.beneficiario === "string" && parsed.beneficiario.trim().length > 0
+          ? parsed.beneficiario.trim()
+          : null;
+
+        return {
+          beneficiario: benef,
+          provider: "gemini_3.7_flash",
+          extraction_type: "focused",
+        };
+      }
+    } catch (err) {
+      console.warn("[FOCUSED_BENEFICIARY] Falha no fallback Gemini:", err);
+    }
+  }
+
+  return {
+    beneficiario: null,
+    provider: "none",
+    extraction_type: "focused",
+  };
+}
+
 /**
  * Formata a mensagem final apresentada ao usuário no chat da Wallet IA.
  */
