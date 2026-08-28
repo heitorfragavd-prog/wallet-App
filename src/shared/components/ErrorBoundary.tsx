@@ -1,24 +1,28 @@
-import React, { Component, ErrorInfo, ReactNode } from "react";
-import { logger } from "@/core/logging/LoggerService";
+﻿import React, { Component, ErrorInfo, ReactNode } from "react";
+import { errorService } from "@/core/errors/ErrorService";
+import { AppError } from "@/core/errors/types";
 import { Button } from "@/shared/components/ui/button";
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
   context?: string;
+  onError?: (error: AppError) => void;
 }
 
 interface State {
   hasError: boolean;
   error?: Error;
+  appError?: AppError;
 }
 
 /**
- * ErrorBoundary — captura erros de renderização React em subtrees.
+ * ErrorBoundary â€” captura erros de renderizaÃ§Ã£o React em subtrees
+ * com integraÃ§Ã£o ao ErrorService e rastreabilidade por cÃ³digo de suporte.
  *
  * Uso:
  *   <ErrorBoundary context="Dashboard">
- *     <ComponenteQuePodefAlhar />
+ *     <ComponenteQuePodeFalhar />
  *   </ErrorBoundary>
  */
 export class ErrorBoundary extends Component<Props, State> {
@@ -32,22 +36,28 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    logger.error(
-      this.props.context ?? "ErrorBoundary",
-      "Erro capturado pelo ErrorBoundary",
-      {
-        message: error.message,
-        stack: error.stack?.slice(0, 500),
-        componentStack: errorInfo.componentStack?.slice(0, 500),
-      }
-    );
+    const appError = errorService.handle(error, {
+      source: "error-boundary",
+      operation: "react-render",
+      component: this.props.context ?? "ErrorBoundary",
+      componentStack: errorInfo.componentStack?.slice(0, 1000),
+    });
+
+    this.setState({ appError });
+
+    if (this.props.onError) {
+      this.props.onError(appError);
+    }
   }
 
   handleRetry = (): void => {
-    if (this.state.error?.message?.includes("dynamically imported module") || this.state.error?.message?.includes("Failed to fetch")) {
+    if (
+      this.state.error?.message?.includes("dynamically imported module") ||
+      this.state.error?.message?.includes("Failed to fetch")
+    ) {
       window.location.reload();
     } else {
-      this.setState({ hasError: false, error: undefined });
+      this.setState({ hasError: false, error: undefined, appError: undefined });
     }
   };
 
@@ -55,8 +65,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
 
+      const errorCode = this.state.appError?.code;
+
       return (
-        <div className="flex min-h-[300px] flex-col items-center justify-center gap-4 p-8 text-center">
+        <div className="flex min-h-[300px] flex-col items-center justify-center gap-4 p-8 text-center" role="alert">
           <div className="rounded-full bg-red-100 dark:bg-red-900/20 p-6">
             <svg
               className="h-10 w-10 text-red-500"
@@ -78,9 +90,13 @@ export class ErrorBoundary extends Component<Props, State> {
               Ops! Algo deu errado
             </h2>
             <p className="text-muted-foreground max-w-sm">
-              Um erro inesperado ocorreu nesta seção. Tente recarregar ou
-              voltar para a página anterior.
+              Um erro inesperado ocorreu nesta seÃ§Ã£o. Tente recarregar ou voltar para a pÃ¡gina anterior.
             </p>
+            {errorCode && (
+              <p className="font-mono text-xs text-muted-foreground/80">
+                CÃ³digo de suporte: <span className="font-semibold">{errorCode}</span>
+              </p>
+            )}
             {process.env.NODE_ENV === "development" && this.state.error && (
               <pre className="mt-4 rounded-md bg-muted p-4 text-left text-xs text-destructive overflow-auto max-w-lg max-h-40">
                 {this.state.error.message}
