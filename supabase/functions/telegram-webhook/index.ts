@@ -595,12 +595,8 @@ function validarExtracaoBoleto(data: {
     return { valido: false, motivo: "Data de vencimento fora do intervalo esperado" };
   }
 
-  // 5. Linha digitável (se fornecida, deve ter 47 ou 48 dígitos)
-  const linha = String(data.linha_digitavel || "").replace(/\D/g, "");
-  if (linha.length > 0 && linha.length !== 47 && linha.length !== 48) {
-    return { valido: false, motivo: "Linha digitável incompleta ou com dígitos faltantes" };
-  }
-
+  // 5. Linha digitável: se for incompleta/inválida, não aborta o documento;
+  // a conciliação canônica rebaixa o status para 'requer_revisao' de forma segura.
   return { valido: true };
 }
 
@@ -5545,15 +5541,20 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
 
           // ─── BLINDAGEM MATEMÁTICA FEBRABAN VIA LINHA DIGITÁVEL ───
+          // Apenas recalcula valores e datas a partir da linha se ela for matematicamente validada!
           if (linhaDigitavel) {
-            const febraban = parseLinhaDigitavelFebraban(linhaDigitavel);
-            if (febraban.valor && febraban.valor > 0) {
-              console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${febraban.valor}`);
-              valor = febraban.valor;
-            }
-            if (febraban.vencimento) {
-              console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${febraban.vencimento}`);
-              dataVencimento = febraban.vencimento;
+            const valLinha = validateLinhaDigitavel(linhaDigitavel);
+            if (valLinha.valido) {
+              if (valLinha.valorDerivado && valLinha.valorDerivado > 0) {
+                console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${valLinha.valorDerivado}`);
+                valor = valLinha.valorDerivado;
+              }
+              if (valLinha.dataVencimentoDerivada) {
+                console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${valLinha.dataVencimentoDerivada}`);
+                dataVencimento = valLinha.dataVencimentoDerivada;
+              }
+            } else {
+              console.log(`[telegram-webhook] Linha digitável não validada matematicamente pelos DVs, preservando valores do OCR visual.`);
             }
           }
 
