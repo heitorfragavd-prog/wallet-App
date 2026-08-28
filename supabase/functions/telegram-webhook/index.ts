@@ -4758,7 +4758,7 @@ FORMATO:
 Analise esta imagem de boleto (já orientada perfeitamente na vertical) e extraia os campos com máxima fidelidade e exatidão:
 
 1. BANCO: Nome do banco e código (ex: "Banco Itaú S.A. (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
-2. BENEFICIÁRIO (CEDENTE): Razão Social ou Nome COMPLETO do beneficiário/cedente. Se o nome ocupar múltiplas linhas no documento (ex: "SPAL INDUSTRIA BRASILEIRA DE" e na linha seguinte "BEBIDAS S/A"), capture TODAS as linhas juntas para formar o nome completo (ex: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A"). NÃO invente palavras que não estejam no papel.
+2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes de empresas conhecidas e NÃO use conhecimento prévio. Capture fielmente o que estiver impresso (ex: se estiver impresso "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso caractere a caractere).
 3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
 4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
 5. CNPJ/CPF DO PAGADOR: Se visível.

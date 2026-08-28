@@ -59,7 +59,7 @@ export const GEMINI_BOLETO_PROMPT = `Você é um especialista em leitura e extra
 Analise esta imagem ou documento PDF de boleto e extraia os campos com máxima fidelidade e exatidão:
 
 1. BANCO: Nome do banco e código (ex: "Itaú Unibanco (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
-2. BENEFICIÁRIO (CEDENTE): Nome/Razão Social da empresa ou pessoa que receberá o valor.
+2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes de empresas conhecidas e NÃO use conhecimento prévio. Se estiver visível apenas "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso sem inventar caracteres.
 3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
 4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
 5. CNPJ/CPF DO PAGADOR: Se visível.

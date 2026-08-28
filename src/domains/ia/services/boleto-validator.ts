@@ -6,6 +6,7 @@ export {
   cleanDigits,
   calcularModulo10,
   calcularModulo11Boleto,
+  calcularModulo11Arrecadacao,
   fatorVencimentoParaData,
   validateLinhaDigitavel,
   validateCodigoBarras,

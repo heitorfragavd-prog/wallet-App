@@ -136,6 +136,38 @@ export function calcularModulo11Boleto(codigoSemDV: string): number {
   return dv;
 }
 
+// Mapeamento dos segmentos de arrecadação FEBRABAN
+const SEGMENTOS_ARRECADACAO: Record<string, string> = {
+  "1": "Prefeitura",
+  "2": "Saneamento / Água e Esgoto",
+  "3": "Energia Elétrica e Gás",
+  "4": "Telecomunicações",
+  "5": "Órgãos Governamentais",
+  "6": "Carnês e Assemelhados",
+  "7": "Multas de Trânsito",
+  "9": "Uso Exclusivo Bancário",
+};
+
+/**
+ * Calcula o dígito verificador Módulo 11 para guias de arrecadação e concessionárias (FEBRABAN).
+ */
+export function calcularModulo11Arrecadacao(blocoSemDV: string): number {
+  let soma = 0;
+  let peso = 2;
+  for (let i = blocoSemDV.length - 1; i >= 0; i--) {
+    soma += parseInt(blocoSemDV[i], 10) * peso;
+    peso = peso === 9 ? 2 : peso + 1;
+  }
+  const resto = soma % 11;
+  if (resto === 0 || resto === 1) {
+    return 0;
+  }
+  if (resto === 10) {
+    return 1;
+  }
+  return 11 - resto;
+}
+
 /**
  * Converte o fator de vencimento da FEBRABAN para data no formato YYYY-MM-DD.
  * Compatível com o ciclo 1 (até 21/02/2025) e ciclo 2 (a partir de 22/02/2025).
@@ -266,6 +298,24 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
 
   // 2. BOLETO DE CONCESSIONÁRIA / ARRECADAÇÃO (48 dígitos)
   if (clean.length === 48) {
+    if (!clean.startsWith("8")) {
+      erros.push("Linha de arrecadação deve iniciar com o dígito 8");
+    }
+
+    const segmentoCod = clean[1];
+    const segmentoNome = SEGMENTOS_ARRECADACAO[segmentoCod] || "Arrecadação / Concessionária";
+    const codMoeda = clean[2];
+
+    const usaModulo10 = codMoeda === "6" || codMoeda === "7";
+    const usaModulo11 = codMoeda === "8" || codMoeda === "9";
+
+    if (!usaModulo10 && !usaModulo11) {
+      erros.push(`Código de moeda/valor inválido para arrecadação (${codMoeda}). Esperado 6, 7, 8 ou 9.`);
+    }
+
+    const fnCalcDV = usaModulo10 ? calcularModulo10 : calcularModulo11Arrecadacao;
+    const nomeAlgoritmo = usaModulo10 ? "Módulo 10" : "Módulo 11";
+
     const bloco1 = clean.substring(0, 11);
     const dv1 = parseInt(clean[11], 10);
     const bloco2 = clean.substring(12, 23);
@@ -275,23 +325,42 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     const bloco4 = clean.substring(36, 47);
     const dv4 = parseInt(clean[47], 10);
 
-    const dv1Ok = calcularModulo10(bloco1) === dv1;
-    const dv2Ok = calcularModulo10(bloco2) === dv2;
-    const dv3Ok = calcularModulo10(bloco3) === dv3;
-    const dv4Ok = calcularModulo10(bloco4) === dv4;
+    const dv1Calculado = fnCalcDV(bloco1);
+    const dv2Calculado = fnCalcDV(bloco2);
+    const dv3Calculado = fnCalcDV(bloco3);
+    const dv4Calculado = fnCalcDV(bloco4);
 
-    if (!dv1Ok) erros.push(`DV do Bloco 1 de arrecadação inválido`);
-    if (!dv2Ok) erros.push(`DV do Bloco 2 de arrecadação inválido`);
-    if (!dv3Ok) erros.push(`DV do Bloco 3 de arrecadação inválido`);
-    if (!dv4Ok) erros.push(`DV do Bloco 4 de arrecadação inválido`);
+    const dv1Ok = dv1Calculado === dv1;
+    const dv2Ok = dv2Calculado === dv2;
+    const dv3Ok = dv3Calculado === dv3;
+    const dv4Ok = dv4Calculado === dv4;
 
+    if (!dv1Ok) erros.push(`DV do Bloco 1 de arrecadação inválido via ${nomeAlgoritmo} (esperado ${dv1Calculado}, recebido ${dv1})`);
+    if (!dv2Ok) erros.push(`DV do Bloco 2 de arrecadação inválido via ${nomeAlgoritmo} (esperado ${dv2Calculado}, recebido ${dv2})`);
+    if (!dv3Ok) erros.push(`DV do Bloco 3 de arrecadação inválido via ${nomeAlgoritmo} (esperado ${dv3Calculado}, recebido ${dv3})`);
+    if (!dv4Ok) erros.push(`DV do Bloco 4 de arrecadação inválido via ${nomeAlgoritmo} (esperado ${dv4Calculado}, recebido ${dv4})`);
+
+    // Código de barras de arrecadação: junção dos 4 blocos sem os DVs (44 dígitos)
     const codigoBarras = `${bloco1}${bloco2}${bloco3}${bloco4}`;
     
+    // Validação do DV Geral de Arrecadação (posição 4 do código de barras / índice 3)
+    const dvGeralInformado = parseInt(codigoBarras[3], 10);
+    const codigoSemDVGeral = codigoBarras.substring(0, 3) + codigoBarras.substring(4);
+    const dvGeralCalculado = fnCalcDV(codigoSemDVGeral);
+    const dvGeralOk = dvGeralInformado === dvGeralCalculado;
+
+    if (!dvGeralOk) {
+      erros.push(`DV geral do código de barras de arrecadação inválido via ${nomeAlgoritmo} (esperado ${dvGeralCalculado}, recebido ${dvGeralInformado})`);
+    }
+
+    // Derivação de valor efetivo (apenas moedas 6 e 8 possuem valor nominal em reais)
     let valorNum: number | undefined;
-    const codMoeda = clean[2];
     if (codMoeda === "6" || codMoeda === "8") {
       const valorStr = codigoBarras.substring(4, 15);
-      valorNum = parseInt(valorStr, 10) / 100;
+      const valorCentavos = parseInt(valorStr, 10);
+      if (!isNaN(valorCentavos) && valorCentavos > 0) {
+        valorNum = valorCentavos / 100;
+      }
     }
 
     const formatada = `${bloco1}-${dv1} ${bloco2}-${dv2} ${bloco3}-${dv3} ${bloco4}-${dv4}`;
@@ -302,7 +371,7 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
       dv_campo_1_valid: dv1Ok,
       dv_campo_2_valid: dv2Ok,
       dv_campo_3_valid: dv3Ok,
-      dv_geral_valid: dv4Ok,
+      dv_geral_valid: dvGeralOk,
       fator_vencimento: null,
       valor_derivado: valorNum || null,
       vencimento_derivado: null,
@@ -316,7 +385,7 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
       linhaFormatada: formatada,
       codigoBarrasDerivado: codigoBarras,
       valorDerivado: valorNum,
-      bancoNome: "Arrecadação / Concessionária",
+      bancoNome: segmentoNome,
       erros,
       evidence,
       motivo: valido ? undefined : erros.join("; "),

@@ -1,11 +1,12 @@
-﻿/**
- * Suíte de Testes Automatizados de Regressão: Boleto SPAL & Matriz FEBRABAN Completa
+/**
+ * Suíte de Testes Automatizados de Regressão: Boleto SPAL & Matriz FEBRABAN Completa (47 e 48 dígitos)
  * 
  * Cobertura Obrigatória:
  * 1. Regressão SPAL Ground Truth (Linha 34191.09115 01746.492931 83045.790009 8 15520000156261, R$ 1.562,61, 2026-08-28)
  * 2. Cenário Compressão SPAL (Visual R$ 562,61 / 21/08/2026 -> status: validado_com_alerta, valor: 1562.61, vencimento: 2026-08-28)
  * 3. Cálculo rigoroso de Módulo 11 do DV Geral (Soma 828 % 11 = 3 -> DV = 8)
- * 4. Matriz de 17 cenários obrigatórios (DVs inválidos, 46/48 dígitos, linhas ausentes, idempotência, fail-closed, etc.)
+ * 4. Arrecadação 48 dígitos: Módulo 10 vs Módulo 11 (moedas 6, 7, 8, 9), DV Geral 44 posições, derivação de valor
+ * 5. Beneficiário SPAL sem alucinação SPAIPA
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
   validateCodigoBarras,
   calcularModulo10,
   calcularModulo11Boleto,
+  calcularModulo11Arrecadacao,
   fatorVencimentoParaData,
   parseBoletoAmount,
   normalizeDate,
@@ -28,7 +30,7 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
   const SPAL_LINHA = "34191.09115 01746.492931 83045.790009 8 15520000156261";
   const SPAL_VALOR = 1562.61;
   const SPAL_VENCIMENTO = "2026-08-28";
-  const SPAL_BENEFICIARIO = "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A";
+  const SPAL_BENEFICIARIO = "SPAL INDUSTRIA BRASILEIRA DE";
   const SPAL_BANCO = "Itaú Unibanco";
 
   describe("1. Regressão SPAL Ground Truth & Módulo 11 do DV Geral", () => {
@@ -89,9 +91,144 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
       expect(msg).toContain("28/08/2026");
       expect(msg).toContain("A leitura visual apresentou leve divergência");
     });
+
+    it("Beneficiário SPAL: Reconhece literalmente 'SPAL INDUSTRIA BRASILEIRA DE' e não alucina 'SPAIPA'", () => {
+      const res = reconcileBoleto({
+        banco: "341",
+        beneficiario: "SPAL INDUSTRIA BRASILEIRA DE",
+        valor: "1.562,61",
+        data_vencimento: "2026-08-28",
+        linha_digitavel: SPAL_LINHA,
+      });
+      expect(res.beneficiarioFinal).toBe("SPAL INDUSTRIA BRASILEIRA DE");
+      expect(res.beneficiarioFinal).not.toContain("SPAIPA");
+    });
   });
 
-  describe("2. Matriz Completa de Testes Determinísticos", () => {
+  describe("2. Arrecadação e Concessionárias (48 dígitos) — Módulo 10 vs Módulo 11", () => {
+    it("48 dígitos / referência Mod10 / válido: Concessionária saneamento (Moeda 6) com DVs e DV Geral válidos", () => {
+      // Moeda 6 (Valor Efetivo) -> Módulo 10
+      // Bloco 1 (11 dígitos): 84660000001 (sem DV)
+      // Código de barras 44 dígitos: 84660000001 43500024020 24012345678 90123456789 (ajustando DV geral no índice 3)
+      const b1 = "84660000001";
+      const b2 = "43500024020";
+      const b3 = "24012345678";
+      const b4 = "90123456789";
+
+      // Calcula o DV geral (índice 3 / 4ª posição da barra)
+      const codigo43 = b1.substring(0, 3) + b1.substring(4) + b2 + b3 + b4;
+      const dvGeral = calcularModulo10(codigo43);
+
+      // Bloco 1 com o DV geral ajustado no índice 3:
+      const bloco1Ajustado = b1.substring(0, 3) + dvGeral + b1.substring(4);
+      const dv1 = calcularModulo10(bloco1Ajustado);
+      const dv2 = calcularModulo10(b2);
+      const dv3 = calcularModulo10(b3);
+      const dv4 = calcularModulo10(b4);
+
+      const linha48 = `${bloco1Ajustado}${dv1}${b2}${dv2}${b3}${dv3}${b4}${dv4}`;
+
+      const res = validateLinhaDigitavel(linha48);
+      expect(res.valido).toBe(true);
+      expect(res.tipo).toBe("arrecadacao");
+      expect(res.valorDerivado).toBe(143.50); // 00000014350 / 100 = 143.50
+      expect(res.bancoNome).toBe("Telecomunicações");
+      expect(res.evidence.linha_matematicamente_valida).toBe(true);
+      expect(res.evidence.dv_geral_valid).toBe(true);
+    });
+
+    it("48 dígitos / referência Mod10 / DV de bloco inválido -> rejeitado/requer revisão", () => {
+      const b1 = "84660000001";
+      const b2 = "43500024020";
+      const b3 = "24012345678";
+      const b4 = "90123456789";
+      const dv1 = calcularModulo10(b1);
+      const dv2Errado = (calcularModulo10(b2) + 1) % 10;
+      const dv3 = calcularModulo10(b3);
+      const dv4 = calcularModulo10(b4);
+
+      const linha48Invalida = `${b1}${dv1}${b2}${dv2Errado}${b3}${dv3}${b4}${dv4}`;
+      const res = validateLinhaDigitavel(linha48Invalida);
+      expect(res.valido).toBe(false);
+      expect(res.erros.some((e) => e.includes("Bloco 2"))).toBe(true);
+    });
+
+    it("48 dígitos / referência Mod11 / válido: Guia com Moeda 8 (Valor Efetivo) calculada via Módulo 11", () => {
+      // Moeda 8 -> Módulo 11
+      const b1 = "82880000015";
+      const b2 = "21000012345";
+      const b3 = "67890123456";
+      const b4 = "78901234567";
+
+      const codigo43 = b1.substring(0, 3) + b1.substring(4) + b2 + b3 + b4;
+      const dvGeral = calcularModulo11Arrecadacao(codigo43);
+
+      const bloco1Ajustado = b1.substring(0, 3) + dvGeral + b1.substring(4);
+      const dv1 = calcularModulo11Arrecadacao(bloco1Ajustado);
+      const dv2 = calcularModulo11Arrecadacao(b2);
+      const dv3 = calcularModulo11Arrecadacao(b3);
+      const dv4 = calcularModulo11Arrecadacao(b4);
+
+      const linha48Mod11 = `${bloco1Ajustado}${dv1}${b2}${dv2}${b3}${dv3}${b4}${dv4}`;
+
+      const res = validateLinhaDigitavel(linha48Mod11);
+      expect(res.valido).toBe(true);
+      expect(res.tipo).toBe("arrecadacao");
+      expect(res.bancoNome).toBe("Saneamento / Água e Esgoto");
+      expect(res.evidence.linha_matematicamente_valida).toBe(true);
+      expect(res.evidence.dv_geral_valid).toBe(true);
+    });
+
+    it("48 dígitos / referência Mod11 / DV inválido: se validar com Mod10 falha", () => {
+      const b1 = "82880000015";
+      const b2 = "21000012345";
+      const b3 = "67890123456";
+      const b4 = "78901234567";
+
+      // Gera DVs via Mod10 numa linha com moeda 8 (que exige Mod11)
+      const dv1Mod10 = calcularModulo10(b1);
+      const dv2Mod10 = calcularModulo10(b2);
+      const dv3Mod10 = calcularModulo10(b3);
+      const dv4Mod10 = calcularModulo10(b4);
+
+      const linhaIncorreta = `${b1}${dv1Mod10}${b2}${dv2Mod10}${b3}${dv3Mod10}${b4}${dv4Mod10}`;
+      const res = validateLinhaDigitavel(linhaIncorreta);
+      expect(res.valido).toBe(false);
+      expect(res.erros.some((e) => e.includes("Módulo 11"))).toBe(true);
+    });
+
+    it("48 dígitos / Moeda 7 ou 9 (sem valor efetivo em reais): não deriva valor financeiro direto", () => {
+      // Moeda 7 (Quantidade de moeda / sem valor em R$)
+      const b1 = "83700000000";
+      const b2 = "00000000000";
+      const b3 = "00000000000";
+      const b4 = "00000000000";
+
+      const codigo43 = b1.substring(0, 3) + b1.substring(4) + b2 + b3 + b4;
+      const dvGeral = calcularModulo10(codigo43);
+
+      const bloco1Ajustado = b1.substring(0, 3) + dvGeral + b1.substring(4);
+      const dv1 = calcularModulo10(bloco1Ajustado);
+      const dv2 = calcularModulo10(b2);
+      const dv3 = calcularModulo10(b3);
+      const dv4 = calcularModulo10(b4);
+
+      const linha48 = `${bloco1Ajustado}${dv1}${b2}${dv2}${b3}${dv3}${b4}${dv4}`;
+      const res = validateLinhaDigitavel(linha48);
+      expect(res.valido).toBe(true);
+      expect(res.valorDerivado).toBeUndefined(); // Não deriva valor em R$
+    });
+
+    it("48 dígitos / Sequência estruturalmente inválida (não começa com 8 ou moeda inválida)", () => {
+      // Começa com '7' em vez de '8'
+      const linhaInvalida = "746600000010435000240200240123456780901234567890";
+      const res = validateLinhaDigitavel(linhaInvalida);
+      expect(res.valido).toBe(false);
+      expect(res.erros.some((e) => e.includes("iniciar com o dígito 8"))).toBe(true);
+    });
+  });
+
+  describe("3. Matriz Completa de Testes Determinísticos", () => {
     it("1: linha válida + visual concordante -> validado", () => {
       const res = reconcileBoleto({
         banco: SPAL_BANCO,
@@ -196,28 +333,6 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
       expect(res.valido).toBe(false);
       expect(res.status).toBe("requer_revisao");
       expect(res.divergencias.some((d) => d.includes("46 dígitos"))).toBe(true);
-    });
-
-    it("9: linha com 48 dígitos (arrecadação válida) -> validado", () => {
-      const bloco1 = "84670000001";
-      const dv1 = calcularModulo10(bloco1);
-      const bloco2 = "43500024020";
-      const dv2 = calcularModulo10(bloco2);
-      const bloco3 = "24012345678";
-      const dv3 = calcularModulo10(bloco3);
-      const bloco4 = "90123456789";
-      const dv4 = calcularModulo10(bloco4);
-      const linha48 = `${bloco1}${dv1}${bloco2}${dv2}${bloco3}${dv3}${bloco4}${dv4}`;
-
-      const res = reconcileBoleto({
-        beneficiario: "Companhia de Água e Esgoto",
-        valor: "143.50",
-        data_vencimento: "2026-09-10",
-        linha_digitavel: linha48,
-      });
-      expect(res.valido).toBe(true);
-      expect(res.status).toBe("validado");
-      expect(res.linhaDigitavel?.tipo).toBe("arrecadacao");
     });
 
     it("10: linha ausente + visual legível -> requer_revisao", () => {
