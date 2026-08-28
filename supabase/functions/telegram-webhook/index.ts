@@ -4857,9 +4857,7 @@ FORMATO:
             }
           } else if (
             orientacaoAnalysis?.tipo_documento === "boleto" ||
-            orientacaoAnalysis?.boleto_dados ||
-            docAnalysis?.tipo_documento === "boleto" ||
-            docAnalysis?.boleto_dados
+            orientacaoAnalysis?.boleto_dados
           ) {
             // ─── PASSO 2 BOLETO: Extração completa na imagem normalizada (pós-rotação) ───
             // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correta
