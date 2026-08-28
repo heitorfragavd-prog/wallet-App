@@ -424,6 +424,7 @@ export interface FocusedBoletoLineCandidate {
   attempt: number;
   region: "full_focused" | "lower_half" | "lower_third";
   latency_ms: number;
+  field_lengths?: string;
 }
 
 export interface RegionCandidate {
@@ -459,20 +460,36 @@ export interface RecoverBoletoLineResult {
 
 export const FOCUSED_BOLETO_LINE_PROMPT = `Você é um leitor óptico especializado em Ficha de Compensação de boletos bancários brasileiros.
 
-Localize a sequência numérica da LINHA DIGITÁVEL (47 dígitos para títulos bancários ou 48 dígitos para arrecadação) impressa na FICHA DE COMPENSAÇÃO (geralmente acima ou abaixo do código de barras).
+Localize a LINHA DIGITÁVEL impressa na FICHA DE COMPENSAÇÃO (geralmente acima ou abaixo do código de barras).
 
-TRANSCRAVA EXATAMENTE cada um dos dígitos numéricos visíveis:
-- Copie fielmente e literalmente os caracteres impressos;
-- NÃO corrija números;
-- NÃO complete sequências por adivinhação;
-- NÃO deduza números apagados;
-- NÃO infira nem reorganize dígitos;
-- Olhe com extrema atenção cada bloco numérico;
-- Se não conseguir ler com segurança, retorne null.
+Transcreva os 5 CAMPOS NUMÉRICOS EXATOS que compõem a linha digitável:
+- campo1: exatamente 10 dígitos numéricos (primeiros 5 dígitos + ponto + 5 dígitos);
+- campo2: exatamente 11 dígitos numéricos;
+- campo3: exatamente 11 dígitos numéricos;
+- dv_geral: exatamente 1 dígito numérico isolado (dígito verificador geral);
+- campo5: exatamente 14 dígitos numéricos (fator de vencimento de 4 dígitos + valor nominal de 10 dígitos).
+
+REGRAS RÍGIDAS DE TRANSCRIÇÃO:
+1. Transcreva LITERALMENTE o que está visível no documento;
+2. NÃO calcule;
+3. NÃO corrija números;
+4. NÃO complete dígitos ausentes;
+5. NÃO use conhecimento de FEBRABAN para inferir dígitos;
+6. Se algum campo não estiver legível, retorne null para esse campo;
+7. ATENÇÃO ESPECIAL À FRONTEIRA ENTRE "dv_geral" E "campo5":
+   - "dv_geral" e "campo5" são DOIS campos separados por espaço;
+   - Exemplo conceitual: se estiver impresso "... [DV de 1 dígito] [campo5 de 14 dígitos]", certifique-se de capturar o DV em "dv_geral" (1 dígito) e todos os 14 dígitos em "campo5";
+   - Mesmo que o DV seja "1" e o campo5 comece com "1" (ex: "... 1 15580000060247"), transcreva "dv_geral": "1" e "campo5": "15580000060247";
+8. NÃO use o valor nominal ou datas impressas para deduzir/reconstruir o campo5; transcreva estritamente os caracteres impressos.
 
 Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
 {
-  "linha_digitavel": "string de 47 ou 48 dígitos contínuos sem pontos ou espaços, ou null",
+  "campo1": "string de 10 dígitos numéricos ou null",
+  "campo2": "string de 11 dígitos numéricos ou null",
+  "campo3": "string de 11 dígitos numéricos ou null",
+  "dv_geral": "string de 1 dígito numérico ou null",
+  "campo5": "string de 14 dígitos numéricos ou null",
+  "linha_digitavel": "string de 47 dígitos contínuos sem pontos/espaços ou null",
   "codigo_barras": "string de 44 dígitos se visíveis numericamente ou null",
   "valor_visual": 0.00,
   "vencimento_visual": "YYYY-MM-DD ou DD/MM/YYYY ou null"
@@ -568,8 +585,34 @@ async function executeFocusedLineAttempt(params: {
     if (!rawJsonText) return null;
 
     const parsed = JSON.parse(rawJsonText.replace(/```json|```/g, "").trim());
-    const rawLinha = typeof parsed.linha_digitavel === "string" ? parsed.linha_digitavel.trim() : null;
-    const digits = rawLinha ? cleanDigits(rawLinha) : "";
+
+    // 1. Extração segmentada por campos
+    const c1 = parsed.campo1 ? cleanDigits(String(parsed.campo1)) : "";
+    const c2 = parsed.campo2 ? cleanDigits(String(parsed.campo2)) : "";
+    const c3 = parsed.campo3 ? cleanDigits(String(parsed.campo3)) : "";
+    const dv = parsed.dv_geral ? cleanDigits(String(parsed.dv_geral)) : "";
+    const c5 = parsed.campo5 ? cleanDigits(String(parsed.campo5)) : "";
+
+    const fieldLengths = `${c1.length},${c2.length},${c3.length},${dv.length},${c5.length}`;
+
+    let digits = "";
+    let rawLinha: string | null = null;
+
+    if (c1.length === 10 && c2.length === 11 && c3.length === 11 && dv.length === 1 && c5.length === 14) {
+      digits = c1 + c2 + c3 + dv + c5;
+      rawLinha = `${c1} ${c2} ${c3} ${dv} ${c5}`;
+    } else {
+      // 2. Compatibilidade com linha direta integral (se vier completa com 47 dígitos)
+      const rawFallback = typeof parsed.linha_digitavel === "string" ? parsed.linha_digitavel.trim() : null;
+      const digitsFallback = rawFallback ? cleanDigits(rawFallback) : "";
+      if (digitsFallback.length === 47) {
+        digits = digitsFallback;
+        rawLinha = rawFallback;
+      } else {
+        digits = digitsFallback || (c1 + c2 + c3 + dv + c5);
+        rawLinha = rawFallback || (digits.length > 0 ? digits : null);
+      }
+    }
 
     return {
       linha_raw: rawLinha,
@@ -582,6 +625,7 @@ async function executeFocusedLineAttempt(params: {
       attempt,
       region,
       latency_ms: Date.now() - start,
+      field_lengths: fieldLengths,
     };
   } catch (err) {
     console.warn(`[BOLETO_RECOVERY_ATTEMPT_ERR] provider=${provider} region=${region} attempt=${attempt} err=${err}`);
@@ -671,8 +715,8 @@ export async function recoverBoletoLineWithFailover(
         console.log(
           `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
           `provider=openai model=${PROVIDER_MODELS.openai} region=${reg.region} ` +
-          `digit_count=${candidate.digit_count} validation_result=${valRes.valido} ` +
-          `validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
+          `digit_count=${candidate.digit_count} field_lengths=${candidate.field_lengths || "none"} ` +
+          `validation_result=${valRes.valido} validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
         );
 
         if (valRes.valido) {
@@ -729,8 +773,8 @@ export async function recoverBoletoLineWithFailover(
         console.log(
           `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
           `provider=gemini model=${PROVIDER_MODELS.gemini} region=${reg.region} ` +
-          `digit_count=${candidate.digit_count} validation_result=${valRes.valido} ` +
-          `validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
+          `digit_count=${candidate.digit_count} field_lengths=${candidate.field_lengths || "none"} ` +
+          `validation_result=${valRes.valido} validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
         );
 
         if (valRes.valido) {
