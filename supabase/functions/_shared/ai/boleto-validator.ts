@@ -551,6 +551,19 @@ export function normalizeDate(dateRaw: unknown): { iso: string | null; formatted
   return { iso: null, formattedBr: null };
 }
 
+export function parseNum(v: unknown): number {
+  return parseBoletoAmount(v);
+}
+
+export function parseDate(v: unknown, fallbackDate?: string): string {
+  const norm = normalizeDate(v);
+  if (norm.iso) return norm.iso;
+  if (!v) return fallbackDate || new Date().toISOString().split("T")[0];
+  const str = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
+  return fallbackDate || new Date().toISOString().split("T")[0];
+}
+
 /**
  * Normaliza e valida CPF/CNPJ.
  */

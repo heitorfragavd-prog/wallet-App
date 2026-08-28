@@ -1,4 +1,5 @@
-﻿import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { parseNum, parseDate } from "../services/boleto-validator";
 
 describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback", () => {
   const PROPOSTA_ID_TESTE = "prop-uuid-1234-5678";
@@ -256,5 +257,23 @@ describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback"
     expect(res.divida?.data_vencimento).toBe("2026-08-28");
     expect(res.divida?.credor).toBe("SPAL INDUSTRIA BRASILEIRA DE");
     expect(prop.dados.linha_digitavel).toBe("34191091150174649293183045790009815520000156261");
+  });
+
+  it("14. Funções de parsing produtivo parseNum e parseDate convertem valores e datas reais", () => {
+    // 1. Números e formatos de moeda
+    expect(parseNum(1562.61)).toBe(1562.61);
+    expect(parseNum("1562.61")).toBe(1562.61);
+    expect(parseNum("1.562,61")).toBe(1562.61);
+    expect(parseNum("R$ 1.562,61")).toBe(1562.61);
+    expect(parseNum("R$ 1562.61")).toBe(1562.61);
+    expect(parseNum(null)).toBe(0);
+    expect(parseNum(undefined)).toBe(0);
+    expect(parseNum("")).toBe(0);
+
+    // 2. Datas em formato ISO e formato Brasileiro
+    expect(parseDate("2026-08-28")).toBe("2026-08-28");
+    expect(parseDate("28/08/2026")).toBe("2026-08-28");
+    expect(parseDate("2026-08-28T00:00:00.000Z")).toBe("2026-08-28");
+    expect(parseDate(null, "2026-08-28")).toBe("2026-08-28");
   });
 });

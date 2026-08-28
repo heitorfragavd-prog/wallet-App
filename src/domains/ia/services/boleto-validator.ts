@@ -12,6 +12,8 @@ export {
   validateCodigoBarras,
   parseBoletoAmount,
   normalizeDate,
+  parseNum,
+  parseDate,
   normalizeCpfCnpj,
   reconcileBoleto,
   type ValidatedLinhaDigitavel,

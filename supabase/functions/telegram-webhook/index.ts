@@ -37,6 +37,8 @@ import {
   validateCodigoBarras,
   parseBoletoAmount,
   normalizeDate,
+  parseNum,
+  parseDate,
   type BoletoValidationResult,
   type BoletoValidationEvidence,
 } from "../_shared/ai/boleto-validator.ts";
@@ -3375,26 +3377,6 @@ serve(async (req) => {
 
         const dados = typeof proposta.dados === "string" ? JSON.parse(proposta.dados) : proposta.dados;
         
-        // Sanitização de valores e datas
-        const parseNum = (v: any) => {
-          if (typeof v === "number") return isNaN(v) ? 0 : v;
-          if (!v) return 0;
-          const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-          const n = parseFloat(s);
-          return isNaN(n) ? 0 : n;
-        };
-
-        const parseDate = (v: any) => {
-          if (!v) return hojeStr;
-          const str = String(v).trim();
-          if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-          if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-            const p = str.split("/");
-            return `${p[2]}-${p[1]}-${p[0]}`;
-          }
-          return hojeStr;
-        };
-
         // ─── CASO B: PROPOSTA DE NF DE COMPRA (ESTOQUE & CUSTO) ───
         if (proposta.tipo === "atualizar_estoque_nf" || conversaAtiva?.estado === "aguardando_confirmacao_nf") {
           const nfId = dados?.nf_id || conversaAtiva?.proposta_id;
@@ -5472,27 +5454,9 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             documentData.data_vencimento = documentData.vencimento;
           }
           // ─── VALIDAÇÃO DETERMINÍSTICA CONTRA ALUCINAÇÃO ───
-          const parseNum = (v: any) => {
-            if (typeof v === "number") return isNaN(v) ? 0 : v;
-            if (!v) return 0;
-            const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-            const n = parseFloat(s);
-            return isNaN(n) ? 0 : n;
-          };
-
-          const parseDt = (v: any) => {
-            if (!v) return null;
-            const str = String(v).trim();
-            if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-            if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-              const p = str.split("/");
-              return `${p[2]}-${p[1]}-${p[0]}`;
-            }
-            return null;
-          };
-
           let valor = parseNum(documentData.valor);
-          let dataVencimento = parseDt(documentData.data_vencimento);
+          let dataVencimento = parseDate(documentData.data_vencimento, "");
+          if (!dataVencimento) dataVencimento = null;
           let beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
 
