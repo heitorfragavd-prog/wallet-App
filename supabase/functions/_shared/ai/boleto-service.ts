@@ -11,8 +11,11 @@
  */
 
 import {
+  cleanDigits,
+  validateLinhaDigitavel,
   reconcileBoleto,
   normalizeDate,
+  parseBoletoAmount,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
 import { callVisionWithFailover } from "./danfe-fiscal-service.ts";
@@ -407,6 +410,295 @@ Retorne JSON:
     beneficiario: null,
     provider: "none",
     extraction_type: "focused",
+  };
+}
+
+export interface FocusedBoletoLineCandidate {
+  linha_raw: string | null;
+  linha_digits: string;
+  digit_count: number;
+  codigo_barras?: string | null;
+  valor_visual?: number | null;
+  vencimento_visual?: string | null;
+  provider: "openai" | "gemini";
+  attempt: number;
+  region: "full_focused" | "lower_half" | "lower_third";
+  latency_ms: number;
+}
+
+export interface RegionCandidate {
+  region: "full_focused" | "lower_half" | "lower_third";
+  base64: string;
+}
+
+export interface RecoverBoletoLineOptions {
+  base64: string;
+  mimeType: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  geminiApiKeyBackup?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  correlationId?: string;
+  regionCandidates?: RegionCandidate[];
+}
+
+export interface RecoverBoletoLineResult {
+  recovered: boolean;
+  successfulCandidate?: FocusedBoletoLineCandidate;
+  validationResult?: BoletoValidationResult;
+  allCandidates: FocusedBoletoLineCandidate[];
+  attemptsCount: number;
+}
+
+export const FOCUSED_BOLETO_LINE_PROMPT = `Você é um leitor óptico especializado em Ficha de Compensação de boletos bancários brasileiros.
+
+Localize a sequência numérica da LINHA DIGITÁVEL (47 dígitos para títulos bancários ou 48 dígitos para arrecadação) impressa na FICHA DE COMPENSAÇÃO (geralmente acima ou abaixo do código de barras).
+
+TRANSCRAVA EXATAMENTE cada um dos dígitos numéricos visíveis:
+- Copie fielmente e literalmente os caracteres impressos;
+- NÃO corrija números;
+- NÃO complete sequências por adivinhação;
+- NÃO deduza números apagados;
+- NÃO infira nem reorganize dígitos;
+- Olhe com extrema atenção cada bloco numérico;
+- Se não conseguir ler com segurança, retorne null.
+
+Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
+{
+  "linha_digitavel": "string de 47 ou 48 dígitos contínuos sem pontos ou espaços, ou null",
+  "codigo_barras": "string de 44 dígitos se visíveis numericamente ou null",
+  "valor_visual": 0.00,
+  "vencimento_visual": "YYYY-MM-DD ou DD/MM/YYYY ou null"
+}`;
+
+/**
+ * Executa uma tentativa de extração focalizada de linha em um provedor e região específicos.
+ */
+async function executeFocusedLineAttempt(params: {
+  provider: "openai" | "gemini";
+  region: "full_focused" | "lower_half" | "lower_third";
+  attempt: number;
+  base64: string;
+  mimeType: string;
+  apiKey: string;
+  fetchImpl: typeof fetch;
+  timeoutMs: number;
+}): Promise<FocusedBoletoLineCandidate | null> {
+  const { provider, region, attempt, base64, mimeType, apiKey, fetchImpl, timeoutMs } = params;
+  const start = Date.now();
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let rawJsonText = "";
+
+    if (provider === "openai") {
+      const resp = await fetchImpl("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: "gpt-4o",
+          temperature: 0.0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "Extrator especialista em transcrição literal de linha digitável bancária. Responda estritamente com JSON." },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: FOCUSED_BOLETO_LINE_PROMPT },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64}`,
+                    detail: "high",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      clearTimeout(timer);
+      if (resp.ok) {
+        const json = await resp.json();
+        rawJsonText = json.choices?.[0]?.message?.content?.trim() || "";
+      }
+    } else if (provider === "gemini") {
+      const resp = await fetchImpl(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: FOCUSED_BOLETO_LINE_PROMPT },
+                  { inline_data: { mime_type: mimeType, data: base64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+            },
+          }),
+        }
+      );
+      clearTimeout(timer);
+      if (resp.ok) {
+        const gJson = await resp.json();
+        rawJsonText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      }
+    }
+
+    if (!rawJsonText) return null;
+
+    const parsed = JSON.parse(rawJsonText.replace(/```json|```/g, "").trim());
+    const rawLinha = typeof parsed.linha_digitavel === "string" ? parsed.linha_digitavel.trim() : null;
+    const digits = rawLinha ? cleanDigits(rawLinha) : "";
+
+    return {
+      linha_raw: rawLinha,
+      linha_digits: digits,
+      digit_count: digits.length,
+      codigo_barras: parsed.codigo_barras ? String(parsed.codigo_barras).trim() : null,
+      valor_visual: parseBoletoAmount(parsed.valor_visual),
+      vencimento_visual: parsed.vencimento_visual ? String(parsed.vencimento_visual).trim() : null,
+      provider,
+      attempt,
+      region,
+      latency_ms: Date.now() - start,
+    };
+  } catch (err) {
+    console.warn(`[BOLETO_RECOVERY_ATTEMPT_ERR] provider=${provider} region=${region} attempt=${attempt} err=${err}`);
+    return null;
+  }
+}
+
+/**
+ * Pipeline de auto-recuperação focalizada e fail-closed de linha digitável.
+ *
+ * Regras Rígidas:
+ * 1. Cada candidato é 100% autônomo e integral — NUNCA misturar blocos de provedores diferentes.
+ * 2. Validação determinística FEBRABAN após cada tentativa — encerra imediatamente no primeiro candidato matematicamente válido.
+ * 3. Se nenhum candidato for válido, encerra com recovered=false (sem chutar nem afrouxar regras).
+ */
+export async function recoverBoletoLineWithFailover(
+  options: RecoverBoletoLineOptions
+): Promise<RecoverBoletoLineResult> {
+  const {
+    base64,
+    mimeType,
+    openaiApiKey,
+    geminiApiKey,
+    geminiApiKeyBackup,
+    fetchImpl = fetch,
+    timeoutMs = 25000,
+    correlationId = "none",
+  } = options;
+
+  const regions: RegionCandidate[] = options.regionCandidates && options.regionCandidates.length > 0
+    ? options.regionCandidates
+    : [{ region: "full_focused", base64 }];
+
+  const allCandidates: FocusedBoletoLineCandidate[] = [];
+  let attemptCounter = 0;
+
+  console.log(`[BOLETO_RECOVERY] correlation_id=${correlationId} started candidate_regions=${regions.length}`);
+
+  // ─── 1. TENTATIVAS COM OPENAI GPT-4O FOCALIZADO (Por Região Candidata) ───
+  if (openaiApiKey) {
+    for (const reg of regions) {
+      attemptCounter++;
+      const candidate = await executeFocusedLineAttempt({
+        provider: "openai",
+        region: reg.region,
+        attempt: attemptCounter,
+        base64: reg.base64,
+        mimeType,
+        apiKey: openaiApiKey,
+        fetchImpl,
+        timeoutMs,
+      });
+
+      if (candidate) {
+        allCandidates.push(candidate);
+        const valRes = validateLinhaDigitavel(candidate.linha_digits);
+
+        console.log(
+          `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
+          `provider=openai region=${reg.region} digit_count=${candidate.digit_count} ` +
+          `febraban_valid=${valRes.valido} latency_ms=${candidate.latency_ms}`
+        );
+
+        if (valRes.valido) {
+          console.log(`[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} recovered_on_attempt=${attemptCounter} provider=openai`);
+          return {
+            recovered: true,
+            successfulCandidate: candidate,
+            validationResult: valRes,
+            allCandidates,
+            attemptsCount: attemptCounter,
+          };
+        }
+      }
+    }
+  }
+
+  // ─── 2. TENTATIVAS COM GEMINI 3.7 FLASH FOCALIZADO (Fallback) ───
+  const activeGeminiKey = geminiApiKey || geminiApiKeyBackup;
+  if (activeGeminiKey) {
+    for (const reg of regions) {
+      attemptCounter++;
+      const candidate = await executeFocusedLineAttempt({
+        provider: "gemini",
+        region: reg.region,
+        attempt: attemptCounter,
+        base64: reg.base64,
+        mimeType,
+        apiKey: activeGeminiKey,
+        fetchImpl,
+        timeoutMs,
+      });
+
+      if (candidate) {
+        allCandidates.push(candidate);
+        const valRes = validateLinhaDigitavel(candidate.linha_digits);
+
+        console.log(
+          `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
+          `provider=gemini region=${reg.region} digit_count=${candidate.digit_count} ` +
+          `febraban_valid=${valRes.valido} latency_ms=${candidate.latency_ms}`
+        );
+
+        if (valRes.valido) {
+          console.log(`[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} recovered_on_attempt=${attemptCounter} provider=gemini`);
+          return {
+            recovered: true,
+            successfulCandidate: candidate,
+            validationResult: valRes,
+            allCandidates,
+            attemptsCount: attemptCounter,
+          };
+        }
+      }
+    }
+  }
+
+  console.log(`[BOLETO_RECOVERY_FAILED] correlation_id=${correlationId} total_attempts=${attemptCounter} recovered=false`);
+
+  return {
+    recovered: false,
+    allCandidates,
+    attemptsCount: attemptCounter,
   };
 }
 

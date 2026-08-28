@@ -43,7 +43,11 @@ import {
   type BoletoValidationResult,
   type BoletoValidationEvidence,
 } from "../_shared/ai/boleto-validator.ts";
-import { extractFocusedBeneficiary } from "../_shared/ai/boleto-service.ts";
+import {
+  extractFocusedBeneficiary,
+  recoverBoletoLineWithFailover,
+  type RegionCandidate,
+} from "../_shared/ai/boleto-service.ts";
 
 
 
@@ -1129,13 +1133,24 @@ serve(async (req) => {
           : "R$ 0,00";
 
       // ================================================================
-      // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta & cancelar_proposta
+      // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta, cancelar_proposta & revisar_proposta
       // ================================================================
-      if (callbackData.startsWith("confirmar_proposta:") || callbackData.startsWith("cancelar_proposta:")) {
+      if (
+        callbackData.startsWith("confirmar_proposta:") ||
+        callbackData.startsWith("cancelar_proposta:") ||
+        callbackData.startsWith("revisar_proposta:")
+      ) {
         const isConfirm = callbackData.startsWith("confirmar_proposta:");
+        const isReview = callbackData.startsWith("revisar_proposta:");
         const propostaId = callbackData.split(":")[1];
 
-        await answerCallback(callbackQuery.id, isConfirm ? "Confirmando cadastro..." : "Cancelando proposta...");
+        const feedbackMsg = isConfirm
+          ? "Confirmando cadastro..."
+          : isReview
+          ? "Abrindo orientações de revisão..."
+          : "Cancelando proposta...";
+
+        await answerCallback(callbackQuery.id, feedbackMsg);
 
         const { data: propostaRow } = await supabase
           .from("telegram_propostas")
@@ -1172,6 +1187,17 @@ serve(async (req) => {
             propostaRow,
             replyCallbackFn,
             callbackMessageId
+          );
+        } else if (isReview) {
+          if (callbackMessageId) {
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+          }
+          await replyCallbackFn(
+            `📸 <b>Revisão de Boleto Requerida</b>\n\n` +
+            `Para garantir a exatidão financeira do cadastro:\n\n` +
+            `1️⃣ Envie uma <b>foto aproximada</b> focando na <b>Ficha de Compensação</b> (rodapé com linha digitável e código de barras);\n` +
+            `2️⃣ Ou envie o boleto original como <b>📎 Arquivo/Documento</b> (para evitar perda de nitidez por compressão).\n\n` +
+            `<i>A IA validará matematicamente os 47 dígitos e o valor exato antes de cadastrar.</i>`
           );
         } else {
           await executarCancelamentoPropostaBoleto(
@@ -4983,7 +5009,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
 
             // ─── VALIDAÇÃO E CONCILIAÇÃO DETERMINÍSTICA CANÔNICA ───
             const rawLinha = bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || null;
-            const validacaoCanonica = reconcileBoleto({
+            let validacaoCanonica = reconcileBoleto({
               banco: bParsed.banco || null,
               beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
               cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
@@ -4996,6 +5022,62 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               nosso_numero: bParsed.nosso_numero || null,
               numero_documento: bParsed.numero_documento || null,
             });
+
+            // ─── PIPELINE DE AUTO-RECUPERAÇÃO DE LINHA DIGITÁVEL (SE 1ª LEITURA FOI INVÁLIDA/INCOMPLETA) ───
+            if (!validacaoCanonica.valido && (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto)) {
+              console.log(`[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} 1st pass invalid, starting recovery...`);
+
+              // Gerar regiões candidatas de forma segura sem eliminar a original
+              const candidateRegions: RegionCandidate[] = [
+                { region: "full_focused", base64: normalizedB64Boleto },
+              ];
+
+              // Tentar crop da metade inferior (Ficha de Compensação) se imagem for alta
+              if (loadedDecodedImage && loadedDecodedImage.height > 400) {
+                try {
+                  const cropY = Math.floor(loadedDecodedImage.height * 0.45);
+                  const cropH = loadedDecodedImage.height - cropY;
+                  const cropped = loadedDecodedImage.clone().crop(0, cropY, loadedDecodedImage.width, cropH);
+                  const croppedB64 = base64Encode(await cropped.encodeJPEG(95));
+                  candidateRegions.push({ region: "lower_half", base64: croppedB64 });
+                } catch (cropErr) {
+                  console.warn(`[BOLETO_RECOVERY] Falha ao gerar crop candidate: ${cropErr}`);
+                }
+              }
+
+              const recoveryRes = await recoverBoletoLineWithFailover({
+                base64: normalizedB64Boleto,
+                mimeType: mimeTypeBoleto,
+                openaiApiKey: openAiKeyBoleto,
+                geminiApiKey: geminiKeyBoleto,
+                geminiApiKeyBackup: geminiBackupBoleto,
+                correlationId: correlationIdBoleto,
+                regionCandidates: candidateRegions,
+              });
+
+              if (recoveryRes.recovered && recoveryRes.successfulCandidate && recoveryRes.validationResult?.valido) {
+                console.log(
+                  `[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} ` +
+                  `Linha recuperada com sucesso via ${recoveryRes.successfulCandidate.provider} (${recoveryRes.successfulCandidate.region})`
+                );
+                validacaoCanonica = reconcileBoleto({
+                  banco: bParsed.banco || null,
+                  beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
+                  cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
+                  pagador: bParsed.pagador || bParsed.sacado || null,
+                  cnpj_cpf_pagador: bParsed.cnpj_cpf_pagador || null,
+                  data_vencimento: bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null,
+                  valor: bParsed.valor ?? orientacaoAnalysis?.boleto_dados?.valor ?? null,
+                  linha_digitavel: recoveryRes.successfulCandidate.linha_digits,
+                  codigo_barras: recoveryRes.successfulCandidate.codigo_barras || bParsed.codigo_barras || null,
+                  nosso_numero: bParsed.nosso_numero || null,
+                  numero_documento: bParsed.numero_documento || null,
+                });
+                validacaoCanonica.warnings.push(
+                  `linha_recuperada_${recoveryRes.successfulCandidate.provider}_${recoveryRes.successfulCandidate.region}`
+                );
+              }
+            }
 
             let beneficiarioFinal = validacaoCanonica.beneficiarioFinal;
             const beneficiarioOcrGlobal = bParsed.beneficiario || bParsed.cedente || null;
@@ -5636,22 +5718,28 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
                 (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
                 (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
-                `💰 Valor identificado: <b>${valFmt}</b>\n` +
-                `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                `⚠️ <b>Valor visual não confirmado: ${valFmt}</b>\n` +
+                `📅 <b>Vencimento visual não confirmado: ${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
                 avisoAnoSuspeito +
                 `\n⚠️ <b>Não foi possível validar a linha digitável com precisão matemática.</b>\n` +
-                `<i>Os valores acima foram lidos visualmente do documento.</i>\n` +
+                `<i>Para sua segurança financeira, revise os dados antes de salvar.</i>\n` +
                 dicaArquivo +
-                `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
-                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+                `\n⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             }
 
-            const botoesBoleto = [
-              [
-                { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${propostaSalva.id}` },
-                { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
-              ],
-            ];
+            const botoesBoleto = isBoletoValidado || isBoletoValidadoAlerta
+              ? [
+                  [
+                    { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ]
+              : [
+                  [
+                    { text: "✏️ Revisar dados", callback_data: `revisar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ];
 
             await sendReplyWithButtons(chatId, mensagemProposta, botoesBoleto);
             return new Response("OK", { status: 200, headers: corsHeaders });
