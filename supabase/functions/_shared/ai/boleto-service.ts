@@ -429,6 +429,12 @@ export interface FocusedBoletoLineCandidate {
 export interface RegionCandidate {
   region: "full_focused" | "lower_half" | "lower_third";
   base64: string;
+  original_width?: number;
+  original_height?: number;
+  crop_x?: number;
+  crop_y?: number;
+  crop_width?: number;
+  crop_height?: number;
 }
 
 export interface RecoverBoletoLineOptions {
@@ -590,6 +596,14 @@ async function executeFocusedLineAttempt(params: {
  * 1. Cada candidato é 100% autônomo e integral — NUNCA misturar blocos de provedores diferentes.
  * 2. Validação determinística FEBRABAN após cada tentativa — encerra imediatamente no primeiro candidato matematicamente válido.
  * 3. Se nenhum candidato for válido, encerra com recovered=false (sem chutar nem afrouxar regras).
+ *
+ * Telemetria:
+ * - CROP_ATTEMPT: region, original_width, original_height, crop_x, crop_y, crop_width, crop_height
+ * - BOLETO_RECOVERY_ATTEMPT: provider, model, region, digit_count, validation_result, validation_errors, latency_ms
+ * - BOLETO_RECOVERY_SUCCESS: provider, model, region, digit_count, valor_derivado, vencimento_derivado
+ * - BOLETO_RECOVERY_FAILED: attempt_count, reason
+ *
+ * Segurança: NUNCA loga base64, imagem, API keys, tokens ou secrets.
  */
 export async function recoverBoletoLineWithFailover(
   options: RecoverBoletoLineOptions
@@ -612,7 +626,24 @@ export async function recoverBoletoLineWithFailover(
   const allCandidates: FocusedBoletoLineCandidate[] = [];
   let attemptCounter = 0;
 
+  const PROVIDER_MODELS: Record<string, string> = {
+    openai: "gpt-4o",
+    gemini: "gemini-3.7-flash",
+  };
+
   console.log(`[BOLETO_RECOVERY] correlation_id=${correlationId} started candidate_regions=${regions.length}`);
+
+  // ─── CROP_ATTEMPT — Telemetria das regiões candidatas ───
+  for (const reg of regions) {
+    if (reg.original_width !== undefined && reg.original_height !== undefined) {
+      console.log(
+        `[CROP_ATTEMPT] correlation_id=${correlationId} region=${reg.region} ` +
+        `original_width=${reg.original_width} original_height=${reg.original_height} ` +
+        `crop_x=${reg.crop_x ?? 0} crop_y=${reg.crop_y ?? 0} ` +
+        `crop_width=${reg.crop_width ?? reg.original_width} crop_height=${reg.crop_height ?? reg.original_height}`
+      );
+    }
+  }
 
   // ─── 1. TENTATIVAS COM OPENAI GPT-4O FOCALIZADO (Por Região Candidata) ───
   if (openaiApiKey) {
@@ -633,14 +664,25 @@ export async function recoverBoletoLineWithFailover(
         allCandidates.push(candidate);
         const valRes = validateLinhaDigitavel(candidate.linha_digits);
 
+        const validationErrors = valRes.valido
+          ? "none"
+          : ([valRes.motivo, ...(valRes.erros || [])].filter(Boolean).join("; ") || "dv_fail");
+
         console.log(
           `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
-          `provider=openai region=${reg.region} digit_count=${candidate.digit_count} ` +
-          `febraban_valid=${valRes.valido} latency_ms=${candidate.latency_ms}`
+          `provider=openai model=${PROVIDER_MODELS.openai} region=${reg.region} ` +
+          `digit_count=${candidate.digit_count} validation_result=${valRes.valido} ` +
+          `validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
         );
 
         if (valRes.valido) {
-          console.log(`[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} recovered_on_attempt=${attemptCounter} provider=openai`);
+          console.log(
+            `[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} ` +
+            `attempt=${attemptCounter} provider=openai model=${PROVIDER_MODELS.openai} ` +
+            `region=${reg.region} digit_count=${candidate.digit_count} ` +
+            `valor_derivado=${valRes.valorDerivado ?? "null"} ` +
+            `vencimento_derivado=${valRes.dataVencimentoDerivada ?? "null"}`
+          );
           return {
             recovered: true,
             successfulCandidate: candidate,
@@ -649,6 +691,13 @@ export async function recoverBoletoLineWithFailover(
             attemptsCount: attemptCounter,
           };
         }
+      } else {
+        console.log(
+          `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
+          `provider=openai model=${PROVIDER_MODELS.openai} region=${reg.region} ` +
+          `digit_count=0 validation_result=false ` +
+          `validation_errors=candidate_null latency_ms=unknown`
+        );
       }
     }
   }
@@ -673,14 +722,25 @@ export async function recoverBoletoLineWithFailover(
         allCandidates.push(candidate);
         const valRes = validateLinhaDigitavel(candidate.linha_digits);
 
+        const validationErrors = valRes.valido
+          ? "none"
+          : ([valRes.motivo, ...(valRes.erros || [])].filter(Boolean).join("; ") || "dv_fail");
+
         console.log(
           `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
-          `provider=gemini region=${reg.region} digit_count=${candidate.digit_count} ` +
-          `febraban_valid=${valRes.valido} latency_ms=${candidate.latency_ms}`
+          `provider=gemini model=${PROVIDER_MODELS.gemini} region=${reg.region} ` +
+          `digit_count=${candidate.digit_count} validation_result=${valRes.valido} ` +
+          `validation_errors=${validationErrors} latency_ms=${candidate.latency_ms}`
         );
 
         if (valRes.valido) {
-          console.log(`[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} recovered_on_attempt=${attemptCounter} provider=gemini`);
+          console.log(
+            `[BOLETO_RECOVERY_SUCCESS] correlation_id=${correlationId} ` +
+            `attempt=${attemptCounter} provider=gemini model=${PROVIDER_MODELS.gemini} ` +
+            `region=${reg.region} digit_count=${candidate.digit_count} ` +
+            `valor_derivado=${valRes.valorDerivado ?? "null"} ` +
+            `vencimento_derivado=${valRes.dataVencimentoDerivada ?? "null"}`
+          );
           return {
             recovered: true,
             successfulCandidate: candidate,
@@ -689,11 +749,29 @@ export async function recoverBoletoLineWithFailover(
             attemptsCount: attemptCounter,
           };
         }
+      } else {
+        console.log(
+          `[BOLETO_RECOVERY_ATTEMPT] correlation_id=${correlationId} attempt=${attemptCounter} ` +
+          `provider=gemini model=${PROVIDER_MODELS.gemini} region=${reg.region} ` +
+          `digit_count=0 validation_result=false ` +
+          `validation_errors=candidate_null latency_ms=unknown`
+        );
       }
     }
   }
 
-  console.log(`[BOLETO_RECOVERY_FAILED] correlation_id=${correlationId} total_attempts=${attemptCounter} recovered=false`);
+  // ─── 3. FAIL-CLOSED — Sem sucesso ───
+  const failReason =
+    !openaiApiKey && !activeGeminiKey
+      ? "no_api_keys"
+      : attemptCounter === 0
+      ? "no_attempts_made"
+      : "all_candidates_invalid";
+
+  console.log(
+    `[BOLETO_RECOVERY_FAILED] correlation_id=${correlationId} ` +
+    `attempt_count=${attemptCounter} reason=${failReason}`
+  );
 
   return {
     recovered: false,

@@ -5025,17 +5025,38 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
 
               // Gerar regiões candidatas de forma segura sem eliminar a original
               const candidateRegions: RegionCandidate[] = [
-                { region: "full_focused", base64: normalizedB64Boleto },
+                {
+                  region: "full_focused",
+                  base64: normalizedB64Boleto,
+                  original_width: loadedDecodedImage?.width,
+                  original_height: loadedDecodedImage?.height,
+                  crop_x: 0,
+                  crop_y: 0,
+                  crop_width: loadedDecodedImage?.width,
+                  crop_height: loadedDecodedImage?.height,
+                },
               ];
 
               // Tentar crop da metade inferior (Ficha de Compensação) se imagem for alta
               if (loadedDecodedImage && loadedDecodedImage.height > 400) {
                 try {
-                  const cropY = Math.floor(loadedDecodedImage.height * 0.45);
-                  const cropH = loadedDecodedImage.height - cropY;
-                  const cropped = loadedDecodedImage.clone().crop(0, cropY, loadedDecodedImage.width, cropH);
+                  const origW = loadedDecodedImage.width;
+                  const origH = loadedDecodedImage.height;
+                  const cropY = Math.floor(origH * 0.45);
+                  const cropH = origH - cropY;
+                  const cropW = origW;
+                  const cropped = loadedDecodedImage.clone().crop(0, cropY, cropW, cropH);
                   const croppedB64 = base64Encode(await cropped.encodeJPEG(95));
-                  candidateRegions.push({ region: "lower_half", base64: croppedB64 });
+                  candidateRegions.push({
+                    region: "lower_half",
+                    base64: croppedB64,
+                    original_width: origW,
+                    original_height: origH,
+                    crop_x: 0,
+                    crop_y: cropY,
+                    crop_width: cropW,
+                    crop_height: cropH,
+                  });
                 } catch (cropErr) {
                   console.warn(`[BOLETO_RECOVERY] Falha ao gerar crop candidate: ${cropErr}`);
                 }
