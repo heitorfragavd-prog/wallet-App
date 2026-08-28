@@ -32,6 +32,7 @@ import {
   type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
 import {
+  cleanDigits,
   reconcileBoleto,
   validateLinhaDigitavel,
   validateCodigoBarras,
@@ -3843,6 +3844,7 @@ serve(async (req) => {
               );
               const pdfValFmt = pdfValor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
               const pdfIsVencido = pdfVenc && pdfVenc < hojeStr;
+              const pdfVencFmt = pdfVenc ? pdfVenc.split("-").reverse().join("/") : "Sem data";
               const msgPdfProposta =
                 `📄 <b>Boleto PDF identificado!</b>\n\n` +
                 `🏢 Beneficiário: <b>${pdfBenef}</b>\n` +
@@ -5587,6 +5589,9 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
             const isBoletoValidado = documentData.validation_status === "validado";
             const isBoletoValidadoAlerta = documentData.validation_status === "validado_com_alerta";
+            const vencimentoAno = dataVencimento ? parseInt(dataVencimento.split("-")[0], 10) : null;
+            const anoAtual = new Date().getFullYear();
+            const vencimentoAnoSuspeito = vencimentoAno !== null && (vencimentoAno < anoAtual - 1 || vencimentoAno > anoAtual + 2);
             const valOcrNum = documentData.valor_ocr ?? null;
             const valDerivNum = documentData.valor_derivado ?? null;
             const vencOcrStr = documentData.vencimento_ocr ?? null;
