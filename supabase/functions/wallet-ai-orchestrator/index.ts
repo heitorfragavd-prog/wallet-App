@@ -5,6 +5,7 @@ import { GeminiLlmRunner } from "../_shared/ai/gemini-adapter.ts";
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { handleBoletoHttpRequest } from "./boleto-handler.ts";
 import { handleFiscalHttpRequest } from "./fiscal-handler.ts";
+import { handleDocumentHttpRequest } from "./document-handler.ts";
 import { handleOrchestratorHttpRequest } from "./handler.ts";
 import {
   createEyemobileLiveClient,
@@ -82,10 +83,25 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  if (url.pathname.endsWith("/document") || url.pathname.endsWith("/process-document")) {
+    return handleDocumentHttpRequest(req, {
+      authDeps,
+      geminiApiKey: geminiApiKey || "",
+      adminClient,
+    });
+  }
+
   if (req.method === "POST") {
     try {
       const clone = req.clone();
       const peek = await clone.json();
+      if (peek?.action === "process_document" || peek?.mode === "DOCUMENT_PROCESS") {
+        return handleDocumentHttpRequest(req, {
+          authDeps,
+          geminiApiKey: geminiApiKey || "",
+          adminClient,
+        });
+      }
       if (peek?.action === "process_danfe" || peek?.mode === "DANFE_PROCESS") {
         return handleFiscalHttpRequest(req, {
           authDeps,

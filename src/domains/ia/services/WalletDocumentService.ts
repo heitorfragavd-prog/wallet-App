@@ -26,22 +26,20 @@ export interface ProcessDocumentResponse {
 export async function processWalletDocument(
   input: WalletDocumentInput,
 ): Promise<ProcessDocumentResponse> {
-  const classification = classifyDocument(input.fileName, input.mimeType, input.textContext);
+  try {
+    const { data, error } = await supabase.functions.invoke("wallet-ai-orchestrator", {
+      body: {
+        action: "process_document",
+        base64: input.base64,
+        mime_type: input.mimeType,
+        workspace_id: input.workspaceId,
+        conversation_id: input.conversationId,
+      },
+    });
 
-  // ── 1. BOLETO (Etapa 2.2A — Extração e Validação Determinística) ─────────────
-  if (classification.tipo === "BOLETO") {
-    try {
-      const { data, error } = await supabase.functions.invoke("wallet-ai-orchestrator", {
-        body: {
-          action: "process_boleto",
-          base64: input.base64,
-          mime_type: input.mimeType,
-          workspace_id: input.workspaceId,
-          conversation_id: input.conversationId,
-        },
-      });
-
-      if (!error && data?.mensagemFormatada) {
+    if (!error && data) {
+      // ── 1. Resposta de Boleto ──────────────────────────────────────────────
+      if (data.dados || data.validacao || data.tipo === "BOLETO" || data.status === "validado" || data.status === "validado_com_alerta") {
         const isValido = data.status === "validado" || data.status === "validado_com_alerta";
         let actionProposal: ActionProposal | undefined;
 
@@ -72,61 +70,14 @@ export async function processWalletDocument(
         return {
           tipo: "BOLETO",
           status: data.status,
-          content: data.mensagemFormatada,
+          content: data.mensagemFormatada || "📄 **Boleto Processado**",
           boletoDados: data.dados,
           actionProposal,
         };
       }
-    } catch {
-      // Fallback gracioso se a edge function estiver offline
-    }
 
-    const msg = [
-      `📄 **Boleto Identificado**`,
-      ``,
-      `• **Arquivo:** ${input.fileName}`,
-      `• **Tipo:** Boleto Bancário / Fatura`,
-      ``,
-      `Identifiquei o anexo como um Boleto Bancário.`,
-      ``,
-      `🔒 *Nenhum pagamento ou lançamento foi realizado.*`,
-      ``,
-      `*Posso preparar este boleto para cadastro.*`,
-    ].join("\n");
-
-    return { tipo: "BOLETO", status: "pendente", content: msg };
-  }
-
-  // ── 2. COMPROVANTE (GAP Etapa 2.2B Declarado) ──────────────────────────────
-  if (classification.tipo === "COMPROVANTE") {
-    const msg = [
-      `🧾 **Comprovante de Pagamento Identificado**`,
-      ``,
-      `• **Arquivo:** ${input.fileName}`,
-      `• **Tipo:** Comprovante / Recibo`,
-      ``,
-      `ℹ️ *A conciliação automática de comprovantes com contas bancárias e extrato será ativada na Etapa 2.2B.*`,
-      ``,
-      `🔒 *Nenhuma alteração foi realizada nas suas contas.*`,
-    ].join("\n");
-
-    return { tipo: "COMPROVANTE", status: "pendente", content: msg };
-  }
-
-  // ── 3. DANFE FISCAL SERVICE V2 (Backend Edge Function) ───────────────────
-  if (classification.tipo === "DANFE") {
-    try {
-      const { data, error } = await supabase.functions.invoke("wallet-ai-orchestrator", {
-        body: {
-          action: "process_danfe",
-          base64: input.base64,
-          mime_type: input.mimeType,
-          workspace_id: input.workspaceId,
-          conversation_id: input.conversationId,
-        },
-      });
-
-      if (!error && data?.mensagemFormatada) {
+      // ── 2. Resposta de DANFE / Fiscal ──────────────────────────────────────
+      if (data.cabecalho || data.valores_totais || data.itens || data.tipo === "DANFE") {
         const isSucesso = data.status === "sucesso";
         let actionProposal: ActionProposal | undefined;
 
@@ -159,15 +110,66 @@ export async function processWalletDocument(
         return {
           tipo: "DANFE",
           status: data.status,
-          content: data.mensagemFormatada,
+          content: data.mensagemFormatada || "🧾 **Nota Fiscal Processada**",
           sessionState: data.sessionState,
           actionProposal,
         };
       }
-    } catch {
-      // Fallback gracioso se a edge function estiver offline
-    }
 
+      // ── 3. Resposta de documento não reconhecido / OUTRO (Fail-Closed) ─────
+      return {
+        tipo: "DESCONHECIDO",
+        status: data.status || "desconhecido",
+        content: data.mensagemFormatada || [
+          `📎 **Documento Não Reconhecido**`,
+          ``,
+          `• **Arquivo:** ${input.fileName}`,
+          ``,
+          `Não identifiquei este arquivo como uma Nota Fiscal (DANFE) ou Boleto Bancário.`,
+          `Para análise fiscal ou financeira, envie uma imagem ou PDF nítido de uma Nota Fiscal ou Boleto.`,
+          ``,
+          `🔒 *Nenhuma ação foi executada.*`,
+        ].join("\n"),
+      };
+    }
+  } catch {
+    // Fallback gracioso se a edge function estiver offline
+  }
+
+  // ── 4. Fallback Fail-Closed em caso de offline / sem resposta da Edge Function ─
+  const localHint = classifyDocument(input.fileName, input.mimeType, input.textContext);
+
+  if (localHint.tipo === "BOLETO") {
+    const msg = [
+      `📄 **Boleto Identificado**`,
+      ``,
+      `• **Arquivo:** ${input.fileName}`,
+      `• **Tipo:** Boleto Bancário / Fatura`,
+      ``,
+      `Identifiquei o anexo como um Boleto Bancário.`,
+      ``,
+      `🔒 *Nenhum pagamento ou lançamento foi realizado.*`,
+      ``,
+      `*Posso preparar este boleto para cadastro.*`,
+    ].join("\n");
+    return { tipo: "BOLETO", status: "pendente", content: msg };
+  }
+
+  if (localHint.tipo === "COMPROVANTE") {
+    const msg = [
+      `🧾 **Comprovante de Pagamento Identificado**`,
+      ``,
+      `• **Arquivo:** ${input.fileName}`,
+      `• **Tipo:** Comprovante / Recibo`,
+      ``,
+      `ℹ️ *A conciliação automática de comprovantes com contas bancárias e extrato será ativada na Etapa 2.2B.*`,
+      ``,
+      `🔒 *Nenhuma alteração foi realizada nas suas contas.*`,
+    ].join("\n");
+    return { tipo: "COMPROVANTE", status: "pendente", content: msg };
+  }
+
+  if (localHint.tipo === "DANFE") {
     const msg = [
       `🧾 **Nota Fiscal (DANFE) Recebida**`,
       ``,
@@ -178,11 +180,9 @@ export async function processWalletDocument(
       ``,
       `🔒 *Nenhuma alteração de custo ou estoque foi aplicada sem confirmação.*`,
     ].join("\n");
-
     return { tipo: "DANFE", status: "pendente", content: msg };
   }
 
-  // ── 4. OUTRO / DESCONHECIDO ───────────────────────────────────────────────
   const msg = [
     `📎 **Arquivo Recebido**`,
     ``,

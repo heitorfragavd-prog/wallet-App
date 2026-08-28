@@ -121,19 +121,11 @@ export function classifyDocument(
     };
   }
 
-  // 4. Se for imagem ou PDF sem pistas explícitas de boleto/comprovante:
-  // Em contexto comercial, arquivos visuais genéricos são direcionados para DANFE
-  if (mimeType.startsWith("image/") || mimeType === "application/pdf") {
-    return {
-      tipo: "DANFE",
-      confianca: 0.6,
-      motivo: "Arquivo de imagem/PDF encaminhado para verificação no pipeline fiscal DANFE",
-    };
-  }
-
+  // 4. Se for imagem ou PDF sem pistas textuais explícitas, marca como DESCONHECIDO
+  // para que a autoridade de classificação documental seja delegada à inspeção visual do backend.
   return {
     tipo: "DESCONHECIDO",
-    confianca: 0.3,
-    motivo: "Tipo de arquivo não reconhecido pelo classificador",
+    confianca: 0.5,
+    motivo: "Arquivo de imagem/PDF sem pistas textuais explícitas — requer classificação visual no backend",
   };
 }
