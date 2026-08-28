@@ -15,7 +15,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { useImportarFatura, extrairDatasDaFatura } from "@/domains/finance/hooks/useImportarFatura";
 import { formatCurrency } from "@/lib/utils";
-import { CreditCard, FileText, ArrowLeft, CheckCircle2, Download, Sparkles, Upload, Loader2, Building, Layers } from "lucide-react";
+import { errorService } from "@/core/errors/ErrorService";
+import { CreditCard, FileText, ArrowLeft, Download, Sparkles, Upload, Loader2 } from "lucide-react";
 
 interface ImportarFaturaModalProps {
   isOpen: boolean;
@@ -70,7 +71,10 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
         setVencimento(vencExtraido);
       }
     } catch (err) {
-      console.error("Erro ao ler PDF:", err);
+      errorService.handle(err, {
+        source: "importador-fatura",
+        operation: "extrairPDF",
+      });
     }
   };
 
@@ -89,7 +93,11 @@ export const ImportarFaturaModal: React.FC<ImportarFaturaModalProps> = ({ isOpen
       await importar(contaId, mesReferencia, vencimento, selecionadas);
       handleClose();
     } catch (err) {
-      console.error(err);
+      errorService.handle(err, {
+        source: "importador-fatura",
+        operation: "importarTransacoesFatura",
+        context: { contaId, mesReferencia, vencimento, count: selecionadas.length },
+      });
     } finally {
       setIsImporting(false);
     }

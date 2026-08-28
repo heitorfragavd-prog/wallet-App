@@ -6,6 +6,7 @@
  */
 
 import { supabase } from "@/integrations/supabase/client";
+import { logger } from "@/core/logging/LoggerService";
 
 export interface PluggyConnector {
   id: number;
@@ -65,6 +66,12 @@ export async function createPluggyConnectToken(workspaceId: string): Promise<{ a
 
   if (error || !data?.success) {
     const errorMsg = formatEdgeFunctionError(error, data, "Erro ao obter Connect Token da Pluggy.");
+    logger.error("pluggyService", "Falha ao obter Connect Token", {
+      source: "pluggy",
+      operation: "getConnectToken",
+      workspaceId,
+      data: { error: errorMsg },
+    });
     throw new Error(errorMsg);
   }
 
@@ -96,6 +103,12 @@ export async function registerPluggyItem(
 
   if (error || !data?.success) {
     const errorMsg = formatEdgeFunctionError(error, data, "Erro ao registrar Item da Pluggy.");
+    logger.error("pluggyService", "Falha ao registrar Item Pluggy", {
+      source: "pluggy",
+      operation: "registerItem",
+      workspaceId,
+      data: { itemId, error: errorMsg },
+    });
     throw new Error(errorMsg);
   }
 
@@ -121,13 +134,23 @@ export async function fetchPluggyItemAccounts(
     });
 
     if (error || !data?.success) {
-      console.warn("Aviso ao buscar contas do Item Pluggy:", data?.error || error?.message);
+      logger.warn("pluggyService", "Aviso ao buscar contas do Item Pluggy", {
+        source: "pluggy",
+        operation: "getAccounts",
+        workspaceId,
+        data: { itemId, error: data?.error || error?.message },
+      });
       return [];
     }
 
     return data.data || [];
   } catch (err) {
-    console.warn("Erro ao buscar contas do Item Pluggy:", err);
+    logger.warn("pluggyService", "Erro ao buscar contas do Item Pluggy", {
+      source: "pluggy",
+      operation: "getAccounts",
+      workspaceId,
+      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+    });
     return [];
   }
 }
@@ -151,13 +174,23 @@ export async function fetchPluggyItemTransactions(
     });
 
     if (error || !data?.success) {
-      console.warn("Aviso ao buscar transações do Item Pluggy:", data?.error || error?.message);
+      logger.warn("pluggyService", "Aviso ao buscar transações do Item Pluggy", {
+        source: "pluggy",
+        operation: "getTransactions",
+        workspaceId,
+        data: { itemId, error: data?.error || error?.message },
+      });
       return [];
     }
 
     return data.data || [];
   } catch (err) {
-    console.warn("Erro ao buscar transações do Item Pluggy:", err);
+    logger.warn("pluggyService", "Erro ao buscar transações do Item Pluggy", {
+      source: "pluggy",
+      operation: "getTransactions",
+      workspaceId,
+      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+    });
     return [];
   }
 }
@@ -181,13 +214,23 @@ export async function fetchPluggyItemInvestments(
     });
 
     if (error || !data?.success) {
-      console.warn("Aviso ao buscar investimentos do Item Pluggy:", data?.error || error?.message);
+      logger.warn("pluggyService", "Aviso ao buscar investimentos do Item Pluggy", {
+        source: "pluggy",
+        operation: "getInvestments",
+        workspaceId,
+        data: { itemId, error: data?.error || error?.message },
+      });
       return [];
     }
 
     return data.data || [];
   } catch (err) {
-    console.warn("Erro ao buscar investimentos do Item Pluggy:", err);
+    logger.warn("pluggyService", "Erro ao buscar investimentos do Item Pluggy", {
+      source: "pluggy",
+      operation: "getInvestments",
+      workspaceId,
+      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+    });
     return [];
   }
 }
