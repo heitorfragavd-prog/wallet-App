@@ -875,6 +875,176 @@ serve(async (req) => {
       }).catch(() => {});
     };
 
+    const executarConfirmacaoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: any,
+      replyFn: (text: string) => Promise<any>,
+      messageIdToEdit?: number
+    ) => {
+      const dados = proposta.dados || {};
+
+      // 1. Proteção contra duplicação (Idempotência sequencial)
+      if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(
+          `ℹ️ <b>Este boleto já foi confirmado e cadastrado anteriormente.</b>\n` +
+          `Nenhuma dívida duplicada foi gerada.`
+        );
+        return { success: true, already_confirmed: true };
+      }
+
+      // 2. Verificação de expiração
+      if (proposta.status === "expirada" || (proposta.expires_at && new Date(proposta.expires_at) < new Date())) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(`⏰ <b>Esta proposta expirou.</b> Envie o boleto novamente para cadastrar.`);
+        return { success: false, expired: true };
+      }
+
+      // 3. Verificação de cancelamento prévio
+      if (proposta.status === "cancelada") {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await replyFn(`❌ <b>Esta proposta foi cancelada anteriormente.</b>`);
+        return { success: false, canceled: true };
+      }
+
+      const valorNum = parseNum(dados.valor_total || dados.valor);
+      const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
+      const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
+      const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
+
+      // Busca workspace do usuário para associar a dívida
+      const { data: wsMember } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", targetUserId)
+        .limit(1)
+        .maybeSingle();
+
+      const insertPayload: Record<string, any> = {
+        user_id: targetUserId,
+        descricao: desc,
+        valor_total: valorNum,
+        valor_restante: valorNum,
+        valor_pago: 0,
+        data_vencimento: vencIso,
+        credor: credorNome,
+        status: "pendente",
+        parcelas: 1,
+        parcelas_pagas: 0,
+        documento_favorecido: dados.cnpj_cpf_beneficiario || null,
+      };
+
+      if (dados.categoria_id) {
+        insertPayload.categoria_id = dados.categoria_id;
+      }
+
+      if (wsMember?.workspace_id) {
+        insertPayload.workspace_id = wsMember.workspace_id;
+      }
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=insert_divida credor="${credorNome}" valor=${valorNum} vencimento=${vencIso}`);
+
+      const { data: dividaInserida, error: errDivida } = await supabase
+        .from("dividas")
+        .insert(insertPayload)
+        .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
+        .single();
+
+      if (errDivida) {
+        console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
+        await replyFn(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
+        return { success: false, error: errDivida.message };
+      }
+
+      if (dividaInserida?.categoria_id && credorNome) {
+        salvarCacheCategoria(supabase, targetUserId, credorNome, dividaInserida.categoria_id).catch(() => {});
+      }
+
+      // Atualização de status e rastreamento de confirmação humana
+      const finalValidationStatus = dados.validation_status === "requer_revisao"
+        ? "manual_confirmed"
+        : (dados.validation_status || "validado");
+
+      const updatedDados = {
+        ...dados,
+        divida_id_gerada: dividaInserida.id,
+        validation_status: finalValidationStatus,
+        confirmed_manually: dados.validation_status === "requer_revisao",
+        confirmed_at: new Date().toISOString(),
+      };
+
+      await supabase
+        .from("telegram_propostas")
+        .update({
+          status: "confirmada",
+          executed_at: new Date().toISOString(),
+          dados: updatedDados,
+        })
+        .eq("id", proposta.id);
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} validation_status=${finalValidationStatus} divida_id_gerada=${dividaInserida.id} action=confirmed_ok`);
+
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+
+      const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
+
+      const avisoRevisao = dados.validation_status === "requer_revisao"
+        ? `\n✍️ <i>Cadastro confirmado manualmente pelo usuário.</i>\n`
+        : "";
+
+      await replyFn(
+        `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
+        `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
+        (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
+        `💰 Valor: <b>${valFmt}</b>\n` +
+        `🗓️ Vencimento: <b>${vencFmt}</b>\n` +
+        avisoRevisao +
+        `\n🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
+        `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
+      );
+
+      return { success: true, divida: dividaInserida };
+    };
+
+    const executarCancelamentoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: any,
+      replyFn: (text: string) => Promise<any>,
+      messageIdToEdit?: number
+    ) => {
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+      if (proposta?.id) {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
+      }
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+      await replyFn("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+      return { success: true, canceled: true };
+    };
+
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
     const message = body?.message;
     const callbackQuery = body?.callback_query;
@@ -954,6 +1124,64 @@ serve(async (req) => {
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
+
+      // ================================================================
+      // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta & cancelar_proposta
+      // ================================================================
+      if (callbackData.startsWith("confirmar_proposta:") || callbackData.startsWith("cancelar_proposta:")) {
+        const isConfirm = callbackData.startsWith("confirmar_proposta:");
+        const propostaId = callbackData.split(":")[1];
+
+        await answerCallback(callbackQuery.id, isConfirm ? "Confirmando cadastro..." : "Cancelando proposta...");
+
+        const { data: propostaRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propostaId)
+          .maybeSingle();
+
+        if (!propostaRow) {
+          await sendReplyWithButtons(cbChatId, "❌ <b>Proposta não encontrada ou já expirada.</b>", []);
+          if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Validação de segurança: apenas o usuário/workspace proprietário pode confirmar
+        if (propostaRow.user_id && cbUserId && propostaRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Você não tem permissão para esta proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const replyCallbackFn = async (text: string) => {
+          if (telegramBotToken) {
+            await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: cbChatId, text, parse_mode: "HTML" }),
+            }).catch(() => {});
+          }
+        };
+
+        if (isConfirm) {
+          await executarConfirmacaoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        } else {
+          await executarCancelamentoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        }
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
 
       // ================================================================
       // BOTÃO: nf_confirmar
@@ -3382,130 +3610,11 @@ serve(async (req) => {
         }
 
         // ─── CASO C: CADASTRO DE DÍVIDA / BOLETO BANCÁRIO ───
-        // Proteção contra duplicação: se a proposta já foi executada ou já tem dívida associada, aborta idempotentemente
-        if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
-          console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=confirm_sim status=already_confirmed divida_id=${dados?.divida_id_gerada}`);
-          await supabase.from("telegram_conversas").upsert(
-            { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-            { onConflict: "chat_id" }
-          );
-          await sendReply(
-            `ℹ️ <b>Este boleto já foi confirmado e cadastrado anteriormente.</b>\n` +
-            `Nenhuma dívida duplicada foi gerada.`
-          );
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        const valorNum = parseNum(dados.valor_total || dados.valor);
-        const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
-        const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
-        const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
-
-        // Busca workspace do usuário para associar a dívida
-        const { data: wsMember } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-
-        const insertPayload: Record<string, any> = {
-          user_id: userId,
-          descricao: desc,
-          valor_total: valorNum,
-          valor_restante: valorNum,
-          valor_pago: 0,
-          data_vencimento: vencIso,
-          credor: credorNome,
-          status: "pendente",
-          parcelas: 1,
-          parcelas_pagas: 0,
-          documento_favorecido: dados.cnpj_cpf_beneficiario || null,
-        };
-
-        if (dados.categoria_id) {
-          insertPayload.categoria_id = dados.categoria_id;
-        }
-
-        if (wsMember?.workspace_id) {
-          insertPayload.workspace_id = wsMember.workspace_id;
-        }
-
-        console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=insert_divida credor="${credorNome}" valor=${valorNum} vencimento=${vencIso}`);
-
-        const { data: dividaInserida, error: errDivida } = await supabase
-          .from("dividas")
-          .insert(insertPayload)
-          .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
-          .single();
-
-        if (errDivida) {
-          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
-          await sendReply(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        if (dividaInserida?.categoria_id && credorNome) {
-          salvarCacheCategoria(supabase, userId, credorNome, dividaInserida.categoria_id).catch(() => {});
-        }
-
-        // Atualização de status e rastreamento de confirmação humana
-        const finalValidationStatus = dados.validation_status === "requer_revisao"
-          ? "manual_confirmed"
-          : (dados.validation_status || "validado");
-
-        const updatedDados = {
-          ...dados,
-          divida_id_gerada: dividaInserida.id,
-          validation_status: finalValidationStatus,
-          confirmed_manually: dados.validation_status === "requer_revisao",
-          confirmed_at: new Date().toISOString(),
-        };
-
-        await supabase
-          .from("telegram_propostas")
-          .update({
-            status: "confirmada",
-            executed_at: new Date().toISOString(),
-            dados: updatedDados,
-          })
-          .eq("id", proposta.id);
-
-        console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} validation_status=${finalValidationStatus} divida_id_gerada=${dividaInserida.id} action=confirmed_ok`);
-
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-
-        const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-        const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
-
-        const avisoRevisao = dados.validation_status === "requer_revisao"
-          ? `\n✍️ <i>Cadastro confirmado manualmente pelo usuário.</i>\n`
-          : "";
-
-        await sendReply(
-          `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
-          `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
-          (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
-          `💰 Valor: <b>${valFmt}</b>\n` +
-          `🗓️ Vencimento: <b>${vencFmt}</b>\n` +
-          avisoRevisao +
-          `\n🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
-          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
-        );
+        await executarConfirmacaoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
 
       } else if (isNao) {
-        if (proposta) {
-          await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
-        }
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-        await sendReply("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+        await executarCancelamentoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
       // Se não foi SIM nem NÃO, mas enviou uma nova foto ou comando, o fluxo prossegue abaixo e limpa o estado antigo.
@@ -3752,8 +3861,7 @@ serve(async (req) => {
               );
               const pdfValFmt = pdfValor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
               const pdfIsVencido = pdfVenc && pdfVenc < hojeStr;
-              const pdfVencFmt = pdfVenc ? pdfVenc.split("-").reverse().join("/") : "Sem data";
-              await sendReply(
+              const msgPdfProposta =
                 `📄 <b>Boleto PDF identificado!</b>\n\n` +
                 `🏢 Beneficiário: <b>${pdfBenef}</b>\n` +
                 (pdfCat?.nome ? `🏷️ Categoria: <b>${pdfCat.nome}</b>\n` : "") +
@@ -3761,10 +3869,16 @@ serve(async (req) => {
                 `📅 Vencimento: <b>${pdfVencFmt}</b>${pdfIsVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
                 (pdfLinha ? `🔢 Linha digitável: <code>${pdfLinha}</code>\n` : "") +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-                `⏰ <i>Esta proposta expira em 30 minutos.</i>`
-              );
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+              const botoesPdf = [
+                [
+                  { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${pdfProposta.id}` },
+                  { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${pdfProposta.id}` },
+                ],
+              ];
+
+              await sendReplyWithButtons(chatId, msgPdfProposta, botoesPdf);
               return new Response("OK", { status: 200, headers: corsHeaders });
             }
           }
@@ -5527,8 +5641,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
                 `\n✅ <b>Linha digitável validada matematicamente.</b>\n` +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             } else if (isBoletoValidadoAlerta) {
               mensagemProposta =
@@ -5542,8 +5654,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `\n✅ <b>Dados bancários validados pela linha digitável.</b>\n` +
                 `⚠️ <i>A leitura visual do documento apresentou divergência decorrente de compressão da imagem. Foram assumidos os dados validados matematicamente.</i>\n` +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             } else {
               const avisoAnoSuspeito = vencimentoAnoSuspeito
@@ -5564,13 +5674,17 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `<i>Os valores acima foram lidos visualmente do documento.</i>\n` +
                 dicaArquivo +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro manual.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             }
 
+            const botoesBoleto = [
+              [
+                { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${propostaSalva.id}` },
+                { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+              ],
+            ];
 
-            await sendReply(mensagemProposta);
+            await sendReplyWithButtons(chatId, mensagemProposta, botoesBoleto);
             return new Response("OK", { status: 200, headers: corsHeaders });
           } else {
             console.error("[telegram-webhook] Erro ao salvar proposta:", errProp?.message);
