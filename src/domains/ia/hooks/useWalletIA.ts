@@ -230,6 +230,7 @@ export function useWalletIA(options: UseWalletIAOptions) {
             content: docResponse.content,
             createdAt: new Date(),
             routeUsed: "DOCUMENT",
+            actionProposal: docResponse.actionProposal,
             correlationId,
           };
         }

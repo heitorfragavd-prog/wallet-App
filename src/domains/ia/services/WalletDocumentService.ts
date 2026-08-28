@@ -12,12 +12,15 @@ import { supabase } from "@/integrations/supabase/client";
 import { classifyDocument, type WalletDocumentInput } from "../types/document";
 import type { DanfeSessionState } from "../../../../supabase/functions/_shared/ai/danfe-fiscal-service";
 import type { BoletoExtractedData } from "../../../../supabase/functions/_shared/ai/boleto-service";
+import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 
 export interface ProcessDocumentResponse {
   tipo: "DANFE" | "BOLETO" | "COMPROVANTE" | "OUTRO" | "DESCONHECIDO";
   content: string;
+  status?: string;
   sessionState?: DanfeSessionState;
   boletoDados?: BoletoExtractedData;
+  actionProposal?: ActionProposal;
 }
 
 export async function processWalletDocument(
@@ -39,10 +42,39 @@ export async function processWalletDocument(
       });
 
       if (!error && data?.mensagemFormatada) {
+        const isValido = data.status === "validado" || data.status === "validado_com_alerta";
+        let actionProposal: ActionProposal | undefined;
+
+        if (isValido && data.dados) {
+          actionProposal = {
+            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+            workspaceId: input.workspaceId,
+            userId: "",
+            actionType: "create_debt",
+            actionVersion: "1.0",
+            summary: `Cadastrar Boleto: ${data.dados.beneficiario || "Boleto Bancário"} - R$ ${(data.dados.valor_total || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            payload: {
+              descricao: `Boleto ${data.dados.beneficiario || ""}`.trim() || "Boleto a Pagar",
+              valor: data.dados.valor_total || 0,
+              data_vencimento: data.dados.data_vencimento || "",
+              linha_digitavel: data.dados.linha_digitavel || "",
+              codigo_barras: data.dados.codigo_barras || "",
+              banco: data.dados.banco_nome || data.dados.banco_codigo || "",
+              beneficiario: data.dados.beneficiario || "",
+            },
+            idempotencyHash: data.dados.linha_digitavel || String(Date.now()),
+            status: "prepared",
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            createdAt: new Date().toISOString(),
+          };
+        }
+
         return {
           tipo: "BOLETO",
+          status: data.status,
           content: data.mensagemFormatada,
           boletoDados: data.dados,
+          actionProposal,
         };
       }
     } catch {
@@ -62,7 +94,7 @@ export async function processWalletDocument(
       `*Posso preparar este boleto para cadastro.*`,
     ].join("\n");
 
-    return { tipo: "BOLETO", content: msg };
+    return { tipo: "BOLETO", status: "pendente", content: msg };
   }
 
   // ── 2. COMPROVANTE (GAP Etapa 2.2B Declarado) ──────────────────────────────
@@ -78,7 +110,7 @@ export async function processWalletDocument(
       `🔒 *Nenhuma alteração foi realizada nas suas contas.*`,
     ].join("\n");
 
-    return { tipo: "COMPROVANTE", content: msg };
+    return { tipo: "COMPROVANTE", status: "pendente", content: msg };
   }
 
   // ── 3. DANFE FISCAL SERVICE V2 (Backend Edge Function) ───────────────────
@@ -95,10 +127,41 @@ export async function processWalletDocument(
       });
 
       if (!error && data?.mensagemFormatada) {
+        const isSucesso = data.status === "sucesso";
+        let actionProposal: ActionProposal | undefined;
+
+        if (isSucesso) {
+          const numNota = data.cabecalho?.numero_nota || data.sessionState?.numeroNf || "S/N";
+          const fornecedor = data.cabecalho?.emitente_razao_social || data.sessionState?.fornecedor || "Fornecedor";
+          const valorTotal = data.valores_totais?.valor_total_nota || data.sessionState?.valorProdutosDeclarado || 0;
+
+          actionProposal = {
+            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+            workspaceId: input.workspaceId,
+            userId: "",
+            actionType: "import_invoice",
+            actionVersion: "1.0",
+            summary: `Importar NF ${numNota} (${fornecedor}) - R$ ${valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            payload: {
+              numero_nota: numNota,
+              fornecedor,
+              chave_acesso: data.cabecalho?.chave_acesso || data.sessionState?.chaveAcesso || "",
+              valor_total: valorTotal,
+              itens_count: (data.itens || data.sessionState?.itensAcumulados || []).length,
+            },
+            idempotencyHash: data.cabecalho?.chave_acesso || String(Date.now()),
+            status: "prepared",
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            createdAt: new Date().toISOString(),
+          };
+        }
+
         return {
           tipo: "DANFE",
+          status: data.status,
           content: data.mensagemFormatada,
           sessionState: data.sessionState,
+          actionProposal,
         };
       }
     } catch {
@@ -116,7 +179,7 @@ export async function processWalletDocument(
       `🔒 *Nenhuma alteração de custo ou estoque foi aplicada sem confirmação.*`,
     ].join("\n");
 
-    return { tipo: "DANFE", content: msg };
+    return { tipo: "DANFE", status: "pendente", content: msg };
   }
 
   // ── 4. OUTRO / DESCONHECIDO ───────────────────────────────────────────────
@@ -131,5 +194,5 @@ export async function processWalletDocument(
     `🔒 *Nenhuma ação foi executada.*`,
   ].join("\n");
 
-  return { tipo: "DESCONHECIDO", content: msg };
+  return { tipo: "DESCONHECIDO", status: "desconhecido", content: msg };
 }
