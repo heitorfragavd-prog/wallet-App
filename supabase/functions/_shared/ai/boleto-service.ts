@@ -89,6 +89,168 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
   "data_emissao": "string ou null"
 }`;
 
+export interface VisionBoletoCallOptions {
+  prompt: string;
+  mimeType: string;
+  base64: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  geminiApiKeyBackup?: string;
+  fetchFn: typeof fetch;
+  timeoutMs?: number;
+  correlationId?: string;
+}
+
+export interface VisionBoletoCallResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+  providerUsed: "openai" | "gemini";
+  credentialSlot: "openai_primary" | "gemini_backup" | "gemini_secondary";
+  fallbackUsed: boolean;
+  fallbackCount: number;
+  fallbackReason?: string;
+  durationMs: number;
+}
+
+/**
+ * Chamada Vision especializada para Boletos com prioridade:
+ * 1. OpenAI GPT-4o Vision (Primário)
+ * 2. Google Gemini 3.7 Flash (Fallback com fail-closed)
+ */
+export async function callBoletoVisionWithFailover(options: VisionBoletoCallOptions): Promise<VisionBoletoCallResponse> {
+  const { prompt, mimeType, base64, openaiApiKey, geminiApiKey, geminiApiKeyBackup, fetchFn, correlationId } = options;
+  const timeoutMs = options.timeoutMs || 40000;
+  const start = Date.now();
+
+  let primaryStatus = 200;
+  let primaryErrorReason: string | undefined;
+
+  // ── 1. TENTATIVA 1: OpenAI GPT-4o Vision (Primário) ──
+  if (openaiApiKey) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const oResp = await fetchFn("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: "gpt-4o",
+          temperature: 0.0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: prompt },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Extraia os dados do boleto com fidelidade absoluta em JSON puro." },
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}`, detail: "high" } },
+              ],
+            },
+          ],
+        }),
+      });
+
+      clearTimeout(timer);
+      primaryStatus = oResp.status;
+
+      if (oResp.ok) {
+        const oJson = await oResp.json();
+        const text = oJson.choices?.[0]?.message?.content || "";
+        console.log(`[BOLETO_PROVIDER] correlation_id=${correlationId || 'anon'} provider=openai credential_slot=openai_primary fallback_count=0 fallback_reason=none`);
+        return {
+          ok: true,
+          status: oResp.status,
+          text,
+          providerUsed: "openai",
+          credentialSlot: "openai_primary",
+          fallbackUsed: false,
+          fallbackCount: 0,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      primaryErrorReason = `openai_http_${primaryStatus}`;
+    } catch (err: any) {
+      primaryErrorReason = err?.name === "AbortError" ? "timeout" : "network_error";
+    }
+  } else {
+    primaryErrorReason = "openai_api_key_missing";
+  }
+
+  // ── 2. TENTATIVA 2: Google Gemini 3.7 Flash (Fallback) ──
+  const effectiveGeminiKey = geminiApiKey || geminiApiKeyBackup;
+  if (effectiveGeminiKey) {
+    console.log(`[BOLETO_PROVIDER] correlation_id=${correlationId || 'anon'} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=${primaryErrorReason}`);
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const targetModel = "gemini-3.7-flash";
+      const gResp = await fetchFn(
+        `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${effectiveGeminiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inline_data: { mime_type: mimeType, data: base64 } },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.0,
+              responseMimeType: "application/json",
+            },
+          }),
+        }
+      );
+
+      clearTimeout(timer);
+
+      if (gResp.ok) {
+        const gJson = await gResp.json();
+        const text = gJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return {
+          ok: true,
+          status: gResp.status,
+          text,
+          providerUsed: "gemini",
+          credentialSlot: "gemini_backup",
+          fallbackUsed: true,
+          fallbackCount: 1,
+          fallbackReason: primaryErrorReason,
+          durationMs: Date.now() - start,
+        };
+      }
+    } catch (gemErr: any) {
+      console.warn("[BOLETO_FAILOVER] Provedor fallback Gemini também falhou:", gemErr);
+    }
+  }
+
+  // ── 3. FAIL-CLOSED: Nenhum provedor conseguiu responder ──
+  return {
+    ok: false,
+    status: primaryStatus,
+    text: "",
+    providerUsed: "openai",
+    credentialSlot: "openai_primary",
+    fallbackUsed: false,
+    fallbackCount: 1,
+    fallbackReason: primaryErrorReason,
+    durationMs: Date.now() - start,
+  };
+}
+
 /**
  * Formata a mensagem final apresentada ao usuário no chat da Wallet IA.
  */
@@ -108,8 +270,8 @@ export function formatBoletoMessage(
 
   const linhaDigitavelFmt = validacao.linhaDigitavel?.linhaFormatada || dados.linha_digitavel || "Não identificada";
 
-  if (validacao.status === "ok") {
-    lines.push(`📄 **Boleto Identificado**`);
+  if (validacao.status === "validado") {
+    lines.push(`📄 **Boleto Identificado e Validado**`);
     lines.push(``);
     if (validacao.bancoFinal) lines.push(`🏦 **Banco:** ${validacao.bancoFinal}`);
     if (validacao.beneficiarioFinal) lines.push(`🏢 **Beneficiário:** ${validacao.beneficiarioFinal}`);
@@ -119,7 +281,24 @@ export function formatBoletoMessage(
     lines.push(`💰 **Valor:** R$ ${valorStr}`);
     lines.push(`🔢 **Linha digitável:** \`${linhaDigitavelFmt}\``);
     lines.push(``);
-    lines.push(`✅ **Dados principais identificados**`);
+    lines.push(`✅ **Linha digitável e dados matematicamente validados.**`);
+    lines.push(``);
+    lines.push(`🔒 *Nenhuma conta ou despesa foi cadastrada ainda.*`);
+    lines.push(``);
+    lines.push(`*Posso preparar este boleto para cadastro.*`);
+  } else if (validacao.status === "validado_com_alerta") {
+    lines.push(`📄 **Boleto Identificado e Validado**`);
+    lines.push(``);
+    if (validacao.bancoFinal) lines.push(`🏦 **Banco:** ${validacao.bancoFinal}`);
+    if (validacao.beneficiarioFinal) lines.push(`🏢 **Beneficiário:** ${validacao.beneficiarioFinal}`);
+    if (validacao.cnpjCpfBeneficiarioFinal) lines.push(`🧾 **CNPJ/CPF:** ${validacao.cnpjCpfBeneficiarioFinal}`);
+    if (validacao.pagadorFinal) lines.push(`👤 **Pagador:** ${validacao.pagadorFinal}`);
+    lines.push(`📅 **Vencimento:** ${dataVencBr}`);
+    lines.push(`💰 **Valor:** R$ ${valorStr}`);
+    lines.push(`🔢 **Linha digitável:** \`${linhaDigitavelFmt}\``);
+    lines.push(``);
+    lines.push(`✅ **Dados bancários validados pela linha digitável.**`);
+    lines.push(`⚠️ *A leitura visual apresentou leve divergência decorrente de compressão da imagem. Foram assumidos os dados matematicamente comprovados.*`);
     lines.push(``);
     lines.push(`🔒 *Nenhuma conta ou despesa foi cadastrada ainda.*`);
     lines.push(``);
@@ -159,13 +338,13 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
   try {
     const cleanB64 = input.base64.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
 
-    const visionResult = await callVisionWithFailover({
+    const visionResult = await callBoletoVisionWithFailover({
       prompt: GEMINI_BOLETO_PROMPT,
       mimeType: input.mimeType,
       base64: cleanB64,
+      openaiApiKey: input.openaiApiKey,
       geminiApiKey: input.geminiApiKey,
       geminiApiKeyBackup: input.geminiApiKeyBackup,
-      openaiApiKey: input.openaiApiKey,
       fetchFn,
       correlationId: input.workspaceId,
     });
@@ -212,9 +391,11 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
 
     const mensagemFormatada = formatBoletoMessage(dados, validacao);
 
+    const isSucesso = validacao.status === "validado" || validacao.status === "validado_com_alerta";
+
     return {
       success: true,
-      status: validacao.status === "ok" ? "sucesso" : "requer_revisao",
+      status: isSucesso ? "sucesso" : "requer_revisao",
       dados,
       validacao,
       mensagemFormatada,
@@ -237,8 +418,11 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
         valido: false,
         status: "requer_revisao",
         divergencias: [errorMsg],
+        warnings: [],
         valorFinal: 0,
+        valorSource: "ocr_visual",
         dataVencimentoFinal: null,
+        vencimentoSource: "ocr_visual",
         beneficiarioFinal: null,
         cnpjCpfBeneficiarioFinal: null,
         pagadorFinal: null,

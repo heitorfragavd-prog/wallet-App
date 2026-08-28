@@ -31,6 +31,15 @@ import {
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
+import {
+  reconcileBoleto,
+  validateLinhaDigitavel,
+  validateCodigoBarras,
+  parseBoletoAmount,
+  normalizeDate,
+  type BoletoValidationResult,
+  type BoletoValidationEvidence,
+} from "../_shared/ai/boleto-validator.ts";
 
 
 
@@ -4775,81 +4784,11 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
   "numero_documento": "string ou null"
 }`;
 
-            interface BoletoGeminiResponse { ok: boolean; status: number; text: string; providerUsed: string; credentialSlot: string; fallbackUsed: boolean; fallbackCount: number; fallbackReason?: string; durationMs: number; }
-            let boletoVisionResult: BoletoGeminiResponse | null = null;
+            interface BoletoVisionResponse { ok: boolean; status: number; text: string; providerUsed: string; credentialSlot: string; fallbackUsed: boolean; fallbackCount: number; fallbackReason?: string; durationMs: number; }
+            let boletoVisionResult: BoletoVisionResponse | null = null;
 
-            // ── Gemini Primary ──
-            if (geminiKeyBoleto) {
-              const tStart = Date.now();
-              try {
-                const gResp = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiKeyBoleto}`,
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      contents: [{ parts: [
-                        { text: GEMINI_BOLETO_PROMPT_TG },
-                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
-                      ]}],
-                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024 },
-                    }),
-                  }
-                );
-                const gJson = await gResp.json();
-                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-                boletoVisionResult = {
-                  ok: gResp.ok && !!rawText,
-                  status: gResp.status,
-                  text: rawText,
-                  providerUsed: "gemini",
-                  credentialSlot: "gemini_primary",
-                  fallbackUsed: false,
-                  fallbackCount: 0,
-                  durationMs: Date.now() - tStart,
-                };
-              } catch (eGp) {
-                console.warn(`[BOLETO_TRACE] provider=gemini_primary ERRO: ${eGp}`);
-              }
-            }
-
-            // ── Gemini Backup ──
-            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && geminiBackupBoleto) {
-              const tStart = Date.now();
-              try {
-                const gResp = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiBackupBoleto}`,
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      contents: [{ parts: [
-                        { text: GEMINI_BOLETO_PROMPT_TG },
-                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
-                      ]}],
-                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024 },
-                    }),
-                  }
-                );
-                const gJson = await gResp.json();
-                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-                boletoVisionResult = {
-                  ok: gResp.ok && !!rawText,
-                  status: gResp.status,
-                  text: rawText,
-                  providerUsed: "gemini",
-                  credentialSlot: "gemini_backup",
-                  fallbackUsed: true,
-                  fallbackCount: 1,
-                  durationMs: Date.now() - tStart,
-                };
-              } catch (eGb) {
-                console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
-              }
-            }
-
-            // ── OpenAI Vision Fallback ──
-            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && openAiKeyBoleto) {
+            // ── 1. OpenAI GPT-4o Vision (Primário) ──
+            if (openAiKeyBoleto) {
               const tStart = Date.now();
               try {
                 const oResp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -4861,13 +4800,13 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                   body: JSON.stringify({
                     model: "gpt-4o",
                     temperature: 0.0,
-                    max_tokens: 1024,
+                    response_format: { type: "json_object" },
                     messages: [
                       { role: "system", content: GEMINI_BOLETO_PROMPT_TG },
                       {
                         role: "user",
                         content: [
-                          { type: "text", text: "Extraia os dados deste boleto e retorne JSON puro." },
+                          { type: "text", text: "Extraia os dados deste boleto com máxima fidelidade em JSON puro." },
                           { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
                         ],
                       },
@@ -4876,18 +4815,58 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 });
                 const oJson = await oResp.json();
                 const rawText = oJson?.choices?.[0]?.message?.content || "";
-                boletoVisionResult = {
-                  ok: oResp.ok && !!rawText,
-                  status: oResp.status,
-                  text: rawText,
-                  providerUsed: "openai",
-                  credentialSlot: "openai_fallback",
-                  fallbackUsed: true,
-                  fallbackCount: 2,
-                  durationMs: Date.now() - tStart,
-                };
+                if (oResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: oResp.status,
+                    text: rawText,
+                    providerUsed: "openai",
+                    credentialSlot: "openai_primary",
+                    fallbackUsed: false,
+                    fallbackCount: 0,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
               } catch (eOai) {
-                console.warn(`[BOLETO_TRACE] provider=openai_fallback ERRO: ${eOai}`);
+                console.warn(`[BOLETO_TRACE] provider=openai_primary ERRO: ${eOai}`);
+              }
+            }
+
+            // ── 2. Google Gemini 3.7 Flash (Fallback) ──
+            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && (geminiKeyBoleto || geminiBackupBoleto)) {
+              const effectiveKey = geminiKeyBoleto || geminiBackupBoleto;
+              const tStart = Date.now();
+              try {
+                const gResp = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${effectiveKey}`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{ parts: [
+                        { text: GEMINI_BOLETO_PROMPT_TG },
+                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
+                      ]}],
+                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+                    }),
+                  }
+                );
+                const gJson = await gResp.json();
+                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                if (gResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: gResp.status,
+                    text: rawText,
+                    providerUsed: "gemini",
+                    credentialSlot: "gemini_backup",
+                    fallbackUsed: true,
+                    fallbackCount: 1,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
+              } catch (eGb) {
+                console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
               }
             }
 
@@ -4903,178 +4882,63 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
               }
             }
 
-            // ─── PROCESSAMENTO DETERMINÍSTICO E NÍVEIS DE CONFIANÇA ───
-            const warnings: string[] = [];
-            const linhaDigitavelRaw = String(bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || "").replace(/\s/g, "");
-            const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
-            const linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
+            // ─── VALIDAÇÃO E CONCILIAÇÃO DETERMINÍSTICA CANÔNICA ───
+            const rawLinha = bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || null;
+            const validacaoCanonica = reconcileBoleto({
+              banco: bParsed.banco || null,
+              beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
+              cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
+              pagador: bParsed.pagador || bParsed.sacado || null,
+              cnpj_cpf_pagador: bParsed.cnpj_cpf_pagador || null,
+              data_vencimento: bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null,
+              valor: bParsed.valor ?? orientacaoAnalysis?.boleto_dados?.valor ?? null,
+              linha_digitavel: rawLinha,
+              codigo_barras: bParsed.codigo_barras || null,
+              nosso_numero: bParsed.nosso_numero || null,
+              numero_documento: bParsed.numero_documento || null,
+            });
 
-            let linhaDigitavelValida = false;
-            let linhaDigitavelValidationError: string | null = null;
-            let valorDerivado: number | null = null;
-            let vencimentoDerivado: string | null = null;
-            let linhaDigitavelFinalDigits = linhaDigitavelDigits; // pode ser substituída por subsequência
-
-            if (linhaDigitavelPresente) {
-              if (linhaDigitavelDigits.length === 47) {
-                if (validarDVsLinhaDigitavel47(linhaDigitavelDigits)) {
-                  const febraban = parseLinhaDigitavelFebraban(linhaDigitavelDigits);
-                  if (febraban.valor && febraban.valor > 0) {
-                    valorDerivado = febraban.valor;
-                    vencimentoDerivado = febraban.vencimento;
-                    linhaDigitavelValida = true;
-                  } else {
-                    linhaDigitavelValidationError = "febraban_campos_invalidos";
-                    warnings.push("linha_digitavel_febraban_invalida");
-                  }
-                } else {
-                  linhaDigitavelValidationError = "dv_invalido_47dig";
-                  warnings.push("linha_digitavel_dv_invalido");
-                }
-              } else if (linhaDigitavelDigits.length === 48) {
-                // Guia de arrecadação / tributos
-                linhaDigitavelValida = true;
-              } else if (linhaDigitavelDigits.length >= 43 && linhaDigitavelDigits.length <= 50) {
-                // ── REPARO SEGURO: busca subsequência contínua válida no texto OCR ──
-                // NÃO inventa, NÃO reordena, NÃO substitui caracteres.
-                const textoCompleto = boletoVisionResult?.text || "";
-                const subsequencia = buscarLinhaDigitavelNoTexto(textoCompleto);
-                if (subsequencia) {
-                  linhaDigitavelFinalDigits = subsequencia;
-                  if (subsequencia.length === 47) {
-                    const febraban = parseLinhaDigitavelFebraban(subsequencia);
-                    if (febraban.valor && febraban.valor > 0) {
-                      valorDerivado = febraban.valor;
-                      vencimentoDerivado = febraban.vencimento;
-                      linhaDigitavelValida = true;
-                      warnings.push(`linha_digitavel_reparada_por_subsequencia_${linhaDigitavelDigits.length}dig_ocr`);
-                    }
-                  } else {
-                    linhaDigitavelValida = true; // 48 dígitos aceito
-                  }
-                }
-                if (!linhaDigitavelValida) {
-                  linhaDigitavelValidationError = `invalid_length_${linhaDigitavelDigits.length}`;
-                  warnings.push("linha_digitavel_comprimento_incorreto");
-                }
-              } else {
-                linhaDigitavelValidationError = `invalid_length_${linhaDigitavelDigits.length}`;
-                warnings.push("linha_digitavel_comprimento_incorreto");
-              }
-            } else {
-              linhaDigitavelValidationError = "linha_digitavel_ausente";
-              warnings.push("linha_digitavel_ausente");
-            }
-
-            const linhaDigitavelFinal = linhaDigitavelValida ? linhaDigitavelFinalDigits : null;
-            const linhaDigitavelMasked = linhaDigitavelFinalDigits.length > 10
-              ? `${linhaDigitavelFinalDigits.slice(0, 5)}***${linhaDigitavelFinalDigits.slice(-4)}`
-              : (linhaDigitavelFinalDigits.length > 0 ? `raw:${linhaDigitavelFinalDigits.length}dig` : "ausente");
-
-            // Valores de OCR
-            const valorOCR = (typeof bParsed.valor === "number") ? bParsed.valor
-              : bParsed.valor ? parseFloat(String(bParsed.valor).replace(/[^\d,.]/g, "").replace(",", ".")) || null
-              : (orientacaoAnalysis?.boleto_dados?.valor ?? null);
-
-            const vencimentoOCRRaw = bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null;
-
-            // ── FILTRO DE SANIDADE DE ANO ──
-            // Se o ano lido pelo OCR for < 2022 ou > 2035, é suspeito de erro de leitura.
-            // NÃO corrige silenciosamente — preserva o valor bruto e registra warning.
-            const vencimentoAno = vencimentoOCRRaw ? parseInt(String(vencimentoOCRRaw).slice(0, 4), 10) : null;
-            const vencimentoAnoSuspeito = vencimentoAno !== null && !isNaN(vencimentoAno) && (vencimentoAno < 2022 || vencimentoAno > 2035);
-            if (vencimentoAnoSuspeito) {
-              warnings.push(`vencimento_ano_suspeito_${vencimentoAno}`);
-            }
-            const vencimentoOCR = vencimentoOCRRaw; // preservado sem correção silenciosa
-
-            // Determinação de fontes e conformidade
-            let valorFinal: number | null = null;
-            let valorSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
-            let vencimentoFinal: string | null = null;
-            let vencimentoSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
-            let validationStatus: "validado" | "requer_revisao" | "rejeitado" = "requer_revisao";
-
-            if (linhaDigitavelValida && valorDerivado && valorDerivado > 0) {
-              valorFinal = valorDerivado;
-              valorSource = "febraban_linha";
-
-              if (vencimentoDerivado) {
-                vencimentoFinal = vencimentoDerivado;
-                vencimentoSource = "febraban_linha";
-              } else {
-                vencimentoFinal = vencimentoOCR;
-                vencimentoSource = "ocr_visual";
-              }
-
-              let hasValorDivergence = false;
-              let hasVencimentoDivergence = false;
-
-              // Comparar com OCR se disponível
-              if (valorOCR && Math.abs(valorOCR - valorDerivado) > 0.05) {
-                warnings.push(`divergencia_valor_ocr_${valorOCR}_vs_derivado_${valorDerivado}`);
-                hasValorDivergence = true;
-              }
-
-              if (vencimentoOCR && vencimentoDerivado && vencimentoOCR.split("T")[0] !== vencimentoDerivado.split("T")[0]) {
-                warnings.push(`divergencia_vencimento_ocr_${vencimentoOCR}_vs_derivado_${vencimentoDerivado}`);
-                hasVencimentoDivergence = true;
-              }
-
-              if (hasValorDivergence || hasVencimentoDivergence) {
-                validationStatus = "requer_revisao";
-              } else {
-                validationStatus = "validado";
-              }
-            } else if (valorOCR && valorOCR > 0) {
-              valorFinal = valorOCR;
-              valorSource = "ocr_visual";
-              vencimentoFinal = vencimentoOCR;
-              vencimentoSource = "ocr_visual";
-              validationStatus = "requer_revisao";
-              warnings.push("linha_digitavel_nao_validada");
-            } else {
-              validationStatus = "rejeitado";
-            }
-
-            const beneficiarioFinal = bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null;
-            const bancoFinal = bParsed.banco || null;
+            const linhaDigits = validacaoCanonica.linhaDigitavel?.linhaLimpa || cleanDigits(rawLinha);
+            const linhaMasked = linhaDigits.length > 10
+              ? `${linhaDigits.slice(0, 5)}***${linhaDigits.slice(-4)}`
+              : (linhaDigits.length > 0 ? `raw:${linhaDigits.length}dig` : "ausente");
 
             console.log(
               `[BOLETO_TRACE] correlation_id=${correlationIdBoleto} ` +
               `orientation_detected=${orientacaoDetectada}° rotation_applied=${orientacaoDetectada}° ` +
-              `provider=${boletoVisionResult?.credentialSlot || "nenhum"} validation_status=${validationStatus} ` +
-              `linha_present=${linhaDigitavelPresente} linha_raw_digits=${linhaDigitavelDigits.length} linha_valid=${linhaDigitavelValida} ` +
-              `linha_digitavel_masked=${linhaDigitavelMasked} ` +
-              `valor_source=${valorSource} valor_ocr=${valorOCR} valor_derivado=${valorDerivado} ` +
-              `vencimento_source=${vencimentoSource} vencimento_ocr=${vencimentoOCR} vencimento_derivado=${vencimentoDerivado} ` +
-              `vencimento_ano_suspeito=${vencimentoAnoSuspeito} ` +
-              `warnings=${JSON.stringify(warnings)}`
+              `provider=${boletoVisionResult?.credentialSlot || "nenhum"} validation_status=${validacaoCanonica.status} ` +
+              `linha_present=${Boolean(linhaDigits)} linha_raw_digits=${linhaDigits.length} linha_valid=${validacaoCanonica.valido} ` +
+              `linha_digitavel_masked=${linhaMasked} ` +
+              `valor_source=${validacaoCanonica.valorSource} valor_final=${validacaoCanonica.valorFinal} ` +
+              `vencimento_source=${validacaoCanonica.vencimentoSource} vencimento_final=${validacaoCanonica.dataVencimentoFinal} ` +
+              `warnings=${JSON.stringify(validacaoCanonica.warnings)}`
             );
 
             documentData = {
               tipo: "boleto",
-              banco: bancoFinal,
-              beneficiario: beneficiarioFinal,
-              cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
-              pagador: bParsed.pagador || bParsed.sacado || null,
-              valor: valorFinal,
-              data_vencimento: vencimentoFinal,
-              linha_digitavel: linhaDigitavelFinal,
-              linha_digitavel_raw: linhaDigitavelRaw || null,
-              linha_digitavel_raw_digits: linhaDigitavelDigits.length,
-              linha_digitavel_validation_error: linhaDigitavelValidationError,
-              codigo_barras: bParsed.codigo_barras || null,
+              banco: validacaoCanonica.bancoFinal,
+              beneficiario: validacaoCanonica.beneficiarioFinal,
+              cnpj_cpf_beneficiario: validacaoCanonica.cnpjCpfBeneficiarioFinal || null,
+              pagador: validacaoCanonica.pagadorFinal || null,
+              valor: validacaoCanonica.valorFinal,
+              data_vencimento: validacaoCanonica.dataVencimentoFinal,
+              linha_digitavel: validacaoCanonica.linhaDigitavel?.linhaLimpa || null,
+              linha_digitavel_formatada: validacaoCanonica.linhaDigitavel?.linhaFormatada || null,
+              linha_digitavel_raw: rawLinha || null,
+              linha_digitavel_raw_digits: linhaDigits.length,
+              codigo_barras: validacaoCanonica.codigoBarras?.codigoLimpo || bParsed.codigo_barras || null,
               nosso_numero: bParsed.nosso_numero || null,
               numero_documento: bParsed.numero_documento || null,
-              validation_status: validationStatus,
-              valor_source: valorSource,
-              valor_ocr: valorOCR,
-              valor_derivado: valorDerivado,
-              vencimento_source: vencimentoSource,
-              vencimento_ocr: vencimentoOCR,
-              vencimento_derivado: vencimentoDerivado,
-              warnings,
+              validation_status: validacaoCanonica.status,
+              valor_source: validacaoCanonica.valorSource,
+              valor_ocr: parseBoletoAmount(bParsed.valor),
+              valor_derivado: validacaoCanonica.linhaDigitavel?.valorDerivado || null,
+              vencimento_source: validacaoCanonica.vencimentoSource,
+              vencimento_ocr: bParsed.data_vencimento || null,
+              vencimento_derivado: validacaoCanonica.linhaDigitavel?.dataVencimentoDerivada || null,
+              warnings: validacaoCanonica.warnings,
+              divergencias: validacaoCanonica.divergencias,
+              evidence: validacaoCanonica.evidence,
               correlation_id: correlationIdBoleto,
             };
           }
@@ -5616,14 +5480,11 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
             const isBoletoValidado = documentData.validation_status === "validado";
+            const isBoletoValidadoAlerta = documentData.validation_status === "validado_com_alerta";
             const valOcrNum = documentData.valor_ocr ?? null;
             const valDerivNum = documentData.valor_derivado ?? null;
             const vencOcrStr = documentData.vencimento_ocr ?? null;
             const vencDerivStr = documentData.vencimento_derivado ?? null;
-
-            const temDivergenciaValor = valOcrNum !== null && valDerivNum !== null && Math.abs(valOcrNum - valDerivNum) > 0.05;
-            const temDivergenciaVenc = vencOcrStr !== null && vencDerivStr !== null && vencOcrStr.split("T")[0] !== vencDerivStr.split("T")[0];
-            const temDivergencia = temDivergenciaValor || temDivergenciaVenc;
 
             let mensagemProposta = "";
 
@@ -5641,35 +5502,19 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
-            } else if (temDivergencia) {
-              const valOcrFmt = valOcrNum !== null ? valOcrNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "Não identificado";
-              const valDerivFmt = valDerivNum !== null ? valDerivNum.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "Não derivado";
-              const vencOcrFmt = vencOcrStr ? vencOcrStr.split("T")[0].split("-").reverse().join("/") : "Não identificado";
-              const vencDerivFmt = vencDerivStr ? vencDerivStr.split("T")[0].split("-").reverse().join("/") : "Não derivado";
-
-              const dicaArquivo = isTelegramCompressedPhoto
-                ? `\n💡 <i>Para leitura mais precisa, envie o boleto como arquivo:\n📎 → Arquivo/Documento</i>\n`
-                : "";
-
+            } else if (isBoletoValidadoAlerta) {
               mensagemProposta =
-                `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
                 `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
                 (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
                 (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
-                `\n` +
-                (temDivergenciaValor
-                  ? `💰 Valor lido visualmente: <b>${valOcrFmt}</b>\n🔢 Valor derivado da linha digitável: <b>${valDerivFmt}</b>\n`
-                  : `💰 Valor identificado: <b>${valFmt}</b>\n`) +
-                `\n` +
-                (temDivergenciaVenc
-                  ? `📅 Vencimento lido visualmente: <b>${vencOcrFmt}</b>\n🔢 Vencimento derivado da linha digitável: <b>${vencDerivFmt}</b>\n`
-                  : `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n`) +
-                (linhaFmt ? `\n🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
-                `\n⚠️ <b>Os dados não coincidem.</b>\n` +
-                `<i>Confira o documento antes de cadastrar.</i>\n` +
-                dicaArquivo +
-                `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro manual.\n` +
+                `💰 Valor validado: <b>${valFmt}</b>\n` +
+                `📅 Vencimento validado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Dados bancários validados pela linha digitável.</b>\n` +
+                `⚠️ <i>A leitura visual do documento apresentou divergência decorrente de compressão da imagem. Foram assumidos os dados validados matematicamente.</i>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
                 `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
                 `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
             } else {
@@ -5687,7 +5532,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
                 `💰 Valor identificado: <b>${valFmt}</b>\n` +
                 `📅 Vencimento identificado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
                 avisoAnoSuspeito +
-                `\n⚠️ <b>Não foi possível validar a linha digitável com precisão.</b>\n` +
+                `\n⚠️ <b>Não foi possível validar a linha digitável com precisão matemática.</b>\n` +
                 `<i>Os valores acima foram lidos visualmente do documento.</i>\n` +
                 dicaArquivo +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida mesmo assim?</b>\n\n` +

@@ -67,14 +67,14 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
   });
 
   describe("2. Validação Determinística de Linha Digitável e Código de Barras", () => {
-    // Linha Itaú Válida com fator 1575 (vencimento 20/09/2026) e valor R$ 1.250,00
-    const LINHA_ITAU_VALIDA = "34191.79001 01043.510047 91020.150008 5 15750000125000";
+    // Linha Itaú Válida com fator 1575 (vencimento 20/09/2026), valor R$ 1.250,00 e DV Geral 1
+    const LINHA_ITAU_VALIDA = "34191.79001 01043.510047 91020.150008 1 15750000125000";
 
     it("C: linha digitável com pontuação é normalizada e formatada corretamente", () => {
       const res = validateLinhaDigitavel(LINHA_ITAU_VALIDA);
       expect(res.valido).toBe(true);
       expect(res.tipo).toBe("bancario");
-      expect(res.linhaLimpa).toBe("34191790010104351004791020150008515750000125000");
+      expect(res.linhaLimpa).toBe("34191790010104351004791020150008115750000125000");
       expect(res.bancoCodigo).toBe("341");
       expect(res.bancoNome).toBe("Itaú Unibanco");
       expect(res.valorDerivado).toBe(1250.00);
@@ -134,16 +134,16 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
         cnpj_cpf_pagador: "43.031.317/0001-06",
         data_vencimento: "2026-09-20",
         valor: "1.250,00",
-        linha_digitavel: "34191.79001 01043.510047 91020.150008 5 15750000125000",
+        linha_digitavel: "34191.79001 01043.510047 91020.150008 1 15750000125000",
       };
 
       const validacao = reconcileBoleto(dados);
       expect(validacao.valido).toBe(true);
-      expect(validacao.status).toBe("ok");
+      expect(validacao.status).toBe("validado");
       expect(validacao.valorFinal).toBe(1250.00);
 
       const msg = formatBoletoMessage(dados, validacao);
-      expect(msg).toContain("📄 **Boleto Identificado**");
+      expect(msg).toContain("📄 **Boleto Identificado e Validado**");
       expect(msg).toContain("🏦 **Banco:** Itaú Unibanco");
       expect(msg).toContain("🏢 **Beneficiário:** Companhia Energética de Minas Gerais");
       expect(msg).toContain("💰 **Valor:** R$ 1.250,00");
@@ -151,21 +151,23 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
       expect(msg).toContain("*Posso preparar este boleto para cadastro.*");
     });
 
-    it("Divergência entre valor impresso e linha digitável marca status requer_revisao", () => {
+    it("Divergência entre valor impresso e linha digitável válida resulta em validado_com_alerta com valor da linha", () => {
       const dadosComDivergencia = {
         banco: "Itaú",
         beneficiario: "Fornecedor X",
         valor: "2.500,00", // Diverge dos 1.250,00 da linha digitável!
-        linha_digitavel: "34191.79001 01043.510047 91020.150008 5 15750000125000",
+        linha_digitavel: "34191.79001 01043.510047 91020.150008 1 15750000125000",
       };
 
       const validacao = reconcileBoleto(dadosComDivergencia);
-      expect(validacao.status).toBe("requer_revisao");
-      expect(validacao.divergencias.some((d) => d.includes("Divergência de valor"))).toBe(true);
+      expect(validacao.status).toBe("validado_com_alerta");
+      expect(validacao.valido).toBe(true);
+      expect(validacao.valorFinal).toBe(1250.00); // Valor da linha é autoritativo!
+      expect(validacao.warnings.some((w) => w.includes("divergencia_valor_ocr"))).toBe(true);
 
       const msg = formatBoletoMessage(dadosComDivergencia, validacao);
-      expect(msg).toContain("📄 **Boleto Identificado (Requer Revisão)**");
-      expect(msg).toContain("Divergência de valor");
+      expect(msg).toContain("📄 **Boleto Identificado e Validado**");
+      expect(msg).toContain("A leitura visual apresentou leve divergência decorrente de compressão da imagem");
       expect(msg).toContain("🔒 *Nenhuma conta ou despesa foi cadastrada ainda.*");
     });
   });

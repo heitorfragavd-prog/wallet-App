@@ -42,20 +42,43 @@ export async function optimizeImageForVision(file: File, maxDimension = 2048, qu
     img.onload = () => {
       URL.revokeObjectURL(url);
 
-      let { width, height } = img;
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
+      const { width, height } = img;
+
+      // Se a imagem já estiver dentro do limite de alta resolução (máx 2560px) e tamanho <= 5MB,
+      // preservamos os bytes originais sem passar pelo Canvas/recompressão JPEG.
+      if (width <= 2560 && height <= 2560 && file.size <= 5 * 1024 * 1024) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target?.result as string;
+          const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+          resolve({
+            base64,
+            dataUrl,
+            blob: file,
+            mimeType: file.type || "image/jpeg",
+            size: file.size,
+          });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      let targetWidth = width;
+      let targetHeight = height;
+      if (targetWidth > maxDimension || targetHeight > maxDimension) {
+        if (targetWidth > targetHeight) {
+          targetHeight = Math.round((targetHeight * maxDimension) / targetWidth);
+          targetWidth = maxDimension;
         } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
+          targetWidth = Math.round((targetWidth * maxDimension) / targetHeight);
+          targetHeight = maxDimension;
         }
       }
 
       const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
       const ctx = canvas.getContext("2d");
 
       if (!ctx) {

@@ -10,6 +10,18 @@
  * 6. Detecção explícita de divergências (status: requer_revisao).
  */
 
+export interface BoletoValidationEvidence {
+  length_valid: boolean;
+  dv_campo_1_valid: boolean;
+  dv_campo_2_valid: boolean;
+  dv_campo_3_valid: boolean;
+  dv_geral_valid: boolean;
+  fator_vencimento: number | null;
+  valor_derivado: number | null;
+  vencimento_derivado: string | null;
+  linha_matematicamente_valida: boolean;
+}
+
 export interface ValidatedLinhaDigitavel {
   valido: boolean;
   tipo: "bancario" | "arrecadacao" | "invalido";
@@ -23,6 +35,7 @@ export interface ValidatedLinhaDigitavel {
   bancoNome?: string;
   motivo?: string;
   erros: string[];
+  evidence?: BoletoValidationEvidence;
 }
 
 export interface ValidatedCodigoBarras {
@@ -40,17 +53,21 @@ export interface ValidatedCodigoBarras {
 
 export interface BoletoValidationResult {
   valido: boolean;
-  status: "ok" | "requer_revisao";
+  status: "validado" | "validado_com_alerta" | "requer_revisao" | "rejeitado";
   divergencias: string[];
+  warnings: string[];
   linhaDigitavel?: ValidatedLinhaDigitavel;
   codigoBarras?: ValidatedCodigoBarras;
   valorFinal: number;
+  valorSource: "febraban_linha" | "ocr_visual";
   dataVencimentoFinal: string | null;
+  vencimentoSource: "febraban_linha" | "ocr_visual";
   beneficiarioFinal: string | null;
   cnpjCpfBeneficiarioFinal: string | null;
   pagadorFinal: string | null;
   cnpjCpfPagadorFinal: string | null;
   bancoFinal: string | null;
+  evidence?: BoletoValidationEvidence;
   motivo?: string;
 }
 
@@ -171,27 +188,40 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     const fatorVencStr = clean.substring(33, 37);
     const valorStr = clean.substring(37, 47);
 
-    // Validação dos DVs dos 3 primeiros blocos
-    if (calcularModulo10(bloco1) !== dv1) {
-      erros.push(`Dígito verificador do Bloco 1 inválido (esperado ${calcularModulo10(bloco1)}, recebido ${dv1})`);
+    // Validação dos DVs dos 3 primeiros blocos (Módulo 10)
+    const dv1Calculado = calcularModulo10(bloco1);
+    const dv1Ok = dv1Calculado === dv1;
+    if (!dv1Ok) {
+      erros.push(`Dígito verificador do Bloco 1 inválido (esperado ${dv1Calculado}, recebido ${dv1})`);
     }
-    if (calcularModulo10(bloco2) !== dv2) {
-      erros.push(`Dígito verificador do Bloco 2 inválido (esperado ${calcularModulo10(bloco2)}, recebido ${dv2})`);
+
+    const dv2Calculado = calcularModulo10(bloco2);
+    const dv2Ok = dv2Calculado === dv2;
+    if (!dv2Ok) {
+      erros.push(`Dígito verificador do Bloco 2 inválido (esperado ${dv2Calculado}, recebido ${dv2})`);
     }
-    if (calcularModulo10(bloco3) !== dv3) {
-      erros.push(`Dígito verificador do Bloco 3 inválido (esperado ${calcularModulo10(bloco3)}, recebido ${dv3})`);
+
+    const dv3Calculado = calcularModulo10(bloco3);
+    const dv3Ok = dv3Calculado === dv3;
+    if (!dv3Ok) {
+      erros.push(`Dígito verificador do Bloco 3 inválido (esperado ${dv3Calculado}, recebido ${dv3})`);
     }
 
     const bancoCodigo = clean.substring(0, 3);
     const bancoNome = BANCOS_FEBRABAN[bancoCodigo] || `Banco ${bancoCodigo}`;
 
-    // Derivação do Código de Barras (44 dígitos)
-    // Posições: Banco(3) + Moeda(1) + DV Geral(1) + Fator(4) + Valor(10) + CampoLivre(25)
-    // CampoLivre = Bloco1[4..9] + Bloco2[0..10] + Bloco3[0..10]
+    // Derivação do Código de Barras (44 dígitos) e cálculo real de Módulo 11 do DV Geral
     const moeda = clean[3];
     const campoLivre = clean.substring(4, 9) + bloco2 + bloco3;
-    const codigoBarras = `${bancoCodigo}${moeda}${dvGeral}${fatorVencStr}${valorStr}${campoLivre}`;
+    const codigoSemDV = `${bancoCodigo}${moeda}${fatorVencStr}${valorStr}${campoLivre}`;
+    const dvGeralCalculado = calcularModulo11Boleto(codigoSemDV);
+    const dvGeralOk = dvGeral === dvGeralCalculado;
 
+    if (!dvGeralOk) {
+      erros.push(`Dígito verificador geral da linha inválido (esperado ${dvGeralCalculado}, recebido ${dvGeral})`);
+    }
+
+    const codigoBarras = `${bancoCodigo}${moeda}${dvGeral}${fatorVencStr}${valorStr}${campoLivre}`;
     const fatorVencNum = parseInt(fatorVencStr, 10);
     const dataVenc = fatorVencNum > 0 ? fatorVencimentoParaData(fatorVencNum) : undefined;
     const valorNum = parseInt(valorStr, 10) / 100;
@@ -202,7 +232,20 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
                       `${clean.substring(21, 26)}.${clean.substring(26, 32)} ` +
                       `${clean[32]} ${clean.substring(33, 47)}`;
 
+    const linhaMatematicaValida = clean.length === 47 && dv1Ok && dv2Ok && dv3Ok && dvGeralOk;
     const valido = erros.length === 0;
+
+    const evidence: BoletoValidationEvidence = {
+      length_valid: clean.length === 47,
+      dv_campo_1_valid: dv1Ok,
+      dv_campo_2_valid: dv2Ok,
+      dv_campo_3_valid: dv3Ok,
+      dv_geral_valid: dvGeralOk,
+      fator_vencimento: fatorVencNum > 0 ? fatorVencNum : null,
+      valor_derivado: valorNum > 0 ? valorNum : null,
+      vencimento_derivado: dataVenc || null,
+      linha_matematicamente_valida: linhaMatematicaValida,
+    };
 
     return {
       valido,
@@ -216,6 +259,7 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
       bancoCodigo,
       bancoNome,
       erros,
+      evidence,
       motivo: valido ? undefined : erros.join("; "),
     };
   }
@@ -231,24 +275,18 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     const bloco4 = clean.substring(36, 47);
     const dv4 = parseInt(clean[47], 10);
 
-    // Validação de DV módulo 10 em cada bloco de arrecadação
-    if (calcularModulo10(bloco1) !== dv1) {
-      erros.push(`DV do Bloco 1 de arrecadação inválido`);
-    }
-    if (calcularModulo10(bloco2) !== dv2) {
-      erros.push(`DV do Bloco 2 de arrecadação inválido`);
-    }
-    if (calcularModulo10(bloco3) !== dv3) {
-      erros.push(`DV do Bloco 3 de arrecadação inválido`);
-    }
-    if (calcularModulo10(bloco4) !== dv4) {
-      erros.push(`DV do Bloco 4 de arrecadação inválido`);
-    }
+    const dv1Ok = calcularModulo10(bloco1) === dv1;
+    const dv2Ok = calcularModulo10(bloco2) === dv2;
+    const dv3Ok = calcularModulo10(bloco3) === dv3;
+    const dv4Ok = calcularModulo10(bloco4) === dv4;
 
-    // Código de barras de arrecadação: junção dos 4 blocos sem os DVs
+    if (!dv1Ok) erros.push(`DV do Bloco 1 de arrecadação inválido`);
+    if (!dv2Ok) erros.push(`DV do Bloco 2 de arrecadação inválido`);
+    if (!dv3Ok) erros.push(`DV do Bloco 3 de arrecadação inválido`);
+    if (!dv4Ok) erros.push(`DV do Bloco 4 de arrecadação inválido`);
+
     const codigoBarras = `${bloco1}${bloco2}${bloco3}${bloco4}`;
     
-    // Valor no código de arrecadação: posições 4..15 (se moeda = 6 ou 8)
     let valorNum: number | undefined;
     const codMoeda = clean[2];
     if (codMoeda === "6" || codMoeda === "8") {
@@ -259,6 +297,18 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     const formatada = `${bloco1}-${dv1} ${bloco2}-${dv2} ${bloco3}-${dv3} ${bloco4}-${dv4}`;
     const valido = erros.length === 0;
 
+    const evidence: BoletoValidationEvidence = {
+      length_valid: clean.length === 48,
+      dv_campo_1_valid: dv1Ok,
+      dv_campo_2_valid: dv2Ok,
+      dv_campo_3_valid: dv3Ok,
+      dv_geral_valid: dv4Ok,
+      fator_vencimento: null,
+      valor_derivado: valorNum || null,
+      vencimento_derivado: null,
+      linha_matematicamente_valida: valido,
+    };
+
     return {
       valido,
       tipo: "arrecadacao",
@@ -268,6 +318,7 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
       valorDerivado: valorNum,
       bancoNome: "Arrecadação / Concessionária",
       erros,
+      evidence,
       motivo: valido ? undefined : erros.join("; "),
     };
   }
@@ -280,6 +331,17 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     linhaLimpa: clean,
     linhaFormatada: clean,
     erros,
+    evidence: {
+      length_valid: false,
+      dv_campo_1_valid: false,
+      dv_campo_2_valid: false,
+      dv_campo_3_valid: false,
+      dv_geral_valid: false,
+      fator_vencimento: null,
+      valor_derivado: null,
+      vencimento_derivado: null,
+      linha_matematicamente_valida: false,
+    },
     motivo: erros[0],
   };
 }
@@ -372,21 +434,18 @@ export function parseBoletoAmount(val: unknown): number {
   const str = String(val).trim().replace(/^R\$\s*/i, "").trim();
   if (!str) return 0;
 
-  // Se tiver vírgula e ponto (ex: "1.234,56") -> remove pontos e troca vírgula por ponto
   if (str.includes(",") && str.includes(".")) {
     const clean = str.replace(/\./g, "").replace(",", ".");
     const parsed = parseFloat(clean);
     return isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
   }
 
-  // Se tiver apenas vírgula (ex: "1234,56")
   if (str.includes(",")) {
     const clean = str.replace(",", ".");
     const parsed = parseFloat(clean);
     return isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
   }
 
-  // Padrão numérico decimal (ex: "1234.56")
   const parsed = parseFloat(str);
   return isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
 }
@@ -398,7 +457,6 @@ export function normalizeDate(dateRaw: unknown): { iso: string | null; formatted
   if (!dateRaw) return { iso: null, formattedBr: null };
   const str = String(dateRaw).trim();
 
-  // Caso DD/MM/YYYY ou DD-MM-YYYY
   const brMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (brMatch) {
     const dd = brMatch[1].padStart(2, "0");
@@ -410,7 +468,6 @@ export function normalizeDate(dateRaw: unknown): { iso: string | null; formatted
     };
   }
 
-  // Caso YYYY-MM-DD
   const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoMatch) {
     const yyyy = isoMatch[1];
@@ -463,6 +520,7 @@ export function reconcileBoleto(raw: {
   agencia_codigo_beneficiario?: string | null;
 }): BoletoValidationResult {
   const divergencias: string[] = [];
+  const warnings: string[] = [];
 
   const valorVisual = parseBoletoAmount(raw.valor);
   const dataVisual = normalizeDate(raw.data_vencimento);
@@ -470,32 +528,72 @@ export function reconcileBoleto(raw: {
   const linhaValidada = raw.linha_digitavel ? validateLinhaDigitavel(raw.linha_digitavel) : undefined;
   const codigoValidado = raw.codigo_barras ? validateCodigoBarras(raw.codigo_barras) : undefined;
 
-  // 1. Reconciliação de Valor
   let valorFinal = valorVisual;
-  if (linhaValidada && linhaValidada.valido && linhaValidada.valorDerivado && linhaValidada.valorDerivado > 0) {
-    if (valorVisual > 0 && Math.abs(valorVisual - linhaValidada.valorDerivado) > 0.05) {
-      divergencias.push(
-        `Divergência de valor: valor impresso (R$ ${valorVisual.toFixed(2)}) difere do valor codificado na linha digitável (R$ ${linhaValidada.valorDerivado.toFixed(2)})`
-      );
-    }
-    // Se o valor visual não veio ou divergiu, a linha digitável é a fonte canônica codificada
-    if (valorFinal <= 0) {
-      valorFinal = linhaValidada.valorDerivado;
-    }
-  }
-
-  // 2. Reconciliação de Data de Vencimento
+  let valorSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
   let dataVencimentoFinal = dataVisual.iso;
-  if (linhaValidada && linhaValidada.valido && linhaValidada.dataVencimentoDerivada) {
-    if (dataVisual.iso && dataVisual.iso !== linhaValidada.dataVencimentoDerivada) {
-      const dataLinhaBr = normalizeDate(linhaValidada.dataVencimentoDerivada).formattedBr;
-      divergencias.push(
-        `Divergência de vencimento: data impressa (${dataVisual.formattedBr}) difere do vencimento na linha digitável (${dataLinhaBr})`
-      );
-    }
-    if (!dataVencimentoFinal) {
+  let vencimentoSource: "febraban_linha" | "ocr_visual" = "ocr_visual";
+  let status: "validado" | "validado_com_alerta" | "requer_revisao" | "rejeitado" = "requer_revisao";
+  let valido = false;
+
+  const linhaMatematicamenteValida = Boolean(
+    linhaValidada?.evidence?.linha_matematicamente_valida || (linhaValidada?.valido && linhaValidada?.tipo === "arrecadacao")
+  );
+
+  if (linhaMatematicamenteValida && linhaValidada && linhaValidada.valorDerivado && linhaValidada.valorDerivado > 0) {
+    // ── HIERARQUIA: LINHA MATEMATICAMENTE ÍNTEGRA É AUTORIDADE PARA VALOR E DATA ──
+    valorFinal = linhaValidada.valorDerivado;
+    valorSource = "febraban_linha";
+
+    if (linhaValidada.dataVencimentoDerivada) {
       dataVencimentoFinal = linhaValidada.dataVencimentoDerivada;
+      vencimentoSource = "febraban_linha";
     }
+
+    let hasVisualDivergence = false;
+
+    // Verificar se valor visual divergiu do valor da linha
+    if (valorVisual > 0 && Math.abs(valorVisual - valorFinal) > 0.05) {
+      warnings.push(
+        `divergencia_valor_ocr: valor visual lido (R$ ${valorVisual.toFixed(2)}) difere do valor validado pela linha (R$ ${valorFinal.toFixed(2)})`
+      );
+      hasVisualDivergence = true;
+    }
+
+    // Verificar se vencimento visual divergiu do vencimento da linha
+    if (dataVisual.iso && dataVencimentoFinal && dataVisual.iso !== dataVencimentoFinal) {
+      warnings.push(
+        `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
+      );
+      hasVisualDivergence = true;
+    }
+
+    if (hasVisualDivergence) {
+      status = "validado_com_alerta";
+      valido = true;
+    } else {
+      status = "validado";
+      valido = true;
+    }
+  } else if (linhaValidada && !linhaValidada.valido) {
+    // Linha informada mas matematicamente inválida
+    divergencias.push(...linhaValidada.erros);
+    if (valorVisual > 0 && dataVisual.iso) {
+      status = "requer_revisao";
+      valido = false;
+    } else {
+      status = "rejeitado";
+      valido = false;
+    }
+  } else if (valorVisual > 0 && dataVisual.iso) {
+    // Linha ausente, mas dados visuais legíveis
+    status = "requer_revisao";
+    valido = false;
+    warnings.push("linha_digitavel_ausente");
+  } else {
+    // Linha e valor ilegíveis -> fail-closed
+    status = "rejeitado";
+    valido = false;
+    divergencias.push("Dados críticos do boleto ilegíveis ou incompletos");
   }
 
   // 3. Banco / Instituição Emissora
@@ -511,30 +609,27 @@ export function reconcileBoleto(raw: {
   const pagadorFinal = raw.pagador ? String(raw.pagador).trim() : null;
   const cnpjCpfPagador = normalizeCpfCnpj(raw.cnpj_cpf_pagador);
 
-  // 5. Linha digitável ou código inválidos
-  if (linhaValidada && !linhaValidada.valido) {
-    divergencias.push(...linhaValidada.erros);
-  }
   if (codigoValidado && !codigoValidado.valido) {
     divergencias.push(...codigoValidado.erros);
   }
-
-  const valido = divergencias.length === 0 && valorFinal > 0;
-  const status = valido ? "ok" : "requer_revisao";
 
   return {
     valido,
     status,
     divergencias,
+    warnings,
     linhaDigitavel: linhaValidada,
     codigoBarras: codigoValidado,
     valorFinal,
+    valorSource,
     dataVencimentoFinal,
+    vencimentoSource,
     beneficiarioFinal,
     cnpjCpfBeneficiarioFinal: cnpjCpfBeneficiario.formatted || cnpjCpfBeneficiario.clean,
     pagadorFinal,
     cnpjCpfPagadorFinal: cnpjCpfPagador.formatted || cnpjCpfPagador.clean,
     bancoFinal,
-    motivo: divergencias.length > 0 ? divergencias.join(" | ") : undefined,
+    evidence: linhaValidada?.evidence,
+    motivo: divergencias.length > 0 ? divergencias.join(" | ") : (warnings.length > 0 ? warnings.join(" | ") : undefined),
   };
 }

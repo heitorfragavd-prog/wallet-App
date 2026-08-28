@@ -141,7 +141,7 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
 
 // ── Dados de fixture ───────────────────────────────────────────────────────────
 
-const hoje = new Date().toISOString().split("T")[0];
+const hoje = isoDay(new Date());
 
 const dados_com_eyemobile: DadosIA = {
   receitas: [{ valor: 474.55, data: hoje, descricao: "Pix Divipay" }],
