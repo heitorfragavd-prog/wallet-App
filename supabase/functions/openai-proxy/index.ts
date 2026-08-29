@@ -1,12 +1,33 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  createBackendLogger,
+  getCorrelationId,
+  withCorrelationHeader,
+  createErrorResponse,
+} from "../_shared/observability/index.ts";
+
+const logger = createBackendLogger("openai-proxy");
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-correlation-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+function fetchWithTimeout(url: string, init: RequestInit & { timeout?: number } = {}): Promise<Response> {
+  const { timeout = 45000, ...fetchInit } = init;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  return fetch(url, { ...fetchInit, signal: controller.signal }).finally(() => clearTimeout(id));
+}
+
+function maskId(id?: string | null): string {
+  if (!id) return "NULL";
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 8)}...${id.slice(-4)}`;
+}
 
 /** Retorna a data atual no fuso horário do Brasil (America/Sao_Paulo) no formato YYYY-MM-DD */
 function getHojeBrasil(): string {
@@ -267,10 +288,11 @@ async function consultarVendasEyemobile(
   const startDate = dataStr || getHojeBrasil();
   const endDate = dataFimStr || startDate;
 
-  console.log("[consultarVendasEyemobile] ===== INÍCIO =====");
-  console.log("[consultarVendasEyemobile] userId=", userId, "startDate=", startDate, "endDate=", endDate);
-  console.log("[consultarVendasEyemobile] Data atual servidor (UTC):", new Date().toISOString());
-  console.log("[consultarVendasEyemobile] Data Brasil:", new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
+  logger.info("Iniciando consulta de vendas Eyemobile", {
+    operation: "consultarVendasEyemobile",
+    userId: maskId(userId),
+    metadata: { startDate, endDate },
+  });
 
   try {
     // 1. Busca primeiro as transações registradas no banco para o período (já convertidas em horário de Brasília)
@@ -283,11 +305,13 @@ async function consultarVendasEyemobile(
       .lte("data", endDate);
 
     if (dbErr) {
-      console.error("[consultarVendasEyemobile] Erro ao consultar transações locais:", dbErr.message);
+      logger.error("Erro ao consultar transações locais", {
+        operation: "consultarVendasEyemobile",
+        metadata: { error: dbErr.message },
+      });
     }
 
     const localTxs = dbTxs || [];
-    console.log("[consultarVendasEyemobile] Transações locais encontradas:", localTxs.length, "para o período", startDate, "a", endDate);
 
     // 2. Busca configuração do Eyemobile para tentar atualizar via API em tempo real
     const { data: config } = await supabase
@@ -303,7 +327,7 @@ async function consultarVendasEyemobile(
       const syncUrl = `${supabaseUrl}/functions/v1/eyemobile-sync`;
 
       try {
-        const response = await fetch(syncUrl, {
+        const response = await fetchWithTimeout(syncUrl, {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${serviceRoleKey}`,
@@ -319,6 +343,7 @@ async function consultarVendasEyemobile(
             start_date: startDate,
             end_date: endDate,
           }),
+          timeout: 20000,
         });
 
         if (response.ok) {
@@ -330,12 +355,17 @@ async function consultarVendasEyemobile(
             const saleDate = toSaoPauloDate(s.time || s.created_at || "");
             return saleDate >= startDate && saleDate <= endDate;
           });
-          console.log("[consultarVendasEyemobile] Vendas retornadas pelo eyemobile-sync (filtradas no fuso):", apiSales.length);
         } else {
-          console.warn("[consultarVendasEyemobile] eyemobile-sync respondeu com status:", response.status);
+          logger.warn("eyemobile-sync respondeu com status não-ok", {
+            operation: "consultarVendasEyemobile",
+            metadata: { status: response.status },
+          });
         }
       } catch (syncErr: any) {
-        console.warn("[consultarVendasEyemobile] Falha ao invocar eyemobile-sync:", syncErr.message);
+        logger.warn("Falha ao invocar eyemobile-sync", {
+          operation: "consultarVendasEyemobile",
+          metadata: { error: syncErr.message },
+        });
       }
     }
 
@@ -370,7 +400,6 @@ async function consultarVendasEyemobile(
         vendas_por_metodo: metodos,
         observacao: `Vendas do PDV Eyemobile em ${dataFormatada}: Total de R$ ${totalVendas.toFixed(2)} em ${qtdTransacoes} transações. Ticket médio: R$ ${ticketMedio.toFixed(2)}.`,
       };
-      console.log("[consultarVendasEyemobile] Resultado final:", JSON.stringify(resultado));
       return resultado;
     }
 
@@ -384,10 +413,12 @@ async function consultarVendasEyemobile(
       vendas_por_metodo: {},
       observacao: "Nenhuma venda encontrada para esta data ou período no PDV Eyemobile.",
     };
-    console.log("[consultarVendasEyemobile] Resultado zero vendas:", JSON.stringify(resultado));
     return resultado;
   } catch (err: any) {
-    console.error("[consultarVendasEyemobile] EXCEPTION:", err.message);
+    logger.error("Exceção ao consultar vendas Eyemobile", {
+      operation: "consultarVendasEyemobile",
+      metadata: { error: err.message },
+    });
     return {
       erro: "Erro interno ao consultar vendas do Eyemobile.",
       detalhe: err.message,
@@ -405,9 +436,11 @@ async function consultarSaidasCaixaPeriodo(
   const startDate = dataInicio || getHojeBrasil();
   const endDate = dataFim || startDate;
 
-  console.log("[consultarSaidasCaixaPeriodo] ===== INÍCIO =====");
-  console.log("[consultarSaidasCaixaPeriodo] userId:", userId);
-  console.log("[consultarSaidasCaixaPeriodo] data_inicio:", startDate, "data_fim:", endDate);
+  logger.info("Iniciando consulta de saídas de caixa", {
+    operation: "consultarSaidasCaixaPeriodo",
+    userId: maskId(userId),
+    metadata: { startDate, endDate },
+  });
 
   try {
     // 1. Categorias e Colaboradores para mapear nomes
@@ -455,7 +488,7 @@ async function consultarSaidasCaixaPeriodo(
         .eq("user_id", userId)
         .gte("data_pagamento", startDate)
         .lte("data_pagamento", endDate),
-      fetch(`${supabaseUrl}/functions/v1/divipay-api`, {
+      fetchWithTimeout(`${supabaseUrl}/functions/v1/divipay-api`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${serviceRoleKey}`,
@@ -467,8 +500,12 @@ async function consultarSaidasCaixaPeriodo(
           limit: 100,
           offset: 0,
         }),
+        timeout: 15000,
       }).then(r => r.ok ? r.json() : { data: [] }).catch(err => {
-        console.warn("[consultarSaidasCaixaPeriodo] Erro DiviPay API:", err.message);
+        logger.warn("Erro ao consultar DiviPay API", {
+          operation: "consultarSaidasCaixaPeriodo",
+          metadata: { error: err.message },
+        });
         return { data: [] };
       }),
     ]);
@@ -585,9 +622,6 @@ async function consultarSaidasCaixaPeriodo(
 
     itens.sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
-    console.log("[consultarSaidasCaixaPeriodo] Total de saídas encontradas:", itens.length, "para o período", startDate, "a", endDate);
-    console.log("[consultarSaidasCaixaPeriodo] Primeiros 3 registros:", JSON.stringify(itens.slice(0, 3)));
-
     const totalSaidas = itens.reduce((sum, item) => sum + item.valor, 0);
     const qtd = itens.length;
     const ticketMedio = qtd > 0 ? totalSaidas / qtd : 0;
@@ -617,10 +651,12 @@ async function consultarSaidasCaixaPeriodo(
       observacao: `Total de saídas de caixa em ${dataFormatada}: R$ ${totalSaidas.toFixed(2)} em ${qtd} lançamentos.`
     };
 
-    console.log("[consultarSaidasCaixaPeriodo] Resultado:", JSON.stringify(resultado));
     return resultado;
   } catch (err: any) {
-    console.error("[consultarSaidasCaixaPeriodo] EXCEPTION:", err.message);
+    logger.error("Exceção ao consultar saídas de caixa", {
+      operation: "consultarSaidasCaixaPeriodo",
+      metadata: { error: err.message },
+    });
     return {
       erro: "Erro ao consultar saídas de caixa do período.",
       detalhe: err.message
@@ -998,13 +1034,34 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-  if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  
+  const correlationId = getCorrelationId(req);
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: withCorrelationHeader(CORS_HEADERS, correlationId),
+    });
+  }
+
+  if (req.method !== "POST") {
+    return createErrorResponse(req, {
+      status: 405,
+      message: "Method not allowed",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
+  }
+
   const url = new URL(req.url);
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return new Response(JSON.stringify({ error: "Missing authorization header" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
-  
+  if (!authHeader) {
+    return createErrorResponse(req, {
+      status: 401,
+      message: "Missing authorization header",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const jwt = authHeader.replace("Bearer ", "").trim();
@@ -1019,9 +1076,11 @@ Deno.serve(async (req: Request) => {
       const targetUserId = (formData.get("user_id") as string) || "";
 
       if (!audioFile) {
-        return new Response(JSON.stringify({ error: "Nenhum arquivo de áudio fornecido" }), {
+        return createErrorResponse(req, {
           status: 400,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          message: "Nenhum arquivo de áudio fornecido",
+          correlationId,
+          corsHeaders: CORS_HEADERS,
         });
       }
 
@@ -1033,9 +1092,16 @@ Deno.serve(async (req: Request) => {
       }
 
       if (!openaiApiKey) {
-        return new Response(JSON.stringify({ error: "OpenAI API Key não configurada para transcrição" }), {
+        logger.error("OpenAI API Key não configurada para transcrição", {
+          correlationId,
+          operation: "transcribe_audio",
+          userId: maskId(targetUserId),
+        });
+        return createErrorResponse(req, {
           status: 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          message: "OpenAI API Key não configurada para transcrição",
+          correlationId,
+          corsHeaders: CORS_HEADERS,
         });
       }
 
@@ -1045,20 +1111,27 @@ Deno.serve(async (req: Request) => {
       openaiFormData.append("language", "pt");
       openaiFormData.append("response_format", "json");
 
-      const whisperResp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      const whisperResp = await fetchWithTimeout("https://api.openai.com/v1/audio/transcriptions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${openaiApiKey}`,
         },
         body: openaiFormData,
+        timeout: 30000,
       });
 
       if (!whisperResp.ok) {
         const errText = await whisperResp.text();
-        console.error("[openai-proxy] Whisper error:", errText);
-        return new Response(JSON.stringify({ error: "Falha na transcrição Whisper", details: errText }), {
-          status: 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        logger.error("Falha na transcrição Whisper", {
+          correlationId,
+          operation: "transcribe_audio",
+          metadata: { status: whisperResp.status, error: errText.slice(0, 300) },
+        });
+        return createErrorResponse(req, {
+          status: whisperResp.status === 429 ? 429 : 502,
+          message: "Falha na transcrição de áudio pelo provedor.",
+          correlationId,
+          corsHeaders: CORS_HEADERS,
         });
       }
 
@@ -1068,26 +1141,38 @@ Deno.serve(async (req: Request) => {
           success: true,
           transcription: whisperData.text,
           language: whisperData.language || "pt",
+          correlation_id: correlationId,
         }),
         {
           status: 200,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          headers: withCorrelationHeader({ ...CORS_HEADERS, "Content-Type": "application/json" }, correlationId),
         },
       );
     } catch (err: any) {
-      console.error("[openai-proxy] Whisper exception:", err);
-      return new Response(JSON.stringify({ error: err.message }), {
+      logger.error("Exceção na transcrição Whisper", {
+        correlationId,
+        operation: "transcribe_audio",
+        metadata: { error: err.message },
+      });
+      return createErrorResponse(req, {
         status: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        message: "Erro interno no processamento do áudio.",
+        correlationId,
+        corsHeaders: CORS_HEADERS,
       });
     }
   }
 
-  let body: { model?: string; messages: unknown[]; max_tokens?: number; temperature?: number; user_id?: string; response_format?: unknown };
+  let body: { model?: string; messages: unknown[]; max_tokens?: number; temperature?: number; user_id?: string; response_format?: unknown; tools?: unknown; _startTime?: number; workspace_id?: string };
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    return createErrorResponse(req, {
+      status: 400,
+      message: "Invalid JSON body",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
   }
 
   let userId: string;
@@ -1111,7 +1196,12 @@ Deno.serve(async (req: Request) => {
     const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
     if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Invalid or expired token" }), { status: 401, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      return createErrorResponse(req, {
+        status: 401,
+        message: "Invalid or expired token",
+        correlationId,
+        corsHeaders: CORS_HEADERS,
+      });
     }
     userId = user.id;
   }
@@ -1120,12 +1210,25 @@ Deno.serve(async (req: Request) => {
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
-    return new Response(JSON.stringify({ error: "API key não configurada. Configure sua chave OpenAI na aba Configurações." }), { status: 400, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+    return createErrorResponse(req, {
+      status: 400,
+      message: "API key não configurada. Configure sua chave OpenAI na aba Configurações.",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
   }
 
-  console.log("[openai-proxy] ===== REQUEST =====");
-  console.log("[openai-proxy] userId:", userId, "model:", body.model || "gpt-4o-mini", "messageCount:", body.messages.length, "toolsCount:", TOOLS.length);
-  console.log("[openai-proxy] Tools registradas:", TOOLS.map(t => t.function.name).join(", "));
+  logger.info("Requisição recebida", {
+    correlationId,
+    operation: "chat_completion",
+    userId: maskId(userId),
+    metadata: {
+      model: body.model || "gpt-4o-mini",
+      messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+      toolsCount: TOOLS.length,
+    },
+  });
+
   const messages = [...body.messages] as Record<string, unknown>[];
   const hojeBrasil = getHojeBrasil();
   const hasSystem = messages.some((m) => m.role === "system");
@@ -1144,7 +1247,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let modelToUse = body.model || "gpt-4o-mini";
-    let response = await fetch(OPENAI_API_URL, {
+    let response = await fetchWithTimeout(OPENAI_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiKey}`,
@@ -1158,15 +1261,20 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         temperature: body.temperature ?? 0.3,
         response_format: body.response_format || undefined,
       }),
+      timeout: 45000,
     });
 
     let data = await response.json();
     if (!response.ok && (modelToUse === "gpt-4o-mini" || modelToUse.includes("mini"))) {
       const errStr = JSON.stringify(data);
       if (errStr.includes("vision") || errStr.includes("image") || response.status === 400) {
-        console.warn("[openai-proxy] Retentando com gpt-4o devido a erro no mini:", errStr.slice(0, 300));
+        logger.warn("Retentando com gpt-4o devido a erro no mini", {
+          correlationId,
+          operation: "chat_fallback_gpt4o",
+          metadata: { error: errStr.slice(0, 300) },
+        });
         modelToUse = "gpt-4o";
-        response = await fetch(OPENAI_API_URL, {
+        response = await fetchWithTimeout(OPENAI_API_URL, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${openaiKey}`,
@@ -1180,28 +1288,34 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
             temperature: body.temperature ?? 0.3,
             response_format: body.response_format || undefined,
           }),
+          timeout: 45000,
         });
         data = await response.json();
       }
     }
 
     if (!response.ok) {
-      console.error("[openai-proxy] OpenAI retornou erro:", response.status, JSON.stringify(data).slice(0, 500));
-      return new Response(JSON.stringify(data), { status: response.status, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      logger.error("OpenAI retornou erro", {
+        correlationId,
+        operation: "openai_response_error",
+        metadata: { status: response.status, error: JSON.stringify(data).slice(0, 300) },
+      });
+      return createErrorResponse(req, {
+        status: response.status === 429 ? 429 : (response.status >= 500 ? 502 : response.status),
+        message: data.error?.message || "Erro retornado pelo provedor OpenAI",
+        correlationId,
+        corsHeaders: CORS_HEADERS,
+      });
     }
 
     const choice = data.choices?.[0];
     const message = choice?.message;
     if (!message) {
-      console.log("[openai-proxy] Iteração", i, "— sem message na resposta, quebrando loop");
       break;
     }
     messages.push(message);
 
     if (!message.tool_calls || message.tool_calls.length === 0) {
-      console.log("[openai-proxy] Iteração", i, "— resposta final do modelo (sem tool_calls)");
-      console.log("[openai-proxy] Resposta content:", (message.content || "").slice(0, 300));
-      
       const usage = data.usage || {};
       const durationMs = Date.now() - (body._startTime || Date.now());
       const toolsExecuted = (messages.filter((m: any) => m.role === "tool") as any[]).length;
@@ -1218,21 +1332,30 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         execution_status: "success",
       }).then(() => {});
 
-      return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+      return new Response(JSON.stringify({ ...data, correlation_id: correlationId }), {
+        status: 200,
+        headers: withCorrelationHeader({ "Content-Type": "application/json", ...CORS_HEADERS }, correlationId),
+      });
     }
 
-    console.log("[openai-proxy] Iteração", i, "— modelo escolheu", message.tool_calls.length, "ferramenta(s):", message.tool_calls.map((tc: any) => tc.function.name).join(", "));
+    logger.info(`Executando ${message.tool_calls.length} ferramenta(s)`, {
+      correlationId,
+      operation: "tool_execution",
+      metadata: { tools: message.tool_calls.map((tc: any) => tc.function.name) },
+    });
 
     await Promise.all(
       message.tool_calls.map(async (tc: any) => {
         let toolResult: unknown;
         try {
           const toolArgs = JSON.parse(tc.function.arguments || "{}");
-          console.log("[openai-proxy] Executando ferramenta:", tc.function.name, "args:", JSON.stringify(toolArgs).slice(0, 500));
           toolResult = await executeTool(tc.function.name, toolArgs, supabase, userId);
-          console.log("[openai-proxy] Resultado ferramenta", tc.function.name, ":", JSON.stringify(toolResult).slice(0, 500));
         } catch (e) {
-          console.error("[openai-proxy] EXCEPTION na ferramenta", tc.function.name, ":", e instanceof Error ? e.message : String(e));
+          logger.error(`Exceção na ferramenta ${tc.function.name}`, {
+            correlationId,
+            operation: "executeTool",
+            metadata: { error: e instanceof Error ? e.message : String(e) },
+          });
           toolResult = { error: e instanceof Error ? e.message : String(e) };
         }
         messages.push({
@@ -1244,5 +1367,10 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
     );
   }
 
-  return new Response(JSON.stringify({ error: "Máximo de iterações atingido" }), { status: 500, headers: { "Content-Type": "application/json", ...CORS_HEADERS } });
+  return createErrorResponse(req, {
+    status: 500,
+    message: "Máximo de iterações atingido sem resposta conclusiva.",
+    correlationId,
+    corsHeaders: CORS_HEADERS,
+  });
 });

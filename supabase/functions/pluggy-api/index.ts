@@ -10,6 +10,14 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createBackendLogger,
+  getCorrelationId,
+  withCorrelationHeader,
+  createErrorResponse,
+} from "../_shared/observability/index.ts";
+
+const logger = createBackendLogger("pluggy-api");
 
 // ─── CONFIGURAÇÃO DE CORS COM ALLOWLIST ───
 const ALLOWED_ORIGINS_DEFAULT = [
@@ -42,16 +50,20 @@ function getCorsHeaders(req: Request) {
 
   return {
     "Access-Control-Allow-Origin": allowed && origin ? origin : ALLOWED_ORIGINS_DEFAULT[0],
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-correlation-id",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Vary": "Origin",
   };
 }
 
-function jsonResponse(req: Request, body: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(body), {
+function jsonResponse(req: Request, body: Record<string, unknown>, status = 200, correlationId?: string) {
+  const corrId = correlationId || getCorrelationId(req);
+  return new Response(JSON.stringify({ ...body, correlation_id: corrId }), {
     status,
-    headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+    headers: withCorrelationHeader(
+      { ...getCorsHeaders(req), "Content-Type": "application/json" },
+      corrId
+    ),
   });
 }
 
@@ -146,7 +158,7 @@ async function getPluggyApiKey(forceRefresh = false): Promise<string> {
 }
 
 // ─── HELPER PARA BUSCA DE TRANSAÇÕES POR CONTA (API v2, cursor-based) ───
-async function fetchTransactionsForAccount(apiKey: string, accountId: string): Promise<any[]> {
+async function fetchTransactionsForAccount(apiKey: string, accountId: string, correlationId?: string): Promise<any[]> {
   const allTxs: any[] = [];
   let url: string | null = `https://api.pluggy.ai/transactions?accountId=${encodeURIComponent(accountId)}&pageSize=500`;
   let pages = 0;
@@ -159,7 +171,11 @@ async function fetchTransactionsForAccount(apiKey: string, accountId: string): P
     });
 
     if (!resp.ok) {
-      console.warn(`[pluggy-api] fetchTransactionsForAccount: HTTP ${resp.status} para account=${maskId(accountId)} page=${pages + 1}`);
+      logger.warn(`HTTP ${resp.status} ao buscar transações`, {
+        operation: "fetchTransactionsForAccount",
+        correlationId,
+        metadata: { accountId: maskId(accountId), page: pages + 1, status: resp.status },
+      });
       break;
     }
 
@@ -184,24 +200,47 @@ async function fetchTransactionsForAccount(apiKey: string, accountId: string): P
 }
 
 serve(async (req: Request) => {
+  const correlationId = getCorrelationId(req);
+  const corsHeaders = getCorsHeaders(req);
+
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: getCorsHeaders(req) });
+    return new Response("ok", { headers: corsHeaders });
   }
 
   const origin = req.headers.get("Origin");
   if (origin && !isOriginAllowed(origin)) {
-    return jsonResponse(req, { success: false, error: "Origem CORS não autorizada." }, 403);
+    logger.warn("Origem CORS não autorizada", {
+      correlationId,
+      operation: "cors_check",
+      metadata: { origin },
+    });
+    return createErrorResponse(req, {
+      status: 403,
+      message: "Origem CORS não autorizada.",
+      correlationId,
+      corsHeaders,
+    });
   }
 
   if (req.method !== "POST") {
-    return jsonResponse(req, { success: false, error: `Método ${req.method} não permitido` }, 405);
+    return createErrorResponse(req, {
+      status: 405,
+      message: `Método ${req.method} não permitido`,
+      correlationId,
+      corsHeaders,
+    });
   }
 
   try {
     // 1. Extração do Token JWT do Usuário
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return jsonResponse(req, { success: false, error: "Token de autenticação ausente." }, 401);
+      return createErrorResponse(req, {
+        status: 401,
+        message: "Token de autenticação ausente.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     const token = authHeader.replace("Bearer ", "").trim();
@@ -210,7 +249,16 @@ serve(async (req: Request) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
-      return jsonResponse(req, { success: false, error: "Configuração do Supabase ausente ou incompleta no servidor." }, 500);
+      logger.error("Configuração do Supabase ausente ou incompleta", {
+        correlationId,
+        operation: "env_check",
+      });
+      return createErrorResponse(req, {
+        status: 500,
+        message: "Configuração do servidor ausente ou incompleta.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     // 2. Cliente Autenticado com JWT do Usuário (NÃO usa service_role como fallback)
@@ -222,7 +270,12 @@ serve(async (req: Request) => {
     const { data: { user }, error: authError } = await userClient.auth.getUser(token);
 
     if (authError || !user) {
-      return jsonResponse(req, { success: false, error: "Usuário não autenticado ou token inválido." }, 401);
+      return createErrorResponse(req, {
+        status: 401,
+        message: "Usuário não autenticado ou token inválido.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     const userId = user.id;
@@ -232,11 +285,21 @@ serve(async (req: Request) => {
     const { action, workspace_id, itemId, ...params } = requestBody;
 
     if (!action) {
-      return jsonResponse(req, { success: false, error: "Parâmetro 'action' é obrigatório." }, 400);
+      return createErrorResponse(req, {
+        status: 400,
+        message: "Parâmetro 'action' é obrigatório.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     if (!workspace_id) {
-      return jsonResponse(req, { success: false, error: "Parâmetro 'workspace_id' é obrigatório." }, 400);
+      return createErrorResponse(req, {
+        status: 400,
+        message: "Parâmetro 'workspace_id' é obrigatório.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     // 4. Validação de Acesso ao Workspace no Contexto Real do Usuário (auth.uid() = userId)
@@ -259,8 +322,18 @@ serve(async (req: Request) => {
     }
 
     if (!authorized) {
-      console.warn(`[pluggy-api] Acesso negado: user=${maskId(userId)} workspace=${maskId(workspace_id)}`);
-      return jsonResponse(req, { success: false, error: "Acesso negado ao workspace especificado." }, 403);
+      logger.warn("Acesso negado ao workspace", {
+        correlationId,
+        operation: "authorize_workspace",
+        userId: maskId(userId),
+        workspaceId: maskId(workspace_id),
+      });
+      return createErrorResponse(req, {
+        status: 403,
+        message: "Acesso negado ao workspace especificado.",
+        correlationId,
+        corsHeaders,
+      });
     }
 
     // 5. Inicialização do Cliente Service Role SOMENTE APÓS Autorização Confirmada
@@ -309,22 +382,43 @@ serve(async (req: Request) => {
         }
 
         if (tokenRes.status === 429) {
-          return jsonResponse(req, { success: false, error: "Limite de requisições da Pluggy atingido." }, 429);
+          return createErrorResponse(req, {
+            status: 429,
+            message: "Limite de requisições da Pluggy atingido.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const tokenData = await tokenRes.json().catch(() => ({}));
         if (!tokenRes.ok || !tokenData.accessToken) {
           const errDetail = tokenData.message || tokenData.error || "Falha ao gerar accessToken na Pluggy.";
-          return jsonResponse(req, { success: false, error: String(errDetail) }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: String(errDetail),
+            correlationId,
+            corsHeaders,
+          });
         }
 
-        return jsonResponse(req, { success: true, data: { accessToken: tokenData.accessToken } });
+        logger.info("Connect Token gerado com sucesso", {
+          correlationId,
+          operation: "getConnectToken",
+          workspaceId: maskId(workspace_id),
+        });
+
+        return jsonResponse(req, { success: true, data: { accessToken: tokenData.accessToken } }, 200, correlationId);
       }
 
       // ─── REGISTRO E VALIDAÇÃO SERVER-SIDE DO ITEM ───
       case "registerItem": {
         if (!itemId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Parâmetro 'itemId' é obrigatório.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const apiKey = await getPluggyApiKey();
@@ -338,11 +432,21 @@ serve(async (req: Request) => {
           });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          return jsonResponse(req, { success: false, error: `Erro ao consultar Item na Pluggy: ${msg}` }, 500);
+          return createErrorResponse(req, {
+            status: 502,
+            message: `Erro ao consultar Item na Pluggy: ${msg}`,
+            correlationId,
+            corsHeaders,
+          });
         }
 
         if (!itemVerifyRes.ok) {
-          return jsonResponse(req, { success: false, error: "Item Pluggy não encontrado ou inválido na instituição financeira." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Item Pluggy não encontrado ou inválido na instituição financeira.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const itemRemoteData = await itemVerifyRes.json().catch(() => ({}));
@@ -351,13 +455,31 @@ serve(async (req: Request) => {
 
         // Validação estrita e obrigatória do clientUserId
         if (!remoteClientUserId) {
-          console.warn(`[pluggy-api] Item ${maskId(itemId)} não possui clientUserId retornado pela Pluggy`);
-          return jsonResponse(req, { success: false, error: "Item Pluggy inválido: clientUserId ausente na instituição." }, 403);
+          logger.warn("Item não possui clientUserId retornado pela Pluggy", {
+            correlationId,
+            operation: "registerItem",
+            metadata: { itemId: maskId(itemId) },
+          });
+          return createErrorResponse(req, {
+            status: 403,
+            message: "Item Pluggy inválido: clientUserId ausente na instituição.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         if (remoteClientUserId !== expectedClientUserId) {
-          console.warn(`[pluggy-api] clientUserId mismatch: remote=${maskId(remoteClientUserId)} expected=${maskId(expectedClientUserId)}`);
-          return jsonResponse(req, { success: false, error: "O Item informado pertence a outra sessão ou usuário." }, 403);
+          logger.warn("clientUserId mismatch", {
+            correlationId,
+            operation: "registerItem",
+            metadata: { remote: maskId(remoteClientUserId), expected: maskId(expectedClientUserId) },
+          });
+          return createErrorResponse(req, {
+            status: 403,
+            message: "O Item informado pertence a outra sessão ou usuário.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         // 2. Proteção contra transferência indevida de ownership
@@ -369,7 +491,12 @@ serve(async (req: Request) => {
 
         if (existingItem) {
           if (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId) {
-            return jsonResponse(req, { success: false, error: "Item já vinculado a outro usuário ou workspace." }, 403);
+            return createErrorResponse(req, {
+              status: 403,
+              message: "Item já vinculado a outro usuário ou workspace.",
+              correlationId,
+              corsHeaders,
+            });
           }
           // Idempotência: mesmo usuário e workspace retorna sucesso
           return jsonResponse(req, {
@@ -380,7 +507,7 @@ serve(async (req: Request) => {
               status: existingItem.status,
               connector_name: existingItem.connector_name,
             },
-          });
+          }, 200, correlationId);
         }
 
         const connectorId = params.connectorId ? Number(params.connectorId) : (itemRemoteData.connector?.id ?? null);
@@ -403,11 +530,31 @@ serve(async (req: Request) => {
 
         if (itemError) {
           if (itemError.code === "23505") {
-            return jsonResponse(req, { success: false, error: "Este item já está registrado em outro contexto." }, 409);
+            return createErrorResponse(req, {
+              status: 409,
+              message: "Este item já está registrado em outro contexto.",
+              correlationId,
+              corsHeaders,
+            });
           }
-          console.error(`[pluggy-api] Erro ao registrar item:`, itemError);
-          return jsonResponse(req, { success: false, error: "Erro ao registrar Item no banco de dados." }, 500);
+          logger.error("Erro ao registrar item no banco", {
+            correlationId,
+            operation: "registerItem",
+            metadata: { error: itemError.message },
+          });
+          return createErrorResponse(req, {
+            status: 500,
+            message: "Erro ao registrar Item no banco de dados.",
+            correlationId,
+            corsHeaders,
+          });
         }
+
+        logger.info("Item Pluggy registrado com sucesso", {
+          correlationId,
+          operation: "registerItem",
+          metadata: { itemId: maskId(itemId), connectorName },
+        });
 
         return jsonResponse(req, {
           success: true,
@@ -417,13 +564,18 @@ serve(async (req: Request) => {
             status: itemRecord.status,
             connector_name: itemRecord.connector_name,
           },
-        });
+        }, 200, correlationId);
       }
 
       // ─── CONSULTA DE CONTAS SANITIZADAS COM VALIDAÇÃO DE OWNERSHIP ───
       case "getAccounts": {
         if (!itemId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Parâmetro 'itemId' é obrigatório.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const { data: itemValid } = await supabaseAdmin
@@ -435,8 +587,17 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         if (!itemValid) {
-          console.warn(`[pluggy-api] Item não autorizado: itemId=${maskId(itemId)} user=${maskId(userId)}`);
-          return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+          logger.warn("Item não autorizado para consulta de contas", {
+            correlationId,
+            operation: "getAccounts",
+            metadata: { itemId: maskId(itemId), userId: maskId(userId) },
+          });
+          return createErrorResponse(req, {
+            status: 403,
+            message: "Item não encontrado ou não pertence a este workspace.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const apiKey = await getPluggyApiKey();
@@ -447,7 +608,12 @@ serve(async (req: Request) => {
 
         if (!accRes.ok) {
           const errBody = await accRes.json().catch(() => ({}));
-          return jsonResponse(req, { success: false, error: errBody.message || `Erro ${accRes.status} ao buscar contas na Pluggy.` }, accRes.status);
+          return createErrorResponse(req, {
+            status: accRes.status,
+            message: errBody.message || `Erro ao buscar contas na Pluggy (HTTP ${accRes.status}).`,
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const accData = await accRes.json().catch(() => ({}));
@@ -462,13 +628,18 @@ serve(async (req: Request) => {
           number: a.number ? `****${String(a.number).slice(-4)}` : undefined,
         }));
 
-        return jsonResponse(req, { success: true, data: sanitizedAccounts });
+        return jsonResponse(req, { success: true, data: sanitizedAccounts }, 200, correlationId);
       }
 
       // ─── CONSULTA DE TRANSAÇÕES PAGINADAS COM VALIDAÇÃO DE OWNERSHIP ───
       case "getTransactions": {
         if (!itemId && !params.accountId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' ou 'accountId' é obrigatório." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Parâmetro 'itemId' ou 'accountId' é obrigatório.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         // Valida ownership do item
@@ -482,7 +653,12 @@ serve(async (req: Request) => {
             .maybeSingle();
 
           if (!itemValid) {
-            return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+            return createErrorResponse(req, {
+              status: 403,
+              message: "Item não encontrado ou não pertence a este workspace.",
+              correlationId,
+              corsHeaders,
+            });
           }
         }
 
@@ -496,7 +672,12 @@ serve(async (req: Request) => {
             .maybeSingle();
 
           if (!accValid) {
-            return jsonResponse(req, { success: false, error: "Conta não encontrada ou não pertence a este workspace." }, 403);
+            return createErrorResponse(req, {
+              status: 403,
+              message: "Conta não encontrada ou não pertence a este workspace.",
+              correlationId,
+              corsHeaders,
+            });
           }
         }
 
@@ -505,7 +686,7 @@ serve(async (req: Request) => {
         // Se accountId fornecido, busca por conta; senão busca todas contas do item
         let allTransactions: any[] = [];
         if (params.accountId) {
-          allTransactions = await fetchTransactionsForAccount(apiKey, String(params.accountId));
+          allTransactions = await fetchTransactionsForAccount(apiKey, String(params.accountId), correlationId);
         } else {
           // Fallback: busca contas do item e itera
           const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
@@ -516,7 +697,7 @@ serve(async (req: Request) => {
           const accounts = accData.results || accData.accounts || [];
           for (const acc of accounts) {
             if (!acc.id) continue;
-            const txs = await fetchTransactionsForAccount(apiKey, String(acc.id));
+            const txs = await fetchTransactionsForAccount(apiKey, String(acc.id), correlationId);
             allTransactions.push(...txs);
           }
         }
@@ -539,13 +720,18 @@ serve(async (req: Request) => {
           success: true,
           data: sanitizedTransactions,
           total: sanitizedTransactions.length,
-        });
+        }, 200, correlationId);
       }
 
       // ─── CONSULTA DE INVESTIMENTOS SANITIZADOS COM VALIDAÇÃO DE OWNERSHIP ───
       case "getInvestments": {
         if (!itemId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Parâmetro 'itemId' é obrigatório.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const { data: itemValid } = await supabaseAdmin
@@ -557,7 +743,12 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         if (!itemValid) {
-          return jsonResponse(req, { success: false, error: "Item não encontrado ou não pertence a este workspace." }, 403);
+          return createErrorResponse(req, {
+            status: 403,
+            message: "Item não encontrado ou não pertence a este workspace.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const apiKey = await getPluggyApiKey();
@@ -568,7 +759,12 @@ serve(async (req: Request) => {
 
         if (!invRes.ok) {
           const errBody = await invRes.json().catch(() => ({}));
-          return jsonResponse(req, { success: false, error: errBody.message || `Erro ${invRes.status} ao buscar investimentos na Pluggy.` }, invRes.status);
+          return createErrorResponse(req, {
+            status: invRes.status,
+            message: errBody.message || `Erro ao buscar investimentos na Pluggy (HTTP ${invRes.status}).`,
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const invData = await invRes.json().catch(() => ({}));
@@ -582,13 +778,18 @@ serve(async (req: Request) => {
           currencyCode: inv.currencyCode,
         }));
 
-        return jsonResponse(req, { success: true, data: sanitizedInvestments });
+        return jsonResponse(req, { success: true, data: sanitizedInvestments }, 200, correlationId);
       }
 
       // ─── SINCRONIZAÇÃO IDEMPOTENTE DE CONTAS E TRANSAÇÕES ───
       case "syncItem": {
         if (!itemId) {
-          return jsonResponse(req, { success: false, error: "Parâmetro 'itemId' é obrigatório." }, 400);
+          return createErrorResponse(req, {
+            status: 400,
+            message: "Parâmetro 'itemId' é obrigatório.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         const expectedClientUserId = await generateClientUserId(userId, workspace_id);
@@ -601,7 +802,12 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         if (existingItem && (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId)) {
-          return jsonResponse(req, { success: false, error: "Item já vinculado a outro workspace." }, 403);
+          return createErrorResponse(req, {
+            status: 403,
+            message: "Item já vinculado a outro workspace.",
+            correlationId,
+            corsHeaders,
+          });
         }
 
         // Garante que o item está registrado no workspace
@@ -721,7 +927,11 @@ serve(async (req: Request) => {
               .single();
 
             if (accErr || !novaConta) {
-              console.error("[pluggy-api] Erro ao criar conta:", accErr);
+              logger.error("Erro ao criar conta sincronizada", {
+                correlationId,
+                operation: "syncItem",
+                metadata: { error: accErr?.message, accountName: nomeConta },
+              });
               continue;
             }
             targetAccountId = novaConta.id;
@@ -740,10 +950,19 @@ serve(async (req: Request) => {
           syncedAccountsCount++;
 
           // ─── BUSCA TRANSAÇÕES DESTA CONTA ESPECÍFICA (v2 API, por accountId) ───
-          const txList = await fetchTransactionsForAccount(apiKey, String(acc.id));
+          const txList = await fetchTransactionsForAccount(apiKey, String(acc.id), correlationId);
           totalTxFetched += txList.length;
 
-          console.log(`[pluggy-api] syncItem: conta=${nomeConta} tipo=${tipoConta} pluggyAccId=${maskId(acc.id)} txs=${txList.length}`);
+          logger.info("Transações sincronizadas para conta", {
+            correlationId,
+            operation: "syncItem",
+            metadata: {
+              accountName: nomeConta,
+              tipoConta,
+              pluggyAccId: maskId(acc.id),
+              txCount: txList.length,
+            },
+          });
 
           for (const tx of txList) {
             if (!tx.id || tx.amount === undefined || !tx.date) continue;
@@ -825,7 +1044,11 @@ serve(async (req: Request) => {
               if (!insertTxErr) {
                 syncedTxCount++;
               } else {
-                console.warn(`[pluggy-api] Erro ao inserir tx ${maskId(tx.id)}:`, insertTxErr.message);
+                logger.warn("Erro ao inserir transação sincronizada", {
+                  correlationId,
+                  operation: "syncItem_insertTx",
+                  metadata: { txId: maskId(tx.id), error: insertTxErr.message },
+                });
               }
             }
           }
@@ -839,15 +1062,29 @@ serve(async (req: Request) => {
             investmentsCount: 0,
             totalTransactionsFetched: totalTxFetched,
           },
-        });
+        }, 200, correlationId);
       }
 
       default:
-        return jsonResponse(req, { success: false, error: `Ação desconhecida: ${action}` }, 400);
+        return createErrorResponse(req, {
+          status: 400,
+          message: `Ação desconhecida: ${action}`,
+          correlationId,
+          corsHeaders,
+        });
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[pluggy-api] Erro inesperado:", msg);
-    return jsonResponse(req, { success: false, error: msg }, 500);
+    logger.error("Erro inesperado na execução", {
+      correlationId,
+      operation: "serve_catch",
+      metadata: { error: msg },
+    });
+    return createErrorResponse(req, {
+      status: 500,
+      message: msg,
+      correlationId,
+      corsHeaders,
+    });
   }
 });

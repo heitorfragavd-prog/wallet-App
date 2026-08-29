@@ -1,6 +1,6 @@
-﻿# ðŸ”­ Observabilidade e SeguranÃ§a Operacional â€” Wallet App
+﻿# Observabilidade e Segurança Operacional — Wallet App
 
-Este documento define a arquitetura, as convenÃ§Ãµes e as diretrizes de observabilidade, logging estruturado, rastreabilidade e tratamento de erros do Wallet App.
+Este documento define a arquitetura, as convenções e as diretrizes de observabilidade, logging estruturado, rastreabilidade e tratamento de erros do Wallet App tanto no frontend quanto nas Supabase Edge Functions.
 
 ---
 
@@ -8,113 +8,131 @@ Este documento define a arquitetura, as convenÃ§Ãµes e as diretrizes de obse
 
 O frontend utiliza um pipeline centralizado e seguro de logs e erros composto por:
 
-```
+`
 [Componente / Hook / Service]
-         â”‚
-         â”œâ”€â”€â”€â–¶ LoggerService (logger.debug / info / warn / error)
-         â”‚           â”‚
-         â”‚           â–¼
-         â”‚     sanitizer.ts (RedaÃ§Ã£o de credenciais + Mascaramento PII)
-         â”‚           â”‚
-         â”‚           â–¼
-         â”‚     JSON estruturado no console + Listeners (Sentry / OTel futuro)
-         â”‚
-         â””â”€â”€â”€â–¶ ErrorService (errorService.handle)
-                     â”‚
-                     â–¼
+         │
+         ├───▶ LoggerService (logger.debug / info / warn / error)
+         │           │
+         │           ▼
+         │     sanitizer.ts (Redação de credenciais + Mascaramento PII)
+         │           │
+         │           ▼
+         │     JSON estruturado no console + Listeners (Sentry / OTel futuro)
+         │
+         └───▶ ErrorService (errorService.handle)
+                     │
+                     ▼
          ErrorBoundary / React Query Cache / Toaster
-```
+`
 
 ---
 
-## 2. NÃ­veis de Log
+## 2. Níveis de Log
 
-| NÃ­vel | Uso Recomendado | ProduÃ§Ã£o |
+| Nível | Uso Recomendado | Produção |
 | :--- | :--- | :---: |
-| `debug` | Detalhes de diagnÃ³stico em desenvolvimento local | Oculto |
-| `info` | Eventos operacionais normais (inÃ­cio de sincronizaÃ§Ã£o, conexÃµes bem-sucedidas) | Ativo |
-| `warn` | CondiÃ§Ãµes anÃ´malas recuperÃ¡veis (retries, fallbacks locais, avisos de API) | Ativo |
-| `error` | Falhas que interromperam ou impactaram uma operaÃ§Ã£o de usuÃ¡rio | Ativo |
+| debug | Detalhes de diagnóstico em desenvolvimento local | Oculto |
+| info | Eventos operacionais normais (início de sincronização, conexões bem-sucedidas) | Ativo |
+| warn | Condições anômalas recuperáveis (retries, fallbacks locais, avisos de API) | Ativo |
+| error | Falhas que interromperam ou impactaram uma operação de usuário | Ativo |
 
 ---
 
-## 3. Campos Estruturados do Log (`LogEntry`)
+## 3. Campos Estruturados do Log (LogEntry)
 
-Todo log emitido pelo `LoggerService` segue o padrÃ£o JSON estruturado com os seguintes campos:
+Todo log emitido segue o padrão JSON estruturado com os seguintes campos:
 
-- **`timestamp`** *(ISO 8601)*: Momento exato da ocorrÃªncia (ex: `2026-08-28T12:00:00.000Z`).
-- **`level`**: `debug` \| `info` \| `warn` \| `error`.
-- **`component`**: Nome do mÃ³dulo/serviÃ§o emissor (ex: `pluggyService`, `ErrorService`).
-- **`message`**: DescriÃ§Ã£o legÃ­vel da operaÃ§Ã£o.
-- **`source`** *(opcional)*: Origem de alto nÃ­vel (`frontend`, `react-query`, `pluggy`, `auth`, `error-boundary`).
-- **`operation`** *(opcional)*: AÃ§Ã£o especÃ­fica executada (ex: `getConnectToken`, `extrairPDF`).
-- **`correlationId`** *(opcional)*: Identificador Ãºnico da transaÃ§Ã£o/requisiÃ§Ã£o para rastreamento ponta a ponta.
-- **`errorCode`** *(opcional)*: CÃ³digo de erro da aplicaÃ§Ã£o (ex: `ERR_NETW_...`).
-- **`workspaceId`** *(opcional)*: Identificador do workspace ativo (sem expor credenciais).
-- **`data`** *(opcional)*: Objeto de metadados contextuais, obrigatoriamente sanitizado.
+- **	imestamp** *(ISO 8601)*: Momento exato da ocorrência (ex: 2026-08-28T12:00:00.000Z).
+- **level**: debug | info | warn | error.
+- **source**: Identificador do módulo/função emissora (ex: pluggyService, pluggy-api, openai-proxy).
+- **operation** *(opcional)*: Ação específica executada (ex: getConnectToken, chat_completion).
+- **correlation_id** *(opcional)*: Identificador único para rastreamento distribuído ponta a ponta.
+- **error_code** *(opcional)*: Código de erro da aplicação (ex: ERR_NETW_..., BAD_REQUEST).
+- **metadata** *(opcional)*: Objeto de metadados contextuais, obrigatoriamente sanitizado.
 
 ---
 
 ## 4. Correlation ID / Request ID
 
-- UtilitÃ¡rio: `src/core/logging/correlationId.ts`
-- Utiliza `crypto.randomUUID()` (ou fallback seguro) para gerar identificadores Ãºnicos.
-- **Regra**: Nunca utilize dados pessoais (e-mail, CPF, nome) na composiÃ§Ã£o do Correlation ID.
-
-Exemplo de uso:
-```ts
-import { ensureCorrelationId } from "@/core/logging/correlationId";
-import { logger } from "@/core/logging/LoggerService";
-
-const correlationId = ensureCorrelationId(existingCorrelationId);
-logger.info("ImportacaoService", "Iniciando importaÃ§Ã£o de extrato", {
-  operation: "import_statement",
-  correlationId,
-});
-```
+- Frontend: src/core/logging/correlationId.ts
+- Backend: supabase/functions/_shared/observability/correlation.ts
+- Utiliza crypto.randomUUID() para gerar UUIDs v4 seguros.
+- Header HTTP padrão: X-Correlation-Id.
+- **Regra**: Nunca utilize dados pessoais (e-mail, CPF, nome) na composição do Correlation ID.
 
 ---
 
-## 5. Regras de SeguranÃ§a e SanitizaÃ§Ã£o (`sanitizer.ts`)
+## 5. Regras de Segurança e Sanitização (sanitizer.ts)
 
-O pipeline de sanitizaÃ§Ã£o do `LoggerService` aplica proteÃ§Ã£o obrigatÃ³ria e automÃ¡tica antes de qualquer emissÃ£o:
+O pipeline de sanitização aplica proteção obrigatória e automática antes de qualquer emissão:
 
-### ðŸš« InformaÃ§Ãµes Proibidas em Logs (REDACTED)
-- Senhas e credenciais (`password`, `senha`, `pwd`)
-- Tokens e chaves de acesso (`token`, `access_token`, `refresh_token`, `jwt`, `Bearer`)
-- Chaves de API (`api_key`, `apiKey`, `sk-...`, `secret`, `service_role`)
-- Dados de seguranÃ§a de cartÃ£o (`cvv`, `cvc`, `security_code`)
-- Cookies e cabeÃ§alhos de autorizaÃ§Ã£o
+### 🚫 Informações Proibidas em Logs (REDACTED)
+- Senhas e credenciais (password, senha, pwd)
+- Tokens e chaves de acesso (	oken, ccess_token, efresh_token, jwt, Bearer)
+- Chaves de API (pi_key, piKey, sk-..., secret, service_role)
+- Dados de segurança de cartão (cvv, cvc, security_code)
+- Cookies e cabeçalhos de autorização (Authorization, Cookie)
 
-### ðŸ›¡ï¸ Mascaramento de Dados SensÃ­veis (PII / Financeiro)
-- **CartÃµes de crÃ©dito**: SubstituÃ­dos por `****-****-****-****`
-- **CPF**: SubstituÃ­do por `***.***.***-**`
-- **CNPJ**: SubstituÃ­do por `**.***.***/****-**`
-- **E-mails**: SubstituÃ­dos por `ab***@dominio.com`
-
----
-
-## 6. Error Boundary e Tratamento de Erros
-
-- O `ErrorBoundary` ativo em `src/shared/components/ErrorBoundary.tsx` captura falhas de renderizaÃ§Ã£o da Ã¡rvore React.
-- Gera automaticamente um cÃ³digo de suporte rastreÃ¡vel (`ERR_...`) exibido ao usuÃ¡rio.
-- NÃ£o expÃµe stack trace ou detalhes de infraestrutura em ambiente de produÃ§Ã£o.
-- Oferece aÃ§Ãµes de `Voltar` e `Tentar novamente` / reload seguro.
+### 🛡️ Mascaramento de Dados Sensíveis (PII / Financeiro)
+- **Cartões de crédito**: Substituídos por ****-****-****-1234
+- **CPF**: Substituído por ***.123.***-**
+- **CNPJ**: Substituído por **.123.***/****-**
+- **E-mails**: Substituídos por u***@dominio.com
 
 ---
 
-## 7. React Query Global Error Handling
+## 6. Observabilidade nas Supabase Edge Functions (Backend)
 
-- O `QueryClient` em `src/main.tsx` estÃ¡ configurado com `QueryCache` e `MutationCache`.
-- Falhas assÃ­ncronas em queries e mutations sÃ£o capturadas e encaminhadas ao `errorService.handle(...)` com `source: 'react-query'`, sem duplicar toasts ou quebrar handlers especÃ­ficos dos componentes.
+Localização dos módulos compartilhados: supabase/functions/_shared/observability/
+
+### 6.1 Módulos Disponíveis
+1. **logger.ts**: Instanciado via createBackendLogger('function-name'). Emite JSON com timestamp ISO, level, correlation_id e sanitização automática de metadados.
+2. **sanitizer.ts**: Sanitizador recursivo para ambiente Deno com proteção anti-ciclo.
+3. **correlation.ts**: Utilitário para extrair X-Correlation-Id de headers de requisição ou gerar novo UUID.
+4. **errors.ts**: Função createErrorResponse(req, { status, message, correlationId, corsHeaders }) que padroniza erros no formato seguro.
+
+### 6.2 Formato Padrão de Resposta de Erro HTTP
+`json
+{
+  success: false,
+  error: {
+    code: BAD_REQUEST,
+    message: Parâmetro obrigatório ausente.,
+    correlation_id: c85d1c3a-928e-4a67-b5b4-f3c95973b4e1
+  }
+}
+`
+
+### 6.3 Mapeamento de Status HTTP
+- 400: BAD_REQUEST (Parâmetros inválidos)
+- 401: UNAUTHORIZED (JWT ausente ou expirado)
+- 403: FORBIDDEN (Acesso negado ao workspace ou recurso)
+- 404: NOT_FOUND (Recurso não encontrado)
+- 409: CONFLICT (Item já registrado em outro contexto)
+- 429: RATE_LIMIT_EXCEEDED (Limite de requisições do provedor excedido)
+- 500: INTERNAL_SERVER_ERROR (Falha interna sem vazamento de internals)
+- 502: BAD_GATEWAY (Falha ou resposta inválida de API externa)
+- 503: SERVICE_UNAVAILABLE (Serviço externo indisponível)
+- 504: GATEWAY_TIMEOUT (Timeout na conexão com provedor)
+
+### 6.4 Gestão de Timeout e CORS
+- **Timeouts**: Chamadas HTTP para APIs externas (OpenAI, Pluggy, Eyemobile, DiviPay) devem utilizar etchWithTimeout com AbortController e timeouts explícitos (15s a 45s).
+- **CORS**: Headers Access-Control-Allow-Origin, Access-Control-Allow-Headers com inclusão de x-correlation-id. Funções com allowlist restrita (como pluggy-api) devem ser preservadas.
 
 ---
 
-## 8. PendÃªncias e PrÃ³ximos Passos (Subetapas da Etapa 7)
+## 7. Error Boundary e React Query (Frontend)
 
-- [x] **7.1**: Base de observabilidade no frontend (Logger + SanitizaÃ§Ã£o + Correlation ID + ErrorBoundary + React Query).
-- [ ] **7.2**: PadronizaÃ§Ã£o de logs estruturados e tratamento nas 31 Edge Functions do Supabase.
-- [ ] **7.3**: Rastreamento ponta a ponta e correlation ID em integraÃ§Ãµes externas (Pluggy, Telegram, OpenAI/Gemini, Webhooks).
-- [ ] **7.4**: CorreÃ§Ã£o do workflow `docker-publish.yml` (tag hardcoded `1.0.3`) e auditoria de secrets em CI.
-- [ ] **7.5**: CatÃ¡logo de alertas operacionais (CrÃ­tico, Alto, MÃ©dio) e playbook de incidentes.
-- [ ] **7.6**: Testes finais, auditoria e preparaÃ§Ã£o do PR para `develop`.
+- O ErrorBoundary ativo em src/shared/components/ErrorBoundary.tsx captura falhas de renderização da árvore React e exibe suporte amigável com código rastreável.
+- O QueryClient em src/main.tsx está configurado com QueryCache e MutationCache interceptando falhas assíncronas para o errorService.
+
+---
+
+## 8. Status das Subetapas da Etapa 7
+
+- [x] **7.1**: Base de observabilidade no frontend (Logger + Sanitização + Correlation ID + ErrorBoundary + React Query).
+- [x] **7.2**: Módulos backend compartilhados (_shared/observability) e migração das funções críticas (pluggy-api, openai-proxy).
+- [ ] **7.3**: Rastreamento ponta a ponta e correlation ID em integrações externas (Telegram, IA, Pluggy completo e falhas de APIs externas).
+- [ ] **7.4**: Correção do workflow docker-publish.yml (tag hardcoded 1.0.3) e auditoria de secrets em CI.
+- [ ] **7.5**: Catálogo de alertas operacionais e playbook de incidentes.
+- [ ] **7.6**: Testes finais, auditoria e preparação do PR para develop.
