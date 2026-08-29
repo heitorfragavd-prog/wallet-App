@@ -10,7 +10,7 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Badge } from "@/shared/components/ui/badge";
 import { Separator } from "@/shared/components/ui/separator";
 import { Skeleton } from "@/shared/components/ui/skeleton";
-import { Upload, Camera, FileText, Check, AlertCircle, X, Trash2, Loader2, Sparkles } from "lucide-react";
+import { Upload, Camera, FileText, Check, Trash2, Loader2, Sparkles } from "lucide-react";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { logger } from "@/core/logging/LoggerService";
 

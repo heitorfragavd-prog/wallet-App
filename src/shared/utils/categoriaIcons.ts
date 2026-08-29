@@ -2,8 +2,8 @@ import {
   // Alimentação / Comida
   Utensils,
   Coffee,
-  Pizza,
-  Sandwich,
+  
+  
   Apple,
   // Transporte
   Car,

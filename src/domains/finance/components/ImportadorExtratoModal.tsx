@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,8 +15,8 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
   UploadCloud,
   FileText,
-  CheckCircle2,
-  AlertTriangle,
+  
+  
   ArrowDownRight,
   ArrowUpRight,
   Sparkles,
@@ -117,7 +117,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           title: "Extrato processado",
           description: `${parsed.length} lançamentos encontrados (${conciliaveis} prontos para conciliar).`,
         });
-      } catch (err) {
+      } catch (_err) {
         toast({
           title: "Erro ao ler extrato",
           description: "Não foi possível interpretar o arquivo.",
@@ -173,7 +173,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
         description: `Lançamento '${item.descricao}' conciliado com a transação existente.`,
       });
       refetchTransacoes();
-    } catch (err) {
+    } catch (_err) {
       toast({
         title: "Erro ao conciliar",
         description: "Não foi possível atualizar a transação.",

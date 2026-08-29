@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useWorkspace, Workspace } from "@/contexts/WorkspaceContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   DropdownMenu,
   DropdownMenuContent,

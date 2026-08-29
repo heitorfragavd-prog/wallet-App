@@ -177,7 +177,7 @@ export const useNotificacoesPush = () => {
           data: { url: "/dividas" },
         });
         toast({ title: "Push enviado! 🔔", description: "Notificação disparada com sucesso." });
-      } catch (swErr) {
+      } catch (_swErr) {
         toast({ title: "Falha no teste", description: err?.message || String(err), variant: "destructive" });
       }
     }

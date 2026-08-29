@@ -70,7 +70,7 @@ export default function AdminPaymentSettings() {
 
             if (error) throw error;
             setPaymentLinks(data || []);
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao carregar links de pagamento");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -95,7 +95,7 @@ export default function AdminPaymentSettings() {
             toast.success("Link atualizado com sucesso!");
             setEditingId(null);
             fetchPaymentLinks();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao atualizar link");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         }
@@ -117,7 +117,7 @@ export default function AdminPaymentSettings() {
 
             toast.success(`Link ${!currentStatus ? 'ativado' : 'desativado'} com sucesso!`);
             fetchPaymentLinks();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao atualizar status");
         }
     };
@@ -133,7 +133,7 @@ export default function AdminPaymentSettings() {
                 setTimeout(() => setCopiedLink(null), 2000);
             }
             toast.success("Copiado para área de transferência!");
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao copiar");
         }
     };

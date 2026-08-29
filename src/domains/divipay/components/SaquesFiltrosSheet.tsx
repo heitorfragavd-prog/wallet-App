@@ -1,7 +1,7 @@
 import {
   Sheet,
   SheetContent,
-  SheetHeader,
+  
   SheetTitle,
 } from "@/shared/components/ui/sheet";
 import { Button } from "@/shared/components/ui/button";
@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select";
-import { Filter, X } from "lucide-react";
+import { Filter } from "lucide-react";
 
 export interface SaquesFilterValues {
   searchQuery: string;

@@ -35,10 +35,10 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
+  
+  
+  
+  
   Tooltip,
   ResponsiveContainer,
   PieChart,
@@ -46,7 +46,6 @@ import {
   Pie,
 } from "recharts";
 import { useInvestimentos, calcularIR, calcularRentabilidadeReal } from "../hooks/useInvestimentos";
-import { useDepositosInvestimento } from "../hooks/useDepositosInvestimento";
 import { useProjecaoInvestimentos, obterTaxaRealAnual } from "../hooks/useProjecaoInvestimentos";
 import { useMetasInvestimento } from "../hooks/useMetasInvestimento";
 import { useProventosEsperados } from "../hooks/useProventosEsperados";

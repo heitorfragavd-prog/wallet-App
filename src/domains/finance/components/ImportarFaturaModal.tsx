@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { useImportarFatura, extrairDatasDaFatura } from "@/domains/finance/hooks/useImportarFatura";
 import { formatCurrency } from "@/lib/utils";
-import { CreditCard, FileText, ArrowLeft, CheckCircle2, Download, Sparkles, Upload, Loader2, Building, Layers } from "lucide-react";
+import { CreditCard, FileText, ArrowLeft, Download, Sparkles, Upload, Loader2 } from "lucide-react";
 
 interface ImportarFaturaModalProps {
   isOpen: boolean;

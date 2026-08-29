@@ -9,7 +9,7 @@ import { Input } from "@/shared/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
-import { Plus, Search, ChefHat, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
+import { Plus, Search, ChefHat } from "lucide-react";
 import type { CategoriaCardapio, StatusMargem } from "@/domains/finance/types/foodCost";
 
 const CATEGORIAS_LABEL: Record<CategoriaCardapio, string> = {

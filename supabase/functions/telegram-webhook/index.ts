@@ -5,8 +5,8 @@ import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
-  analyzeTileCoverage,
-  subdivideCropTile,
+  
+  
   expandCropTileWithMargin,
   classifyVisionResponse,
   validateProductRow,
@@ -20,8 +20,8 @@ import {
 import {
   validateProductRowV2,
   validateDanfeMathV2,
-  reconcileAndDeduplicateV2,
-  sanitizeProductDescription,
+  
+  
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
   parseFiscalNumber,

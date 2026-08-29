@@ -1,6 +1,6 @@
 
 import { Button } from "@/shared/components/ui/button";
-import { MessageCircle, Menu, Wallet } from "lucide-react";
+import { Menu, Wallet } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ThemeToggle } from "@/shared/components/ThemeToggle";

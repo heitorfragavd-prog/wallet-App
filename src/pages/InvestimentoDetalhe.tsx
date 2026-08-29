@@ -15,10 +15,10 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import {
-  TrendingUp,
+  
   ArrowLeft,
-  Calendar,
-  Layers,
+  
+  
   Percent,
   Trash2,
   Download,
@@ -28,13 +28,12 @@ import {
   Briefcase,
   Sparkles,
 } from "lucide-react";
-import { useInvestimentos, calcularIR, calcularPrecoMedio, calcularRentabilidadeReal } from "../domains/finance/hooks/useInvestimentos";
+import { useInvestimentos, calcularPrecoMedio } from "../domains/finance/hooks/useInvestimentos";
 import { useDepositosInvestimento } from "../domains/finance/hooks/useDepositosInvestimento";
 import { useProjecaoInvestimentos, obterTaxaRealAnual } from "../domains/finance/hooks/useProjecaoInvestimentos";
 import { useProventosEsperados } from "../domains/finance/hooks/useProventosEsperados";
 import { useMetasInvestimento } from "../domains/finance/hooks/useMetasInvestimento";
 import { useContasUsuario } from "../domains/finance/hooks/useContasUsuario";
-import { format } from "date-fns";
 
 export default function InvestimentoDetalhe() {
   const { id } = useParams<{ id: string }>();

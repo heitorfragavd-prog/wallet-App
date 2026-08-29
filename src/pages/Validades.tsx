@@ -3,7 +3,6 @@ import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { useValidadeInsumos } from "@/domains/finance/hooks/useValidadeInsumos";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
-import { Badge } from "@/shared/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/shared/components/ui/dialog";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";

@@ -17,7 +17,7 @@ import {
   Trash2, 
   CheckCircle, 
   Bell, 
-  BellOff,
+  
   Edit,
   Tag,
   Sparkles,
@@ -124,7 +124,7 @@ export const ListaManutencoes = ({ veiculoId, quilometragemAtual = 0 }: ListaMan
           description: `"${confirmDialog.nome}" foi removida.`,
         });
       }
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: "Erro ao Remover",
         description: "Não foi possível remover a manutenção. Tente novamente.",

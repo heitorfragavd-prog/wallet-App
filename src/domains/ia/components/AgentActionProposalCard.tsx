@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
-import { Edit3, Check, X, ShieldAlert, Sparkles } from "lucide-react";
+import { Edit3, Sparkles } from "lucide-react";
 import { Input } from "@/shared/components/ui/input";
 import { Button } from "@/shared/components/ui/button";
 

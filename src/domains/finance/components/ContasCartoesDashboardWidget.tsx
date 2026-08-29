@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Card, CardContent } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
-import { Eye, EyeOff, Info, ArrowRight, CreditCard as CreditCardIcon } from "lucide-react";
+import { Eye, EyeOff, Info, CreditCard as CreditCardIcon } from "lucide-react";
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";

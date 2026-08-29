@@ -120,7 +120,7 @@ Total da Fatura: R$ 16.053,77
         }
         itensImportados.push(`item_${i}`);
       }
-    } catch (e) {
+    } catch (_e) {
       rollback();
     }
 

@@ -3,7 +3,6 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { supabase } from "@/integrations/supabase/client";
 import { WalletAiOrchestratorClient } from "../services/WalletAiOrchestratorClient";
 import { useWalletAgentChat } from "../hooks/useWalletAgentChat";
-import { AgentVisualizationRenderer } from "./AgentVisualizationRenderer";
 import { AgentActionProposalCard } from "./AgentActionProposalCard";
 import {
   Brain,
