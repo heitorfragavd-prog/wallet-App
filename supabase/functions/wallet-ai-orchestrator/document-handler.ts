@@ -2,13 +2,15 @@
  * Document Handler — Classificação e Despacho Automático de Documentos no Backend (Etapa 1.2)
  * 
  * Inspeciona visualmente a imagem/PDF via IA e despacha automaticamente para:
- * - process_boleto (Boleto Handler)
- * - process_danfe (Fiscal Handler)
+ * - process_boleto (Boleto Handler) com normalização automática de orientação
+ * - process_danfe (Fiscal Handler) com normalização automática de orientação
  * - OUTRO (Fail-closed)
  * 
  * SEGURANÇA:
  * - Nenhuma mutação de banco de dados
  * - Workspace isolation obrigatório
+ * - Normalização matricial de orientação (0°, 90°, 180°, 270°) antes do OCR
+ * - Preservação de PDFs sem rotação matricial
  * - Fail-closed em caso de dúvida ou tipo "outro"
  */
 
@@ -18,9 +20,14 @@ import {
   type AiExecutionContext,
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
-import { handleBoletoHttpRequest } from "./boleto-handler.ts";
 import { handleFiscalHttpRequest } from "./fiscal-handler.ts";
-import { callBoletoVisionWithFailover } from "../_shared/ai/boleto-service.ts";
+import {
+  callBoletoVisionWithFailover,
+  processBoletoDocument,
+  type ProcessBoletoOutput,
+} from "../_shared/ai/boleto-service.ts";
+import { calculateRotationNeeded } from "../_shared/danfe-extractor.ts";
+import { normalizeAndRotateImageMatrix } from "../_shared/ai/danfe-visual-pipeline.ts";
 import type { SupabaseClientLike } from "../wallet-ai-query/supabase-adapter.ts";
 
 export interface DocumentHandlerDependencies {
@@ -36,14 +43,20 @@ const CORS_HEADERS = {
 };
 
 export const PROMPT_CLASSIFICACAO_DOCUMENTO = `Você é um conferente especialista em documentos fiscais e bancários brasileiros.
-Analise esta imagem/documento e identifique o tipo principal:
-- "danfe": se for Nota Fiscal eletrônica (DANFE), cupom fiscal (NFC-e), nota de compra com tabela de itens ou fornecedor fiscal.
-- "boleto": se for Boleto Bancário de cobrança, fatura com código de barras, linha digitável ou ficha de compensação.
-- "outro": qualquer outro documento, foto comum, comprovante genérico ou texto não relacionado.
+Analise esta imagem/documento e retorne APENAS um JSON no seguinte formato:
+
+REGRAS:
+1. "tipo_documento":
+   - "danfe": se for Nota Fiscal eletrônica (DANFE), cupom fiscal (NFC-e), nota de compra com tabela de itens ou fornecedor fiscal.
+   - "boleto": se for Boleto Bancário de cobrança, fatura com código de barras, linha digitável ou ficha de compensação.
+   - "outro": qualquer outro documento, foto comum, comprovante genérico ou texto não relacionado.
+2. "orientacao_leitura":
+   - Se o texto da folha estiver deitado ou lateral para ler, indique em "orientacao_leitura" quantos graus (90, 180, 270) a folha precisa girar no sentido horário para ficar perfeitamente vertical em pé (normal = 0).
 
 Retorne APENAS um JSON no seguinte formato:
 {
   "tipo_documento": "danfe" | "boleto" | "outro",
+  "orientacao_leitura": 0 | 90 | 180 | 270,
   "confianca": 0.0 a 1.0,
   "motivo": "justificativa curta"
 }`;
@@ -79,6 +92,7 @@ export async function handleDocumentHttpRequest(
     const workspaceId = typeof body.workspace_id === "string" ? body.workspace_id.trim() : "";
     const base64 = typeof body.base64 === "string" ? body.base64 : "";
     const mimeType = typeof body.mime_type === "string" ? body.mime_type : "image/jpeg";
+    const conversationId = typeof body.conversation_id === "string" ? body.conversation_id.trim() : undefined;
 
     if (!workspaceId) {
       return new Response(JSON.stringify({ error: "missing_workspace_id" }), {
@@ -107,8 +121,9 @@ export async function handleDocumentHttpRequest(
       ? (globalThis as any).Deno.env.get("GEMINI_API_KEY_BACKUP")
       : undefined;
 
-    // 2. Classificação Visual Canônica
+    // 2. Classificação Visual Canônica (Tipo + Orientação na mesma chamada)
     let tipoIdentificado: "danfe" | "boleto" | "outro" = "outro";
+    let orientacaoDetectada: 0 | 90 | 180 | 270 = 0;
 
     try {
       const visionResult = await callBoletoVisionWithFailover({
@@ -129,30 +144,81 @@ export async function handleDocumentHttpRequest(
           if (parsed.tipo_documento === "boleto" || parsed.tipo_documento === "danfe" || parsed.tipo_documento === "outro") {
             tipoIdentificado = parsed.tipo_documento;
           }
+          orientacaoDetectada = calculateRotationNeeded(parsed.orientacao_leitura);
         }
       }
     } catch (err) {
       console.warn("[document-handler] Erro na classificação visual:", err);
     }
 
-    // 3. Despacho para o pipeline correspondente
+    // 3. Normalização de Orientação (somente para imagens raster, nunca PDF)
+    let effectiveBase64 = base64;
+    let effectiveMimeType = mimeType;
+
+    const isRasterImage =
+      mimeType.startsWith("image/") &&
+      (mimeType === "image/jpeg" || mimeType === "image/jpg" || mimeType === "image/png" || mimeType === "image/webp");
+
+    if (isRasterImage && orientacaoDetectada > 0) {
+      try {
+        console.log(`[document-handler] Aplicando rotação normalizadora de ${orientacaoDetectada}°...`);
+        const matrixRes = await normalizeAndRotateImageMatrix(base64, orientacaoDetectada);
+        if (matrixRes.rotated && matrixRes.base64) {
+          effectiveBase64 = matrixRes.base64;
+          effectiveMimeType = "image/jpeg";
+          console.log(`[document-handler] Rotação de ${orientacaoDetectada}° aplicada com sucesso.`);
+        }
+      } catch (rotErr) {
+        console.warn("[document-handler] Falha na rotação da imagem, mantendo original:", rotErr);
+      }
+    }
+
+    // 4. Despacho para o pipeline correspondente com Payload Efetivamente Normalizado
     if (tipoIdentificado === "boleto") {
-      return await handleBoletoHttpRequest(request, {
-        authDeps: dependencies.authDeps,
+      const extractionResult: ProcessBoletoOutput = await processBoletoDocument({
+        base64: effectiveBase64,
+        mimeType: effectiveMimeType,
         geminiApiKey: dependencies.geminiApiKey,
-        adminClient: dependencies.adminClient,
+        geminiApiKeyBackup: backupKey,
+        openaiApiKey: openAiKey,
+        workspaceId: context.workspaceId,
       });
+
+      return new Response(
+        JSON.stringify({
+          success: extractionResult.success,
+          status: extractionResult.status,
+          mensagemFormatada: extractionResult.mensagemFormatada,
+          dados: extractionResult.dados,
+          validacao: extractionResult.validacao,
+        }),
+        {
+          status: 200,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        },
+      );
     }
 
     if (tipoIdentificado === "danfe") {
-      return await handleFiscalHttpRequest(request, {
+      const normalizedRequest = new Request(request.url, {
+        method: "POST",
+        headers: request.headers,
+        body: JSON.stringify({
+          ...body,
+          base64: effectiveBase64,
+          mime_type: effectiveMimeType,
+          conversation_id: conversationId,
+        }),
+      });
+
+      return await handleFiscalHttpRequest(normalizedRequest, {
         authDeps: dependencies.authDeps,
         geminiApiKey: dependencies.geminiApiKey,
         adminClient: dependencies.adminClient,
       });
     }
 
-    // 4. Fail-closed para OUTRO / Inconclusivo
+    // 5. Fail-closed para OUTRO / Inconclusivo
     return new Response(
       JSON.stringify({
         success: false,
