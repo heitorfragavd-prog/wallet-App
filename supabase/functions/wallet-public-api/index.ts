@@ -8,7 +8,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// @ts-ignore
+// @ts-expect-error Deno runtime global
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
       });
 
       // Executa o processamento em background
-      // @ts-ignore
+      // @ts-expect-error EdgeRuntime global
       EdgeRuntime.waitUntil((async () => {
         try {
           const text = message.text || message.caption || "";
@@ -203,7 +203,7 @@ Deno.serve(async (req: Request) => {
       });
 
       // Executa o processamento em background
-      // @ts-ignore
+      // @ts-expect-error EdgeRuntime global
       EdgeRuntime.waitUntil((async () => {
         try {
           const messageContent = messageData.message || {};
