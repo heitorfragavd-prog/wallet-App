@@ -99,7 +99,7 @@ function parseOfxDate(dateStr: string): string {
  */
 function parseBrDateToIso(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split("T")[0];
-  const parts = dateStr.trim().split(/[\/\-\.]/);
+  const parts = dateStr.trim().split(/[/\-.]/);
   if (parts.length === 3) {
     const p1 = parts[0];
     const p2 = parts[1];

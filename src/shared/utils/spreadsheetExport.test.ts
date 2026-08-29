@@ -9,6 +9,6 @@ describe("spreadsheetExport", () => {
   });
 
   it("gera CSV UTF-8 seguro para Excel", () => {
-    expect(toCsv([{ Nome: "A;B", Valor: "+CMD" }])).toContain('"A;B";\"\'+CMD\"');
+    expect(toCsv([{ Nome: "A;B", Valor: "+CMD" }])).toContain('"A;B";"\'+CMD"');
   });
 });
