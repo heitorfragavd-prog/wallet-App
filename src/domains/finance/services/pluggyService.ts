@@ -3,10 +3,13 @@
  * 
  * Comunica-se exclusivamente com a Supabase Edge Function 'pluggy-api'
  * para autenticação JWT segura, validação de workspace e sincronização de dados bancários.
+ * 
+ * Suporta rastreamento ponta a ponta com X-Correlation-Id e logs estruturados.
  */
 
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
+import { getCorrelationId } from "@/core/logging/correlationId";
 
 export interface PluggyConnector {
   id: number;
@@ -36,28 +39,95 @@ export interface PluggyTransaction {
   type?: "DEBIT" | "CREDIT";
 }
 
-function formatEdgeFunctionError(error: unknown, data: unknown, defaultMsg: string): string {
-  if (data && typeof data === "object" && "error" in data && typeof (data as { error: unknown }).error === "string") {
-    return (data as { error: string }).error;
+export const PLUGGY_ERROR_CODES = {
+  TIMEOUT: "PLUGGY_TIMEOUT",
+  UPSTREAM_ERROR: "PLUGGY_UPSTREAM_ERROR",
+  AUTH_ERROR: "PLUGGY_AUTH_ERROR",
+  FORBIDDEN: "PLUGGY_FORBIDDEN",
+} as const;
+
+export class PluggyServiceError extends Error {
+  code: string;
+  correlationId?: string;
+
+  constructor(message: string, code: string = PLUGGY_ERROR_CODES.UPSTREAM_ERROR, correlationId?: string) {
+    super(message);
+    this.name = "PluggyServiceError";
+    this.code = code;
+    this.correlationId = correlationId;
   }
-  const msg = error && typeof error === "object" && "message" in error && typeof (error as { message: unknown }).message === "string"
+}
+
+function formatEdgeFunctionError(
+  error: unknown,
+  data: unknown,
+  defaultMsg: string,
+  _correlationId?: string
+): { message: string; code: string } {
+  let message = defaultMsg;
+  let code: string = PLUGGY_ERROR_CODES.UPSTREAM_ERROR;
+
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    if (typeof d.error === "string") {
+      message = d.error;
+    } else if (d.error && typeof d.error === "object") {
+      const errObj = d.error as Record<string, unknown>;
+      if (typeof errObj.message === "string") message = errObj.message;
+      if (typeof errObj.code === "string") code = errObj.code;
+    }
+  }
+
+  const rawErrMsg = error && typeof error === "object" && "message" in error && typeof (error as { message: unknown }).message === "string"
     ? (error as { message: string }).message
     : "";
-  if (msg.includes("Failed to send a request to the Edge Function") || msg.includes("FunctionsFetchError") || msg.includes("Failed to fetch")) {
-    return "O serviço Open Finance está em fase de ativação e ainda não foi publicado no servidor. Por favor, tente novamente após a implantação.";
+
+  if (
+    rawErrMsg.includes("Failed to send a request to the Edge Function") ||
+    rawErrMsg.includes("FunctionsFetchError") ||
+    rawErrMsg.includes("Failed to fetch")
+  ) {
+    message = "O serviço Open Finance está em fase de ativação e ainda não foi publicado no servidor. Por favor, tente novamente após a implantação.";
+    code = PLUGGY_ERROR_CODES.UPSTREAM_ERROR;
+  } else if (rawErrMsg.includes("timeout") || rawErrMsg.includes("abort")) {
+    message = "Tempo limite excedido ao comunicar com o serviço Open Finance.";
+    code = PLUGGY_ERROR_CODES.TIMEOUT;
+  } else if (rawErrMsg.includes("401") || rawErrMsg.includes("não autenticado") || rawErrMsg.includes("Token de autenticação ausente")) {
+    message = rawErrMsg || "Usuário não autenticado ou token inválido.";
+    code = PLUGGY_ERROR_CODES.AUTH_ERROR;
+  } else if (rawErrMsg.includes("403") || rawErrMsg.includes("Acesso negado")) {
+    message = rawErrMsg || "Acesso negado ao workspace especificado.";
+    code = PLUGGY_ERROR_CODES.FORBIDDEN;
+  } else if (rawErrMsg && !data) {
+    message = rawErrMsg;
   }
-  return msg || defaultMsg;
+
+  return { message, code };
 }
 
 /**
  * Gera o connectToken de forma segura via Edge Function autenticada
  */
-export async function createPluggyConnectToken(workspaceId: string): Promise<{ accessToken: string }> {
+export async function createPluggyConnectToken(
+  workspaceId: string,
+  options?: { correlationId?: string }
+): Promise<{ accessToken: string }> {
   if (!workspaceId) {
     throw new Error("workspace_id é obrigatório para obter o Connect Token.");
   }
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
+  logger.info("pluggyService", "Solicitando Connect Token da Pluggy", {
+    operation: "createPluggyConnectToken",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+  });
+
   const { data, error } = await supabase.functions.invoke("pluggy-api", {
+    headers: {
+      "X-Correlation-Id": correlationId,
+    },
     body: {
       action: "getConnectToken",
       workspace_id: workspaceId,
@@ -65,15 +135,22 @@ export async function createPluggyConnectToken(workspaceId: string): Promise<{ a
   });
 
   if (error || !data?.success) {
-    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao obter Connect Token da Pluggy.");
-    logger.error("pluggyService", "Falha ao obter Connect Token", {
-      source: "pluggy",
-      operation: "getConnectToken",
-      workspaceId,
-      data: { error: errorMsg },
+    const { message, code } = formatEdgeFunctionError(error, data, "Erro ao obter Connect Token da Pluggy.", correlationId);
+    logger.error("pluggyService", "Falha ao obter Connect Token da Pluggy", {
+      operation: "createPluggyConnectToken",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      error_code: code,
+      error: message,
     });
-    throw new Error(errorMsg);
+    throw new PluggyServiceError(message, code, correlationId);
   }
+
+  logger.info("pluggyService", "Connect Token obtido com sucesso", {
+    operation: "createPluggyConnectToken",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+  });
 
   return data.data;
 }
@@ -85,13 +162,27 @@ export async function registerPluggyItem(
   workspaceId: string,
   itemId: string,
   connectorId?: number,
-  connectorName?: string
+  connectorName?: string,
+  options?: { correlationId?: string }
 ): Promise<{ id?: string; item_id: string; status?: string; connector_name?: string }> {
   if (!workspaceId || !itemId) {
     throw new Error("workspace_id e itemId são obrigatórios.");
   }
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
+  logger.info("pluggyService", "Registrando Item Pluggy no workspace", {
+    operation: "registerPluggyItem",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+    itemId,
+    connectorName,
+  });
+
   const { data, error } = await supabase.functions.invoke("pluggy-api", {
+    headers: {
+      "X-Correlation-Id": correlationId,
+    },
     body: {
       action: "registerItem",
       workspace_id: workspaceId,
@@ -102,15 +193,24 @@ export async function registerPluggyItem(
   });
 
   if (error || !data?.success) {
-    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao registrar Item da Pluggy.");
+    const { message, code } = formatEdgeFunctionError(error, data, "Erro ao registrar Item da Pluggy.", correlationId);
     logger.error("pluggyService", "Falha ao registrar Item Pluggy", {
-      source: "pluggy",
-      operation: "registerItem",
-      workspaceId,
-      data: { itemId, error: errorMsg },
+      operation: "registerPluggyItem",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      error_code: code,
+      itemId,
+      error: message,
     });
-    throw new Error(errorMsg);
+    throw new PluggyServiceError(message, code, correlationId);
   }
+
+  logger.info("pluggyService", "Item Pluggy registrado com sucesso", {
+    operation: "registerPluggyItem",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+    itemId: data.data?.item_id || itemId,
+  });
 
   return data.data;
 }
@@ -120,12 +220,18 @@ export async function registerPluggyItem(
  */
 export async function fetchPluggyItemAccounts(
   workspaceId: string,
-  itemId: string
+  itemId: string,
+  options?: { correlationId?: string }
 ): Promise<PluggyAccount[]> {
   if (!workspaceId || !itemId) return [];
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
   try {
     const { data, error } = await supabase.functions.invoke("pluggy-api", {
+      headers: {
+        "X-Correlation-Id": correlationId,
+      },
       body: {
         action: "getAccounts",
         workspace_id: workspaceId,
@@ -134,11 +240,13 @@ export async function fetchPluggyItemAccounts(
     });
 
     if (error || !data?.success) {
+      const errDetail = data?.error || error?.message;
       logger.warn("pluggyService", "Aviso ao buscar contas do Item Pluggy", {
-        source: "pluggy",
-        operation: "getAccounts",
-        workspaceId,
-        data: { itemId, error: data?.error || error?.message },
+        operation: "fetchPluggyItemAccounts",
+        correlation_id: correlationId,
+        workspace_id: workspaceId,
+        itemId,
+        error: errDetail,
       });
       return [];
     }
@@ -146,10 +254,11 @@ export async function fetchPluggyItemAccounts(
     return data.data || [];
   } catch (err) {
     logger.warn("pluggyService", "Erro ao buscar contas do Item Pluggy", {
-      source: "pluggy",
-      operation: "getAccounts",
-      workspaceId,
-      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+      operation: "fetchPluggyItemAccounts",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      itemId,
+      error: err instanceof Error ? err.message : String(err),
     });
     return [];
   }
@@ -160,12 +269,18 @@ export async function fetchPluggyItemAccounts(
  */
 export async function fetchPluggyItemTransactions(
   workspaceId: string,
-  itemId: string
+  itemId: string,
+  options?: { correlationId?: string }
 ): Promise<PluggyTransaction[]> {
   if (!workspaceId || !itemId) return [];
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
   try {
     const { data, error } = await supabase.functions.invoke("pluggy-api", {
+      headers: {
+        "X-Correlation-Id": correlationId,
+      },
       body: {
         action: "getTransactions",
         workspace_id: workspaceId,
@@ -174,11 +289,13 @@ export async function fetchPluggyItemTransactions(
     });
 
     if (error || !data?.success) {
+      const errDetail = data?.error || error?.message;
       logger.warn("pluggyService", "Aviso ao buscar transações do Item Pluggy", {
-        source: "pluggy",
-        operation: "getTransactions",
-        workspaceId,
-        data: { itemId, error: data?.error || error?.message },
+        operation: "fetchPluggyItemTransactions",
+        correlation_id: correlationId,
+        workspace_id: workspaceId,
+        itemId,
+        error: errDetail,
       });
       return [];
     }
@@ -186,10 +303,11 @@ export async function fetchPluggyItemTransactions(
     return data.data || [];
   } catch (err) {
     logger.warn("pluggyService", "Erro ao buscar transações do Item Pluggy", {
-      source: "pluggy",
-      operation: "getTransactions",
-      workspaceId,
-      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+      operation: "fetchPluggyItemTransactions",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      itemId,
+      error: err instanceof Error ? err.message : String(err),
     });
     return [];
   }
@@ -200,12 +318,18 @@ export async function fetchPluggyItemTransactions(
  */
 export async function fetchPluggyItemInvestments(
   workspaceId: string,
-  itemId: string
+  itemId: string,
+  options?: { correlationId?: string }
 ): Promise<Record<string, unknown>[]> {
   if (!workspaceId || !itemId) return [];
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
   try {
     const { data, error } = await supabase.functions.invoke("pluggy-api", {
+      headers: {
+        "X-Correlation-Id": correlationId,
+      },
       body: {
         action: "getInvestments",
         workspace_id: workspaceId,
@@ -214,11 +338,13 @@ export async function fetchPluggyItemInvestments(
     });
 
     if (error || !data?.success) {
+      const errDetail = data?.error || error?.message;
       logger.warn("pluggyService", "Aviso ao buscar investimentos do Item Pluggy", {
-        source: "pluggy",
-        operation: "getInvestments",
-        workspaceId,
-        data: { itemId, error: data?.error || error?.message },
+        operation: "fetchPluggyItemInvestments",
+        correlation_id: correlationId,
+        workspace_id: workspaceId,
+        itemId,
+        error: errDetail,
       });
       return [];
     }
@@ -226,10 +352,11 @@ export async function fetchPluggyItemInvestments(
     return data.data || [];
   } catch (err) {
     logger.warn("pluggyService", "Erro ao buscar investimentos do Item Pluggy", {
-      source: "pluggy",
-      operation: "getInvestments",
-      workspaceId,
-      data: { itemId, error: err instanceof Error ? err.message : String(err) },
+      operation: "fetchPluggyItemInvestments",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      itemId,
+      error: err instanceof Error ? err.message : String(err),
     });
     return [];
   }
@@ -241,13 +368,27 @@ export async function fetchPluggyItemInvestments(
 export async function syncPluggyItemToSupabase(
   workspaceId: string,
   itemId: string,
-  connectorName?: string
+  connectorName?: string,
+  options?: { correlationId?: string }
 ): Promise<{ accountsCount: number; transactionsCount: number; investmentsCount: number }> {
   if (!workspaceId || !itemId) {
     throw new Error("workspace_id e itemId são obrigatórios para sincronização.");
   }
 
+  const correlationId = options?.correlationId || getCorrelationId();
+
+  logger.info("pluggyService", "Iniciando sincronização do Item Pluggy no banco", {
+    operation: "syncPluggyItemToSupabase",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+    itemId,
+    connectorName,
+  });
+
   const { data, error } = await supabase.functions.invoke("pluggy-api", {
+    headers: {
+      "X-Correlation-Id": correlationId,
+    },
     body: {
       action: "syncItem",
       workspace_id: workspaceId,
@@ -257,9 +398,25 @@ export async function syncPluggyItemToSupabase(
   });
 
   if (error || !data?.success) {
-    const errorMsg = formatEdgeFunctionError(error, data, "Erro ao sincronizar Item da Pluggy.");
-    throw new Error(errorMsg);
+    const { message, code } = formatEdgeFunctionError(error, data, "Erro ao sincronizar Item da Pluggy.", correlationId);
+    logger.error("pluggyService", "Falha na sincronização do Item Pluggy", {
+      operation: "syncPluggyItemToSupabase",
+      correlation_id: correlationId,
+      workspace_id: workspaceId,
+      error_code: code,
+      itemId,
+      error: message,
+    });
+    throw new PluggyServiceError(message, code, correlationId);
   }
+
+  logger.info("pluggyService", "Sincronização do Item Pluggy concluída com sucesso", {
+    operation: "syncPluggyItemToSupabase",
+    correlation_id: correlationId,
+    workspace_id: workspaceId,
+    accountsCount: data.data?.accountsCount,
+    transactionsCount: data.data?.transactionsCount,
+  });
 
   return data.data;
 }

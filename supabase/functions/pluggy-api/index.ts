@@ -1,12 +1,17 @@
 // Supabase Edge Function: pluggy-api
 // Proxy seguro, autenticado e endurecido para a API da Pluggy (Open Finance).
 // 
-// Arquitetura de Autorização Estrita:
+// Arquitetura de Autorização Estrita e Observabilidade Ponta a Ponta:
 // 1. O JWT do usuário é validado no cliente de usuário (userClient) com Authorization: Bearer <token> e SUPABASE_ANON_KEY.
 // 2. public.tem_acesso_workspace() é executada sob auth.uid() do usuário autenticado no userClient.
 // 3. Validação estrita de clientUserId na Pluggy (GET /items/{id}) contra expectedClientUserId.
 // 4. O cliente service_role (supabaseAdmin) é utilizado SOMENTE APÓS autorização confirmada
 //    para garantir a integridade de escrita e leitura de pluggy_items, contas_usuario e transacoes.
+// 5. Rastreamento distribuído via X-Correlation-Id, logs estruturados com duration_ms e códigos de erro padronizados:
+//    - PLUGGY_TIMEOUT
+//    - PLUGGY_UPSTREAM_ERROR
+//    - PLUGGY_AUTH_ERROR
+//    - PLUGGY_FORBIDDEN
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -15,9 +20,18 @@ import {
   getCorrelationId,
   withCorrelationHeader,
   createErrorResponse,
+  HTTP_STATUS,
 } from "../_shared/observability/index.ts";
 
 const logger = createBackendLogger("pluggy-api");
+
+// ─── CÓDIGOS DE ERRO PADRONIZADOS DA INTEGRAÇÃO PLUGGY ───
+export const PLUGGY_ERROR_CODES = {
+  TIMEOUT: "PLUGGY_TIMEOUT",
+  UPSTREAM_ERROR: "PLUGGY_UPSTREAM_ERROR",
+  AUTH_ERROR: "PLUGGY_AUTH_ERROR",
+  FORBIDDEN: "PLUGGY_FORBIDDEN",
+} as const;
 
 // ─── CONFIGURAÇÃO DE CORS COM ALLOWLIST ───
 const ALLOWED_ORIGINS_DEFAULT = [
@@ -83,18 +97,72 @@ async function generateClientUserId(userId: string, workspaceId: string): Promis
   return `usr_${hashHex.slice(0, 28)}`;
 }
 
-function fetchWithTimeout(url: string, init: RequestInit & { timeout?: number } = {}): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit & { timeout?: number } = {},
+  logCtx?: { operation: string; correlationId?: string; maskedTarget?: string }
+): Promise<Response> {
   const { timeout = 15000, ...fetchInit } = init;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
-  return fetch(url, { ...fetchInit, signal: controller.signal }).finally(() => clearTimeout(id));
+  const startTime = performance.now();
+
+  try {
+    const resp = await fetch(url, { ...fetchInit, signal: controller.signal });
+    const durationMs = Math.round(performance.now() - startTime);
+
+    if (logCtx) {
+      logger.info(`Chamada externa Pluggy: ${logCtx.operation}`, {
+        source: "pluggy-api",
+        operation: logCtx.operation,
+        correlationId: logCtx.correlationId,
+        metadata: {
+          status: resp.status,
+          duration_ms: durationMs,
+          target: logCtx.maskedTarget,
+        },
+      });
+    }
+
+    return resp;
+  } catch (err: unknown) {
+    const durationMs = Math.round(performance.now() - startTime);
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimeout = msg.includes("abort") || msg.includes("timeout");
+
+    if (logCtx) {
+      logger.error(`Falha na chamada externa Pluggy: ${logCtx.operation}`, {
+        source: "pluggy-api",
+        operation: logCtx.operation,
+        correlationId: logCtx.correlationId,
+        errorCode: isTimeout ? PLUGGY_ERROR_CODES.TIMEOUT : PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+        metadata: {
+          duration_ms: durationMs,
+          error: isTimeout ? "Timeout" : "Connection Error",
+          target: logCtx.maskedTarget,
+        },
+      });
+    }
+
+    if (isTimeout) {
+      const timeoutErr = new Error(`Tempo limite de ${timeout}ms excedido na conexão com a Pluggy.`);
+      (timeoutErr as any).code = PLUGGY_ERROR_CODES.TIMEOUT;
+      throw timeoutErr;
+    }
+
+    const upstreamErr = new Error(`Erro de conexão com a Pluggy: ${msg}`);
+    (upstreamErr as any).code = PLUGGY_ERROR_CODES.UPSTREAM_ERROR;
+    throw upstreamErr;
+  } finally {
+    clearTimeout(id);
+  }
 }
 
 // ─── CACHE E GERENCIAMENTO DE API KEY DA PLUGGY EM MEMÓRIA ───
 let cachedApiKey: { key: string; expiresAt: number } | null = null;
 let authPromiseInFlight: Promise<string> | null = null;
 
-async function getPluggyApiKey(forceRefresh = false): Promise<string> {
+async function getPluggyApiKey(forceRefresh = false, correlationId?: string): Promise<string> {
   if (!forceRefresh && cachedApiKey && cachedApiKey.expiresAt > Date.now() + 60_000) {
     return cachedApiKey.key;
   }
@@ -109,27 +177,41 @@ async function getPluggyApiKey(forceRefresh = false): Promise<string> {
       const clientSecret = (Deno.env.get("PLUGGY_CLIENT_SECRET") ?? "").trim();
 
       if (!clientId || !clientSecret) {
-        throw new Error("Credenciais da Pluggy (PLUGGY_CLIENT_ID/PLUGGY_CLIENT_SECRET) não configuradas no servidor.");
+        const err = new Error("Credenciais da Pluggy (PLUGGY_CLIENT_ID/PLUGGY_CLIENT_SECRET) não configuradas no servidor.");
+        (err as any).code = PLUGGY_ERROR_CODES.AUTH_ERROR;
+        throw err;
       }
 
       let resp: Response;
       try {
-        resp = await fetchWithTimeout("https://api.pluggy.ai/auth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId, clientSecret }),
-          timeout: 15000,
-        });
+        resp = await fetchWithTimeout(
+          "https://api.pluggy.ai/auth",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId, clientSecret }),
+            timeout: 15000,
+          },
+          {
+            operation: "auth",
+            correlationId,
+            maskedTarget: "https://api.pluggy.ai/auth",
+          }
+        );
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("abort") || msg.includes("timeout")) {
-          throw new Error("Tempo limite excedido ao autenticar na Pluggy.");
-        }
-        throw new Error(`Erro de conexão com a Pluggy: ${msg}`);
+        throw err;
+      }
+
+      if (resp.status === 401 || resp.status === 403) {
+        const err = new Error("Credenciais da Pluggy inválidas ou rejeitadas pelo provedor.");
+        (err as any).code = PLUGGY_ERROR_CODES.AUTH_ERROR;
+        throw err;
       }
 
       if (resp.status === 429) {
-        throw new Error("Limite de requisições da Pluggy atingido (Rate Limit 429). Tente novamente em instantes.");
+        const err = new Error("Limite de requisições da Pluggy atingido (Rate Limit 429). Tente novamente em instantes.");
+        (err as any).code = "RATE_LIMIT_EXCEEDED";
+        throw err;
       }
 
       const rawBody = await resp.text();
@@ -137,12 +219,16 @@ async function getPluggyApiKey(forceRefresh = false): Promise<string> {
       try {
         data = JSON.parse(rawBody);
       } catch {
-        throw new Error(`Resposta inválida da autenticação Pluggy (status ${resp.status}).`);
+        const err = new Error(`Resposta inválida da autenticação Pluggy (status ${resp.status}).`);
+        (err as any).code = PLUGGY_ERROR_CODES.UPSTREAM_ERROR;
+        throw err;
       }
 
       if (!resp.ok || !data.apiKey) {
         const errorMsg = data.message || data.error || data.detail || `Falha na autenticação Pluggy (status ${resp.status})`;
-        throw new Error(String(errorMsg));
+        const err = new Error(String(errorMsg));
+        (err as any).code = PLUGGY_ERROR_CODES.AUTH_ERROR;
+        throw err;
       }
 
       const apiKey = String(data.apiKey);
@@ -165,10 +251,18 @@ async function fetchTransactionsForAccount(apiKey: string, accountId: string, co
   const maxPages = 20; // Até 10.000 transações por conta
 
   while (url && pages < maxPages) {
-    const resp = await fetchWithTimeout(url, {
-      headers: { "X-API-KEY": apiKey },
-      timeout: 20000,
-    });
+    const resp = await fetchWithTimeout(
+      url,
+      {
+        headers: { "X-API-KEY": apiKey },
+        timeout: 20000,
+      },
+      {
+        operation: "fetchTransactionsForAccount",
+        correlationId,
+        maskedTarget: `account=${maskId(accountId)} page=${pages + 1}`,
+      }
+    );
 
     if (!resp.ok) {
       logger.warn(`HTTP ${resp.status} ao buscar transações`, {
@@ -215,7 +309,8 @@ serve(async (req: Request) => {
       metadata: { origin },
     });
     return createErrorResponse(req, {
-      status: 403,
+      status: HTTP_STATUS.FORBIDDEN,
+      code: PLUGGY_ERROR_CODES.FORBIDDEN,
       message: "Origem CORS não autorizada.",
       correlationId,
       corsHeaders,
@@ -224,7 +319,7 @@ serve(async (req: Request) => {
 
   if (req.method !== "POST") {
     return createErrorResponse(req, {
-      status: 405,
+      status: HTTP_STATUS.METHOD_NOT_ALLOWED,
       message: `Método ${req.method} não permitido`,
       correlationId,
       corsHeaders,
@@ -236,7 +331,8 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return createErrorResponse(req, {
-        status: 401,
+        status: HTTP_STATUS.UNAUTHORIZED,
+        code: PLUGGY_ERROR_CODES.AUTH_ERROR,
         message: "Token de autenticação ausente.",
         correlationId,
         corsHeaders,
@@ -254,7 +350,7 @@ serve(async (req: Request) => {
         operation: "env_check",
       });
       return createErrorResponse(req, {
-        status: 500,
+        status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
         message: "Configuração do servidor ausente ou incompleta.",
         correlationId,
         corsHeaders,
@@ -271,7 +367,8 @@ serve(async (req: Request) => {
 
     if (authError || !user) {
       return createErrorResponse(req, {
-        status: 401,
+        status: HTTP_STATUS.UNAUTHORIZED,
+        code: PLUGGY_ERROR_CODES.AUTH_ERROR,
         message: "Usuário não autenticado ou token inválido.",
         correlationId,
         corsHeaders,
@@ -286,7 +383,7 @@ serve(async (req: Request) => {
 
     if (!action) {
       return createErrorResponse(req, {
-        status: 400,
+        status: HTTP_STATUS.BAD_REQUEST,
         message: "Parâmetro 'action' é obrigatório.",
         correlationId,
         corsHeaders,
@@ -295,7 +392,7 @@ serve(async (req: Request) => {
 
     if (!workspace_id) {
       return createErrorResponse(req, {
-        status: 400,
+        status: HTTP_STATUS.BAD_REQUEST,
         message: "Parâmetro 'workspace_id' é obrigatório.",
         correlationId,
         corsHeaders,
@@ -329,7 +426,8 @@ serve(async (req: Request) => {
         workspaceId: maskId(workspace_id),
       });
       return createErrorResponse(req, {
-        status: 403,
+        status: HTTP_STATUS.FORBIDDEN,
+        code: PLUGGY_ERROR_CODES.FORBIDDEN,
         message: "Acesso negado ao workspace especificado.",
         correlationId,
         corsHeaders,
@@ -345,45 +443,76 @@ serve(async (req: Request) => {
     switch (action) {
       // ─── GERAÇÃO DE CONNECT TOKEN COM CLIENT USER ID DERIVADO ───
       case "getConnectToken": {
-        const apiKey = await getPluggyApiKey();
+        const apiKey = await getPluggyApiKey(false, correlationId);
         const clientUserId = await generateClientUserId(userId, workspace_id);
 
         let tokenRes: Response;
         try {
-          tokenRes = await fetchWithTimeout("https://api.pluggy.ai/connect_token", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-KEY": apiKey,
-            },
-            body: JSON.stringify({
-              options: {
-                clientUserId,
+          tokenRes = await fetchWithTimeout(
+            "https://api.pluggy.ai/connect_token",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-API-KEY": apiKey,
               },
-            }),
-            timeout: 15000,
+              body: JSON.stringify({
+                options: {
+                  clientUserId,
+                },
+              }),
+              timeout: 15000,
+            },
+            {
+              operation: "getConnectToken",
+              correlationId,
+              maskedTarget: "https://api.pluggy.ai/connect_token",
+            }
+          );
+        } catch (err: any) {
+          if (err.code === PLUGGY_ERROR_CODES.TIMEOUT) {
+            return createErrorResponse(req, {
+              status: HTTP_STATUS.GATEWAY_TIMEOUT,
+              code: PLUGGY_ERROR_CODES.TIMEOUT,
+              message: "Tempo limite excedido ao comunicar com a Pluggy.",
+              correlationId,
+              corsHeaders,
+            });
+          }
+          return createErrorResponse(req, {
+            status: HTTP_STATUS.BAD_GATEWAY,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+            message: `Erro ao gerar Connect Token na Pluggy: ${err.message}`,
+            correlationId,
+            corsHeaders,
           });
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          throw new Error(`Erro ao gerar Connect Token na Pluggy: ${msg}`);
         }
 
         if (tokenRes.status === 401) {
-          const freshApiKey = await getPluggyApiKey(true);
-          tokenRes = await fetchWithTimeout("https://api.pluggy.ai/connect_token", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-KEY": freshApiKey,
+          const freshApiKey = await getPluggyApiKey(true, correlationId);
+          tokenRes = await fetchWithTimeout(
+            "https://api.pluggy.ai/connect_token",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-API-KEY": freshApiKey,
+              },
+              body: JSON.stringify({ options: { clientUserId } }),
+              timeout: 15000,
             },
-            body: JSON.stringify({ options: { clientUserId } }),
-            timeout: 15000,
-          });
+            {
+              operation: "getConnectToken_retry",
+              correlationId,
+              maskedTarget: "https://api.pluggy.ai/connect_token",
+            }
+          );
         }
 
         if (tokenRes.status === 429) {
           return createErrorResponse(req, {
-            status: 429,
+            status: HTTP_STATUS.RATE_LIMIT,
+            code: "RATE_LIMIT_EXCEEDED",
             message: "Limite de requisições da Pluggy atingido.",
             correlationId,
             corsHeaders,
@@ -394,7 +523,8 @@ serve(async (req: Request) => {
         if (!tokenRes.ok || !tokenData.accessToken) {
           const errDetail = tokenData.message || tokenData.error || "Falha ao gerar accessToken na Pluggy.";
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
             message: String(errDetail),
             correlationId,
             corsHeaders,
@@ -414,27 +544,44 @@ serve(async (req: Request) => {
       case "registerItem": {
         if (!itemId) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
             message: "Parâmetro 'itemId' é obrigatório.",
             correlationId,
             corsHeaders,
           });
         }
 
-        const apiKey = await getPluggyApiKey();
+        const apiKey = await getPluggyApiKey(false, correlationId);
 
         // 1. Valida na API da Pluggy se o item existe de fato
         let itemVerifyRes: Response;
         try {
-          itemVerifyRes = await fetchWithTimeout(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, {
-            headers: { "X-API-KEY": apiKey },
-            timeout: 15000,
-          });
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
+          itemVerifyRes = await fetchWithTimeout(
+            `https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`,
+            {
+              headers: { "X-API-KEY": apiKey },
+              timeout: 15000,
+            },
+            {
+              operation: "registerItem_verify",
+              correlationId,
+              maskedTarget: `items/${maskId(itemId)}`,
+            }
+          );
+        } catch (err: any) {
+          if (err.code === PLUGGY_ERROR_CODES.TIMEOUT) {
+            return createErrorResponse(req, {
+              status: HTTP_STATUS.GATEWAY_TIMEOUT,
+              code: PLUGGY_ERROR_CODES.TIMEOUT,
+              message: "Tempo limite excedido ao validar Item na Pluggy.",
+              correlationId,
+              corsHeaders,
+            });
+          }
           return createErrorResponse(req, {
-            status: 502,
-            message: `Erro ao consultar Item na Pluggy: ${msg}`,
+            status: HTTP_STATUS.BAD_GATEWAY,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+            message: `Erro ao consultar Item na Pluggy: ${err.message}`,
             correlationId,
             corsHeaders,
           });
@@ -442,7 +589,8 @@ serve(async (req: Request) => {
 
         if (!itemVerifyRes.ok) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
             message: "Item Pluggy não encontrado ou inválido na instituição financeira.",
             correlationId,
             corsHeaders,
@@ -461,7 +609,8 @@ serve(async (req: Request) => {
             metadata: { itemId: maskId(itemId) },
           });
           return createErrorResponse(req, {
-            status: 403,
+            status: HTTP_STATUS.FORBIDDEN,
+            code: PLUGGY_ERROR_CODES.FORBIDDEN,
             message: "Item Pluggy inválido: clientUserId ausente na instituição.",
             correlationId,
             corsHeaders,
@@ -475,7 +624,8 @@ serve(async (req: Request) => {
             metadata: { remote: maskId(remoteClientUserId), expected: maskId(expectedClientUserId) },
           });
           return createErrorResponse(req, {
-            status: 403,
+            status: HTTP_STATUS.FORBIDDEN,
+            code: PLUGGY_ERROR_CODES.FORBIDDEN,
             message: "O Item informado pertence a outra sessão ou usuário.",
             correlationId,
             corsHeaders,
@@ -492,7 +642,8 @@ serve(async (req: Request) => {
         if (existingItem) {
           if (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId) {
             return createErrorResponse(req, {
-              status: 403,
+              status: HTTP_STATUS.FORBIDDEN,
+              code: PLUGGY_ERROR_CODES.FORBIDDEN,
               message: "Item já vinculado a outro usuário ou workspace.",
               correlationId,
               corsHeaders,
@@ -531,7 +682,7 @@ serve(async (req: Request) => {
         if (itemError) {
           if (itemError.code === "23505") {
             return createErrorResponse(req, {
-              status: 409,
+              status: HTTP_STATUS.CONFLICT,
               message: "Este item já está registrado em outro contexto.",
               correlationId,
               corsHeaders,
@@ -543,7 +694,7 @@ serve(async (req: Request) => {
             metadata: { error: itemError.message },
           });
           return createErrorResponse(req, {
-            status: 500,
+            status: HTTP_STATUS.INTERNAL_SERVER_ERROR,
             message: "Erro ao registrar Item no banco de dados.",
             correlationId,
             corsHeaders,
@@ -571,7 +722,7 @@ serve(async (req: Request) => {
       case "getAccounts": {
         if (!itemId) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
             message: "Parâmetro 'itemId' é obrigatório.",
             correlationId,
             corsHeaders,
@@ -593,23 +744,53 @@ serve(async (req: Request) => {
             metadata: { itemId: maskId(itemId), userId: maskId(userId) },
           });
           return createErrorResponse(req, {
-            status: 403,
+            status: HTTP_STATUS.FORBIDDEN,
+            code: PLUGGY_ERROR_CODES.FORBIDDEN,
             message: "Item não encontrado ou não pertence a este workspace.",
             correlationId,
             corsHeaders,
           });
         }
 
-        const apiKey = await getPluggyApiKey();
-        const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
-          headers: { "X-API-KEY": apiKey },
-          timeout: 15000,
-        });
+        const apiKey = await getPluggyApiKey(false, correlationId);
+        let accRes: Response;
+        try {
+          accRes = await fetchWithTimeout(
+            `https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`,
+            {
+              headers: { "X-API-KEY": apiKey },
+              timeout: 15000,
+            },
+            {
+              operation: "getAccounts",
+              correlationId,
+              maskedTarget: `accounts?itemId=${maskId(itemId)}`,
+            }
+          );
+        } catch (err: any) {
+          if (err.code === PLUGGY_ERROR_CODES.TIMEOUT) {
+            return createErrorResponse(req, {
+              status: HTTP_STATUS.GATEWAY_TIMEOUT,
+              code: PLUGGY_ERROR_CODES.TIMEOUT,
+              message: "Tempo limite excedido ao buscar contas na Pluggy.",
+              correlationId,
+              corsHeaders,
+            });
+          }
+          return createErrorResponse(req, {
+            status: HTTP_STATUS.BAD_GATEWAY,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+            message: `Erro ao buscar contas na Pluggy: ${err.message}`,
+            correlationId,
+            corsHeaders,
+          });
+        }
 
         if (!accRes.ok) {
           const errBody = await accRes.json().catch(() => ({}));
           return createErrorResponse(req, {
             status: accRes.status,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
             message: errBody.message || `Erro ao buscar contas na Pluggy (HTTP ${accRes.status}).`,
             correlationId,
             corsHeaders,
@@ -635,7 +816,7 @@ serve(async (req: Request) => {
       case "getTransactions": {
         if (!itemId && !params.accountId) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
             message: "Parâmetro 'itemId' ou 'accountId' é obrigatório.",
             correlationId,
             corsHeaders,
@@ -654,7 +835,8 @@ serve(async (req: Request) => {
 
           if (!itemValid) {
             return createErrorResponse(req, {
-              status: 403,
+              status: HTTP_STATUS.FORBIDDEN,
+              code: PLUGGY_ERROR_CODES.FORBIDDEN,
               message: "Item não encontrado ou não pertence a este workspace.",
               correlationId,
               corsHeaders,
@@ -673,7 +855,8 @@ serve(async (req: Request) => {
 
           if (!accValid) {
             return createErrorResponse(req, {
-              status: 403,
+              status: HTTP_STATUS.FORBIDDEN,
+              code: PLUGGY_ERROR_CODES.FORBIDDEN,
               message: "Conta não encontrada ou não pertence a este workspace.",
               correlationId,
               corsHeaders,
@@ -681,7 +864,7 @@ serve(async (req: Request) => {
           }
         }
 
-        const apiKey = await getPluggyApiKey();
+        const apiKey = await getPluggyApiKey(false, correlationId);
 
         // Se accountId fornecido, busca por conta; senão busca todas contas do item
         let allTransactions: any[] = [];
@@ -689,10 +872,18 @@ serve(async (req: Request) => {
           allTransactions = await fetchTransactionsForAccount(apiKey, String(params.accountId), correlationId);
         } else {
           // Fallback: busca contas do item e itera
-          const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
-            headers: { "X-API-KEY": apiKey },
-            timeout: 15000,
-          });
+          const accRes = await fetchWithTimeout(
+            `https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`,
+            {
+              headers: { "X-API-KEY": apiKey },
+              timeout: 15000,
+            },
+            {
+              operation: "getTransactions_fetchAccounts",
+              correlationId,
+              maskedTarget: `accounts?itemId=${maskId(itemId)}`,
+            }
+          );
           const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
           const accounts = accData.results || accData.accounts || [];
           for (const acc of accounts) {
@@ -727,7 +918,7 @@ serve(async (req: Request) => {
       case "getInvestments": {
         if (!itemId) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
             message: "Parâmetro 'itemId' é obrigatório.",
             correlationId,
             corsHeaders,
@@ -744,23 +935,53 @@ serve(async (req: Request) => {
 
         if (!itemValid) {
           return createErrorResponse(req, {
-            status: 403,
+            status: HTTP_STATUS.FORBIDDEN,
+            code: PLUGGY_ERROR_CODES.FORBIDDEN,
             message: "Item não encontrado ou não pertence a este workspace.",
             correlationId,
             corsHeaders,
           });
         }
 
-        const apiKey = await getPluggyApiKey();
-        const invRes = await fetchWithTimeout(`https://api.pluggy.ai/investments?itemId=${encodeURIComponent(String(itemId))}`, {
-          headers: { "X-API-KEY": apiKey },
-          timeout: 15000,
-        });
+        const apiKey = await getPluggyApiKey(false, correlationId);
+        let invRes: Response;
+        try {
+          invRes = await fetchWithTimeout(
+            `https://api.pluggy.ai/investments?itemId=${encodeURIComponent(String(itemId))}`,
+            {
+              headers: { "X-API-KEY": apiKey },
+              timeout: 15000,
+            },
+            {
+              operation: "getInvestments",
+              correlationId,
+              maskedTarget: `investments?itemId=${maskId(itemId)}`,
+            }
+          );
+        } catch (err: any) {
+          if (err.code === PLUGGY_ERROR_CODES.TIMEOUT) {
+            return createErrorResponse(req, {
+              status: HTTP_STATUS.GATEWAY_TIMEOUT,
+              code: PLUGGY_ERROR_CODES.TIMEOUT,
+              message: "Tempo limite excedido ao buscar investimentos na Pluggy.",
+              correlationId,
+              corsHeaders,
+            });
+          }
+          return createErrorResponse(req, {
+            status: HTTP_STATUS.BAD_GATEWAY,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+            message: `Erro ao buscar investimentos na Pluggy: ${err.message}`,
+            correlationId,
+            corsHeaders,
+          });
+        }
 
         if (!invRes.ok) {
           const errBody = await invRes.json().catch(() => ({}));
           return createErrorResponse(req, {
             status: invRes.status,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
             message: errBody.message || `Erro ao buscar investimentos na Pluggy (HTTP ${invRes.status}).`,
             correlationId,
             corsHeaders,
@@ -785,7 +1006,7 @@ serve(async (req: Request) => {
       case "syncItem": {
         if (!itemId) {
           return createErrorResponse(req, {
-            status: 400,
+            status: HTTP_STATUS.BAD_REQUEST,
             message: "Parâmetro 'itemId' é obrigatório.",
             correlationId,
             corsHeaders,
@@ -803,7 +1024,8 @@ serve(async (req: Request) => {
 
         if (existingItem && (existingItem.workspace_id !== workspace_id || existingItem.user_id !== userId)) {
           return createErrorResponse(req, {
-            status: 403,
+            status: HTTP_STATUS.FORBIDDEN,
+            code: PLUGGY_ERROR_CODES.FORBIDDEN,
             message: "Item já vinculado a outro workspace.",
             correlationId,
             corsHeaders,
@@ -822,13 +1044,41 @@ serve(async (req: Request) => {
           });
         }
 
-        const apiKey = await getPluggyApiKey();
+        const apiKey = await getPluggyApiKey(false, correlationId);
 
         // 1. Busca contas na Pluggy
-        const accRes = await fetchWithTimeout(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, {
-          headers: { "X-API-KEY": apiKey },
-          timeout: 15000,
-        });
+        let accRes: Response;
+        try {
+          accRes = await fetchWithTimeout(
+            `https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`,
+            {
+              headers: { "X-API-KEY": apiKey },
+              timeout: 15000,
+            },
+            {
+              operation: "syncItem_fetchAccounts",
+              correlationId,
+              maskedTarget: `accounts?itemId=${maskId(itemId)}`,
+            }
+          );
+        } catch (err: any) {
+          if (err.code === PLUGGY_ERROR_CODES.TIMEOUT) {
+            return createErrorResponse(req, {
+              status: HTTP_STATUS.GATEWAY_TIMEOUT,
+              code: PLUGGY_ERROR_CODES.TIMEOUT,
+              message: "Tempo limite excedido ao sincronizar contas da Pluggy.",
+              correlationId,
+              corsHeaders,
+            });
+          }
+          return createErrorResponse(req, {
+            status: HTTP_STATUS.BAD_GATEWAY,
+            code: PLUGGY_ERROR_CODES.UPSTREAM_ERROR,
+            message: `Erro ao buscar contas na Pluggy: ${err.message}`,
+            correlationId,
+            corsHeaders,
+          });
+        }
 
         const accData = accRes.ok ? await accRes.json().catch(() => ({})) : {};
         const accountsList = accData.results || accData.accounts || [];
@@ -1067,7 +1317,7 @@ serve(async (req: Request) => {
 
       default:
         return createErrorResponse(req, {
-          status: 400,
+          status: HTTP_STATUS.BAD_REQUEST,
           message: `Ação desconhecida: ${action}`,
           correlationId,
           corsHeaders,
@@ -1075,13 +1325,19 @@ serve(async (req: Request) => {
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    const code = (err as any)?.code || PLUGGY_ERROR_CODES.UPSTREAM_ERROR;
+    const status = code === PLUGGY_ERROR_CODES.TIMEOUT ? HTTP_STATUS.GATEWAY_TIMEOUT : HTTP_STATUS.INTERNAL_SERVER_ERROR;
+
     logger.error("Erro inesperado na execução", {
       correlationId,
       operation: "serve_catch",
+      errorCode: code,
       metadata: { error: msg },
     });
+
     return createErrorResponse(req, {
-      status: 500,
+      status,
+      code,
       message: msg,
       correlationId,
       corsHeaders,
