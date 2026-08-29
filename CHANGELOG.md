@@ -2,6 +2,27 @@
 
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 
+## [1.0.49] - 2026-09-01
+
+### ✨ Novo
+- **Observabilidade & Telemetria:**
+  - Implementação completa de rastreamento e telemetria ponta-a-ponta.
+  - Logs estruturados e sanitização nativa para Edge Functions (`_shared/observability`).
+  - Trace end-to-end nas requisições da integração Pluggy e Proxy OpenAI.
+  - Logs front-end unificados e estruturados, facilitando tracing de erros locais.
+  - Adoção de `Correlation ID` garantindo a rastreabilidade completa das requisições, desde o Front-end até às chamadas a APIs de terceiros.
+- **Resiliência:**
+  - Melhorias no `ErrorService` e inclusão de `ErrorBoundary` para componentes da interface.
+
+### 🔧 Corrigido & Melhorado
+- Correção de falhas no linting e CI (Progressive Linting e Tipagem do Typescript).
+- Remoção de comentários e regras suprimidas (`eslint-disable`) não utilizadas, aprimorando a confiabilidade do código.
+
+### 📊 Estatísticas
+- **6 commits na release 1.0.49**
+
+---
+
 ## [1.0.47] - 2026-08-20
 
 ### ✨ Novo
