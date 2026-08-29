@@ -53,12 +53,12 @@ function parseOfxDate(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split("T")[0];
   const clean = dateStr.trim().replace(/[^0-9]/g, "");
   if (clean.length >= 8) {
-    let ano = clean.substring(0, 4);
-    let p1 = clean.substring(4, 6);
-    let p2 = clean.substring(6, 8);
+    const ano = clean.substring(0, 4);
+    const p1 = clean.substring(4, 6);
+    const p2 = clean.substring(6, 8);
 
-    let num1 = parseInt(p1, 10);
-    let num2 = parseInt(p2, 10);
+    const num1 = parseInt(p1, 10);
+    const num2 = parseInt(p2, 10);
 
     let mes = p1;
     let dia = p2;
@@ -73,7 +73,7 @@ function parseOfxDate(dateStr: string): string {
     }
 
     // Trava de segurança: garante que mês seja entre 01 e 12
-    let mInt = parseInt(mes, 10);
+    const mInt = parseInt(mes, 10);
     if (isNaN(mInt) || mInt > 12 || mInt < 1) {
       if (parseInt(dia, 10) <= 12 && parseInt(dia, 10) >= 1) {
         const tmp = mes;
@@ -84,7 +84,7 @@ function parseOfxDate(dateStr: string): string {
       }
     }
 
-    let dInt = parseInt(dia, 10);
+    const dInt = parseInt(dia, 10);
     if (isNaN(dInt) || dInt > 31 || dInt < 1) {
       dia = String(new Date().getDate()).padStart(2, "0");
     }
@@ -101,15 +101,15 @@ function parseBrDateToIso(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split("T")[0];
   const parts = dateStr.trim().split(/[\/\-\.]/);
   if (parts.length === 3) {
-    let p1 = parts[0];
-    let p2 = parts[1];
-    let p3 = parts[2];
+    const p1 = parts[0];
+    const p2 = parts[1];
+    const p3 = parts[2];
 
     // Se a data já veio YYYY-MM-DD ou YYYY-DD-MM
     if (p1.length === 4) {
-      let ano = p1;
-      let m = parseInt(p2, 10);
-      let d = parseInt(p3, 10);
+      const ano = p1;
+      const m = parseInt(p2, 10);
+      const d = parseInt(p3, 10);
       if (m > 12 && d <= 12) {
         return `${ano}-${p3.padStart(2, "0")}-${p2.padStart(2, "0")}`;
       }

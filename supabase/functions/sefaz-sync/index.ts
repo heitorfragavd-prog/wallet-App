@@ -143,7 +143,7 @@ serve(async (req) => {
       });
     }
 
-    let totalNotasSincronizadas = 0;
+    const totalNotasSincronizadas = 0;
 
     for (const cert of certificados) {
       console.log(`[sefaz-sync] Sincronizando CNPJ ${cert.cnpj} (Workspace: ${cert.workspace_id})...`);

@@ -208,8 +208,8 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           if (!item.data) return new Date().toISOString().split("T")[0];
           const parts = item.data.trim().split("-");
           if (parts.length === 3 && parts[0].length === 4) {
-            let m = parseInt(parts[1], 10);
-            let d = parseInt(parts[2], 10);
+            const m = parseInt(parts[1], 10);
+            const d = parseInt(parts[2], 10);
             if (m > 12 && d <= 12) {
               return `${parts[0]}-${String(d).padStart(2, "0")}-${String(m).padStart(2, "0")}`;
             }

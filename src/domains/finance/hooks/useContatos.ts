@@ -25,7 +25,7 @@ export const CONTATOS_QUERY_KEY = ["contatos"] as const;
 async function fetchContatos(workspaceId: string | null): Promise<Contato[]> {
   if (!workspaceId) return [];
 
-  let query = supabase
+  const query = supabase
     .from("contatos")
     .select("*")
     .eq("workspace_id", workspaceId)

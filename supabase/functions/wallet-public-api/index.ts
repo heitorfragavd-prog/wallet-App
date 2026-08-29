@@ -89,7 +89,7 @@ Deno.serve(async (req: Request) => {
       const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 
       // 1. Verificar se existe mapeamento ativo para este canal do Telegram
-      let { data: mapping } = await supabase
+      const { data: mapping } = await supabase
         .from("channel_mappings")
         .select("*")
         .eq("channel_type", "telegram")
@@ -126,7 +126,7 @@ Deno.serve(async (req: Request) => {
       // @ts-ignore
       EdgeRuntime.waitUntil((async () => {
         try {
-          let text = message.text || message.caption || "";
+          const text = message.text || message.caption || "";
           let imageBase64: string | undefined;
 
           // Se tiver imagem, obter a de maior resolução
@@ -207,7 +207,7 @@ Deno.serve(async (req: Request) => {
       EdgeRuntime.waitUntil((async () => {
         try {
           const messageContent = messageData.message || {};
-          let text = messageContent.conversation || 
+          const text = messageContent.conversation || 
                      messageContent.extendedTextMessage?.text || 
                      messageContent.imageMessage?.caption || 
                      "";

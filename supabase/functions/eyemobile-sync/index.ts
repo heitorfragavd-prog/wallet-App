@@ -1114,7 +1114,7 @@ async function syncUserEyemobile(
       let offset = typeof customOffset === "number"
         ? customOffset
         : (mode === "HISTORY" ? (config.last_synced_offset || 0) : 0);
-      let limit = typeof customLimit === "number" ? customLimit : 100;
+      const limit = typeof customLimit === "number" ? customLimit : 100;
 
       // Se o offset for 0 e tivermos startStr, resolvemos o offset correspondente na API
       if (offset === 0 && startStr && typeof customOffset !== "number") {

@@ -985,7 +985,7 @@ serve(async (req) => {
                 const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
 
                 if (variacao > 10) {
-                  let precoVendaAtual = Number(prodEye?.preco_venda || 0);
+                  const precoVendaAtual = Number(prodEye?.preco_venda || 0);
                   let margemReal = Number(prodEye?.margem_real_percentual || 0);
                   let precoSugerido = 0;
 
@@ -3172,7 +3172,7 @@ serve(async (req) => {
             }
             if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
 
-            let markupAplicado = margemReal;
+            const markupAplicado = margemReal;
 
             if (variacao12m > 10) {
               const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);

@@ -186,11 +186,11 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
     return { isValid: false, motivo: 'Nenhum valor monetário lido (unitário e total zerados ou nulos)' };
   }
 
-  let valorUnitarioLido: number | null = temUnitLido ? vUnitLidoNum : null;
+  const valorUnitarioLido: number | null = temUnitLido ? vUnitLidoNum : null;
   let valorUnitarioCalculado: number | null = null;
   let valorUnitarioInferido = false;
 
-  let valorTotalLido: number | null = temTotLido ? vTotLidoNum : null;
+  const valorTotalLido: number | null = temTotLido ? vTotLidoNum : null;
   let valorTotalCalculado: number | null = null;
   let valorTotalInferido = false;
 

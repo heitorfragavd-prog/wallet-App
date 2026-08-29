@@ -100,7 +100,7 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
   const soma = (rows: any[] | null) =>
     (rows ?? []).reduce((acc: number, r: any) => acc + Number(r.valor || 0), 0);
 
-  let somaReceitasBanco = soma(recRows) + soma(transRecRows);
+  const somaReceitasBanco = soma(recRows) + soma(transRecRows);
 
   let somaDivipay = 0;
   try {
