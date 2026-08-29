@@ -207,9 +207,6 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       const result = await createPluggyConnectToken(mockWorkspaceId);
       expect(result).toEqual({ accessToken: 'secure-connect-token-xyz' });
       expect(supabase.functions.invoke).toHaveBeenCalledWith('pluggy-api', {
-        headers: {
-          'X-Correlation-Id': expect.any(String),
-        },
         body: {
           action: 'getConnectToken',
           workspace_id: mockWorkspaceId,
@@ -293,9 +290,6 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       const accounts = await fetchPluggyItemAccounts(mockWorkspaceId, mockItemId);
       expect(accounts).toEqual(mockAccounts);
       expect(supabase.functions.invoke).toHaveBeenCalledWith('pluggy-api', {
-        headers: {
-          'X-Correlation-Id': expect.any(String),
-        },
         body: {
           action: 'getAccounts',
           workspace_id: mockWorkspaceId,
@@ -317,9 +311,6 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       const transactions = await fetchPluggyItemTransactions(mockWorkspaceId, mockItemId);
       expect(transactions).toEqual(mockTxs);
       expect(supabase.functions.invoke).toHaveBeenCalledWith('pluggy-api', {
-        headers: {
-          'X-Correlation-Id': expect.any(String),
-        },
         body: {
           action: 'getTransactions',
           workspace_id: mockWorkspaceId,
@@ -341,9 +332,6 @@ describe('Pluggy Security & Backend Isolation Tests', () => {
       const investments = await fetchPluggyItemInvestments(mockWorkspaceId, mockItemId);
       expect(investments).toEqual(mockInvs);
       expect(supabase.functions.invoke).toHaveBeenCalledWith('pluggy-api', {
-        headers: {
-          'X-Correlation-Id': expect.any(String),
-        },
         body: {
           action: 'getInvestments',
           workspace_id: mockWorkspaceId,
