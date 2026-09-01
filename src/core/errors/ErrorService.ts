@@ -1,96 +1,95 @@
-/**
+﻿/**
  * Error Service
  * 
  * Provides centralized error handling with:
- * - Error categorization
- * - User-friendly message generation
- * - Context wrapping
- * - Integration with logging service
+ * - Automatic error categorization
+ * - Safe, user-friendly message generation without leaking technical stacks
+ * - Tracing via correlation IDs & structured error codes
+ * - Direct integration with structured LoggerService
  */
 
-import { ErrorCategory, AppError } from './types';
+import { ErrorCategory, AppError, ErrorHandleOptions } from './types';
 import { logger } from '../logging/LoggerService';
+import { ensureCorrelationId } from '../logging/correlationId';
 
 /**
- * User-friendly error messages by category
+ * User-friendly error messages by category (safe for end users)
  */
 const USER_MESSAGES: Record<ErrorCategory, string> = {
-  [ErrorCategory.AUTHENTICATION]: 'Sua sessão expirou. Faça login novamente.',
-  [ErrorCategory.VALIDATION]: 'Por favor, verifique os dados informados.',
-  [ErrorCategory.NETWORK]: 'Erro de conexão. Verifique sua internet.',
-  [ErrorCategory.SERVER]: 'Erro no servidor. Tente novamente em instantes.',
+  [ErrorCategory.AUTHENTICATION]: 'Sua sessÃ£o expirou ou nÃ£o foi autorizada. FaÃ§a login novamente.',
+  [ErrorCategory.VALIDATION]: 'Por favor, verifique as informaÃ§Ãµes inseridas.',
+  [ErrorCategory.NETWORK]: 'Falha na conexÃ£o de rede. Verifique sua internet.',
+  [ErrorCategory.SERVER]: 'ServiÃ§o temporariamente indisponÃ­vel. Tente novamente em instantes.',
   [ErrorCategory.UNKNOWN]: 'Ocorreu um erro inesperado.',
 };
 
 /**
  * Error Service Class
  */
-class ErrorService {
+export class ErrorService {
   /**
-   * Categorizes an error based on its properties
+   * Categorizes an error based on its properties and message
    */
   private categorizeError(error: unknown): ErrorCategory {
     if (!error) {
       return ErrorCategory.UNKNOWN;
     }
 
-    // Check if it's already an AppError
     if (this.isAppError(error)) {
       return error.category;
     }
 
-    // Check if it's a standard Error
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
       
-      // Authentication errors
       if (
         message.includes('auth') ||
         message.includes('unauthorized') ||
         message.includes('forbidden') ||
+        message.includes('jwt') ||
         message.includes('token') ||
         message.includes('session')
       ) {
         return ErrorCategory.AUTHENTICATION;
       }
       
-      // Validation errors
       if (
         message.includes('invalid') ||
         message.includes('validation') ||
         message.includes('required') ||
-        message.includes('missing')
+        message.includes('missing') ||
+        message.includes('bad request')
       ) {
         return ErrorCategory.VALIDATION;
       }
       
-      // Network errors
       if (
         message.includes('network') ||
         message.includes('fetch') ||
         message.includes('connection') ||
-        message.includes('timeout')
+        message.includes('timeout') ||
+        message.includes('offline')
       ) {
         return ErrorCategory.NETWORK;
       }
       
-      // Server errors
       if (
         message.includes('server') ||
         message.includes('500') ||
+        message.includes('502') ||
         message.includes('503') ||
-        message.includes('database')
+        message.includes('database') ||
+        message.includes('internal error')
       ) {
         return ErrorCategory.SERVER;
       }
     }
 
-    // Check for HTTP status codes in objects
     if (typeof error === 'object' && error !== null) {
       const errorObj = error as Record<string, unknown>;
       
       if ('status' in errorObj || 'statusCode' in errorObj) {
-        const status = (errorObj.status || errorObj.statusCode) as number;
+        const status = Number(errorObj.status ?? errorObj.statusCode);
         
         if (status === 401 || status === 403) {
           return ErrorCategory.AUTHENTICATION;
@@ -110,7 +109,7 @@ class ErrorService {
   /**
    * Type guard to check if an error is an AppError
    */
-  private isAppError(error: unknown): error is AppError {
+  public isAppError(error: unknown): error is AppError {
     return (
       typeof error === 'object' &&
       error !== null &&
@@ -121,32 +120,37 @@ class ErrorService {
   }
 
   /**
-   * Generates a unique error code
+   * Generates a unique support and tracking error code
    */
   private generateErrorCode(category: ErrorCategory): string {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 7);
-    return `${category.toUpperCase()}_${timestamp}_${random}`;
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `ERR_${category.substring(0, 4).toUpperCase()}_${timestamp}_${random}`;
   }
 
   /**
-   * Wraps an error with context and categorization
+   * Wraps and processes an error with categorization, correlation ID and structured logging
    */
-  handle(error: unknown, context?: Record<string, unknown>): AppError {
-    // If it's already an AppError, just add context if provided
+  handle(error: unknown, contextOrOptions?: ErrorHandleOptions | Record<string, unknown>): AppError {
+    const options = (contextOrOptions ?? {}) as ErrorHandleOptions;
+    const correlationId = ensureCorrelationId(options.correlationId);
+
+    // If it's already an AppError, enrich and log
     if (this.isAppError(error)) {
       const appError: AppError = {
         ...error,
-        context: { ...error.context, ...context },
+        correlationId: error.correlationId || correlationId,
+        operation: options.operation || error.operation,
+        source: options.source || error.source,
+        workspaceId: options.workspaceId || error.workspaceId,
+        context: { ...error.context, ...options },
       };
       this.log(appError);
       return appError;
     }
 
-    // Categorize the error
     const category = this.categorizeError(error);
 
-    // Extract message
     let message = 'An unknown error occurred';
     if (error instanceof Error) {
       message = error.message;
@@ -154,45 +158,60 @@ class ErrorService {
       message = error;
     } else if (typeof error === 'object' && error !== null) {
       const errorObj = error as Record<string, unknown>;
-      if ('message' in errorObj && typeof errorObj.message === 'string') {
+      if (typeof errorObj.message === 'string') {
         message = errorObj.message;
+      } else if (typeof errorObj.error === 'string') {
+        message = errorObj.error;
       }
     }
 
-    // Create AppError
     const appError: AppError = {
       code: this.generateErrorCode(category),
       message,
       category,
-      context,
+      correlationId,
+      operation: options.operation,
+      source: options.source,
+      workspaceId: options.workspaceId,
+      context: options,
       originalError: error instanceof Error ? error : undefined,
     };
 
-    // Log the error
     this.log(appError);
 
     return appError;
   }
 
   /**
-   * Gets a user-friendly error message without technical details
+   * Returns a user-friendly, safe error message without technical internals
    */
-  getUserMessage(error: AppError): string {
-    return USER_MESSAGES[error.category] || USER_MESSAGES[ErrorCategory.UNKNOWN];
+  getUserMessage(error: AppError | unknown): string {
+    if (this.isAppError(error)) {
+      return USER_MESSAGES[error.category] || USER_MESSAGES[ErrorCategory.UNKNOWN];
+    }
+    const category = this.categorizeError(error);
+    return USER_MESSAGES[category] || USER_MESSAGES[ErrorCategory.UNKNOWN];
   }
 
   /**
-   * Logs an error using the logging service
+   * Logs structured error via LoggerService
    */
   private log(error: AppError): void {
     logger.error('ErrorService', error.message, {
-      code: error.code,
-      category: error.category,
-      context: error.context,
-      stack: error.originalError?.stack,
+      source: error.source || 'frontend',
+      operation: error.operation,
+      correlationId: error.correlationId,
+      errorCode: error.code,
+      workspaceId: error.workspaceId,
+      data: {
+        category: error.category,
+        stack: error.originalError?.stack,
+        context: error.context,
+      },
     });
   }
 }
 
 // Export singleton instance
 export const errorService = new ErrorService();
+export default errorService;
