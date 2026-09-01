@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, no-empty */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
@@ -6,7 +6,6 @@ import {
   getCorrelationId,
   withCorrelationHeader,
   createErrorResponse,
-  HTTP_STATUS,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
 
@@ -1189,7 +1188,9 @@ Deno.serve(async (req: Request) => {
       if (decoded.role === "service_role" || decoded.iss === "supabase") {
         isServiceRoleCall = true;
       }
-    } catch (_) {}
+    } catch (_) {
+      // Ignora payload malformado para prosseguir com autenticação padrão
+    }
   }
 
   if (isServiceRoleCall && body.user_id) {
