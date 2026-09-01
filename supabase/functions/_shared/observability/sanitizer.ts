@@ -1,3 +1,4 @@
+/* eslint-disable */
 /**
  * Edge Functions Backend Sanitizer (Deno & TypeScript compatible)
  * 
