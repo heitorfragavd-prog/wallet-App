@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Edge Functions Backend Error Handler (Deno & TypeScript compatible)
  * 
  * Standardizes error responses with:
@@ -39,6 +39,20 @@ export const HTTP_STATUS = {
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503,
   GATEWAY_TIMEOUT: 504,
+} as const;
+
+export const OPENAI_ERROR_CODES = {
+  TIMEOUT: 'OPENAI_TIMEOUT',
+  UPSTREAM_ERROR: 'OPENAI_UPSTREAM_ERROR',
+  RATE_LIMIT: 'OPENAI_RATE_LIMIT',
+  AUTH_ERROR: 'OPENAI_AUTH_ERROR',
+} as const;
+
+export const PLUGGY_ERROR_CODES = {
+  TIMEOUT: 'PLUGGY_TIMEOUT',
+  UPSTREAM_ERROR: 'PLUGGY_UPSTREAM_ERROR',
+  AUTH_ERROR: 'PLUGGY_AUTH_ERROR',
+  FORBIDDEN: 'PLUGGY_FORBIDDEN',
 } as const;
 
 /**

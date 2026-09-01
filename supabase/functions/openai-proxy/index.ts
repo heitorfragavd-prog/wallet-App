@@ -5,6 +5,8 @@ import {
   getCorrelationId,
   withCorrelationHeader,
   createErrorResponse,
+  HTTP_STATUS,
+  OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
 
 const logger = createBackendLogger("openai-proxy");
@@ -1295,13 +1297,26 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
     }
 
     if (!response.ok) {
+      const isRateLimit = response.status === 429;
+      const isAuthError = response.status === 401 || response.status === 403;
+      const isTimeout = response.status === 504;
+      const errorCode = isRateLimit
+        ? OPENAI_ERROR_CODES.RATE_LIMIT
+        : isAuthError
+        ? OPENAI_ERROR_CODES.AUTH_ERROR
+        : isTimeout
+        ? OPENAI_ERROR_CODES.TIMEOUT
+        : OPENAI_ERROR_CODES.UPSTREAM_ERROR;
+
       logger.error("OpenAI retornou erro", {
         correlationId,
         operation: "openai_response_error",
+        errorCode,
         metadata: { status: response.status, error: JSON.stringify(data).slice(0, 300) },
       });
       return createErrorResponse(req, {
-        status: response.status === 429 ? 429 : (response.status >= 500 ? 502 : response.status),
+        status: isRateLimit ? 429 : isTimeout ? 504 : response.status >= 500 ? 502 : response.status,
+        code: errorCode,
         message: data.error?.message || "Erro retornado pelo provedor OpenAI",
         correlationId,
         corsHeaders: CORS_HEADERS,
