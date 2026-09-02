@@ -69,7 +69,7 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: { "Content-Type": "application/json", ...CORS_HEADERS }
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[ChatGPT Endpoint Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }
@@ -158,7 +158,7 @@ Deno.serve(async (req: Request) => {
       })());
 
       return response;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[Telegram Endpoint Route Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }
@@ -240,7 +240,7 @@ Deno.serve(async (req: Request) => {
       })());
 
       return response;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[WhatsApp Endpoint Route Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }

@@ -107,7 +107,7 @@ export const useNotificacoesPush = () => {
       setIsSubscribed(true);
       toast({ title: "Notificações ativadas! 🔔", description: "Você receberá alertas de dívidas e compromissos." });
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       const errorMsg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
       logger.error("useNotificacoesPush", "Erro ao registrar push", { error: errorMsg });
       toast({ title: "Erro ao ativar", description: errorMsg, variant: "destructive" });
@@ -165,7 +165,7 @@ export const useNotificacoesPush = () => {
       }
 
       toast({ title: "Push enviado! 🔔", description: "Notificação disparada com sucesso para este dispositivo." });
-    } catch (err: any) {
+    } catch (err: unknown) {
       try {
         const reg = await navigator.serviceWorker.ready;
         await reg.showNotification(titulo, {

@@ -736,7 +736,7 @@ export function useImportarFatura() {
       setTransacoes([]);
       setBancoDetectado("desconhecido");
       return criadas;
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({ title: "Erro ao importar fatura", description: err instanceof Error ? err.message : (err?.error || "Erro desconhecido"), variant: "destructive" });
       throw err;
     }

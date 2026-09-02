@@ -182,7 +182,7 @@ const PDVPage: React.FC = () => {
       } else {
         throw new Error("Resposta de produtos inválida");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro ao sincronizar produtos:", err);
       if (showToast) {
         toast({

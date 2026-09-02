@@ -289,7 +289,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
       setItens([]);
       setArquivoNome("");
       onOpenChange(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro na importação de lançamentos:", err);
       const errorMsg = err?.message || err?.details || (typeof err === "object" ? JSON.stringify(err) : String(err));
       toast({

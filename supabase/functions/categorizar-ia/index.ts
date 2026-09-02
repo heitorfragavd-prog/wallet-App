@@ -44,7 +44,7 @@ Responda APENAS em JSON:
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return new Response(JSON.stringify({ categoria: "outras", confianca: 0 }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

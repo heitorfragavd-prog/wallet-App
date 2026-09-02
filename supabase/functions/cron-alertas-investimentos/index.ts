@@ -160,7 +160,7 @@ serve(async () => {
     return new Response(JSON.stringify({ success: true, alertsSent: alertCount }), {
       headers: { "Content-Type": "application/json" }
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return new Response(JSON.stringify({ error: err.message, success: false }), {
       status: 500,
       headers: { "Content-Type": "application/json" }

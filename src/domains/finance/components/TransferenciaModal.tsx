@@ -179,7 +179,7 @@ export const TransferenciaModal: React.FC<TransferenciaModalProps> = ({
       });
 
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Erro na transferência",
         description: err.message || "Não foi possível realizar a transferência.",

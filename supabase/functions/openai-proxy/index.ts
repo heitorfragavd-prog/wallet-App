@@ -334,7 +334,7 @@ async function consultarVendasEyemobile(
         } else {
           console.warn("[consultarVendasEyemobile] eyemobile-sync respondeu com status:", response.status);
         }
-      } catch (syncErr: any) {
+      } catch (syncErr: unknown) {
         console.warn("[consultarVendasEyemobile] Falha ao invocar eyemobile-sync:", syncErr.message);
       }
     }
@@ -386,7 +386,7 @@ async function consultarVendasEyemobile(
     };
     console.log("[consultarVendasEyemobile] Resultado zero vendas:", JSON.stringify(resultado));
     return resultado;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[consultarVendasEyemobile] EXCEPTION:", err.message);
     return {
       erro: "Erro interno ao consultar vendas do Eyemobile.",
@@ -619,7 +619,7 @@ async function consultarSaidasCaixaPeriodo(
 
     console.log("[consultarSaidasCaixaPeriodo] Resultado:", JSON.stringify(resultado));
     return resultado;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[consultarSaidasCaixaPeriodo] EXCEPTION:", err.message);
     return {
       erro: "Erro ao consultar saídas de caixa do período.",
@@ -1074,7 +1074,7 @@ Deno.serve(async (req: Request) => {
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         },
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[openai-proxy] Whisper exception:", err);
       return new Response(JSON.stringify({ error: err.message }), {
         status: 500,

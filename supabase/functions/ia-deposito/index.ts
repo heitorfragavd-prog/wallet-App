@@ -66,7 +66,7 @@ Responda APENAS com um objeto JSON válido, sem markdown:
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return new Response(JSON.stringify({ error: error.message, success: false }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

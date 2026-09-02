@@ -116,7 +116,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ html }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     return new Response(JSON.stringify({ error: e.message || "Erro ao gerar recibo" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

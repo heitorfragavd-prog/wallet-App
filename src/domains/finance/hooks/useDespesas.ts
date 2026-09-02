@@ -169,7 +169,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     ) as Despesa[];
 
     return res;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[fetchDespesas Hook Exception]", err);
     throw err;
   }

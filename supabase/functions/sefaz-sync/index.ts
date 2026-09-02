@@ -163,7 +163,7 @@ serve(async (req) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[sefaz-sync] Erro geral na sincronização SEFAZ:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,

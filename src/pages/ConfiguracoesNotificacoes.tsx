@@ -99,7 +99,7 @@ const ConfiguracoesNotificacoes = () => {
 
       // 3. Fallback: dispara push direto com aviso de dívida
       await push.testarPush();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro ao simular tarefa:", err);
     } finally {
       setTestandoPush(false);

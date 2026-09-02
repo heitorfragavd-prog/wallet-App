@@ -73,7 +73,7 @@ async function resolveCategoriaByCredor(
         .then(() => {});
       return { id: cacheHit.categorias.id, nome: cacheHit.categorias.nome };
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err.message);
   }
 
@@ -161,7 +161,7 @@ Responda APENAS com o número correspondente (ex: 1, 2, etc). Se nenhuma categor
           return { id: chosenCat.id, nome: chosenCat.nome };
         }
       }
-    } catch (llmCatErr: any) {
+    } catch (llmCatErr: unknown) {
       console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr.message);
     }
   }
@@ -187,7 +187,7 @@ async function salvarCacheCategoria(supabase: any, userId: string, credor: strin
       { onConflict: "user_id,credor_normalizado" }
     );
     console.log(`[telegram-webhook] Cache de categoria salvo: "${credorNorm}" -> ${categoriaId}`);
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err.message);
   }
 }
@@ -254,7 +254,7 @@ async function transcribeAudio(fileId: string, telegramBotToken: string, supabas
 
     const result = await transcribeResp.json();
     return result.transcription || null;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[transcribeAudio] exception:", err.message);
     return null;
   }
@@ -430,7 +430,7 @@ REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
         return nomeCorrigido.trim();
       }
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[telegram-webhook] Erro ao reextrair beneficiário:", e.message);
   }
   return null;
@@ -3589,7 +3589,7 @@ serve(async (req) => {
                   headers: { Authorization: `Bearer ${openaiApiKey}` },
                 }).catch(() => {});
               }
-            } catch (asstErr: any) {
+            } catch (asstErr: unknown) {
               console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr.message);
             }
           }
@@ -3703,7 +3703,7 @@ serve(async (req) => {
             // Re-encodificar overview como JPEG em alta qualidade (95)
             finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
-          } catch (imgErr: any) {
+          } catch (imgErr: unknown) {
             console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
           }
 
@@ -4123,7 +4123,7 @@ REGRAS:
                 } else {
                   console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
-              } catch (hErr: any) {
+              } catch (hErr: unknown) {
                 console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
               }
             } else {
@@ -4284,7 +4284,7 @@ REGRAS:
                     const errText = await geminiResp.text();
                     console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
                   }
-                } catch (gemErr: any) {
+                } catch (gemErr: unknown) {
                   if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
                     geminiErrorCode = "gemini_timeout";
                   } else {
@@ -4493,7 +4493,7 @@ FORMATO:
                     const tileJson = tileResp.ok ? await tileResp.json() : null;
                     const rawTile = tileJson?.choices?.[0]?.message?.content || "";
                     return { rawText: rawTile, httpStatus: tileResp.status };
-                  } catch (tileErr: any) {
+                  } catch (tileErr: unknown) {
                     console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
                     return { rawText: "", httpStatus: 500 };
                   }
@@ -5118,7 +5118,7 @@ FORMATO:
           await sendReply(msgFallback);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
-      } catch (imgErr: any) {
+      } catch (imgErr: unknown) {
         console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErr.message, imgErr.stack);
         await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErr.message);
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -5241,7 +5241,7 @@ Ferramentas disponíveis:
         const errorBody = await aiResponse.text();
         console.error("[telegram-webhook] openai-proxy retornou erro:", aiResponse.status, errorBody.slice(0, 500));
       }
-    } catch (aiErr: any) {
+    } catch (aiErr: unknown) {
       console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErr.message, aiErr.stack);
     }
 
@@ -5253,7 +5253,7 @@ Ferramentas disponíveis:
     );
 
     return new Response("OK", { status: 200, headers: corsHeaders });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

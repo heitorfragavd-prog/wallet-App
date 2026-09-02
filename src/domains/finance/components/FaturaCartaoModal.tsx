@@ -281,7 +281,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         title: "Dívida criada! 💳",
         description: `Fatura de ${mesAnoCapitalizado} (R$ ${totalFatura.toFixed(2)}) foi adicionada às suas Dívidas.`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Erro ao gerar dívida",
         description: err?.message || String(err),
