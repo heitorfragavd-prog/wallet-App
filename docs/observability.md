@@ -156,4 +156,8 @@ O catálogo completo de severidades (**SEV1 a SEV4**), troubleshooting guiado co
 - [x] **7.3B**: Observabilidade no gateway OpenAI Proxy e isolamento de dependências com a branch IA.
 - [x] **7.4**: Auditoria de CI/CD, secrets e confirmação da estratégia dinâmica no Docker Publish (`.github/workflows/`).
 - [x] **7.5**: Catálogo de alertas operacionais (Crítico, Alto, Médio) e incident playbook (`docs/incident-playbook.md`).
-- [ ] **7.6**: Testes finais, auditoria e preparação do PR para `develop`.
+- [x] **7.6**: Auditoria final, validação completa de quality gates (502 testes, typecheck, build, lint) e preparação do PR para `develop`.
+
+> 📌 **Pendências Operacionais Mapeadas para Pós-Merge**:
+> 1. **Automação de Release E2E**: Comprovação da geração 100% autônoma de GitHub Release e Git Tag sem intervenção manual na primeira esteira de promoção para `master`.
+> 2. **Integrações de IA Avançada / Mensageria**: Observabilidade em Gemini (Vision DANFE), Telegram Webhook, Assistente Financeiro e Wallet AI Orchestrator mantidas isoladas na branch paralela (`feat/ia-agente-financeiro-v2`) e programadas para incorporação após o merge daquela branch.
