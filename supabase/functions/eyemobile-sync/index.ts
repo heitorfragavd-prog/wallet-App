@@ -1288,21 +1288,27 @@ async function syncUserEyemobile(
               continue;
             }
 
-            // Insert main sale revenue
-            const { error: revErr } = await supabaseAdmin.from("transacoes").insert({
-              user_id: user_id,
-              workspace_id: syncWorkspaceId,
-              tipo: "receita",
-              valor: Number(sale.total || 0),
-              descricao: `Venda Eyemobile #${sale.id}`,
-              data: sale.time ? toSaoPauloDate(sale.time) : new Date().toISOString().split("T")[0],
-              created_at: sale.time || new Date().toISOString(),
-              categoria_id: config.default_categoria_receita_id || null,
-              conta_id: config.default_conta_id || null,
-              metodo_pagamento: mappedMethod,
-              itens: Array.isArray(sale.transaction_items) ? sale.transaction_items : null,
-              observacoes: saleMarker + (storeName ? ` | Loja: ${storeName}` : "") + (payTypeName ? ` | Pagamento: ${payTypeName}` : ""),
-            });
+            // ATOMIC UPSERT: protegido por constraint UNIQUE (workspace_id, eyemobile_sale_id)
+            const { error: revErr } = await supabaseAdmin.from("transacoes").upsert(
+              {
+                user_id: user_id,
+                workspace_id: syncWorkspaceId,
+                eyemobile_sale_id: String(sale.id),
+                tipo: "receita",
+                valor: Number(sale.total || 0),
+                descricao: `Venda Eyemobile #${sale.id}`,
+                data: sale.time ? toSaoPauloDate(sale.time) : new Date().toISOString().split("T")[0],
+                created_at: sale.time || new Date().toISOString(),
+                categoria_id: config.default_categoria_receita_id || null,
+                conta_id: config.default_conta_id || null,
+                metodo_pagamento: mappedMethod,
+                itens: Array.isArray(sale.transaction_items) ? sale.transaction_items : null,
+                observacoes: saleMarker + (storeName ? ` | Loja: ${storeName}` : "") + (payTypeName ? ` | Pagamento: ${payTypeName}` : ""),
+              },
+              {
+                onConflict: "workspace_id,eyemobile_sale_id",
+              }
+            );
 
             if (revErr) {
               console.error("Erro ao inserir receita de venda:", revErr);

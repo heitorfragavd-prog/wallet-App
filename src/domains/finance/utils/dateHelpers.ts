@@ -2,9 +2,24 @@
  * Utilitários de data para o módulo de Relatórios.
  */
 
-/** Formata string ISO para dd/mm/aaaa */
+/** Formata string ISO para dd/mm/aaaa no fuso America/Sao_Paulo */
 export const formatarData = (dataString: string): string => {
   if (!dataString) return "";
+  if (dataString.includes("T") || dataString.includes("Z")) {
+    try {
+      const d = new Date(dataString);
+      if (!isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        }).format(d);
+      }
+    } catch {
+      // fallback
+    }
+  }
   const [ano, mes, dia] = dataString.split("T")[0].split("-");
   return `${dia}/${mes}/${ano}`;
 };
