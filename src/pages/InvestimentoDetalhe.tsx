@@ -401,7 +401,7 @@ export default function InvestimentoDetalhe() {
                       <Label className="text-[10px] text-slate-300">Tipo de Rendimento</Label>
                       <Select
                         value={novoProv.tipo}
-                        onValueChange={(val: any) => setNovoProv({ ...novoProv, tipo: val })}
+                        onValueChange={(val: string) => setNovoProv({ ...novoProv, tipo: val })}
                       >
                         <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942] h-9">
                           <SelectValue placeholder="Selecione..." />

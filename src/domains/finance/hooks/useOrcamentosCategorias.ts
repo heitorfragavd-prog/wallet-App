@@ -81,7 +81,7 @@ export const useOrcamentosCategorias = (mesReferencia?: string) => {
       qc.invalidateQueries({ queryKey: ORCAMENTOS_CATEGORIAS_QUERY_KEY });
       toast({ title: "Teto de Gastos Definido", description: "Limite de orçamento salvo com sucesso!" });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       logger.error("useOrcamentosCategorias", "Erro ao salvar limite", { error: String(error) });
       const msg = error?.message || (typeof error === "object" ? JSON.stringify(error) : String(error));
       toast({

@@ -96,7 +96,7 @@ export function useConfiguracoesInvestimentos() {
         description: "Configurações de investimentos salvas!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useConfiguracoesInvestimentos", "Erro ao salvar configurações", { error: err.message });
       toast({
         variant: "destructive",

@@ -53,12 +53,12 @@ const DREPage: React.FC = () => {
     ].filter((d) => d.value > 0);
   }, [dre]);
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color?: string }>; label?: string }) => {
     if (!active || !payload) return null;
     return (
       <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-xs">
         <p className="font-semibold mb-1">{label}</p>
-        {payload.map((p: any, i: number) => (<p key={i} style={{ color: p.color }}>{p.name}: {formatCurrency(p.value)}</p>))}
+        {payload?.map((p, i: number) => (<p key={i} style={{ color: p.color }}>{p.name}: {formatCurrency(p.value)}</p>))}
       </div>
     );
   };

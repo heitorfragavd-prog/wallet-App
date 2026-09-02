@@ -94,7 +94,7 @@ export default function EquipeCustoNovoPage() {
           <CardContent className="p-6 space-y-6">
             <div className="space-y-2">
               <Label>Tipo de Custo</Label>
-              <Select value={form.tipo} onValueChange={(v: any) => setForm({ ...form, tipo: v })}>
+              <Select value={form.tipo} onValueChange={(v: string) => setForm({ ...form, tipo: v })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="vale">Vale (empréstimo)</SelectItem>

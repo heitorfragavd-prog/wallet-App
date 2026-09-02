@@ -103,7 +103,7 @@ export function useInvestimentos() {
         description: "Investimento cadastrado com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useInvestimentos", "Erro ao criar investimento", { error: err.message });
       toast({
         variant: "destructive",
@@ -133,7 +133,7 @@ export function useInvestimentos() {
         description: "Investimento atualizado com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useInvestimentos", "Erro ao atualizar investimento", { error: err.message });
       toast({
         variant: "destructive",
@@ -159,7 +159,7 @@ export function useInvestimentos() {
         description: "Investimento excluído com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useInvestimentos", "Erro ao excluir investimento", { error: err.message });
       toast({
         variant: "destructive",

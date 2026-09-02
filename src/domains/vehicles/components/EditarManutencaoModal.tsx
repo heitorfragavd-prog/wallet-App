@@ -28,7 +28,7 @@ interface EditarManutencaoModalProps {
   tipo: 'plano' | 'customizada';
   plano?: PlanoManutencaoVeiculo;
   customizada?: ManutencaoCustomizada;
-  onSave: (data: any) => Promise<void>;
+  onSave: (data: Partial<PlanoManutencaoVeiculo & ManutencaoCustomizada>) => Promise<void>;
 }
 
 const SISTEMAS = [

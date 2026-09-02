@@ -146,7 +146,7 @@ export function useDepositosInvestimento(investimentoId?: string) {
         description: "Depósito cadastrado com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useDepositosInvestimento", "Erro ao criar depósito", { error: err.message });
       toast({
         variant: "destructive",
@@ -216,7 +216,7 @@ export function useDepositosInvestimento(investimentoId?: string) {
         description: "Depósito excluído com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useDepositosInvestimento", "Erro ao excluir depósito", { error: err.message });
       toast({
         variant: "destructive",

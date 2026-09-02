@@ -853,7 +853,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-slate-300">Tipo de Investimento</Label>
-                <Select value={novoAtivo.tipo} onValueChange={(val: any) => setNovoAtivo({ ...novoAtivo, tipo: val })}>
+                <Select value={novoAtivo.tipo} onValueChange={(val: string) => setNovoAtivo({ ...novoAtivo, tipo: val })}>
                   <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942]">
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
@@ -1013,7 +1013,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
 
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-slate-300">Tipo de Meta</Label>
-                <Select value={novaMeta.tipo} onValueChange={(val: any) => setNovaMeta({ ...novaMeta, tipo: val })}>
+                <Select value={novaMeta.tipo} onValueChange={(val: string) => setNovaMeta({ ...novaMeta, tipo: val })}>
                   <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942]">
                     <SelectValue placeholder="Selecione..." />
                   </SelectTrigger>
