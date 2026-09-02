@@ -387,7 +387,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao criar receita", { error: String(error) });
-      toast({ title: "Erro ao criar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao criar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? String((error as Record<string, unknown>).message) : String(error)), variant: "destructive" });
     },
   });
 
@@ -422,7 +422,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao atualizar receita", { error: String(error) });
-      toast({ title: "Erro ao atualizar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao atualizar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? String((error as Record<string, unknown>).message) : String(error)), variant: "destructive" });
     },
   });
 
@@ -442,7 +442,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao remover receita", { error: String(error) });
-      toast({ title: "Erro ao remover receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao remover receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? String((error as Record<string, unknown>).message) : String(error)), variant: "destructive" });
     },
   });
 

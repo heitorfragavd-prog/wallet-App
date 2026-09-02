@@ -133,7 +133,7 @@ export const AIMetricsDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Select value={periodo} onValueChange={(v) => setPeriodo(v as any)}>
+            <Select value={periodo} onValueChange={(v) => setPeriodo(v as "7d" | "30d" | "90d" | "all")}>
               <SelectTrigger className="w-36 bg-card">
                 <SelectValue />
               </SelectTrigger>
