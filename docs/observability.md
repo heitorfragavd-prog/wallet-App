@@ -140,12 +140,20 @@ O pipeline de sanitização aplica proteção obrigatória e automática antes d
 
 ---
 
-## 8. Roadmap da Etapa 7
+## 8. Alertas Operacionais & Incident Playbook
+
+O catálogo completo de severidades (**SEV1 a SEV4**), troubleshooting guiado com Correlation ID e os playbooks de resposta a falhas (Pluggy, OpenAI, CI/CD e Infraestrutura) estão documentados em:
+
+👉 **[`docs/incident-playbook.md`](./incident-playbook.md)**
+
+---
+
+## 9. Roadmap da Etapa 7
 
 - [x] **7.1**: Base de observabilidade no frontend (Logger + Sanitização + Correlation ID + ErrorBoundary + React Query).
 - [x] **7.2**: Padronização de logs estruturados e shared observability nas Edge Functions (`_shared/observability`).
 - [x] **7.3A**: Rastreamento ponta a ponta e correlation ID no fluxo Pluggy Open Finance.
 - [x] **7.3B**: Observabilidade no gateway OpenAI Proxy e isolamento de dependências com a branch IA.
 - [x] **7.4**: Auditoria de CI/CD, secrets e confirmação da estratégia dinâmica no Docker Publish (`.github/workflows/`).
-- [ ] **7.5**: Catálogo de alertas operacionais (Crítico, Alto, Médio) e incident playbook.
+- [x] **7.5**: Catálogo de alertas operacionais (Crítico, Alto, Médio) e incident playbook (`docs/incident-playbook.md`).
 - [ ] **7.6**: Testes finais, auditoria e preparação do PR para `develop`.
