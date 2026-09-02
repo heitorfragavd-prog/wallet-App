@@ -120,12 +120,44 @@ O pipeline de sanitização aplica proteção obrigatória e automática antes d
 
 ---
 
-## 7. Roadmap da Etapa 7
+## 7. Segurança Operacional em CI/CD & Pipelines
+
+### 7.1. Gestão e Isolamento de Secrets
+- **Vite Frontend**: Consome estritamente variáveis públicas (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_APP_NAME`).
+- **Backend / Edge Functions**: Chaves de alto privilégio (`SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `PLUGGY_CLIENT_SECRET`) nunca são injetadas no bundle do Vite nem expostas em workflows client-side.
+- **Docker Hub**: Autenticação segura via `docker/login-action@v3` consumindo `DOCKERHUB_USERNAME` e `DOCKERHUB_TOKEN` via stdin, sem eco em logs.
+
+### 7.2. Estratégia de Tagging Dinâmico Docker
+- O workflow `.github/workflows/docker-publish.yml` lê a versão da aplicação diretamente do `package.json` em tempo de execução (`node -p "require('./package.json').version"`), sem tags hardcoded.
+- **Branch `develop`**: Gera `${DOCKERHUB_USERNAME}/wallet:develop` e `${DOCKERHUB_USERNAME}/wallet:develop-<short_sha>`.
+- **Branch `master`**: Gera `${DOCKERHUB_USERNAME}/wallet:latest`, `${DOCKERHUB_USERNAME}/wallet:<app_version>` e `${DOCKERHUB_USERNAME}/wallet:master-<short_sha>`.
+- **Gatilho Seguro (`workflow_run`)**: Publicação acionada exclusivamente após conclusão com sucesso do `CI Quality Gates` em eventos de `push`, efetuando checkout no `head_sha` exato auditado.
+
+### 7.3. Automação de Release
+- O workflow `.github/workflows/release.yml` reage à conclusão bem-sucedida do build Docker em `master`.
+- Valida idempotência checando existência de tag e release prévias antes de criar a release no GitHub vinculada ao `head_sha`.
+- *Risco Operacional Registrado*: A criação 100% autônoma de GitHub Release ainda será comprovada ponta a ponta na primeira esteira real de promoção para `master`.
+
+---
+
+## 8. Alertas Operacionais & Incident Playbook
+
+O catálogo completo de severidades (**SEV1 a SEV4**), troubleshooting guiado com Correlation ID e os playbooks de resposta a falhas (Pluggy, OpenAI, CI/CD e Infraestrutura) estão documentados em:
+
+👉 **[`docs/incident-playbook.md`](./incident-playbook.md)**
+
+---
+
+## 9. Roadmap da Etapa 7
 
 - [x] **7.1**: Base de observabilidade no frontend (Logger + Sanitização + Correlation ID + ErrorBoundary + React Query).
 - [x] **7.2**: Padronização de logs estruturados e shared observability nas Edge Functions (`_shared/observability`).
 - [x] **7.3A**: Rastreamento ponta a ponta e correlation ID no fluxo Pluggy Open Finance.
 - [x] **7.3B**: Observabilidade no gateway OpenAI Proxy e isolamento de dependências com a branch IA.
-- [ ] **7.4**: GitHub Actions, secrets e correção da tag Docker `1.0.3` hardcoded em `.github/workflows/docker-publish.yml`.
-- [ ] **7.5**: Catálogo de alertas operacionais (Crítico, Alto, Médio) e incident playbook.
-- [ ] **7.6**: Testes finais, auditoria e preparação do PR para `develop`.
+- [x] **7.4**: Auditoria de CI/CD, secrets e confirmação da estratégia dinâmica no Docker Publish (`.github/workflows/`).
+- [x] **7.5**: Catálogo de alertas operacionais (Crítico, Alto, Médio) e incident playbook (`docs/incident-playbook.md`).
+- [x] **7.6**: Auditoria final, validação completa de quality gates (502 testes, typecheck, build, lint) e preparação do PR para `develop`.
+
+> 📌 **Pendências Operacionais Mapeadas para Pós-Merge**:
+> 1. **Automação de Release E2E**: Comprovação da geração 100% autônoma de GitHub Release e Git Tag sem intervenção manual na primeira esteira de promoção para `master`.
+> 2. **Integrações de IA Avançada / Mensageria**: Observabilidade em Gemini (Vision DANFE), Telegram Webhook, Assistente Financeiro e Wallet AI Orchestrator mantidas isoladas na branch paralela (`feat/ia-agente-financeiro-v2`) e programadas para incorporação após o merge daquela branch.
