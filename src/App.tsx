@@ -33,6 +33,7 @@ const Mercado             = lazyWithRetry(() => import("./pages/Mercado"));
 const Veiculos            = lazyWithRetry(() => import("./pages/Veiculos"));
 const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
 const IAPage              = lazyWithRetry(() => import("./pages/IAPage"));
+const WalletIAPage        = lazyWithRetry(() => import("./pages/WalletIAPage"));
 const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
 const InvestimentoDetalhe = lazyWithRetry(() => import("./pages/InvestimentoDetalhe"));
@@ -110,6 +111,7 @@ function App() {
                   <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
                   <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
                   <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
+                  <Route path="/ia-v2"      element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} />
                   <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
                   <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
                   <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
