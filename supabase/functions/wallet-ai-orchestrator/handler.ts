@@ -202,6 +202,7 @@ export async function handleOrchestratorHttpRequest(
         success: true,
         message: turnResult.finalMessage,
         toolCalls: turnResult.toolCallsExecuted,
+        action_proposals: turnResult.actionProposals ?? [],
         iterations: turnResult.iterations,
         usage: turnResult.usage,
         estimatedCostUsd,

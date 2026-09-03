@@ -256,6 +256,7 @@ export function useWalletIA(options: UseWalletIAOptions) {
             createdAt: new Date(),
             routeUsed: routeDecision.route,
             toolCalls: response.toolCalls,
+            actionProposal: response.actionProposals?.[0],
             correlationId,
           };
         }

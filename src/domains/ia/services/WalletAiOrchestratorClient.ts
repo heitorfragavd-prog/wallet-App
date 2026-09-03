@@ -1,4 +1,5 @@
 import type { LlmMessage, LlmUsage, ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 
 export interface SendMessagePayload {
   workspaceId: string;
@@ -11,6 +12,7 @@ export interface SendMessagePayload {
 export interface OrchestratorClientResponse {
   message: LlmMessage;
   toolCalls: ExecutedToolRecord[];
+  actionProposals?: ActionProposal[];
   iterations: number;
   usage: LlmUsage;
   estimatedCostUsd: number;
@@ -149,6 +151,7 @@ export class WalletAiOrchestratorClient {
     return {
       message: assistantMessage,
       toolCalls: json.toolCalls ?? [],
+      actionProposals: json.action_proposals ?? [],
       iterations: json.iterations ?? 1,
       usage: json.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       estimatedCostUsd: json.estimatedCostUsd ?? 0,

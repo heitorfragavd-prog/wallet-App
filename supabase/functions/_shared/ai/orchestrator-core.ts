@@ -1,7 +1,12 @@
+import type { ActionProposal } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
 import { OPENAI_FINANCIAL_TOOLS, type OpenAiFunctionDefinition } from "./openai-tools-definition.ts";
 import type { QueryToolCatalog } from "./query-tools.ts";
-import { dispatchOpenAiToolCall, type OpenAiToolCall, type OpenAiToolMessage } from "./tool-dispatcher.ts";
+import {
+  dispatchOpenAiToolCall,
+  type OpenAiToolCall,
+  type OpenAiToolMessage,
+} from "./tool-dispatcher.ts";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -45,6 +50,7 @@ export interface OrchestratorTurnResult {
   finalMessage: LlmMessage;
   conversationHistory: LlmMessage[];
   toolCallsExecuted: ExecutedToolRecord[];
+  actionProposals: ActionProposal[];
   iterations: number;
   usage: LlmUsage;
   loopDetected?: boolean;
@@ -55,18 +61,21 @@ export const FINANCIAL_AGENT_SYSTEM_PROMPT = `Você é o Wallet Finance Agent V2
 
 REGRAS DE CONDUTA E SEGURANÇA:
 1. Cálculos e dados numéricos devem vir SEMPRE das ferramentas determinísticas fornecidas. NUNCA invente números, deduções ou métricas.
-2. Distinção conceitual estrita:
+2. OPERAÇÕES FINANCEIRAS DE ESCRITA (MUTAÇÃO):
+   - NUNCA realize alterações, cadastros ou exclusões financeiras diretamente sem aprovação humana.
+   - Quando o usuário solicitar registrar receita, despesa, dívida, meta ou conta, use a ferramenta de proposta correspondente.
+   - As ferramentas de escrita geram uma Proposta de Ação (Action Proposal) que exigirá confirmação humana explícita do usuário na interface.
+   - Jamais tente burlar, usar service role, forçar execução direta ou alterar IDs de workspace e usuário.
+3. Distinção conceitual estrita:
    - Saldo Disponível: Total de liquidez em contas bancárias e carteiras no momento.
    - Fluxo de Caixa: Entradas menos saídas realizadas em um período específico.
    - Lucro / Resultado: Receitas operacionais menos despesas operacionais (excluindo transferências internas).
    - Dívidas / Contas a Pagar: Obrigações futuras ou pendentes com credores.
-3. Ao responder sobre métricas financeiras, informe explicitamente:
+4. Ao responder sobre métricas financeiras, informe explicitamente:
    - O período exato consultado (ex: 01/08/2026 a 31/08/2026).
    - Os filtros e fontes aplicados (ex: Receitas e Despesas confirmadas).
    - A fórmula utilizada quando houver consolidação ou cálculo derivado.
-   - Avisos ou limitações se existirem dados pendentes de conciliação.
-4. Formate todos os valores monetários em formato Real Brasileiro: R$ 1.234,56.
-5. Se a solicitação do usuário estiver ambígua em relação ao período ou contexto, use o período padrão do mês corrente ou peça esclarecimento com cortesia e brevidade.
+5. Formate todos os valores monetários em formato Real Brasileiro: R$ 1.234,56.
 6. Nunca solicite nem exiba senhas, tokens ou dados sigilosos.`;
 
 export async function runOrchestratorTurn(
@@ -91,6 +100,7 @@ export async function runOrchestratorTurn(
 
   let iterations = 0;
   const toolCallsExecuted: ExecutedToolRecord[] = [];
+  const actionProposals: ActionProposal[] = [];
   const executedSignatures = new Set<string>();
 
   const totalUsage: LlmUsage = {
@@ -119,6 +129,7 @@ export async function runOrchestratorTurn(
         finalMessage: assistantMsg,
         conversationHistory: messages,
         toolCallsExecuted,
+        actionProposals,
         iterations,
         usage: totalUsage,
       };
@@ -137,11 +148,16 @@ export async function runOrchestratorTurn(
       }
       executedSignatures.add(signature);
 
-      const toolResultMsg: OpenAiToolMessage = await dispatchOpenAiToolCall(
+      const dispatched = await dispatchOpenAiToolCall(
         toolCall,
         context,
         catalog,
       );
+
+      const toolResultMsg: OpenAiToolMessage = dispatched.message;
+      if (dispatched.actionProposal) {
+        actionProposals.push(dispatched.actionProposal);
+      }
 
       messages.push(toolResultMsg);
 
@@ -179,6 +195,7 @@ export async function runOrchestratorTurn(
         finalMessage: loopFallbackMessage,
         conversationHistory: messages,
         toolCallsExecuted,
+        actionProposals,
         iterations,
         usage: totalUsage,
         loopDetected: true,
@@ -186,18 +203,19 @@ export async function runOrchestratorTurn(
     }
   }
 
-  // Atingiu o limite de iterações sem resposta final textual
-  const limitFallbackMessage: LlmMessage = {
+  // Teto máximo de iterações atingido
+  const maxFallbackMessage: LlmMessage = {
     role: "assistant",
     content:
-      "O limite máximo de etapas para esta consulta foi atingido. Aqui estão as informações parciais consolidadas disponíveis.",
+      "A consulta exigiu múltiplos passos analíticos e atingiu o limite de segurança de execuções. Aqui estão os dados parciais consolidados até o momento.",
   };
-  messages.push(limitFallbackMessage);
+  messages.push(maxFallbackMessage);
 
   return {
-    finalMessage: limitFallbackMessage,
+    finalMessage: maxFallbackMessage,
     conversationHistory: messages,
     toolCallsExecuted,
+    actionProposals,
     iterations,
     usage: totalUsage,
     maxIterationsReached: true,

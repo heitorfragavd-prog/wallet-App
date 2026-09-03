@@ -1,11 +1,35 @@
-import type { ActionProposal, PrepareActionInput } from "./action-types.ts";
+import {
+  CANONICAL_ACTIONS,
+  type ActionProposal,
+  type ActionRiskLevel,
+  type PrepareActionInput,
+} from "./action-types.ts";
+import type { AiExecutionContext } from "./auth.ts";
+
+export type ActionErrorCode =
+  | "WALLET_AI_ACTION_INVALID"
+  | "WALLET_AI_ACTION_FORBIDDEN"
+  | "WALLET_AI_ACTION_EXPIRED"
+  | "WALLET_AI_ACTION_ALREADY_PROCESSED"
+  | "WALLET_AI_ACTION_EXECUTION_ERROR";
+
+export class ActionGatewayError extends Error {
+  constructor(
+    public readonly code: ActionErrorCode,
+    public readonly status: number,
+    message: string,
+  ) {
+    super(`[${code}] ${message}`);
+    this.name = "ActionGatewayError";
+  }
+}
 
 function generateSimpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = (hash << 5) - hash + char;
-    hash |= 0; // Converte para integer 32bit
+    hash |= 0;
   }
   return Math.abs(hash).toString(16).padStart(8, "0");
 }
@@ -23,27 +47,115 @@ export function computeIdempotencyHash(
   return `idem_${generateSimpleHash(serialized)}`;
 }
 
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Sanitiza o payload da proposta contra injeção e campos não permitidos.
+ * Rejeita qualquer tentativa de sobrescrever user_id, workspace_id ou dados fora da whitelist.
+ */
+export function sanitizeActionPayload(
+  actionType: string,
+  rawPayload: Record<string, unknown>,
+): Record<string, unknown> {
+  const definition = CANONICAL_ACTIONS[actionType];
+  if (!definition) {
+    throw new ActionGatewayError(
+      "WALLET_AI_ACTION_INVALID",
+      400,
+      `Tipo de ação não reconhecido ou não permitido: ${actionType}`,
+    );
+  }
+
+  // Whitelist estrita de campos
+  const sanitized: Record<string, unknown> = {};
+  for (const field of definition.allowedFields) {
+    if (rawPayload[field] !== undefined) {
+      sanitized[field] = rawPayload[field];
+    }
+  }
+
+  // Verifica campos obrigatórios
+  for (const reqField of definition.requiredFields) {
+    const val = sanitized[reqField];
+    if (val === undefined || val === null || val === "") {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        `Campo obrigatório ausente no payload: ${reqField}`,
+      );
+    }
+  }
+
+  // Validação estrita de valores monetários
+  const numericFields = ["valor", "valor_total", "valor_alvo", "valor_atual", "saldo", "valor_pago"];
+  for (const numKey of numericFields) {
+    if (sanitized[numKey] !== undefined) {
+      const parsed = Number(sanitized[numKey]);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new ActionGatewayError(
+          "WALLET_AI_ACTION_INVALID",
+          400,
+          `Valor numérico inválido para o campo ${numKey}: ${sanitized[numKey]}`,
+        );
+      }
+      sanitized[numKey] = parsed;
+    }
+  }
+
+  // Validação de datas
+  const dateFields = ["data", "data_vencimento", "data_limite"];
+  for (const dateKey of dateFields) {
+    if (sanitized[dateKey] !== undefined) {
+      const dateStr = String(sanitized[dateKey]).trim();
+      if (!ISO_DATE_PATTERN.test(dateStr)) {
+        throw new ActionGatewayError(
+          "WALLET_AI_ACTION_INVALID",
+          400,
+          `Data inválida para o campo ${dateKey}. Esperado formato YYYY-MM-DD: ${dateStr}`,
+        );
+      }
+      sanitized[dateKey] = dateStr;
+    }
+  }
+
+  return sanitized;
+}
+
+/**
+ * Cria a proposta de ação em estado 'prepared' com classificação de risco server-side.
+ * O modelo LLM nunca controla nem informa o riskLevel.
+ */
 export function prepareActionProposal<TPayload = Record<string, unknown>>(
   input: PrepareActionInput<TPayload>,
 ): ActionProposal<TPayload> {
-  const ttlMs = (input.ttlMinutes ?? 15) * 60 * 1000;
+  const definition = CANONICAL_ACTIONS[input.actionType];
+  const riskLevel: ActionRiskLevel = definition ? definition.riskLevel : "HIGH";
+
+  // Sanitiza o payload antes de criar a proposta
+  const sanitizedPayload = (definition
+    ? sanitizeActionPayload(input.actionType, input.payload as Record<string, unknown>)
+    : input.payload) as TPayload;
+
+  const ttlMs = (input.ttlMinutes ?? 30) * 60 * 1000;
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
 
   const idempotencyHash = computeIdempotencyHash(
     input.workspaceId,
     input.actionType,
-    input.payload as Record<string, unknown>,
+    sanitizedPayload as Record<string, unknown>,
   );
 
   return {
     id: crypto.randomUUID ? crypto.randomUUID() : `act_${Date.now()}`,
     workspaceId: input.workspaceId,
     userId: input.userId,
+    conversationId: input.conversationId,
     actionType: input.actionType,
     actionVersion: "v1",
+    riskLevel,
     summary: input.summary,
-    payload: input.payload,
+    payload: sanitizedPayload,
     previousState: input.previousState ?? null,
     idempotencyHash,
     status: "prepared",
@@ -51,35 +163,78 @@ export function prepareActionProposal<TPayload = Record<string, unknown>>(
     confirmedAt: null,
     executedAt: null,
     createdAt: now.toISOString(),
+    correlationId: input.correlationId,
   };
 }
 
 export interface ValidationResult {
   valid: boolean;
+  code?: ActionErrorCode;
   error?: string;
 }
 
+/**
+ * Revalidação server-side obrigatória antes de qualquer execução.
+ * Valida workspace, ownership, status, TTL e permissão RBAC.
+ */
 export function validateActionForExecution(
   proposal: ActionProposal,
   requestingUserId: string,
   requestingWorkspaceId: string,
+  userRole?: string,
 ): ValidationResult {
+  // Cross-tenant check
   if (proposal.userId !== requestingUserId || proposal.workspaceId !== requestingWorkspaceId) {
-    return { valid: false, error: "action_forbidden_cross_tenant" };
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_FORBIDDEN",
+      error: "Ação não autorizada para o usuário ou workspace solicitante.",
+    };
   }
 
+  // Status check
   if (proposal.status === "cancelled") {
-    return { valid: false, error: "action_already_cancelled" };
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+      error: "Esta proposta de ação foi cancelada e não pode ser executada.",
+    };
   }
 
   if (proposal.status === "executed") {
-    return { valid: false, error: "action_already_executed" };
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+      error: "Esta proposta de ação já foi executada anteriormente (proteção contra replay).",
+    };
   }
 
-  const now = new Date().getTime();
+  if (proposal.status === "expired") {
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_EXPIRED",
+      error: "A proposta de ação expirou. Gere uma nova proposta.",
+    };
+  }
+
+  // TTL check
+  const now = Date.now();
   const expiresTime = new Date(proposal.expiresAt).getTime();
   if (now > expiresTime) {
-    return { valid: false, error: "action_proposal_expired" };
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_EXPIRED",
+      error: "A proposta de ação expirou. Gere uma nova proposta.",
+    };
+  }
+
+  // RBAC check: role 'viewer' ou 'leitor' não pode executar ações
+  if (userRole && (userRole === "viewer" || userRole === "leitor")) {
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_FORBIDDEN",
+      error: "Papel de usuário somente leitura não possui permissão para executar ações financeiras.",
+    };
   }
 
   return { valid: true };
@@ -91,6 +246,96 @@ export interface ActionRepository {
   updateStatus(
     id: string,
     status: ActionProposal["status"],
-    timestamps?: { confirmedAt?: string; executedAt?: string },
+    timestamps?: { confirmedAt?: string; executedAt?: string; errorMessage?: string },
   ): Promise<void>;
+}
+
+export interface ActionDatabaseMutator {
+  executeMutation(
+    actionType: string,
+    payload: Record<string, unknown>,
+    context: AiExecutionContext,
+  ): Promise<{ success: boolean; recordId?: string; data?: unknown }>;
+}
+
+/**
+ * Executa uma proposta de ação após confirmação explícita do usuário.
+ * Aplica trava atômica de idempotência contra replay.
+ */
+export async function executeConfirmedProposal(
+  proposalId: string,
+  context: AiExecutionContext,
+  repository: ActionRepository,
+  mutator: ActionDatabaseMutator,
+  userRole?: string,
+): Promise<{ success: boolean; executedRecordId?: string; proposal: ActionProposal }> {
+  const proposal = await repository.getProposal(proposalId);
+  if (!proposal) {
+    throw new ActionGatewayError(
+      "WALLET_AI_ACTION_INVALID",
+      404,
+      `Proposta de ação não encontrada: ${proposalId}`,
+    );
+  }
+
+  const validation = validateActionForExecution(
+    proposal,
+    context.userId,
+    context.workspaceId,
+    userRole,
+  );
+
+  if (!validation.valid) {
+    if (validation.code === "WALLET_AI_ACTION_EXPIRED" && proposal.status === "prepared") {
+      await repository.updateStatus(proposalId, "expired");
+    }
+    throw new ActionGatewayError(
+      validation.code ?? "WALLET_AI_ACTION_FORBIDDEN",
+      validation.code === "WALLET_AI_ACTION_ALREADY_PROCESSED" ? 409 : 403,
+      validation.error ?? "Validação da proposta falhou.",
+    );
+  }
+
+  // Política estrita de alto risco: deleção bloqueada nesta etapa
+  if (proposal.actionType === "deletar_transacao") {
+    throw new ActionGatewayError(
+      "WALLET_AI_ACTION_FORBIDDEN",
+      403,
+      "Operação de exclusão bloqueada por política de segurança de alto risco. Realize exclusões exclusivamente através da interface financeira principal.",
+    );
+  }
+
+  // Marca transição atômica para confirmed
+  const confirmedAt = new Date().toISOString();
+  await repository.updateStatus(proposalId, "confirmed", { confirmedAt });
+
+  try {
+    const mutationResult = await mutator.executeMutation(
+      proposal.actionType,
+      proposal.payload as Record<string, unknown>,
+      context,
+    );
+
+    const executedAt = new Date().toISOString();
+    await repository.updateStatus(proposalId, "executed", { executedAt });
+
+    return {
+      success: true,
+      executedRecordId: mutationResult.recordId,
+      proposal: {
+        ...proposal,
+        status: "executed",
+        confirmedAt,
+        executedAt,
+      },
+    };
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : "mutation_failed";
+    await repository.updateStatus(proposalId, "prepared", { errorMessage });
+    throw new ActionGatewayError(
+      "WALLET_AI_ACTION_EXECUTION_ERROR",
+      500,
+      `Falha na execução da transação no banco de dados: ${errorMessage}`,
+    );
+  }
 }
