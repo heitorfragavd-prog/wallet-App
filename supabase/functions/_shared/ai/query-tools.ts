@@ -105,7 +105,7 @@ function sourceReferences(records: CanonicalFinancialRecord[]): FinancialSourceR
 }
 
 export function createQueryToolCatalog(repository: FinancialQueryRepository): QueryToolCatalog {
-  return {
+  const catalog: QueryToolCatalog = {
     buscar_receitas: async (args, context) => {
       const period = validatePeriod(args);
       const records = await repository.listRevenues(context, period);
@@ -130,6 +130,17 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
         balances,
         [],
         { availableBalance: "soma dos saldos de contas; cartões de crédito excluídos" },
+      );
+    },
+    consultar_contas: async (_args, context) => {
+      const balances = await repository.listBalances(context);
+      return baseResult(
+        "consultar_contas",
+        context,
+        null,
+        balances,
+        [],
+        { availableBalance: "saldos consolidados por conta/carteira" },
       );
     },
     consultar_dividas: async (args, context) => {
@@ -172,7 +183,39 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
         summary.warnings,
       );
     },
+    consultar_fluxo_caixa: async (args, context) => {
+      const period = validatePeriod(args);
+      const [revenues, expenses] = await Promise.all([
+        repository.listRevenues(context, period),
+        repository.listExpenses(context, period),
+      ]);
+      const totalEntradas = revenues.reduce((acc, r) => acc + r.amount, 0);
+      const totalSaidas = expenses.reduce((acc, r) => acc + r.amount, 0);
+      const resultado = totalEntradas - totalSaidas;
+
+      return baseResult(
+        "consultar_fluxo_caixa",
+        context,
+        period,
+        {
+          totalEntradas,
+          totalSaidas,
+          fluxoLiquido: resultado,
+          quantidadeReceitas: revenues.length,
+          quantidadeDespesas: expenses.length,
+        },
+        [...sourceReferences(revenues), ...sourceReferences(expenses)],
+        { fluxoLiquido: "totalEntradas - totalSaidas" },
+      );
+    },
   };
+
+  // Aliases seguros para comandos em linguagem natural
+  catalog.consultar_receitas = catalog.buscar_receitas;
+  catalog.consultar_despesas = catalog.buscar_despesas;
+  catalog.consultar_transacoes = catalog.buscar_transacoes;
+
+  return catalog;
 }
 
 export async function executeQueryTool(

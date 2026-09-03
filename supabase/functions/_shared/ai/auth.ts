@@ -9,12 +9,15 @@ export interface OwnedWorkspace {
 export interface AuthorizationDependencies {
   getUser(accessToken: string): Promise<AuthenticatedUser | null>;
   findOwnedWorkspace(workspaceId: string, userId: string): Promise<OwnedWorkspace | null>;
+  verifyConversationOwnership?(conversationId: string, workspaceId: string, userId: string): Promise<boolean>;
 }
 
 export interface AiExecutionContext {
   readonly userId: string;
   readonly workspaceId: string;
   readonly accessToken: string;
+  readonly conversationId?: string;
+  readonly correlationId?: string;
 }
 
 export type AiAuthorizationErrorCode =
@@ -22,7 +25,11 @@ export type AiAuthorizationErrorCode =
   | "invalid_authorization"
   | "invalid_workspace"
   | "invalid_token"
-  | "workspace_forbidden";
+  | "workspace_forbidden"
+  | "WALLET_AI_AUTH_ERROR"
+  | "WALLET_AI_FORBIDDEN"
+  | "WALLET_AI_INVALID_WORKSPACE"
+  | "WALLET_AI_INVALID_CONVERSATION";
 
 export class AiAuthorizationError extends Error {
   constructor(
@@ -55,6 +62,8 @@ export async function authorizeAiRequest(
   request: Request,
   workspaceId: string,
   dependencies: AuthorizationDependencies,
+  conversationId?: string,
+  correlationId?: string,
 ): Promise<AiExecutionContext> {
   if (!UUID_PATTERN.test(workspaceId)) {
     throw new AiAuthorizationError("invalid_workspace", 400, "Workspace inválido.");
@@ -75,9 +84,31 @@ export async function authorizeAiRequest(
     );
   }
 
+  if (conversationId) {
+    if (!UUID_PATTERN.test(conversationId)) {
+      throw new AiAuthorizationError(
+        "WALLET_AI_INVALID_CONVERSATION",
+        400,
+        "ID de conversa inválido.",
+      );
+    }
+    if (dependencies.verifyConversationOwnership) {
+      const allowed = await dependencies.verifyConversationOwnership(conversationId, workspace.id, user.id);
+      if (!allowed) {
+        throw new AiAuthorizationError(
+          "WALLET_AI_INVALID_CONVERSATION",
+          403,
+          "Conversa não pertence ao usuário ou workspace informado.",
+        );
+      }
+    }
+  }
+
   return Object.freeze({
     userId: user.id,
     workspaceId: workspace.id,
     accessToken,
+    conversationId,
+    correlationId,
   });
 }

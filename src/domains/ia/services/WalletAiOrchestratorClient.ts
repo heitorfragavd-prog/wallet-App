@@ -4,6 +4,8 @@ export interface SendMessagePayload {
   workspaceId: string;
   messages: LlmMessage[];
   model?: string;
+  conversationId?: string;
+  correlationId?: string;
 }
 
 export interface OrchestratorClientResponse {
@@ -14,6 +16,8 @@ export interface OrchestratorClientResponse {
   estimatedCostUsd: number;
   loopDetected: boolean;
   maxIterationsReached: boolean;
+  conversationId?: string;
+  correlationId?: string;
 }
 
 export interface WalletAiOrchestratorClientOptions {
@@ -42,7 +46,6 @@ export class WalletAiOrchestratorClient {
     this.baseUrl = options.baseUrl ?? "/functions/v1/wallet-ai-orchestrator";
     this.getAccessToken = options.getAccessToken;
     const customFetch = options.fetchImpl;
-    // Sempre executa fetch no escopo global para evitar 'Illegal invocation' em browsers
     this.fetchImpl = customFetch
       ? (input, init) => customFetch(input, init)
       : (input, init) => globalThis.fetch(input, init);
@@ -52,34 +55,44 @@ export class WalletAiOrchestratorClient {
     const token = await this.getAccessToken();
     if (!token) {
       throw new WalletAiOrchestratorError(
-        "missing_session",
+        "WALLET_AI_AUTH_ERROR",
         "Sessão de usuário não encontrada para autenticar a requisição.",
       );
+    }
+
+    const correlationId = payload.correlationId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+
+    const requestHeaders: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "X-Correlation-Id": correlationId,
+    };
+
+    const requestBody: Record<string, unknown> = {
+      workspace_id: payload.workspaceId,
+      messages: payload.messages,
+      model: payload.model,
+    };
+    if (payload.conversationId) {
+      requestBody.conversation_id = payload.conversationId;
+    }
+    if (payload.correlationId) {
+      requestBody.correlation_id = payload.correlationId;
     }
 
     let response: Response;
     try {
       response = await this.fetchImpl(this.baseUrl, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          workspace_id: payload.workspaceId,
-          messages: payload.messages,
-          model: payload.model,
-        }),
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
       });
     } catch {
-      // Fallback para openai-proxy se o endpoint principal apresentar erro de rede
+      // Fallback gracioso para openai-proxy se o endpoint principal apresentar erro de rede
       const proxyUrl = this.baseUrl.replace("wallet-ai-orchestrator", "openai-proxy");
       response = await this.fetchImpl(proxyUrl, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           messages: payload.messages,
           model: payload.model || "gpt-4o-mini",
@@ -87,15 +100,12 @@ export class WalletAiOrchestratorClient {
       });
     }
 
-    // Se o orchestrator V2 ainda não estiver publicado na nuvem (404), usa o proxy existente
+    // Se o orchestrator V2 ainda não estiver publicado no Supabase (404), usa proxy existente
     if (response.status === 404) {
       const proxyUrl = this.baseUrl.replace("wallet-ai-orchestrator", "openai-proxy");
       const fallbackResp = await this.fetchImpl(proxyUrl, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           messages: payload.messages,
           model: payload.model || "gpt-4o-mini",
@@ -114,6 +124,7 @@ export class WalletAiOrchestratorClient {
             estimatedCostUsd: 0,
             loopDetected: false,
             maxIterationsReached: false,
+            correlationId,
           };
         }
       }
@@ -122,9 +133,10 @@ export class WalletAiOrchestratorClient {
     const json = await response.json().catch(() => ({}));
 
     if (!response.ok || json.success === false) {
+      const errorCode = json.code ?? json.error ?? "WALLET_AI_TOOL_ERROR";
       throw new WalletAiOrchestratorError(
-        json.error ?? "orchestrator_request_failed",
-        `Falha na execução do assistente: ${json.error ?? response.statusText}`,
+        errorCode,
+        `Falha na execução do assistente: ${errorCode}`,
         response.status,
       );
     }
@@ -142,6 +154,8 @@ export class WalletAiOrchestratorClient {
       estimatedCostUsd: json.estimatedCostUsd ?? 0,
       loopDetected: json.loopDetected ?? false,
       maxIterationsReached: json.maxIterationsReached ?? false,
+      conversationId: json.conversation_id,
+      correlationId: json.correlation_id || response.headers?.get?.("x-correlation-id") || correlationId,
     };
   }
 }

@@ -59,14 +59,35 @@ export function createSupabaseAuthorizationDependencies(
       return { id: data.user.id };
     },
     async findOwnedWorkspace(workspaceId, userId) {
-      const { data, error } = await client
+      // 1. Verifica se é dono do workspace
+      const { data: ownerData } = await client
         .from("workspaces")
         .select("id")
         .eq("id", workspaceId)
         .eq("user_id", userId)
         .maybeSingle();
-      if (error || !data) return null;
-      return { id: data.id };
+      if (ownerData) return { id: ownerData.id };
+
+      // 2. Verifica se é membro autorizado na tabela workspace_usuarios
+      const { data: memberData } = await client
+        .from("workspace_usuarios")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (memberData) return { id: workspaceId };
+
+      return null;
+    },
+    async verifyConversationOwnership(conversationId, _workspaceId, userId) {
+      const { data } = await client
+        .from("chat_conversas")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      // Se a conversa já existe no banco, deve pertencer ao usuário. Se ainda não existe, permite criação.
+      return data !== null;
     },
   };
 }

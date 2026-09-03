@@ -141,4 +141,40 @@ export const OPENAI_FINANCIAL_TOOLS: OpenAiFunctionDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "consultar_fluxo_caixa",
+      description:
+        "Calcula o fluxo de caixa consolidado (total de entradas, saídas e resultado líquido) para o período especificado.",
+      parameters: {
+        type: "object",
+        properties: {
+          start: {
+            type: "string",
+            description: "Data inicial no formato YYYY-MM-DD",
+          },
+          end: {
+            type: "string",
+            description: "Data final no formato YYYY-MM-DD",
+          },
+        },
+        required: ["start", "end"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_contas",
+      description:
+        "Consulta as contas bancárias e carteiras ativas no workspace e seus saldos atuais consolidados.",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
 ];
