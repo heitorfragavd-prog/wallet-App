@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { supabase } from "@/integrations/supabase/client";
-import { useNotificacoesPush } from "@/hooks/useNotificacoesPush";
+import { useNotificacoesPush } from "@/domains/notifications/hooks/useNotificacoesPush";
 import { useTelegram } from "@/domains/finance/hooks/useTelegram";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
