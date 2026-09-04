@@ -1,4 +1,5 @@
 export type TipoColaborador = 'funcionario' | 'socio' | 'folguista';
+
 export type RegimeEncargos = 'mei' | 'geral';
 
 export type EstadoContrato =
@@ -6,6 +7,14 @@ export type EstadoContrato =
   | { estado: 'decisao'; diasRestantes: 0; dataFim: string }
   | { estado: 'indeterminado'; diasRestantes: null; dataFim: string | null }
   | { estado: 'inativo'; diasRestantes: null; dataFim: string | null };
+
+export type EstadoContratoInput = {
+  statusPersistido?: string | null;
+  dataAdmissao?: string | null;
+  diasExperiencia?: number | null;
+  dataReferencia?: string | null;
+  dataDemissao?: string | null;
+};
 
 export type DiaAcertoFuncionario = {
   trabalhou: boolean;
@@ -48,6 +57,8 @@ export type CustoColaborador = {
 };
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const MILLISECONDS_PER_DAY = 86_400_000;
+const CLOSED_CONTRACT_STATUSES = new Set(['demitido', 'inativo']);
 
 function isoDate(year: number, monthIndex: number, day: number): string {
   return [year, monthIndex + 1, day]
@@ -57,6 +68,43 @@ function isoDate(year: number, monthIndex: number, day: number): string {
 
 function positiveInteger(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
+function parseIsoDate(value: string, fieldName: string): Date {
+  const match = ISO_DATE.exec(value);
+  if (!match) throw new RangeError(`${fieldName} invalida`);
+
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    date.getUTCFullYear() !== Number(year)
+    || date.getUTCMonth() !== Number(month) - 1
+    || date.getUTCDate() !== Number(day)
+  ) {
+    throw new RangeError(`${fieldName} invalida`);
+  }
+
+  return date;
+}
+
+export function dataCivilSaoPaulo(clock: Date): string {
+  if (!(clock instanceof Date) || !Number.isFinite(clock.getTime())) {
+    throw new RangeError('Relogio invalido');
+  }
+
+  const parts = new Intl.DateTimeFormat('pt-BR-u-ca-gregory-nu-latn', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(clock);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value;
+  const year = part('year');
+  const month = part('month');
+  const day = part('day');
+  if (!year || !month || !day) throw new RangeError('Relogio invalido');
+
+  return `${year}-${month}-${day}`;
 }
 
 export function quintoDiaUtil(year: number, month: number, holidays: string[] = []): string {
@@ -84,63 +132,41 @@ export function quintoDiaUtil(year: number, month: number, holidays: string[] = 
 }
 
 export function calcularFimExperiencia(admissionDate: string, experienceDays = 90): string {
-  const match = ISO_DATE.exec(admissionDate);
-  if (!match || !Number.isInteger(experienceDays) || experienceDays < 0) {
+  if (!Number.isInteger(experienceDays) || experienceDays < 0) {
     throw new RangeError('Data de admissao ou periodo de experiencia invalido');
   }
 
-  const [, year, month, day] = match;
-  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
-  if (
-    date.getUTCFullYear() !== Number(year)
-    || date.getUTCMonth() !== Number(month) - 1
-    || date.getUTCDate() !== Number(day)
-  ) {
-    throw new RangeError('Data de admissao invalida');
-  }
-
+  const date = parseIsoDate(admissionDate, 'Data de admissao');
+  // Prazo civil: exclui a admissao e inclui o vencimento (CC, art. 132).
   date.setUTCDate(date.getUTCDate() + experienceDays);
   return isoDate(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
-export type ResolverEstadoContratoInput = {
-  statusPersistido?: string | null;
-  dataAdmissao?: string | null;
-  diasExperiencia?: number | null;
-  dataReferencia?: string | null;
-  dataDemissao?: string | null;
-};
-
-export function resolverEstadoContrato(input: ResolverEstadoContratoInput): EstadoContrato {
-  if (input.dataDemissao || input.statusPersistido === 'inativo') {
-    return { estado: 'inativo', diasRestantes: null, dataFim: input.dataDemissao ?? null };
+export function resolverEstadoContrato(input: EstadoContratoInput): EstadoContrato | null {
+  const statusPersistido = input.statusPersistido?.trim().toLowerCase() || 'ativo';
+  const dataRef = input.dataReferencia || dataCivilSaoPaulo(new Date());
+  const referenceDate = parseIsoDate(dataRef, 'Data de referencia');
+  const diasExp = input.diasExperiencia ?? 90;
+  if (!Number.isInteger(diasExp) || diasExp < 0) {
+    throw new RangeError('Periodo de experiencia invalido');
   }
+  if (input.dataDemissao) parseIsoDate(input.dataDemissao, 'Data de demissao');
 
-  if (!input.dataAdmissao) {
-    return { estado: 'indeterminado', diasRestantes: null, dataFim: null };
+  const dataFim = input.dataAdmissao
+    ? calcularFimExperiencia(input.dataAdmissao, diasExp)
+    : null;
+
+  if (input.dataDemissao || CLOSED_CONTRACT_STATUSES.has(statusPersistido)) {
+    return { estado: 'inativo', diasRestantes: null, dataFim };
   }
+  if (!dataFim) return null;
 
-  const dataFim = calcularFimExperiencia(input.dataAdmissao, input.diasExperiencia ?? 90);
-  const ref = input.dataReferencia ?? new Date().toISOString().slice(0, 10);
+  const endDate = parseIsoDate(dataFim, 'Data final da experiencia');
+  const diasRestantes = Math.round((endDate.getTime() - referenceDate.getTime()) / MILLISECONDS_PER_DAY);
 
-  if (input.statusPersistido !== 'experiencia') {
-    return { estado: 'indeterminado', diasRestantes: null, dataFim };
-  }
-
-  const endUtc = Date.parse(`${dataFim}T00:00:00Z`);
-  const [refY, refM, refD] = ref.slice(0, 10).split('-').map(Number);
-  const refUtc = Date.UTC(refY, refM - 1, refD);
-  const diasRestantes = Math.ceil((endUtc - refUtc) / 86_400_000);
-
-  if (diasRestantes < 0) {
-    return { estado: 'indeterminado', diasRestantes: null, dataFim };
-  }
-
-  if (diasRestantes === 0) {
-    return { estado: 'decisao', diasRestantes: 0, dataFim };
-  }
-
-  return { estado: 'experiencia', diasRestantes, dataFim };
+  if (diasRestantes > 0) return { estado: 'experiencia', diasRestantes, dataFim };
+  if (diasRestantes === 0) return { estado: 'decisao', diasRestantes: 0, dataFim };
+  return { estado: 'indeterminado', diasRestantes: null, dataFim };
 }
 
 export function calcularAcertoFuncionario(dias: DiaAcertoFuncionario[]) {
@@ -153,14 +179,15 @@ export function calcularAcertoFuncionario(dias: DiaAcertoFuncionario[]) {
       const passagem = positiveInteger(dia.passagemCentavos);
       const meta = positiveInteger(dia.metaCentavos);
       const diferenca = Math.max(0, uberReal - uberBase);
+      const transporte = uberBase + passagem + diferenca;
 
       total.uberRealCentavos += uberReal;
       total.uberBaseCentavos += uberBase;
       total.passagensCentavos += passagem;
       total.diferencaUberCentavos += diferenca;
-      total.transporteCentavos += uberBase + passagem + diferenca;
+      total.transporteCentavos += transporte;
       total.metaCentavos += meta;
-      total.totalCentavos += uberBase + passagem + diferenca + meta;
+      total.totalCentavos += transporte + meta;
       return total;
     },
     {
