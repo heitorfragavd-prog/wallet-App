@@ -46,6 +46,15 @@ vi.mock("@/domains/finance/hooks/useColaboradores", () => ({
 }));
 
 describe("EquipePage", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date("2026-08-25T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("mostra resumo, contagens globais, alertas e filtros sem distorcer os totais", () => {
     render(<EquipePage />);
 
