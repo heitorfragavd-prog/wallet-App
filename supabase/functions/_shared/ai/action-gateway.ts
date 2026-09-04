@@ -103,7 +103,7 @@ export function sanitizeActionPayload(
   }
 
   // Validação de datas
-  const dateFields = ["data", "data_vencimento", "data_limite"];
+  const dateFields = ["data", "data_vencimento", "data_limite", "data_emissao"];
   for (const dateKey of dateFields) {
     if (sanitized[dateKey] !== undefined) {
       const dateStr = String(sanitized[dateKey]).trim();

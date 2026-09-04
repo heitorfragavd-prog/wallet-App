@@ -456,4 +456,104 @@ describe("Orchestrator HTTP Handler & Security Suite", () => {
       expect(body.code).toBe("WALLET_AI_PROVIDER_RATE_LIMIT");
     });
   });
+
+  // ── 8. PROCESS_DOCUMENT CANÔNICO (DANFE / BOLETO) ──────────────────────────
+  describe("Processamento Documental (action: process_document)", () => {
+    it("deve rotear action: process_document para o documentPipelineRunner com sucesso", async () => {
+      const mockDocRunner = vi.fn().mockResolvedValueOnce({
+        success: true,
+        documentType: "BOLETO",
+        status: "sucesso",
+        confidence: 98,
+        data: { beneficiario: "FORNECEDOR LTDA", valor: 150.0 },
+        validation: { isValid: true, errors: [], warnings: [] },
+        hasPromptInjection: false,
+        isDuplicate: false,
+        formattedMessage: "📄 **Boleto Processado com Sucesso**",
+        correlationId: "corr-doc-1",
+        durationMs: 45,
+      });
+
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer valid-token",
+          "Content-Type": "application/json",
+          "x-correlation-id": "corr-doc-1",
+        },
+        body: JSON.stringify({
+          action: "process_document",
+          workspace_id: validWorkspaceId,
+          base64: "dGVzdGU=",
+          mime_type: "application/pdf",
+          fileName: "boleto.pdf",
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: mockAuthDeps,
+        repoFactory: () => mockRepo,
+        runnerFactory: () => ({} as LlmRunner),
+        auditLogger: mockAuditLogger,
+        documentPipelineRunner: mockDocRunner,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("X-Correlation-Id")).toBe("corr-doc-1");
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.documentType).toBe("BOLETO");
+      expect(mockDocRunner).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogger.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "wallet_ai_document_pipeline",
+          status: "success",
+        }),
+      );
+    });
+
+    it("deve retornar 413 quando payload exceder limite de tamanho", async () => {
+      const mockDocRunner = vi.fn().mockResolvedValueOnce({
+        success: false,
+        documentType: "DESCONHECIDO",
+        status: "erro",
+        confidence: 0,
+        data: {},
+        validation: { isValid: false, errors: ["Arquivo excede 10MB"], warnings: [] },
+        hasPromptInjection: false,
+        isDuplicate: false,
+        formattedMessage: "❌ Arquivo excede 10MB",
+        correlationId: "corr-too-large",
+        durationMs: 10,
+        error: "Arquivo muito grande",
+        errorCode: "WALLET_AI_PAYLOAD_TOO_LARGE",
+      });
+
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer valid-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "process_document",
+          workspace_id: validWorkspaceId,
+          base64: "A".repeat(1000),
+          mime_type: "application/pdf",
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: mockAuthDeps,
+        repoFactory: () => mockRepo,
+        runnerFactory: () => ({} as LlmRunner),
+        auditLogger: mockAuditLogger,
+        documentPipelineRunner: mockDocRunner,
+      });
+
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.errorCode).toBe("WALLET_AI_PAYLOAD_TOO_LARGE");
+    });
+  });
 });

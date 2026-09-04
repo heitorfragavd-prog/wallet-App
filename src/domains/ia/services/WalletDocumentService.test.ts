@@ -71,19 +71,19 @@ describe("WalletDocumentService & Document Classifier", () => {
       });
 
       expect(supabase.functions.invoke).toHaveBeenCalledWith("wallet-ai-orchestrator", {
-        body: {
+        body: expect.objectContaining({
           action: "process_document",
           base64: "dGVzdGU=",
           mime_type: "application/pdf",
           workspace_id: "ws-123",
           conversation_id: "conv-1",
-        },
+        }),
       });
 
       expect(res.tipo).toBe("BOLETO");
       expect(res.status).toBe("validado");
       expect(res.actionProposal).toBeDefined();
-      expect(res.actionProposal?.actionType).toBe("create_debt");
+      expect(res.actionProposal?.actionType).toBe("cadastrar_divida_boleto");
       expect(res.boletoDados?.valor_total).toBe(1562.61);
     });
 
@@ -116,7 +116,7 @@ describe("WalletDocumentService & Document Classifier", () => {
       expect(res.tipo).toBe("DANFE");
       expect(res.status).toBe("sucesso");
       expect(res.actionProposal).toBeDefined();
-      expect(res.actionProposal?.actionType).toBe("import_invoice");
+      expect(res.actionProposal?.actionType).toBe("cadastrar_despesa_nf");
     });
 
     it("deve retornar fail-closed quando Edge Function falhar", async () => {

@@ -47,32 +47,48 @@ export async function processWalletDocument(
         action: "process_document",
         base64: input.base64,
         mime_type: input.mimeType,
+        fileName: input.fileName,
+        file_name: input.fileName,
         workspace_id: input.workspaceId,
         conversation_id: input.conversationId,
+        textContext: input.textContext,
+        text_context: input.textContext,
       },
     });
 
     if (!error && data) {
       // ── 1. Resposta de Boleto ──────────────────────────────────────────────
-      if (data.dados || data.validacao || data.tipo === "BOLETO" || data.status === "validado" || data.status === "validado_com_alerta") {
-        const isValido = data.status === "validado" || data.status === "validado_com_alerta";
-        let actionProposal: ActionProposal | undefined;
+      if (
+        data.documentType === "BOLETO" ||
+        data.dados ||
+        data.validacao ||
+        data.tipo === "BOLETO" ||
+        data.status === "validado" ||
+        data.status === "validado_com_alerta"
+      ) {
+        const isValido =
+          data.status === "validado" ||
+          data.status === "validado_com_alerta" ||
+          data.status === "sucesso" ||
+          data.success === true;
+        let actionProposal: ActionProposal | undefined =
+          data.actionProposal || data.action_proposal;
 
-        if (isValido && data.dados) {
+        if (!actionProposal && isValido && data.dados) {
           actionProposal = {
             id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
             workspaceId: input.workspaceId,
             userId: "",
-            actionType: "create_debt",
+            actionType: "cadastrar_divida_boleto",
             actionVersion: "1.0",
-            summary: `Cadastrar Boleto: ${data.dados.beneficiario || "Boleto Bancário"} - R$ ${(data.dados.valor_total || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            summary: `Cadastrar Boleto: ${data.dados.beneficiario || "Boleto Bancário"} - R$ ${(data.dados.valor_total || data.dados.valor || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             payload: {
               descricao: `Boleto ${data.dados.beneficiario || ""}`.trim() || "Boleto a Pagar",
-              valor: data.dados.valor_total || 0,
+              valor: data.dados.valor_total || data.dados.valor || 0,
               data_vencimento: data.dados.data_vencimento || "",
               linha_digitavel: data.dados.linha_digitavel || "",
               codigo_barras: data.dados.codigo_barras || "",
-              banco: data.dados.banco_nome || data.dados.banco_codigo || "",
+              banco: data.dados.banco_nome || data.dados.banco_codigo || data.dados.banco || "",
               beneficiario: data.dados.beneficiario || "",
             },
             idempotencyHash: data.dados.linha_digitavel || String(Date.now()),
@@ -85,18 +101,25 @@ export async function processWalletDocument(
         return {
           tipo: "BOLETO",
           status: data.status,
-          content: data.mensagemFormatada || "📄 **Boleto Processado**",
+          content: data.formattedMessage || data.mensagemFormatada || "📄 **Boleto Processado**",
           boletoDados: data.dados,
           actionProposal,
         };
       }
 
       // ── 2. Resposta de DANFE / Fiscal ──────────────────────────────────────
-      if (data.cabecalho || data.valores_totais || data.itens || data.tipo === "DANFE") {
-        const isSucesso = data.status === "sucesso";
-        let actionProposal: ActionProposal | undefined;
+      if (
+        data.documentType === "DANFE" ||
+        data.cabecalho ||
+        data.valores_totais ||
+        data.itens ||
+        data.tipo === "DANFE"
+      ) {
+        const isSucesso = data.status === "sucesso" || data.success === true;
+        let actionProposal: ActionProposal | undefined =
+          data.actionProposal || data.action_proposal;
 
-        if (isSucesso) {
+        if (!actionProposal && isSucesso) {
           const numNota = data.cabecalho?.numero_nota || data.sessionState?.numeroNf || "S/N";
           const fornecedor = data.cabecalho?.emitente_razao_social || data.sessionState?.fornecedor || "Fornecedor";
           const valorTotal = data.valores_totais?.valor_total_nota || data.sessionState?.valorProdutosDeclarado || 0;
@@ -105,12 +128,12 @@ export async function processWalletDocument(
             id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
             workspaceId: input.workspaceId,
             userId: "",
-            actionType: "import_invoice",
+            actionType: "cadastrar_despesa_nf",
             actionVersion: "1.0",
             summary: `Importar NF ${numNota} (${fornecedor}) - R$ ${valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             payload: {
-              numero_nota: numNota,
               fornecedor,
+              numero_nf: numNota,
               chave_acesso: data.cabecalho?.chave_acesso || data.sessionState?.chaveAcesso || "",
               valor_total: valorTotal,
               itens_count: (data.itens || data.sessionState?.itensAcumulados || []).length,
@@ -125,7 +148,7 @@ export async function processWalletDocument(
         return {
           tipo: "DANFE",
           status: data.status,
-          content: data.mensagemFormatada || "🧾 **Nota Fiscal Processada**",
+          content: data.formattedMessage || data.mensagemFormatada || "🧾 **Nota Fiscal Processada**",
           sessionState: data.sessionState,
           actionProposal,
         };

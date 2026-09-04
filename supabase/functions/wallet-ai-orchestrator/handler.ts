@@ -19,6 +19,12 @@ import {
   createQueryToolCatalog,
   type FinancialQueryRepository,
 } from "../_shared/ai/query-tools.ts";
+import {
+  processDocumentPipeline,
+  type ProcessDocumentPipelineInput,
+  type ProcessDocumentPipelineResult,
+} from "../_shared/ai/document-pipeline.ts";
+import type { ActionProposal } from "../_shared/ai/action-types.ts";
 
 export interface AuditEventLogger {
   logEvent(event: {
@@ -38,6 +44,27 @@ export interface OrchestratorHandlerDependencies {
   repoFactory: (context: AiExecutionContext) => FinancialQueryRepository;
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
+  documentPipelineRunner?: (
+    input: ProcessDocumentPipelineInput,
+  ) => Promise<ProcessDocumentPipelineResult>;
+  geminiApiKey?: string;
+  geminiApiKeyBackup?: string;
+  openaiApiKey?: string;
+  findDuplicateFn?: (
+    context: AiExecutionContext,
+    params: {
+      workspaceId: string;
+      chaveAcesso?: string;
+      numeroNf?: string;
+      cnpj?: string;
+      linhaDigitavel?: string;
+      codigoBarras?: string;
+    },
+  ) => Promise<{ isDuplicate: boolean; existingRecordId?: string; type?: string }>;
+  saveProposalFn?: (
+    context: AiExecutionContext,
+    proposal: ActionProposal,
+  ) => Promise<void>;
 }
 
 const CORS_HEADERS = {
@@ -63,6 +90,12 @@ function mapStandardErrorCode(code: string): string {
       return "WALLET_AI_INVALID_CONVERSATION";
     case "empty_messages":
       return "WALLET_AI_INVALID_PAYLOAD";
+    case "WALLET_AI_DOCUMENT_VALIDATION_FAILED":
+      return "WALLET_AI_DOCUMENT_VALIDATION_FAILED";
+    case "WALLET_AI_PAYLOAD_TOO_LARGE":
+      return "WALLET_AI_PAYLOAD_TOO_LARGE";
+    case "WALLET_AI_UNSUPPORTED_MEDIA_TYPE":
+      return "WALLET_AI_UNSUPPORTED_MEDIA_TYPE";
     default:
       return code;
   }
@@ -143,6 +176,103 @@ export async function handleOrchestratorHttpRequest(
         }),
         { status: 400, headers: responseHeaders },
       );
+    }
+
+    // Processamento Documental Canônico (DANFE / Boletos / Comprovantes)
+    if (body.action === "process_document") {
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+
+      const base64 = typeof body.base64 === "string" ? body.base64 : "";
+      const mimeType =
+        typeof body.mime_type === "string"
+          ? body.mime_type
+          : typeof body.mimeType === "string"
+          ? body.mimeType
+          : "";
+      const fileName =
+        typeof body.fileName === "string"
+          ? body.fileName
+          : typeof body.file_name === "string"
+          ? body.file_name
+          : undefined;
+      const rawDocType =
+        typeof body.document_type === "string"
+          ? body.document_type
+          : typeof body.documentTypeHint === "string"
+          ? body.documentTypeHint
+          : undefined;
+      const documentTypeHint = rawDocType
+        ? (rawDocType.toUpperCase() as "DANFE" | "BOLETO" | "COMPROVANTE" | "DESCONHECIDO")
+        : undefined;
+      const textContext =
+        typeof body.textContext === "string"
+          ? body.textContext
+          : typeof body.text_context === "string"
+          ? body.text_context
+          : undefined;
+
+      const pipelineRunner = dependencies.documentPipelineRunner ?? processDocumentPipeline;
+      const docResult = await pipelineRunner({
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        conversationId,
+        base64,
+        mimeType,
+        fileName,
+        documentTypeHint,
+        textContext,
+        correlationId,
+        geminiApiKey: dependencies.geminiApiKey,
+        geminiApiKeyBackup: dependencies.geminiApiKeyBackup,
+        openaiApiKey: dependencies.openaiApiKey,
+        findDuplicateFn: dependencies.findDuplicateFn
+          ? (params) => dependencies.findDuplicateFn!(context!, params)
+          : undefined,
+        saveProposalFn: dependencies.saveProposalFn
+          ? (prop) => dependencies.saveProposalFn!(context!, prop)
+          : undefined,
+      });
+
+      const durationMs = Date.now() - startTime;
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "wallet_ai_document_pipeline",
+          durationMs,
+          status: docResult.success ? "success" : "error",
+          errorCode: docResult.errorCode,
+          metadata: {
+            correlationId,
+            conversationId,
+            documentType: docResult.documentType,
+            status: docResult.status,
+            hasPromptInjection: docResult.hasPromptInjection,
+            isDuplicate: docResult.isDuplicate,
+            hasProposal: !!docResult.actionProposal,
+          },
+        });
+      }
+
+      const httpStatus =
+        docResult.errorCode === "WALLET_AI_PAYLOAD_TOO_LARGE"
+          ? 413
+          : docResult.errorCode === "WALLET_AI_UNSUPPORTED_MEDIA_TYPE"
+          ? 415
+          : docResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
+          ? 400
+          : 200;
+
+      return new Response(JSON.stringify(docResult), {
+        status: httpStatus,
+        headers: responseHeaders,
+      });
     }
 
     if (messages.length === 0) {
