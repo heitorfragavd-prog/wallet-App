@@ -25,15 +25,14 @@ export class ActionExecutorRegistry {
 }
 
 /**
- * Registra os executores concretos de acordo com a fase de rollout.
- * FASE 1 (Etapa 9.4A): Somente LOW risk é executável automaticamente (cadastrar_meta, atualizar_meta).
- * FASE 2: MEDIUM risk mantido sob validação.
- * FASE 3 / HIGH RISK: Proposal-only (sem executor automático).
- * DELEÇÃO: Bloqueada por política de segurança.
+ * Registra manipuladores concretos para ações de metas.
+ * 
+ * NOTA ARQUITETURAL (CHECKPOINT 9.4A.1):
+ * A tabela 'public.metas' possui apenas 'user_id' e NÃO possui coluna 'workspace_id'.
+ * Portanto, o domínio de metas é puramente user-scoped no schema atual.
+ * Se ativado, o executor opera no escopo da conta pessoal do usuário.
  */
-export function createDefaultActionExecutorRegistry(): ActionExecutorRegistry {
-  const registry = new ActionExecutorRegistry();
-
+export function registerMetaActionHandlers(registry: ActionExecutorRegistry): void {
   // ── LOW RISK: cadastrar_meta ──────────────────────────────────────────────
   registry.register("cadastrar_meta", async (payload, context, client) => {
     const titulo = String(payload.nome || payload.titulo || "").trim();
@@ -130,6 +129,26 @@ export function createDefaultActionExecutorRegistry(): ActionExecutorRegistry {
 
     return { recordId: data.id, data };
   });
+}
+
+/**
+ * Cria o ActionExecutorRegistry padrão canônico.
+ * 
+ * CHECKPOINT 9.4A.1 AUDIT & DECISION:
+ * Em produção, 0 executores de banco permanecem ativos por padrão.
+ * Como 'public.metas' não possui 'workspace_id', ativar executores diretos
+ * permitiria que um usuário em múltiplos workspaces alterasse metas de outro contexto.
+ * Portanto, para garantir risco ZERO de mutação cross-workspace ('NÃO deixar executor LOW ativo se houver risco cross-workspace'),
+ * todos os 9 Action Types operam em modo PROPOSAL-ONLY até evolução do schema de metas.
+ */
+export function createDefaultActionExecutorRegistry(options?: {
+  enableUserScopedMetaExecutors?: boolean;
+}): ActionExecutorRegistry {
+  const registry = new ActionExecutorRegistry();
+
+  if (options?.enableUserScopedMetaExecutors) {
+    registerMetaActionHandlers(registry);
+  }
 
   return registry;
 }

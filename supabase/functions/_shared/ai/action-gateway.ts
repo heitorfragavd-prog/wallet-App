@@ -183,12 +183,43 @@ export function validateActionForExecution(
   requestingWorkspaceId: string,
   userRole?: string,
 ): ValidationResult {
-  // Cross-tenant check
-  if (proposal.userId !== requestingUserId || proposal.workspaceId !== requestingWorkspaceId) {
+  // Cross-tenant check: strict workspace isolation
+  if (proposal.workspaceId !== requestingWorkspaceId) {
     return {
       valid: false,
       code: "WALLET_AI_ACTION_FORBIDDEN",
-      error: "Ação não autorizada para o usuário ou workspace solicitante.",
+      error: "Ação não autorizada para o workspace solicitante.",
+    };
+  }
+
+  // RBAC check: role 'viewer' ou 'leitor' não pode executar ações
+  if (userRole && (userRole === "viewer" || userRole === "leitor")) {
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_FORBIDDEN",
+      error: "Papel de usuário somente leitura não possui permissão para executar ações financeiras.",
+    };
+  }
+
+  // RBAC Approval policy (Política B: RBAC WORKSPACE):
+  // - owner & admin: podem aprovar propostas de qualquer membro do workspace
+  // - member: só pode aprovar suas próprias propostas
+  const isElevated = userRole === "owner" || userRole === "admin";
+
+  if (!isElevated && proposal.userId !== requestingUserId) {
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_FORBIDDEN",
+      error: "Membros sem privilégios de administrador só podem aprovar suas próprias propostas de ação.",
+    };
+  }
+
+  // Role check para HIGH risk: exige owner ou admin
+  if (proposal.riskLevel === "HIGH" && !isElevated) {
+    return {
+      valid: false,
+      code: "WALLET_AI_ACTION_FORBIDDEN",
+      error: "Ações de alto risco exigem permissão de proprietário ou administrador.",
     };
   }
 
@@ -225,15 +256,6 @@ export function validateActionForExecution(
       valid: false,
       code: "WALLET_AI_ACTION_EXPIRED",
       error: "A proposta de ação expirou. Gere uma nova proposta.",
-    };
-  }
-
-  // RBAC check: role 'viewer' ou 'leitor' não pode executar ações
-  if (userRole && (userRole === "viewer" || userRole === "leitor")) {
-    return {
-      valid: false,
-      code: "WALLET_AI_ACTION_FORBIDDEN",
-      error: "Papel de usuário somente leitura não possui permissão para executar ações financeiras.",
     };
   }
 
@@ -348,6 +370,11 @@ export async function executeConfirmedProposal(
       userId: context.userId,
       correlationId: context.correlationId,
       timestamp: new Date().toISOString(),
+      metadata: {
+        created_by: proposal.userId,
+        confirmed_by: context.userId,
+        approver_role: userRole ?? "unknown",
+      },
     });
   }
 
@@ -376,6 +403,11 @@ export async function executeConfirmedProposal(
         userId: context.userId,
         correlationId: context.correlationId,
         timestamp: executedAt,
+        metadata: {
+          created_by: proposal.userId,
+          confirmed_by: context.userId,
+          approver_role: userRole ?? "unknown",
+        },
       });
     }
 

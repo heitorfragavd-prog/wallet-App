@@ -152,17 +152,30 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
       };
     }
 
-    // Cross-tenant check
-    if (currentProposal.workspaceId !== context.workspaceId || currentProposal.userId !== context.userId) {
+    // Cross-tenant check: strict workspace isolation
+    if (currentProposal.workspaceId !== context.workspaceId) {
       return {
         success: false,
         code: "WALLET_AI_ACTION_FORBIDDEN",
-        error: "Ação não autorizada para o usuário ou workspace autenticado.",
+        error: "Ação não autorizada para o workspace autenticado.",
       };
     }
 
-    // Role check para HIGH risk
-    if (currentProposal.riskLevel === "HIGH" && userRole !== "owner" && userRole !== "admin") {
+    // RBAC Approval policy (Política B: RBAC WORKSPACE):
+    // - owner & admin: podem aprovar propostas de qualquer membro do workspace
+    // - member: só pode aprovar suas próprias propostas
+    const isElevated = userRole === "owner" || userRole === "admin";
+
+    if (!isElevated && currentProposal.userId !== context.userId) {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Membros sem privilégios de administrador só podem aprovar suas próprias propostas de ação.",
+      };
+    }
+
+    // Role check para HIGH risk: exige owner ou admin
+    if (currentProposal.riskLevel === "HIGH" && !isElevated) {
       return {
         success: false,
         code: "WALLET_AI_ACTION_FORBIDDEN",

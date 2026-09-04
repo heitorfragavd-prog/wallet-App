@@ -15,6 +15,7 @@ import { SupabaseActionProposalRepository } from "../../../../supabase/functions
 import {
   SupabaseActionDatabaseMutator,
   createDefaultActionExecutorRegistry,
+  registerMetaActionHandlers,
 } from "../../../../supabase/functions/_shared/ai/action-executor-registry";
 import { ActionAuditLogger } from "../../../../supabase/functions/_shared/ai/action-audit";
 
@@ -473,13 +474,261 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
       expect(result.proposal?.status).toBe("confirmed");
     });
 
-    it("confirmProposalAtomically: bloqueia role 'viewer'", async () => {
+    // ── CHECKPOINT 9.4A.1: MATRIZ DE APPROVAL (POLÍTICA B) ───────────────────
+    it("POLÍTICA B: creator member confirma sua própria proposal LOW", async () => {
+      const lowRow = {
+        id: "prop-low-member-1",
+        workspace_id: validWorkspaceId,
+        user_id: validUserId, // Criador = validUserId
+        conversation_id: null,
+        action_type: "cadastrar_meta",
+        action_version: "v1",
+        risk_level: "LOW",
+        summary: "Meta Reserva de Emergência",
+        payload: { nome: "Reserva", valor_alvo: 10000 },
+        previous_state: null,
+        idempotency_hash: "hash-idem-low-1",
+        status: "prepared" as const,
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        confirmed_at: null,
+        executed_at: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: lowRow, error: null }),
+            }),
+          }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  select: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: { ...lowRow, status: "confirmed", confirmed_at: new Date().toISOString() },
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+
+      const repository = new SupabaseActionProposalRepository(mockSupabase);
+      const res = await repository.confirmProposalAtomically("prop-low-member-1", context, "member");
+      expect(res.success).toBe(true);
+      expect(res.proposal?.status).toBe("confirmed");
+    });
+
+    it("POLÍTICA B: admin confirma proposal criada por member do mesmo workspace", async () => {
+      const creatorMemberId = "member-user-456";
+      const adminContext: AiExecutionContext = {
+        ...context,
+        userId: "admin-user-789", // Aprovador admin != Criador member
+      };
+
+      const memberProposalRow = {
+        id: "prop-member-created",
+        workspace_id: validWorkspaceId, // Mesmo workspace
+        user_id: creatorMemberId, // Criado por outro membro
+        conversation_id: null,
+        action_type: "cadastrar_transacao",
+        action_version: "v1",
+        risk_level: "MEDIUM",
+        summary: "Despesa criada por operador",
+        payload: { descricao: "Suprimentos", valor: 350 },
+        previous_state: null,
+        idempotency_hash: "hash-idem-admin-appr",
+        status: "prepared" as const,
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        confirmed_at: null,
+        executed_at: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: memberProposalRow, error: null }),
+            }),
+          }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  select: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: { ...memberProposalRow, status: "confirmed", confirmed_at: new Date().toISOString() },
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+
+      const repository = new SupabaseActionProposalRepository(mockSupabase);
+      const res = await repository.confirmProposalAtomically("prop-member-created", adminContext, "admin");
+      expect(res.success).toBe(true);
+      expect(res.proposal?.status).toBe("confirmed");
+    });
+
+    it("POLÍTICA B: owner confirma proposal criada por member do mesmo workspace", async () => {
+      const creatorMemberId = "member-user-456";
+      const ownerContext: AiExecutionContext = {
+        ...context,
+        userId: "owner-user-999", // Aprovador owner != Criador member
+      };
+
+      const memberProposalRow = {
+        id: "prop-member-created-2",
+        workspace_id: validWorkspaceId, // Mesmo workspace
+        user_id: creatorMemberId,
+        conversation_id: null,
+        action_type: "cadastrar_meta",
+        action_version: "v1",
+        risk_level: "LOW",
+        summary: "Meta trimestral",
+        payload: { nome: "Meta Q4", valor_alvo: 50000 },
+        previous_state: null,
+        idempotency_hash: "hash-idem-owner-appr",
+        status: "prepared" as const,
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        confirmed_at: null,
+        executed_at: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: memberProposalRow, error: null }),
+            }),
+          }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  select: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: { ...memberProposalRow, status: "confirmed", confirmed_at: new Date().toISOString() },
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+
+      const repository = new SupabaseActionProposalRepository(mockSupabase);
+      const res = await repository.confirmProposalAtomically("prop-member-created-2", ownerContext, "owner");
+      expect(res.success).toBe(true);
+      expect(res.proposal?.status).toBe("confirmed");
+    });
+
+    it("POLÍTICA B: viewer não confirma (bloqueado com 403)", async () => {
       const mockSupabase = { from: vi.fn() } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
       const repository = new SupabaseActionProposalRepository(mockSupabase);
 
       const result = await repository.confirmProposalAtomically("prop-1", context, "viewer");
       expect(result.success).toBe(false);
       expect(result.code).toBe("WALLET_AI_ACTION_FORBIDDEN");
+      expect(result.error).toContain("viewer");
+    });
+
+    it("POLÍTICA B: usuário de outro workspace não confirma (bloqueado com 403)", async () => {
+      const alienWorkspaceContext: AiExecutionContext = {
+        ...context,
+        workspaceId: "alien-workspace-999",
+      };
+
+      const rowInValidWorkspace = {
+        id: "prop-ws-1",
+        workspace_id: validWorkspaceId,
+        user_id: validUserId,
+        conversation_id: null,
+        action_type: "cadastrar_meta",
+        action_version: "v1",
+        risk_level: "LOW",
+        summary: "Meta",
+        payload: {},
+        previous_state: null,
+        idempotency_hash: "hash-idem-ws",
+        status: "prepared" as const,
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        confirmed_at: null,
+        executed_at: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: rowInValidWorkspace, error: null }),
+            }),
+          }),
+        }),
+      } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+
+      const repository = new SupabaseActionProposalRepository(mockSupabase);
+      const res = await repository.confirmProposalAtomically("prop-ws-1", alienWorkspaceContext, "admin");
+      expect(res.success).toBe(false);
+      expect(res.code).toBe("WALLET_AI_ACTION_FORBIDDEN");
+      expect(res.error).toContain("workspace");
+    });
+
+    it("POLÍTICA B: member tenta aprovar proposal criada por outro member (bloqueado com 403)", async () => {
+      const otherMemberContext: AiExecutionContext = {
+        ...context,
+        userId: "other-member-888",
+      };
+
+      const rowCreatedByFirstMember = {
+        id: "prop-mem-1",
+        workspace_id: validWorkspaceId,
+        user_id: validUserId, // Criado por validUserId
+        conversation_id: null,
+        action_type: "cadastrar_meta",
+        action_version: "v1",
+        risk_level: "LOW",
+        summary: "Meta",
+        payload: {},
+        previous_state: null,
+        idempotency_hash: "hash-idem-mem",
+        status: "prepared" as const,
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+        confirmed_at: null,
+        executed_at: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: rowCreatedByFirstMember, error: null }),
+            }),
+          }),
+        }),
+      } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+
+      const repository = new SupabaseActionProposalRepository(mockSupabase);
+      const res = await repository.confirmProposalAtomically("prop-mem-1", otherMemberContext, "member");
+      expect(res.success).toBe(false);
+      expect(res.code).toBe("WALLET_AI_ACTION_FORBIDDEN");
+      expect(res.error).toContain("Membros sem privilégios de administrador só podem aprovar suas próprias propostas");
     });
 
     it("confirmProposalAtomically: bloqueia aprovação HIGH para role 'member'", async () => {
@@ -521,9 +770,43 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
     });
   });
 
-  // ── 6. ROLLOUT GRADUAL DE EXECUTORES (ETAPA 9.4A) ──────────────────────────
-  describe("Rollout Gradual de Executores (ActionExecutorRegistry)", () => {
-    it("PHASE 1 (LOW RISK): cadastrar_meta executa mutação na tabela metas", async () => {
+  // ── 6. ROLLOUT GRADUAL DE EXECUTORES & ISOLAMENTO DE METAS (CHECKPOINT 9.4A.1) ──
+  describe("Rollout de Executores & Auditoria de Isolamento de Metas (Checkpoint 9.4A.1)", () => {
+    it("PRODUÇÃO / DEFAULT: 0 executores ativos por padrão (cadastrar_meta opera como Proposal-only)", async () => {
+      const mockSupabase = { from: vi.fn() } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+      // createDefaultActionExecutorRegistry sem opções -> 0 executores de banco ativos em produção
+      const mutator = new SupabaseActionDatabaseMutator(
+        mockSupabase,
+        createDefaultActionExecutorRegistry(),
+      );
+
+      await expect(
+        mutator.executeMutation(
+          "cadastrar_meta",
+          { nome: "Viagem Fim de Ano", valor_alvo: 5000 },
+          context,
+        ),
+      ).rejects.toThrowError(/Proposal-only/);
+    });
+
+    it("PRODUÇÃO / DEFAULT: tentativa de mutação cross-workspace em metas é BLOQUEADA", async () => {
+      const mockSupabase = { from: vi.fn() } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
+      const mutator = new SupabaseActionDatabaseMutator(
+        mockSupabase,
+        createDefaultActionExecutorRegistry(),
+      );
+
+      // Como o default registry opera 100% proposal-only, nenhuma mutação é executada no banco
+      await expect(
+        mutator.executeMutation(
+          "atualizar_meta",
+          { meta_id: "meta-workspace-b-123", valor_atual: 1500 },
+          context,
+        ),
+      ).rejects.toThrowError(/Proposal-only/);
+    });
+
+    it("OPT-IN TEST REGISTRY: cadastrar_meta executa e descarta campos não permitidos (workspace_id/user_id injetados)", async () => {
       let insertedMeta: Record<string, unknown> | null = null;
 
       const mockSupabase = {
@@ -544,16 +827,23 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
         }),
       } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
 
-      const mutator = new SupabaseActionDatabaseMutator(
-        mockSupabase,
-        createDefaultActionExecutorRegistry(),
-      );
+      // Habilita o executor no registry para teste unitário do handler
+      const customRegistry = createDefaultActionExecutorRegistry({ enableUserScopedMetaExecutors: true });
+      const mutator = new SupabaseActionDatabaseMutator(mockSupabase, customRegistry);
 
-      const res = await mutator.executeMutation(
-        "cadastrar_meta",
-        { nome: "Viagem Fim de Ano", valor_alvo: 5000, valor_atual: 500 },
-        context,
-      );
+      // Sanitiza payload antes da mutação conforme o fluxo canônico
+      const sanitized = sanitizeActionPayload("cadastrar_meta", {
+        nome: "Viagem Fim de Ano",
+        valor_alvo: 5000,
+        valor_atual: 500,
+        workspace_id: "malicious-workspace-injection",
+        user_id: "attacker-user-injection",
+      });
+
+      expect((sanitized as Record<string, unknown>).workspace_id).toBeUndefined();
+      expect((sanitized as Record<string, unknown>).user_id).toBeUndefined();
+
+      const res = await mutator.executeMutation("cadastrar_meta", sanitized, context);
 
       expect(res.success).toBe(true);
       expect(res.recordId).toBe("meta-uuid-999");
@@ -561,10 +851,13 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
       expect(insertedMeta!["titulo"]).toBe("Viagem Fim de Ano");
       expect(insertedMeta!["valor_alvo"]).toBe(5000);
       expect(insertedMeta!["valor_atual"]).toBe(500);
+      // Confirma que user_id foi preenchido exclusivamente pelo context autenticado server-side
       expect(insertedMeta!["user_id"]).toBe(validUserId);
+      // Confirma que não há coluna workspace_id no schema de public.metas
+      expect(insertedMeta!["workspace_id"]).toBeUndefined();
     });
 
-    it("PHASE 1 (LOW RISK): atualizar_meta executa mutação na tabela metas", async () => {
+    it("OPT-IN TEST REGISTRY: atualizar_meta executa mutação filtrando por id e user_id", async () => {
       let updatedFields: Record<string, unknown> | null = null;
 
       const mockSupabase = {
@@ -589,10 +882,9 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
         }),
       } as unknown as import("https://esm.sh/@supabase/supabase-js@2.45.4").SupabaseClient;
 
-      const mutator = new SupabaseActionDatabaseMutator(
-        mockSupabase,
-        createDefaultActionExecutorRegistry(),
-      );
+      const customRegistry = createDefaultActionExecutorRegistry();
+      registerMetaActionHandlers(customRegistry);
+      const mutator = new SupabaseActionDatabaseMutator(mockSupabase, customRegistry);
 
       const res = await mutator.executeMutation(
         "atualizar_meta",
