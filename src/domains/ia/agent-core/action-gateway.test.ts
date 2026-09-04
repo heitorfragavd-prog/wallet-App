@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   prepareActionProposal,
   validateActionForExecution,
-  type 
+  type ActionRepository,
 } from "../../../../supabase/functions/_shared/ai/action-gateway";
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 

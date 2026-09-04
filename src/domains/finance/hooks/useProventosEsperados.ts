@@ -73,7 +73,7 @@ export function useProventosEsperados() {
         description: "Provento cadastrado com sucesso!",
       });
     },
-    onError: (err: unknown) => {
+    onError: (err: any) => {
       logger.error("useProventosEsperados", "Erro ao criar provento", { error: err.message });
       toast({
         variant: "destructive",
@@ -103,7 +103,7 @@ export function useProventosEsperados() {
         description: "Provento atualizado com sucesso!",
       });
     },
-    onError: (err: unknown) => {
+    onError: (err: any) => {
       logger.error("useProventosEsperados", "Erro ao atualizar provento", { error: err.message });
       toast({
         variant: "destructive",
@@ -129,7 +129,7 @@ export function useProventosEsperados() {
         description: "Provento excluído com sucesso!",
       });
     },
-    onError: (err: unknown) => {
+    onError: (err: any) => {
       logger.error("useProventosEsperados", "Erro ao excluir provento", { error: err.message });
       toast({
         variant: "destructive",

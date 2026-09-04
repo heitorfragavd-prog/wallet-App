@@ -86,7 +86,7 @@ serve(async (req) => {
               logsEnvio.push("telegram_erro");
             }
           }
-        } catch (err: unknown) {
+        } catch (err: any) {
           console.error("[notificar-lembretes] Exceção Telegram:", err.message);
           logsEnvio.push("telegram_exception");
         }
@@ -103,7 +103,7 @@ serve(async (req) => {
             link_redirecionamento: "/agenda",
           });
           logsEnvio.push("in_app_sucesso");
-        } catch (err: unknown) {
+        } catch (err: any) {
           console.error("[notificar-lembretes] Erro in-app notificacoes:", err.message);
           logsEnvio.push("in_app_erro");
         }
@@ -133,7 +133,7 @@ serve(async (req) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (err: unknown) {
+  } catch (err: any) {
     console.error("[notificar-lembretes] Exceção geral:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,

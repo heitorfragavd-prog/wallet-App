@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  
+  sanitizeProductDescription,
   validateProductRowV2,
   reconcileAndDeduplicateV2,
   validateDanfeMathV2,
-  
+  parseFiscalNumber,
   DanfeItemV2
 } from './danfe-gemini-v2';
 

@@ -143,7 +143,7 @@ serve(async (req) => {
       });
     }
 
-    const totalNotasSincronizadas = 0;
+    let totalNotasSincronizadas = 0;
 
     for (const cert of certificados) {
       console.log(`[sefaz-sync] Sincronizando CNPJ ${cert.cnpj} (Workspace: ${cert.workspace_id})...`);
@@ -163,7 +163,7 @@ serve(async (req) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (err: unknown) {
+  } catch (err: any) {
     console.error("[sefaz-sync] Erro geral na sincronização SEFAZ:", err.message);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,

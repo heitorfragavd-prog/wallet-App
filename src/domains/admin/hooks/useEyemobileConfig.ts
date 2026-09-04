@@ -105,7 +105,7 @@ export const useEyemobileConfig = () => {
       if (logsError) throw logsError;
       setLogs((logsData || []) as EyemobileSyncLog[]);
 
-    } catch (error: unknown) {
+    } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro ao carregar configurações do Eyemobile", { error: error.message });
       toast({
         title: "Erro ao carregar configurações",
@@ -156,7 +156,7 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true };
 
-    } catch (error: unknown) {
+    } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro ao salvar configurações do Eyemobile", { error: error.message });
       toast({
         title: "Erro ao salvar",
@@ -194,7 +194,7 @@ export const useEyemobileConfig = () => {
                 throw new Error(bodyJson.error);
               }
             }
-          } catch (e: unknown) {
+          } catch (e: any) {
             console.error("failed to extract body text from context:", e.message);
           }
         }
@@ -209,7 +209,7 @@ export const useEyemobileConfig = () => {
 
       return { success: true };
 
-    } catch (error: unknown) {
+    } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro ao testar conexão", { error: error.message });
       toast({
         title: "Falha na conexão",
@@ -251,7 +251,7 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true, ...data };
 
-    } catch (error: unknown) {
+    } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro ao sincronizar dados", { error: error.message });
       toast({
         title: syncMode === "HISTORY" ? "Erro na sincronização histórica" : "Erro na sincronização",
@@ -404,7 +404,7 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true, salesCount: totalSales, stockAlerts: totalStock, errors: allErrors };
  
-    } catch (error: unknown) {
+    } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro na sincronização histórica completa", { error: error.message });
       toast({
         title: "Erro na sincronização histórica",
@@ -450,7 +450,7 @@ export const useEyemobileConfig = () => {
 
       await fetchConfig();
       return true;
-    } catch (err: unknown) {
+    } catch (err: any) {
       toast({
         title: "Erro ao resetar progresso",
         description: err.message,

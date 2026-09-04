@@ -1,4 +1,4 @@
-import React, { useEffect, forwardRef } from "react";
+import React, { useRef, useEffect, forwardRef } from "react";
 import { Search, ScanLine } from "lucide-react";
 import { Input } from "@/shared/components/ui/input";
 

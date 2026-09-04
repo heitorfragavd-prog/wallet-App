@@ -17,8 +17,8 @@ import {
 import {
   Loader2,
   Save,
-  
-  
+  CheckCircle,
+  AlertCircle,
   Wifi,
   RefreshCw,
   Clock,
@@ -26,6 +26,7 @@ import {
   HelpCircle,
   RotateCcw,
 } from "lucide-react";
+import { Alert, AlertDescription } from "@/shared/components/ui/alert";
 import { Badge } from "@/shared/components/ui/badge";
 
 export function EyemobileSettingsCard() {

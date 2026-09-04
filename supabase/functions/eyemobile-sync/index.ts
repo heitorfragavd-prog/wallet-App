@@ -156,7 +156,7 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: true, rows: res.rows, columns: res.rowDescription?.columns.map(c => c.name) }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
-      } catch (err: unknown) {
+      } catch (err: any) {
         return new Response(JSON.stringify({ error: err.message, success: false }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
@@ -322,7 +322,7 @@ serve(async (req) => {
             console.log(`[Eyemobile API] Resolved point_id from relationship ID: ${requestBody.point_id} -> ${resolvedPointId}`);
           }
         }
-      } catch (e: unknown) {
+      } catch (e: any) {
         console.warn("[Eyemobile API] Failed to resolve point_id dynamically:", e.message);
       }
 
@@ -368,7 +368,7 @@ serve(async (req) => {
             }
           }
         }
-      } catch (e: unknown) {
+      } catch (e: any) {
         console.warn("[Eyemobile API] Failed to resolve product groups dynamically:", e.message);
       }
 
@@ -696,7 +696,7 @@ serve(async (req) => {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
-      } catch (err: unknown) {
+      } catch (err: any) {
         return new Response(JSON.stringify({ success: false, error: err.message }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -719,7 +719,7 @@ serve(async (req) => {
         try {
           await syncUserEyemobile(config.user_id, mode || "ALL", supabaseAdmin);
           successCount++;
-        } catch (e: unknown) {
+        } catch (e: any) {
           console.error(`Erro ao sincronizar usuário ${config.user_id}:`, e.message);
           errorCount++;
         }
@@ -773,7 +773,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
 
-  } catch (error: unknown) {
+  } catch (error: any) {
     console.error("Erro na Edge Function Eyemobile:", error);
     return new Response(
       JSON.stringify({
@@ -842,7 +842,7 @@ async function fetchDashboardData(
     
       // Retorna estrutura vazia em vez de lançar erro para não quebrar o dashboard
       return { data: [], has_more: false };
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error(`Erro de rede ao consultar ${primaryUrl}:`, err.message);
       if (fallbackUrl) {
         try {
@@ -903,7 +903,7 @@ async function fetchDashboardData(
         totalDbCount || 0
       );
       console.log(`Resolved API start offset for date ${effectiveStartDate}: ${startOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
-    } catch (e: unknown) {
+    } catch (e: any) {
       console.error(`Error resolving API start offset: ${e.message}`);
     }
   }
@@ -1114,7 +1114,7 @@ async function syncUserEyemobile(
       let offset = typeof customOffset === "number"
         ? customOffset
         : (mode === "HISTORY" ? (config.last_synced_offset || 0) : 0);
-      const limit = typeof customLimit === "number" ? customLimit : 100;
+      let limit = typeof customLimit === "number" ? customLimit : 100;
 
       // Se o offset for 0 e tivermos startStr, resolvemos o offset correspondente na API
       if (offset === 0 && startStr && typeof customOffset !== "number") {
@@ -1147,7 +1147,7 @@ async function syncUserEyemobile(
           );
           console.log(`Resolved API sync start offset for date ${startStr}: ${apiStartOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
           offset = apiStartOffset;
-        } catch (e: unknown) {
+        } catch (e: any) {
           console.error(`Error resolving API sync start offset: ${e.message}`);
         }
       }
@@ -1347,7 +1347,7 @@ async function syncUserEyemobile(
           }
         };
       }
-    } catch (e: unknown) {
+    } catch (e: any) {
       console.error("Erro ao sincronizar vendas:", e.message);
       syncErrors.push(`Vendas: ${e.message}`);
     }
@@ -1405,7 +1405,7 @@ async function syncUserEyemobile(
           }
         }
       }
-    } catch (e: unknown) {
+    } catch (e: any) {
       console.error("Erro ao sincronizar estoque:", e.message);
       syncErrors.push(`Estoque: ${e.message}`);
     }

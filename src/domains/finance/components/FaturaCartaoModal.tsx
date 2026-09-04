@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
-  
-  
+  DialogHeader,
+  DialogTitle,
 } from "@/shared/components/ui/dialog";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
@@ -281,7 +281,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
         title: "Dívida criada! 💳",
         description: `Fatura de ${mesAnoCapitalizado} (R$ ${totalFatura.toFixed(2)}) foi adicionada às suas Dívidas.`,
       });
-    } catch (err: unknown) {
+    } catch (err: any) {
       toast({
         title: "Erro ao gerar dívida",
         description: err?.message || String(err),

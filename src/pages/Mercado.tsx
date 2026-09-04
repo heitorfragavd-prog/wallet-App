@@ -113,7 +113,7 @@ const Mercado = () => {
         await createCategoriaMercado({ ...categoria, ativa: true });
       }
       toast({ title: "Sucesso!", description: "Categorias de mercado padrão importadas." });
-    } catch (_error) {
+    } catch (error) {
       toast({ title: "Erro", description: "Não foi possível importar as categorias.", variant: "destructive" });
     }
   };

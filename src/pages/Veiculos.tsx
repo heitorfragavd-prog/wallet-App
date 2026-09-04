@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
-import { Card, CardContent } from "@/shared/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Badge } from "@/shared/components/ui/badge";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
@@ -26,6 +26,7 @@ import { ListaManutencoes } from "@/domains/vehicles/components/ListaManutencoes
 import { useVeiculos, Veiculo } from "@/domains/vehicles/hooks/useVeiculos";
 import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao";
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
+import { usePlanosManutencao } from "@/domains/vehicles/hooks/usePlanosManutencao";
 import { useManutencoesCustomizadas } from "@/domains/vehicles/hooks/useManutencoesCustomizadas";
 
 export default function Veiculos() {

@@ -111,7 +111,7 @@ Deno.test("enviarWebhook - deve enviar webhook com sucesso", async () => {
           if (response.ok) {
             return true;
           }
-        } catch (_error) {
+        } catch (error) {
           if (tentativa >= maxTentativas) {
             return false;
           }
@@ -221,7 +221,7 @@ Deno.test("enviarWebhook - deve fazer retry em caso de falha", async () => {
               setTimeout(resolve, webhook.retry_delay_seconds * 1000)
             );
           }
-        } catch (_error) {
+        } catch (error) {
           if (tentativa >= maxTentativas) {
             return false;
           }
@@ -539,7 +539,7 @@ Deno.test("retry - deve ter sucesso na segunda tentativa", async () => {
               setTimeout(resolve, webhook.retry_delay_seconds * 1000)
             );
           }
-        } catch (_error) {
+        } catch (error) {
           if (tentativa >= maxTentativas) {
             return false;
           }
@@ -649,7 +649,7 @@ Deno.test("retry - deve respeitar número máximo de tentativas configurado", as
               setTimeout(resolve, webhook.retry_delay_seconds * 1000)
             );
           }
-        } catch (_error) {
+        } catch (error) {
           if (tentativa >= maxTentativas) {
             return false;
           }
@@ -759,7 +759,7 @@ Deno.test("retry - não deve fazer retry em caso de sucesso imediato", async () 
               setTimeout(resolve, webhook.retry_delay_seconds * 1000)
             );
           }
-        } catch (_error) {
+        } catch (error) {
           if (tentativa >= maxTentativas) {
             return false;
           }
@@ -872,7 +872,7 @@ Deno.test("retry - deve tratar diferentes status codes como falha", async () => 
                 setTimeout(resolve, webhook.retry_delay_seconds * 1000)
               );
             }
-          } catch (_error) {
+          } catch (error) {
             if (tentativa >= maxTentativas) {
               return false;
             }

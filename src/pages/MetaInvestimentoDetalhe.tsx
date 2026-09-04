@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Badge } from "@/shared/components/ui/badge";
 import {
   ArrowLeft,
-  
-  
+  Target,
+  Plus,
   TrendingUp,
   Layers,
   Calendar,
@@ -38,18 +38,6 @@ export default function MetaInvestimentoDetalhe() {
   const [simAporteMensal, setSimAporteMensal] = useState("");
   const [simMesesAlvo, setSimMesesAlvo] = useState("");
 
-  // Linked investments
-  const linkedInvs = meta ? investimentos.filter((inv) => inv.meta_id === meta.id) : [];
-  const totalAtualMeta = linkedInvs.reduce((sum, inv) => sum + Number(inv.valor_atual || 0), 0);
-
-  // Sync / update meta current balance in database if it differs
-  useEffect(() => {
-    if (meta && meta.valor_atual !== totalAtualMeta) {
-      updateMeta.mutate({ id: meta.id, valor_atual: totalAtualMeta });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meta?.id, totalAtualMeta]);
-
   if (!meta) {
     return (
       <DashboardLayout>
@@ -61,6 +49,18 @@ export default function MetaInvestimentoDetalhe() {
       </DashboardLayout>
     );
   }
+
+  // Linked investments
+  const linkedInvs = investimentos.filter((inv) => inv.meta_id === meta.id);
+  const totalAtualMeta = linkedInvs.reduce((sum, inv) => sum + Number(inv.valor_atual || 0), 0);
+
+  // Sync / update meta current balance in database if it differs
+  useEffect(() => {
+    if (meta && meta.valor_atual !== totalAtualMeta) {
+      updateMeta.mutate({ id: meta.id, valor_atual: totalAtualMeta });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta?.id, totalAtualMeta]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(val);

@@ -15,7 +15,7 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/components/ui/dialog";
-import { ArrowLeft, Store, Lock, AlertTriangle, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
+import { ArrowLeft, Store, RefreshCw, Smartphone, CheckCircle2, Lock, AlertTriangle, Coins, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface Movimentacao {
@@ -182,7 +182,7 @@ const PDVPage: React.FC = () => {
       } else {
         throw new Error("Resposta de produtos inválida");
       }
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error("Erro ao sincronizar produtos:", err);
       if (showToast) {
         toast({

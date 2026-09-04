@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -66,6 +66,7 @@ import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { usePrivacy } from "@/contexts/PrivacyContext";
+import { supabase } from "@/integrations/supabase/client";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
 import { AccountSelector } from "@/domains/finance/components/AccountSelector";

@@ -15,10 +15,10 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import {
-  
+  TrendingUp,
   ArrowLeft,
-  
-  
+  Calendar,
+  Layers,
   Percent,
   Trash2,
   Download,
@@ -28,12 +28,13 @@ import {
   Briefcase,
   Sparkles,
 } from "lucide-react";
-import { useInvestimentos, calcularPrecoMedio } from "../domains/finance/hooks/useInvestimentos";
+import { useInvestimentos, calcularIR, calcularPrecoMedio, calcularRentabilidadeReal } from "../domains/finance/hooks/useInvestimentos";
 import { useDepositosInvestimento } from "../domains/finance/hooks/useDepositosInvestimento";
 import { useProjecaoInvestimentos, obterTaxaRealAnual } from "../domains/finance/hooks/useProjecaoInvestimentos";
 import { useProventosEsperados } from "../domains/finance/hooks/useProventosEsperados";
 import { useMetasInvestimento } from "../domains/finance/hooks/useMetasInvestimento";
 import { useContasUsuario } from "../domains/finance/hooks/useContasUsuario";
+import { format } from "date-fns";
 
 export default function InvestimentoDetalhe() {
   const { id } = useParams<{ id: string }>();
@@ -401,7 +402,7 @@ export default function InvestimentoDetalhe() {
                       <Label className="text-[10px] text-slate-300">Tipo de Rendimento</Label>
                       <Select
                         value={novoProv.tipo}
-                        onValueChange={(val: string) => setNovoProv({ ...novoProv, tipo: val })}
+                        onValueChange={(val: any) => setNovoProv({ ...novoProv, tipo: val })}
                       >
                         <SelectTrigger className="bg-[#1C2541]/50 border-[#1E2942] h-9">
                           <SelectValue placeholder="Selecione..." />

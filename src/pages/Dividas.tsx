@@ -48,7 +48,7 @@ import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDividas, Divida } from "@/domains/finance/hooks/useDividas";
 import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { BankLogoBadge } from "@/shared/components/BankLogoBadge";
-import { useDateRangeFilter } from "@/shared/components/DateRangePicker";
+import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 import { ReminderSelector } from "@/domains/finance/components/ReminderSelector";
 import { useDebtReminders } from "@/domains/finance/hooks/useDebtReminders";
 import { RegistrarPagamentoModal } from "@/domains/finance/components/RegistrarPagamentoModal";

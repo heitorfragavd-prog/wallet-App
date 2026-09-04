@@ -192,7 +192,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
       }
 
       // Buscar detalhes adicionais
-      const lembreteComDetalhes = { ...lembrete };
+      let lembreteComDetalhes = { ...lembrete };
       
       if (input.tipo_manutencao === 'plano') {
         const { data: plano } = await supabase

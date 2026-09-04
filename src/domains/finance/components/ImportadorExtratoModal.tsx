@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,8 +15,8 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
   UploadCloud,
   FileText,
-  
-  
+  CheckCircle2,
+  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Sparkles,
@@ -117,7 +117,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           title: "Extrato processado",
           description: `${parsed.length} lançamentos encontrados (${conciliaveis} prontos para conciliar).`,
         });
-      } catch (_err) {
+      } catch (err) {
         toast({
           title: "Erro ao ler extrato",
           description: "Não foi possível interpretar o arquivo.",
@@ -173,7 +173,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
         description: `Lançamento '${item.descricao}' conciliado com a transação existente.`,
       });
       refetchTransacoes();
-    } catch (_err) {
+    } catch (err) {
       toast({
         title: "Erro ao conciliar",
         description: "Não foi possível atualizar a transação.",
@@ -208,8 +208,8 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
           if (!item.data) return new Date().toISOString().split("T")[0];
           const parts = item.data.trim().split("-");
           if (parts.length === 3 && parts[0].length === 4) {
-            const m = parseInt(parts[1], 10);
-            const d = parseInt(parts[2], 10);
+            let m = parseInt(parts[1], 10);
+            let d = parseInt(parts[2], 10);
             if (m > 12 && d <= 12) {
               return `${parts[0]}-${String(d).padStart(2, "0")}-${String(m).padStart(2, "0")}`;
             }
@@ -289,7 +289,7 @@ export const ImportadorExtratoModal: React.FC<ImportadorExtratoModalProps> = ({
       setItens([]);
       setArquivoNome("");
       onOpenChange(false);
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error("Erro na importação de lançamentos:", err);
       const errorMsg = err?.message || err?.details || (typeof err === "object" ? JSON.stringify(err) : String(err));
       toast({

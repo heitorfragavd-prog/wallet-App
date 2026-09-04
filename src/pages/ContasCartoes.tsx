@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ElementType } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import {
   Card,
