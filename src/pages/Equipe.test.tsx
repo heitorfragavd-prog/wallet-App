@@ -45,6 +45,14 @@ vi.mock("@/domains/finance/hooks/useColaboradores", () => ({
   useColaboradores: () => ({ data: colaboradores, isLoading: false, error: null }),
 }));
 
+beforeEach(() => {
+  vi.setSystemTime(new Date("2026-08-25T12:00:00Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("EquipePage", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });

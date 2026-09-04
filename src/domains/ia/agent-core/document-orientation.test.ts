@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { calculateRotationNeeded } from "../../../../supabase/functions/_shared/danfe-extractor";
 import { normalizeAndRotateImageMatrix } from "../../../../supabase/functions/_shared/ai/danfe-visual-pipeline";
 
@@ -11,8 +11,8 @@ describe("Document Orientation & Normalization Pipeline (Etapa 1.2)", () => {
     expect(calculateRotationNeeded(270)).toBe(270);
     expect(calculateRotationNeeded(null)).toBe(0);
     expect(calculateRotationNeeded(undefined)).toBe(0);
-    expect(calculateRotationNeeded(45 as any)).toBe(0);
-    expect(calculateRotationNeeded(360 as any)).toBe(0);
+    expect(calculateRotationNeeded(45 as unknown as Parameters<typeof calculateRotationNeeded>[0])).toBe(0);
+    expect(calculateRotationNeeded(360 as unknown as Parameters<typeof calculateRotationNeeded>[0])).toBe(0);
   });
 
   // ── 2. ORIENTAÇÃO 0° (SEM ROTAÇÃO / PRESERVA ORIGINAL) ────────────────────
@@ -60,7 +60,7 @@ describe("Document Orientation & Normalization Pipeline (Etapa 1.2)", () => {
       motivo: "Boleto bancário Itaú / SPAL identificado, orientado a 270°",
     };
 
-    const rotation = calculateRotationNeeded(rawAnalysis.orientacao_leitura as any);
+    const rotation = calculateRotationNeeded(rawAnalysis.orientacao_leitura as Parameters<typeof calculateRotationNeeded>[0]);
     expect(rotation).toBe(270);
     expect(rawAnalysis.tipo_documento).toBe("boleto");
   });

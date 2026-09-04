@@ -33,10 +33,10 @@ export async function normalizeAndRotateImageMatrix(
   const cleanB64 = base64Data.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
 
   // Detectar se está rodando no Deno com ImageScript disponível
-  if (typeof (globalThis as any).Deno !== "undefined") {
+  if (typeof (globalThis as { Deno?: unknown }).Deno !== "undefined") {
     try {
       const { Image } = await import("https://deno.land/x/imagescript@1.2.15/mod.ts");
-      const { decode: base64Decode, encode: base64Encode } = await import("https://deno.land/std@0.168.0/encoding/base64.ts");
+      const { encode: base64Encode } = await import("https://deno.land/std@0.168.0/encoding/base64.ts");
 
       const binaryString = atob(cleanB64);
       const bytes = new Uint8Array(binaryString.length);
@@ -100,7 +100,7 @@ export async function cropTableRegionMatrix(
   const safeTop = Math.max(0.05, Math.min(0.60, typeof topRatio === "number" ? topRatio : 0.24));
   const safeBottom = Math.max(safeTop + 0.10, Math.min(0.98, typeof bottomRatio === "number" ? bottomRatio : 0.90));
 
-  if (typeof (globalThis as any).Deno !== "undefined") {
+  if (typeof (globalThis as { Deno?: unknown }).Deno !== "undefined") {
     try {
       const { Image } = await import("https://deno.land/x/imagescript@1.2.15/mod.ts");
       const { encode: base64Encode } = await import("https://deno.land/std@0.168.0/encoding/base64.ts");

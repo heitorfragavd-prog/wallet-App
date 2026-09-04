@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Document Handler — Classificação e Despacho Automático de Documentos no Backend (Etapa 1.2)
  * 
  * Inspeciona visualmente a imagem/PDF via IA e despacha automaticamente para:
@@ -79,7 +79,7 @@ export async function handleDocumentHttpRequest(
   let context: AiExecutionContext | null = null;
 
   try {
-    let body: Record<string, any>;
+    let body: Record<string, unknown>;
     try {
       body = await request.clone().json();
     } catch {
@@ -111,15 +111,14 @@ export async function handleDocumentHttpRequest(
     // 1. Autorização Server-Side Obrigatória
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
-    const openAiKey = (dependencies.authDeps as any)?.openAiApiKey || (
-      typeof (globalThis as any).Deno !== "undefined"
-        ? (globalThis as any).Deno.env.get("OPENAI_API_KEY")
-        : undefined
+    type DenoGlobal = { Deno?: { env: { get(key: string): string | undefined } } };
+    const denoEnv = (globalThis as unknown as DenoGlobal).Deno?.env;
+
+    const openAiKey = (dependencies.authDeps as { openAiApiKey?: string })?.openAiApiKey || (
+      denoEnv?.get("OPENAI_API_KEY")
     );
 
-    const backupKey = typeof (globalThis as any).Deno !== "undefined"
-      ? (globalThis as any).Deno.env.get("GEMINI_API_KEY_BACKUP")
-      : undefined;
+    const backupKey = denoEnv?.get("GEMINI_API_KEY_BACKUP");
 
     // 2. Classificação Visual Canônica (Tipo + Orientação na mesma chamada)
     let tipoIdentificado: "danfe" | "boleto" | "outro" = "outro";

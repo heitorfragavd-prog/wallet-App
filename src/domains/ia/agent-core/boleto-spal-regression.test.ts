@@ -12,13 +12,9 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   validateLinhaDigitavel,
-  validateCodigoBarras,
   calcularModulo10,
   calcularModulo11Boleto,
   calcularModulo11Arrecadacao,
-  fatorVencimentoParaData,
-  parseBoletoAmount,
-  normalizeDate,
   reconcileBoleto,
 } from "../services/boleto-validator";
 import {
@@ -133,7 +129,7 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         base64: "dummy_b64",
         mimeType: "image/jpeg",
         openaiApiKey: "fake_key",
-        fetchImpl: mockFetch as any,
+        fetchImpl: mockFetch as unknown as typeof fetch,
       });
 
       expect(focusedResult.beneficiario).toBe("SPAL INDUSTRIA BRASILEIRA DE");
@@ -457,7 +453,7 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         openaiApiKey: "fake_openai_key",
         geminiApiKey: "fake_gemini_key",
         workspaceId: "ws_resilience_test",
-        fetchImpl: mockFetch as any,
+        fetchImpl: mockFetch as unknown as typeof fetch,
       });
 
       expect(output.success).toBe(true);

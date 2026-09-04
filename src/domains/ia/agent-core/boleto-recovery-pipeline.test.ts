@@ -60,7 +60,7 @@ describe('Boleto Auto-Recovery Pipeline & High-Risk UX Verification', () => {
       mimeType: 'image/jpeg',
       openaiApiKey: 'sk-openai-mock',
       geminiApiKey: 'ai-gemini-mock',
-      fetchImpl: fetchMock as any,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(res.recovered).toBe(true);
@@ -96,7 +96,7 @@ describe('Boleto Auto-Recovery Pipeline & High-Risk UX Verification', () => {
       mimeType: 'image/jpeg',
       openaiApiKey: 'sk-openai-mock',
       geminiApiKey: 'ai-gemini-mock',
-      fetchImpl: fetchMock as any,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(res.recovered).toBe(true);
@@ -120,7 +120,7 @@ describe('Boleto Auto-Recovery Pipeline & High-Risk UX Verification', () => {
       mimeType: 'image/jpeg',
       openaiApiKey: 'sk-openai-mock',
       geminiApiKey: 'ai-gemini-mock',
-      fetchImpl: fetchMock as any,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(res.recovered).toBe(false);

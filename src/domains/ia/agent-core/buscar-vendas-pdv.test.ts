@@ -9,7 +9,7 @@
  * E. workspace incorreto é bloqueado pelo AiExecutionContext server-side
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // ── Tipos mínimos para o teste ─────────────────────────────────────────────────
 

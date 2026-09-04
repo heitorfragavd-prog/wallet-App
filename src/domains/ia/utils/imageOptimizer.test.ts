@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Testes Automatizados — Image Optimizer: Prova de Preservação de Bytes
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -14,13 +14,6 @@ describe("Image Optimizer — Prova de Preservação de Bytes e Resolução", ()
     const fakeContent = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
     const file = new File([fakeContent], "foto_boleto.jpg", { type: "image/jpeg" });
 
-    // Mock do Image nativo com dimensões 900x1600 (dentro do limite)
-    const mockImage = {
-      width: 900,
-      height: 1600,
-      onload: null as any,
-    };
-
     // Spy no FileReader
     const originalImage = globalThis.Image;
     globalThis.Image = class {
@@ -32,7 +25,7 @@ describe("Image Optimizer — Prova de Preservação de Bytes e Resolução", ()
           if (this.onload) this.onload();
         }, 10);
       }
-    } as any;
+    } as unknown as typeof Image;
 
     try {
       const res = await optimizeImageForVision(file, 2048, 0.90);

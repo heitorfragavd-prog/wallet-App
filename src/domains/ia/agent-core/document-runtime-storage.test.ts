@@ -21,6 +21,7 @@ import { handleFiscalHttpRequest } from "../../../../supabase/functions/wallet-a
 import { WalletStorageService, CHAT_ATTACHMENTS_BUCKET } from "../services/WalletStorageService";
 import { processDanfeDocument, type DanfeSessionState } from "../../../../supabase/functions/_shared/ai/danfe-fiscal-service";
 import { processWalletDocument } from "../services/WalletDocumentService";
+import type { SupabaseClientLike } from "../../../../supabase/functions/wallet-ai-query/supabase-adapter";
 
 const mockAuthDeps = {
   getUser: vi.fn().mockResolvedValue({ id: "user-uuid-1111" }),
@@ -69,7 +70,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
     const resp = await handleFiscalHttpRequest(req, {
       authDeps: mockAuthDeps,
       geminiApiKey: "test-gemini-key",
-      adminClient: mockAdminClient as any,
+      adminClient: mockAdminClient as unknown as SupabaseClientLike,
     });
 
     expect(resp.status).toBe(200);
@@ -83,9 +84,9 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
   // B. Folha 1/2 -> invoca RPC atômica e retorna 'parcial_multipagina'
   // ──────────────────────────────────────────────────────────────────────────
   it("B: Folha 1 de 2 -> invoca RPC merge_documento_sessao_page atomicamente", async () => {
-    let rpcArgsPassed: any = null;
+    let rpcArgsPassed: Record<string, unknown> | null = null;
     const mockAdminClient = {
-      rpc: vi.fn().mockImplementation((fnName, args) => {
+      rpc: vi.fn().mockImplementation((fnName: string, args: Record<string, unknown>) => {
         if (fnName === "merge_documento_sessao_page") {
           rpcArgsPassed = args;
           return Promise.resolve({
@@ -155,7 +156,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
             },
           ],
         }),
-      }) as any;
+      }) as unknown as typeof fetch;
 
     try {
       const req = new Request("http://localhost/wallet-ai-orchestrator", {
@@ -172,17 +173,17 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
       const resp = await handleFiscalHttpRequest(req, {
         authDeps: mockAuthDeps,
         geminiApiKey: "test-gemini-key",
-        adminClient: mockAdminClient as any,
+        adminClient: mockAdminClient as unknown as SupabaseClientLike,
       });
 
       expect(resp.status).toBe(200);
       const json = await resp.json();
       expect(json.status).toBe("parcial_multipagina");
       expect(rpcArgsPassed).toBeDefined();
-      expect(rpcArgsPassed.p_total_paginas).toBe(2);
-      expect(rpcArgsPassed.p_pagina_atual).toBe(1);
-      expect(rpcArgsPassed.p_user_id).toBe("user-uuid-1111");
-      expect(rpcArgsPassed.p_workspace_id).toBe(validWsId);
+      expect(rpcArgsPassed?.p_total_paginas).toBe(2);
+      expect(rpcArgsPassed?.p_pagina_atual).toBe(1);
+      expect(rpcArgsPassed?.p_user_id).toBe("user-uuid-1111");
+      expect(rpcArgsPassed?.p_workspace_id).toBe(validWsId);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -193,7 +194,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
   // ──────────────────────────────────────────────────────────────────────────
   it("C: Refresh de página e envio da Folha 2/2 -> RPC consolida e valida nota", async () => {
     const mockAdminClient = {
-      rpc: vi.fn().mockImplementation((fnName, _args) => {
+      rpc: vi.fn().mockImplementation((fnName: string, _args: Record<string, unknown>) => {
         if (fnName === "merge_documento_sessao_page") {
           return Promise.resolve({
             data: {
@@ -265,7 +266,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
             },
           ],
         }),
-      }) as any;
+      }) as unknown as typeof fetch;
 
     try {
       const req = new Request("http://localhost/wallet-ai-orchestrator", {
@@ -282,7 +283,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
       const resp = await handleFiscalHttpRequest(req, {
         authDeps: mockAuthDeps,
         geminiApiKey: "test-gemini-key",
-        adminClient: mockAdminClient as any,
+        adminClient: mockAdminClient as unknown as SupabaseClientLike,
       });
 
       expect(resp.status).toBe(200);
@@ -379,7 +380,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
       geminiApiKey: "fake-key",
       workspaceId: validWsId,
       existingSession: sessionP2,
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.status).toBe("sucesso");
@@ -445,7 +446,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
       geminiApiKey: "fake-key",
       workspaceId: "ws-bbb",
       existingSession: sessionWsA,
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.sessionState?.workspaceId).toBe("ws-bbb");
@@ -460,12 +461,12 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
     let uploadedPath = "";
 
     const uploadSpy = vi.spyOn(supabase.storage, "from").mockReturnValue({
-      upload: vi.fn().mockImplementation((path, _file) => {
+      upload: vi.fn().mockImplementation((path: string, _file: Blob) => {
         uploadedPath = path;
         return Promise.resolve({ data: { path }, error: null });
       }),
       createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: "https://storage.supabase.co/signed" }, error: null }),
-    } as any);
+    } as unknown as ReturnType<typeof supabase.storage.from>);
 
     const mockFile = new Blob(["conteudo fake"], { type: "image/png" });
     const result = await WalletStorageService.uploadAttachment({
@@ -565,7 +566,7 @@ describe("Etapa 2.1b — Runtime Real, Sessões Atômicas e Storage", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "fake-key",
       workspaceId: validWsId,
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.status).toBe("requer_revisao");

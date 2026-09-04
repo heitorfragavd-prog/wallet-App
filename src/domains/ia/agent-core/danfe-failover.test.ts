@@ -22,12 +22,12 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
   it("A: Gemini principal OK -> backup NÃO chamado, OpenAI NÃO chamado", async () => {
     const keysUsed: string[] = [];
 
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
       const parsedUrl = new URL(url);
       const key = parsedUrl.searchParams.get("key");
       if (key) keysUsed.push(key);
 
-      const body = JSON.parse(init.body);
+      const body = init?.body ? JSON.parse(init.body) : {};
       const prompt = body.contents?.[0]?.parts?.[0]?.text || "";
 
       if (prompt.includes("quadro CÁLCULO DO IMPOSTO")) {
@@ -85,7 +85,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -97,7 +97,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
   it("B: Gemini principal 429 -> backup chamado -> backup OK -> OpenAI NÃO chamado", async () => {
     const keysUsed: string[] = [];
 
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
       const parsedUrl = new URL(url);
       const key = parsedUrl.searchParams.get("key");
       if (key) keysUsed.push(key);
@@ -111,7 +111,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       }
 
       if (key === "key_backup") {
-        const body = JSON.parse(init.body);
+        const body = init?.body ? JSON.parse(init.body) : {};
         const prompt = body.contents?.[0]?.parts?.[0]?.text || "";
 
         if (prompt.includes("quadro CÁLCULO DO IMPOSTO")) {
@@ -170,7 +170,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -180,7 +180,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
   });
 
   it("C: Gemini principal Timeout -> backup OK", async () => {
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
       const parsedUrl = new URL(url);
       const key = parsedUrl.searchParams.get("key");
 
@@ -223,7 +223,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKey: "key_primary",
       geminiApiKeyBackup: "key_backup",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -272,7 +272,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKey: "key_primary",
       geminiApiKeyBackup: "key_backup",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -280,14 +280,14 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
   });
 
   it("E: Principal 429 -> backup 429 -> OpenAI OK", async () => {
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
       if (url.includes("googleapis.com")) {
         return Promise.resolve({ ok: false, status: 429, text: async () => "RESOURCE_EXHAUSTED" });
       }
 
       if (url.includes("openai.com")) {
-        const body = JSON.parse(init.body);
-        const sys = body.messages[0].content;
+        const body = init?.body ? JSON.parse(init.body) : {};
+        const sys = body.messages?.[0]?.content || "";
 
         if (sys.includes("quadro CÁLCULO DO IMPOSTO")) {
           return Promise.resolve({
@@ -337,7 +337,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -346,7 +346,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
   });
 
   it("F: Principal 429 -> backup Timeout -> OpenAI OK", async () => {
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
       const parsedUrl = new URL(url);
       const key = parsedUrl.searchParams?.get("key");
 
@@ -390,7 +390,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -413,7 +413,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.itens).toHaveLength(0);
@@ -425,11 +425,11 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
     let backupCalled = false;
     let openAiCalled = false;
 
-    const mockFetch = vi.fn().mockImplementation((url: string, init: any) => {
+    const mockFetch = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
       if (url.includes("key=key_backup")) backupCalled = true;
       if (url.includes("openai.com")) openAiCalled = true;
 
-      const body = JSON.parse(init.body);
+      const body = init?.body ? JSON.parse(init.body) : {};
       const prompt = body.contents?.[0]?.parts?.[0]?.text || "";
 
       if (prompt.includes("quadro CÁLCULO DO IMPOSTO")) {
@@ -487,7 +487,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: "key_backup",
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.validacao.valido).toBe(false);
@@ -532,7 +532,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKeyBackup: undefined, // Sem chave backup
       openaiApiKey: "key_openai",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -576,7 +576,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKey: "key_super_secret_primary_12345",
       geminiApiKeyBackup: "key_super_secret_backup_67890",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     const allLogs = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
@@ -616,7 +616,7 @@ describe("DANFE Failover — Suíte Completa de Contingência de Chaves", () => 
       geminiApiKey: "key_primary",
       geminiApiKeyBackup: "key_backup",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.mensagemFormatada).toContain("Nenhuma alteração foi feita no estoque");

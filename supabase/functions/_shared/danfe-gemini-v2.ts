@@ -55,7 +55,7 @@ export interface DanfeExtractionResultV2 {
     valor_frete?: number;
   };
   itens: DanfeItemV2[];
-  itensRejeitados: Array<{ index: number; raw: any; motivo: string }>;
+  itensRejeitados: Array<{ index: number; raw: unknown; motivo: string }>;
   validacao: DanfeValidationResultV2;
   metadados: {
     modelo_utilizado: string;
@@ -90,8 +90,8 @@ export function sanitizeProductDescription(descricaoBruta: string): { descricaoL
 
   const fciPatterns = [
     /Resolu[çc][ãa]o\s+do\s+Senado\s+Federal\s+n[ºo°]?\s*13\/12[^\n]*/gi,
-    /N[úu]mero\s+da\s+FCI:?\s*([A-F0-9\-]{36}|[A-F0-9\-]+)/gi,
-    /FCI:?\s*([A-F0-9\-]{36})/gi,
+    /N[úu]mero\s+da\s+FCI:?\s*([A-F0-9-]{36}|[A-F0-9-]+)/gi,
+    /FCI:?\s*([A-F0-9-]{36})/gi,
     /vBCFCPST[^\n]*/gi,
     /vFCPST[^\n]*/gi,
   ];
@@ -121,7 +121,7 @@ export function sanitizeProductDescription(descricaoBruta: string): { descricaoL
 
 // ─── 2. PARSER DE NÚMEROS BRASILEIROS ───
 
-export function parseFiscalNumber(val: any): number {
+export function parseFiscalNumber(val: unknown): number {
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
   if (!val) return 0;
   const str = String(val).trim();
@@ -137,12 +137,13 @@ export function parseFiscalNumber(val: any): number {
 
 // ─── 3. VALIDAÇÃO ESTRUTURAL DETERMINÍSTICA ESTREITA ───
 
-export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: DanfeItemV2; motivo?: string } {
+export function validateProductRowV2(rawItem: unknown): { isValid: boolean; item?: DanfeItemV2; motivo?: string } {
   if (!rawItem || typeof rawItem !== 'object') {
     return { isValid: false, motivo: 'Objeto nulo ou inválido' };
   }
+  const item = rawItem as Record<string, unknown>;
 
-  const rawDesc = String(rawItem.descricao || '').trim();
+  const rawDesc = String(item.descricao || '').trim();
   if (rawDesc.length < 2) {
     return { isValid: false, motivo: 'Descrição vazia ou muito curta (<2 caracteres)' };
   }
@@ -170,14 +171,14 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
   }
 
   // 3. Validação de Quantidade
-  const qtd = parseFiscalNumber(rawItem.quantidade);
+  const qtd = parseFiscalNumber(item.quantidade);
   if (qtd <= 0) {
-    return { isValid: false, motivo: `Quantidade inválida (${rawItem.quantidade})` };
+    return { isValid: false, motivo: `Quantidade inválida (${item.quantidade})` };
   }
 
   // 4. Validação de Valores Monetários com preservação de origem (lido vs inferido)
-  const vUnitLidoNum = rawItem.valor_unitario != null && String(rawItem.valor_unitario).trim() !== '' ? parseFiscalNumber(rawItem.valor_unitario) : null;
-  const vTotLidoNum = rawItem.valor_total != null && String(rawItem.valor_total).trim() !== '' ? parseFiscalNumber(rawItem.valor_total) : null;
+  const vUnitLidoNum = item.valor_unitario != null && String(item.valor_unitario).trim() !== '' ? parseFiscalNumber(item.valor_unitario) : null;
+  const vTotLidoNum = item.valor_total != null && String(item.valor_total).trim() !== '' ? parseFiscalNumber(item.valor_total) : null;
 
   const temUnitLido = vUnitLidoNum !== null && vUnitLidoNum > 0;
   const temTotLido = vTotLidoNum !== null && vTotLidoNum > 0;
@@ -208,11 +209,11 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
   const valorUnitarioConsolidado = temUnitLido ? vUnitLidoNum! : valorUnitarioCalculado!;
 
   // 5. Forte Sinal Fiscal Obrigatório (Código >=2 chars OU EAN >=7 chars OU NCM >=4 dígitos OU CFOP 4 dígitos)
-  const codStr = rawItem.codigo ? String(rawItem.codigo).trim() : null;
-  const eanStr = rawItem.ean ? String(rawItem.ean).trim() : null;
-  const ncmStr = rawItem.ncm ? String(rawItem.ncm).trim().replace(/[^0-9]/g, '') : null;
-  const cfopStr = rawItem.cfop ? String(rawItem.cfop).trim().replace(/[^0-9]/g, '') : null;
-  const cstStr = rawItem.cst ? String(rawItem.cst).trim() : null;
+  const codStr = item.codigo ? String(item.codigo).trim() : null;
+  const eanStr = item.ean ? String(item.ean).trim() : null;
+  const ncmStr = item.ncm ? String(item.ncm).trim().replace(/[^0-9]/g, '') : null;
+  const cfopStr = item.cfop ? String(item.cfop).trim().replace(/[^0-9]/g, '') : null;
+  const cstStr = item.cst ? String(item.cst).trim() : null;
 
   const temSinalCodigo = Boolean(codStr && codStr.length >= 2 && codStr !== 'null');
   const temSinalEan = Boolean(eanStr && eanStr.length >= 7 && eanStr !== 'SEM GTIN');
@@ -226,8 +227,8 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
 
   // 6. Tratamento de Unidade (NUNCA INVENTAR "UN")
   let unidadeFinal: string | null = null;
-  if (rawItem.unidade) {
-    const uUpper = String(rawItem.unidade).trim().toUpperCase();
+  if (item.unidade) {
+    const uUpper = String(item.unidade).trim().toUpperCase();
     if (UNIDADES_FISCAIS_VALIDAS.has(uUpper)) {
       unidadeFinal = uUpper;
     } else if (uUpper.length >= 1 && uUpper.length <= 4) {
@@ -419,21 +420,24 @@ function isPlausibleNFeAccessKey(digits44: string): boolean {
  * NÃO serializa o JSON inteiro nem usa regex de blocos que possa concatenar CNPJ + NF.
  * Cada candidato é avaliado individualmente. Deve ter exatamente 44 dígitos após limpeza.
  */
-export function findAccessKeyInPayload(payload: any, rawText?: string): string | null {
+export function findAccessKeyInPayload(payload: unknown, rawText?: string): string | null {
   if (!payload && !rawText) return null;
 
+  const payloadRecord = payload as Record<string, unknown> | null | undefined;
+  const cabecalhoRecord = payloadRecord?.cabecalho as Record<string, unknown> | null | undefined;
+
   // Lista explícita de campos onde a chave de acesso pode estar — nunca o payload inteiro
-  const candidateValues: any[] = [
-    payload?.chave_acesso,
-    payload?.chave,
-    payload?.chave_de_acesso,
-    payload?.nfe_chave,
-    payload?.access_key,
-    payload?.cabecalho?.chave_acesso,
-    payload?.cabecalho?.chave,
-    payload?.cabecalho?.chave_de_acesso,
-    payload?.cabecalho?.nfe_chave,
-    payload?.cabecalho?.access_key,
+  const candidateValues: unknown[] = [
+    payloadRecord?.chave_acesso,
+    payloadRecord?.chave,
+    payloadRecord?.chave_de_acesso,
+    payloadRecord?.nfe_chave,
+    payloadRecord?.access_key,
+    cabecalhoRecord?.chave_acesso,
+    cabecalhoRecord?.chave,
+    cabecalhoRecord?.chave_de_acesso,
+    cabecalhoRecord?.nfe_chave,
+    cabecalhoRecord?.access_key,
   ];
 
   for (const cand of candidateValues) {

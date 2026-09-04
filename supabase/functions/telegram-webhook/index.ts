@@ -1,17 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
-  
-  
   expandCropTileWithMargin,
   classifyVisionResponse,
-  validateProductRow,
   consolidateDanfeItems,
-  deduplicateAndConsolidateItems,
   validateDanfeMath,
   evaluateStockStatus,
   type DanfeItemRaw,
@@ -20,28 +17,19 @@ import {
 import {
   validateProductRowV2,
   validateDanfeMathV2,
-  
-  
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
-  parseFiscalNumber,
-  formatNFeNumber,
   findAccessKeyInPayload,
   reconcileNFeNumber,
   type DanfeItemV2,
-  type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
 import {
   cleanDigits,
   reconcileBoleto,
   validateLinhaDigitavel,
-  validateCodigoBarras,
   parseBoletoAmount,
-  normalizeDate,
   parseNum,
   parseDate,
-  type BoletoValidationResult,
-  type BoletoValidationEvidence,
 } from "../_shared/ai/boleto-validator.ts";
 import {
   extractFocusedBeneficiary,
@@ -65,8 +53,15 @@ function generateToken(): string {
   return token;
 }
 
+interface CategoriaRow {
+  id: string;
+  nome: string;
+  tipo?: string;
+  aliases?: string | null;
+}
+
 async function resolveCategoriaByCredor(
-  supabase: any,
+  supabase: SupabaseClient,
   userId: string,
   credorOrDesc: string,
   supabaseUrl?: string,
@@ -96,15 +91,16 @@ async function resolveCategoriaByCredor(
       return { id: cacheHit.categorias.id, nome: cacheHit.categorias.nome };
     }
   } catch (err: unknown) {
-    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err.message);
+    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err instanceof Error ? err.message : String(err));
   }
 
-  const { data: categorias } = await supabase
+  const { data: categoriasData } = await supabase
     .from("categorias")
     .select("id,nome,tipo,aliases")
     .eq("user_id", userId);
 
-  if (!categorias || categorias.length === 0) return null;
+  const categorias = (categoriasData as CategoriaRow[] | null) || [];
+  if (categorias.length === 0) return null;
 
   // ─── 2. ALIASES: Sinônimos e marcas cadastrados ───
   for (const cat of categorias) {
@@ -119,10 +115,10 @@ async function resolveCategoriaByCredor(
   }
 
   // ─── 3. MATCH EXATO E POR INCLUSÃO COMPLETA ───
-  const exact = categorias.find((c: any) => normalize(c.nome) === credorNorm);
+  const exact = categorias.find((c) => normalize(c.nome) === credorNorm);
   if (exact) return { id: exact.id, nome: exact.nome };
 
-  const fullInc = categorias.find((c: any) => {
+  const fullInc = categorias.find((c) => {
     const catNorm = normalize(c.nome);
     return catNorm.length >= 3 && (credorNorm.includes(catNorm) || catNorm.includes(credorNorm));
   });
@@ -137,7 +133,7 @@ async function resolveCategoriaByCredor(
   const inputTokens = credorNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
 
   for (const token of inputTokens) {
-    const match = categorias.find((c: any) => {
+    const match = categorias.find((c) => {
       const catNorm = normalize(c.nome);
       return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
     });
@@ -148,7 +144,7 @@ async function resolveCategoriaByCredor(
   if (supabaseUrl && serviceKey && categorias.length > 0) {
     try {
       console.log(`[telegram-webhook] Tentando categorização por LLM para "${credorOrDesc}"...`);
-      const catListStr = categorias.map((c: any, i: number) => `${i + 1}. ${c.nome}`).join("\n");
+      const catListStr = categorias.map((c, i: number) => `${i + 1}. ${c.nome}`).join("\n");
       const prompt = `Você é um classificador financeiro inteligente.
 Dado o nome do beneficiário/fornecedor "${credorOrDesc}", escolha a categoria mais provável entre as seguintes:
 ${catListStr}
@@ -184,14 +180,14 @@ Responda APENAS com o número correspondente (ex: 1, 2, etc). Se nenhuma categor
         }
       }
     } catch (llmCatErr: unknown) {
-      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr.message);
+      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr instanceof Error ? llmCatErr.message : String(llmCatErr));
     }
   }
 
   return null;
 }
 
-async function salvarCacheCategoria(supabase: any, userId: string, credor: string, categoriaId: string) {
+async function salvarCacheCategoria(supabase: SupabaseClient, userId: string, credor: string, categoriaId: string) {
   if (!credor || !categoriaId) return;
   const normalize = (s: string) =>
     s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
@@ -210,7 +206,7 @@ async function salvarCacheCategoria(supabase: any, userId: string, credor: strin
     );
     console.log(`[telegram-webhook] Cache de categoria salvo: "${credorNorm}" -> ${categoriaId}`);
   } catch (err: unknown) {
-    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err.message);
+    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -277,13 +273,14 @@ async function transcribeAudio(fileId: string, telegramBotToken: string, supabas
     const result = await transcribeResp.json();
     return result.transcription || null;
   } catch (err: unknown) {
-    console.error("[transcribeAudio] exception:", err.message);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[transcribeAudio] exception:", errMsg);
     return null;
   }
 }
 
 // ─── PREVISÃO DE CAIXA INTELIGENTE ───
-async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?: string | null): Promise<string> {
+async function calcularPrevisaoCaixa(supabase: SupabaseClient, userId: string, workspaceId?: string | null): Promise<string> {
   const hoje = new Date();
   
   // 1. Saldo atual nas contas
@@ -297,7 +294,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   }
   const { data: contas } = await qContas;
   
-  const saldoAtual = (contas || []).reduce((a: number, c: any) => a + (Number(c.saldo) || 0), 0);
+  const saldoAtual = (contas || []).reduce((a: number, c: { saldo?: unknown }) => a + (Number(c?.saldo) || 0), 0);
   
   // 2. Receitas médias dos últimos 30 dias
   const dataInicio30 = new Date(hoje);
@@ -333,7 +330,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDespFixas = qDespFixas.eq("workspace_id", workspaceId);
   const { data: despesas30d } = await qDespFixas;
   
-  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: any) => a + Number(d.valor || 0), 0);
+  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: { valor?: unknown }) => a + Number(d.valor || 0), 0);
   const despesaDiaria = totalDespesas30d > 0 ? totalDespesas30d / 30 : 0;
   
   // 4. Dívidas a vencer nos próximos 90 dias
@@ -351,7 +348,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDividas = qDividas.eq("workspace_id", workspaceId);
   const { data: dividasFuturas } = await qDividas;
   
-  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: any) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
+  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: { valor_restante?: unknown; valor_total?: unknown }) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
   
   // 5. Calcular fluxo diário
   const fluxoDiario = mediaDiariaVendas - despesaDiaria;
@@ -388,7 +385,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
     msg += `   (<i>${dividasFuturas.length} compromissos</i>)\n\n`;
     
     msg += `<b>Próximos vencimentos:</b>\n`;
-    dividasFuturas.slice(0, 5).forEach((d: any) => {
+    dividasFuturas.slice(0, 5).forEach((d: { data_vencimento?: string; valor_restante?: unknown; valor_total?: unknown; credor?: string; descricao?: string }) => {
       const venc = new Date(d.data_vencimento + "T12:00:00Z");
       const dias = Math.max(0, Math.ceil((venc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
       const emoji = dias <= 3 ? "🔴" : dias <= 7 ? "🟡" : "🟢";
@@ -445,15 +442,16 @@ REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
       const json = await resp.json();
       const raw = json.choices?.[0]?.message?.content?.trim() || "";
       const cleaned = raw.replace(/```json\s*/i, "").replace(/```/g, "").trim();
-      let parsed: any = null;
-      try { parsed = JSON.parse(cleaned); } catch {}
-      const nomeCorrigido = parsed?.beneficiario || parsed?.nome || null;
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = JSON.parse(cleaned); } catch { /* fallback intencional */ }
+      const nomeCorrigido = typeof parsed?.beneficiario === "string" ? parsed.beneficiario : typeof parsed?.nome === "string" ? parsed.nome : null;
       if (nomeCorrigido && nomeCorrigido.length >= 3 && !isNomeDeBanco(nomeCorrigido)) {
         return nomeCorrigido.trim();
       }
     }
   } catch (e: unknown) {
-    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", e.message);
+    const errMessage = e instanceof Error ? e.message : String(e);
+    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", errMessage);
   }
   return null;
 }
@@ -494,7 +492,7 @@ function dvModulo10(digits: string): number {
 
 // Valida os DVs dos campos 1, 2 e 3 de uma linha digitável bancária de 47 dígitos.
 // NÃO inventa nem corrige dígitos — apenas verifica.
-function validarDVsLinhaDigitavel47(d: string): boolean {
+function _validarDVsLinhaDigitavel47(d: string): boolean {
   if (d.length !== 47) return false;
   if (dvModulo10(d.slice(0, 9)) !== parseInt(d[9], 10)) return false;
   if (dvModulo10(d.slice(10, 20)) !== parseInt(d[20], 10)) return false;
@@ -506,7 +504,7 @@ function validarDVsLinhaDigitavel47(d: string): boolean {
 // NUNCA inventa, reordena ou substitui dígitos.
 // Para 47 dígitos: exige DV de todos os 3 campos + FEBRABAN com valor > 0.
 // Para 48 dígitos (guia de arrecadação): aceita estruturalmente se for o único bloco.
-function buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
+function _buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
   if (!textoOCR || textoOCR.length < 20) return null;
 
   // Primeiro: busca em blocos que parecem linha digitável (sequências longas com pontos/espaços)
@@ -516,7 +514,7 @@ function buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
     for (const len of [47, 48]) {
       for (let start = 0; start <= digits.length - len; start++) {
         const cand = digits.slice(start, start + len);
-        if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+        if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
           const febraban = parseLinhaDigitavelFebraban(cand);
           if (febraban.valor && febraban.valor > 0) return cand;
         }
@@ -530,7 +528,7 @@ function buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
   for (const len of [47, 48]) {
     for (let start = 0; start <= allDigits.length - len; start++) {
       const cand = allDigits.slice(start, start + len);
-      if (len === 47 && validarDVsLinhaDigitavel47(cand)) {
+      if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
         const febraban = parseLinhaDigitavelFebraban(cand);
         if (febraban.valor && febraban.valor > 0) return cand;
       }
@@ -730,10 +728,10 @@ serve(async (req) => {
   });
 
   try {
-    let body: any = {};
+    let body: Record<string, unknown> = {};
     try {
       body = await req.json();
-    } catch (_) {}
+    } catch { /* fallback intencional */ }
 
     // ─── AÇÕES ADMINISTRATIVAS (Info / Configuração do Webhook) ───
     if (body?.action === "get_webhook_info" || req.method === "GET") {
@@ -881,11 +879,11 @@ serve(async (req) => {
     const executarConfirmacaoPropostaBoleto = async (
       targetUserId: string,
       targetChatId: string | number,
-      proposta: any,
-      replyFn: (text: string) => Promise<any>,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
       messageIdToEdit?: number
     ) => {
-      const dados = proposta.dados || {};
+      const dados = (proposta.dados || {}) as Record<string, unknown>;
 
       // 1. Proteção contra duplicação (Idempotência sequencial)
       if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
@@ -902,7 +900,7 @@ serve(async (req) => {
       }
 
       // 2. Verificação de expiração
-      if (proposta.status === "expirada" || (proposta.expires_at && new Date(proposta.expires_at) < new Date())) {
+      if (proposta.status === "expirada" || (proposta.expires_at && new Date(String(proposta.expires_at)) < new Date())) {
         if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
         await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
         await supabase.from("telegram_conversas").upsert(
@@ -933,7 +931,7 @@ serve(async (req) => {
         .limit(1)
         .maybeSingle();
 
-      const insertPayload: Record<string, any> = {
+      const insertPayload: Record<string, unknown> = {
         user_id: targetUserId,
         descricao: desc,
         valor_total: valorNum,
@@ -1030,8 +1028,8 @@ serve(async (req) => {
     const executarCancelamentoPropostaBoleto = async (
       targetUserId: string,
       targetChatId: string | number,
-      proposta: any,
-      replyFn: (text: string) => Promise<any>,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
       messageIdToEdit?: number
     ) => {
       if (messageIdToEdit) {
@@ -1049,14 +1047,16 @@ serve(async (req) => {
     };
 
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
-    const message = body?.message;
-    const callbackQuery = body?.callback_query;
+    const message = body?.message as Record<string, unknown> | undefined;
+    const callbackQuery = body?.callback_query as Record<string, unknown> | undefined;
 
     if (callbackQuery) {
-      const callbackChatId = callbackQuery.message?.chat?.id;
-      const callbackMessageId = callbackQuery.message?.message_id;
-      const callbackData = callbackQuery.data || "";
-      const callbackUserId = callbackQuery.from?.id;
+      const callbackChatId = (callbackQuery.message as Record<string, unknown> | undefined)?.chat
+        ? ((callbackQuery.message as Record<string, unknown>).chat as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+      const callbackMessageId = (callbackQuery.message as Record<string, unknown> | undefined)?.message_id as number | undefined;
+      const callbackData = (callbackQuery.data as string) || "";
+      const callbackUserId = (callbackQuery.from as Record<string, unknown> | undefined)?.id;
 
       let cbUserId: string = "";
       const cbChatId = callbackChatId;
@@ -1119,11 +1119,11 @@ serve(async (req) => {
       }
 
       if (!cbUserId) {
-        await answerCallback(callbackQuery.id, "Usuário não encontrado.");
+        await answerCallback(callbackQuery.id as string | number, "Usuário não encontrado.");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1247,7 +1247,7 @@ serve(async (req) => {
         let itensRecemProcessados = 0;
         let itensPendentes = 0;
 
-        const alertasCriados: any[] = [];
+        const alertasCriados: Array<Record<string, unknown>> = [];
         if (itens && itens.length > 0) {
           for (const item of itens) {
             // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
@@ -1454,7 +1454,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
+        let updateResult: { success?: boolean; error?: unknown } = { success: true };
         if (alerta.produto_eyemobile_id) {
           const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
             method: "POST",
@@ -1577,7 +1577,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
+        let updateResult: { success?: boolean; error?: unknown } = { success: true };
         if (alerta.produto_eyemobile_id) {
           const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
             method: "POST",
@@ -1719,9 +1719,10 @@ serve(async (req) => {
     }
 
     // ─── RESOLUÇÃO DE USUÁRIO / GRUPO ───
-    const chatType = message.chat?.type || "private";
+    const chatObj = message?.chat as Record<string, unknown> | undefined;
+    const chatType = typeof chatObj?.type === "string" ? chatObj.type : "private";
     const isGroup = chatType === "group" || chatType === "supergroup";
-    let grupoConfig: any = null;
+    let grupoConfig: Record<string, unknown> | null = null;
     let userId: string = "";
     let workspaceId: string | null = null;
 
@@ -1898,7 +1899,7 @@ serve(async (req) => {
         const custoNovo = Number(alerta.custo_novo || 0);
         const novaMargem = custoNovo > 0 ? ((precoDigitado / custoNovo) - 1) * 100 : 0;
 
-        const fmt = (v: any) =>
+        const fmt = (v: unknown) =>
           v != null && !isNaN(Number(v))
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -1969,7 +1970,7 @@ serve(async (req) => {
 
       await supabase.from("notas_fiscais_compra").update({ status: "pendente" }).eq("id", nfParcial.id);
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1979,7 +1980,7 @@ serve(async (req) => {
       msg += `📦 <b>Itens:</b> ${itensParciais?.length || 0} produtos\n`;
       msg += `💰 <b>Valor Total NF:</b> ${fmt(nfParcial.valor_total)}\n\n`;
 
-      (itensParciais || []).forEach((item: any, i: number) => {
+      (itensParciais || []).forEach((item: Record<string, unknown>, i: number) => {
         msg += `${i + 1}. <b>${item.descricao || "Item"}</b>\n`;
         msg += `   📦 ${item.quantidade || 0} ${item.unidade || "UN"} × ${fmt(item.valor_unitario)}\n`;
         msg += `   💰 Total: ${fmt(item.valor_total)}\n`;
@@ -2055,7 +2056,7 @@ serve(async (req) => {
 
     // ─── 0. COMANDO /precos (LISTAR ALERTAS DE PREÇO PENDENTES) ───
     if (text.startsWith("/precos") || respLower.includes("alertas de preco") || respLower.includes("precos pendentes")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2074,14 +2075,14 @@ serve(async (req) => {
 
       let msgPrecos = `🚨 <b>Alertas de Preço Pendentes:</b> (${alertas.length} produto(s))\n\n`;
 
-      alertas.forEach((alerta: any, idx: number) => {
-        const idCurto = alerta.id.slice(0, 8);
+      alertas.forEach((alerta: Record<string, unknown>, idx: number) => {
+        const idCurto = String(alerta.id || "").slice(0, 8);
         const statusEmoji = alerta.status === "editado" ? "✏️" : "⏳";
 
         msgPrecos += `${idx + 1}. ${statusEmoji} <b>${alerta.produto_descricao}</b> (<code>${idCurto}</code>)\n`;
-        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${alerta.variacao_custo_percentual?.toFixed(1)}%)\n`;
+        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${Number(alerta.variacao_custo_percentual || 0).toFixed(1)}%)\n`;
         msgPrecos += `   💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
-        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${alerta.margem_real_percentual?.toFixed(0)}%)\n`;
+        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${Number(alerta.margem_real_percentual || 0).toFixed(0)}%)\n`;
         if (alerta.preco_definido_usuario) {
           msgPrecos += `   ✏️ Editado por você: <b>${fmt(alerta.preco_definido_usuario)}</b>\n`;
         }
@@ -2101,7 +2102,7 @@ serve(async (req) => {
       .maybeSingle();
 
     if (confirmarPrecoMatch || (respLower.startsWith("confirmar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2160,7 +2161,7 @@ serve(async (req) => {
             }),
           });
 
-          let updateResult: any = null;
+          let updateResult: Record<string, unknown> | null = null;
           try {
             updateResult = await updateResp.json();
           } catch {
@@ -2223,7 +2224,7 @@ serve(async (req) => {
     const editarPrecoMatch = text.match(/^editar\s+([a-f0-9]{8})\s+R?\$?\s*([0-9]+[.,]?[0-9]*)/i);
 
     if (editarPrecoMatch || (respLower.startsWith("editar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2393,8 +2394,8 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const total = (ultimo.total || {}) as Record<string, any>;
-        const fmt = (v: any) =>
+        const total = (ultimo.total || {}) as Record<string, unknown>;
+        const fmt = (v: unknown) =>
           v != null && Number(v) > 0
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -2477,13 +2478,13 @@ serve(async (req) => {
         .eq("user_id", userId);
 
       const catNorm = categoriaNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const categoria = (categorias || []).find((c: any) => {
+      const categoria = (categorias || []).find((c: { id: string; nome: string }) => {
         const n = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         return n === catNorm || n.includes(catNorm) || catNorm.includes(n);
       });
 
       if (!categoria) {
-        const sugestoes = (categorias || []).slice(0, 6).map((c: any) => `• ${c.nome}`).join("\n");
+        const sugestoes = (categorias || []).slice(0, 6).map((c: { id: string; nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ Categoria <b>"${categoriaNome}"</b> não encontrada.\n\n` +
           (sugestoes ? `<b>Categorias disponíveis:</b>\n${sugestoes}\n\n` : "") +
@@ -2544,13 +2545,13 @@ serve(async (req) => {
 
       const evts = events || [];
       const totalCalls = evts.length;
-      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successfulCalls = evts.filter((e: { execution_status?: string }) => e.execution_status === "success").length;
       const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
-      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const totalTokens = evts.reduce((acc: number, e: { tokens_total?: unknown }) => acc + (Number(e.tokens_total) || 500), 0);
       const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
       const estimatedCostBrl = estimatedCostUsd * 5.65;
       const avgDuration = totalCalls > 0
-        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        ? Math.round(evts.reduce((acc: number, e: { duration_ms?: unknown }) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
         : 0;
 
       const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -2565,10 +2566,10 @@ serve(async (req) => {
 
       if (evts.length > 0) {
         msg += `📋 <b>Últimas Ações Auditadas:</b>\n`;
-        evts.slice(0, 4).forEach((e: any) => {
+        evts.slice(0, 4).forEach((e: { created_at: string; execution_status?: string; tool_name: string; duration_ms?: unknown }) => {
           const dt = new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
           const st = e.execution_status === "success" ? "✅" : "⚠️";
-          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${e.duration_ms || 0}ms)\n`;
+          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${Number(e.duration_ms || 0)}ms)\n`;
         });
         msg += `\n`;
       }
@@ -2602,7 +2603,7 @@ serve(async (req) => {
 
       const { data: historico } = await query;
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2617,7 +2618,7 @@ serve(async (req) => {
 
       let msg = `📊 <b>Histórico de Custo de Produtos</b>${produtoBusca ? ` — <i>"${produtoBusca}"</i>` : ""}\n\n`;
 
-      historico.forEach((h: any, i: number) => {
+      historico.forEach((h: Record<string, unknown>, i: number) => {
         const dataFmt = h.data_compra ? h.data_compra.split("-").reverse().join("/") : "Sem data";
         const variacao = Number(h.variacao_percentual) || 0;
         const emoji = variacao > 10 ? "🔴" : variacao > 0 ? "🟡" : "🟢";
@@ -2718,20 +2719,20 @@ serve(async (req) => {
       ]);
 
       const eventos = [
-        ...(compromissos || []).map((c: any) => ({
+        ...(compromissos || []).map((c: { titulo?: string; data: string; hora?: string | null; local?: string | null }) => ({
           tipo: "Compromisso",
           titulo: c.titulo,
           data: c.data,
           hora: c.hora,
           local: c.local,
-          descricao: null,
+          descricao: null as string | null,
         })),
-        ...(lembretes || []).map((l: any) => ({
+        ...(lembretes || []).map((l: { titulo?: string; data: string; hora?: string | null; descricao?: string | null }) => ({
           tipo: "Lembrete",
           titulo: l.titulo,
           data: l.data,
           hora: l.hora,
-          local: null,
+          local: null as string | null,
           descricao: l.descricao,
         })),
       ].sort((a, b) => {
@@ -2744,7 +2745,7 @@ serve(async (req) => {
         await sendReply(`📅 <b>Sem eventos ${periodoLabel}!</b>\n\nSua agenda está livre. 🎉`);
       } else {
         let msg = `📅 <b>Agenda & Eventos ${periodoLabel}:</b>\n\n`;
-        eventos.forEach((e: any, i: number) => {
+        eventos.forEach((e: { data: string; hora?: string | null; titulo?: string; local?: string | null; descricao?: string | null }, i: number) => {
           const [ano, mes, dia] = e.data.split("-");
           const dObj = new Date(Number(ano), Number(mes) - 1, Number(dia));
           const diaSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][dObj.getDay()];
@@ -2878,7 +2879,7 @@ serve(async (req) => {
         const hojeObj = new Date(hojeStr);
         let msg = `💳 <b>Suas Dívidas (${periodoDescricao}):</b>\n\n`;
 
-        dividas.forEach((d: any) => {
+        dividas.forEach((d: { valor_restante?: unknown; valor_total?: unknown; data_vencimento?: string; descricao?: string; credor?: string }) => {
           const valor = Number(d.valor_restante || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
           let atrasoText = "";
@@ -2902,7 +2903,7 @@ serve(async (req) => {
           msg += "\n";
         });
 
-        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
+        const totalDevido = dividas.reduce((acc: number, d: { valor_restante?: unknown; valor_total?: unknown }) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
         msg += `📊 <b>Total devido:</b> <b>${totalDevido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n\n`;
         msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
@@ -2935,7 +2936,7 @@ serve(async (req) => {
       const bancoMatch = respLower.match(/(?:divipay|nubank|inter|bradesco|itau|itaú|caixa|sicoob|pagbank|pagseguro|banco\s+do\s+brasil|bb)/i);
       if (bancoMatch) {
         const bTerm = bancoMatch[0].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        const filtradas = contas.filter((c: any) => {
+        const filtradas = contas.filter((c: { nome?: string }) => {
           const nNorm = (c.nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
           return nNorm.includes(bTerm);
         });
@@ -2953,7 +2954,7 @@ serve(async (req) => {
 
       if (contas.length > 0) {
         let totalEmContas = 0;
-        contas.forEach((c: any) => {
+        contas.forEach((c: { saldo_atual?: unknown; tipo?: string; nome?: string }) => {
           const s = Number(c.saldo_atual || 0);
           totalEmContas += s;
           const icon = c.tipo === "cartao_credito" ? "💳" : "🏛️";
@@ -3039,10 +3040,10 @@ serve(async (req) => {
       ]);
 
       const catMap = new Map<string, string>();
-      (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
+      (categoriasRaw || []).forEach((c: { id: string; nome: string }) => catMap.set(c.id, c.nome));
 
       const despesas = [...(despesasRaw || []), ...(txsDespesasRaw || [])];
-      const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
+      const totalDespesas = despesas.reduce((s: number, d: { valor?: unknown }) => s + Number(d.valor || 0), 0);
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
       if (despesas.length === 0) {
@@ -3062,7 +3063,7 @@ serve(async (req) => {
         outros: 0,
       };
 
-      despesas.forEach((d: any) => {
+      despesas.forEach((d: { valor?: unknown; categoria_id?: string | null; metodo_pagamento?: unknown }) => {
         const val = Number(d.valor || 0);
         const nomeCat = (d.categoria_id && catMap.get(d.categoria_id)) || "Sem categoria";
         porCat[nomeCat] = (porCat[nomeCat] || 0) + val;
@@ -3157,7 +3158,7 @@ serve(async (req) => {
 
       // Busca todas as receitas e vendas (com paginação ampla para suportar milhares de lançamentos)
       const fetchAllRows = async (table: string, filterTipo?: string) => {
-        const rows: any[] = [];
+        const rows: Array<{ data?: string; valor?: unknown; descricao?: string }> = [];
         let from = 0;
         const step = 1000;
         while (true) {
@@ -3189,7 +3190,7 @@ serve(async (req) => {
 
       const totalReceitas = todasReceitas.reduce((s, r) => s + Number(r.valor || 0), 0);
       const totalDespesas = todasDespesas.reduce((s, d) => s + Number(d.valor || 0), 0);
-      const saldoPeriodo = totalReceitas - totalDespesas;
+      const _saldoPeriodo = totalReceitas - totalDespesas;
 
       if (todasReceitas.length === 0 && todasDespesas.length === 0) {
         await sendReply(`📊 <b>Nenhuma movimentação registrada no período (${labelPeriodo}).</b>`);
@@ -3198,7 +3199,7 @@ serve(async (req) => {
 
       // Agrupa receitas por dia
       const porDia: Record<string, number> = {};
-      todasReceitas.forEach((v: any) => {
+      todasReceitas.forEach((v: { data?: string; valor?: unknown }) => {
         const d = (v.data || "").split("T")[0];
         const val = Number(v.valor || 0);
         porDia[d] = (porDia[d] || 0) + val;
@@ -3269,13 +3270,13 @@ serve(async (req) => {
         s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
       const catAlvoNorm = normalize(categoriaAlvoTerm);
 
-      const catEncontrada = (categorias || []).find((c: any) => {
+      const catEncontrada = (categorias || []).find((c: { id: string; nome: string; aliases?: string | null }) => {
         const cNorm = normalize(c.nome);
         return cNorm === catAlvoNorm || cNorm.includes(catAlvoNorm) || catAlvoNorm.includes(cNorm);
       });
 
       if (!catEncontrada) {
-        const nomesDisponiveis = (categorias || []).map((c: any) => `• ${c.nome}`).join("\n");
+        const nomesDisponiveis = (categorias || []).map((c: { nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ <b>Categoria "${categoriaAlvoTerm}" não encontrada.</b>\n\n` +
           `<b>Suas categorias disponíveis:</b>\n${nomesDisponiveis || "Nenhuma categoria cadastrada"}`
@@ -3344,7 +3345,7 @@ serve(async (req) => {
         .eq("chat_id", chatId)
         .maybeSingle();
 
-      let proposta: any = null;
+      let proposta: Record<string, unknown> | null = null;
 
       if (conversaAtiva?.proposta_id) {
         const { data: propById } = await supabase
@@ -3388,7 +3389,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        if (new Date(proposta.expires_at) < new Date()) {
+        if (new Date(String(proposta.expires_at)) < new Date()) {
           await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
           await supabase.from("telegram_conversas").upsert(
             { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
@@ -3422,10 +3423,9 @@ serve(async (req) => {
 
           let msg = `✅ <b>Nota Fiscal de Compra Confirmada!</b>\n\nAtualizando estoque e custos...\n\n`;
           const alertasAumento: string[] = [];
-          const sugestoesPreco: string[] = [];
           const produtosAtualizados: string[] = [];
 
-          const fmt = (v: any) =>
+          const fmt = (v: unknown) =>
             v != null && !isNaN(Number(v))
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
@@ -3479,8 +3479,6 @@ serve(async (req) => {
               margemReal = ((Number(produtoExistente.preco_venda) / Number(produtoExistente.custo_atual)) - 1) * 100;
             }
             if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
-
-            const markupAplicado = margemReal;
 
             if (variacao12m > 10) {
               const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
@@ -3571,8 +3569,8 @@ serve(async (req) => {
 
           if (alertasPendentes && alertasPendentes.length > 0) {
             msg += `\n🚨 <b>PREÇOS DE VENDA PRECISAM SER AJUSTADOS:</b>\n\n`;
-            alertasPendentes.forEach((alerta: any, idx: number) => {
-              const idCurto = alerta.id.slice(0, 8);
+            alertasPendentes.forEach((alerta: Record<string, unknown>, idx: number) => {
+              const idCurto = String(alerta.id || "").slice(0, 8);
               msg += `${idx + 1}. <b>${alerta.produto_descricao}</b>\n`;
               msg += `   💰 Preço atual: ${fmt(alerta.preco_venda_atual)}\n`;
               msg += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b>\n`;
@@ -3626,10 +3624,10 @@ serve(async (req) => {
     }
 
     // ─── CASO 3: Mensagem com Foto / Documento ───
-    const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
-    const hasDoc = !!message.document;
-    const caption = (message.caption || "").trim();
-    const promptText = (message.text || caption || "").trim();
+    const hasPhoto = Array.isArray(message?.photo) && message.photo.length > 0;
+    const hasDoc = !!message?.document;
+    const caption = (typeof message?.caption === "string" ? message.caption : "").trim();
+    const promptText = (typeof message?.text === "string" ? message.text : caption || "").trim();
 
     if (hasPhoto || hasDoc) {
       console.log("[telegram-webhook] ===== INÍCIO PROCESSAMENTO DE IMAGEM =====");
@@ -3647,8 +3645,8 @@ serve(async (req) => {
         }).catch(() => {});
 
         const fileId = hasPhoto
-          ? message.photo[message.photo.length - 1].file_id
-          : message.document.file_id;
+          ? (message?.photo as Array<{ file_id: string }>)[(message?.photo as Array<{ file_id: string }>).length - 1].file_id
+          : (message?.document as { file_id: string }).file_id;
 
         // IMPORTANTE: fotos enviadas como "foto" (hasPhoto) são comprimidas pelo Telegram para ~1280px.
         // Arquivos enviados como "documento" (hasDoc) mantêm a qualidade original.
@@ -3670,12 +3668,12 @@ serve(async (req) => {
 
         const filePath = fileInfo.result.file_path;
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
-        const docMime = (message.document?.mime_type || "").toLowerCase();
+        const docMime = ((message?.document as { mime_type?: string })?.mime_type || "").toLowerCase();
 
         // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
-        let loadedDecodedImage: any = null;
-        let documentData: any = null;
+        let loadedDecodedImage: Image | null = null;
+        let documentData: Record<string, unknown> | null = null;
 
         // ============================================
         // FLUXO XML: Parser Nativo Determinístico de NF-e
@@ -3698,7 +3696,7 @@ serve(async (req) => {
 
           if (parsedNFe && parsedNFe.itens && parsedNFe.itens.length > 0) {
             console.log(`[telegram-webhook] XML de NF-e processado com sucesso! ${parsedNFe.itens.length} itens extraídos.`);
-            documentData = parsedNFe;
+            documentData = parsedNFe as unknown as Record<string, unknown>;
           } else {
             await sendReply(
               "⚠️ <b>Arquivo XML recebido, mas não foi identificado como NF-e padrão.</b>\n\n" +
@@ -3728,7 +3726,7 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          let pdfDocumentData: any = null;
+          let pdfDocumentData: Record<string, unknown> | null = null;
 
           // 2. Busca chave da OpenAI do usuário ou do ambiente
           const { data: iaCfg } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
@@ -3808,7 +3806,7 @@ serve(async (req) => {
                     } catch {
                       const objMatch = rawMsg.match(/\{[\s\S]*\}/);
                       if (objMatch) {
-                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch {}
+                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch { /* ignore fallback */ }
                       }
                     }
                   }
@@ -3821,7 +3819,7 @@ serve(async (req) => {
                 }).catch(() => {});
               }
             } catch (asstErr: unknown) {
-              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr.message);
+              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr instanceof Error ? asstErr.message : String(asstErr));
             }
           }
 
@@ -3941,7 +3939,7 @@ serve(async (req) => {
             finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
           } catch (imgErr: unknown) {
-            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
+            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr instanceof Error ? imgErr.message : String(imgErr));
           }
 
           const b64 = base64Encode(finalBase64Bytes);
@@ -4055,23 +4053,23 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             const rawContent = aiJson.choices?.[0]?.message?.content || "";
             console.log("[telegram-webhook] Resposta bruta conferência fechamento:", rawContent.slice(0, 300));
 
-            let fechamento: any = null;
+            let fechamento: Record<string, unknown> | null = null;
             try {
               fechamento = JSON.parse(rawContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
             } catch {
               const match = rawContent.match(/\{[\s\S]*\}/);
               if (match) {
-                try { fechamento = JSON.parse(match[0]); } catch {}
+                try { fechamento = JSON.parse(match[0]); } catch { /* ignore fallback */ }
               }
             }
 
             if (fechamento && fechamento.tipo === "fechamento") {
-              const fmt = (v: any) =>
+              const fmt = (v: unknown) =>
                 v != null && Number(v) > 0
                   ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                   : "R$ 0,00";
 
-              const env = fechamento.total || fechamento.envelope || {};
+              const env = (fechamento.total || fechamento.envelope || {}) as Record<string, unknown>;
               const envDinheiro = Number(env.dinheiro) || 0;
               const envDebito = Number(env.debito) || 0;
               const envCredito = Number(env.credito) || 0;
@@ -4138,15 +4136,17 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                 msg = `✅ <b>Fechamento OK — Confirmado!</b>\n\n`;
                 msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
 
-                const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
-                const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+                const caixa1Obj = (fechamento.caixa1 || {}) as Record<string, unknown>;
+                const caixa2Obj = (fechamento.caixa2 || {}) as Record<string, unknown>;
+                const temCaixa1 = fechamento.caixa1 && Object.values(caixa1Obj).some((v: unknown) => Number(v) > 0);
+                const temCaixa2 = fechamento.caixa2 && Object.values(caixa2Obj).some((v: unknown) => Number(v) > 0);
 
                 if (temCaixa1 || temCaixa2) {
                   if (temCaixa1) {
-                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(caixa1Obj.dinheiro)} | 💳 Déb: ${fmt(caixa1Obj.debito)} | 💳 Créd: ${fmt(caixa1Obj.credito)} | 📲 Pix: ${fmt(caixa1Obj.pix)}\n\n`;
                   }
                   if (temCaixa2) {
-                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(caixa2Obj.dinheiro)} | 💳 Déb: ${fmt(caixa2Obj.debito)} | 💳 Créd: ${fmt(caixa2Obj.credito)} | 📲 Pix: ${fmt(caixa2Obj.pix)}\n\n`;
                   }
                 }
 
@@ -4266,8 +4266,8 @@ REGRAS:
             }),
           });
 
-          let orientacaoAnalysis: any = null;
-          let docAnalysis: any = null;
+          let orientacaoAnalysis: Record<string, unknown> | null = null;
+          let docAnalysis: Record<string, unknown> | null = null;
           if (aiResp1.ok) {
             const aiJson1 = await aiResp1.json();
             const raw1 = aiJson1.choices?.[0]?.message?.content || "";
@@ -4275,7 +4275,7 @@ REGRAS:
               orientacaoAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
             } catch {
               const m = raw1.match(/\{[\s\S]*\}/);
-              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch {} }
+              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
             }
           }
 
@@ -4392,7 +4392,7 @@ REGRAS:
                   console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp?.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
               } catch (hErr: unknown) {
-                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
+                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr instanceof Error ? hErr.message : String(hErr));
               }
             }
  else {
@@ -4468,7 +4468,7 @@ REGRAS:
                   docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
                 } catch {
                   const m = raw2.match(/\{[\s\S]*\}/);
-                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
                 }
               }
             }
@@ -4582,16 +4582,17 @@ REGRAS:
                     console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
                   }
                 } catch (gemErr: unknown) {
-                  if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
+                  const errObj = gemErr as { name?: string; message?: string };
+                  if (errObj?.name === "TimeoutError" || String(errObj?.message).includes("timeout") || String(errObj?.message).includes("aborted")) {
                     geminiErrorCode = "gemini_timeout";
                   } else {
                     geminiErrorCode = "gemini_processing_error";
                   }
-                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, gemErr.message);
+                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, errObj?.message || String(gemErr));
                 }
 
                 if (!geminiErrorCode && geminiRawText) {
-                  let rawList: any[] | null = null;
+                  let rawList: unknown[] | null = null;
                   try {
                     const clean = geminiRawText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
                     const p = JSON.parse(clean);
@@ -4605,7 +4606,7 @@ REGRAS:
                         const p = JSON.parse(m[0]);
                         if (Array.isArray(p.itens)) rawList = p.itens;
                         else if (Array.isArray(p.produtos)) rawList = p.produtos;
-                      } catch (_) {}
+                      } catch { /* ignore fallback */ }
                     }
                   }
 
@@ -4644,7 +4645,7 @@ REGRAS:
                   } else {
                     // 3. Validação Estrutural Estrita com Sanitização de FCI
                     const itensValidados: DanfeItemV2[] = [];
-                    const itensRejeitados: any[] = [];
+                    const itensRejeitados: Array<{ index: number; motivo: unknown }> = [];
 
                     rawList.forEach((r, idx) => {
                       const v = validateProductRowV2(r);
@@ -4791,7 +4792,7 @@ FORMATO:
                     const rawTile = tileJson?.choices?.[0]?.message?.content || "";
                     return { rawText: rawTile, httpStatus: tileResp.status };
                   } catch (tileErr: unknown) {
-                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
+                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr instanceof Error ? tileErr.message : String(tileErr));
                     return { rawText: "", httpStatus: 500 };
                   }
                 };
@@ -4990,31 +4991,32 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             }
 
             // ── Parse do JSON retornado pelo provider ──
-            let bParsed: Record<string, any> = {};
+            let bParsed: Record<string, unknown> = {};
             if (boletoVisionResult?.ok && boletoVisionResult.text) {
               try {
                 const cleaned = boletoVisionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
                 bParsed = JSON.parse(cleaned);
               } catch {
                 const m = boletoVisionResult.text.match(/\{[\s\S]*\}/);
-                if (m) { try { bParsed = JSON.parse(m[0]); } catch {} }
+                if (m) { try { bParsed = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
               }
             }
 
             // ─── VALIDAÇÃO E CONCILIAÇÃO DETERMINÍSTICA CANÔNICA ───
-            const rawLinha = bParsed.linha_digitavel || orientacaoAnalysis?.boleto_dados?.linha_digitavel || null;
+            const boletoDados = orientacaoAnalysis?.boleto_dados as Record<string, unknown> | undefined;
+            const rawLinha = (typeof bParsed.linha_digitavel === "string" ? bParsed.linha_digitavel : null) || (typeof boletoDados?.linha_digitavel === "string" ? boletoDados.linha_digitavel : null);
             let validacaoCanonica = reconcileBoleto({
-              banco: bParsed.banco || null,
-              beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
-              cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
-              pagador: bParsed.pagador || bParsed.sacado || null,
-              cnpj_cpf_pagador: bParsed.cnpj_cpf_pagador || null,
-              data_vencimento: bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null,
-              valor: bParsed.valor ?? orientacaoAnalysis?.boleto_dados?.valor ?? null,
+              banco: typeof bParsed.banco === "string" ? bParsed.banco : null,
+              beneficiario: (typeof bParsed.beneficiario === "string" ? bParsed.beneficiario : typeof bParsed.cedente === "string" ? bParsed.cedente : typeof boletoDados?.beneficiario === "string" ? boletoDados.beneficiario : null),
+              cnpj_cpf_beneficiario: typeof bParsed.cnpj_cpf_beneficiario === "string" ? bParsed.cnpj_cpf_beneficiario : null,
+              pagador: (typeof bParsed.pagador === "string" ? bParsed.pagador : typeof bParsed.sacado === "string" ? bParsed.sacado : null),
+              cnpj_cpf_pagador: typeof bParsed.cnpj_cpf_pagador === "string" ? bParsed.cnpj_cpf_pagador : null,
+              data_vencimento: (typeof bParsed.data_vencimento === "string" ? bParsed.data_vencimento : typeof bParsed.vencimento === "string" ? bParsed.vencimento : typeof boletoDados?.data_vencimento === "string" ? boletoDados.data_vencimento : null),
+              valor: bParsed.valor ?? boletoDados?.valor ?? null,
               linha_digitavel: rawLinha,
-              codigo_barras: bParsed.codigo_barras || null,
-              nosso_numero: bParsed.nosso_numero || null,
-              numero_documento: bParsed.numero_documento || null,
+              codigo_barras: typeof bParsed.codigo_barras === "string" ? bParsed.codigo_barras : null,
+              nosso_numero: typeof bParsed.nosso_numero === "string" ? bParsed.nosso_numero : null,
+              numero_documento: typeof bParsed.numero_documento === "string" ? bParsed.numero_documento : null,
             });
 
             // ─── PIPELINE DE AUTO-RECUPERAÇÃO DE LINHA DIGITÁVEL (SE 1ª LEITURA FOI INVÁLIDA/INCOMPLETA) ───
@@ -5227,7 +5229,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
           const wsId = wsData?.id || workspaceId || null;
 
 
-          const fmt = (v: any) =>
+          const fmt = (v: unknown) =>
             v != null && !isNaN(Number(v))
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
@@ -5308,7 +5310,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             }
 
             // 4. Todas as páginas recebidas -> CONSOLIDAÇÃO ATÔMICA
-            const todosItens: any[] = [];
+            const todosItens: unknown[] = [];
             for (let pNum = 1; pNum <= totalPaginas; pNum++) {
               const pData = dadosSessao.paginas?.[String(pNum)];
               if (pData?.itens) {
@@ -5352,7 +5354,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
           const valorTotalProdutosNF = (documentData.valores_totais?.valor_produtos != null && !isNaN(Number(documentData.valores_totais.valor_produtos)) && Number(documentData.valores_totais.valor_produtos) > 0)
             ? Number(documentData.valores_totais.valor_produtos)
             : null;
-          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
+          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: { valor_total?: unknown }) => sum + (Number(item?.valor_total) || 0), 0);
 
           // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
           if (!validacao.valido || itensExtraidos.length === 0) {
@@ -5446,13 +5448,13 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             .single();
 
           if (!errNF && nfSalva) {
-            const itensParaInserir = (documentData.itens || []).map((item: any) => ({
+            const itensParaInserir = (documentData.itens || []).map((item: Record<string, unknown>) => ({
               nf_id: nfSalva.id,
               codigo_produto: item.codigo,
               descricao: item.descricao,
               ncm: item.ncm,
               cfop: item.cfop,
-              unidade: item.unidade || "UN",
+              unidade: (item.unidade as string) || "UN",
               quantidade: item.quantidade,
               valor_unitario: item.valor_unitario,
               valor_total: item.valor_total,
@@ -5480,11 +5482,11 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             }
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
-            documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
-              const qtd = item.quantidade != null ? `${item.quantidade} ${item.unidade || "UN"}` : "Qtd N/A";
-              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario) : "N/A";
-              const vTot = item.valor_total != null ? fmt(item.valor_total) : "N/A";
-              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido) : vUnit;
+            documentData.itens.slice(0, 10).forEach((item: Record<string, unknown>, i: number) => {
+              const qtd = item.quantidade != null ? `${item.quantidade} ${(item.unidade as string) || "UN"}` : "Qtd N/A";
+              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario as number | string) : "N/A";
+              const vTot = item.valor_total != null ? fmt(item.valor_total as number | string) : "N/A";
+              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido as number | string) : vUnit;
               msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
               msg += `   📦 ${qtd} × ${vUnit}\n`;
               msg += `   💰 Total: ${vTot} | Custo Líquido: <b>${vLiq}</b>\n\n`;
@@ -5694,10 +5696,6 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
             const vencimentoAno = dataVencimento ? parseInt(dataVencimento.split("-")[0], 10) : null;
             const anoAtual = new Date().getFullYear();
             const vencimentoAnoSuspeito = vencimentoAno !== null && (vencimentoAno < anoAtual - 1 || vencimentoAno > anoAtual + 2);
-            const valOcrNum = documentData.valor_ocr ?? null;
-            const valDerivNum = documentData.valor_derivado ?? null;
-            const vencOcrStr = documentData.vencimento_ocr ?? null;
-            const vencDerivStr = documentData.vencimento_derivado ?? null;
 
             let mensagemProposta = "";
 
@@ -5807,8 +5805,10 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido:
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
       } catch (imgErr: unknown) {
-        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErr.message, imgErr.stack);
-        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErr.message);
+        const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+        const imgErrStack = imgErr instanceof Error ? imgErr.stack : undefined;
+        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErrMsg, imgErrStack);
+        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErrMsg);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
     }
@@ -5930,7 +5930,9 @@ Ferramentas disponíveis:
         console.error("[telegram-webhook] openai-proxy retornou erro:", aiResponse.status, errorBody.slice(0, 500));
       }
     } catch (aiErr: unknown) {
-      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErr.message, aiErr.stack);
+      const aiErrMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+      const aiErrStack = aiErr instanceof Error ? aiErr.stack : undefined;
+      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErrMsg, aiErrStack);
     }
 
     // Fallback se a IA não retornar resposta
@@ -5942,7 +5944,8 @@ Ferramentas disponíveis:
 
     return new Response("OK", { status: 200, headers: corsHeaders });
   } catch (err: unknown) {
-    return new Response(JSON.stringify({ error: err.message }), {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return new Response(JSON.stringify({ error: errMsg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

@@ -261,8 +261,28 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
 
   // ─── I: Confirmação SIM em boleto validado → 1 dívida criada ───
   it("I: Confirmação SIM em proposta pendente cria exatamente 1 dívida", () => {
-    const dividasCriadas: any[] = [];
-    const proposta: any = {
+    interface TestDivida {
+      id: string;
+      credor?: string;
+      valor_total?: number;
+      status?: string;
+    }
+    interface TestProposta {
+      id: string;
+      status: string;
+      dados: {
+        credor?: string;
+        valor_total?: number;
+        data_vencimento?: string;
+        validation_status?: string;
+        divida_id_gerada?: string;
+        linha_digitavel_raw_digits?: number;
+        warnings?: string[];
+      };
+    }
+
+    const dividasCriadas: TestDivida[] = [];
+    const proposta: TestProposta = {
       id: "prop-123",
       status: "pendente",
       dados: {
@@ -275,7 +295,7 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
 
     // Simula execução do SIM
     if (proposta.status === "pendente" && !proposta.dados.divida_id_gerada) {
-      const novaDivida = {
+      const novaDivida: TestDivida = {
         id: "div-001",
         credor: proposta.dados.credor,
         valor_total: proposta.dados.valor_total,
@@ -292,8 +312,8 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
 
   // ─── J: Confirmação SIM repetida (Duplo SIM) → Continua 1 dívida ───
   it("J: Segundo SIM em proposta já confirmada não gera segunda dívida (idempotência)", () => {
-    const dividasCriadas: any[] = [{ id: "div-001" }];
-    const proposta: any = {
+    const dividasCriadas: Array<{ id: string }> = [{ id: "div-001" }];
+    const proposta: { id: string; status: string; dados?: { divida_id_gerada?: string; validation_status?: string } } = {
       id: "prop-123",
       status: "confirmada",
       dados: {
@@ -319,8 +339,8 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
 
   // ─── K: Retry do mesmo Telegram update → Continua 1 dívida ───
   it("K: Retry de update do Telegram com proposta em processamento/confirmada não duplica", () => {
-    const dividasCriadas: any[] = [{ id: "div-001" }];
-    const proposta: any = {
+    const dividasCriadas: Array<{ id: string }> = [{ id: "div-001" }];
+    const proposta: { id: string; status: string; dados?: { divida_id_gerada?: string } } = {
       id: "prop-123",
       status: "confirmada",
       dados: { divida_id_gerada: "div-001" },
@@ -334,7 +354,17 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
 
   // ─── L: Boleto requer_revisao confirmado manualmente → status manual_confirmed ───
   it("L: Boleto requer_revisao confirmado manualmente transiciona para manual_confirmed", () => {
-    const proposta: any = {
+    const proposta: {
+      id: string;
+      status: string;
+      dados: {
+        credor: string;
+        valor_total: number;
+        validation_status: string;
+        linha_digitavel_raw_digits: number;
+        warnings: string[];
+      };
+    } = {
       id: "prop-456",
       status: "pendente",
       dados: {
@@ -378,7 +408,7 @@ describe("Telegram Webhook — Homologação Segura de Boleto (Cenários A a M)"
   it("N: documentData assembly usa vencimentoFinal (não vencFinal) — regressão v113 ReferenceError", () => {
     const linhaDigitavelRaw = "3419109107904722829398304579000981538000001"; // 43 dígitos
     const linhaDigitavelDigits = linhaDigitavelRaw.replace(/\D/g, "");
-    const linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
+    const _linhaDigitavelPresente = linhaDigitavelDigits.length > 0;
     const linhaDigitavelValida = linhaDigitavelDigits.length === 47 || linhaDigitavelDigits.length === 48;
 
     const valorOCR = 1262.55;
@@ -580,8 +610,8 @@ describe("Melhorias de Robustez — Boleto OCR (Etapa 2.2C)", () => {
   it("E: isTelegramCompressedPhoto + requer_revisao → dicaArquivo presente na mensagem", () => {
     const isTelegramCompressedPhoto = true;
     const isBoletoValidado = false;
-    const avisoAnoSuspeito = false;
-    const vencimentoAno = 2026;
+    const _avisoAnoSuspeito = false;
+    const _vencimentoAno = 2026;
 
     const dicaArquivo = isTelegramCompressedPhoto
       ? `\n💡 <i>Para leitura mais precisa da linha digitável, envie o boleto como arquivo:\n📎 → Arquivo/Documento (não "Galeria")</i>\n`

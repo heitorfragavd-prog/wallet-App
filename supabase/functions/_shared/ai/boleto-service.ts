@@ -18,7 +18,6 @@ import {
   parseBoletoAmount,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
-import { callVisionWithFailover } from "./danfe-fiscal-service.ts";
 
 export interface ProcessBoletoInput {
   base64: string;
@@ -179,8 +178,8 @@ export async function callBoletoVisionWithFailover(options: VisionBoletoCallOpti
       }
 
       primaryErrorReason = `openai_http_${primaryStatus}`;
-    } catch (err: any) {
-      primaryErrorReason = err?.name === "AbortError" ? "timeout" : "network_error";
+    } catch (err: unknown) {
+      primaryErrorReason = (err instanceof Error && err.name === "AbortError") ? "timeout" : "network_error";
     }
   } else {
     primaryErrorReason = "openai_api_key_missing";
@@ -235,7 +234,7 @@ export async function callBoletoVisionWithFailover(options: VisionBoletoCallOpti
           durationMs: Date.now() - start,
         };
       }
-    } catch (gemErr: any) {
+    } catch (gemErr: unknown) {
       console.warn("[BOLETO_FAILOVER] Provedor fallback Gemini também falhou:", gemErr);
     }
   }
@@ -926,7 +925,7 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
       throw new Error(`Falha na extração visual do boleto (status: ${visionResult.status})`);
     }
 
-    let parsedJson: Record<string, any> = {};
+    let parsedJson: Record<string, string | number | null | undefined> = {};
     try {
       const cleaned = visionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
       parsedJson = JSON.parse(cleaned);

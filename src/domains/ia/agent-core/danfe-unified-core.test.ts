@@ -14,10 +14,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { processDanfeDocument } from "../../../../supabase/functions/_shared/ai/danfe-fiscal-service";
-import {
-  GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
-  GEMINI_V2_PROMPT_TABELA,
-} from "../../../../supabase/functions/_shared/danfe-gemini-v2";
 
 describe("DANFE Core Único — Testes Abrangentes", () => {
   beforeEach(() => {
@@ -25,8 +21,8 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
   });
 
   it("1. Região da tabela ausente no cabeçalho -> aciona obrigatoriamente fallback de crop 0.24 a 0.90", async () => {
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text: string }> }> };
       const prompt = body.contents[0].parts[0].text;
 
       // Cabeçalho responde sem regiao_tabela_produtos
@@ -83,7 +79,7 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -93,8 +89,8 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
   });
 
   it("2. Cabeçalho falha (erro HTTP 500) -> tabela ainda é tentada e produtos são extraídos", async () => {
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text: string }> }> };
       const prompt = body.contents[0].parts[0].text;
 
       // Cabeçalho falha
@@ -136,7 +132,7 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.itens).toHaveLength(1);
@@ -146,8 +142,8 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
 
   it("3. PDF multimodal enviado diretamente sem rotação matricial de bitmap", async () => {
     const promptsSent: string[] = [];
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text: string }> }> };
       const prompt = body.contents[0].parts[0].text;
       promptsSent.push(prompt);
 
@@ -202,7 +198,7 @@ describe("DANFE Core Único — Testes Abrangentes", () => {
       mimeType: "application/pdf",
       geminiApiKey: "test-key",
       workspaceId: "ws-test",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
