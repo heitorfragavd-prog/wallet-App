@@ -18,7 +18,7 @@
  *   - useChatFinanceiro.sendMessage para DOCUMENT/LEGACY
  */
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
 import { routeMessage, type WalletAIRoute } from "../services/WalletAIRouter";
@@ -114,7 +114,6 @@ export function useWalletIA(options: UseWalletIAOptions) {
   const [messages, setMessages] = useState<WalletIAMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<string>("");
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Cliente do Agent V2 — instanciado uma vez
   const client = useMemo(

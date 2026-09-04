@@ -122,7 +122,7 @@ describe("DANFE Brasnorte — Teste de Regressão Cirúrgico", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-brasnorte-123",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     // 1. Verificações de Cabeçalho
@@ -233,7 +233,7 @@ describe("DANFE Brasnorte — Teste de Regressão Cirúrgico", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-1",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.cabecalho?.fornecedor).toBe("Brasnorte Alternativo");
@@ -335,7 +335,7 @@ describe("DANFE Brasnorte — Teste de Regressão Cirúrgico", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-brasnorte-270",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);

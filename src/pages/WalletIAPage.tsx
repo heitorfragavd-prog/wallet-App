@@ -30,10 +30,8 @@ import {
   Loader2,
   Paperclip,
   X,
-  AlertCircle,
   Zap,
   Sparkles,
-  MessageSquare,
 } from "lucide-react";
 import { ConversasSidebar } from "@/components/ia/ConversasSidebar";
 import { AgentVisualizationRenderer } from "@/domains/ia/components/AgentVisualizationRenderer";

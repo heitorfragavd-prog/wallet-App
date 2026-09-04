@@ -526,7 +526,7 @@ export function normalizeDate(dateRaw: unknown): { iso: string | null; formatted
   if (!dateRaw) return { iso: null, formattedBr: null };
   const str = String(dateRaw).trim();
 
-  const brMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const brMatch = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (brMatch) {
     const dd = brMatch[1].padStart(2, "0");
     const mm = brMatch[2].padStart(2, "0");

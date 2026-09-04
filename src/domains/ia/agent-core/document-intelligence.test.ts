@@ -142,7 +142,7 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "fake-key",
       workspaceId: "ws-test-1",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -256,7 +256,7 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
       geminiApiKey: "fake-key",
       workspaceId: "ws-test-1",
       existingSession: previousSession,
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
@@ -329,7 +329,7 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
       geminiApiKey: "fake-key",
       workspaceId: "ws-empresa-B", // Diferente de ws-empresa-A
       existingSession: sessionOtherWorkspace,
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     // Sessão do workspace B é criada do zero
@@ -388,7 +388,7 @@ describe("Etapa 2.1 — Document Intelligence e DANFE", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "fake-key",
       workspaceId: "ws-test-1",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.status).toBe("requer_revisao");

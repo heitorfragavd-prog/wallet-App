@@ -20,7 +20,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { classifyDocument } from "../types/document";
 import {
   validateLinhaDigitavel,
-  validateCodigoBarras,
   parseBoletoAmount,
   normalizeDate,
   normalizeCpfCnpj,
@@ -174,7 +173,7 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
 
   describe("4. Pipeline Completo de Extração (processBoletoDocument)", () => {
     it("K: Executa pipeline de ponta a ponta com mock e workspace isolado", async () => {
-      const mockFetch = vi.fn().mockImplementation((_url, init) => {
+      const mockFetch = vi.fn().mockImplementation((_url, _init) => {
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -208,7 +207,7 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
         mimeType: "application/pdf",
         geminiApiKey: "fake_gemini_key",
         workspaceId: "ws_test_isolation_123",
-        fetchImpl: mockFetch as any,
+        fetchImpl: mockFetch as unknown as typeof fetch,
       });
 
       expect(output.success).toBe(true);

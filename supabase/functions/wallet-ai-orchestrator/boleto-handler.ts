@@ -52,7 +52,7 @@ export async function handleBoletoHttpRequest(
   let context: AiExecutionContext | null = null;
 
   try {
-    let body: Record<string, any>;
+    let body: Record<string, unknown>;
     try {
       body = await request.json();
     } catch {
@@ -83,14 +83,12 @@ export async function handleBoletoHttpRequest(
     // 1. Autorização Server-Side Obrigatória
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
-    const backupKey = typeof (globalThis as any).Deno !== "undefined"
-      ? (globalThis as any).Deno.env.get("GEMINI_API_KEY_BACKUP")
-      : undefined;
+    type DenoGlobal = { Deno?: { env: { get(key: string): string | undefined } } };
+    const denoEnv = (globalThis as unknown as DenoGlobal).Deno?.env;
+    const backupKey = denoEnv?.get("GEMINI_API_KEY_BACKUP");
 
-    const openAiKey = (dependencies.authDeps as any)?.openAiApiKey || (
-      typeof (globalThis as any).Deno !== "undefined"
-        ? (globalThis as any).Deno.env.get("OPENAI_API_KEY")
-        : undefined
+    const openAiKey = (dependencies.authDeps as { openAiApiKey?: string })?.openAiApiKey || (
+      denoEnv?.get("OPENAI_API_KEY")
     );
 
     // 2. Extração e Validação Determinística de Boleto

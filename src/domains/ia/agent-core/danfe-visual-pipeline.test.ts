@@ -20,9 +20,9 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
   });
 
   it("A: Foto a 90° -> detecta orientação e rotaciona matriz antes de extrair cabeçalho e tabela", async () => {
-    const fetchBodies: any[] = [];
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
+    const fetchBodies: Array<{ contents: Array<{ parts: Array<{ text?: string }> }> }> = [];
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text?: string }> }> };
       fetchBodies.push(body);
 
       // Chamada 1: Orientação
@@ -89,7 +89,7 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-123",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(res.success).toBe(true);
@@ -111,9 +111,9 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
 
   it("D & E: Cabeçalho recebe imagem completa e Produtos recebem crop da tabela", async () => {
     const promptsSent: string[] = [];
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
-      const prompt = body.contents[0].parts[0].text;
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text?: string }> }> };
+      const prompt = body.contents[0].parts[0].text ?? "";
       promptsSent.push(prompt);
 
       if (prompt === PROMPT_ORIENTACAO_DANFE) {
@@ -175,7 +175,7 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
       mimeType: "image/png",
       geminiApiKey: "test-key",
       workspaceId: "ws-123",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(res.success).toBe(true);
@@ -191,9 +191,9 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
 
   it("G: PDF não passa por rotação nem crop de bitmap", async () => {
     const promptsSent: string[] = [];
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
-      const prompt = body.contents[0].parts[0].text;
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text?: string }> }> };
+      const prompt = body.contents[0].parts[0].text ?? "";
       promptsSent.push(prompt);
 
       if (prompt === GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS) {
@@ -247,7 +247,7 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
       mimeType: "application/pdf",
       geminiApiKey: "test-key",
       workspaceId: "ws-123",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(res.success).toBe(true);
@@ -255,9 +255,9 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
   });
 
   it("H: Nenhuma mutação de estoque ou custo é executada", async () => {
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
-      const body = JSON.parse(init.body);
-      const prompt = body.contents[0].parts[0].text;
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { contents: Array<{ parts: Array<{ text?: string }> }> };
+      const prompt = body.contents[0].parts[0].text ?? "";
       if (prompt === PROMPT_ORIENTACAO_DANFE) {
         return Promise.resolve({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ orientacao_leitura: 0 }) }] } }] }) });
       }
@@ -311,7 +311,7 @@ describe("DANFE Visual Pipeline Unificado (Etapa 2.1c)", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "test-key",
       workspaceId: "ws-123",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(res.mensagemFormatada).toContain("Nenhuma alteração foi feita no estoque");

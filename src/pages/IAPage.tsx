@@ -7,17 +7,15 @@ import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import { Textarea } from "@/shared/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/components/ui/select";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/shared/components/ui/alert-dialog";
 import {
-  Brain, Zap, Sparkles, Bot, User, Send, Loader2, MessageSquare,
-  Upload, Key, FileText, Settings, Check, AlertCircle, X, FileUp,
+  Brain, Zap, Sparkles, User, Send, Loader2, MessageSquare,
+  Key, FileText, Settings, Check, AlertCircle, X, FileUp,
   Trash2, ChevronDown, ChevronUp, Paperclip,
 } from "lucide-react";
-import { EditarResultadoIAModal } from "@/components/EditarResultadoIAModal";
 import { ConversasSidebar } from "@/components/ia/ConversasSidebar";
 import { useToast } from "@/shared/hooks/use-toast";
 import { useIAConfiguracoes } from "@/domains/ia/hooks/useIAConfiguracoes";
-import { useIAAnalysis, type AnalysisResult } from "@/domains/ia/hooks/useIAAnalysis";
+import { useIAAnalysis } from "@/domains/ia/hooks/useIAAnalysis";
 import { useChatFinanceiro } from "@/domains/ia/hooks/useChatFinanceiro";
 import { useConversas } from "@/domains/ia/hooks/useConversas";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
@@ -25,7 +23,6 @@ import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { logger } from "@/core/logging/LoggerService";
-import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { UploadInteligente } from "@/domains/ia/components/UploadInteligente";
 import { AgentV2Tab } from "@/domains/ia/components/AgentV2Tab";
 
@@ -197,7 +194,7 @@ function ConsultaRapidaTab() {
     queryKey: ["ia-chat-contas"],
     queryFn: async () => {
       const { data } = await supabase.from("contas_usuario").select("*");
-      const mapped = (data ?? []).map((c: any) => ({
+      const mapped = (data ?? []).map((c: { nome?: unknown; saldo_atual?: unknown; saldo?: unknown; tipo?: unknown }) => ({
         nome: String(c.nome || ""),
         saldo_atual: Number(c.saldo_atual ?? c.saldo ?? 0),
         tipo: String(c.tipo || "")
@@ -301,14 +298,6 @@ function ConsultaRapidaTab() {
 // COMPONENTE: ABA IA AVANÇADA (Chat OpenAI + Upload)
 // ═══════════════════════════════════════════════════════════════════════════
 
-interface UploadedFile {
-  id: string;
-  file: File;
-  preview?: string;
-  type: "image" | "pdf";
-  size: string;
-}
-
 const ADV_CHAT_SUGGESTIONS = [
   "Quanto gastei este mês?",
   "Quais são minhas maiores despesas?",
@@ -318,18 +307,14 @@ const ADV_CHAT_SUGGESTIONS = [
 
 function IAAvancadaTab() {
   const { toast } = useToast();
-  const { categoriasDespesa, categoriasReceita } = useCategorias();
   const { configuracao, isLoading: configLoading, salvarConfiguracao, isConfigured } = useIAConfiguracoes();
-  const { results: analysisResults, atualizarStatus, atualizarCategoria, editarResultado, excluirResultado, salvarResultado } = useIAAnalysis();
+  const { results: analysisResults } = useIAAnalysis();
   const { conversas, isLoading: conversasLoading, criarConversa, renomearConversa, deletarConversa, atualizarUltimaMensagem } = useConversas();
   const [conversaAtiva, setConversaAtiva] = useState<string | null>(null);
   const { messages, isLoading: chatLoading, isLoadingHistory, systemPrompt, setSystemPrompt, sendMessage, clearChat } = useChatFinanceiro(conversaAtiva);
 
   const [apiKey, setApiKey] = useState("");
   const [selectedModel, setSelectedModel] = useState("gpt-4o");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [dragOver, setDragOver] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [showSystemPromptEditor, setShowSystemPromptEditor] = useState(false);
   const [attachedImage, setAttachedImage] = useState<{ dataUrl: string; base64: string; mimeType: string } | null>(null);
@@ -430,106 +415,10 @@ function IAAvancadaTab() {
     { value: "gpt-4", label: "GPT-4" },
   ];
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return "0 Bytes";
-    const k = 1024; const sizes = ["Bytes", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  };
-
   const handleSaveConfig = async () => {
     if (!apiKey.trim()) { toast({ title: "Erro", description: "Por favor, insira uma chave API válida.", variant: "destructive" }); return; }
     await salvarConfiguracao(apiKey, selectedModel);
   };
-
-  const processFiles = (files: FileList) => {
-    const maxSize = 10 * 1024 * 1024;
-    const allowedTypes = ["image/jpeg", "image/png", "image/gif", "application/pdf"];
-    Array.from(files).forEach((file) => {
-      if (file.size > maxSize) { toast({ title: "Arquivo muito grande", description: `${file.name} excede o limite de 10MB.`, variant: "destructive" }); return; }
-      if (!allowedTypes.includes(file.type)) { toast({ title: "Tipo de arquivo não suportado", description: `${file.name} não é um tipo suportado.`, variant: "destructive" }); return; }
-      const fileId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      const fileType = file.type.startsWith("image/") ? "image" as const : "pdf" as const;
-      const uploadedFile: UploadedFile = { id: fileId, file, type: fileType, size: formatFileSize(file.size) };
-      if (fileType === "image") {
-        const reader = new FileReader();
-        reader.onload = (e) => { setUploadedFiles((prev) => prev.map((f) => f.id === fileId ? { ...f, preview: e.target?.result as string } : f)); };
-        reader.readAsDataURL(file);
-      }
-      setUploadedFiles((prev) => [...prev, uploadedFile]);
-    });
-  };
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files; if (!files || files.length === 0) return;
-    processFiles(files); event.target.value = "";
-  };
-
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragOver(true); };
-  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); };
-  const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files); };
-  const removeFile = (fileId: string) => setUploadedFiles((prev) => prev.filter((f) => f.id !== fileId));
-
-  const convertFileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(",")[1]);
-    reader.onerror = reject; reader.readAsDataURL(file);
-  });
-
-  const analyzeWithOpenAI = async (file: File): Promise<void> => {
-    const base64Image = await convertFileToBase64(file);
-    const prompt = `Analise este comprovante financeiro e extraia as seguintes informações em formato JSON:\n\n{\n  "tipo": "receita" ou "despesa",\n  "descricao": "descrição clara da transação",\n  "valor": número (apenas o valor numérico, sem símbolos),\n  "categoria": "categoria apropriada (ex: Alimentação, Transporte, Saúde, Salário, etc.)",\n  "data": "data no formato YYYY-MM-DD",\n  "confianca": número de 0 a 100 indicando a confiança na análise\n}\n\nRegras importantes:\n- Se for uma nota fiscal de compra/pagamento = "despesa"\n- Se for um comprovante de pagamento recebido/depósito = "receita"\n- Para o valor, extraia apenas números (ex: se vê "R$ 150,50", retorne 150.5)\n- Para categoria, use termos como: Alimentação, Transporte, Saúde, Educação, Lazer, Moradia, Salário, Freelance, Vendas\n- Para data, tente extrair a data da transação\n- Seja preciso na classificação entre receita e despesa\n\nResponda APENAS com o JSON, sem explicações adicionais.`;
-    const { data, error } = await supabase.functions.invoke("openai-proxy", {
-      body: { model: selectedModel, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${file.type};base64,${base64Image}`, detail: "high" } }] }], max_tokens: 500, temperature: 0.1 },
-    });
-    if (error) throw new Error(error.message);
-    const content = data?.choices?.[0]?.message?.content as string;
-    const cleanContent = content.replace(/```json\s*|\s*```/g, "").trim();
-    const analysisData = JSON.parse(cleanContent);
-    await salvarResultado({ file_name: file.name, tipo: analysisData.tipo, descricao: analysisData.descricao, valor: parseFloat(analysisData.valor), categoria: analysisData.categoria, data: analysisData.data, confianca: analysisData.confianca, status: "pending" });
-  };
-
-  const analyzeFiles = async () => {
-    if (uploadedFiles.length === 0) { toast({ title: "Nenhum arquivo", description: "Adicione arquivos antes de analisar.", variant: "destructive" }); return; }
-    if (!isConfigured) { toast({ title: "Configuração necessária", description: "Configure sua chave API OpenAI primeiro.", variant: "destructive" }); return; }
-    setIsAnalyzing(true);
-    try {
-      let count = 0;
-      for (const uploadedFile of uploadedFiles) {
-        if (uploadedFile.type === "image") {
-          try { await analyzeWithOpenAI(uploadedFile.file); count++; }
-          catch (error) { logger.error("IA", "Erro na análise de arquivo", { error: error instanceof Error ? error.message : String(error) }); }
-        } else {
-          toast({ title: "PDF não suportado", description: `${uploadedFile.file.name}: Análise de PDF será implementada em breve.`, variant: "destructive" });
-        }
-      }
-      setUploadedFiles([]);
-      toast({ title: "Análise concluída", description: `${count} arquivo(s) analisado(s) com sucesso!` });
-    } catch (error) {
-      logger.error("IA", "Erro na análise de arquivos", { error: error instanceof Error ? error.message : String(error) });
-      toast({ title: "Erro na análise", description: "Verifique sua chave API e tente novamente.", variant: "destructive" });
-    } finally { setIsAnalyzing(false); }
-  };
-
-  const handleApproveResult = async (result: AnalysisResult) => {
-    try {
-      const userId = (await supabase.auth.getUser()).data.user?.id;
-      if (result.tipo === "despesa") {
-        const { error } = await supabase.from("despesas").insert({ descricao: result.descricao, valor: result.valor, data: result.data, categoria_id: result.categoria_id, user_id: userId });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("receitas").insert({ descricao: result.descricao, valor: result.valor, data: result.data, categoria_id: result.categoria_id, user_id: userId });
-        if (error) throw error;
-      }
-      await atualizarStatus(result.id, "approved");
-      toast({ title: "Sucesso", description: `${result.tipo === "despesa" ? "Despesa" : "Receita"} criada com sucesso!` });
-    } catch (error) {
-      logger.error("IA", "Erro ao criar transação", { resultId: result.id, error: error instanceof Error ? error.message : String(error) });
-      toast({ title: "Erro", description: "Erro ao criar transação. Verifique se uma categoria foi selecionada.", variant: "destructive" });
-    }
-  };
-  const handleRejectResult = (id: string) => atualizarStatus(id, "rejected");
-  const handleCategoryChange = (resultId: string, categoryId: string) => atualizarCategoria(resultId, categoryId);
 
   return (
     <div className="space-y-4">

@@ -11,8 +11,8 @@ describe("DANFE Extraction Regression Tests", () => {
   });
 
   it("Sanitiza Base64 com prefixo dataURL e quebras de linha sem quebrar a chamada do Gemini", async () => {
-    let capturedBody: any = null;
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
+    let capturedBody: { contents: Array<{ parts: Array<{ inline_data?: { data: string; mime_type: string } }> }> } | null = null;
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
       capturedBody = JSON.parse(init.body);
       return Promise.resolve({
         ok: true,
@@ -44,20 +44,20 @@ describe("DANFE Extraction Regression Tests", () => {
       mimeType: "image/jpeg",
       geminiApiKey: "fake-key",
       workspaceId: "ws-1",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
     expect(result.success).toBe(true);
     expect(capturedBody).toBeDefined();
     // Confirma que o base64 enviado ao Gemini não contém 'data:image' nem quebras de linha
-    const inlineData = capturedBody.contents[0].parts[1].inline_data;
-    expect(inlineData.data).toBe("dGVzdGU=");
-    expect(inlineData.mime_type).toBe("image/jpeg");
+    const inlineData = capturedBody?.contents[0].parts[1].inline_data;
+    expect(inlineData?.data).toBe("dGVzdGU=");
+    expect(inlineData?.mime_type).toBe("image/jpeg");
   });
 
   it("Preserva MIME type application/pdf para documentos PDF", async () => {
-    let capturedBody: any = null;
-    const mockFetch = vi.fn().mockImplementation((_url, init) => {
+    let capturedBody: { contents: Array<{ parts: Array<{ inline_data?: { data: string; mime_type: string } }> }> } | null = null;
+    const mockFetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
       capturedBody = JSON.parse(init.body);
       return Promise.resolve({
         ok: true,
@@ -86,10 +86,10 @@ describe("DANFE Extraction Regression Tests", () => {
       mimeType: "application/pdf",
       geminiApiKey: "fake-key",
       workspaceId: "ws-1",
-      fetchImpl: mockFetch as any,
+      fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
-    const inlineData = capturedBody.contents[0].parts[1].inline_data;
+    const inlineData = capturedBody?.contents[0].parts[1].inline_data;
     expect(inlineData.mime_type).toBe("application/pdf");
   });
 });

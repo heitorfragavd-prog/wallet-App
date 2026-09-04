@@ -49,7 +49,7 @@ export async function handleFiscalHttpRequest(
   let context: AiExecutionContext | null = null;
 
   try {
-    let body: Record<string, any>;
+    let body: Record<string, unknown>;
     try {
       body = await request.json();
     } catch {
@@ -81,12 +81,18 @@ export async function handleFiscalHttpRequest(
     // 1. Autorização Server-Side Obrigatória
     context = await authorizeAiRequest(request, workspaceId, dependencies.authDeps);
 
+    type DenoGlobal = { Deno?: { env: { get(key: string): string | undefined } } };
+    const denoEnv = (globalThis as unknown as DenoGlobal).Deno?.env;
+    const openAiApiKey = (dependencies.authDeps as { openAiApiKey?: string })?.openAiApiKey || (
+      denoEnv?.get("OPENAI_API_KEY")
+    );
+
     // 2. Processar Folha Atual via Gemini Fiscal Service V2 com Failover para OpenAI Vision
     const extractionResult: ProcessDanfeOutput = await processDanfeDocument({
       base64,
       mimeType,
       geminiApiKey: dependencies.geminiApiKey,
-      openaiApiKey: (dependencies.authDeps as any)?.openAiApiKey || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("OPENAI_API_KEY") : undefined),
+      openaiApiKey: openAiApiKey,
       workspaceId: context.workspaceId,
       existingSession: null, // Deixamos a RPC atômica gerenciar o merge de estado no banco
     });
@@ -100,7 +106,11 @@ export async function handleFiscalHttpRequest(
 
     if (dependencies.adminClient && totalPaginas > 1) {
       try {
-        const { data: mergeResult, error: rpcErr } = await (dependencies.adminClient.rpc as any)(
+        interface ClientWithRpc {
+          rpc: (fn: string, params: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+        }
+        const rpcClient = dependencies.adminClient as unknown as ClientWithRpc;
+        const { data: mergeResult, error: rpcErr } = await rpcClient.rpc(
           "merge_documento_sessao_page",
           {
             p_user_id: context.userId,

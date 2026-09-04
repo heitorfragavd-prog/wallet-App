@@ -1,15 +1,56 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { parseNum, parseDate } from "../services/boleto-validator";
+
+interface PropostaDados {
+  descricao: string;
+  valor_total: number;
+  valor_restante: number;
+  data_vencimento: string;
+  credor: string;
+  banco: string;
+  linha_digitavel: string;
+  validation_status: string;
+  categoria_id: string;
+  categoria_nome: string;
+  divida_id_gerada?: string;
+  confirmed_at?: string;
+}
+
+interface MockProposta {
+  id: string;
+  user_id: string;
+  chat_id: number;
+  tipo: string;
+  status: string;
+  expires_at?: string;
+  dados: PropostaDados;
+}
+
+interface MockDivida {
+  id: string;
+  user_id: string;
+  descricao: string;
+  valor_total: number;
+  valor_restante: number;
+  data_vencimento: string;
+  credor: string;
+  categoria_id: string;
+  status: string;
+}
+
+interface MockTelegramCall {
+  endpoint: string;
+  body: Record<string, unknown>;
+}
 
 describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback", () => {
   const PROPOSTA_ID_TESTE = "prop-uuid-1234-5678";
   const USER_ID_TESTE = "user-uuid-owner";
   const CHAT_ID_TESTE = 987654321;
-  const SPAL_LINHA = "34191.09115 01746.492931 83045.790009 8 15520000156261";
 
-  let mockPropostas: Map<string, any>;
-  let mockDividas: any[];
-  let mockTelegramCalls: { endpoint: string; body: any }[];
+  let mockPropostas: Map<string, MockProposta>;
+  let mockDividas: MockDivida[];
+  let mockTelegramCalls: MockTelegramCall[];
 
   beforeEach(() => {
     mockPropostas = new Map();
@@ -41,9 +82,12 @@ describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback"
   const mockExecutarConfirmacao = async (
     targetUserId: string,
     targetChatId: string | number,
-    proposta: any,
+    proposta?: MockProposta,
     messageIdToEdit?: number
   ) => {
+    if (!proposta) {
+      return { success: false, message: "Proposta não encontrada" };
+    }
     const dados = proposta.dados || {};
 
     if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
@@ -78,7 +122,7 @@ describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback"
       return { success: false, canceled: true, message: "❌ Esta proposta foi cancelada anteriormente." };
     }
 
-    const novaDivida = {
+    const novaDivida: MockDivida = {
       id: "divida-" + (mockDividas.length + 1),
       user_id: targetUserId,
       descricao: dados.descricao,
@@ -113,7 +157,7 @@ describe("Telegram Boleto Proposal - Inline Keyboard, Callbacks & Text Fallback"
   const mockExecutarCancelamento = async (
     targetUserId: string,
     targetChatId: string | number,
-    proposta: any,
+    proposta?: MockProposta,
     messageIdToEdit?: number
   ) => {
     if (messageIdToEdit) {
