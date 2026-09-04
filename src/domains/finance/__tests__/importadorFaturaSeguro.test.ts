@@ -3,6 +3,7 @@ import {
   extrairTotalDaFatura,
   extrairDatasDaFatura,
   parsearFaturaSicoob,
+  parsearFaturaNubank,
   gerarHashLinha,
   gerarHashDocumento,
 } from "../hooks/useImportarFatura";
@@ -120,7 +121,7 @@ Total da Fatura: R$ 16.053,77
         }
         itensImportados.push(`item_${i}`);
       }
-    } catch (e) {
+    } catch (_e) {
       rollback();
     }
 
@@ -200,5 +201,46 @@ Total da Fatura: R$ 16.053,77
     expect(() => validarCategoria(categoriaOutroUsuario, usuarioAutenticadoId)).toThrow(
       "Categoria inválida ou não pertencente ao usuário/workspace"
     );
+  });
+
+  it("14. Parser Nubank: Deve extrair transações com formato dia mês_extenso (ex: 12 JUL Restaurante R$ 85,00)", () => {
+    const nubankSample = `
+NUBANK FATURA
+COMPRAS
+12 JUL Restaurante Paris R$ 85,00
+15 AGO Uber *Trip R$ 34,90
+20 AGO Mercado Livre 02/05 R$ 110,00
+25 AGO PAGAMENTO RECEBIDO -1500,00
+`;
+
+    const transacoes = parsearFaturaNubank(nubankSample, 2026);
+
+    expect(transacoes).toHaveLength(3);
+
+    expect(transacoes[0].data).toBe('2026-07-12');
+    expect(transacoes[0].descricao).toBe('Restaurante Paris');
+    expect(transacoes[0].valor).toBe(85.00);
+
+    expect(transacoes[1].data).toBe('2026-08-15');
+    expect(transacoes[1].descricao).toBe('Uber *Trip');
+    expect(transacoes[1].valor).toBe(34.90);
+
+    // Parcelado
+    expect(transacoes[2].data).toBe('2026-08-20');
+    expect(transacoes[2].valor).toBe(110.00);
+    expect(transacoes[2].parcela_atual).toBe(2);
+    expect(transacoes[2].total_parcelas).toBe(5);
+  });
+
+  it("15. Parser Nubank: Suporta formato numérico DD/MM e ignora estornos e pagamentos", () => {
+    const sample = `
+05/09 Farmacia Drogasil R$ 62,50
+10/09 Pagamento de fatura -500,00
+`;
+
+    const transacoes = parsearFaturaNubank(sample, 2026);
+    expect(transacoes).toHaveLength(1);
+    expect(transacoes[0].descricao).toBe('Farmacia Drogasil');
+    expect(transacoes[0].valor).toBe(62.50);
   });
 });

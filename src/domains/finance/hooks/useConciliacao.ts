@@ -29,9 +29,9 @@ async function fetchLancamentos(mes: string, workspaceId: string | null): Promis
 
   const cols = "id, descricao, valor, data, conciliado, metodo_pagamento";
 
-  let receitasQuery = supabase.from("receitas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
-  let despesasQuery = supabase.from("despesas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
-  let transacoesQuery = supabase.from("transacoes").select(`${cols}, tipo`).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
+  const receitasQuery = supabase.from("receitas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
+  const despesasQuery = supabase.from("despesas").select(cols).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
+  const transacoesQuery = supabase.from("transacoes").select(`${cols}, tipo`).eq("workspace_id", workspaceId).gte("data", startDate).lte("data", endDate);
 
   const [r, d, t] = await Promise.all([receitasQuery, despesasQuery, transacoesQuery]);
   if (r.error) throw r.error;

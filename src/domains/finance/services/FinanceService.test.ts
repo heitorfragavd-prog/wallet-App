@@ -175,4 +175,154 @@ describe('FinanceService', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('calculateBalance', () => {
+    it('calcula saldo positivo quando receitas superam despesas', () => {
+      expect(financeService.calculateBalance(1500, 500)).toBe(1000);
+    });
+
+    it('calcula saldo negativo quando despesas superam receitas', () => {
+      expect(financeService.calculateBalance(500, 1500)).toBe(-1000);
+    });
+
+    it('calcula saldo zero quando iguais', () => {
+      expect(financeService.calculateBalance(350.5, 350.5)).toBe(0);
+    });
+  });
+
+  describe('calculateBudgetUsage', () => {
+    it('calcula porcentagem consumida corretamente', () => {
+      expect(financeService.calculateBudgetUsage(250, 1000)).toBe(25);
+    });
+
+    it('limita o uso em 100% quando o orçamento é estourado', () => {
+      expect(financeService.calculateBudgetUsage(1500, 1000)).toBe(100);
+    });
+
+    it('retorna 0 quando o orçamento for zero ou negativo', () => {
+      expect(financeService.calculateBudgetUsage(100, 0)).toBe(0);
+      expect(financeService.calculateBudgetUsage(100, -500)).toBe(0);
+    });
+  });
+
+  describe('createDebt (motor de parcelamento de dívidas)', () => {
+    it('cria parcelas distribuindo centavos na última parcela e vincula parent_id', async () => {
+      const mockInsert = vi.fn().mockReturnValue({
+        select: vi.fn().mockResolvedValue({
+          data: [{ id: 'div-1' }, { id: 'div-2' }, { id: 'div-3' }],
+          error: null,
+        }),
+      });
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        in: vi.fn().mockResolvedValue({ error: null }),
+      });
+
+      vi.mocked(supabase.from).mockImplementation((table: string) => {
+        if (table === 'dividas') {
+          return {
+            insert: mockInsert,
+            update: mockUpdate,
+          } as never;
+        }
+        return {} as never;
+      });
+
+      const result = await financeService.createDebt({
+        userId,
+        descricao: 'Empréstimo Bancário',
+        valorTotal: 100.00,
+        totalParcelas: 3,
+        dataVencimentoInicial: '2026-01-31',
+        credor: 'Banco do Brasil',
+      });
+
+      expect(result.id).toBe('div-1');
+      expect(mockInsert).toHaveBeenCalledTimes(1);
+
+      const rowsInserted = mockInsert.mock.calls[0][0];
+      expect(rowsInserted).toHaveLength(3);
+
+      // Parcela 1: 33.33
+      expect(rowsInserted[0].valor_total).toBe(33.33);
+      expect(rowsInserted[0].data_vencimento).toBe('2026-01-31');
+      expect(rowsInserted[0].descricao).toBe('Empréstimo Bancário (1/3)');
+
+      // Parcela 2: Fevereiro clampado para 28
+      expect(rowsInserted[1].valor_total).toBe(33.33);
+      expect(rowsInserted[1].data_vencimento).toBe('2026-02-28');
+
+      // Parcela 3: Absorve a diferença do arredondamento: 100 - (33.33 * 2) = 33.34
+      expect(rowsInserted[2].valor_total).toBe(33.34);
+      expect(rowsInserted[2].data_vencimento).toBe('2026-03-31');
+
+      // Verifica vinculação do parent_id
+      expect(mockUpdate).toHaveBeenCalledWith({ parent_id: 'div-1' });
+    });
+
+    it('lança erro se a inserção no Supabase falhar', async () => {
+      vi.mocked(supabase.from).mockReturnValueOnce({
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockResolvedValue({ data: null, error: new Error('DB Error') }),
+        }),
+      } as never);
+
+      await expect(
+        financeService.createDebt({
+          userId,
+          descricao: 'Dívida Falha',
+          valorTotal: 50,
+          totalParcelas: 1,
+          dataVencimentoInicial: '2026-05-10',
+          credor: 'Loja',
+        })
+      ).rejects.toThrow('DB Error');
+    });
+  });
+
+  describe('createTransaction (motor de parcelamento de transações)', () => {
+    it('cria transação parcelada e vincula ao parent_id', async () => {
+      const mockInsert = vi.fn().mockReturnValue({
+        select: vi.fn().mockResolvedValue({
+          data: [{ id: 'tx-1' }, { id: 'tx-2' }],
+          error: null,
+        }),
+      });
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        in: vi.fn().mockResolvedValue({ error: null }),
+      });
+
+      vi.mocked(supabase.from).mockImplementation((table: string) => {
+        if (table === 'transacoes') {
+          return {
+            insert: mockInsert,
+            update: mockUpdate,
+          } as never;
+        }
+        return {} as never;
+      });
+
+      const result = await financeService.createTransaction({
+        userId,
+        descricao: 'Compra Notebook',
+        tipo: 'despesa',
+        valorTotal: 500.00,
+        totalParcelas: 2,
+        dataInicial: '2026-06-15',
+      });
+
+      expect(result.id).toBe('tx-1');
+      expect(mockInsert).toHaveBeenCalledTimes(1);
+
+      const rows = mockInsert.mock.calls[0][0];
+      expect(rows).toHaveLength(2);
+      expect(rows[0].valor).toBe(250.00);
+      expect(rows[0].descricao).toBe('Compra Notebook (1/2)');
+      expect(rows[1].valor).toBe(250.00);
+      expect(rows[1].descricao).toBe('Compra Notebook (2/2)');
+
+      expect(mockUpdate).toHaveBeenCalledWith({ parent_id: 'tx-1' });
+    });
+  });
 });

@@ -75,20 +75,5 @@ jobs:
       - name: Install dependencies (strict clean install)
         run: npm ci --legacy-peer-deps
 
-      - name: Lint changed files in PR
-        run: |
-          if [ "${{ github.base_ref }}" = "master" ] && [ "${{ github.head_ref }}" = "develop" ]; then
-            echo "Release promotion develop → master."
-            echo "Progressive lint incremental already enforced on PRs merged into develop."
-            echo "Skipping historical accumulated diff."
-            exit 0
-          fi
-
-          git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD | grep -E '\.(ts|tsx|js|jsx)$' > /tmp/changed_files.txt || true
-          if [ -s /tmp/changed_files.txt ]; then
-            echo "Linting changed files:"
-            cat /tmp/changed_files.txt
-            xargs -a /tmp/changed_files.txt npx eslint
-          else
-            echo "No TS/JS files changed in this PR."
-          fi
+      - name: Lint changed files in PR (Progressive Lint)
+        run: bash scripts/lint-changed.sh "${{ github.base_ref }}" "${{ github.head_ref }}"
