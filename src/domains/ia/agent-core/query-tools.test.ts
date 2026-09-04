@@ -40,16 +40,18 @@ function repository(overrides: Partial<FinancialQueryRepository> = {}): Financia
 }
 
 describe("query tool catalog", () => {
-  it("exposes only the six priority read tools", () => {
+  it("exposes the seven priority read tools", () => {
     expect(Object.keys(createQueryToolCatalog(repository())).sort()).toEqual([
       "buscar_despesas",
       "buscar_receitas",
       "buscar_transacoes",
+      "buscar_vendas_pdv",
       "consultar_dividas",
       "consultar_resumo_mensal",
       "consultar_saldos",
     ]);
   });
+
 
   it("passes the immutable authenticated context to repository queries", async () => {
     const repo = repository();

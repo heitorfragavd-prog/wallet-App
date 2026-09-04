@@ -11,10 +11,11 @@ const mockContext: AiExecutionContext = {
 };
 
 describe("OpenAI Financial Tools Definitions", () => {
-  it("deve conter exatamente as 6 ferramentas de leitura da camada canônica", () => {
+  it("deve conter exatamente as 7 ferramentas de leitura da camada canônica", () => {
     const toolNames = OPENAI_FINANCIAL_TOOLS.map((t) => t.function.name);
     expect(toolNames).toEqual([
       "buscar_receitas",
+      "buscar_vendas_pdv",
       "buscar_despesas",
       "buscar_transacoes",
       "consultar_saldos",
@@ -22,6 +23,7 @@ describe("OpenAI Financial Tools Definitions", () => {
       "consultar_resumo_mensal",
     ]);
   });
+
 
   it("cada ferramenta deve conter description e parameters válidos", () => {
     for (const tool of OPENAI_FINANCIAL_TOOLS) {

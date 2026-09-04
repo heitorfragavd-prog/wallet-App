@@ -341,11 +341,13 @@ function IAAvancadaTab() {
     if (conversasLoading || conversaAtiva) return;
     if (conversas.length > 0) setConversaAtiva(conversas[0].id);
   }, [conversas, conversasLoading, conversaAtiva]);
-
   useEffect(() => {
-    if (configuracao) { setApiKey(configuracao.api_key); setSelectedModel(configuracao.modelo); }
+    if (configuracao) {
+      // api_key não é mais retornada ao frontend (segurança — Etapa 1.1)
+      // O input de API key começa vazio — usuário deve redigitar para atualizar
+      setSelectedModel(configuracao.modelo);
+    }
   }, [configuracao]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, chatLoading]);

@@ -12,6 +12,8 @@ export interface FinancialDataQuery {
   columns: string;
   equals: { user_id: string; workspace_id: string; [key: string]: unknown };
   dateRange?: { column: "data" | "data_vencimento"; start: string; end: string };
+  /** Optional LIKE filter: { column, pattern }. Applied with SQL LIKE operator. */
+  like?: { column: string; pattern: string };
 }
 
 export type FinancialDataRow = Record<string, unknown>;
@@ -83,14 +85,14 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       const [recRows, txRows] = await Promise.all([
         execute(scopedQuery(
           "receitas",
-          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          "id,user_id,workspace_id,descricao,valor,data",
           context,
           period,
         )),
         execute({
           ...scopedQuery(
             "transacoes",
-            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            "id,user_id,workspace_id,descricao,valor,data,tipo",
             context,
             period,
           ),
@@ -105,14 +107,14 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       const [despRows, txRows] = await Promise.all([
         execute(scopedQuery(
           "despesas",
-          "id,user_id,workspace_id,descricao,valor,data,deduplication_key",
+          "id,user_id,workspace_id,descricao,valor,data",
           context,
           period,
         )),
         execute({
           ...scopedQuery(
             "transacoes",
-            "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+            "id,user_id,workspace_id,descricao,valor,data,tipo",
             context,
             period,
           ),
@@ -126,7 +128,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
     async listTransactions(context, period) {
       const rows = await execute(scopedQuery(
         "transacoes",
-        "id,user_id,workspace_id,descricao,valor,data,tipo,deduplication_key",
+        "id,user_id,workspace_id,descricao,valor,data,tipo",
         context,
         period,
       ));
@@ -167,6 +169,24 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           status: String(row.status),
         };
       });
+    },
+    async listSalesPDV(context, period) {
+      // Fonte canônica de vendas brutas do PDV Eyemobile no banco.
+      // Usa a mesma origem do buildLocalFallbackDashboard:
+      // transacoes WHERE tipo='receita' AND descricao LIKE 'Venda Eyemobile %'
+      // Este valor é BRUTO (sem deduções de taxas Divipay).
+      const query = scopedQuery(
+        "transacoes",
+        "id,user_id,workspace_id,descricao,valor,data,tipo",
+        context,
+        period,
+      );
+      const rows = await execute({
+        ...query,
+        equals: { ...query.equals, tipo: "receita" },
+        like: { column: "descricao", pattern: "Venda Eyemobile %" },
+      });
+      return normalizeRecords(rows, context, "transacao", "income");
     },
   };
 }

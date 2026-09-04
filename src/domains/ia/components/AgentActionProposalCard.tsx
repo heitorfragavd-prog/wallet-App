@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
-import { Edit3, Check, X, ShieldAlert, Sparkles } from "lucide-react";
+import { Edit3, ShieldAlert, Sparkles } from "lucide-react";
 import { Input } from "@/shared/components/ui/input";
 import { Button } from "@/shared/components/ui/button";
 
@@ -9,6 +9,10 @@ export interface AgentActionProposalCardProps {
   onConfirm: (proposalId: string, updatedPayload?: Record<string, unknown>) => void | Promise<void>;
   onCancel: (proposalId: string) => void | Promise<void>;
   isProcessing?: boolean;
+  /** Se true, desabilita execucao e exibe disabledReason. Retrocompat: default false. */
+  disabled?: boolean;
+  /** Mensagem exibida quando disabled=true. */
+  disabledReason?: string;
 }
 
 export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = ({
@@ -16,26 +20,20 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
   onConfirm,
   onCancel,
   isProcessing = false,
+  disabled = false,
+  disabledReason = "Execução ainda não disponível.",
 }) => {
   const isPending = proposal.status === "prepared";
   const [isEditing, setIsEditing] = useState(false);
-  const [editablePayload, setEditablePayload] = useState<Record<string, unknown>>({
-    ...proposal.payload,
-  });
+  const [editablePayload, setEditablePayload] = useState<Record<string, unknown>>({ ...proposal.payload });
 
   const handleFieldChange = (key: string, value: unknown) => {
-    setEditablePayload((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
+    setEditablePayload((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleConfirmAction = () => {
-    if (isEditing) {
-      onConfirm(proposal.id, editablePayload);
-    } else {
-      onConfirm(proposal.id);
-    }
+    if (disabled) return;
+    if (isEditing) { onConfirm(proposal.id, editablePayload); } else { onConfirm(proposal.id); }
   };
 
   return (
@@ -49,30 +47,22 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {isPending && !isEditing && (
-            <button
-              type="button"
-              onClick={() => setIsEditing(true)}
-              className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-background"
-            >
+          {isPending && !isEditing && !disabled && (
+            <button type="button" onClick={() => setIsEditing(true)}
+              className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-background">
               <Edit3 className="h-3 w-3" /> Editar
             </button>
           )}
-          <span
-            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              proposal.status === "executed"
-                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
-                : proposal.status === "cancelled"
-                ? "bg-rose-100 text-rose-800 dark:bg-rose-950/30 dark:text-rose-300"
-                : "bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
-            }`}
-          >
-            {proposal.status === "prepared"
-              ? "Aguardando Confirmação"
-              : proposal.status === "executed"
-              ? "Executado"
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            proposal.status === "executed"
+              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
               : proposal.status === "cancelled"
-              ? "Cancelado"
+              ? "bg-rose-100 text-rose-800 dark:bg-rose-950/30 dark:text-rose-300"
+              : "bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+          }`}>
+            {proposal.status === "prepared" ? "Aguardando Confirmação"
+              : proposal.status === "executed" ? "Executado"
+              : proposal.status === "cancelled" ? "Cancelado"
               : proposal.status}
           </span>
         </div>
@@ -80,7 +70,6 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
 
       <div className="py-3">
         <p className="font-semibold text-sm text-foreground">{proposal.summary}</p>
-
         {isEditing ? (
           <div className="mt-3 space-y-2 rounded-lg bg-muted/30 p-3 border border-border/60">
             <p className="text-xs font-semibold text-primary">Editar Campos da Proposta:</p>
@@ -92,26 +81,15 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
                     <label className="text-[11px] font-medium text-muted-foreground capitalize">
                       {key.replace(/_/g, " ")}:
                     </label>
-                    <Input
-                      value={String(val ?? "")}
-                      onChange={(e) => handleFieldChange(key, e.target.value)}
-                      className="h-8 text-xs bg-background"
-                    />
+                    <Input value={String(val ?? "")} onChange={(e) => handleFieldChange(key, e.target.value)} className="h-8 text-xs bg-background" />
                   </div>
                 );
               })}
             </div>
             <div className="flex justify-end gap-2 pt-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setEditablePayload({ ...proposal.payload });
-                  setIsEditing(false);
-                }}
-                className="h-7 text-xs"
-              >
+              <Button type="button" variant="ghost" size="sm"
+                onClick={() => { setEditablePayload({ ...proposal.payload }); setIsEditing(false); }}
+                className="h-7 text-xs">
                 Descartar Edições
               </Button>
             </div>
@@ -136,27 +114,24 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
       </div>
 
       {isPending && (
-        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/50">
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={() => onCancel(proposal.id)}
-            className="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={handleConfirmAction}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 shadow-sm"
-          >
-            {isProcessing
-              ? "Confirmando..."
-              : isEditing
-              ? "Salvar & Confirmar Operação"
-              : "Confirmar Operação"}
-          </button>
+        <div className="pt-2 border-t border-border/50">
+          {disabled ? (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span>{disabledReason}</span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-end gap-2">
+              <button type="button" disabled={isProcessing} onClick={() => onCancel(proposal.id)}
+                className="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50">
+                Cancelar
+              </button>
+              <button type="button" disabled={isProcessing} onClick={handleConfirmAction}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 shadow-sm">
+                {isProcessing ? "Confirmando..." : isEditing ? "Salvar & Confirmar Operação" : "Confirmar Operação"}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
