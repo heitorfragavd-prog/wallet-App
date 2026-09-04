@@ -1,26 +1,17 @@
 import type { OpenAiFunctionDefinition } from "./openai-tools-definition.ts";
 import type { LlmMessage, LlmResponse, LlmRunner, LlmUsage } from "./orchestrator-core.ts";
 
-export const ALLOWED_MODELS = ["gpt-4o-mini", "gpt-4o", "o3-mini"] as const;
-export type AllowedModel = (typeof ALLOWED_MODELS)[number];
+export const ALLOWED_GEMINI_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-3.6-flash",
+] as const;
 
-export const DEFAULT_MODEL: AllowedModel = "gpt-4o-mini";
+export type AllowedGeminiModel = (typeof ALLOWED_GEMINI_MODELS)[number];
+export const DEFAULT_GEMINI_MODEL: AllowedGeminiModel = "gemini-2.5-flash";
 
-// Tabela de preços por 1.000.000 tokens (USD)
-const MODEL_PRICING: Record<AllowedModel, { inputPerMillion: number; outputPerMillion: number }> = {
-  "gpt-4o-mini": { inputPerMillion: 0.15, outputPerMillion: 0.60 },
-  "gpt-4o": { inputPerMillion: 2.50, outputPerMillion: 10.00 },
-  "o3-mini": { inputPerMillion: 1.10, outputPerMillion: 4.40 },
-};
-
-export function calculateEstimatedCost(model: AllowedModel, usage: LlmUsage): number {
-  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING[DEFAULT_MODEL];
-  const inputCost = (usage.promptTokens / 1_000_000) * pricing.inputPerMillion;
-  const outputCost = (usage.completionTokens / 1_000_000) * pricing.outputPerMillion;
-  return inputCost + outputCost;
-}
-
-export interface OpenAiRunnerOptions {
+export interface GeminiRunnerOptions {
   apiKey: string;
   model?: string;
   baseUrl?: string;
@@ -28,21 +19,20 @@ export interface OpenAiRunnerOptions {
   fetchImpl?: typeof fetch;
 }
 
-export class OpenAiLlmRunner implements LlmRunner {
+export class GeminiLlmRunner implements LlmRunner {
   private readonly apiKey: string;
-  public readonly model: AllowedModel;
+  public readonly model: string;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(options: OpenAiRunnerOptions) {
+  constructor(options: GeminiRunnerOptions) {
     this.apiKey = options.apiKey;
-    this.baseUrl = options.baseUrl ?? "https://api.openai.com/v1/chat/completions";
+    this.model = options.model || DEFAULT_GEMINI_MODEL;
+    this.baseUrl =
+      options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
-
-    const requestedModel = options.model as AllowedModel;
-    this.model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
   }
 
   async generateCompletion(
@@ -76,7 +66,7 @@ export class OpenAiLlmRunner implements LlmRunner {
       }),
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? "auto" : undefined,
-      temperature: 0.1, // Determinístico para finanças
+      temperature: 0.1,
     };
 
     try {
@@ -92,19 +82,19 @@ export class OpenAiLlmRunner implements LlmRunner {
 
       if (!res.ok) {
         if (res.status === 429) {
-          throw new Error("openai_quota_exceeded");
+          throw new Error("gemini_rate_limit");
         }
-        if (res.status === 401) {
-          throw new Error("openai_invalid_key");
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("gemini_invalid_key");
         }
-        throw new Error(`openai_api_error_${res.status}`);
+        throw new Error(`gemini_api_error_${res.status}`);
       }
 
       const json = await res.json();
       const choice = json.choices?.[0];
 
       if (!choice || !choice.message) {
-        throw new Error("openai_empty_response");
+        throw new Error("gemini_empty_response");
       }
 
       const rawMsg = choice.message;
@@ -122,6 +112,11 @@ export class OpenAiLlmRunner implements LlmRunner {
         },
         usage,
       };
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error("gemini_timeout");
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }

@@ -1,17 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
-  analyzeTileCoverage,
-  subdivideCropTile,
   expandCropTileWithMargin,
   classifyVisionResponse,
-  validateProductRow,
   consolidateDanfeItems,
-  deduplicateAndConsolidateItems,
   validateDanfeMath,
   evaluateStockStatus,
   type DanfeItemRaw,
@@ -20,14 +17,27 @@ import {
 import {
   validateProductRowV2,
   validateDanfeMathV2,
-  reconcileAndDeduplicateV2,
-  sanitizeProductDescription,
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
-  parseFiscalNumber,
+  findAccessKeyInPayload,
+  reconcileNFeNumber,
   type DanfeItemV2,
-  type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
+import {
+  cleanDigits,
+  reconcileBoleto,
+  validateLinhaDigitavel,
+  parseBoletoAmount,
+  parseNum,
+  parseDate,
+} from "../_shared/ai/boleto-validator.ts";
+import {
+  extractFocusedBeneficiary,
+  recoverBoletoLineWithFailover,
+  type RegionCandidate,
+} from "../_shared/ai/boleto-service.ts";
+
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,8 +53,15 @@ function generateToken(): string {
   return token;
 }
 
+interface CategoriaRow {
+  id: string;
+  nome: string;
+  tipo?: string;
+  aliases?: string | null;
+}
+
 async function resolveCategoriaByCredor(
-  supabase: any,
+  supabase: SupabaseClient,
   userId: string,
   credorOrDesc: string,
   supabaseUrl?: string,
@@ -73,16 +90,17 @@ async function resolveCategoriaByCredor(
         .then(() => {});
       return { id: cacheHit.categorias.id, nome: cacheHit.categorias.nome };
     }
-  } catch (err: any) {
-    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err.message);
+  } catch (err: unknown) {
+    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err instanceof Error ? err.message : String(err));
   }
 
-  const { data: categorias } = await supabase
+  const { data: categoriasData } = await supabase
     .from("categorias")
     .select("id,nome,tipo,aliases")
     .eq("user_id", userId);
 
-  if (!categorias || categorias.length === 0) return null;
+  const categorias = (categoriasData as CategoriaRow[] | null) || [];
+  if (categorias.length === 0) return null;
 
   // ─── 2. ALIASES: Sinônimos e marcas cadastrados ───
   for (const cat of categorias) {
@@ -97,10 +115,10 @@ async function resolveCategoriaByCredor(
   }
 
   // ─── 3. MATCH EXATO E POR INCLUSÃO COMPLETA ───
-  const exact = categorias.find((c: any) => normalize(c.nome) === credorNorm);
+  const exact = categorias.find((c) => normalize(c.nome) === credorNorm);
   if (exact) return { id: exact.id, nome: exact.nome };
 
-  const fullInc = categorias.find((c: any) => {
+  const fullInc = categorias.find((c) => {
     const catNorm = normalize(c.nome);
     return catNorm.length >= 3 && (credorNorm.includes(catNorm) || catNorm.includes(credorNorm));
   });
@@ -115,7 +133,7 @@ async function resolveCategoriaByCredor(
   const inputTokens = credorNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
 
   for (const token of inputTokens) {
-    const match = categorias.find((c: any) => {
+    const match = categorias.find((c) => {
       const catNorm = normalize(c.nome);
       return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
     });
@@ -126,7 +144,7 @@ async function resolveCategoriaByCredor(
   if (supabaseUrl && serviceKey && categorias.length > 0) {
     try {
       console.log(`[telegram-webhook] Tentando categorização por LLM para "${credorOrDesc}"...`);
-      const catListStr = categorias.map((c: any, i: number) => `${i + 1}. ${c.nome}`).join("\n");
+      const catListStr = categorias.map((c, i: number) => `${i + 1}. ${c.nome}`).join("\n");
       const prompt = `Você é um classificador financeiro inteligente.
 Dado o nome do beneficiário/fornecedor "${credorOrDesc}", escolha a categoria mais provável entre as seguintes:
 ${catListStr}
@@ -161,15 +179,15 @@ Responda APENAS com o número correspondente (ex: 1, 2, etc). Se nenhuma categor
           return { id: chosenCat.id, nome: chosenCat.nome };
         }
       }
-    } catch (llmCatErr: any) {
-      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr.message);
+    } catch (llmCatErr: unknown) {
+      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr instanceof Error ? llmCatErr.message : String(llmCatErr));
     }
   }
 
   return null;
 }
 
-async function salvarCacheCategoria(supabase: any, userId: string, credor: string, categoriaId: string) {
+async function salvarCacheCategoria(supabase: SupabaseClient, userId: string, credor: string, categoriaId: string) {
   if (!credor || !categoriaId) return;
   const normalize = (s: string) =>
     s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
@@ -187,8 +205,8 @@ async function salvarCacheCategoria(supabase: any, userId: string, credor: strin
       { onConflict: "user_id,credor_normalizado" }
     );
     console.log(`[telegram-webhook] Cache de categoria salvo: "${credorNorm}" -> ${categoriaId}`);
-  } catch (err: any) {
-    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err.message);
+  } catch (err: unknown) {
+    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -254,14 +272,15 @@ async function transcribeAudio(fileId: string, telegramBotToken: string, supabas
 
     const result = await transcribeResp.json();
     return result.transcription || null;
-  } catch (err: any) {
-    console.error("[transcribeAudio] exception:", err.message);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[transcribeAudio] exception:", errMsg);
     return null;
   }
 }
 
 // ─── PREVISÃO DE CAIXA INTELIGENTE ───
-async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?: string | null): Promise<string> {
+async function calcularPrevisaoCaixa(supabase: SupabaseClient, userId: string, workspaceId?: string | null): Promise<string> {
   const hoje = new Date();
   
   // 1. Saldo atual nas contas
@@ -275,7 +294,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   }
   const { data: contas } = await qContas;
   
-  const saldoAtual = (contas || []).reduce((a: number, c: any) => a + (Number(c.saldo) || 0), 0);
+  const saldoAtual = (contas || []).reduce((a: number, c: { saldo?: unknown }) => a + (Number(c?.saldo) || 0), 0);
   
   // 2. Receitas médias dos últimos 30 dias
   const dataInicio30 = new Date(hoje);
@@ -311,7 +330,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDespFixas = qDespFixas.eq("workspace_id", workspaceId);
   const { data: despesas30d } = await qDespFixas;
   
-  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: any) => a + Number(d.valor || 0), 0);
+  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: { valor?: unknown }) => a + Number(d.valor || 0), 0);
   const despesaDiaria = totalDespesas30d > 0 ? totalDespesas30d / 30 : 0;
   
   // 4. Dívidas a vencer nos próximos 90 dias
@@ -329,7 +348,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDividas = qDividas.eq("workspace_id", workspaceId);
   const { data: dividasFuturas } = await qDividas;
   
-  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: any) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
+  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: { valor_restante?: unknown; valor_total?: unknown }) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
   
   // 5. Calcular fluxo diário
   const fluxoDiario = mediaDiariaVendas - despesaDiaria;
@@ -366,7 +385,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
     msg += `   (<i>${dividasFuturas.length} compromissos</i>)\n\n`;
     
     msg += `<b>Próximos vencimentos:</b>\n`;
-    dividasFuturas.slice(0, 5).forEach((d: any) => {
+    dividasFuturas.slice(0, 5).forEach((d: { data_vencimento?: string; valor_restante?: unknown; valor_total?: unknown; credor?: string; descricao?: string }) => {
       const venc = new Date(d.data_vencimento + "T12:00:00Z");
       const dias = Math.max(0, Math.ceil((venc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
       const emoji = dias <= 3 ? "🔴" : dias <= 7 ? "🟡" : "🟢";
@@ -423,15 +442,16 @@ REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
       const json = await resp.json();
       const raw = json.choices?.[0]?.message?.content?.trim() || "";
       const cleaned = raw.replace(/```json\s*/i, "").replace(/```/g, "").trim();
-      let parsed: any = null;
-      try { parsed = JSON.parse(cleaned); } catch {}
-      const nomeCorrigido = parsed?.beneficiario || parsed?.nome || null;
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = JSON.parse(cleaned); } catch { /* fallback intencional */ }
+      const nomeCorrigido = typeof parsed?.beneficiario === "string" ? parsed.beneficiario : typeof parsed?.nome === "string" ? parsed.nome : null;
       if (nomeCorrigido && nomeCorrigido.length >= 3 && !isNomeDeBanco(nomeCorrigido)) {
         return nomeCorrigido.trim();
       }
     }
-  } catch (e: any) {
-    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", e.message);
+  } catch (e: unknown) {
+    const errMessage = e instanceof Error ? e.message : String(e);
+    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", errMessage);
   }
   return null;
 }
@@ -456,6 +476,66 @@ function parseLinhaDigitavelFebraban(linha: string): { valor: number | null; ven
     vencimento = vencDate.toISOString().split("T")[0];
   }
   return { valor, vencimento };
+}
+
+// ─── VALIDAÇÃO DE DV MÓDULO 10 (campos 1, 2, 3 da linha digitável bancária) ───
+function dvModulo10(digits: string): number {
+  let sum = 0;
+  let factor = 2;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    const prod = parseInt(digits[i], 10) * factor;
+    sum += prod > 9 ? Math.floor(prod / 10) + (prod % 10) : prod;
+    factor = factor === 2 ? 1 : 2;
+  }
+  return (10 - (sum % 10)) % 10;
+}
+
+// Valida os DVs dos campos 1, 2 e 3 de uma linha digitável bancária de 47 dígitos.
+// NÃO inventa nem corrige dígitos — apenas verifica.
+function _validarDVsLinhaDigitavel47(d: string): boolean {
+  if (d.length !== 47) return false;
+  if (dvModulo10(d.slice(0, 9)) !== parseInt(d[9], 10)) return false;
+  if (dvModulo10(d.slice(10, 20)) !== parseInt(d[20], 10)) return false;
+  if (dvModulo10(d.slice(21, 31)) !== parseInt(d[31], 10)) return false;
+  return true;
+}
+
+// Procura subsequência CONTÍNUA de 47 ou 48 dígitos no texto OCR bruto.
+// NUNCA inventa, reordena ou substitui dígitos.
+// Para 47 dígitos: exige DV de todos os 3 campos + FEBRABAN com valor > 0.
+// Para 48 dígitos (guia de arrecadação): aceita estruturalmente se for o único bloco.
+function _buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
+  if (!textoOCR || textoOCR.length < 20) return null;
+
+  // Primeiro: busca em blocos que parecem linha digitável (sequências longas com pontos/espaços)
+  const blocos = textoOCR.match(/\d[\d.\s]{20,}\d/g) || [];
+  for (const bloco of blocos) {
+    const digits = bloco.replace(/\D/g, "");
+    for (const len of [47, 48]) {
+      for (let start = 0; start <= digits.length - len; start++) {
+        const cand = digits.slice(start, start + len);
+        if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
+          const febraban = parseLinhaDigitavelFebraban(cand);
+          if (febraban.valor && febraban.valor > 0) return cand;
+        }
+        if (len === 48 && digits.length === 48) return cand;
+      }
+    }
+  }
+
+  // Fallback: janela deslizante no total de dígitos do texto
+  const allDigits = textoOCR.replace(/\D/g, "");
+  for (const len of [47, 48]) {
+    for (let start = 0; start <= allDigits.length - len; start++) {
+      const cand = allDigits.slice(start, start + len);
+      if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
+        const febraban = parseLinhaDigitavelFebraban(cand);
+        if (febraban.valor && febraban.valor > 0) return cand;
+      }
+      if (len === 48 && allDigits.length >= 48 && allDigits.length <= 52) return cand;
+    }
+  }
+  return null;
 }
 
 // ─── VALIDAÇÃO DETERMINÍSTICA ANTI-ALUCINAÇÃO DE BOLETOS ───
@@ -513,12 +593,8 @@ function validarExtracaoBoleto(data: {
     return { valido: false, motivo: "Data de vencimento fora do intervalo esperado" };
   }
 
-  // 5. Linha digitável (se fornecida, deve ter 47 ou 48 dígitos)
-  const linha = String(data.linha_digitavel || "").replace(/\D/g, "");
-  if (linha.length > 0 && linha.length !== 47 && linha.length !== 48) {
-    return { valido: false, motivo: "Linha digitável incompleta ou com dígitos faltantes" };
-  }
-
+  // 5. Linha digitável: se for incompleta/inválida, não aborta o documento;
+  // a conciliação canônica rebaixa o status para 'requer_revisao' de forma segura.
   return { valido: true };
 }
 
@@ -652,10 +728,10 @@ serve(async (req) => {
   });
 
   try {
-    let body: any = {};
+    let body: Record<string, unknown> = {};
     try {
       body = await req.json();
-    } catch (_) {}
+    } catch { /* fallback intencional */ }
 
     // ─── AÇÕES ADMINISTRATIVAS (Info / Configuração do Webhook) ───
     if (body?.action === "get_webhook_info" || req.method === "GET") {
@@ -800,15 +876,187 @@ serve(async (req) => {
       }).catch(() => {});
     };
 
+    const executarConfirmacaoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
+      messageIdToEdit?: number
+    ) => {
+      const dados = (proposta.dados || {}) as Record<string, unknown>;
+
+      // 1. Proteção contra duplicação (Idempotência sequencial)
+      if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(
+          `ℹ️ <b>Este boleto já foi confirmado e cadastrado anteriormente.</b>\n` +
+          `Nenhuma dívida duplicada foi gerada.`
+        );
+        return { success: true, already_confirmed: true };
+      }
+
+      // 2. Verificação de expiração
+      if (proposta.status === "expirada" || (proposta.expires_at && new Date(String(proposta.expires_at)) < new Date())) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(`⏰ <b>Esta proposta expirou.</b> Envie o boleto novamente para cadastrar.`);
+        return { success: false, expired: true };
+      }
+
+      // 3. Verificação de cancelamento prévio
+      if (proposta.status === "cancelada") {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await replyFn(`❌ <b>Esta proposta foi cancelada anteriormente.</b>`);
+        return { success: false, canceled: true };
+      }
+
+      const valorNum = parseNum(dados.valor_total || dados.valor);
+      const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
+      const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
+      const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
+
+      // Busca workspace do usuário para associar a dívida
+      const { data: wsMember } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", targetUserId)
+        .limit(1)
+        .maybeSingle();
+
+      const insertPayload: Record<string, unknown> = {
+        user_id: targetUserId,
+        descricao: desc,
+        valor_total: valorNum,
+        valor_restante: valorNum,
+        valor_pago: 0,
+        data_vencimento: vencIso,
+        credor: credorNome,
+        status: "pendente",
+        parcelas: 1,
+        parcelas_pagas: 0,
+        documento_favorecido: dados.cnpj_cpf_beneficiario || null,
+      };
+
+      if (dados.categoria_id) {
+        insertPayload.categoria_id = dados.categoria_id;
+      }
+
+      if (wsMember?.workspace_id) {
+        insertPayload.workspace_id = wsMember.workspace_id;
+      }
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=insert_divida credor="${credorNome}" valor=${valorNum} vencimento=${vencIso}`);
+
+      const { data: dividaInserida, error: errDivida } = await supabase
+        .from("dividas")
+        .insert(insertPayload)
+        .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
+        .single();
+
+      if (errDivida) {
+        console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
+        await replyFn(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
+        return { success: false, error: errDivida.message };
+      }
+
+      if (dividaInserida?.categoria_id && credorNome) {
+        salvarCacheCategoria(supabase, targetUserId, credorNome, dividaInserida.categoria_id).catch(() => {});
+      }
+
+      // Atualização de status e rastreamento de confirmação humana
+      const finalValidationStatus = dados.validation_status === "requer_revisao"
+        ? "manual_confirmed"
+        : (dados.validation_status || "validado");
+
+      const updatedDados = {
+        ...dados,
+        divida_id_gerada: dividaInserida.id,
+        validation_status: finalValidationStatus,
+        confirmed_manually: dados.validation_status === "requer_revisao",
+        confirmed_at: new Date().toISOString(),
+      };
+
+      await supabase
+        .from("telegram_propostas")
+        .update({
+          status: "confirmada",
+          executed_at: new Date().toISOString(),
+          dados: updatedDados,
+        })
+        .eq("id", proposta.id);
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} validation_status=${finalValidationStatus} divida_id_gerada=${dividaInserida.id} action=confirmed_ok`);
+
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+
+      const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
+
+      const avisoRevisao = dados.validation_status === "requer_revisao"
+        ? `\n✍️ <i>Cadastro confirmado manualmente pelo usuário.</i>\n`
+        : "";
+
+      await replyFn(
+        `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
+        `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
+        (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
+        `💰 Valor: <b>${valFmt}</b>\n` +
+        `🗓️ Vencimento: <b>${vencFmt}</b>\n` +
+        avisoRevisao +
+        `\n🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
+        `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
+      );
+
+      return { success: true, divida: dividaInserida };
+    };
+
+    const executarCancelamentoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
+      messageIdToEdit?: number
+    ) => {
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+      if (proposta?.id) {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
+      }
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+      await replyFn("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+      return { success: true, canceled: true };
+    };
+
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
-    const message = body?.message;
-    const callbackQuery = body?.callback_query;
+    const message = body?.message as Record<string, unknown> | undefined;
+    const callbackQuery = body?.callback_query as Record<string, unknown> | undefined;
 
     if (callbackQuery) {
-      const callbackChatId = callbackQuery.message?.chat?.id;
-      const callbackMessageId = callbackQuery.message?.message_id;
-      const callbackData = callbackQuery.data || "";
-      const callbackUserId = callbackQuery.from?.id;
+      const callbackChatId = (callbackQuery.message as Record<string, unknown> | undefined)?.chat
+        ? ((callbackQuery.message as Record<string, unknown>).chat as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+      const callbackMessageId = (callbackQuery.message as Record<string, unknown> | undefined)?.message_id as number | undefined;
+      const callbackData = (callbackQuery.data as string) || "";
+      const callbackUserId = (callbackQuery.from as Record<string, unknown> | undefined)?.id;
 
       let cbUserId: string = "";
       const cbChatId = callbackChatId;
@@ -871,14 +1119,94 @@ serve(async (req) => {
       }
 
       if (!cbUserId) {
-        await answerCallback(callbackQuery.id, "Usuário não encontrado.");
+        await answerCallback(callbackQuery.id as string | number, "Usuário não encontrado.");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
+
+      // ================================================================
+      // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta, cancelar_proposta & revisar_proposta
+      // ================================================================
+      if (
+        callbackData.startsWith("confirmar_proposta:") ||
+        callbackData.startsWith("cancelar_proposta:") ||
+        callbackData.startsWith("revisar_proposta:")
+      ) {
+        const isConfirm = callbackData.startsWith("confirmar_proposta:");
+        const isReview = callbackData.startsWith("revisar_proposta:");
+        const propostaId = callbackData.split(":")[1];
+
+        const feedbackMsg = isConfirm
+          ? "Confirmando cadastro..."
+          : isReview
+          ? "Abrindo orientações de revisão..."
+          : "Cancelando proposta...";
+
+        await answerCallback(callbackQuery.id, feedbackMsg);
+
+        const { data: propostaRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propostaId)
+          .maybeSingle();
+
+        if (!propostaRow) {
+          await sendReplyWithButtons(cbChatId, "❌ <b>Proposta não encontrada ou já expirada.</b>", []);
+          if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Validação de segurança: apenas o usuário/workspace proprietário pode confirmar
+        if (propostaRow.user_id && cbUserId && propostaRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Você não tem permissão para esta proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const replyCallbackFn = async (text: string) => {
+          if (telegramBotToken) {
+            await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: cbChatId, text, parse_mode: "HTML" }),
+            }).catch(() => {});
+          }
+        };
+
+        if (isConfirm) {
+          await executarConfirmacaoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        } else if (isReview) {
+          if (callbackMessageId) {
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+          }
+          await replyCallbackFn(
+            `📸 <b>Revisão de Boleto Requerida</b>\n\n` +
+            `Para garantir a exatidão financeira do cadastro:\n\n` +
+            `1️⃣ Envie uma <b>foto aproximada</b> focando na <b>Ficha de Compensação</b> (rodapé com linha digitável e código de barras);\n` +
+            `2️⃣ Ou envie o boleto original como <b>📎 Arquivo/Documento</b> (para evitar perda de nitidez por compressão).\n\n` +
+            `<i>A IA validará matematicamente os 47 dígitos e o valor exato antes de cadastrar.</i>`
+          );
+        } else {
+          await executarCancelamentoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        }
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
 
       // ================================================================
       // BOTÃO: nf_confirmar
@@ -919,7 +1247,7 @@ serve(async (req) => {
         let itensRecemProcessados = 0;
         let itensPendentes = 0;
 
-        const alertasCriados: any[] = [];
+        const alertasCriados: Array<Record<string, unknown>> = [];
         if (itens && itens.length > 0) {
           for (const item of itens) {
             // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
@@ -985,7 +1313,7 @@ serve(async (req) => {
                 const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
 
                 if (variacao > 10) {
-                  let precoVendaAtual = Number(prodEye?.preco_venda || 0);
+                  const precoVendaAtual = Number(prodEye?.preco_venda || 0);
                   let margemReal = Number(prodEye?.margem_real_percentual || 0);
                   let precoSugerido = 0;
 
@@ -1126,7 +1454,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
+        let updateResult: { success?: boolean; error?: unknown } = { success: true };
         if (alerta.produto_eyemobile_id) {
           const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
             method: "POST",
@@ -1249,7 +1577,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
+        let updateResult: { success?: boolean; error?: unknown } = { success: true };
         if (alerta.produto_eyemobile_id) {
           const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
             method: "POST",
@@ -1391,9 +1719,10 @@ serve(async (req) => {
     }
 
     // ─── RESOLUÇÃO DE USUÁRIO / GRUPO ───
-    const chatType = message.chat?.type || "private";
+    const chatObj = message?.chat as Record<string, unknown> | undefined;
+    const chatType = typeof chatObj?.type === "string" ? chatObj.type : "private";
     const isGroup = chatType === "group" || chatType === "supergroup";
-    let grupoConfig: any = null;
+    let grupoConfig: Record<string, unknown> | null = null;
     let userId: string = "";
     let workspaceId: string | null = null;
 
@@ -1570,7 +1899,7 @@ serve(async (req) => {
         const custoNovo = Number(alerta.custo_novo || 0);
         const novaMargem = custoNovo > 0 ? ((precoDigitado / custoNovo) - 1) * 100 : 0;
 
-        const fmt = (v: any) =>
+        const fmt = (v: unknown) =>
           v != null && !isNaN(Number(v))
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -1641,7 +1970,7 @@ serve(async (req) => {
 
       await supabase.from("notas_fiscais_compra").update({ status: "pendente" }).eq("id", nfParcial.id);
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1651,7 +1980,7 @@ serve(async (req) => {
       msg += `📦 <b>Itens:</b> ${itensParciais?.length || 0} produtos\n`;
       msg += `💰 <b>Valor Total NF:</b> ${fmt(nfParcial.valor_total)}\n\n`;
 
-      (itensParciais || []).forEach((item: any, i: number) => {
+      (itensParciais || []).forEach((item: Record<string, unknown>, i: number) => {
         msg += `${i + 1}. <b>${item.descricao || "Item"}</b>\n`;
         msg += `   📦 ${item.quantidade || 0} ${item.unidade || "UN"} × ${fmt(item.valor_unitario)}\n`;
         msg += `   💰 Total: ${fmt(item.valor_total)}\n`;
@@ -1727,7 +2056,7 @@ serve(async (req) => {
 
     // ─── 0. COMANDO /precos (LISTAR ALERTAS DE PREÇO PENDENTES) ───
     if (text.startsWith("/precos") || respLower.includes("alertas de preco") || respLower.includes("precos pendentes")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1746,14 +2075,14 @@ serve(async (req) => {
 
       let msgPrecos = `🚨 <b>Alertas de Preço Pendentes:</b> (${alertas.length} produto(s))\n\n`;
 
-      alertas.forEach((alerta: any, idx: number) => {
-        const idCurto = alerta.id.slice(0, 8);
+      alertas.forEach((alerta: Record<string, unknown>, idx: number) => {
+        const idCurto = String(alerta.id || "").slice(0, 8);
         const statusEmoji = alerta.status === "editado" ? "✏️" : "⏳";
 
         msgPrecos += `${idx + 1}. ${statusEmoji} <b>${alerta.produto_descricao}</b> (<code>${idCurto}</code>)\n`;
-        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${alerta.variacao_custo_percentual?.toFixed(1)}%)\n`;
+        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${Number(alerta.variacao_custo_percentual || 0).toFixed(1)}%)\n`;
         msgPrecos += `   💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
-        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${alerta.margem_real_percentual?.toFixed(0)}%)\n`;
+        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${Number(alerta.margem_real_percentual || 0).toFixed(0)}%)\n`;
         if (alerta.preco_definido_usuario) {
           msgPrecos += `   ✏️ Editado por você: <b>${fmt(alerta.preco_definido_usuario)}</b>\n`;
         }
@@ -1773,7 +2102,7 @@ serve(async (req) => {
       .maybeSingle();
 
     if (confirmarPrecoMatch || (respLower.startsWith("confirmar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1832,7 +2161,7 @@ serve(async (req) => {
             }),
           });
 
-          let updateResult: any = null;
+          let updateResult: Record<string, unknown> | null = null;
           try {
             updateResult = await updateResp.json();
           } catch {
@@ -1895,7 +2224,7 @@ serve(async (req) => {
     const editarPrecoMatch = text.match(/^editar\s+([a-f0-9]{8})\s+R?\$?\s*([0-9]+[.,]?[0-9]*)/i);
 
     if (editarPrecoMatch || (respLower.startsWith("editar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2065,8 +2394,8 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const total = (ultimo.total || {}) as Record<string, any>;
-        const fmt = (v: any) =>
+        const total = (ultimo.total || {}) as Record<string, unknown>;
+        const fmt = (v: unknown) =>
           v != null && Number(v) > 0
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -2149,13 +2478,13 @@ serve(async (req) => {
         .eq("user_id", userId);
 
       const catNorm = categoriaNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const categoria = (categorias || []).find((c: any) => {
+      const categoria = (categorias || []).find((c: { id: string; nome: string }) => {
         const n = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         return n === catNorm || n.includes(catNorm) || catNorm.includes(n);
       });
 
       if (!categoria) {
-        const sugestoes = (categorias || []).slice(0, 6).map((c: any) => `• ${c.nome}`).join("\n");
+        const sugestoes = (categorias || []).slice(0, 6).map((c: { id: string; nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ Categoria <b>"${categoriaNome}"</b> não encontrada.\n\n` +
           (sugestoes ? `<b>Categorias disponíveis:</b>\n${sugestoes}\n\n` : "") +
@@ -2216,13 +2545,13 @@ serve(async (req) => {
 
       const evts = events || [];
       const totalCalls = evts.length;
-      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successfulCalls = evts.filter((e: { execution_status?: string }) => e.execution_status === "success").length;
       const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
-      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const totalTokens = evts.reduce((acc: number, e: { tokens_total?: unknown }) => acc + (Number(e.tokens_total) || 500), 0);
       const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
       const estimatedCostBrl = estimatedCostUsd * 5.65;
       const avgDuration = totalCalls > 0
-        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        ? Math.round(evts.reduce((acc: number, e: { duration_ms?: unknown }) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
         : 0;
 
       const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -2237,10 +2566,10 @@ serve(async (req) => {
 
       if (evts.length > 0) {
         msg += `📋 <b>Últimas Ações Auditadas:</b>\n`;
-        evts.slice(0, 4).forEach((e: any) => {
+        evts.slice(0, 4).forEach((e: { created_at: string; execution_status?: string; tool_name: string; duration_ms?: unknown }) => {
           const dt = new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
           const st = e.execution_status === "success" ? "✅" : "⚠️";
-          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${e.duration_ms || 0}ms)\n`;
+          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${Number(e.duration_ms || 0)}ms)\n`;
         });
         msg += `\n`;
       }
@@ -2274,7 +2603,7 @@ serve(async (req) => {
 
       const { data: historico } = await query;
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2289,7 +2618,7 @@ serve(async (req) => {
 
       let msg = `📊 <b>Histórico de Custo de Produtos</b>${produtoBusca ? ` — <i>"${produtoBusca}"</i>` : ""}\n\n`;
 
-      historico.forEach((h: any, i: number) => {
+      historico.forEach((h: Record<string, unknown>, i: number) => {
         const dataFmt = h.data_compra ? h.data_compra.split("-").reverse().join("/") : "Sem data";
         const variacao = Number(h.variacao_percentual) || 0;
         const emoji = variacao > 10 ? "🔴" : variacao > 0 ? "🟡" : "🟢";
@@ -2390,20 +2719,20 @@ serve(async (req) => {
       ]);
 
       const eventos = [
-        ...(compromissos || []).map((c: any) => ({
+        ...(compromissos || []).map((c: { titulo?: string; data: string; hora?: string | null; local?: string | null }) => ({
           tipo: "Compromisso",
           titulo: c.titulo,
           data: c.data,
           hora: c.hora,
           local: c.local,
-          descricao: null,
+          descricao: null as string | null,
         })),
-        ...(lembretes || []).map((l: any) => ({
+        ...(lembretes || []).map((l: { titulo?: string; data: string; hora?: string | null; descricao?: string | null }) => ({
           tipo: "Lembrete",
           titulo: l.titulo,
           data: l.data,
           hora: l.hora,
-          local: null,
+          local: null as string | null,
           descricao: l.descricao,
         })),
       ].sort((a, b) => {
@@ -2416,7 +2745,7 @@ serve(async (req) => {
         await sendReply(`📅 <b>Sem eventos ${periodoLabel}!</b>\n\nSua agenda está livre. 🎉`);
       } else {
         let msg = `📅 <b>Agenda & Eventos ${periodoLabel}:</b>\n\n`;
-        eventos.forEach((e: any, i: number) => {
+        eventos.forEach((e: { data: string; hora?: string | null; titulo?: string; local?: string | null; descricao?: string | null }, i: number) => {
           const [ano, mes, dia] = e.data.split("-");
           const dObj = new Date(Number(ano), Number(mes) - 1, Number(dia));
           const diaSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][dObj.getDay()];
@@ -2550,7 +2879,7 @@ serve(async (req) => {
         const hojeObj = new Date(hojeStr);
         let msg = `💳 <b>Suas Dívidas (${periodoDescricao}):</b>\n\n`;
 
-        dividas.forEach((d: any) => {
+        dividas.forEach((d: { valor_restante?: unknown; valor_total?: unknown; data_vencimento?: string; descricao?: string; credor?: string }) => {
           const valor = Number(d.valor_restante || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
           let atrasoText = "";
@@ -2574,7 +2903,7 @@ serve(async (req) => {
           msg += "\n";
         });
 
-        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
+        const totalDevido = dividas.reduce((acc: number, d: { valor_restante?: unknown; valor_total?: unknown }) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
         msg += `📊 <b>Total devido:</b> <b>${totalDevido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n\n`;
         msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
@@ -2607,7 +2936,7 @@ serve(async (req) => {
       const bancoMatch = respLower.match(/(?:divipay|nubank|inter|bradesco|itau|itaú|caixa|sicoob|pagbank|pagseguro|banco\s+do\s+brasil|bb)/i);
       if (bancoMatch) {
         const bTerm = bancoMatch[0].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        const filtradas = contas.filter((c: any) => {
+        const filtradas = contas.filter((c: { nome?: string }) => {
           const nNorm = (c.nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
           return nNorm.includes(bTerm);
         });
@@ -2625,7 +2954,7 @@ serve(async (req) => {
 
       if (contas.length > 0) {
         let totalEmContas = 0;
-        contas.forEach((c: any) => {
+        contas.forEach((c: { saldo_atual?: unknown; tipo?: string; nome?: string }) => {
           const s = Number(c.saldo_atual || 0);
           totalEmContas += s;
           const icon = c.tipo === "cartao_credito" ? "💳" : "🏛️";
@@ -2711,10 +3040,10 @@ serve(async (req) => {
       ]);
 
       const catMap = new Map<string, string>();
-      (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
+      (categoriasRaw || []).forEach((c: { id: string; nome: string }) => catMap.set(c.id, c.nome));
 
       const despesas = [...(despesasRaw || []), ...(txsDespesasRaw || [])];
-      const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
+      const totalDespesas = despesas.reduce((s: number, d: { valor?: unknown }) => s + Number(d.valor || 0), 0);
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
       if (despesas.length === 0) {
@@ -2734,7 +3063,7 @@ serve(async (req) => {
         outros: 0,
       };
 
-      despesas.forEach((d: any) => {
+      despesas.forEach((d: { valor?: unknown; categoria_id?: string | null; metodo_pagamento?: unknown }) => {
         const val = Number(d.valor || 0);
         const nomeCat = (d.categoria_id && catMap.get(d.categoria_id)) || "Sem categoria";
         porCat[nomeCat] = (porCat[nomeCat] || 0) + val;
@@ -2829,7 +3158,7 @@ serve(async (req) => {
 
       // Busca todas as receitas e vendas (com paginação ampla para suportar milhares de lançamentos)
       const fetchAllRows = async (table: string, filterTipo?: string) => {
-        const rows: any[] = [];
+        const rows: Array<{ data?: string; valor?: unknown; descricao?: string }> = [];
         let from = 0;
         const step = 1000;
         while (true) {
@@ -2861,7 +3190,7 @@ serve(async (req) => {
 
       const totalReceitas = todasReceitas.reduce((s, r) => s + Number(r.valor || 0), 0);
       const totalDespesas = todasDespesas.reduce((s, d) => s + Number(d.valor || 0), 0);
-      const saldoPeriodo = totalReceitas - totalDespesas;
+      const _saldoPeriodo = totalReceitas - totalDespesas;
 
       if (todasReceitas.length === 0 && todasDespesas.length === 0) {
         await sendReply(`📊 <b>Nenhuma movimentação registrada no período (${labelPeriodo}).</b>`);
@@ -2870,7 +3199,7 @@ serve(async (req) => {
 
       // Agrupa receitas por dia
       const porDia: Record<string, number> = {};
-      todasReceitas.forEach((v: any) => {
+      todasReceitas.forEach((v: { data?: string; valor?: unknown }) => {
         const d = (v.data || "").split("T")[0];
         const val = Number(v.valor || 0);
         porDia[d] = (porDia[d] || 0) + val;
@@ -2941,13 +3270,13 @@ serve(async (req) => {
         s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
       const catAlvoNorm = normalize(categoriaAlvoTerm);
 
-      const catEncontrada = (categorias || []).find((c: any) => {
+      const catEncontrada = (categorias || []).find((c: { id: string; nome: string; aliases?: string | null }) => {
         const cNorm = normalize(c.nome);
         return cNorm === catAlvoNorm || cNorm.includes(catAlvoNorm) || catAlvoNorm.includes(cNorm);
       });
 
       if (!catEncontrada) {
-        const nomesDisponiveis = (categorias || []).map((c: any) => `• ${c.nome}`).join("\n");
+        const nomesDisponiveis = (categorias || []).map((c: { nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ <b>Categoria "${categoriaAlvoTerm}" não encontrada.</b>\n\n` +
           `<b>Suas categorias disponíveis:</b>\n${nomesDisponiveis || "Nenhuma categoria cadastrada"}`
@@ -3016,7 +3345,7 @@ serve(async (req) => {
         .eq("chat_id", chatId)
         .maybeSingle();
 
-      let proposta: any = null;
+      let proposta: Record<string, unknown> | null = null;
 
       if (conversaAtiva?.proposta_id) {
         const { data: propById } = await supabase
@@ -3060,7 +3389,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        if (new Date(proposta.expires_at) < new Date()) {
+        if (new Date(String(proposta.expires_at)) < new Date()) {
           await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
           await supabase.from("telegram_conversas").upsert(
             { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
@@ -3072,26 +3401,6 @@ serve(async (req) => {
 
         const dados = typeof proposta.dados === "string" ? JSON.parse(proposta.dados) : proposta.dados;
         
-        // Sanitização de valores e datas
-        const parseNum = (v: any) => {
-          if (typeof v === "number") return isNaN(v) ? 0 : v;
-          if (!v) return 0;
-          const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-          const n = parseFloat(s);
-          return isNaN(n) ? 0 : n;
-        };
-
-        const parseDate = (v: any) => {
-          if (!v) return hojeStr;
-          const str = String(v).trim();
-          if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-          if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-            const p = str.split("/");
-            return `${p[2]}-${p[1]}-${p[0]}`;
-          }
-          return hojeStr;
-        };
-
         // ─── CASO B: PROPOSTA DE NF DE COMPRA (ESTOQUE & CUSTO) ───
         if (proposta.tipo === "atualizar_estoque_nf" || conversaAtiva?.estado === "aguardando_confirmacao_nf") {
           const nfId = dados?.nf_id || conversaAtiva?.proposta_id;
@@ -3114,10 +3423,9 @@ serve(async (req) => {
 
           let msg = `✅ <b>Nota Fiscal de Compra Confirmada!</b>\n\nAtualizando estoque e custos...\n\n`;
           const alertasAumento: string[] = [];
-          const sugestoesPreco: string[] = [];
           const produtosAtualizados: string[] = [];
 
-          const fmt = (v: any) =>
+          const fmt = (v: unknown) =>
             v != null && !isNaN(Number(v))
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
@@ -3171,8 +3479,6 @@ serve(async (req) => {
               margemReal = ((Number(produtoExistente.preco_venda) / Number(produtoExistente.custo_atual)) - 1) * 100;
             }
             if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
-
-            let markupAplicado = margemReal;
 
             if (variacao12m > 10) {
               const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
@@ -3263,8 +3569,8 @@ serve(async (req) => {
 
           if (alertasPendentes && alertasPendentes.length > 0) {
             msg += `\n🚨 <b>PREÇOS DE VENDA PRECISAM SER AJUSTADOS:</b>\n\n`;
-            alertasPendentes.forEach((alerta: any, idx: number) => {
-              const idCurto = alerta.id.slice(0, 8);
+            alertasPendentes.forEach((alerta: Record<string, unknown>, idx: number) => {
+              const idCurto = String(alerta.id || "").slice(0, 8);
               msg += `${idx + 1}. <b>${alerta.produto_descricao}</b>\n`;
               msg += `   💰 Preço atual: ${fmt(alerta.preco_venda_atual)}\n`;
               msg += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b>\n`;
@@ -3306,99 +3612,22 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const valorNum = parseNum(dados.valor_total || dados.valor);
-        const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
-        const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
-        const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
-
-        // Busca workspace do usuário para associar a dívida
-        const { data: wsMember } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-
-        const insertPayload: Record<string, any> = {
-          user_id: userId,
-          descricao: desc,
-          valor_total: valorNum,
-          valor_restante: valorNum,
-          valor_pago: 0,
-          data_vencimento: vencIso,
-          credor: credorNome,
-          status: "pendente",
-          parcelas: 1,
-          parcelas_pagas: 0,
-          metodo_pagamento_esperado: "boleto",
-          linha_digitavel: dados.linha_digitavel || null,
-          codigo_barras: dados.codigo_barras || null,
-        };
-
-        if (dados.categoria_id) {
-          insertPayload.categoria_id = dados.categoria_id;
-        }
-
-        if (wsMember?.workspace_id) {
-          insertPayload.workspace_id = wsMember.workspace_id;
-        }
-
-        console.log("[telegram-webhook] Inserindo divida confirmada:", JSON.stringify(insertPayload));
-
-        const { data: dividaInserida, error: errDivida } = await supabase
-          .from("dividas")
-          .insert(insertPayload)
-          .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
-          .single();
-
-        if (errDivida) {
-          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
-          await sendReply(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        if (dividaInserida?.categoria_id && credorNome) {
-          salvarCacheCategoria(supabase, userId, credorNome, dividaInserida.categoria_id).catch(() => {});
-        }
-
-        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-
-        const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-        const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
-
-        await sendReply(
-          `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
-          `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
-          (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
-          `💰 Valor: <b>${valFmt}</b>\n` +
-          `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
-          `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
-          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
-        );
+        // ─── CASO C: CADASTRO DE DÍVIDA / BOLETO BANCÁRIO ───
+        await executarConfirmacaoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
+
       } else if (isNao) {
-        if (proposta) {
-          await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
-        }
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-        await sendReply("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+        await executarCancelamentoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
       // Se não foi SIM nem NÃO, mas enviou uma nova foto ou comando, o fluxo prossegue abaixo e limpa o estado antigo.
     }
 
     // ─── CASO 3: Mensagem com Foto / Documento ───
-    const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
-    const hasDoc = !!message.document;
-    const caption = (message.caption || "").trim();
-    const promptText = (message.text || caption || "").trim();
+    const hasPhoto = Array.isArray(message?.photo) && message.photo.length > 0;
+    const hasDoc = !!message?.document;
+    const caption = (typeof message?.caption === "string" ? message.caption : "").trim();
+    const promptText = (typeof message?.text === "string" ? message.text : caption || "").trim();
 
     if (hasPhoto || hasDoc) {
       console.log("[telegram-webhook] ===== INÍCIO PROCESSAMENTO DE IMAGEM =====");
@@ -3416,8 +3645,8 @@ serve(async (req) => {
         }).catch(() => {});
 
         const fileId = hasPhoto
-          ? message.photo[message.photo.length - 1].file_id
-          : message.document.file_id;
+          ? (message?.photo as Array<{ file_id: string }>)[(message?.photo as Array<{ file_id: string }>).length - 1].file_id
+          : (message?.document as { file_id: string }).file_id;
 
         // IMPORTANTE: fotos enviadas como "foto" (hasPhoto) são comprimidas pelo Telegram para ~1280px.
         // Arquivos enviados como "documento" (hasDoc) mantêm a qualidade original.
@@ -3439,12 +3668,12 @@ serve(async (req) => {
 
         const filePath = fileInfo.result.file_path;
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
-        const docMime = (message.document?.mime_type || "").toLowerCase();
+        const docMime = ((message?.document as { mime_type?: string })?.mime_type || "").toLowerCase();
 
         // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
-        let loadedDecodedImage: any = null;
-        let documentData: any = null;
+        let loadedDecodedImage: Image | null = null;
+        let documentData: Record<string, unknown> | null = null;
 
         // ============================================
         // FLUXO XML: Parser Nativo Determinístico de NF-e
@@ -3467,7 +3696,7 @@ serve(async (req) => {
 
           if (parsedNFe && parsedNFe.itens && parsedNFe.itens.length > 0) {
             console.log(`[telegram-webhook] XML de NF-e processado com sucesso! ${parsedNFe.itens.length} itens extraídos.`);
-            documentData = parsedNFe;
+            documentData = parsedNFe as unknown as Record<string, unknown>;
           } else {
             await sendReply(
               "⚠️ <b>Arquivo XML recebido, mas não foi identificado como NF-e padrão.</b>\n\n" +
@@ -3497,7 +3726,7 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          let pdfDocumentData: any = null;
+          let pdfDocumentData: Record<string, unknown> | null = null;
 
           // 2. Busca chave da OpenAI do usuário ou do ambiente
           const { data: iaCfg } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
@@ -3577,7 +3806,7 @@ serve(async (req) => {
                     } catch {
                       const objMatch = rawMsg.match(/\{[\s\S]*\}/);
                       if (objMatch) {
-                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch {}
+                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch { /* ignore fallback */ }
                       }
                     }
                   }
@@ -3589,8 +3818,8 @@ serve(async (req) => {
                   headers: { Authorization: `Bearer ${openaiApiKey}` },
                 }).catch(() => {});
               }
-            } catch (asstErr: any) {
-              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr.message);
+            } catch (asstErr: unknown) {
+              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr instanceof Error ? asstErr.message : String(asstErr));
             }
           }
 
@@ -3636,7 +3865,7 @@ serve(async (req) => {
               const pdfValFmt = pdfValor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
               const pdfIsVencido = pdfVenc && pdfVenc < hojeStr;
               const pdfVencFmt = pdfVenc ? pdfVenc.split("-").reverse().join("/") : "Sem data";
-              await sendReply(
+              const msgPdfProposta =
                 `📄 <b>Boleto PDF identificado!</b>\n\n` +
                 `🏢 Beneficiário: <b>${pdfBenef}</b>\n` +
                 (pdfCat?.nome ? `🏷️ Categoria: <b>${pdfCat.nome}</b>\n` : "") +
@@ -3644,10 +3873,16 @@ serve(async (req) => {
                 `📅 Vencimento: <b>${pdfVencFmt}</b>${pdfIsVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
                 (pdfLinha ? `🔢 Linha digitável: <code>${pdfLinha}</code>\n` : "") +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-                `⏰ <i>Esta proposta expira em 30 minutos.</i>`
-              );
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+              const botoesPdf = [
+                [
+                  { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${pdfProposta.id}` },
+                  { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${pdfProposta.id}` },
+                ],
+              ];
+
+              await sendReplyWithButtons(chatId, msgPdfProposta, botoesPdf);
               return new Response("OK", { status: 200, headers: corsHeaders });
             }
           }
@@ -3703,8 +3938,8 @@ serve(async (req) => {
             // Re-encodificar overview como JPEG em alta qualidade (95)
             finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
-          } catch (imgErr: any) {
-            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
+          } catch (imgErr: unknown) {
+            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr instanceof Error ? imgErr.message : String(imgErr));
           }
 
           const b64 = base64Encode(finalBase64Bytes);
@@ -3818,23 +4053,23 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             const rawContent = aiJson.choices?.[0]?.message?.content || "";
             console.log("[telegram-webhook] Resposta bruta conferência fechamento:", rawContent.slice(0, 300));
 
-            let fechamento: any = null;
+            let fechamento: Record<string, unknown> | null = null;
             try {
               fechamento = JSON.parse(rawContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
             } catch {
               const match = rawContent.match(/\{[\s\S]*\}/);
               if (match) {
-                try { fechamento = JSON.parse(match[0]); } catch {}
+                try { fechamento = JSON.parse(match[0]); } catch { /* ignore fallback */ }
               }
             }
 
             if (fechamento && fechamento.tipo === "fechamento") {
-              const fmt = (v: any) =>
+              const fmt = (v: unknown) =>
                 v != null && Number(v) > 0
                   ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                   : "R$ 0,00";
 
-              const env = fechamento.total || fechamento.envelope || {};
+              const env = (fechamento.total || fechamento.envelope || {}) as Record<string, unknown>;
               const envDinheiro = Number(env.dinheiro) || 0;
               const envDebito = Number(env.debito) || 0;
               const envCredito = Number(env.credito) || 0;
@@ -3901,15 +4136,17 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                 msg = `✅ <b>Fechamento OK — Confirmado!</b>\n\n`;
                 msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
 
-                const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
-                const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+                const caixa1Obj = (fechamento.caixa1 || {}) as Record<string, unknown>;
+                const caixa2Obj = (fechamento.caixa2 || {}) as Record<string, unknown>;
+                const temCaixa1 = fechamento.caixa1 && Object.values(caixa1Obj).some((v: unknown) => Number(v) > 0);
+                const temCaixa2 = fechamento.caixa2 && Object.values(caixa2Obj).some((v: unknown) => Number(v) > 0);
 
                 if (temCaixa1 || temCaixa2) {
                   if (temCaixa1) {
-                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(caixa1Obj.dinheiro)} | 💳 Déb: ${fmt(caixa1Obj.debito)} | 💳 Créd: ${fmt(caixa1Obj.credito)} | 📲 Pix: ${fmt(caixa1Obj.pix)}\n\n`;
                   }
                   if (temCaixa2) {
-                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(caixa2Obj.dinheiro)} | 💳 Déb: ${fmt(caixa2Obj.debito)} | 💳 Créd: ${fmt(caixa2Obj.credito)} | 📲 Pix: ${fmt(caixa2Obj.pix)}\n\n`;
                   }
                 }
 
@@ -4029,7 +4266,8 @@ REGRAS:
             }),
           });
 
-          let orientacaoAnalysis: any = null;
+          let orientacaoAnalysis: Record<string, unknown> | null = null;
+          let docAnalysis: Record<string, unknown> | null = null;
           if (aiResp1.ok) {
             const aiJson1 = await aiResp1.json();
             const raw1 = aiJson1.choices?.[0]?.message?.content || "";
@@ -4037,7 +4275,7 @@ REGRAS:
               orientacaoAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
             } catch {
               const m = raw1.match(/\{[\s\S]*\}/);
-              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch {} }
+              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
             }
           }
 
@@ -4073,39 +4311,68 @@ REGRAS:
             const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
             const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
             const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+            const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 
-            let docAnalysis: any = null;
 
-            if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
-              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
+            if (isGeminiV2Enabled && (geminiApiKey || geminiApiKeyBackup) && loadedDecodedImage) {
+              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Failover de Chave ───
               try {
                 const headerStart = Date.now();
                 const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
-                const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    contents: [{
-                      parts: [
-                        { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                        { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
-                      ]
-                    }],
-                    generationConfig: {
-                      temperature: 0.0,
-                      responseMimeType: "application/json",
-                      thinkingConfig: {
-                        thinkingBudget: 1
-                      }
+                const headerPayload = JSON.stringify({
+                  contents: [{
+                    parts: [
+                      { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                      { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
+                    ]
+                  }],
+                  generationConfig: {
+                    temperature: 0.0,
+                    responseMimeType: "application/json",
+                    thinkingConfig: {
+                      thinkingBudget: 1
                     }
-                  }),
-                  signal: AbortSignal.timeout(30000)
+                  }
                 });
 
-                const headerDurationMs = Date.now() - headerStart;
-                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp.status}`);
+                let geminiResp: Response | null = null;
+                let activeSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
-                if (geminiResp.ok) {
+                // Tentativa 1: Chave Primária
+                if (geminiApiKey) {
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                  } catch (pErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave primária:", pErr);
+                  }
+                }
+
+                // Tentativa 2: Chave Reserva (se primária falhou por 429, timeout ou 5xx)
+                if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                  const pStatus = geminiResp ? geminiResp.status : "timeout";
+                  console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                    activeSlot = "gemini_backup";
+                  } catch (bErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave reserva:", bErr);
+                  }
+                }
+
+                const headerDurationMs = Date.now() - headerStart;
+                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp?.status} slot=${activeSlot}`);
+
+                if (geminiResp && geminiResp.ok) {
                   const gJson = await geminiResp.json();
                   if (gJson.usageMetadata) {
                     console.log(`[NF_V2_USAGE] target=header promptTokenCount=${gJson.usageMetadata.promptTokenCount} candidatesTokenCount=${gJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${gJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${gJson.usageMetadata.totalTokenCount}`);
@@ -4118,15 +4385,17 @@ REGRAS:
                     serie_nf: docAnalysis?.cabecalho?.serie_nf,
                     data_emissao: docAnalysis?.cabecalho?.data_emissao,
                     valor_produtos: docAnalysis?.valores_totais?.valor_produtos,
-                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
+                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf,
+                    slot: activeSlot,
                   });
                 } else {
-                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp?.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
-              } catch (hErr: any) {
-                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
+              } catch (hErr: unknown) {
+                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr instanceof Error ? hErr.message : String(hErr));
               }
-            } else {
+            }
+ else {
               // ─── PASSO 2 (LEGADO): GPT-4o Overview ───
               const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
 Esta imagem já está na orientação vertical correta (em pé).
@@ -4199,7 +4468,7 @@ REGRAS:
                   docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
                 } catch {
                   const m = raw2.match(/\{[\s\S]*\}/);
-                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
                 }
               }
             }
@@ -4236,38 +4505,66 @@ REGRAS:
 
                 console.log(`[NF_V2_CROP] continuous table crop: ${loadedDecodedImage.width}x${cropH} (top ${Math.round(topRatio*100)}% - bottom ${Math.round(bottomRatio*100)}%)`);
 
-                // 2. Chamada Vision ao Gemini com Timeout e Tratamento de Erros
+                // 2. Chamada Vision ao Gemini com Timeout, Tratamento de Erros e Failover de Chaves
                 let geminiRawText = "";
                 let geminiDurationMs = 0;
                 let geminiErrorCode = "";
+                let productsActiveSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
                 try {
                   const v2Start = Date.now();
-                  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`;
-
-                  const geminiResp = await fetch(geminiUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      contents: [{
-                        parts: [
-                          { text: GEMINI_V2_PROMPT_TABELA },
-                          { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
-                        ]
-                      }],
-                      generationConfig: {
-                        temperature: 0.0,
-                        responseMimeType: "application/json",
-                        thinkingConfig: {
-                          thinkingBudget: 1
-                        }
+                  const productsPayload = JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: GEMINI_V2_PROMPT_TABELA },
+                        { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
+                      ]
+                    }],
+                    generationConfig: {
+                      temperature: 0.0,
+                      responseMimeType: "application/json",
+                      thinkingConfig: {
+                        thinkingBudget: 1
                       }
-                    }),
-                    signal: AbortSignal.timeout(45000)
+                    }
                   });
 
+                  let geminiResp: Response | null = null;
+
+                  // Tentativa 1: Chave Primária
+                  if (geminiApiKey) {
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                    } catch (pErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave primária:", pErr);
+                    }
+                  }
+
+                  // Tentativa 2: Chave Reserva
+                  if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                    const pStatus = geminiResp ? geminiResp.status : "timeout";
+                    console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                      productsActiveSlot = "gemini_backup";
+                    } catch (bErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave reserva:", bErr);
+                    }
+                  }
+
                   geminiDurationMs = Date.now() - v2Start;
-                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp.status}`);
+                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp?.status} slot=${productsActiveSlot}`);
+
 
                   if (geminiResp.ok) {
                     const geminiJson = await geminiResp.json();
@@ -4284,17 +4581,18 @@ REGRAS:
                     const errText = await geminiResp.text();
                     console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
                   }
-                } catch (gemErr: any) {
-                  if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
+                } catch (gemErr: unknown) {
+                  const errObj = gemErr as { name?: string; message?: string };
+                  if (errObj?.name === "TimeoutError" || String(errObj?.message).includes("timeout") || String(errObj?.message).includes("aborted")) {
                     geminiErrorCode = "gemini_timeout";
                   } else {
                     geminiErrorCode = "gemini_processing_error";
                   }
-                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, gemErr.message);
+                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, errObj?.message || String(gemErr));
                 }
 
                 if (!geminiErrorCode && geminiRawText) {
-                  let rawList: any[] | null = null;
+                  let rawList: unknown[] | null = null;
                   try {
                     const clean = geminiRawText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
                     const p = JSON.parse(clean);
@@ -4308,7 +4606,7 @@ REGRAS:
                         const p = JSON.parse(m[0]);
                         if (Array.isArray(p.itens)) rawList = p.itens;
                         else if (Array.isArray(p.produtos)) rawList = p.produtos;
-                      } catch (_) {}
+                      } catch { /* ignore fallback */ }
                     }
                   }
 
@@ -4347,7 +4645,7 @@ REGRAS:
                   } else {
                     // 3. Validação Estrutural Estrita com Sanitização de FCI
                     const itensValidados: DanfeItemV2[] = [];
-                    const itensRejeitados: any[] = [];
+                    const itensRejeitados: Array<{ index: number; motivo: unknown }> = [];
 
                     rawList.forEach((r, idx) => {
                       const v = validateProductRowV2(r);
@@ -4493,8 +4791,8 @@ FORMATO:
                     const tileJson = tileResp.ok ? await tileResp.json() : null;
                     const rawTile = tileJson?.choices?.[0]?.message?.content || "";
                     return { rawText: rawTile, httpStatus: tileResp.status };
-                  } catch (tileErr: any) {
-                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
+                  } catch (tileErr: unknown) {
+                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr instanceof Error ? tileErr.message : String(tileErr));
                     return { rawText: "", httpStatus: 500 };
                   }
                 };
@@ -4558,15 +4856,319 @@ FORMATO:
                 isTelegramCompressedPhoto
               };
             }
-          } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
+          } else if (
+            orientacaoAnalysis?.tipo_documento === "boleto" ||
+            orientacaoAnalysis?.boleto_dados
+          ) {
+            // ─── PASSO 2 BOLETO: Extração completa na imagem normalizada (pós-rotação) ───
+            // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correta
+            // mesmo quando a foto foi tirada de lado (90° / 270°).
+            // Cadeia: Gemini Primary → Gemini Backup → OpenAI Vision → Fail-Closed
+            const correlationIdBoleto = `tg-boleto-${userId}-${Date.now()}`;
+            const geminiKeyBoleto = Deno.env.get("GEMINI_API_KEY") || "";
+            const geminiBackupBoleto = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
+            const openAiKeyBoleto = Deno.env.get("OPENAI_API_KEY") || "";
+
+            // Extrai base64 limpo da imagem normalizada
+            const normalizedB64Boleto = normalizedOverviewUri.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
+            const mimeTypeBoleto = "image/jpeg";
+
+            const GEMINI_BOLETO_PROMPT_TG = `Você é um especialista em leitura e extração de boletos bancários e guias de arrecadação brasileiras.
+
+Analise esta imagem de boleto (já orientada perfeitamente na vertical) e extraia os campos com máxima fidelidade e exatidão:
+
+1. BANCO: Nome do banco e código (ex: "Banco Itaú S.A. (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
+2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes de empresas conhecidas e NÃO use conhecimento prévio. Capture fielmente o que estiver impresso (ex: se estiver impresso "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso caractere a caractere).
+3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
+4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
+5. CNPJ/CPF DO PAGADOR: Se visível.
+6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY).
+7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1262.55). NÃO leia CNPJ, CPF ou código numérico de barras como valor.
+8. LINHA DIGITÁVEL: A sequência completa de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
+9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
+10. NOSSO NÚMERO: Código de identificação do título.
+11. NÚMERO DO DOCUMENTO / SEU NÚMERO: Número da fatura ou documento de referência.
+
+Retorne EXCLUSIVAMENTE um objeto JSON válido:
+{
+  "banco": "string ou null",
+  "beneficiario": "string ou null",
+  "cnpj_cpf_beneficiario": "string ou null",
+  "pagador": "string ou null",
+  "cnpj_cpf_pagador": "string ou null",
+  "data_vencimento": "YYYY-MM-DD ou DD/MM/YYYY ou null",
+  "valor": 0.00,
+  "linha_digitavel": "string ou null",
+  "codigo_barras": "string ou null",
+  "nosso_numero": "string ou null",
+  "numero_documento": "string ou null"
+}`;
+
+            interface BoletoVisionResponse { ok: boolean; status: number; text: string; providerUsed: string; credentialSlot: string; fallbackUsed: boolean; fallbackCount: number; fallbackReason?: string; durationMs: number; }
+            let boletoVisionResult: BoletoVisionResponse | null = null;
+
+            // ── 1. OpenAI GPT-4o Vision (Primário) ──
+            if (openAiKeyBoleto) {
+              const tStart = Date.now();
+              try {
+                const oResp = await fetch("https://api.openai.com/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${openAiKeyBoleto}`,
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4o",
+                    temperature: 0.0,
+                    response_format: { type: "json_object" },
+                    messages: [
+                      { role: "system", content: GEMINI_BOLETO_PROMPT_TG },
+                      {
+                        role: "user",
+                        content: [
+                          { type: "text", text: "Extraia os dados deste boleto com máxima fidelidade em JSON puro." },
+                          { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                        ],
+                      },
+                    ],
+                  }),
+                });
+                const oJson = await oResp.json();
+                const rawText = oJson?.choices?.[0]?.message?.content || "";
+                if (oResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: oResp.status,
+                    text: rawText,
+                    providerUsed: "openai",
+                    credentialSlot: "openai_primary",
+                    fallbackUsed: false,
+                    fallbackCount: 0,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
+              } catch (eOai) {
+                console.warn(`[BOLETO_TRACE] provider=openai_primary ERRO: ${eOai}`);
+              }
+            }
+
+            // ── 2. Google Gemini 3.7 Flash (Fallback) ──
+            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && (geminiKeyBoleto || geminiBackupBoleto)) {
+              const effectiveKey = geminiKeyBoleto || geminiBackupBoleto;
+              const tStart = Date.now();
+              try {
+                const gResp = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${effectiveKey}`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{ parts: [
+                        { text: GEMINI_BOLETO_PROMPT_TG },
+                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
+                      ]}],
+                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+                    }),
+                  }
+                );
+                const gJson = await gResp.json();
+                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                if (gResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: gResp.status,
+                    text: rawText,
+                    providerUsed: "gemini",
+                    credentialSlot: "gemini_backup",
+                    fallbackUsed: true,
+                    fallbackCount: 1,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
+              } catch (eGb) {
+                console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
+              }
+            }
+
+            // ── Parse do JSON retornado pelo provider ──
+            let bParsed: Record<string, unknown> = {};
+            if (boletoVisionResult?.ok && boletoVisionResult.text) {
+              try {
+                const cleaned = boletoVisionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
+                bParsed = JSON.parse(cleaned);
+              } catch {
+                const m = boletoVisionResult.text.match(/\{[\s\S]*\}/);
+                if (m) { try { bParsed = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
+              }
+            }
+
+            // ─── VALIDAÇÃO E CONCILIAÇÃO DETERMINÍSTICA CANÔNICA ───
+            const boletoDados = orientacaoAnalysis?.boleto_dados as Record<string, unknown> | undefined;
+            const rawLinha = (typeof bParsed.linha_digitavel === "string" ? bParsed.linha_digitavel : null) || (typeof boletoDados?.linha_digitavel === "string" ? boletoDados.linha_digitavel : null);
+            let validacaoCanonica = reconcileBoleto({
+              banco: typeof bParsed.banco === "string" ? bParsed.banco : null,
+              beneficiario: (typeof bParsed.beneficiario === "string" ? bParsed.beneficiario : typeof bParsed.cedente === "string" ? bParsed.cedente : typeof boletoDados?.beneficiario === "string" ? boletoDados.beneficiario : null),
+              cnpj_cpf_beneficiario: typeof bParsed.cnpj_cpf_beneficiario === "string" ? bParsed.cnpj_cpf_beneficiario : null,
+              pagador: (typeof bParsed.pagador === "string" ? bParsed.pagador : typeof bParsed.sacado === "string" ? bParsed.sacado : null),
+              cnpj_cpf_pagador: typeof bParsed.cnpj_cpf_pagador === "string" ? bParsed.cnpj_cpf_pagador : null,
+              data_vencimento: (typeof bParsed.data_vencimento === "string" ? bParsed.data_vencimento : typeof bParsed.vencimento === "string" ? bParsed.vencimento : typeof boletoDados?.data_vencimento === "string" ? boletoDados.data_vencimento : null),
+              valor: bParsed.valor ?? boletoDados?.valor ?? null,
+              linha_digitavel: rawLinha,
+              codigo_barras: typeof bParsed.codigo_barras === "string" ? bParsed.codigo_barras : null,
+              nosso_numero: typeof bParsed.nosso_numero === "string" ? bParsed.nosso_numero : null,
+              numero_documento: typeof bParsed.numero_documento === "string" ? bParsed.numero_documento : null,
+            });
+
+            // ─── PIPELINE DE AUTO-RECUPERAÇÃO DE LINHA DIGITÁVEL (SE 1ª LEITURA FOI INVÁLIDA/INCOMPLETA) ───
+            if (!validacaoCanonica.valido && (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto)) {
+              console.log(`[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} 1st pass invalid, starting recovery...`);
+
+              // Gerar regiões candidatas de forma segura sem eliminar a original
+              const candidateRegions: RegionCandidate[] = [
+                {
+                  region: "full_focused",
+                  base64: normalizedB64Boleto,
+                  original_width: loadedDecodedImage?.width,
+                  original_height: loadedDecodedImage?.height,
+                  crop_x: 0,
+                  crop_y: 0,
+                  crop_width: loadedDecodedImage?.width,
+                  crop_height: loadedDecodedImage?.height,
+                },
+              ];
+
+              // Tentar crop da metade inferior (Ficha de Compensação) se imagem for alta
+              if (loadedDecodedImage && loadedDecodedImage.height > 400) {
+                try {
+                  const origW = loadedDecodedImage.width;
+                  const origH = loadedDecodedImage.height;
+                  const cropY = Math.floor(origH * 0.45);
+                  const cropH = origH - cropY;
+                  const cropW = origW;
+                  const cropped = loadedDecodedImage.clone().crop(0, cropY, cropW, cropH);
+                  const croppedB64 = base64Encode(await cropped.encodeJPEG(95));
+                  candidateRegions.push({
+                    region: "lower_half",
+                    base64: croppedB64,
+                    original_width: origW,
+                    original_height: origH,
+                    crop_x: 0,
+                    crop_y: cropY,
+                    crop_width: cropW,
+                    crop_height: cropH,
+                  });
+                } catch (cropErr) {
+                  console.warn(`[BOLETO_RECOVERY] Falha ao gerar crop candidate: ${cropErr}`);
+                }
+              }
+
+              const recoveryRes = await recoverBoletoLineWithFailover({
+                base64: normalizedB64Boleto,
+                mimeType: mimeTypeBoleto,
+                openaiApiKey: openAiKeyBoleto,
+                geminiApiKey: geminiKeyBoleto,
+                geminiApiKeyBackup: geminiBackupBoleto,
+                correlationId: correlationIdBoleto,
+                regionCandidates: candidateRegions,
+              });
+
+              if (recoveryRes.recovered && recoveryRes.successfulCandidate && recoveryRes.validationResult?.valido) {
+                console.log(
+                  `[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} ` +
+                  `Linha recuperada com sucesso via ${recoveryRes.successfulCandidate.provider} (${recoveryRes.successfulCandidate.region})`
+                );
+                validacaoCanonica = reconcileBoleto({
+                  banco: bParsed.banco || null,
+                  beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
+                  cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
+                  pagador: bParsed.pagador || bParsed.sacado || null,
+                  cnpj_cpf_pagador: bParsed.cnpj_cpf_pagador || null,
+                  data_vencimento: bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null,
+                  valor: bParsed.valor ?? orientacaoAnalysis?.boleto_dados?.valor ?? null,
+                  linha_digitavel: recoveryRes.successfulCandidate.linha_digits,
+                  codigo_barras: recoveryRes.successfulCandidate.codigo_barras || bParsed.codigo_barras || null,
+                  nosso_numero: bParsed.nosso_numero || null,
+                  numero_documento: bParsed.numero_documento || null,
+                });
+                validacaoCanonica.warnings.push(
+                  `linha_recuperada_${recoveryRes.successfulCandidate.provider}_${recoveryRes.successfulCandidate.region}`
+                );
+              }
+            }
+
+            let beneficiarioFinal = validacaoCanonica.beneficiarioFinal;
+            const beneficiarioOcrGlobal = bParsed.beneficiario || bParsed.cedente || null;
+            let beneficiarioOcrFocused: string | null = null;
+
+            // Transcrição literal focalizada no campo Beneficiário para máxima precisão textual
+            if (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto) {
+              try {
+                const focusedRes = await extractFocusedBeneficiary({
+                  base64: normalizedB64Boleto,
+                  mimeType: mimeTypeBoleto,
+                  openaiApiKey: openAiKeyBoleto,
+                  geminiApiKey: geminiKeyBoleto || geminiBackupBoleto,
+                });
+                beneficiarioOcrFocused = focusedRes.beneficiario;
+                if (beneficiarioOcrFocused && beneficiarioOcrFocused.length >= 2) {
+                  beneficiarioFinal = beneficiarioOcrFocused;
+                } else if (!beneficiarioFinal) {
+                  validacaoCanonica.warnings.push("beneficiario_baixa_confianca");
+                }
+              } catch (fErr) {
+                console.warn(`[BOLETO_TRACE] Falha na extração focalizada de beneficiário: ${fErr}`);
+              }
+            }
+
+            const linhaDigits = validacaoCanonica.linhaDigitavel?.linhaLimpa || cleanDigits(rawLinha);
+            const linhaMasked = linhaDigits.length > 10
+              ? `${linhaDigits.slice(0, 5)}***${linhaDigits.slice(-4)}`
+              : (linhaDigits.length > 0 ? `raw:${linhaDigits.length}dig` : "ausente");
+
+            console.log(
+              `[BOLETO_TRACE] correlation_id=${correlationIdBoleto} ` +
+              `orientation_detected=${orientacaoDetectada}° rotation_applied=${orientacaoDetectada}° ` +
+              `provider=${boletoVisionResult?.credentialSlot || "nenhum"} validation_status=${validacaoCanonica.status} ` +
+              `linha_present=${Boolean(linhaDigits)} linha_raw_digits=${linhaDigits.length} linha_valid=${validacaoCanonica.valido} ` +
+              `linha_digitavel_masked=${linhaMasked} ` +
+              `valor_source=${validacaoCanonica.valorSource} valor_final=${validacaoCanonica.valorFinal} ` +
+              `vencimento_source=${validacaoCanonica.vencimentoSource} vencimento_final=${validacaoCanonica.dataVencimentoFinal} ` +
+              `beneficiario_global="${beneficiarioOcrGlobal || ""}" beneficiario_focused="${beneficiarioOcrFocused || ""}" ` +
+              `warnings=${JSON.stringify(validacaoCanonica.warnings)}`
+            );
+
             documentData = {
               tipo: "boleto",
-              beneficiario: docAnalysis?.boleto_dados?.beneficiario,
-              valor: docAnalysis?.boleto_dados?.valor,
-              data_vencimento: docAnalysis?.boleto_dados?.data_vencimento,
-              linha_digitavel: docAnalysis?.boleto_dados?.linha_digitavel,
+              banco: validacaoCanonica.bancoFinal,
+              beneficiario: beneficiarioFinal,
+              beneficiario_ocr_global: beneficiarioOcrGlobal,
+              beneficiario_ocr_focused: beneficiarioOcrFocused,
+              cnpj_cpf_beneficiario: validacaoCanonica.cnpjCpfBeneficiarioFinal || null,
+              pagador: validacaoCanonica.pagadorFinal || null,
+              valor: validacaoCanonica.valorFinal,
+              data_vencimento: validacaoCanonica.dataVencimentoFinal,
+              linha_digitavel: validacaoCanonica.linhaDigitavel?.linhaLimpa || null,
+              linha_digitavel_formatada: validacaoCanonica.linhaDigitavel?.linhaFormatada || null,
+              linha_digitavel_raw: rawLinha || null,
+              linha_digitavel_raw_digits: linhaDigits.length,
+              codigo_barras: validacaoCanonica.codigoBarras?.codigoLimpo || bParsed.codigo_barras || null,
+              nosso_numero: bParsed.nosso_numero || null,
+              numero_documento: bParsed.numero_documento || null,
+              validation_status: validacaoCanonica.status,
+              valor_source: validacaoCanonica.valorSource,
+              valor_ocr: parseBoletoAmount(bParsed.valor),
+              valor_derivado: validacaoCanonica.linhaDigitavel?.valorDerivado || null,
+              vencimento_source: validacaoCanonica.vencimentoSource,
+              vencimento_ocr: bParsed.data_vencimento || null,
+              vencimento_derivado: validacaoCanonica.linhaDigitavel?.dataVencimentoDerivada || null,
+              warnings: validacaoCanonica.warnings,
+              divergencias: validacaoCanonica.divergencias,
+              evidence: validacaoCanonica.evidence,
+              correlation_id: correlationIdBoleto,
             };
           }
+
+
         }
 
         const ehDANFE = Boolean(
@@ -4588,6 +5190,34 @@ FORMATO:
         if (documentData && ehDANFE) {
           console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA (PRIORIDADE 1) <<< Itens:", documentData.itens?.length);
 
+          // Conciliação Determinística do Número da NF com a Chave de Acesso Oficial (44 dígitos)
+          if (documentData.cabecalho) {
+            const chaveDetectada = (
+              findAccessKeyInPayload(documentData) ||
+              findAccessKeyInPayload(documentData.cabecalho) ||
+              documentData.cabecalho.chave_acesso ||
+              null
+            );
+            if (chaveDetectada) {
+              documentData.cabecalho.chave_acesso = chaveDetectada;
+            }
+
+            const rec = reconcileNFeNumber(
+              documentData.cabecalho.numero_nf,
+              documentData.cabecalho.serie_nf,
+              chaveDetectada,
+              String(chatId),
+              "telegram"
+            );
+            if (rec.numero_nf_formatado) {
+              documentData.cabecalho.numero_nf = rec.numero_nf_formatado;
+            }
+            if (rec.serie_nf) {
+              documentData.cabecalho.serie_nf = rec.serie_nf;
+            }
+          }
+
+
           const { data: wsData } = await supabase
             .from("workspaces")
             .select("id")
@@ -4598,7 +5228,8 @@ FORMATO:
 
           const wsId = wsData?.id || workspaceId || null;
 
-          const fmt = (v: any) =>
+
+          const fmt = (v: unknown) =>
             v != null && !isNaN(Number(v))
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
@@ -4679,7 +5310,7 @@ FORMATO:
             }
 
             // 4. Todas as páginas recebidas -> CONSOLIDAÇÃO ATÔMICA
-            const todosItens: any[] = [];
+            const todosItens: unknown[] = [];
             for (let pNum = 1; pNum <= totalPaginas; pNum++) {
               const pData = dadosSessao.paginas?.[String(pNum)];
               if (pData?.itens) {
@@ -4723,7 +5354,7 @@ FORMATO:
           const valorTotalProdutosNF = (documentData.valores_totais?.valor_produtos != null && !isNaN(Number(documentData.valores_totais.valor_produtos)) && Number(documentData.valores_totais.valor_produtos) > 0)
             ? Number(documentData.valores_totais.valor_produtos)
             : null;
-          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
+          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: { valor_total?: unknown }) => sum + (Number(item?.valor_total) || 0), 0);
 
           // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
           if (!validacao.valido || itensExtraidos.length === 0) {
@@ -4817,13 +5448,13 @@ FORMATO:
             .single();
 
           if (!errNF && nfSalva) {
-            const itensParaInserir = (documentData.itens || []).map((item: any) => ({
+            const itensParaInserir = (documentData.itens || []).map((item: Record<string, unknown>) => ({
               nf_id: nfSalva.id,
               codigo_produto: item.codigo,
               descricao: item.descricao,
               ncm: item.ncm,
               cfop: item.cfop,
-              unidade: item.unidade || "UN",
+              unidade: (item.unidade as string) || "UN",
               quantidade: item.quantidade,
               valor_unitario: item.valor_unitario,
               valor_total: item.valor_total,
@@ -4851,11 +5482,11 @@ FORMATO:
             }
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
-            documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
-              const qtd = item.quantidade != null ? `${item.quantidade} ${item.unidade || "UN"}` : "Qtd N/A";
-              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario) : "N/A";
-              const vTot = item.valor_total != null ? fmt(item.valor_total) : "N/A";
-              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido) : vUnit;
+            documentData.itens.slice(0, 10).forEach((item: Record<string, unknown>, i: number) => {
+              const qtd = item.quantidade != null ? `${item.quantidade} ${(item.unidade as string) || "UN"}` : "Qtd N/A";
+              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario as number | string) : "N/A";
+              const vTot = item.valor_total != null ? fmt(item.valor_total as number | string) : "N/A";
+              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido as number | string) : vUnit;
               msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
               msg += `   📦 ${qtd} × ${vUnit}\n`;
               msg += `   💰 Total: ${vTot} | Custo Líquido: <b>${vLiq}</b>\n\n`;
@@ -4924,40 +5555,27 @@ FORMATO:
             documentData.data_vencimento = documentData.vencimento;
           }
           // ─── VALIDAÇÃO DETERMINÍSTICA CONTRA ALUCINAÇÃO ───
-          const parseNum = (v: any) => {
-            if (typeof v === "number") return isNaN(v) ? 0 : v;
-            if (!v) return 0;
-            const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-            const n = parseFloat(s);
-            return isNaN(n) ? 0 : n;
-          };
-
-          const parseDt = (v: any) => {
-            if (!v) return null;
-            const str = String(v).trim();
-            if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-            if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-              const p = str.split("/");
-              return `${p[2]}-${p[1]}-${p[0]}`;
-            }
-            return null;
-          };
-
           let valor = parseNum(documentData.valor);
-          let dataVencimento = parseDt(documentData.data_vencimento);
+          let dataVencimento = parseDate(documentData.data_vencimento, "");
+          if (!dataVencimento) dataVencimento = null;
           let beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
 
           // ─── BLINDAGEM MATEMÁTICA FEBRABAN VIA LINHA DIGITÁVEL ───
+          // Apenas recalcula valores e datas a partir da linha se ela for matematicamente validada!
           if (linhaDigitavel) {
-            const febraban = parseLinhaDigitavelFebraban(linhaDigitavel);
-            if (febraban.valor && febraban.valor > 0) {
-              console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${febraban.valor}`);
-              valor = febraban.valor;
-            }
-            if (febraban.vencimento) {
-              console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${febraban.vencimento}`);
-              dataVencimento = febraban.vencimento;
+            const valLinha = validateLinhaDigitavel(linhaDigitavel);
+            if (valLinha.valido) {
+              if (valLinha.valorDerivado && valLinha.valorDerivado > 0) {
+                console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${valLinha.valorDerivado}`);
+                valor = valLinha.valorDerivado;
+              }
+              if (valLinha.dataVencimentoDerivada) {
+                console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${valLinha.dataVencimentoDerivada}`);
+                dataVencimento = valLinha.dataVencimentoDerivada;
+              }
+            } else {
+              console.log(`[telegram-webhook] Linha digitável não validada matematicamente pelos DVs, preservando valores do OCR visual.`);
             }
           }
 
@@ -5027,10 +5645,25 @@ FORMATO:
                 valor_restante: valor,
                 data_vencimento: dataVencimento || hojeStr,
                 credor: beneficiario,
+                banco: documentData.banco || null,
+                cnpj_cpf_beneficiario: documentData.cnpj_cpf_beneficiario || null,
                 categoria_id: categoriaId,
                 categoria_nome: categoriaNome,
                 status: "pendente",
                 linha_digitavel: linhaFmt || null,
+                linha_digitavel_raw: documentData.linha_digitavel_raw || null,
+                linha_digitavel_raw_digits: documentData.linha_digitavel_raw_digits ?? null,
+                linha_digitavel_validation_error: documentData.linha_digitavel_validation_error || null,
+                codigo_barras: documentData.codigo_barras || null,
+                validation_status: documentData.validation_status || "requer_revisao",
+                valor_source: documentData.valor_source || "ocr_visual",
+                valor_ocr: documentData.valor_ocr ?? null,
+                valor_derivado: documentData.valor_derivado ?? null,
+                vencimento_source: documentData.vencimento_source || "ocr_visual",
+                vencimento_ocr: documentData.vencimento_ocr ?? null,
+                vencimento_derivado: documentData.vencimento_derivado ?? null,
+                warnings: documentData.warnings || [],
+                correlation_id: documentData.correlation_id || null,
               },
               resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${dataVencimento || hojeStr}`,
               status: "pendente",
@@ -5058,22 +5691,75 @@ FORMATO:
             const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
             const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
+            const isBoletoValidado = documentData.validation_status === "validado";
+            const isBoletoValidadoAlerta = documentData.validation_status === "validado_com_alerta";
+            const vencimentoAno = dataVencimento ? parseInt(dataVencimento.split("-")[0], 10) : null;
+            const anoAtual = new Date().getFullYear();
+            const vencimentoAnoSuspeito = vencimentoAno !== null && (vencimentoAno < anoAtual - 1 || vencimentoAno > anoAtual + 2);
 
-            let mensagemProposta =
-              `📄 <b>Boleto identificado!</b>\n\n` +
-              `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
-              (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
-              `💰 Valor: <b>${valFmt}</b>\n` +
-              `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
-              (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
+            let mensagemProposta = "";
 
-            mensagemProposta +=
-              `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-              `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-              `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-              `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            if (isBoletoValidado) {
+              mensagemProposta =
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor: <b>${valFmt}</b>\n` +
+                `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Linha digitável validada matematicamente.</b>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else if (isBoletoValidadoAlerta) {
+              mensagemProposta =
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor validado: <b>${valFmt}</b>\n` +
+                `📅 Vencimento validado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Dados bancários validados pela linha digitável.</b>\n` +
+                `⚠️ <i>A leitura visual do documento apresentou divergência decorrente de compressão da imagem. Foram assumidos os dados validados matematicamente.</i>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else {
+              const avisoAnoSuspeito = vencimentoAnoSuspeito
+                ? `\n⚠️ <i>Ano do vencimento (${vencimentoAno}) pode estar incorreto — OCR pode ter lido errado.</i>\n`
+                : "";
+              const dicaArquivo = isTelegramCompressedPhoto
+                ? `\n💡 <i>Para leitura mais precisa da linha digitável, envie o boleto como arquivo:\n📎 → Arquivo/Documento (não "Galeria")</i>\n`
+                : "";
+              mensagemProposta =
+                `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `⚠️ <b>Valor visual não confirmado: ${valFmt}</b>\n` +
+                `📅 <b>Vencimento visual não confirmado: ${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                avisoAnoSuspeito +
+                `\n⚠️ <b>Não foi possível validar a linha digitável com precisão matemática.</b>\n` +
+                `<i>Para sua segurança financeira, revise os dados antes de salvar.</i>\n` +
+                dicaArquivo +
+                `\n⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            }
 
-            await sendReply(mensagemProposta);
+            const botoesBoleto = isBoletoValidado || isBoletoValidadoAlerta
+              ? [
+                  [
+                    { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ]
+              : [
+                  [
+                    { text: "✏️ Revisar dados", callback_data: `revisar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ];
+
+            await sendReplyWithButtons(chatId, mensagemProposta, botoesBoleto);
             return new Response("OK", { status: 200, headers: corsHeaders });
           } else {
             console.error("[telegram-webhook] Erro ao salvar proposta:", errProp?.message);
@@ -5118,9 +5804,11 @@ FORMATO:
           await sendReply(msgFallback);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
-      } catch (imgErr: any) {
-        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErr.message, imgErr.stack);
-        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErr.message);
+      } catch (imgErr: unknown) {
+        const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+        const imgErrStack = imgErr instanceof Error ? imgErr.stack : undefined;
+        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErrMsg, imgErrStack);
+        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErrMsg);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
     }
@@ -5241,8 +5929,10 @@ Ferramentas disponíveis:
         const errorBody = await aiResponse.text();
         console.error("[telegram-webhook] openai-proxy retornou erro:", aiResponse.status, errorBody.slice(0, 500));
       }
-    } catch (aiErr: any) {
-      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErr.message, aiErr.stack);
+    } catch (aiErr: unknown) {
+      const aiErrMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+      const aiErrStack = aiErr instanceof Error ? aiErr.stack : undefined;
+      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErrMsg, aiErrStack);
     }
 
     // Fallback se a IA não retornar resposta
@@ -5253,8 +5943,9 @@ Ferramentas disponíveis:
     );
 
     return new Response("OK", { status: 200, headers: corsHeaders });
-  } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return new Response(JSON.stringify({ error: errMsg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
