@@ -211,6 +211,23 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   },
 };
 
+/**
+ * Mapeamento canônico de aliases de ações para evitar divergência entre
+ * ferramentas legadas, orquestrador e frontend.
+ */
+export const ACTION_TYPE_ALIASES: Record<string, string> = {
+  cadastrar_receita: "cadastrar_transacao",
+  cadastrar_despesa: "cadastrar_transacao",
+  atualizar_status_receita: "atualizar_transacao",
+  atualizar_status_despesa: "atualizar_transacao",
+  create_debt: "cadastrar_divida_boleto",
+  import_invoice: "cadastrar_despesa_nf",
+};
+
+export function resolveActionType(actionType: string): string {
+  return ACTION_TYPE_ALIASES[actionType] ?? actionType;
+}
+
 export interface ActionProposal<TPayload = Record<string, unknown>> {
   id: string;
   workspaceId: string;

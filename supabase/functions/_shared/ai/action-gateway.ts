@@ -1,5 +1,6 @@
 import {
   CANONICAL_ACTIONS,
+  resolveActionType,
   type ActionProposal,
   type ActionRiskLevel,
   type PrepareActionInput,
@@ -128,13 +129,23 @@ export function sanitizeActionPayload(
 export function prepareActionProposal<TPayload = Record<string, unknown>>(
   input: PrepareActionInput<TPayload>,
 ): ActionProposal<TPayload> {
-  const definition = CANONICAL_ACTIONS[input.actionType];
+  const canonicalType = resolveActionType(input.actionType);
+  const definition = CANONICAL_ACTIONS[canonicalType];
   const riskLevel: ActionRiskLevel = definition ? definition.riskLevel : "HIGH";
+
+  const rawPayload = { ...(input.payload as Record<string, unknown>) };
+  if (!rawPayload.tipo) {
+    if (input.actionType === "cadastrar_despesa" || input.actionType === "atualizar_status_despesa") {
+      rawPayload.tipo = "despesa";
+    } else if (input.actionType === "cadastrar_receita" || input.actionType === "atualizar_status_receita") {
+      rawPayload.tipo = "receita";
+    }
+  }
 
   // Sanitiza o payload antes de criar a proposta
   const sanitizedPayload = (definition
-    ? sanitizeActionPayload(input.actionType, input.payload as Record<string, unknown>)
-    : input.payload) as TPayload;
+    ? sanitizeActionPayload(canonicalType, rawPayload)
+    : rawPayload) as TPayload;
 
   const ttlMs = (input.ttlMinutes ?? 30) * 60 * 1000;
   const now = new Date();
@@ -142,7 +153,7 @@ export function prepareActionProposal<TPayload = Record<string, unknown>>(
 
   const idempotencyHash = computeIdempotencyHash(
     input.workspaceId,
-    input.actionType,
+    canonicalType,
     sanitizedPayload as Record<string, unknown>,
   );
 
@@ -151,7 +162,7 @@ export function prepareActionProposal<TPayload = Record<string, unknown>>(
     workspaceId: input.workspaceId,
     userId: input.userId,
     conversationId: input.conversationId,
-    actionType: input.actionType,
+    actionType: canonicalType,
     actionVersion: "v1",
     riskLevel,
     summary: input.summary,

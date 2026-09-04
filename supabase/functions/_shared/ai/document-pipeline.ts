@@ -152,6 +152,32 @@ export function detectPromptInjection(text: string): { hasInjection: boolean; ma
   };
 }
 
+export function detectPromptInjectionInValues(values: unknown[]): { hasInjection: boolean; matches: string[] } {
+  const allMatches: string[] = [];
+  for (const val of values) {
+    if (typeof val === "string") {
+      const check = detectPromptInjection(val);
+      if (check.hasInjection) {
+        allMatches.push(...check.matches);
+      }
+    } else if (Array.isArray(val)) {
+      const check = detectPromptInjectionInValues(val);
+      if (check.hasInjection) {
+        allMatches.push(...check.matches);
+      }
+    } else if (val && typeof val === "object") {
+      const check = detectPromptInjectionInValues(Object.values(val as Record<string, unknown>));
+      if (check.hasInjection) {
+        allMatches.push(...check.matches);
+      }
+    }
+  }
+  return {
+    hasInjection: allMatches.length > 0,
+    matches: Array.from(new Set(allMatches)),
+  };
+}
+
 export function sanitizeDocumentString(text: string): string {
   if (!text || typeof text !== "string") return "";
   let clean = text;
@@ -284,6 +310,13 @@ export function validateDanfeMathStrict(danfeData: {
   const totais = danfeData.valores_totais || {};
   const totalDeclarado = Number(totais.valor_total_nota ?? totais.valor_total_produtos ?? 0);
 
+  if (totalDeclarado <= 0) {
+    errors.push("Valor total da nota fiscal deve ser maior que zero.");
+  }
+  if (itens.length === 0) {
+    errors.push("Nota fiscal não contém itens discriminados.");
+  }
+
   let somaCalculadaItens = 0;
   let itensValidos = true;
 
@@ -298,9 +331,9 @@ export function validateDanfeMathStrict(danfeData: {
     const itemOk = diffItem <= 0.02 || (qtd === 0 && totalItemDeclarado === 0);
     if (!itemOk && totalItemDeclarado > 0) {
       itensValidos = false;
-      warnings.push(
-        `Item '${item.descricao || "Sem descrição"}': cálculo (${qtd} × R$ ${unit.toFixed(2)} = R$ ${totalItemCalculado.toFixed(2)}) difere do total declarado (R$ ${totalItemDeclarado.toFixed(2)}).`
-      );
+      const warn = `Item '${item.descricao || "Sem descrição"}': cálculo (${qtd} × R$ ${unit.toFixed(2)} = R$ ${totalItemCalculado.toFixed(2)}) difere do total declarado (R$ ${totalItemDeclarado.toFixed(2)}).`;
+      warnings.push(warn);
+      errors.push(warn);
     }
 
     somaCalculadaItens += totalItemDeclarado > 0 ? totalItemDeclarado : totalItemCalculado;
@@ -319,15 +352,15 @@ export function validateDanfeMathStrict(danfeData: {
 
   // Tolerância de até R$ 0,05 na soma de itens vs total geral
   const diferencaTotal = Math.abs(Math.round((totalDeclarado - somaCalculadaItens) * 100) / 100);
-  const somaItensValida = itens.length === 0 || totalDeclarado === 0 || diferencaTotal <= 0.05;
+  const somaItensValida = itens.length > 0 && totalDeclarado > 0 && diferencaTotal <= 0.05;
 
-  if (!somaItensValida) {
-    warnings.push(
-      `Soma calculada dos itens (R$ ${somaCalculadaItens.toFixed(2)}) difere do total declarado da nota (R$ ${totalDeclarado.toFixed(2)}). Diferença: R$ ${diferencaTotal.toFixed(2)}.`
-    );
+  if (!somaItensValida && itens.length > 0 && totalDeclarado > 0) {
+    const warn = `Soma calculada dos itens (R$ ${somaCalculadaItens.toFixed(2)}) difere do total declarado da nota (R$ ${totalDeclarado.toFixed(2)}). Diferença: R$ ${diferencaTotal.toFixed(2)}.`;
+    warnings.push(warn);
+    errors.push(warn);
   }
 
-  const isValid = itensValidos && somaItensValida;
+  const isValid = itensValidos && somaItensValida && errors.length === 0 && totalDeclarado > 0 && itens.length > 0;
 
   return {
     isValid,
@@ -385,6 +418,29 @@ export async function processDocumentPipeline(
     textContext: input.textContext,
   });
 
+  if (injectionCheck.hasInjection) {
+    const durationMs = Date.now() - startTime;
+    return {
+      success: false,
+      documentType: docType,
+      status: "requer_revisao",
+      confidence: 0,
+      data: {},
+      validation: {
+        isValid: false,
+        errors: ["Tentativa de manipulação de instruções / prompt injection detectada no documento."],
+        warnings: [],
+      },
+      hasPromptInjection: true,
+      isDuplicate: false,
+      formattedMessage: "🛡️ **Aviso de Segurança:** O documento contém padrões suspeitos ou instruções maliciosas e foi bloqueado para revisão.",
+      correlationId,
+      durationMs,
+      error: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+      errorCode: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+    };
+  }
+
   const cleanBase64 = input.base64.includes(",")
     ? input.base64.split(",")[1]
     : input.base64;
@@ -410,22 +466,39 @@ export async function processDocumentPipeline(
       if (dados.beneficiario) dados.beneficiario = sanitizeDocumentString(dados.beneficiario);
       if (dados.pagador) dados.pagador = sanitizeDocumentString(dados.pagador);
 
-      // Verificação de injeção em dados extraídos
-      const injectionInExtracted = detectPromptInjection(
-        `${dados.beneficiario || ""} ${dados.pagador || ""}`
-      );
+      // Verificação de injeção em dados extraídos e contexto
+      const injectionInExtracted = detectPromptInjectionInValues([
+        dados.beneficiario,
+        dados.pagador,
+        dados.instrucoes,
+        dados.linha_digitavel,
+        dados.codigo_barras,
+      ]);
       const hasInjection = injectionCheck.hasInjection || injectionInExtracted.hasInjection;
 
-      // Reconciliação determinística e validação FEBRABAN
-      const isFebrabanValid = validacao?.valido === true;
-      const errors: string[] = [];
-      const warnings: string[] = [];
-
-      if (!isFebrabanValid) {
-        errors.push(validacao?.erro || "Validação FEBRABAN do código de barras / linha digitável falhou.");
-      }
-      if (validacao?.divergencias && validacao.divergencias.length > 0) {
-        warnings.push(...validacao.divergencias);
+      // Gate 1: Prompt Injection Fail-Closed
+      if (hasInjection) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "BOLETO",
+          status: "requer_revisao",
+          confidence: 0,
+          data: dados as Record<string, unknown>,
+          validation: {
+            isValid: false,
+            errors: ["Tentativa de manipulação de instruções / prompt injection detectada."],
+            warnings: [],
+            febrabanValidation: validacao,
+          },
+          hasPromptInjection: true,
+          isDuplicate: false,
+          formattedMessage: "🛡️ **Aviso de Segurança:** O documento contém padrões suspeitos ou instruções maliciosas e foi bloqueado para revisão.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+          errorCode: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+        };
       }
 
       // Detecção de Duplicatas
@@ -442,17 +515,64 @@ export async function processDocumentPipeline(
           if (dupResult.isDuplicate) {
             isDuplicate = true;
             duplicateDetails = dupResult;
-            warnings.push(
-              `Atenção: Este boleto já foi cadastrado anteriormente (Registro: ${dupResult.existingRecordId || "existente"}).`
-            );
           }
         } catch {
           // Detecção de duplicata é defensiva e não quebra o pipeline
         }
       }
 
-      // Validação estrita: se não for válido FEBRABAN, rejeita com erro explícito
+      // Gate 2: Duplicidade Fail-Closed
+      if (isDuplicate) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "BOLETO",
+          status: "duplicata_detectada",
+          confidence: validacao?.confianca ?? 95,
+          data: dados as Record<string, unknown>,
+          validation: {
+            isValid: validacao?.valido === true,
+            errors: ["Boleto já cadastrado anteriormente."],
+            warnings: validacao?.divergencias || [],
+            febrabanValidation: validacao,
+          },
+          hasPromptInjection: false,
+          isDuplicate: true,
+          duplicateDetails,
+          formattedMessage: `⚠️ **Boleto Duplicado Detectado:** Este boleto já foi cadastrado anteriormente (Registro: ${duplicateDetails?.existingRecordId || "existente"}).`,
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_DUPLICATE",
+          errorCode: "WALLET_AI_DOCUMENT_DUPLICATE",
+        };
+      }
+
+      // Reconciliação determinística e validação FEBRABAN + Dados Mínimos
+      const numValor = typeof dados.valor === "number" ? dados.valor : parseFloat(String(dados.valor || 0));
+      const hasMinimumBoletoData = Boolean(
+        dados.beneficiario &&
+        dados.data_vencimento &&
+        (dados.linha_digitavel || dados.codigo_barras)
+      );
+      const isFebrabanValid = validacao?.valido === true;
+
+      const errors: string[] = [];
+      const warnings: string[] = validacao?.divergencias ? [...validacao.divergencias] : [];
+
       if (!isFebrabanValid) {
+        errors.push(validacao?.erro || "Validação FEBRABAN do código de barras / linha digitável falhou.");
+      }
+      if (numValor <= 0) {
+        errors.push("Valor do boleto deve ser maior que zero.");
+      }
+      if (!hasMinimumBoletoData) {
+        if (!dados.beneficiario) errors.push("Beneficiário do boleto não identificado.");
+        if (!dados.data_vencimento) errors.push("Data de vencimento do boleto não identificada.");
+        if (!dados.linha_digitavel && !dados.codigo_barras) errors.push("Código de barras ou linha digitável ausente.");
+      }
+
+      // Gate 3: Validação FEBRABAN + Dados Mínimos + Valor Positivo Fail-Closed
+      if (!isFebrabanValid || numValor <= 0 || !hasMinimumBoletoData) {
         const durationMs = Date.now() - startTime;
         return {
           success: false,
@@ -466,8 +586,8 @@ export async function processDocumentPipeline(
             warnings,
             febrabanValidation: validacao,
           },
-          hasPromptInjection: hasInjection,
-          isDuplicate,
+          hasPromptInjection: false,
+          isDuplicate: false,
           duplicateDetails,
           formattedMessage: boletoOutput.mensagemFormatada || "⚠️ **Boleto com Inconsistências:** Dados não puderam ser validados com segurança.",
           correlationId,
@@ -477,15 +597,14 @@ export async function processDocumentPipeline(
         };
       }
 
-      // Se válido, gerar Action Proposal canônica (100% proposal-only)
-      const numValor = typeof dados.valor === "number" ? dados.valor : parseFloat(String(dados.valor || 0));
+      // Se válido em TODOS os gates, gerar Action Proposal canônica (100% proposal-only)
       const proposalPayload: Record<string, unknown> = {
         beneficiario: dados.beneficiario || "Beneficiário do Boleto",
         cnpj_cpf_beneficiario: dados.cnpj_cpf_beneficiario || undefined,
         pagador: dados.pagador || undefined,
-        valor: numValor > 0 ? numValor : 0,
-        valor_total: numValor > 0 ? numValor : 0,
-        data_vencimento: dados.data_vencimento || new Date().toISOString().split("T")[0],
+        valor: numValor,
+        valor_total: numValor,
+        data_vencimento: dados.data_vencimento,
         linha_digitavel: dados.linha_digitavel || undefined,
         codigo_barras: dados.codigo_barras || undefined,
         banco: dados.banco || undefined,
@@ -513,7 +632,7 @@ export async function processDocumentPipeline(
       return {
         success: true,
         documentType: "BOLETO",
-        status: isDuplicate ? "duplicata_detectada" : "sucesso",
+        status: "sucesso",
         confidence: validacao?.confianca ?? 95,
         data: dados as Record<string, unknown>,
         validation: {
@@ -522,8 +641,8 @@ export async function processDocumentPipeline(
           warnings,
           febrabanValidation: validacao,
         },
-        hasPromptInjection: hasInjection,
-        isDuplicate,
+        hasPromptInjection: false,
+        isDuplicate: false,
         duplicateDetails,
         actionProposal: proposal,
         formattedMessage: boletoOutput.mensagemFormatada,
@@ -536,14 +655,38 @@ export async function processDocumentPipeline(
     // FLUXO B: NOTA FISCAL (DANFE)
     // ───────────────────────────────────────────────────────────────────────────
     if (docType === "DANFE") {
-      const danfeOutput: ProcessDanfeOutput = await processDanfeDocument({
-        base64: cleanBase64,
-        mimeType: input.mimeType,
-        geminiApiKey: input.geminiApiKey || "",
-        geminiApiKeyBackup: input.geminiApiKeyBackup,
-        openaiApiKey: input.openaiApiKey,
-        workspaceId: input.workspaceId,
-      });
+      let danfeOutput: ProcessDanfeOutput;
+      try {
+        danfeOutput = await processDanfeDocument({
+          base64: cleanBase64,
+          mimeType: input.mimeType,
+          geminiApiKey: input.geminiApiKey || "",
+          geminiApiKeyBackup: input.geminiApiKeyBackup,
+          openaiApiKey: input.openaiApiKey,
+          workspaceId: input.workspaceId,
+        });
+      } catch (err: any) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "DANFE",
+          status: "requer_revisao",
+          confidence: 0,
+          data: {},
+          validation: {
+            isValid: false,
+            errors: [err?.message || "Falha na extração dos dados da Nota Fiscal."],
+            warnings: [],
+          },
+          hasPromptInjection: false,
+          isDuplicate: false,
+          formattedMessage: "⚠️ **Nota Fiscal com Inconsistências:** Dados fiscais não puderam ser validados com segurança.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+          errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+        };
+      }
 
       const cabecalho = danfeOutput.cabecalho || {};
       const valoresTotais = danfeOutput.valores_totais || {};
@@ -560,16 +703,42 @@ export async function processDocumentPipeline(
         if (it.descricao) it.descricao = sanitizeDocumentString(it.descricao);
       }
 
-      const injectionInDanfe = detectPromptInjection(
-        `${cabecalho.emitente_razao_social || ""} ${cabecalho.natureza_operacao || ""}`
-      );
+      const injectionInDanfe = detectPromptInjectionInValues([
+        cabecalho.emitente_razao_social,
+        cabecalho.emitente_nome_fantasia,
+        cabecalho.natureza_operacao,
+        cabecalho.destinatario_razao_social,
+        ...itens.map((it) => it.descricao),
+      ]);
       const hasInjection = injectionCheck.hasInjection || injectionInDanfe.hasInjection;
 
-      // Validação matemática determinística de DANFE
-      const mathValidation = validateDanfeMathStrict({
-        valores_totais: valoresTotais,
-        itens: itens,
-      });
+      // Gate 1: Prompt Injection Fail-Closed
+      if (hasInjection) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "DANFE",
+          status: "requer_revisao",
+          confidence: 0,
+          data: {
+            cabecalho,
+            valores_totais: valoresTotais,
+            itens,
+          },
+          validation: {
+            isValid: false,
+            errors: ["Tentativa de manipulação de instruções / prompt injection detectada no documento."],
+            warnings: [],
+          },
+          hasPromptInjection: true,
+          isDuplicate: false,
+          formattedMessage: "🛡️ **Aviso de Segurança:** A Nota Fiscal contém padrões suspeitos ou instruções maliciosas e foi bloqueada para revisão.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+          errorCode: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+        };
+      }
 
       // Detecção de Duplicatas por Chave de Acesso ou Número da Nota + CNPJ
       let isDuplicate = false;
@@ -586,68 +755,138 @@ export async function processDocumentPipeline(
           if (dupResult.isDuplicate) {
             isDuplicate = true;
             duplicateDetails = dupResult;
-            mathValidation.warnings.push(
-              `Atenção: Esta Nota Fiscal já foi importada anteriormente (Registro: ${dupResult.existingRecordId || "existente"}).`
-            );
           }
         } catch {
           // Detecção de duplicata defensiva
         }
       }
 
-      // Preparar proposta canônica se DANFE tiver dados mínimos
-      const valorTotalNota = Number(valoresTotais.valor_total_nota ?? valoresTotais.valor_total_produtos ?? 0);
-      const fornecedorNome = cabecalho.emitente_razao_social || cabecalho.emitente_nome_fantasia || "Fornecedor";
-      const numNota = cabecalho.numero_nota || "S/N";
-
-      let actionProposal: ActionProposal | undefined;
-
-      if (danfeOutput.status === "sucesso" && valorTotalNota > 0) {
-        const proposalPayload: Record<string, unknown> = {
-          fornecedor: fornecedorNome,
-          cnpj_fornecedor: cabecalho.emitente_cnpj || undefined,
-          numero_nf: numNota,
-          serie_nf: cabecalho.serie || undefined,
-          data_emissao: cabecalho.data_emissao || new Date().toISOString().split("T")[0],
-          chave_acesso: cabecalho.chave_acesso || undefined,
-          valor_total: valorTotalNota,
-          valor_produtos: Number(valoresTotais.valor_total_produtos ?? valorTotalNota),
-          itens: itens.map((i) => ({
-            codigo: i.codigo_produto || undefined,
-            descricao: i.descricao,
-            quantidade: i.quantidade,
-            valor_unitario: i.valor_unitario,
-            valor_total: i.valor_total,
-          })),
+      // Gate 2: Duplicidade Fail-Closed
+      if (isDuplicate) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "DANFE",
+          status: "duplicata_detectada",
+          confidence: 90,
+          data: {
+            cabecalho,
+            valores_totais: valoresTotais,
+            itens,
+          },
+          validation: {
+            isValid: true,
+            errors: ["Nota Fiscal já importada anteriormente."],
+            warnings: [],
+          },
+          hasPromptInjection: false,
+          isDuplicate: true,
+          duplicateDetails,
+          formattedMessage: `⚠️ **DANFE Duplicado Detectado:** Esta Nota Fiscal já foi cadastrada anteriormente (Registro: ${duplicateDetails?.existingRecordId || "existente"}).`,
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_DUPLICATE",
+          errorCode: "WALLET_AI_DOCUMENT_DUPLICATE",
         };
+      }
 
-        actionProposal = prepareActionProposal({
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          conversationId: input.conversationId,
-          actionType: "cadastrar_despesa_nf",
-          summary: `Importar NF ${numNota} (${fornecedorNome}) - R$ ${valorTotalNota.toFixed(2)}`,
-          payload: proposalPayload,
-        });
+      // Validação matemática determinística de DANFE
+      const mathValidation = validateDanfeMathStrict({
+        valores_totais: valoresTotais,
+        itens: itens,
+      });
 
-        if (input.saveProposalFn) {
-          try {
-            await input.saveProposalFn(actionProposal);
-          } catch {
-            // Persistência defensiva
-          }
+      const valorTotalNota = Number(valoresTotais.valor_total_nota ?? valoresTotais.valor_total_produtos ?? 0);
+      const fornecedorNome = (cabecalho.emitente_razao_social || cabecalho.emitente_nome_fantasia || "").trim();
+      const hasNumeroOuChave = Boolean(cabecalho.numero_nota || cabecalho.chave_acesso);
+      const hasMinimumData = Boolean(fornecedorNome && hasNumeroOuChave && valorTotalNota > 0 && itens.length > 0);
+
+      const allErrors = [...mathValidation.errors];
+      if (!hasMinimumData) {
+        if (!fornecedorNome) allErrors.push("Fornecedor / emitente da nota fiscal não identificado.");
+        if (!hasNumeroOuChave) allErrors.push("Nota fiscal sem número de nota e sem chave de acesso.");
+        if (valorTotalNota <= 0 && !allErrors.some((e) => e.includes("maior que zero"))) {
+          allErrors.push("Valor total da nota fiscal deve ser maior que zero.");
+        }
+        if (itens.length === 0 && !allErrors.some((e) => e.includes("itens"))) {
+          allErrors.push("Nota fiscal sem itens discriminados.");
+        }
+      }
+
+      const isDanfeValid = danfeOutput.status === "sucesso" && mathValidation.isValid && hasMinimumData;
+
+      // Gate 3: Validação Fiscal e Matemática Fail-Closed
+      if (!isDanfeValid) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "DANFE",
+          status: "requer_revisao",
+          confidence: 70,
+          data: {
+            cabecalho,
+            valores_totais: valoresTotais,
+            itens,
+          },
+          validation: {
+            isValid: false,
+            errors: allErrors.length > 0 ? allErrors : ["Validação fiscal ou matemática da DANFE falhou."],
+            warnings: mathValidation.warnings,
+            mathValidation: mathValidation.mathValidation,
+          },
+          hasPromptInjection: false,
+          isDuplicate: false,
+          duplicateDetails,
+          formattedMessage: danfeOutput.mensagemFormatada || "⚠️ **Nota Fiscal com Inconsistências:** Dados matemáticos ou cadastrais divergentes.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+          errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+        };
+      }
+
+      // Se passou em TODOS os gates, gerar Action Proposal canônica (proposal-only)
+      const numNota = cabecalho.numero_nota || "S/N";
+      const proposalPayload: Record<string, unknown> = {
+        fornecedor: fornecedorNome,
+        cnpj_fornecedor: cabecalho.emitente_cnpj || undefined,
+        numero_nf: numNota,
+        serie_nf: cabecalho.serie || undefined,
+        data_emissao: cabecalho.data_emissao || new Date().toISOString().split("T")[0],
+        chave_acesso: cabecalho.chave_acesso || undefined,
+        valor_total: valorTotalNota,
+        valor_produtos: Number(valoresTotais.valor_total_produtos ?? valorTotalNota),
+        itens: itens.map((i) => ({
+          codigo: i.codigo_produto || undefined,
+          descricao: i.descricao,
+          quantidade: i.quantidade,
+          valor_unitario: i.valor_unitario,
+          valor_total: i.valor_total,
+        })),
+      };
+
+      const actionProposal = prepareActionProposal({
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        conversationId: input.conversationId,
+        actionType: "cadastrar_despesa_nf",
+        summary: `Importar NF ${numNota} (${fornecedorNome}) - R$ ${valorTotalNota.toFixed(2)}`,
+        payload: proposalPayload,
+      });
+
+      if (input.saveProposalFn) {
+        try {
+          await input.saveProposalFn(actionProposal);
+        } catch {
+          // Persistência defensiva
         }
       }
 
       const durationMs = Date.now() - startTime;
       return {
-        success: danfeOutput.status === "sucesso",
+        success: true,
         documentType: "DANFE",
-        status: isDuplicate
-          ? "duplicata_detectada"
-          : mathValidation.isValid
-          ? "sucesso"
-          : "requer_revisao",
+        status: "sucesso",
         confidence: 90,
         data: {
           cabecalho,
@@ -655,13 +894,13 @@ export async function processDocumentPipeline(
           itens,
         },
         validation: {
-          isValid: mathValidation.isValid,
-          errors: mathValidation.errors,
+          isValid: true,
+          errors: [],
           warnings: mathValidation.warnings,
           mathValidation: mathValidation.mathValidation,
         },
-        hasPromptInjection: hasInjection,
-        isDuplicate,
+        hasPromptInjection: false,
+        isDuplicate: false,
         duplicateDetails,
         actionProposal,
         formattedMessage: danfeOutput.mensagemFormatada,
