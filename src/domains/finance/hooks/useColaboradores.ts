@@ -19,7 +19,7 @@ export interface Colaborador {
   vale_transporte_diario?: number;
   vale_refeicao: number;
   outros_beneficios: number;
-  status: string;
+  status: string | null;
   dias_experiencia: number;
   carga_horaria_semanal: number;
   cpf?: string | null;
