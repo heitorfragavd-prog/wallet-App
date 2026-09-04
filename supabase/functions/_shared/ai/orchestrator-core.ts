@@ -1,6 +1,6 @@
 import type { ActionProposal } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
-import { OPENAI_FINANCIAL_TOOLS, type OpenAiFunctionDefinition } from "./openai-tools-definition.ts";
+import { OPENAI_ALL_TOOLS, type OpenAiFunctionDefinition } from "./openai-tools-definition.ts";
 import type { QueryToolCatalog } from "./query-tools.ts";
 import {
   dispatchOpenAiToolCall,
@@ -112,7 +112,7 @@ export async function runOrchestratorTurn(
   while (iterations < maxIterations) {
     iterations++;
 
-    const response = await runner.generateCompletion(messages, OPENAI_FINANCIAL_TOOLS);
+    const response = await runner.generateCompletion(messages, OPENAI_ALL_TOOLS);
 
     if (response.usage) {
       totalUsage.promptTokens += response.usage.promptTokens;
@@ -148,15 +148,14 @@ export async function runOrchestratorTurn(
       }
       executedSignatures.add(signature);
 
-      const dispatched = await dispatchOpenAiToolCall(
+      const toolResultMsg: OpenAiToolMessage = await dispatchOpenAiToolCall(
         toolCall,
         context,
         catalog,
       );
 
-      const toolResultMsg: OpenAiToolMessage = dispatched.message;
-      if (dispatched.actionProposal) {
-        actionProposals.push(dispatched.actionProposal);
+      if (toolResultMsg.actionProposal) {
+        actionProposals.push(toolResultMsg.actionProposal);
       }
 
       messages.push(toolResultMsg);

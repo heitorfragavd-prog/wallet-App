@@ -112,6 +112,52 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
         });
       }).toThrowError(/WALLET_AI_ACTION_INVALID/);
     });
+
+    it("atualizar_divida: valida proposta com risco MEDIUM e exige divida_id", () => {
+      const proposal = prepareActionProposal({
+        workspaceId: validWorkspaceId,
+        userId: validUserId,
+        actionType: "atualizar_divida",
+        summary: "Atualizar dívida",
+        payload: { divida_id: "div-123", status: "quitada", valor_pago: 500 },
+      });
+      expect(proposal.riskLevel).toBe("MEDIUM");
+      expect(proposal.status).toBe("prepared");
+
+      expect(() => {
+        sanitizeActionPayload("atualizar_divida", { status: "quitada" }); // sem divida_id
+      }).toThrowError(/WALLET_AI_ACTION_INVALID/);
+    });
+
+    it("atualizar_transacao: valida proposta com risco HIGH e exige transacao_id", () => {
+      const proposal = prepareActionProposal({
+        workspaceId: validWorkspaceId,
+        userId: validUserId,
+        actionType: "atualizar_transacao",
+        summary: "Atualizar transação",
+        payload: { transacao_id: "tx-123", valor: 350 },
+      });
+      expect(proposal.riskLevel).toBe("HIGH");
+
+      expect(() => {
+        sanitizeActionPayload("atualizar_transacao", { valor: 350 }); // sem transacao_id
+      }).toThrowError(/WALLET_AI_ACTION_INVALID/);
+    });
+
+    it("atualizar_conta: valida proposta com risco HIGH e exige conta_id", () => {
+      const proposal = prepareActionProposal({
+        workspaceId: validWorkspaceId,
+        userId: validUserId,
+        actionType: "atualizar_conta",
+        summary: "Atualizar saldo conta",
+        payload: { conta_id: "acc-123", saldo: 1500 },
+      });
+      expect(proposal.riskLevel).toBe("HIGH");
+
+      expect(() => {
+        sanitizeActionPayload("atualizar_conta", { saldo: 1500 }); // sem conta_id
+      }).toThrowError(/WALLET_AI_ACTION_INVALID/);
+    });
   });
 
   // ── 2. VALIDAÇÃO SERVER-SIDE (APPROVAL) ───────────────────────────────────
@@ -327,7 +373,7 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
       expect(dispatched.actionProposal?.status).toBe("prepared");
       expect(dispatched.actionProposal?.riskLevel).toBe("MEDIUM");
 
-      const responseContent = JSON.parse(dispatched.message.content);
+      const responseContent = JSON.parse(dispatched.content);
       expect(responseContent.requires_confirmation).toBe(true);
       expect(responseContent.status).toBe("prepared");
       expect(responseContent.message).toContain("Nenhuma alteração foi efetuada no banco");

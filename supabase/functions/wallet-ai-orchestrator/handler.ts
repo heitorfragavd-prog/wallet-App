@@ -167,7 +167,7 @@ export async function handleOrchestratorHttpRequest(
     );
 
     const repository = dependencies.repoFactory(context);
-    const catalog = createQueryToolCatalog(repository);
+    const catalog = createQueryToolCatalog(repository, { extended: true });
     const runner = dependencies.runnerFactory(selectedModel);
 
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)

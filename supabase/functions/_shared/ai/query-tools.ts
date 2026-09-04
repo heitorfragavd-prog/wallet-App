@@ -104,7 +104,10 @@ function sourceReferences(records: CanonicalFinancialRecord[]): FinancialSourceR
   return [...grouped.entries()].map(([type, ids]) => ({ type, ids }));
 }
 
-export function createQueryToolCatalog(repository: FinancialQueryRepository): QueryToolCatalog {
+export function createQueryToolCatalog(
+  repository: FinancialQueryRepository,
+  options: { extended?: boolean } = {},
+): QueryToolCatalog {
   const catalog: QueryToolCatalog = {
     buscar_receitas: async (args, context) => {
       const period = validatePeriod(args);
@@ -130,17 +133,6 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
         balances,
         [],
         { availableBalance: "soma dos saldos de contas; cartões de crédito excluídos" },
-      );
-    },
-    consultar_contas: async (_args, context) => {
-      const balances = await repository.listBalances(context);
-      return baseResult(
-        "consultar_contas",
-        context,
-        null,
-        balances,
-        [],
-        { availableBalance: "saldos consolidados por conta/carteira" },
       );
     },
     consultar_dividas: async (args, context) => {
@@ -183,7 +175,10 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
         summary.warnings,
       );
     },
-    consultar_fluxo_caixa: async (args, context) => {
+  };
+
+  if (options.extended) {
+    catalog.consultar_fluxo_caixa = async (args, context) => {
       const period = validatePeriod(args);
       const [revenues, expenses] = await Promise.all([
         repository.listRevenues(context, period),
@@ -207,13 +202,12 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
         [...sourceReferences(revenues), ...sourceReferences(expenses)],
         { fluxoLiquido: "totalEntradas - totalSaidas" },
       );
-    },
-  };
-
-  // Aliases seguros para comandos em linguagem natural
-  catalog.consultar_receitas = catalog.buscar_receitas;
-  catalog.consultar_despesas = catalog.buscar_despesas;
-  catalog.consultar_transacoes = catalog.buscar_transacoes;
+    };
+    catalog.consultar_contas = catalog.consultar_saldos;
+    catalog.consultar_receitas = catalog.buscar_receitas;
+    catalog.consultar_despesas = catalog.buscar_despesas;
+    catalog.consultar_transacoes = catalog.buscar_transacoes;
+  }
 
   return catalog;
 }

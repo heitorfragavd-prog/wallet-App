@@ -68,12 +68,13 @@ export function createSupabaseAuthorizationDependencies(
         .maybeSingle();
       if (ownerData) return { id: ownerData.id };
 
-      // 2. Verifica se é membro autorizado na tabela workspace_usuarios
+      // 2. Verifica se é membro autorizado na tabela workspace_members
       const { data: memberData } = await client
-        .from("workspace_usuarios")
+        .from("workspace_members")
         .select("id")
         .eq("workspace_id", workspaceId)
         .eq("user_id", userId)
+        .eq("active", true)
         .maybeSingle();
       if (memberData) return { id: workspaceId };
 

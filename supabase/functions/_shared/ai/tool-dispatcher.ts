@@ -18,13 +18,8 @@ export interface OpenAiToolMessage {
   tool_call_id: string;
   name: string;
   content: string;
-}
-
-export interface DispatchedToolExecution {
-  message: OpenAiToolMessage;
-  result?: QueryToolResult;
   actionProposal?: ActionProposal;
-  error?: string;
+  result?: QueryToolResult;
 }
 
 function generateProposalSummary(actionType: string, args: Record<string, unknown>): string {
@@ -65,7 +60,7 @@ export async function dispatchOpenAiToolCall(
   toolCall: OpenAiToolCall,
   context: AiExecutionContext,
   catalog: QueryToolCatalog,
-): Promise<DispatchedToolExecution> {
+): Promise<OpenAiToolMessage> {
   const toolName = toolCall.function.name;
   let parsedArgs: Record<string, unknown> = {};
 
@@ -74,7 +69,7 @@ export async function dispatchOpenAiToolCall(
       ? (JSON.parse(toolCall.function.arguments) as Record<string, unknown>)
       : {};
   } catch (_e) {
-    const errorMsg: OpenAiToolMessage = {
+    return {
       role: "tool",
       tool_call_id: toolCall.id,
       name: toolName,
@@ -83,7 +78,6 @@ export async function dispatchOpenAiToolCall(
         message: "Os argumentos fornecidos não são um JSON válido.",
       }),
     };
-    return { message: errorMsg, error: "invalid_tool_arguments" };
   }
 
   // Se a tool for uma mutação WRITE (Action Proposal)
@@ -99,7 +93,7 @@ export async function dispatchOpenAiToolCall(
         correlationId: context.correlationId,
       });
 
-      const toolMsg: OpenAiToolMessage = {
+      return {
         role: "tool",
         tool_call_id: toolCall.id,
         name: toolName,
@@ -112,22 +106,15 @@ export async function dispatchOpenAiToolCall(
           requires_confirmation: true,
           message: `Proposta de ação gerada com sucesso (ID: ${proposal.id}, Risco: ${proposal.riskLevel}). Nenhuma alteração foi efetuada no banco. O usuário deve revisar e confirmar a ação explicitamente na interface.`,
         }),
-      };
-
-      return {
-        message: toolMsg,
         actionProposal: proposal,
       };
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "action_proposal_failed";
       return {
-        message: {
-          role: "tool",
-          tool_call_id: toolCall.id,
-          name: toolName,
-          content: JSON.stringify({ error: errorMessage }),
-        },
-        error: errorMessage,
+        role: "tool",
+        tool_call_id: toolCall.id,
+        name: toolName,
+        content: JSON.stringify({ error: errorMessage }),
       };
     }
   }
@@ -136,26 +123,21 @@ export async function dispatchOpenAiToolCall(
   try {
     const result = await executeQueryTool(toolName, parsedArgs, context, catalog);
     return {
-      message: {
-        role: "tool",
-        tool_call_id: toolCall.id,
-        name: toolName,
-        content: JSON.stringify(result),
-      },
+      role: "tool",
+      tool_call_id: toolCall.id,
+      name: toolName,
+      content: JSON.stringify(result),
       result,
     };
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : "tool_execution_failed";
     return {
-      message: {
-        role: "tool",
-        tool_call_id: toolCall.id,
-        name: toolName,
-        content: JSON.stringify({
-          error: errorMessage,
-        }),
-      },
-      error: errorMessage,
+      role: "tool",
+      tool_call_id: toolCall.id,
+      name: toolName,
+      content: JSON.stringify({
+        error: errorMessage,
+      }),
     };
   }
 }

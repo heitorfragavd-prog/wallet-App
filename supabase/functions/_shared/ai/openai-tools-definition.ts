@@ -141,6 +141,9 @@ export const OPENAI_FINANCIAL_TOOLS: OpenAiFunctionDefinition[] = [
       },
     },
   },
+];
+
+export const OPENAI_EXTENDED_READ_TOOLS: OpenAiFunctionDefinition[] = [
   {
     type: "function",
     function: {
@@ -177,6 +180,9 @@ export const OPENAI_FINANCIAL_TOOLS: OpenAiFunctionDefinition[] = [
       },
     },
   },
+];
+
+export const OPENAI_ACTION_TOOLS: OpenAiFunctionDefinition[] = [
   {
     type: "function",
     function: {
@@ -280,3 +286,10 @@ export const OPENAI_FINANCIAL_TOOLS: OpenAiFunctionDefinition[] = [
     },
   },
 ];
+
+export const OPENAI_ALL_TOOLS: OpenAiFunctionDefinition[] = [
+  ...OPENAI_FINANCIAL_TOOLS,
+  ...OPENAI_EXTENDED_READ_TOOLS,
+  ...OPENAI_ACTION_TOOLS,
+];
+
