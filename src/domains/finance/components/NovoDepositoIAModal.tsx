@@ -20,9 +20,8 @@ import {
 import {
   Sparkles,
   UploadCloud,
-  
   Loader2,
-  Calendar as 
+  Calendar as CalendarIcon,
   CheckCircle,
 } from "lucide-react";
 import { useDepositosInvestimento } from "../hooks/useDepositosInvestimento";

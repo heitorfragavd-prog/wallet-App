@@ -207,10 +207,11 @@ Deno.serve(async (req: Request) => {
       EdgeRuntime.waitUntil((async () => {
         try {
           const messageContent = messageData.message || {};
-          const text = messageContent.conversation || 
-                     messageContent.extendedTextMessage?.text || 
-                     messageContent.imageMessage?.caption || 
-                     "";
+          const text =
+            messageContent.conversation ||
+            messageContent.extendedTextMessage?.text ||
+            messageContent.imageMessage?.caption ||
+            "";
 
           let imageBase64: string | undefined;
 

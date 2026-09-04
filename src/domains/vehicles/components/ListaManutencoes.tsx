@@ -16,8 +16,7 @@ import {
   Wrench, 
   Trash2, 
   CheckCircle, 
-  Bell, 
-  
+  Bell,
   Edit,
   Tag,
   Sparkles,
