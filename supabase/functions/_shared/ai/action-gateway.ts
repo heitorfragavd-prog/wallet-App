@@ -248,6 +248,12 @@ export interface ActionRepository {
     status: ActionProposal["status"],
     timestamps?: { confirmedAt?: string; executedAt?: string; errorMessage?: string },
   ): Promise<void>;
+  confirmProposalAtomically?(
+    id: string,
+    context: AiExecutionContext,
+    userRole?: string,
+  ): Promise<{ success: boolean; proposal?: ActionProposal; code?: ActionErrorCode; error?: string }>;
+  executeProposalAtomically?(id: string): Promise<boolean>;
 }
 
 export interface ActionDatabaseMutator {
@@ -256,6 +262,10 @@ export interface ActionDatabaseMutator {
     payload: Record<string, unknown>,
     context: AiExecutionContext,
   ): Promise<{ success: boolean; recordId?: string; data?: unknown }>;
+}
+
+export interface AuditEventSinkLike {
+  logEvent(event: import("./action-types.ts").ActionAuditEvent): Promise<void> | void;
 }
 
 /**
@@ -268,35 +278,57 @@ export async function executeConfirmedProposal(
   repository: ActionRepository,
   mutator: ActionDatabaseMutator,
   userRole?: string,
+  auditLogger?: AuditEventSinkLike,
 ): Promise<{ success: boolean; executedRecordId?: string; proposal: ActionProposal }> {
-  const proposal = await repository.getProposal(proposalId);
-  if (!proposal) {
-    throw new ActionGatewayError(
-      "WALLET_AI_ACTION_INVALID",
-      404,
-      `Proposta de ação não encontrada: ${proposalId}`,
-    );
-  }
+  let proposal: ActionProposal | null = null;
 
-  const validation = validateActionForExecution(
-    proposal,
-    context.userId,
-    context.workspaceId,
-    userRole,
-  );
-
-  if (!validation.valid) {
-    if (validation.code === "WALLET_AI_ACTION_EXPIRED" && proposal.status === "prepared") {
-      await repository.updateStatus(proposalId, "expired");
+  // Se o repositório possuir confirmação atômica condicional nativa
+  if (typeof repository.confirmProposalAtomically === "function") {
+    const confirmResult = await repository.confirmProposalAtomically(proposalId, context, userRole);
+    if (!confirmResult.success || !confirmResult.proposal) {
+      throw new ActionGatewayError(
+        confirmResult.code ?? "WALLET_AI_ACTION_FORBIDDEN",
+        confirmResult.code === "WALLET_AI_ACTION_ALREADY_PROCESSED" ? 409 : 403,
+        confirmResult.error ?? "Falha na confirmação atômica da proposta.",
+      );
     }
-    throw new ActionGatewayError(
-      validation.code ?? "WALLET_AI_ACTION_FORBIDDEN",
-      validation.code === "WALLET_AI_ACTION_ALREADY_PROCESSED" ? 409 : 403,
-      validation.error ?? "Validação da proposta falhou.",
+    proposal = confirmResult.proposal;
+  } else {
+    // Fallback para repositórios genéricos/mockados em memória
+    proposal = await repository.getProposal(proposalId);
+    if (!proposal) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        404,
+        `Proposta de ação não encontrada: ${proposalId}`,
+      );
+    }
+
+    const validation = validateActionForExecution(
+      proposal,
+      context.userId,
+      context.workspaceId,
+      userRole,
     );
+
+    if (!validation.valid) {
+      if (validation.code === "WALLET_AI_ACTION_EXPIRED" && proposal.status === "prepared") {
+        await repository.updateStatus(proposalId, "expired");
+      }
+      throw new ActionGatewayError(
+        validation.code ?? "WALLET_AI_ACTION_FORBIDDEN",
+        validation.code === "WALLET_AI_ACTION_ALREADY_PROCESSED" ? 409 : 403,
+        validation.error ?? "Validação da proposta falhou.",
+      );
+    }
+
+    const confirmedAt = new Date().toISOString();
+    await repository.updateStatus(proposalId, "confirmed", { confirmedAt });
+    proposal.status = "confirmed";
+    proposal.confirmedAt = confirmedAt;
   }
 
-  // Política estrita de alto risco: deleção bloqueada nesta etapa
+  // Política estrita de alto risco: deleção bloqueada incondicionalmente
   if (proposal.actionType === "deletar_transacao") {
     throw new ActionGatewayError(
       "WALLET_AI_ACTION_FORBIDDEN",
@@ -305,9 +337,19 @@ export async function executeConfirmedProposal(
     );
   }
 
-  // Marca transição atômica para confirmed
-  const confirmedAt = new Date().toISOString();
-  await repository.updateStatus(proposalId, "confirmed", { confirmedAt });
+  // Auditoria: Confirmação realizada
+  if (auditLogger) {
+    await auditLogger.logEvent({
+      eventName: "proposal_confirmed",
+      proposalId: proposal.id,
+      actionType: proposal.actionType,
+      riskLevel: proposal.riskLevel,
+      workspaceId: context.workspaceId,
+      userId: context.userId,
+      correlationId: context.correlationId,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   try {
     const mutationResult = await mutator.executeMutation(
@@ -317,7 +359,25 @@ export async function executeConfirmedProposal(
     );
 
     const executedAt = new Date().toISOString();
-    await repository.updateStatus(proposalId, "executed", { executedAt });
+    if (typeof repository.executeProposalAtomically === "function") {
+      await repository.executeProposalAtomically(proposalId);
+    } else {
+      await repository.updateStatus(proposalId, "executed", { executedAt });
+    }
+
+    // Auditoria: Execução com sucesso
+    if (auditLogger) {
+      await auditLogger.logEvent({
+        eventName: "proposal_executed",
+        proposalId: proposal.id,
+        actionType: proposal.actionType,
+        riskLevel: proposal.riskLevel,
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        correlationId: context.correlationId,
+        timestamp: executedAt,
+      });
+    }
 
     return {
       success: true,
@@ -325,13 +385,31 @@ export async function executeConfirmedProposal(
       proposal: {
         ...proposal,
         status: "executed",
-        confirmedAt,
         executedAt,
       },
     };
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : "mutation_failed";
     await repository.updateStatus(proposalId, "prepared", { errorMessage });
+
+    if (auditLogger) {
+      await auditLogger.logEvent({
+        eventName: "proposal_execution_failed",
+        proposalId: proposal.id,
+        actionType: proposal.actionType,
+        riskLevel: proposal.riskLevel,
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        correlationId: context.correlationId,
+        timestamp: new Date().toISOString(),
+        metadata: { error: errorMessage },
+      });
+    }
+
+    if (err instanceof ActionGatewayError) {
+      throw err;
+    }
+
     throw new ActionGatewayError(
       "WALLET_AI_ACTION_EXECUTION_ERROR",
       500,

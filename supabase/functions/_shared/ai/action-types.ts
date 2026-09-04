@@ -173,3 +173,24 @@ export interface PrepareActionInput<TPayload = Record<string, unknown>> {
   ttlMinutes?: number;
   correlationId?: string;
 }
+
+export type ActionAuditEventName =
+  | "proposal_created"
+  | "proposal_confirmed"
+  | "proposal_cancelled"
+  | "proposal_executed"
+  | "proposal_expired"
+  | "proposal_execution_failed";
+
+export interface ActionAuditEvent {
+  eventName: ActionAuditEventName;
+  proposalId: string;
+  actionType: string;
+  riskLevel: ActionRiskLevel;
+  workspaceId: string;
+  userId: string;
+  correlationId?: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+

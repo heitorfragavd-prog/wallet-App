@@ -1,11 +1,10 @@
-import React, { useState } from "react";
+import React from "react";
 import type { ActionProposal, ActionRiskLevel } from "../../../../supabase/functions/_shared/ai/action-types";
-import { Edit3, ShieldAlert, Sparkles, AlertTriangle } from "lucide-react";
-import { Input } from "@/shared/components/ui/input";
+import { ShieldAlert, Sparkles, AlertTriangle } from "lucide-react";
 
 export interface AgentActionProposalCardProps {
   proposal: ActionProposal;
-  onConfirm: (proposalId: string, updatedPayload?: Record<string, unknown>) => void | Promise<void>;
+  onConfirm: (proposalId: string) => void | Promise<void>;
   onCancel: (proposalId: string) => void | Promise<void>;
   isProcessing?: boolean;
   disabled?: boolean;
@@ -21,41 +20,29 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
   disabledReason,
 }) => {
   const isPending = proposal.status === "prepared";
-  const [isEditing, setIsEditing] = useState(false);
-  const [editablePayload, setEditablePayload] = useState<Record<string, unknown>>({
-    ...proposal.payload,
-  });
-
   const riskLevel: ActionRiskLevel = proposal.riskLevel ?? "MEDIUM";
-
-  const handleFieldChange = (key: string, value: unknown) => {
-    setEditablePayload((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
-  };
 
   const handleConfirmAction = () => {
     if (disabled || isProcessing) return;
-    if (isEditing) {
-      onConfirm(proposal.id, editablePayload);
-    } else {
-      onConfirm(proposal.id);
-    }
+    onConfirm(proposal.id);
   };
 
   return (
-    <div className={`my-3 overflow-hidden rounded-xl border bg-card p-4 shadow-sm transition-all ${
-      riskLevel === "HIGH"
-        ? "border-rose-500/40 bg-rose-50/10 dark:bg-rose-950/10"
-        : "border-primary/20"
-    }`}>
+    <div
+      className={`my-3 overflow-hidden rounded-xl border bg-card p-4 shadow-sm transition-all ${
+        riskLevel === "HIGH"
+          ? "border-rose-500/40 bg-rose-50/10 dark:bg-rose-950/10"
+          : "border-primary/20"
+      }`}
+    >
       {/* Header */}
       <div className="flex items-center justify-between pb-2 border-b border-border/50">
         <div className="flex items-center gap-2">
-          <span className={`flex h-2 w-2 rounded-full ${
-            riskLevel === "HIGH" ? "bg-rose-500 animate-pulse" : "bg-amber-500 animate-pulse"
-          }`} />
+          <span
+            className={`flex h-2 w-2 rounded-full ${
+              riskLevel === "HIGH" ? "bg-rose-500 animate-pulse" : "bg-amber-500 animate-pulse"
+            }`}
+          />
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
             <Sparkles className="h-3 w-3 text-amber-400" />
             Ação Proposta pelo Assistente
@@ -75,16 +62,6 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
           >
             Risco {riskLevel}
           </span>
-
-          {isPending && !isEditing && !disabled && (
-            <button
-              type="button"
-              onClick={() => setIsEditing(true)}
-              className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-background"
-            >
-              <Edit3 className="h-3 w-3" /> Editar
-            </button>
-          )}
 
           {/* Status da Proposta */}
           <span
@@ -131,63 +108,21 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
       <div className="py-3">
         <p className="font-semibold text-sm text-foreground">{proposal.summary}</p>
 
-        {isEditing ? (
-          <div className="mt-3 space-y-2 rounded-lg bg-muted/30 p-3 border border-border/60">
-            <p className="text-xs font-semibold text-primary">Editar Campos da Proposta:</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              {Object.entries(editablePayload).map(([key, val]) => {
-                if (typeof val === "object" && val !== null) return null;
-                return (
-                  <div key={key} className="flex flex-col gap-1">
-                    <label className="text-[11px] font-medium text-muted-foreground capitalize">
-                      {key.replace(/_/g, " ")}:
-                    </label>
-                    <Input
-                      value={String(val ?? "")}
-                      onChange={(e) => handleFieldChange(key, e.target.value)}
-                      className="h-8 text-xs bg-background"
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditablePayload({ ...proposal.payload });
-                  setIsEditing(false);
-                }}
-                className="px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Cancelar Edição
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsEditing(false)}
-                className="px-2.5 py-1 text-xs bg-secondary text-secondary-foreground rounded hover:bg-secondary/80"
-              >
-                Salvar Alterações
-              </button>
-            </div>
+        <div className="mt-2 rounded-lg bg-muted/40 p-2.5 text-xs">
+          <p className="font-medium text-muted-foreground mb-1">Detalhes da Operação:</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px]">
+            {Object.entries(proposal.payload).map(([k, v]) => (
+              <div key={k} className="flex items-center gap-1.5">
+                <span className="text-muted-foreground font-mono">{k}:</span>
+                <span className="font-semibold text-foreground">
+                  {typeof v === "number" && k.toLowerCase().includes("valor")
+                    ? v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                    : String(v)}
+                </span>
+              </div>
+            ))}
           </div>
-        ) : (
-          <div className="mt-2 rounded-lg bg-muted/40 p-2.5 text-xs">
-            <p className="font-medium text-muted-foreground mb-1">Detalhes da Operação:</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px]">
-              {Object.entries(proposal.payload).map(([k, v]) => (
-                <div key={k} className="flex items-center gap-1.5">
-                  <span className="text-muted-foreground font-mono">{k}:</span>
-                  <span className="font-semibold text-foreground">
-                    {typeof v === "number" && k.toLowerCase().includes("valor")
-                      ? v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                      : String(v)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        </div>
       </div>
 
       {/* Botões de Ação */}
@@ -213,8 +148,6 @@ export const AgentActionProposalCard: React.FC<AgentActionProposalCardProps> = (
           >
             {isProcessing
               ? "Confirmando..."
-              : isEditing
-              ? "Salvar & Confirmar Operação"
               : riskLevel === "HIGH"
               ? "Confirmar Operação de Alto Risco"
               : "Confirmar Operação"}
