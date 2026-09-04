@@ -104,4 +104,22 @@ describe("EquipeDetalhePage", () => {
     fireEvent.click(screen.getByRole("button", { name: /revelar conta bancária/i }));
     expect(screen.getByText("123456-7")).toBeInTheDocument();
   });
+
+  it("renderiza todas as abas sem falha de contexto de hook (Tabs / Radix UI)", () => {
+    render(<EquipeDetalhePage />);
+    const tabs = ["Visão geral", "Acertos", "Escalas", "Financeiro", "Dados pessoais"];
+    for (const tabName of tabs) {
+      const tab = screen.getByRole("tab", { name: tabName });
+      expect(tab).toBeInTheDocument();
+      fireEvent.click(tab);
+    }
+  });
+
+  it("garante que vite.config.ts possui deduplicação de react e react-dom", async () => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const viteConfigPath = path.resolve(__dirname, "../../vite.config.ts");
+    const content = fs.readFileSync(viteConfigPath, "utf-8");
+    expect(content).toMatch(/dedupe:\s*\[\s*['"]react['"]\s*,\s*['"]react-dom['"]\s*\]/);
+  });
 });
