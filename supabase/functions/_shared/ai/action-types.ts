@@ -7,9 +7,13 @@ export type ActionProposalStatus =
 
 export type ActionRiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
+export type ActionExecutionPolicy = "proposal_only" | "blocked" | "executable";
+
 export interface ActionDefinition {
   actionType: string;
   riskLevel: ActionRiskLevel;
+  executionPolicy: ActionExecutionPolicy;
+  blocked?: boolean;
   requiredPermission: string;
   requiresConfirmation: true;
   reversible: boolean;
@@ -22,6 +26,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_transacao: {
     actionType: "cadastrar_transacao",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:transactions:write",
     requiresConfirmation: true,
     reversible: true,
@@ -43,6 +48,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   atualizar_transacao: {
     actionType: "atualizar_transacao",
     riskLevel: "HIGH",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:transactions:write",
     requiresConfirmation: true,
     reversible: true,
@@ -64,6 +70,8 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   deletar_transacao: {
     actionType: "deletar_transacao",
     riskLevel: "HIGH",
+    executionPolicy: "blocked",
+    blocked: true,
     requiredPermission: "finance:transactions:delete",
     requiresConfirmation: true,
     reversible: false,
@@ -74,6 +82,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_divida: {
     actionType: "cadastrar_divida",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:debts:write",
     requiresConfirmation: true,
     reversible: true,
@@ -92,6 +101,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   atualizar_divida: {
     actionType: "atualizar_divida",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:debts:write",
     requiresConfirmation: true,
     reversible: true,
@@ -102,6 +112,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_meta: {
     actionType: "cadastrar_meta",
     riskLevel: "LOW",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:goals:write",
     requiresConfirmation: true,
     reversible: true,
@@ -112,6 +123,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   atualizar_meta: {
     actionType: "atualizar_meta",
     riskLevel: "LOW",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:goals:write",
     requiresConfirmation: true,
     reversible: true,
@@ -122,6 +134,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   criar_conta: {
     actionType: "criar_conta",
     riskLevel: "HIGH",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:accounts:write",
     requiresConfirmation: true,
     reversible: false,
@@ -132,6 +145,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   atualizar_conta: {
     actionType: "atualizar_conta",
     riskLevel: "HIGH",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:accounts:write",
     requiresConfirmation: true,
     reversible: true,
@@ -142,6 +156,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_despesa_nf: {
     actionType: "cadastrar_despesa_nf",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:invoices:write",
     requiresConfirmation: true,
     reversible: true,
@@ -166,6 +181,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_divida_boleto: {
     actionType: "cadastrar_divida_boleto",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:debts:write",
     requiresConfirmation: true,
     reversible: true,
@@ -189,6 +205,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   cadastrar_boleto: {
     actionType: "cadastrar_boleto",
     riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
     requiredPermission: "finance:debts:write",
     requiresConfirmation: true,
     reversible: true,
@@ -224,8 +241,26 @@ export const ACTION_TYPE_ALIASES: Record<string, string> = {
   import_invoice: "cadastrar_despesa_nf",
 };
 
-export function resolveActionType(actionType: string): string {
-  return ACTION_TYPE_ALIASES[actionType] ?? actionType;
+export type CanonicalActionType = keyof typeof CANONICAL_ACTIONS;
+
+export function resolveActionType(actionType: string): CanonicalActionType {
+  return (ACTION_TYPE_ALIASES[actionType] ?? actionType) as CanonicalActionType;
+}
+
+export function resolveActionTypeAndPayload(
+  actionType: string,
+  payload: Record<string, unknown> = {},
+): { canonicalType: CanonicalActionType; resolvedPayload: Record<string, unknown> } {
+  const canonicalType = resolveActionType(actionType);
+  const resolvedPayload = { ...payload };
+
+  if (actionType === "cadastrar_despesa" || actionType === "atualizar_status_despesa") {
+    resolvedPayload.tipo = "despesa";
+  } else if (actionType === "cadastrar_receita" || actionType === "atualizar_status_receita") {
+    resolvedPayload.tipo = "receita";
+  }
+
+  return { canonicalType, resolvedPayload };
 }
 
 export interface ActionProposal<TPayload = Record<string, unknown>> {

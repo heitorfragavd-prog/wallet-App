@@ -14,10 +14,12 @@ import {
   CANONICAL_ACTIONS,
   ACTION_TYPE_ALIASES,
   resolveActionType,
-  type CanonicalActionType,
+  resolveActionTypeAndPayload,
+  type ActionRiskLevel,
 } from "../../../../supabase/functions/_shared/ai/action-types.ts";
 import {
   prepareActionProposal,
+  ActionGatewayError,
 } from "../../../../supabase/functions/_shared/ai/action-gateway.ts";
 import {
   ActionExecutorRegistry,
@@ -277,42 +279,79 @@ describe("Document Pipeline — Validação e Segurança (Etapa 9.4B)", () => {
     });
   });
 
-  describe("8. Catálogo Canônico e Mapeamento de Aliases", () => {
+  describe("8. Catálogo Canônico, Risk Model e Mapeamento de Aliases", () => {
+    it("todos os CANONICAL_ACTIONS devem usar estritamente os riskLevels LOW, MEDIUM ou HIGH (sem CRITICAL)", () => {
+      const allowedRiskLevels: ActionRiskLevel[] = ["LOW", "MEDIUM", "HIGH"];
+      expect(Object.keys(CANONICAL_ACTIONS)).toHaveLength(12);
+
+      for (const [_actionName, def] of Object.entries(CANONICAL_ACTIONS)) {
+        expect(allowedRiskLevels).toContain(def.riskLevel);
+        // Garante que CRITICAL foi eliminado e não é aceito
+        expect((def.riskLevel as string)).not.toBe("CRITICAL");
+        expect(["proposal_only", "blocked", "executable"]).toContain(def.executionPolicy);
+      }
+    });
+
+    it("deletar_transacao deve possuir riskLevel HIGH e executionPolicy BLOCKED", () => {
+      const deleteDef = CANONICAL_ACTIONS.deletar_transacao;
+      expect(deleteDef).toBeDefined();
+      expect(deleteDef.riskLevel).toBe("HIGH");
+      expect(deleteDef.executionPolicy).toBe("blocked");
+      expect(deleteDef.blocked).toBe(true);
+
+      const registry = new ActionExecutorRegistry();
+      expect(registry.has("deletar_transacao")).toBe(false);
+    });
+
     it("deve mapear aliases legados e informais para a ação canônica correspondente", () => {
       expect(ACTION_TYPE_ALIASES.cadastrar_receita).toBe("cadastrar_transacao");
+      expect(ACTION_TYPE_ALIASES.cadastrar_despesa).toBe("cadastrar_transacao");
+      expect(ACTION_TYPE_ALIASES.atualizar_status_receita).toBe("atualizar_transacao");
+      expect(ACTION_TYPE_ALIASES.atualizar_status_despesa).toBe("atualizar_transacao");
       expect(ACTION_TYPE_ALIASES.create_debt).toBe("cadastrar_divida_boleto");
+      expect(ACTION_TYPE_ALIASES.import_invoice).toBe("cadastrar_despesa_nf");
+
       expect(resolveActionType("cadastrar_receita")).toBe("cadastrar_transacao");
       expect(resolveActionType("cadastrar_despesa")).toBe("cadastrar_transacao");
-      expect(resolveActionType("atualizar_status_receita")).toBe("atualizar_transacao");
-      expect(resolveActionType("atualizar_status_despesa")).toBe("atualizar_transacao");
       expect(resolveActionType("create_debt")).toBe("cadastrar_divida_boleto");
       expect(resolveActionType("import_invoice")).toBe("cadastrar_despesa_nf");
     });
 
-    it("deve manter intactas todas as 12 ações canônicas oficiais", () => {
-      const canonicalTypes: CanonicalActionType[] = [
-        "cadastrar_transacao",
-        "atualizar_transacao",
-        "deletar_transacao",
-        "cadastrar_divida",
-        "atualizar_divida",
-        "cadastrar_meta",
-        "atualizar_meta",
-        "criar_conta",
-        "atualizar_conta",
-        "cadastrar_despesa_nf",
-        "cadastrar_divida_boleto",
-        "cadastrar_boleto",
-      ];
-
-      expect(Object.keys(CANONICAL_ACTIONS)).toHaveLength(12);
-      for (const type of canonicalTypes) {
-        expect(resolveActionType(type)).toBe(type);
-        expect(CANONICAL_ACTIONS[type]).toBeDefined();
-      }
+    it("resolveActionTypeAndPayload deve injetar e preservar tipo=receita para cadastrar_receita", () => {
+      const res = resolveActionTypeAndPayload("cadastrar_receita", {
+        valor: 1000,
+        descricao: "Consultoria",
+      });
+      expect(res.canonicalType).toBe("cadastrar_transacao");
+      expect(res.resolvedPayload.tipo).toBe("receita");
+      expect(res.resolvedPayload.valor).toBe(1000);
     });
 
-    it("prepareActionProposal deve normalizar aliases automaticamente na criação da proposta", () => {
+    it("resolveActionTypeAndPayload deve injetar e preservar tipo=despesa para cadastrar_despesa", () => {
+      const res = resolveActionTypeAndPayload("cadastrar_despesa", {
+        valor: 200,
+        descricao: "Internet",
+      });
+      expect(res.canonicalType).toBe("cadastrar_transacao");
+      expect(res.resolvedPayload.tipo).toBe("despesa");
+      expect(res.resolvedPayload.valor).toBe(200);
+    });
+
+    it("prepareActionProposal com alias cadastrar_receita deve gerar cadastrar_transacao com tipo receita", () => {
+      const proposal = prepareActionProposal({
+        workspaceId: "ws-test",
+        userId: "user-test",
+        actionType: "cadastrar_receita",
+        summary: "Receita de Vendas",
+        payload: { valor: 5000, descricao: "Venda de Serviços", data: "2026-09-04" },
+      });
+
+      expect(proposal.actionType).toBe("cadastrar_transacao");
+      expect(proposal.riskLevel).toBe("MEDIUM");
+      expect((proposal.payload as Record<string, unknown>).tipo).toBe("receita");
+    });
+
+    it("prepareActionProposal com alias cadastrar_despesa deve gerar cadastrar_transacao com tipo despesa", () => {
       const proposal = prepareActionProposal({
         workspaceId: "ws-test",
         userId: "user-test",
@@ -323,6 +362,67 @@ describe("Document Pipeline — Validação e Segurança (Etapa 9.4B)", () => {
 
       expect(proposal.actionType).toBe("cadastrar_transacao");
       expect(proposal.riskLevel).toBe("MEDIUM");
+      expect((proposal.payload as Record<string, unknown>).tipo).toBe("despesa");
+    });
+
+    it("nenhuma alias ou payload pode escolher workspace_id, user_id, risk_level ou status", () => {
+      const maliciousPayload = {
+        valor: 100,
+        descricao: "Tentativa de Manipulação",
+        data: "2026-09-04",
+        workspace_id: "attacker-workspace",
+        user_id: "attacker-user",
+        risk_level: "LOW",
+        status: "confirmed",
+      };
+
+      const proposal = prepareActionProposal({
+        workspaceId: "authentic-ws-123",
+        userId: "authentic-user-456",
+        actionType: "cadastrar_despesa",
+        summary: "Teste de Imunidade",
+        payload: maliciousPayload,
+      });
+
+      // Valores canônicos são definidos pelo gateway, nunca pelo payload
+      expect(proposal.workspaceId).toBe("authentic-ws-123");
+      expect(proposal.userId).toBe("authentic-user-456");
+      expect(proposal.riskLevel).toBe("MEDIUM");
+      expect(proposal.status).toBe("prepared");
+
+      // Payload sanitizado remove chaves não permitidas
+      const p = proposal.payload as Record<string, unknown>;
+      expect(p.workspace_id).toBeUndefined();
+      expect(p.user_id).toBeUndefined();
+      expect(p.risk_level).toBeUndefined();
+      expect(p.status).toBeUndefined();
+    });
+
+    it("alias ou actionType desconhecido deve ser rejeitado com WALLET_AI_ACTION_NOT_FOUND", () => {
+      expect(() => {
+        prepareActionProposal({
+          workspaceId: "ws-test",
+          userId: "user-test",
+          actionType: "acao_completamente_inexistente",
+          summary: "Inexistente",
+          payload: { foo: "bar" },
+        });
+      }).toThrow(ActionGatewayError);
+
+      try {
+        prepareActionProposal({
+          workspaceId: "ws-test",
+          userId: "user-test",
+          actionType: "acao_completamente_inexistente",
+          summary: "Inexistente",
+          payload: { foo: "bar" },
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ActionGatewayError);
+        const agErr = err as ActionGatewayError;
+        expect(agErr.code).toBe("WALLET_AI_ACTION_NOT_FOUND");
+        expect(agErr.status).toBe(404);
+      }
     });
   });
 });

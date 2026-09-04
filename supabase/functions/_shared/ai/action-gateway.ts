@@ -9,6 +9,7 @@ import type { AiExecutionContext } from "./auth.ts";
 
 export type ActionErrorCode =
   | "WALLET_AI_ACTION_INVALID"
+  | "WALLET_AI_ACTION_NOT_FOUND"
   | "WALLET_AI_ACTION_FORBIDDEN"
   | "WALLET_AI_ACTION_EXPIRED"
   | "WALLET_AI_ACTION_ALREADY_PROCESSED"
@@ -131,21 +132,24 @@ export function prepareActionProposal<TPayload = Record<string, unknown>>(
 ): ActionProposal<TPayload> {
   const canonicalType = resolveActionType(input.actionType);
   const definition = CANONICAL_ACTIONS[canonicalType];
-  const riskLevel: ActionRiskLevel = definition ? definition.riskLevel : "HIGH";
+  if (!definition) {
+    throw new ActionGatewayError(
+      "WALLET_AI_ACTION_NOT_FOUND",
+      404,
+      `Ação ou alias "${input.actionType}" não reconhecida no catálogo canônico de ações.`,
+    );
+  }
+  const riskLevel: ActionRiskLevel = definition.riskLevel;
 
   const rawPayload = { ...(input.payload as Record<string, unknown>) };
-  if (!rawPayload.tipo) {
-    if (input.actionType === "cadastrar_despesa" || input.actionType === "atualizar_status_despesa") {
-      rawPayload.tipo = "despesa";
-    } else if (input.actionType === "cadastrar_receita" || input.actionType === "atualizar_status_receita") {
-      rawPayload.tipo = "receita";
-    }
+  if (input.actionType === "cadastrar_despesa" || input.actionType === "atualizar_status_despesa") {
+    rawPayload.tipo = "despesa";
+  } else if (input.actionType === "cadastrar_receita" || input.actionType === "atualizar_status_receita") {
+    rawPayload.tipo = "receita";
   }
 
   // Sanitiza o payload antes de criar a proposta
-  const sanitizedPayload = (definition
-    ? sanitizeActionPayload(canonicalType, rawPayload)
-    : rawPayload) as TPayload;
+  const sanitizedPayload = sanitizeActionPayload(canonicalType, rawPayload) as TPayload;
 
   const ttlMs = (input.ttlMinutes ?? 30) * 60 * 1000;
   const now = new Date();
