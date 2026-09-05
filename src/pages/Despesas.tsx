@@ -68,26 +68,30 @@ import { AccountSelector } from "@/domains/finance/components/AccountSelector";
 import { TagsInput } from "@/domains/finance/components/TagsInput";
 import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
 import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
+import { formatarDataParaSaoPaulo, getHojeSaoPaulo } from "@/domains/finance/utils/dateHelpers";
 
-// Função para formatar data
+// Função para formatar data (no fuso America/Sao_Paulo)
 const formatarData = (dataString: string) => {
-  if (!dataString) return "";
-  const [ano, mes, dia] = dataString.split("T")[0].split("-");
+  const dataSP = formatarDataParaSaoPaulo(dataString);
+  if (!dataSP) return "";
+  const [ano, mes, dia] = dataSP.split("-");
   return `${dia}/${mes}/${ano}`;
 };
 
-// Função para formatar data relativa
+// Função para formatar data relativa (no fuso America/Sao_Paulo)
 const formatarDataRelativa = (dataString: string) => {
-  if (!dataString) return "";
-  const data = new Date(dataString.split("T")[0] + "T12:00:00");
-  const hoje = new Date();
-  hoje.setHours(12, 0, 0, 0);
-  const ontem = new Date(hoje);
-  ontem.setDate(ontem.getDate() - 1);
-  
-  if (data.toDateString() === hoje.toDateString()) return "Hoje";
-  if (data.toDateString() === ontem.toDateString()) return "Ontem";
-  return formatarData(dataString);
+  const dataSP = formatarDataParaSaoPaulo(dataString);
+  if (!dataSP) return "";
+  const hojeSP = getHojeSaoPaulo();
+  if (dataSP === hojeSP) return "Hoje";
+
+  const [y, m, d] = hojeSP.split("-").map(Number);
+  const ontemDate = new Date(y, m - 1, d - 1);
+  const ontemSP = `${ontemDate.getFullYear()}-${String(ontemDate.getMonth() + 1).padStart(2, "0")}-${String(ontemDate.getDate()).padStart(2, "0")}`;
+  if (dataSP === ontemSP) return "Ontem";
+
+  const [ano, mes, dia] = dataSP.split("-");
+  return `${dia}/${mes}/${ano}`;
 };
 
 const formatarMetodoPagamento = (metodo?: string | null) => {
@@ -119,13 +123,10 @@ const Despesas = () => {
 
   const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalDespesas();
 
-  // Busca as despesas do dia atual de forma independente (sempre do dia de hoje)
-  const hojeLocal = useMemo(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }, []);
+  // Busca as despesas do dia atual de forma independente (sempre do dia de hoje no fuso America/Sao_Paulo)
+  const hojeLocal = useMemo(() => getHojeSaoPaulo(), []);
 
-  const { despesas: despesasDeHoje } = useDespesas({
+  const { despesas: despesasDeHoje, loading: loadingDeHoje } = useDespesas({
     startDate: hojeLocal,
     endDate: hojeLocal,
   });
@@ -309,7 +310,7 @@ const Despesas = () => {
   // Dados processados
   const { 
     despesasFiltradas, 
-    despesasAgrupadas, 
+    despesasAgrupadas: _despesasAgrupadas, 
     totalDespesas, 
     categoriaList,
     dailyData,
@@ -339,13 +340,13 @@ const Despesas = () => {
     });
 
     const total = despesas.reduce((sum, d) => sum + d.valor, 0);
-    const media = despesas.length > 0 ? total / Math.max(1, new Set(despesas.map(d => d.data.substring(0, 7))).size) : 0;
+    const _media = despesas.length > 0 ? total / Math.max(1, new Set(despesas.map(d => d.data.substring(0, 7))).size) : 0;
 
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
 
-    // Despesas de Hoje (usando consulta dedicada do dia de hoje e normalização segura de YYYY-MM-DD)
+    // Despesas de Hoje (usando consulta dedicada do dia de hoje e normalização segura de YYYY-MM-DD em São Paulo)
     const totalDespesasDeHoje = despesasDeHoje
-      .filter((d) => (d.data || "").split("T")[0] === hojeLocal)
+      .filter((d) => formatarDataParaSaoPaulo(d.data) === hojeLocal)
       .reduce((sum, d) => sum + (d.valor || 0), 0);
 
 
@@ -433,13 +434,15 @@ const Despesas = () => {
     // 3. Fluxo por dia
     const dailyMap = new Map<string, number>();
     filtradas.forEach((d) => {
-      const dateStr = d.data.split("T")[0]; // YYYY-MM-DD
-      dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
+      const dateStr = formatarDataParaSaoPaulo(d.data); // YYYY-MM-DD em São Paulo
+      if (dateStr) {
+        dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
+      }
     });
 
     const dailyData = Array.from(dailyMap.entries())
       .map(([date, total]) => {
-        const [ano, mes, dia] = date.split("-");
+        const [_ano, mes, dia] = date.split("-");
         return {
           dateStr: `${dia}/${mes}`,
           rawDate: date,
@@ -460,7 +463,7 @@ const Despesas = () => {
       previstoParaPagar,
       metodoList
     };
-  }, [despesas, todasDividas, filtro, categoriaFiltro, hojeLocal]);
+  }, [despesas, despesasDeHoje, todasDividas, filtro, categoriaFiltro, hojeLocal]);
 
   // Agrupar apenas as despesas visíveis para a lista mobile
   const despesasAgrupadasVisiveis = useMemo(() => {
@@ -508,7 +511,7 @@ const Despesas = () => {
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
                   <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Despesas do Dia">Despesas do Dia</p>
-                  {loading ? (
+                  {loadingDeHoje ? (
                     <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
                     <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(totalDespesasDeHoje)}>

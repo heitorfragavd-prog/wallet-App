@@ -1,7 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { getHojeSaoPaulo } from "@/domains/finance/utils/dateHelpers";
 
+/**
+ * Hook para cálculo da média mensal de despesas dos últimos 6 meses.
+ * 
+ * ARQUITETURA DE DADOS:
+ * - `despesas`: Lançamentos manuais, contas a pagar e saques operacionais cadastrados no sistema.
+ * - `transacoes`: Movimentações financeiras com `tipo = 'despesa'` oriundas de extratos bancários (OFX, Pluggy, etc.).
+ * 
+ * NOTA SOBRE DEDUPLICAÇÃO:
+ * Não há chave estrangeira rígida entre as duas tabelas no banco de dados. Deduplicações heurísticas
+ * cegas (por valor + data + descrição) foram expressamente evitadas para não mascarar despesas legítimas
+ * idênticas (ex: pagamentos recorrentes ou múltiplos no mesmo dia). O hook agrega os registros de ambas
+ * as origens para estimar o fluxo médio real de saída do workspace nos últimos 6 meses.
+ * 
+ * FUSO HORÁRIO:
+ * A data limite é calculada em `America/Sao_Paulo` (YYYY-MM-DD), evitando desvios de timezone
+ * que ocorriam ao utilizar `toISOString().split('T')[0]`.
+ */
 export function useMediaMensalDespesas() {
   const { activeWorkspace } = useWorkspace();
 
@@ -10,10 +28,11 @@ export function useMediaMensalDespesas() {
     queryFn: async () => {
       if (!activeWorkspace?.id) return 0;
 
-      // Pegar a data exata de 6 meses atrás
-      const hoje = new Date();
-      const seisMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 6, hoje.getDate());
-      const dataFormatada = seisMesesAtras.toISOString().split('T')[0];
+      // Pegar a data exata de 6 meses atrás no fuso America/Sao_Paulo (sem desvio por toISOString)
+      const hojeSP = getHojeSaoPaulo();
+      const [ano, mes, dia] = hojeSP.split("-").map(Number);
+      const dataRef = new Date(ano, mes - 1 - 6, dia);
+      const dataFormatada = `${dataRef.getFullYear()}-${String(dataRef.getMonth() + 1).padStart(2, "0")}-${String(dataRef.getDate()).padStart(2, "0")}`;
 
       // Busca despesas dos últimos 6 meses
       const despesasQuery = supabase

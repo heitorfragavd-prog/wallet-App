@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { formatarDataParaSaoPaulo, getHojeSaoPaulo } from "@/domains/finance/utils/dateHelpers";
 import { Despesa as DespesaType, PaymentMethod } from "../types";
 
 export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
@@ -50,14 +51,15 @@ async function fetchDivipayDespesas(startDate?: string | null, endDate?: string 
       if (fresh.length === 0) break;
     }
 
-    const startDay = startDate ? startDate.split("T")[0] : null;
-    const endDay = endDate ? endDate.split("T")[0] : null;
+    const startDay = startDate ? formatarDataParaSaoPaulo(startDate) : null;
+    const endDay = endDate ? formatarDataParaSaoPaulo(endDate) : null;
 
     return allWithdraws
       .filter((w) => {
         const status = String(w.status || "").toUpperCase();
         if (status && DIVIPAY_NON_SETTLED_STATUSES.some((s) => status.includes(s))) return false;
-        const dateStr = (w.createdAt || "").split("T")[0];
+        const dateStr = formatarDataParaSaoPaulo(w.createdAt);
+        if (!dateStr) return false;
         if (startDay && dateStr < startDay) return false;
         if (endDay && dateStr > endDay) return false;
         return true;
@@ -65,7 +67,7 @@ async function fetchDivipayDespesas(startDate?: string | null, endDate?: string 
       .map((w) => {
         const isBoleto = w.type === "BILLET" || String(w.description || "").toLowerCase().includes("boleto");
         const resolved = resolveBeneficiary(Number(w.amount || 0), w.description || "", isBoleto ? "Boleto" : "Pix");
-        const dateVal = w.createdAt ? w.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+        const dateVal = formatarDataParaSaoPaulo(w.createdAt) || getHojeSaoPaulo();
         const desc = w.description || (isBoleto ? "Pagamento de boleto" : "Saque Pix");
         const fav = w.name || resolved.name || "Divipay";
 
@@ -96,47 +98,71 @@ async function fetchDivipayDespesas(startDate?: string | null, endDate?: string 
   }
 }
 
+interface RawDespesaRow extends Record<string, unknown> {
+  id?: string;
+  data: string;
+  valor: number;
+  descricao?: string;
+  divipay_external_id?: string | null;
+  observacoes?: string | null;
+  categorias?: { nome: string; cor?: string; icone?: string } | Array<{ nome: string; cor?: string; icone?: string }> | null;
+  despesa_tags?: Array<{ tags?: { id: string; nome: string; cor?: string } | null }>;
+}
+
+interface RawTransacaoRow extends Record<string, unknown> {
+  id?: string;
+  data: string;
+  valor: number;
+  descricao?: string;
+  divipay_external_id?: string | null;
+  observacoes?: string | null;
+  categorias?: { nome: string; cor?: string; icone?: string } | Array<{ nome: string; cor?: string; icone?: string }> | null;
+}
+
 // ─── Fetcher puro (sem React) ───────────────────────────────────────────
 async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[]> {
   const { startDate, endDate, workspaceId } = params;
   if (!workspaceId) return [];
 
-  let despesasQuery: any = supabase
+  const startDay = startDate ? formatarDataParaSaoPaulo(startDate) : null;
+  const endDay = endDate ? formatarDataParaSaoPaulo(endDate) : null;
+
+  let despesasQuery = supabase
     .from("despesas")
     .select("*, categorias!despesas_categoria_id_fkey(nome, cor, icone), despesa_tags (tags (id, nome, cor))")
     .eq("workspace_id", workspaceId);
 
-  if (startDate) despesasQuery = despesasQuery.gte("data", startDate);
-  if (endDate) despesasQuery = despesasQuery.lte("data", endDate);
+  if (startDay) despesasQuery = despesasQuery.gte("data", startDay);
+  if (endDay) despesasQuery = despesasQuery.lte("data", endDay);
 
-  let transacoesQuery: any = supabase
+  let transacoesQuery = supabase
     .from("transacoes")
     .select("*, categorias(nome, cor, icone)")
     .eq("tipo", "despesa")
     .eq("workspace_id", workspaceId);
 
-  if (startDate) transacoesQuery = transacoesQuery.gte("data", startDate);
-  if (endDate) transacoesQuery = transacoesQuery.lte("data", endDate);
+  if (startDay) transacoesQuery = transacoesQuery.gte("data", startDay);
+  if (endDay) transacoesQuery = transacoesQuery.lte("data", endDay);
 
   try {
     const [despesasResp, transacoesResp, divipayDespesas] = await Promise.all([
       despesasQuery,
       transacoesQuery,
-      fetchDivipayDespesas(startDate, endDate, workspaceId),
+      fetchDivipayDespesas(startDay, endDay, workspaceId),
     ]);
 
     // Normaliza despesas: garante que categorias seja objeto
-    const mappedDespesas = (despesasResp?.data ?? []).map((d: any) => {
+    const mappedDespesas = ((despesasResp?.data ?? []) as unknown as RawDespesaRow[]).map((d) => {
       const cat = d.categorias;
       return {
         ...d,
-        tags: d.despesa_tags?.map((dt: any) => dt.tags).filter(Boolean) ?? [],
+        tags: d.despesa_tags?.map((dt) => dt.tags).filter(Boolean) ?? [],
         categorias: Array.isArray(cat) ? (cat[0] ?? null) : cat,
       };
     });
 
     // Normaliza transacoes: garante que categorias seja objeto
-    const mappedTransacoes = (transacoesResp?.data ?? []).map((d: any) => {
+    const mappedTransacoes = ((transacoesResp?.data ?? []) as unknown as RawTransacaoRow[]).map((d) => {
       const cat = d.categorias;
       return {
         ...d,
@@ -144,10 +170,13 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       };
     });
 
-    // Anti-duplicidade: saques da Divipay que já foram gravados na tabela `despesas`
+    // Anti-duplicidade: saques da Divipay que já foram gravados na tabela `despesas` ou `transacoes`
     // (com marcador divipay-saque:... ou observacoes referenciando o ID)
     const existingDivipayIds = new Set<string>();
-    mappedDespesas.forEach((d: any) => {
+    [...mappedDespesas, ...mappedTransacoes].forEach((d: RawDespesaRow | RawTransacaoRow) => {
+      if (d.divipay_external_id) {
+        existingDivipayIds.add(String(d.divipay_external_id).trim());
+      }
       const obs = String(d.observacoes || "");
       if (obs.includes("divipay-saque:")) {
         const id = obs.split("divipay-saque:")[1]?.split(")")[0]?.trim();
@@ -156,6 +185,9 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       if (obs.includes("Pago via Divipay") && obs.includes(" - ")) {
         const id = obs.split(" - ").pop()?.trim();
         if (id) existingDivipayIds.add(id);
+      }
+      if (String(d.id || "").startsWith("divipay-")) {
+        existingDivipayIds.add(String(d.id).replace("divipay-", "").trim());
       }
     });
 
@@ -169,7 +201,7 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     ) as Despesa[];
 
     return res;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[fetchDespesas Hook Exception]", err);
     throw err;
   }
@@ -197,21 +229,31 @@ async function updateDespesaTags(despesaId: string, tagNames: string[]) {
   if (tagNames.length > 0) await addTagsToDespesa(despesaId, tagNames);
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
 // ─── Hook ─────────────────────────────────────────────────────
 export const useDespesas = (params: DespesasQueryParams = {}) => {
   if (typeof window !== "undefined") {
-    (window as any).supabase = supabase;
+    (window as unknown as { supabase: typeof supabase }).supabase = supabase;
   }
   const qc = useQueryClient();
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();
   const currentWorkspaceId = activeWorkspace?.id || null;
   const { startDate = null, endDate = null } = params;
+  const startDay = startDate ? formatarDataParaSaoPaulo(startDate) || null : null;
+  const endDay = endDate ? formatarDataParaSaoPaulo(endDate) || null : null;
 
   // ── Query — queryKey inclui datas e workspaceId
   const { data: despesas = [], isLoading: loading } = useQuery({
-    queryKey: [...DESPESAS_QUERY_KEY, { startDate, endDate, workspaceId: currentWorkspaceId }],
-    queryFn: () => fetchDespesas({ startDate, endDate, workspaceId: currentWorkspaceId }),
+    queryKey: [...DESPESAS_QUERY_KEY, { startDate: startDay, endDate: endDay, workspaceId: currentWorkspaceId }],
+    queryFn: () => fetchDespesas({ startDate: startDay, endDate: endDay, workspaceId: currentWorkspaceId }),
     enabled: !!currentWorkspaceId,
     staleTime: 0,
     refetchOnMount: true,
@@ -231,7 +273,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
         throw new Error("Workspace não selecionado para criar despesa.");
       }
       const userId = (await supabase.auth.getUser()).data.user?.id;
-      let faturaIdToLink = (despesa as any).fatura_id || null;
+      let faturaIdToLink = (despesa as { fatura_id?: string | null }).fatura_id || null;
 
       // Se for cartão de crédito e fatura_id não veio preenchido, calcula automaticamente por período de fechamento
       if (!faturaIdToLink && despesa.conta_id) {
@@ -281,7 +323,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
             }
           }
         } catch (e) {
-          logger.warn("useDespesas", "Aviso ao calcular fatura automática:", String(e));
+          logger.warn("useDespesas", "Aviso ao calcular fatura automática:", { error: String(e) });
         }
       }
 
@@ -303,7 +345,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDespesas", "Erro ao criar despesa", { error: String(error) });
-      toast({ title: "Erro ao criar despesa", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao criar despesa", description: getErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -340,7 +382,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDespesas", "Erro ao atualizar despesa", { error: String(error) });
-      toast({ title: "Erro ao atualizar despesa", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao atualizar despesa", description: getErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -362,7 +404,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useDespesas", "Erro ao remover despesa", { error: String(error) });
-      toast({ title: "Erro ao remover despesa", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      toast({ title: "Erro ao remover despesa", description: getErrorMessage(error), variant: "destructive" });
     },
   });
 
