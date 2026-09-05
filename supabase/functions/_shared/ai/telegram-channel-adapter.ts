@@ -20,6 +20,10 @@ import {
   type ProcessDocumentPipelineInput,
   type ProcessDocumentPipelineResult,
 } from "./document-pipeline.ts";
+import {
+  OperationsAgent,
+  createSupabaseOperationsRepository,
+} from "./operations-agent.ts";
 
 // ─── TIPOS DO TELEGRAM ────────────────────────────────────────────────────────
 
@@ -356,7 +360,7 @@ export function formatProposalMessage(proposal: ActionProposal): {
   buttons: TelegramInlineButton[][];
 } {
   const p = proposal.payload || {};
-  const valor = p.valor || p.valor_total || p.valor_alvo || 0;
+  const valor = p.valor || p.valor_total || p.valor_alvo || p.novo_custo || 0;
   const data = p.data || p.data_vencimento || p.data_limite || "N/A";
   const desc = p.descricao || p.titulo || p.nome || proposal.summary;
   const cat = p.categoria || p.categoria_id || "Geral";
@@ -669,6 +673,8 @@ export interface TelegramAdapterDependencies {
       codigoBarras?: string;
     },
   ) => Promise<{ isDuplicate: boolean; existingRecordId?: string; type?: string }>;
+  operationsAgent?: OperationsAgent;
+  operationsAgentFactory?: (context: AiExecutionContext) => OperationsAgent;
 }
 
 // ─── MANIPULADORES DE MENSAGENS E EVENTOS ─────────────────────────────────────
@@ -707,7 +713,15 @@ export async function handleTelegramTextMessage(
   };
 
   const repo = deps.repoFactory(context);
-  const catalog = createQueryToolCatalog(repo);
+  const operationsAgent =
+    deps.operationsAgent ??
+    (deps.operationsAgentFactory
+      ? deps.operationsAgentFactory(context)
+      : new OperationsAgent({
+          repository: createSupabaseOperationsRepository(deps.supabase),
+          auditSink: deps.auditSink,
+        }));
+  const catalog = createQueryToolCatalog(repo, { extended: true, operationsAgent });
   const runner = deps.runnerFactory();
 
   const turnResult = await runOrchestratorTurn(

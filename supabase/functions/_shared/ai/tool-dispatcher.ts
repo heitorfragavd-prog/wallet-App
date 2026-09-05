@@ -51,6 +51,11 @@ function generateProposalSummary(actionType: string, args: Record<string, unknow
       return `Criar conta "${args.nome ?? ""}" (${args.tipo ?? "corrente"})`;
     case "atualizar_conta":
       return `Atualizar dados da conta ${args.conta_id ?? ""}`;
+    case "atualizar_custo_produto_eyemobile": {
+      const prod = args.produto_nome || args.produto_id || args.codigo_barras || "produto";
+      const custo = typeof args.novo_custo === "number" ? args.novo_custo.toFixed(2) : String(args.novo_custo ?? "0");
+      return `Atualizar custo de "${prod}" para R$ ${custo}`;
+    }
     default:
       return `Operação ${actionType}`;
   }

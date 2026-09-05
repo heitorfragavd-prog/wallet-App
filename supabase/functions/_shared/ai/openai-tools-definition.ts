@@ -180,6 +180,53 @@ export const OPENAI_EXTENDED_READ_TOOLS: OpenAiFunctionDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "validar_fechamento_caixa",
+      description:
+        "Valida o fechamento de caixa operacional cruzando vendas, saídas/sangrias e valores relatados, detectando furos ou sobras de forma determinística.",
+      parameters: {
+        type: "object",
+        properties: {
+          data: { type: "string", description: "Data do turno a validar no formato YYYY-MM-DD" },
+          turno: { type: "string", description: "Identificador do turno (opcional, ex: manha, noite)" },
+          valor_relatado: { type: "number", description: "Valor total em dinheiro ou saldo relatado pelo operador" },
+          valores_por_meio: {
+            type: "object",
+            description: "Valores relatados discriminados por meio de pagamento (dinheiro, debito, credito, pix, voucher)",
+            properties: {
+              dinheiro: { type: "number" },
+              debito: { type: "number" },
+              credito: { type: "number" },
+              pix: { type: "number" },
+              voucher: { type: "number" },
+            },
+            additionalProperties: false,
+          },
+        },
+        required: ["data"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_vendas_eyemobile",
+      description:
+        "Consulta as vendas operacionais realizadas no PDV Eyemobile e registradas no workspace, discriminadas por meio de pagamento.",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: { type: "string", description: "Data inicial no formato YYYY-MM-DD" },
+          data_fim: { type: "string", description: "Data final no formato YYYY-MM-DD" },
+        },
+        required: ["data_inicio"],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 export const OPENAI_ACTION_TOOLS: OpenAiFunctionDefinition[] = [
@@ -281,6 +328,27 @@ export const OPENAI_ACTION_TOOLS: OpenAiFunctionDefinition[] = [
           motivo: { type: "string", description: "Justificativa da exclusão" },
         },
         required: ["transacao_id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "atualizar_custo_produto_eyemobile",
+      description:
+        "Gera uma Proposta de Ação (Action Proposal) para atualizar o custo de um produto no Eyemobile PDV e/ou adicionar quantidade ao estoque. Exige confirmação humana explícita.",
+      parameters: {
+        type: "object",
+        properties: {
+          produto_id: { type: "string", description: "ID canônico do produto no Eyemobile" },
+          produto_nome: { type: "string", description: "Nome do produto para referência" },
+          codigo_barras: { type: "string", description: "Código de barras do produto (EAN/GTIN)" },
+          novo_custo: { type: "number", description: "Novo custo unitário em Reais" },
+          quantidade_estoque: { type: "number", description: "Quantidade atualizada no estoque (opcional)" },
+          motivo: { type: "string", description: "Motivo da alteração de custo" },
+        },
+        required: ["novo_custo"],
         additionalProperties: false,
       },
     },

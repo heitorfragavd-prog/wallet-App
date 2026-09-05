@@ -226,6 +226,26 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
     ],
     requiredFields: ["beneficiario", "valor", "data_vencimento"],
   },
+  atualizar_custo_produto_eyemobile: {
+    actionType: "atualizar_custo_produto_eyemobile",
+    riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
+    requiredPermission: "operations:eyemobile:write",
+    requiresConfirmation: true,
+    reversible: true,
+    auditCategory: "inventory_mutation",
+    allowedFields: [
+      "produto_id",
+      "produto_uuid",
+      "produto_nome",
+      "codigo_barras",
+      "custo_anterior",
+      "novo_custo",
+      "quantidade_estoque",
+      "motivo",
+    ],
+    requiredFields: ["novo_custo"],
+  },
 };
 
 /**

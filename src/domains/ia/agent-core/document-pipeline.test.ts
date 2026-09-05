@@ -282,7 +282,7 @@ describe("Document Pipeline — Validação e Segurança (Etapa 9.4B)", () => {
   describe("8. Catálogo Canônico, Risk Model e Mapeamento de Aliases", () => {
     it("todos os CANONICAL_ACTIONS devem usar estritamente os riskLevels LOW, MEDIUM ou HIGH (sem CRITICAL)", () => {
       const allowedRiskLevels: ActionRiskLevel[] = ["LOW", "MEDIUM", "HIGH"];
-      expect(Object.keys(CANONICAL_ACTIONS)).toHaveLength(12);
+      expect(Object.keys(CANONICAL_ACTIONS)).toHaveLength(13);
 
       for (const [_actionName, def] of Object.entries(CANONICAL_ACTIONS)) {
         expect(allowedRiskLevels).toContain(def.riskLevel);
