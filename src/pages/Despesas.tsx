@@ -69,24 +69,21 @@ import { TagsInput } from "@/domains/finance/components/TagsInput";
 import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
 import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
 
-// Função para formatar data
-const formatarData = (dataString: string) => {
-  if (!dataString) return "";
-  const [ano, mes, dia] = dataString.split("T")[0].split("-");
-  return `${dia}/${mes}/${ano}`;
-};
+import { formatarData, formatarDataParaSaoPaulo, getHojeSaoPaulo, calcularTotalDespesasDoDia } from "@/domains/finance/utils/dateHelpers";
 
-// Função para formatar data relativa
+// Função para formatar data relativa com alinhamento em America/Sao_Paulo
 const formatarDataRelativa = (dataString: string) => {
   if (!dataString) return "";
-  const data = new Date(dataString.split("T")[0] + "T12:00:00");
-  const hoje = new Date();
-  hoje.setHours(12, 0, 0, 0);
-  const ontem = new Date(hoje);
-  ontem.setDate(ontem.getDate() - 1);
-  
-  if (data.toDateString() === hoje.toDateString()) return "Hoje";
-  if (data.toDateString() === ontem.toDateString()) return "Ontem";
+  const spDate = formatarDataParaSaoPaulo(dataString);
+  if (!spDate) return "";
+  const hoje = getHojeSaoPaulo();
+
+  const [ano, mes, dia] = hoje.split("-").map(Number);
+  const ontemDate = new Date(ano, mes - 1, dia - 1);
+  const ontem = formatarDataParaSaoPaulo(ontemDate);
+
+  if (spDate === hoje) return "Hoje";
+  if (spDate === ontem) return "Ontem";
   return formatarData(dataString);
 };
 
@@ -119,16 +116,28 @@ const Despesas = () => {
 
   const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalDespesas();
 
-  // Busca as despesas do dia atual de forma independente (sempre do dia de hoje)
-  const hojeLocal = useMemo(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }, []);
+  // Busca as despesas do dia atual de forma independente (sempre do dia de hoje no fuso America/Sao_Paulo)
+  const hojeLocal = useMemo(() => getHojeSaoPaulo(), []);
 
-  const { despesas: despesasDeHoje } = useDespesas({
+  const { despesas: despesasDeHoje, loading: loadingDeHoje } = useDespesas({
     startDate: hojeLocal,
     endDate: hojeLocal,
   });
+
+  // Total de despesas do dia com resiliência:
+  // 1. Fonte primária: consulta dedicada despesasDeHoje
+  // 2. Se a consulta dedicada retornar > 0, usa ela
+  // 3. Fallback de resiliência: se despesas (da query principal) já carregou e contém registros de hoje,
+  //    garante que o cartão NUNCA exiba R$ 0,00 enquanto existirem despesas do dia na tela
+  const totalDespesasDeHoje = useMemo(() => {
+    const totalDedicado = calcularTotalDespesasDoDia(despesasDeHoje, hojeLocal);
+    if (totalDedicado > 0) return totalDedicado;
+    return calcularTotalDespesasDoDia(despesas, hojeLocal);
+  }, [despesasDeHoje, despesas, hojeLocal]);
+
+  // Loading do Card "Despesas do Dia":
+  // Só exibe Skeleton se a query dedicada estiver carregando E a query principal ainda não tiver dados de hoje
+  const loadingCardHoje = loadingDeHoje && (!despesas || !despesas.some((d) => formatarDataParaSaoPaulo(d.data) === hojeLocal));
 
 
   const { dividas: todasDividas, loading: loadingDividas } = useDividas({
@@ -309,12 +318,10 @@ const Despesas = () => {
   // Dados processados
   const { 
     despesasFiltradas, 
-    despesasAgrupadas, 
     totalDespesas, 
     categoriaList,
     dailyData,
     totalFiltrado,
-    totalDespesasDeHoje,
     previstoParaPagar,
     metodoList
   } = useMemo(() => {
@@ -339,15 +346,8 @@ const Despesas = () => {
     });
 
     const total = despesas.reduce((sum, d) => sum + d.valor, 0);
-    const media = despesas.length > 0 ? total / Math.max(1, new Set(despesas.map(d => d.data.substring(0, 7))).size) : 0;
 
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
-
-    // Despesas de Hoje (usando consulta dedicada do dia de hoje e normalização segura de YYYY-MM-DD)
-    const totalDespesasDeHoje = despesasDeHoje
-      .filter((d) => (d.data || "").split("T")[0] === hojeLocal)
-      .reduce((sum, d) => sum + (d.valor || 0), 0);
-
 
     // Previsto para pagar (dívidas em aberto no período filtrado)
     const previstoParaPagar = (todasDividas ?? [])
@@ -433,13 +433,15 @@ const Despesas = () => {
     // 3. Fluxo por dia
     const dailyMap = new Map<string, number>();
     filtradas.forEach((d) => {
-      const dateStr = d.data.split("T")[0]; // YYYY-MM-DD
-      dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
+      const dateStr = formatarDataParaSaoPaulo(d.data); // YYYY-MM-DD
+      if (dateStr) {
+        dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
+      }
     });
 
     const dailyData = Array.from(dailyMap.entries())
       .map(([date, total]) => {
-        const [ano, mes, dia] = date.split("-");
+        const [, mes, dia] = date.split("-");
         return {
           dateStr: `${dia}/${mes}`,
           rawDate: date,
@@ -451,16 +453,14 @@ const Despesas = () => {
 
     return { 
       despesasFiltradas: filtradas, 
-      despesasAgrupadas: grupos, 
       totalDespesas: total, 
       categoriaList,
       dailyData,
       totalFiltrado,
-      totalDespesasDeHoje,
       previstoParaPagar,
       metodoList
     };
-  }, [despesas, todasDividas, filtro, categoriaFiltro, hojeLocal]);
+  }, [despesas, todasDividas, filtro, categoriaFiltro]);
 
   // Agrupar apenas as despesas visíveis para a lista mobile
   const despesasAgrupadasVisiveis = useMemo(() => {
@@ -508,7 +508,7 @@ const Despesas = () => {
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
                   <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Despesas do Dia">Despesas do Dia</p>
-                  {loading ? (
+                  {loadingCardHoje ? (
                     <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
                   ) : (
                     <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(totalDespesasDeHoje)}>
