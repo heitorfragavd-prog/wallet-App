@@ -77,38 +77,119 @@ export function normalizePaymentMethod(method: unknown): PaymentMethod {
 }
 
 /**
- * Deduplica transações operacionais entre banco local e Eyemobile PDV para prevenir double counting.
- * Se uma transação local já contiver referência ou ID do Eyemobile, a cópia da API não é somada cegamente.
+ * Identifica se uma transação provém de uma fonte digital consolidada / autoritativa (ex: Divipay / Gateway).
+ */
+export function isAuthoritativeDigitalSource(tx: OperationalTransaction): boolean {
+  if (tx.source === "divipay") return true;
+  if (tx.metadata?.source === "divipay") return true;
+  const text = `${tx.description} ${tx.metadata?.observacoes ?? ""}`.toLowerCase();
+  return text.includes("divipay") || text.includes("gateway") || text.includes("recebimento pix divipay");
+}
+
+/**
+ * Identifica se uma transação provém do PDV Eyemobile.
+ */
+export function isEyemobileTransaction(tx: OperationalTransaction): boolean {
+  if (tx.source === "eyemobile") return true;
+  if (tx.metadata?.source === "eyemobile") return true;
+  if (tx.metadata?.eyemobile_sale_id != null) return true;
+  const text = `${tx.description} ${tx.metadata?.observacoes ?? ""}`.toLowerCase();
+  return text.includes("eyemobile") || text.includes("venda eyemobile");
+}
+
+/**
+ * Extrai o ID da venda Eyemobile de metadados, externalId ou texto de descrição/observações.
+ */
+export function extractEyemobileSaleId(tx: OperationalTransaction): string | null {
+  if (tx.metadata?.eyemobile_sale_id != null) {
+    return String(tx.metadata.eyemobile_sale_id);
+  }
+  if (tx.externalId && tx.source === "eyemobile") {
+    return String(tx.externalId);
+  }
+  const text = `${tx.description} ${tx.metadata?.observacoes ?? ""}`;
+  const match = text.match(/(?:Venda\s*(?:Eyemobile\s*)?#|#)(\d+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Deduplica transações operacionais entre banco local, gateways digitais e Eyemobile PDV
+ * prevenindo double counting através de arquitetura determinística em 3 Camadas:
+ *
+ * CAMADA 1 — ID Explícito:
+ *  - eyemobile_sale_id, externalId ou `#<id>` na descrição/observações.
+ *  - Se uma transação do banco local já possuir o ID da venda PDV, a duplicata externa é descartada.
+ *
+ * CAMADA 2 — Autoridade por Meio de Pagamento Digital (Divipay / Gateway Bancário):
+ *  - Meios digitais: PIX, cartão de débito, cartão de crédito.
+ *  - Se uma fonte digital autoritativa consolidada (Divipay / gateway) já registrou a entrada digital,
+ *    a venda PDV correspondente sem ID explícito é reconciliada 1 para 1 (conta 1x).
+ *  - DINHEIRO: NUNCA é removido pela deduplicação digital. Eyemobile dinheiro e transações manuais
+ *    em dinheiro são preservadas independentemente.
+ *
+ * CAMADA 3 — Vendas Legítimas Distintas com Mesmo Valor:
+ *  - Consumo estritamente 1 para 1 da cobertura de gateway.
+ *  - Vendas legítimas adicionais com o mesmo valor que não possuam correspondente no gateway
+ *    são preservadas integralmente.
+ *  - Transações manuais locais independentes permanecem intactas.
  */
 export function deduplicateOperationalTransactions(
   localTxs: OperationalTransaction[],
   eyemobileTxs: OperationalTransaction[] = [],
 ): { unique: OperationalTransaction[]; duplicatesCount: number } {
-  const seenKeys = new Set<string>();
+  const seenExplicitEyeIds = new Set<string>();
   const unique: OperationalTransaction[] = [];
   let duplicatesCount = 0;
 
-  // Primeiro adiciona as transações do banco local
+  // 1. Registra e preserva todas as transações locais existentes no banco (sistema de registro primário)
   for (const tx of localTxs) {
-    const key = `local_${tx.id}`;
-    seenKeys.add(key);
-    // Também registra por assinatura se tiver metadata de venda PDV
-    if (tx.metadata?.eyemobile_sale_id) {
-      seenKeys.add(`eye_${tx.metadata.eyemobile_sale_id}`);
+    const eyeId = extractEyemobileSaleId(tx);
+    if (eyeId) {
+      seenExplicitEyeIds.add(String(eyeId));
     }
     unique.push(tx);
   }
 
-  // Em seguida, adiciona Eyemobile apenas se não houver duplicata
-  for (const tx of eyemobileTxs) {
-    const eyeId = tx.metadata?.eyemobile_sale_id ? String(tx.metadata.eyemobile_sale_id) : tx.id;
-    const key = `eye_${eyeId}`;
+  // 2. Prepara o pool de cobertura autoritativa digital (apenas para meios digitais: pix, debito, credito)
+  const digitalMethods: PaymentMethod[] = ["pix", "debito", "credito"];
+  const authoritativePool = new Map<string, number>(); // `${method}_${cents}` -> count
 
-    if (seenKeys.has(key)) {
+  for (const tx of localTxs) {
+    const method = normalizePaymentMethod(tx.paymentMethod);
+    if (digitalMethods.includes(method) && isAuthoritativeDigitalSource(tx)) {
+      const cents = toCents(tx.amount);
+      const key = `${method}_${cents}`;
+      authoritativePool.set(key, (authoritativePool.get(key) || 0) + 1);
+    }
+  }
+
+  // 3. Processa vendas do Eyemobile através dos filtros em camadas
+  for (const tx of eyemobileTxs) {
+    const eyeId = extractEyemobileSaleId(tx) || tx.id;
+    const method = normalizePaymentMethod(tx.paymentMethod);
+    const cents = toCents(tx.amount);
+
+    // CAMADA 1: ID Explícito (já registrado nas transações locais ou já visto no lote externo)
+    if (seenExplicitEyeIds.has(String(eyeId))) {
       duplicatesCount++;
       continue;
     }
-    seenKeys.add(key);
+
+    // CAMADA 2: Fonte autoritativa digital (PIX, débito, crédito)
+    if (digitalMethods.includes(method)) {
+      const poolKey = `${method}_${cents}`;
+      const available = authoritativePool.get(poolKey) || 0;
+      if (available > 0) {
+        // Coberto pela fonte autoritativa digital (1 para 1)
+        authoritativePool.set(poolKey, available - 1);
+        seenExplicitEyeIds.add(String(eyeId));
+        duplicatesCount++;
+        continue;
+      }
+    }
+
+    // Venda PDV legítima aceita (dinheiro físico, ou digital não coberto)
+    seenExplicitEyeIds.add(String(eyeId));
     unique.push(tx);
   }
 

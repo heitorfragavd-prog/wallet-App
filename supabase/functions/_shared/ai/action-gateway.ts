@@ -88,8 +88,18 @@ export function sanitizeActionPayload(
     }
   }
 
-  // Validação estrita de valores monetários
-  const numericFields = ["valor", "valor_total", "valor_alvo", "valor_atual", "saldo", "valor_pago"];
+  // Validação estrita de valores monetários e numéricos
+  const numericFields = [
+    "valor",
+    "valor_total",
+    "valor_alvo",
+    "valor_atual",
+    "saldo",
+    "valor_pago",
+    "novo_custo",
+    "custo_anterior",
+    "quantidade_estoque",
+  ];
   for (const numKey of numericFields) {
     if (sanitized[numKey] !== undefined) {
       const parsed = Number(sanitized[numKey]);

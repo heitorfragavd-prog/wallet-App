@@ -259,6 +259,9 @@ export const ACTION_TYPE_ALIASES: Record<string, string> = {
   atualizar_status_despesa: "atualizar_transacao",
   create_debt: "cadastrar_divida_boleto",
   import_invoice: "cadastrar_despesa_nf",
+  alterar_custo_produto_eyemobile: "atualizar_custo_produto_eyemobile",
+  atualizar_custo_eyemobile: "atualizar_custo_produto_eyemobile",
+  atualizar_custo_produto: "atualizar_custo_produto_eyemobile",
 };
 
 export type CanonicalActionType = keyof typeof CANONICAL_ACTIONS;

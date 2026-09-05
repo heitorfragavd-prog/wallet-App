@@ -7,7 +7,12 @@ import {
 } from "../../../../supabase/functions/_shared/ai/operations-agent.ts";
 import type { AiExecutionContext } from "../../../../supabase/functions/_shared/ai/auth.ts";
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types.ts";
-import type { ActionRepository } from "../../../../supabase/functions/_shared/ai/action-gateway.ts";
+import {
+  prepareActionProposal,
+  ActionGatewayError,
+  type ActionRepository,
+} from "../../../../supabase/functions/_shared/ai/action-gateway.ts";
+import { ActionExecutorRegistry } from "../../../../supabase/functions/_shared/ai/action-executor-registry.ts";
 import {
   handleTelegramTextMessage,
   handleTelegramCallback,
@@ -621,6 +626,223 @@ describe("Operations Agent — Suíte Canônica (Etapa 9.5B)", () => {
       expect(prod).toBeDefined();
       expect(prod?.nome).toBe("Cerveja Pilsen");
       expect(prod?.custoAtual).toBe(5.5);
+    });
+  });
+
+  // ─── 6. HARDENING DE SEGURANÇA, SANITIZER E ZERO EXECUÇÃO FÍSICA (9.5B.1) ───
+  describe("6. Hardening de Segurança, Sanitizer e Zero Execução Física (Checkpoint 9.5B.1)", () => {
+    it("Payload Sanitizer: purga injeção maliciosa de workspace_id, user_id, risk_level e SQL", () => {
+      const maliciousPayload = {
+        produto_id: "eye-prod-10",
+        novo_custo: 25.5,
+        motivo: "Reajuste padrão",
+        // Campos maliciosos injetados
+        workspace_id: "injected-ws-999",
+        user_id: "injected-user-666",
+        risk_level: "LOW",
+        status: "executed",
+        table: "users",
+        sql: "DROP TABLE transacoes;",
+      };
+
+      const proposal = prepareActionProposal({
+        workspaceId: TEST_WORKSPACE,
+        userId: TEST_USER,
+        actionType: "atualizar_custo_produto_eyemobile",
+        summary: "Teste de Injeção",
+        payload: maliciousPayload,
+      });
+
+      // Metadados autoritativos controlados pelo gateway
+      expect(proposal.workspaceId).toBe(TEST_WORKSPACE);
+      expect(proposal.userId).toBe(TEST_USER);
+      expect(proposal.riskLevel).toBe("MEDIUM");
+      expect(proposal.status).toBe("prepared");
+
+      // Payload sanitizado remove chaves não permitidas
+      const p = proposal.payload as Record<string, unknown>;
+      expect(p.produto_id).toBe("eye-prod-10");
+      expect(p.novo_custo).toBe(25.5);
+      expect(p.motivo).toBe("Reajuste padrão");
+      expect(p.workspace_id).toBeUndefined();
+      expect(p.user_id).toBeUndefined();
+      expect(p.risk_level).toBeUndefined();
+      expect(p.status).toBeUndefined();
+      expect(p.table).toBeUndefined();
+      expect(p.sql).toBeUndefined();
+    });
+
+    it("Payload Sanitizer: rejeita novo_custo negativo ou não numérico via Action Gateway", () => {
+      expect(() =>
+        prepareActionProposal({
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          actionType: "atualizar_custo_produto_eyemobile",
+          summary: "Custo negativo",
+          payload: { novo_custo: -15.0 },
+        }),
+      ).toThrow(ActionGatewayError);
+
+      expect(() =>
+        prepareActionProposal({
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          actionType: "atualizar_custo_produto_eyemobile",
+          summary: "Custo string inválida",
+          payload: { novo_custo: "invalido" },
+        }),
+      ).toThrow(ActionGatewayError);
+    });
+
+    it("Zero Execução Física: 13º Action Type não possui executor registrado e confirmação é proposal_only", async () => {
+      const registry = new ActionExecutorRegistry();
+      expect(registry.has("atualizar_custo_produto_eyemobile")).toBe(false);
+
+      const savedProposals = new Map<string, ActionProposal>();
+      const mockProposalRepo: ActionRepository = {
+        saveProposal: vi.fn(async (p: ActionProposal) => {
+          savedProposals.set(p.id, { ...p });
+        }),
+        getProposal: vi.fn(async (id: string) => savedProposals.get(id) || null),
+        updateStatus: vi.fn(async (id: string, s: any) => {
+          const p = savedProposals.get(id);
+          if (p) {
+            p.status = s;
+            savedProposals.set(id, p);
+          }
+        }),
+        confirmProposalAtomically: vi.fn(async (id: string) => {
+          const p = savedProposals.get(id);
+          if (!p) return { success: false, code: "WALLET_AI_ACTION_INVALID", error: "Not found" };
+          p.status = "confirmed";
+          p.confirmedAt = new Date().toISOString();
+          savedProposals.set(id, p);
+          return { success: true, proposal: p };
+        }),
+        cancelProposalAtomically: vi.fn(async () => true),
+      };
+
+      const proposal = prepareActionProposal({
+        workspaceId: TEST_WORKSPACE,
+        userId: TEST_USER,
+        actionType: "atualizar_custo_produto_eyemobile",
+        summary: "Atualizar custo IPA",
+        payload: { novo_custo: 18.0, produto_id: "eye-ipa" },
+      });
+
+      await mockProposalRepo.saveProposal(proposal);
+
+      const confirmResult = await mockProposalRepo.confirmProposalAtomically!(proposal.id, mockContext);
+      expect(confirmResult.success).toBe(true);
+      expect(confirmResult.proposal?.status).toBe("confirmed");
+      expect(confirmResult.proposal?.executedAt).toBeNull();
+    });
+
+    it("validar_fechamento_caixa é 100% READ PURO: nenhuma mutação (insert/update/delete/rpc) é invocada", async () => {
+      const insertSpy = vi.fn();
+      const updateSpy = vi.fn();
+      const deleteSpy = vi.fn();
+      const rpcSpy = vi.fn();
+
+      const mockSb = {
+        from: vi.fn(() => {
+          let currentTipo = "";
+          const qb: any = {
+            select: () => qb,
+            eq: (col: string, val: any) => {
+              if (col === "tipo") currentTipo = val;
+              return qb;
+            },
+            gte: () => qb,
+            lte: () => qb,
+            insert: insertSpy,
+            update: updateSpy,
+            delete: deleteSpy,
+            then: (resolve: any) => {
+              if (currentTipo === "despesa") {
+                return resolve({ data: [], error: null });
+              }
+              return resolve({
+                data: [
+                  {
+                    id: "tx-read-1",
+                    workspace_id: TEST_WORKSPACE,
+                    user_id: TEST_USER,
+                    valor: 100.0,
+                    tipo: "receita",
+                    data: "2026-09-04",
+                    metodo_pagamento: "dinheiro",
+                    descricao: "Venda 100",
+                    observacoes: null,
+                  },
+                ],
+                error: null,
+              });
+            },
+          };
+          return qb;
+        }),
+        rpc: rpcSpy,
+      };
+
+      const agent = new OperationsAgent({
+        repository: createSupabaseOperationsRepository(mockSb as any),
+      });
+
+      const res = await agent.validarFechamentoCaixa(
+        {
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          reportedTotal: 100.0,
+        },
+        mockContext,
+      );
+
+      expect(res.status).toBe("exato");
+      expect(insertSpy).toHaveBeenCalledTimes(0);
+      expect(updateSpy).toHaveBeenCalledTimes(0);
+      expect(deleteSpy).toHaveBeenCalledTimes(0);
+      expect(rpcSpy).toHaveBeenCalledTimes(0);
+    });
+
+    it("Cross-workspace isolation: produto de outro workspace não pode gerar proposta no workspace autenticado", async () => {
+      const foreignProductRepo: OperationsRepository = {
+        async listOperationalSales() {
+          return [];
+        },
+        async listOperationalWithdrawals() {
+          return [];
+        },
+        async findEyemobileProduct(context, criteria) {
+          // Só retorna produto se workspace_id for ws-alien-999
+          if (context.workspaceId === "ws-alien-999" && criteria.nome === "Cerveja Alien") {
+            return {
+              id: "prod-alien-1",
+              workspaceId: "ws-alien-999",
+              produtoId: "eye-alien",
+              nome: "Cerveja Alien",
+              custoAtual: 10.0,
+            };
+          }
+          return null; // No workspace TEST_WORKSPACE, produto não existe
+        },
+      };
+
+      const agent = new OperationsAgent({
+        repository: foreignProductRepo,
+      });
+
+      // Usuário no workspace TEST_WORKSPACE tenta atualizar custo do produto do ws-alien-999
+      await expect(
+        agent.proporAtualizacaoCustoEyemobile(
+          {
+            produtoNome: "Cerveja Alien",
+            novoCusto: 12.0,
+          },
+          mockContext, // workspaceId: TEST_WORKSPACE
+        ),
+      ).rejects.toThrow("WALLET_AI_OPERATIONS_DATA_UNAVAILABLE");
     });
   });
 });

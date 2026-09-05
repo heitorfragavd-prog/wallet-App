@@ -345,4 +345,346 @@ describe("Operations Core — Cálculos Determinísticos & Precisão Monetária 
       ).toThrow("WALLET_AI_OPERATIONS_WORKSPACE_MISMATCH");
     });
   });
+
+  // ─── 5. RECONCILIAÇÃO OPERACIONAL REAL — CAMADAS DE DEDUP (CHECKPOINT 9.5B.1) ─
+  describe("5. Reconciliação Operacional Real — 3 Camadas de Dedup (Checkpoint 9.5B.1)", () => {
+    it("Eyemobile dinheiro único → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-cash-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 50.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Venda Balcão Dinheiro",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(0);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].amount).toBe(50.0);
+      expect(unique[0].paymentMethod).toBe("dinheiro");
+    });
+
+    it("Eyemobile PIX + Divipay PIX correspondente → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "divipay-pix-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 100.0,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Recebimento Pix Divipay 9901",
+          source: "divipay",
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-pix-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 100.0,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Venda Eyemobile #501",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].id).toBe("divipay-pix-1");
+      expect(unique[0].amount).toBe(100.0);
+    });
+
+    it("Eyemobile débito + Divipay débito → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "divipay-deb-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 80.0,
+          type: "receita",
+          paymentMethod: "debito",
+          description: "Entrada Débito Gateway Divipay",
+          source: "divipay",
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-deb-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 80.0,
+          type: "receita",
+          paymentMethod: "debito",
+          description: "Venda Cartão Débito Eyemobile #502",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].id).toBe("divipay-deb-1");
+      expect(unique[0].amount).toBe(80.0);
+    });
+
+    it("Eyemobile crédito + Divipay crédito → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "divipay-cred-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 150.0,
+          type: "receita",
+          paymentMethod: "credito",
+          description: "Entrada Crédito Gateway Divipay",
+          source: "divipay",
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-cred-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 150.0,
+          type: "receita",
+          paymentMethod: "credito",
+          description: "Venda Crédito Eyemobile #503",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].id).toBe("divipay-cred-1");
+      expect(unique[0].amount).toBe(150.0);
+    });
+
+    it("Eyemobile digital sem metadata ID mas coberto pela fonte autoritativa → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "divipay-pix-raw",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 75.5,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Recebimento Pix Divipay",
+          source: "divipay",
+          metadata: {}, // Sem nenhum ID de venda do Eyemobile
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-pix-raw",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 75.5,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Venda PDV",
+          source: "eyemobile",
+          metadata: {}, // Sem metadata ID
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].amount).toBe(75.5);
+    });
+
+    it("Eyemobile sale_id explicitamente duplicado → conta 1x", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "local-sale-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 120.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Venda Eyemobile #8888",
+          source: "local",
+          metadata: { eyemobile_sale_id: "8888" },
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-sale-dup",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 120.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Venda Eyemobile #8888",
+          source: "eyemobile",
+          metadata: { eyemobile_sale_id: "8888" },
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(1);
+      expect(unique[0].id).toBe("local-sale-1");
+    });
+
+    it("Venda legítima diferente com mesmo valor → NÃO eliminar indevidamente", () => {
+      // 1 lançamento Divipay de R$ 50 e 2 vendas legítimas Eyemobile de R$ 50 cada
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "divipay-pix-50",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 50.0,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Recebimento Pix Divipay 101",
+          source: "divipay",
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-sale-a",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 50.0,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Venda Eyemobile #301",
+          source: "eyemobile",
+        },
+        {
+          id: "eye-sale-b",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 50.0,
+          type: "receita",
+          paymentMethod: "pix",
+          description: "Venda Eyemobile #302",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      // Divipay cobre apenas 1 venda de 50. A 2ª venda legítima de 50 é PRESERVADA!
+      expect(duplicatesCount).toBe(1);
+      expect(unique).toHaveLength(2);
+      const total = unique.reduce((acc, t) => acc + t.amount, 0);
+      expect(total).toBe(100.0);
+    });
+
+    it("Transação manual independente → preservada", () => {
+      const localTxs: OperationalTransaction[] = [
+        {
+          id: "manual-dinheiro-1",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 200.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Aporte em Espécie Gaveta",
+          source: "local",
+        },
+      ];
+      const eyeTxs: OperationalTransaction[] = [
+        {
+          id: "eye-cash-sales",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 150.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Vendas Dinheiro PDV",
+          source: "eyemobile",
+        },
+      ];
+
+      const { unique, duplicatesCount } = deduplicateOperationalTransactions(localTxs, eyeTxs);
+      expect(duplicatesCount).toBe(0);
+      expect(unique).toHaveLength(2);
+      const total = unique.reduce((acc, t) => acc + t.amount, 0);
+      expect(total).toBe(350.0);
+    });
+  });
+
+  // ─── 6. PRECISÃO MONETÁRIA ESTREITA EM CENTAVOS INTEIROS ───────────────────
+  describe("6. Precisão Monetária Estreita em Centavos Inteiros", () => {
+    it("resolve soma flutuante crítica 0.1 + 0.2 exatamente como 0.30", () => {
+      const c1 = toCents(0.1);
+      const c2 = toCents(0.2);
+      expect(c1 + c2).toBe(30);
+      expect(fromCents(c1 + c2)).toBe(0.3);
+    });
+
+    it("lida com o menor centavo (R$ 0,01) e grandes volumes (R$ 999.999,99)", () => {
+      expect(toCents(0.01)).toBe(1);
+      expect(fromCents(1)).toBe(0.01);
+
+      expect(toCents(999999.99)).toBe(99999999);
+      expect(fromCents(99999999)).toBe(999999.99);
+    });
+
+    it("detecta diferença de exatamente 1 centavo (0.01 de sobra ou furo) sem tolerância frouxa", () => {
+      const sales: OperationalTransaction[] = [
+        {
+          id: "s-cent",
+          workspaceId: TEST_WORKSPACE,
+          userId: TEST_USER,
+          date: "2026-09-04",
+          amount: 100.0,
+          type: "receita",
+          paymentMethod: "dinheiro",
+          description: "Venda 100",
+          source: "local",
+        },
+      ];
+
+      // Relatado 100.01 -> sobra de 0.01
+      const resSobra = reconcileCashClosing({
+        workspaceId: TEST_WORKSPACE,
+        userId: TEST_USER,
+        date: "2026-09-04",
+        sales,
+        reportedTotal: 100.01,
+      });
+      expect(resSobra.status).toBe("sobra");
+      expect(resSobra.difference).toBe(0.01);
+
+      // Relatado 99.99 -> furo de -0.01
+      const resFuro = reconcileCashClosing({
+        workspaceId: TEST_WORKSPACE,
+        userId: TEST_USER,
+        date: "2026-09-04",
+        sales,
+        reportedTotal: 99.99,
+      });
+      expect(resFuro.status).toBe("furo");
+      expect(resFuro.difference).toBe(-0.01);
+    });
+  });
 });
