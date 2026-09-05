@@ -19,6 +19,7 @@ import {
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../danfe-gemini-v2.ts";
+import { DEFAULT_DOCUMENT_MODEL } from "./model-policy.ts";
 
 export {
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
@@ -114,7 +115,7 @@ export {
   PROMPT_ORIENTACAO_DANFE,
 };
 
-const DEFAULT_DANFE_MODEL = "gemini-3.6-flash";
+const DEFAULT_DANFE_MODEL = DEFAULT_DOCUMENT_MODEL;
 
 export interface VisionCallOptions {
   prompt: string;

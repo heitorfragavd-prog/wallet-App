@@ -7,6 +7,7 @@ import {
 import {
   ALLOWED_MODELS,
   DEFAULT_CHAT_MODEL as DEFAULT_MODEL,
+  DEFAULT_SUMMARY_MODEL,
   type AllowedModel,
   validateAndResolveModel,
   AiModelNotAllowedError,
@@ -22,6 +23,10 @@ import {
   buildTurnContext,
   type ConversationRepository,
   DEFAULT_RECENT_MESSAGES,
+  shouldSummarizeConversation,
+  generateConversationSummary,
+  type SummarizerRunner,
+  SUMMARIZATION_THRESHOLD_MESSAGES,
 } from "../_shared/ai/memory-core.ts";
 import {
   runOrchestratorTurn,
@@ -59,6 +64,7 @@ export interface OrchestratorHandlerDependencies {
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
   conversationRepo?: ConversationRepository;
+  summarizerRunner?: SummarizerRunner;
   documentPipelineRunner?: (
     input: ProcessDocumentPipelineInput,
   ) => Promise<ProcessDocumentPipelineResult>;
@@ -384,6 +390,72 @@ export async function handleOrchestratorHttpRequest(
             tokensCount: turnResult.usage.totalTokens,
           });
         }
+
+        // Ciclo de Sumarização Canônica Real (Threshold -> Chamada -> Scoped Update -> Fail-safe)
+        const msgCount = await dependencies.conversationRepo.countMessages(
+          conversationId,
+          context.workspaceId,
+        );
+        const shouldSummarize = shouldSummarizeConversation({
+          messageCount: msgCount,
+          estimatedTokens: turnResult.usage.totalTokens,
+        });
+
+        if (shouldSummarize) {
+          try {
+            const recentAll = await dependencies.conversationRepo.listRecentMessages(
+              conversationId,
+              context.workspaceId,
+              SUMMARIZATION_THRESHOLD_MESSAGES + 5,
+            );
+            const historyForSummary = recentAll.map((m) => ({
+              role: m.role,
+              content: m.content,
+            }));
+
+            const summarizerRunner: SummarizerRunner =
+              dependencies.summarizerRunner ||
+              (async (msgs, opts) => {
+                const summarizerLlm = dependencies.runnerFactory(opts?.model || DEFAULT_SUMMARY_MODEL);
+                const resp = await summarizerLlm.generateCompletion(msgs, []);
+                return resp.message.content || "";
+              });
+
+            const newSummary = await generateConversationSummary({
+              historyMessages: historyForSummary,
+              previousSummary: loadedSummary,
+              runner: summarizerRunner,
+              options: { correlationId, model: DEFAULT_SUMMARY_MODEL },
+            });
+
+            if (newSummary && newSummary.trim()) {
+              await dependencies.conversationRepo.updateSummary(
+                conversationId,
+                context.workspaceId,
+                context.userId,
+                newSummary.trim(),
+              );
+            }
+          } catch (sumErr) {
+            // Fail-safe: log de auditoria sem quebrar o turno do usuário
+            console.warn("[handler] Falha ao gerar/atualizar resumo da conversa:", sumErr);
+            if (dependencies.auditLogger) {
+              await dependencies.auditLogger.logEvent({
+                userId: context.userId,
+                workspaceId: context.workspaceId,
+                toolName: "ai_summary_failed",
+                durationMs: 0,
+                status: "error",
+                errorCode: "WALLET_AI_SUMMARY_FAILED",
+                metadata: {
+                  correlationId,
+                  conversationId,
+                  error: sumErr instanceof Error ? sumErr.message : String(sumErr),
+                },
+              });
+            }
+          }
+        }
       } catch (err) {
         console.warn("[handler] Falha ao persistir mensagens na memória:", err);
       }
@@ -400,6 +472,7 @@ export async function handleOrchestratorHttpRequest(
         loopDetected: turnResult.loopDetected ?? false,
         maxIterationsReached: turnResult.maxIterationsReached ?? false,
         toolCallsLimitReached: turnResult.toolCallsLimitReached ?? false,
+        errorCode: turnResult.errorCode,
         contextTruncated,
       };
 
@@ -426,6 +499,7 @@ export async function handleOrchestratorHttpRequest(
         loopDetected: turnResult.loopDetected ?? false,
         maxIterationsReached: turnResult.maxIterationsReached ?? false,
         toolCallsLimitReached: turnResult.toolCallsLimitReached ?? false,
+        errorCode: turnResult.errorCode,
         conversation_id: conversationId,
         correlation_id: correlationId,
       }),

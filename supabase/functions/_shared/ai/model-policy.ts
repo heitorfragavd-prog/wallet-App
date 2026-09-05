@@ -4,25 +4,32 @@
  * Regras:
  * - Não espalhar nomes de modelo hardcoded pelo sistema.
  * - Cliente não pode selecionar modelos arbitrários fora da allowlist.
- * - Routing simples por caso de uso (chat, complex, document, summary).
+ * - Routing simples por caso de uso (chat, complex, document, summary, audio).
+ * - Document Primary Model consolidado canônico: Gemini 2.5 Flash.
  */
 
 export const ALLOWED_MODELS = [
   "gpt-4o-mini",
   "gpt-4o",
   "o3-mini",
+  "gemini-2.5-flash",
+  "gemini-3.6-flash",
+  "gemini-3.7-flash",
   "gemini-1.5-flash",
   "gemini-1.5-pro",
+  "whisper-1",
 ] as const;
 
 export type AllowedModel = (typeof ALLOWED_MODELS)[number];
 
 export const DEFAULT_CHAT_MODEL: AllowedModel = "gpt-4o-mini";
 export const DEFAULT_COMPLEX_MODEL: AllowedModel = "gpt-4o";
-export const DEFAULT_DOCUMENT_MODEL: AllowedModel = "gemini-1.5-flash";
+export const DEFAULT_DOCUMENT_MODEL: AllowedModel = "gemini-2.5-flash";
+export const DEFAULT_DOCUMENT_FALLBACK_MODEL: AllowedModel = "gpt-4o";
 export const DEFAULT_SUMMARY_MODEL: AllowedModel = "gpt-4o-mini";
+export const DEFAULT_AUDIO_MODEL: AllowedModel = "whisper-1";
 
-export type ModelTaskType = "chat" | "complex" | "document" | "summary";
+export type ModelTaskType = "chat" | "complex" | "document" | "summary" | "audio";
 
 export class AiModelNotAllowedError extends Error {
   public readonly code = "WALLET_AI_MODEL_NOT_ALLOWED";
@@ -57,6 +64,8 @@ export function validateAndResolveModel(
         return DEFAULT_DOCUMENT_MODEL;
       case "summary":
         return DEFAULT_SUMMARY_MODEL;
+      case "audio":
+        return DEFAULT_AUDIO_MODEL;
       case "chat":
       default:
         return DEFAULT_CHAT_MODEL;
@@ -76,6 +85,8 @@ export function validateAndResolveModel(
         return DEFAULT_DOCUMENT_MODEL;
       case "summary":
         return DEFAULT_SUMMARY_MODEL;
+      case "audio":
+        return DEFAULT_AUDIO_MODEL;
       case "chat":
       default:
         return DEFAULT_CHAT_MODEL;

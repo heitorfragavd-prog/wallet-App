@@ -49,6 +49,9 @@ export interface ExecutedToolRecord {
   toolCallId: string;
 }
 
+export const DEFAULT_MAX_ITERATIONS = 5;
+export const DEFAULT_MAX_TOOL_CALLS_PER_TURN = 10;
+
 export interface OrchestratorTurnResult {
   finalMessage: LlmMessage;
   conversationHistory: LlmMessage[];
@@ -59,6 +62,7 @@ export interface OrchestratorTurnResult {
   loopDetected?: boolean;
   maxIterationsReached?: boolean;
   toolCallsLimitReached?: boolean;
+  errorCode?: "WALLET_AI_TOOL_LIMIT_REACHED" | "WALLET_AI_LOOP_DETECTED" | "WALLET_AI_MAX_ITERATIONS_REACHED";
 }
 
 export const FINANCIAL_AGENT_SYSTEM_PROMPT = `Você é o Wallet Finance Agent V2, um assistente e consultor financeiro corporativo inteligente, determinístico, auditável e altamente confiável.
@@ -89,8 +93,8 @@ export async function runOrchestratorTurn(
   runner: LlmRunner,
   options: OrchestratorOptions = {},
 ): Promise<OrchestratorTurnResult> {
-  const maxIterations = options.maxToolIterations ?? 5;
-  const maxToolCallsPerTurn = options.maxToolCallsPerTurn ?? 8;
+  const maxIterations = options.maxToolIterations ?? DEFAULT_MAX_ITERATIONS;
+  const maxToolCallsPerTurn = options.maxToolCallsPerTurn ?? DEFAULT_MAX_TOOL_CALLS_PER_TURN;
   const maxToolResultLength = options.maxToolResultLength ?? 2000;
   const systemPrompt = options.systemPromptOverride ?? FINANCIAL_AGENT_SYSTEM_PROMPT;
 
@@ -213,6 +217,7 @@ export async function runOrchestratorTurn(
         iterations,
         usage: totalUsage,
         loopDetected: true,
+        errorCode: "WALLET_AI_LOOP_DETECTED",
       };
     }
 
@@ -232,6 +237,7 @@ export async function runOrchestratorTurn(
         iterations,
         usage: totalUsage,
         toolCallsLimitReached: true,
+        errorCode: "WALLET_AI_TOOL_LIMIT_REACHED",
       };
     }
   }
@@ -252,5 +258,6 @@ export async function runOrchestratorTurn(
     iterations,
     usage: totalUsage,
     maxIterationsReached: true,
+    errorCode: "WALLET_AI_MAX_ITERATIONS_REACHED",
   };
 }

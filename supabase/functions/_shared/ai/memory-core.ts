@@ -12,6 +12,7 @@
  */
 
 import type { LlmMessage } from "./orchestrator-core.ts";
+import { DEFAULT_SUMMARY_MODEL } from "./model-policy.ts";
 
 export const DEFAULT_RECENT_MESSAGES = 10;
 export const SUMMARIZATION_THRESHOLD_MESSAGES = 15;
@@ -233,6 +234,72 @@ export function shouldSummarizeConversation(params: {
     return true;
   }
   return false;
+}
+
+export type SummarizerRunner = (
+  messages: LlmMessage[],
+  options?: { model?: string; correlationId?: string },
+) => Promise<string>;
+
+export interface GenerateConversationSummaryParams {
+  historyMessages: Array<{ role: string; content: string | null }>;
+  previousSummary?: string | null;
+  runner?: SummarizerRunner;
+  options?: { correlationId?: string; model?: string };
+}
+
+/**
+ * Gera ou atualiza o resumo canônico da conversa utilizando o modelo configurado pela Model Policy.
+ * Possui fallback determinístico caso runner não seja fornecido.
+ */
+export async function generateConversationSummary(
+  params: GenerateConversationSummaryParams,
+): Promise<string> {
+  const { historyMessages, previousSummary, runner, options } = params;
+
+  if (runner) {
+    const promptMessages: LlmMessage[] = [
+      {
+        role: "system",
+        content:
+          "Você é um sumarizador conciso de conversas financeiras. Crie um resumo factual, direto e objetivo dos tópicos discutidos, decisões e pedidos do usuário. NUNCA invente dados monetários. Mantenha o resumo em no máximo 2 parágrafos curtos.",
+      },
+    ];
+
+    if (previousSummary && previousSummary.trim()) {
+      promptMessages.push({
+        role: "user",
+        content: `Resumo anterior da conversa:\n${previousSummary.trim()}`,
+      });
+    }
+
+    const serializedHistory = historyMessages
+      .map((m) => `${m.role.toUpperCase()}: ${m.content || ""}`)
+      .join("\n");
+
+    promptMessages.push({
+      role: "user",
+      content: `Atualize o resumo da conversa considerando as mensagens a seguir:\n${serializedHistory}`,
+    });
+
+    const result = await runner(promptMessages, {
+      model: options?.model || DEFAULT_SUMMARY_MODEL,
+      correlationId: options?.correlationId,
+    });
+
+    return (result || "").trim();
+  }
+
+  // Heurística determinística simples quando não houver runner LLM
+  const topics = historyMessages
+    .filter((m) => m.content && m.content.trim())
+    .map((m) => m.content!.trim().slice(0, 100))
+    .slice(-5)
+    .join(" | ");
+
+  return previousSummary
+    ? `${previousSummary}\nAtualizações: ${topics}`
+    : `Tópicos discutidos: ${topics}`;
 }
 
 /**

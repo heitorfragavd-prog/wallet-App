@@ -61,14 +61,24 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
       expect(calculateEstimatedCost("gpt-4o-mini", { promptTokens: 0, completionTokens: 0 })).toBe(0);
     });
 
-    it("deve usar fallback seguro de precificação se modelo não for encontrado", () => {
+    it("deve retornar -1 e marcar status unknown se modelo não for encontrado na precificação", () => {
       const cost = calculateEstimatedCost("modelo-desconhecido-xyz", {
         promptTokens: 1_000_000,
         completionTokens: 1_000_000,
       });
 
-      // Fallback para gpt-4o-mini: 0.15 + 0.60 = 0.75
-      expect(cost).toBe(0.75);
+      // Modelo desconhecido: não fingir custo zero nem assumir default
+      expect(cost).toBe(-1);
+
+      const record = createCostTelemetryRecord({
+        model: "modelo-desconhecido-xyz",
+        usage: { promptTokens: 1000, completionTokens: 1000, totalTokens: 2000 },
+        durationMs: 100,
+        correlationId: "corr-unknown",
+        workspaceId: "ws-unknown",
+      });
+      expect(record.cost_status).toBe("unknown");
+      expect(record.estimated_cost_usd).toBeNull();
     });
 
     it("deve construir registro de telemetria completo sem campos vazios", () => {
@@ -104,7 +114,7 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
     it("deve aplicar fallback para o modelo padrão quando solicitado vazio", () => {
       expect(validateAndResolveModel("", { task: "chat" })).toBe("gpt-4o-mini");
       expect(validateAndResolveModel(undefined, { task: "complex" })).toBe("gpt-4o");
-      expect(validateAndResolveModel(undefined, { task: "document" })).toBe("gemini-1.5-flash");
+      expect(validateAndResolveModel(undefined, { task: "document" })).toBe("gemini-2.5-flash");
       expect(validateAndResolveModel(undefined, { task: "summary" })).toBe("gpt-4o-mini");
     });
 

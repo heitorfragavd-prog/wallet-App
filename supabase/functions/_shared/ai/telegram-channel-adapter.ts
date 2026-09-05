@@ -30,7 +30,12 @@ import {
   type ConversationRepository,
   buildTurnContext,
   DEFAULT_RECENT_MESSAGES,
+  shouldSummarizeConversation,
+  generateConversationSummary,
+  type SummarizerRunner,
+  SUMMARIZATION_THRESHOLD_MESSAGES,
 } from "./memory-core.ts";
+import { DEFAULT_SUMMARY_MODEL } from "./model-policy.ts";
 import { FINANCIAL_AGENT_SYSTEM_PROMPT, type LlmMessage } from "./orchestrator-core.ts";
 
 // ─── TIPOS DO TELEGRAM ────────────────────────────────────────────────────────
@@ -698,6 +703,7 @@ export async function handleTelegramTextMessage(
     text: string;
     identity: ResolvedTelegramIdentity;
     chatId: string | number;
+    correlationId?: string;
   },
   deps: TelegramAdapterDependencies,
 ): Promise<{
@@ -713,12 +719,17 @@ export async function handleTelegramTextMessage(
     };
   }
 
+  const generatedTgCorrelationId =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? `tg_${crypto.randomUUID()}`
+      : `tg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
   const context: AiExecutionContext = {
     userId: identity.userId,
     workspaceId: identity.workspaceId,
     userRole: identity.userRole,
     channel: "telegram",
-    correlationId: `tg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    correlationId: params.correlationId || generatedTgCorrelationId,
   };
 
   const repo = deps.repoFactory(context);
@@ -793,6 +804,50 @@ export async function handleTelegramTextMessage(
           content: turnResult.finalMessage.content,
           tokensCount: turnResult.usage?.totalTokens ?? 0,
         });
+      }
+
+      // Ciclo de Sumarização Canônica do Telegram (Threshold -> Chamada -> Scoped Update -> Fail-safe)
+      const msgCount = await deps.conversationRepo.countMessages(
+        conversationId,
+        identity.workspaceId,
+      );
+      if (
+        shouldSummarizeConversation({
+          messageCount: msgCount,
+          estimatedTokens: turnResult.usage?.totalTokens,
+        })
+      ) {
+        try {
+          const recentAll = await deps.conversationRepo.listRecentMessages(
+            conversationId,
+            identity.workspaceId,
+            SUMMARIZATION_THRESHOLD_MESSAGES + 5,
+          );
+          const historyForSummary = recentAll.map((m) => ({
+            role: m.role,
+            content: m.content,
+          }));
+          const summarizerRunner: SummarizerRunner = async (msgs, opts) => {
+            const sumRunner = deps.runnerFactory(opts?.model || DEFAULT_SUMMARY_MODEL);
+            const sumResp = await sumRunner.generateCompletion(msgs, []);
+            return sumResp.message.content || "";
+          };
+          const newSummary = await generateConversationSummary({
+            historyMessages: historyForSummary,
+            runner: summarizerRunner,
+            options: { correlationId: context.correlationId, model: DEFAULT_SUMMARY_MODEL },
+          });
+          if (newSummary && newSummary.trim()) {
+            await deps.conversationRepo.updateSummary(
+              conversationId,
+              identity.workspaceId,
+              identity.userId,
+              newSummary.trim(),
+            );
+          }
+        } catch (sumErr) {
+          console.warn("[telegram-adapter] Falha ao resumir conversa:", sumErr);
+        }
       }
     } catch (err) {
       console.warn("[telegram-adapter] Erro ao persistir mensagens:", err);
@@ -1243,6 +1298,7 @@ export async function handleTelegramDocument(
 export async function processTelegramUpdate(
   update: TelegramUpdate,
   deps: TelegramAdapterDependencies,
+  options?: { correlationId?: string },
 ): Promise<{ handled: boolean; result?: any; error?: string }> {
   // 0. Idempotência de Updates via Sliding Window (FAIL-CLOSED contra replay de rede)
   if (update?.update_id) {
@@ -1380,7 +1436,7 @@ export async function processTelegramUpdate(
         const transcript = await api.transcribeAudio(audio.file_id, audio.mime_type);
         if (transcript) {
           const textResult = await handleTelegramTextMessage(
-            { text: transcript, identity, chatId },
+            { text: transcript, identity, chatId, correlationId: options?.correlationId },
             deps,
           );
 
@@ -1406,7 +1462,7 @@ export async function processTelegramUpdate(
       }
 
       const textResult = await handleTelegramTextMessage(
-        { text: trimmed, identity, chatId },
+        { text: trimmed, identity, chatId, correlationId: options?.correlationId },
         deps,
       );
 

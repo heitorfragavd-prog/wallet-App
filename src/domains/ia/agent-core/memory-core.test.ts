@@ -6,6 +6,7 @@ import {
   compactToolOutput,
   sanitizeMemoryContent,
   shouldSummarizeConversation,
+  generateConversationSummary,
   SupabaseConversationRepository,
   UNTRUSTED_MEMORY_NOTICE,
 } from "../../../../supabase/functions/_shared/ai/memory-core";
@@ -259,6 +260,67 @@ describe("ETAPA 9.6 - Canonical Memory & Context Control", () => {
 
     it("deve disparar sumarização quando tokens estimados excederem threshold (3000)", () => {
       expect(shouldSummarizeConversation({ messageCount: 8, estimatedTokens: 3500 })).toBe(true);
+    });
+  });
+
+  describe("7. Real Summarization Flow Contract", () => {
+    it("deve gerar resumo estruturado usando runner de IA quando threshold atingido", async () => {
+      const mockRunner = vi.fn().mockResolvedValue("Resumo consolidado: usuário consultou receitas de agosto e planejou corte de custos.");
+
+      const history = [
+        { role: "user", content: "Qual o total de receitas de agosto?" },
+        { role: "assistant", content: "O total de receitas foi R$ 45.000,00." },
+        { role: "user", content: "Como posso reduzir custos?" },
+        { role: "assistant", content: "Sugiro analisar despesas fixas com fornecedores." },
+      ];
+
+      const summary = await generateConversationSummary({
+        historyMessages: history,
+        previousSummary: "Usuário iniciou análise financeira do Q3.",
+        runner: mockRunner,
+        options: { correlationId: "test-corr", model: "gpt-4o-mini" },
+      });
+
+      expect(summary).toBe("Resumo consolidado: usuário consultou receitas de agosto e planejou corte de custos.");
+      expect(mockRunner).toHaveBeenCalledTimes(1);
+      const calledMessages = mockRunner.mock.calls[0][0];
+      expect(calledMessages[0].role).toBe("system");
+      expect(calledMessages[1].content).toContain("Resumo anterior da conversa:\nUsuário iniciou análise financeira do Q3.");
+      expect(calledMessages[2].content).toContain("Qual o total de receitas de agosto?");
+    });
+
+    it("deve gerar resumo heurístico fallback determinístico se runner não for fornecido", async () => {
+      const history = [
+        { role: "user", content: "Pergunta 1" },
+        { role: "assistant", content: "Resposta 1" },
+      ];
+
+      const summary = await generateConversationSummary({
+        historyMessages: history,
+        previousSummary: null,
+      });
+
+      expect(summary).toContain("Tópicos discutidos:");
+      expect(summary).toContain("Pergunta 1");
+    });
+
+    it("deve garantir scoping de workspace_id e user_id no updateSummary do repositório", async () => {
+      const mockSupabase = {
+        from: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+      };
+
+      const repo = new SupabaseConversationRepository(mockSupabase);
+      await repo.updateSummary("conv-123", "ws-456", "user-789", "Novo resumo");
+
+      expect(mockSupabase.from).toHaveBeenCalledWith("wallet_ai_conversations");
+      expect(mockSupabase.update).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: "Novo resumo" })
+      );
+      expect(mockSupabase.eq).toHaveBeenCalledWith("id", "conv-123");
+      expect(mockSupabase.eq).toHaveBeenCalledWith("workspace_id", "ws-456");
+      expect(mockSupabase.eq).toHaveBeenCalledWith("user_id", "user-789");
     });
   });
 });
