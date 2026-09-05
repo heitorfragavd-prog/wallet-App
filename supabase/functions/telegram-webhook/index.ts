@@ -38,6 +38,7 @@ import { createFinancialRepository } from "../_shared/ai/financial-repository.ts
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
+import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -817,6 +818,7 @@ serve(async (req) => {
 
     const proposalRepo = new SupabaseActionProposalRepository(supabase as any);
     const mutator = new SupabaseActionDatabaseMutator(supabase as any);
+    const conversationRepo = new SupabaseConversationRepository(supabase as any);
 
     const adapterDeps: TelegramAdapterDependencies = {
       supabase,
@@ -825,6 +827,7 @@ serve(async (req) => {
       repoFactory: () => createFinancialRepository((query) => executeSupabaseFinancialQuery(supabase as any, query)),
       proposalRepo,
       mutator,
+      conversationRepo,
       documentPipelineRunner: processDocumentPipeline,
       openaiApiKey,
       geminiApiKey,

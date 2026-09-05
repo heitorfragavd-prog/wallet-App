@@ -1,24 +1,18 @@
 import type { OpenAiFunctionDefinition } from "./openai-tools-definition.ts";
 import type { LlmMessage, LlmResponse, LlmRunner, LlmUsage } from "./orchestrator-core.ts";
 
-export const ALLOWED_MODELS = ["gpt-4o-mini", "gpt-4o", "o3-mini"] as const;
-export type AllowedModel = (typeof ALLOWED_MODELS)[number];
-
-export const DEFAULT_MODEL: AllowedModel = "gpt-4o-mini";
-
-// Tabela de preços por 1.000.000 tokens (USD)
-const MODEL_PRICING: Record<AllowedModel, { inputPerMillion: number; outputPerMillion: number }> = {
-  "gpt-4o-mini": { inputPerMillion: 0.15, outputPerMillion: 0.60 },
-  "gpt-4o": { inputPerMillion: 2.50, outputPerMillion: 10.00 },
-  "o3-mini": { inputPerMillion: 1.10, outputPerMillion: 4.40 },
-};
-
-export function calculateEstimatedCost(model: AllowedModel, usage: LlmUsage): number {
-  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING[DEFAULT_MODEL];
-  const inputCost = (usage.promptTokens / 1_000_000) * pricing.inputPerMillion;
-  const outputCost = (usage.completionTokens / 1_000_000) * pricing.outputPerMillion;
-  return inputCost + outputCost;
-}
+export {
+  ALLOWED_MODELS,
+  DEFAULT_CHAT_MODEL as DEFAULT_MODEL,
+  type AllowedModel,
+} from "./model-policy.ts";
+export { calculateEstimatedCost } from "./cost-calculator.ts";
+import {
+  ALLOWED_MODELS,
+  DEFAULT_CHAT_MODEL,
+  type AllowedModel,
+  validateAndResolveModel,
+} from "./model-policy.ts";
 
 export interface OpenAiRunnerOptions {
   apiKey: string;
@@ -41,8 +35,7 @@ export class OpenAiLlmRunner implements LlmRunner {
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
 
-    const requestedModel = options.model as AllowedModel;
-    this.model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
+    this.model = validateAndResolveModel(options.model, { task: "chat", fallbackToDefault: true });
   }
 
   async generateCompletion(

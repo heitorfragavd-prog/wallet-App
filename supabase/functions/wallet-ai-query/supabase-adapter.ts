@@ -80,15 +80,25 @@ export function createSupabaseAuthorizationDependencies(
 
       return null;
     },
-    async verifyConversationOwnership(conversationId, _workspaceId, userId) {
-      const { data } = await client
+    async verifyConversationOwnership(conversationId, workspaceId, userId) {
+      // 1. Tabela canônica Wallet AI Conversations (isolamento por workspace e usuário)
+      const { data: canonicalData } = await client
+        .from("wallet_ai_conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (canonicalData !== null) return true;
+
+      // 2. Fallback legado para chat_conversas (apenas se existir e pertencer ao usuário)
+      const { data: legacyData } = await client
         .from("chat_conversas")
         .select("id")
         .eq("id", conversationId)
         .eq("user_id", userId)
         .maybeSingle();
-      // Se a conversa já existe no banco, deve pertencer ao usuário. Se ainda não existe, permite criação.
-      return data !== null;
+      return legacyData !== null;
     },
   };
 }

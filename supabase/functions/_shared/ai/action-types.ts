@@ -14,7 +14,8 @@ export interface ActionDefinition {
   riskLevel: ActionRiskLevel;
   executionPolicy: ActionExecutionPolicy;
   blocked?: boolean;
-  requiredPermission: string;
+  /** @deprecated Documental metadata only. Runtime authorization is strictly Role-Based (owner/admin/member/viewer). */
+  requiredPermission?: string;
   requiresConfirmation: true;
   reversible: boolean;
   auditCategory: string;
@@ -230,7 +231,6 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
     actionType: "atualizar_custo_produto_eyemobile",
     riskLevel: "MEDIUM",
     executionPolicy: "proposal_only",
-    requiredPermission: "operations:eyemobile:write",
     requiresConfirmation: true,
     reversible: true,
     auditCategory: "inventory_mutation",

@@ -4,6 +4,7 @@ import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { handleOrchestratorHttpRequest } from "./handler.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
 import { SupabaseActionProposalRepository } from "../_shared/ai/action-repository.ts";
+import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
 import {
   createSupabaseAuthorizationDependencies,
   executeSupabaseFinancialQuery,
@@ -26,6 +27,7 @@ const adminClient = createClient(supabaseUrl, serviceRoleKey, {
 }) as unknown as SupabaseClientLike;
 
 const proposalRepo = new SupabaseActionProposalRepository(adminClient as any);
+const conversationRepo = new SupabaseConversationRepository(adminClient as any);
 
 const authDeps = createSupabaseAuthorizationDependencies(adminClient);
 
@@ -96,6 +98,7 @@ Deno.serve((req: Request) =>
     repoFactory,
     runnerFactory,
     auditLogger,
+    conversationRepo,
     documentPipelineRunner: processDocumentPipeline,
     geminiApiKey,
     geminiApiKeyBackup,

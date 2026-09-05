@@ -7,6 +7,7 @@ import {
   type OpenAiToolCall,
   type OpenAiToolMessage,
 } from "./tool-dispatcher.ts";
+import { compactToolOutput } from "./memory-core.ts";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -36,6 +37,8 @@ export interface LlmRunner {
 
 export interface OrchestratorOptions {
   maxToolIterations?: number;
+  maxToolCallsPerTurn?: number;
+  maxToolResultLength?: number;
   systemPromptOverride?: string;
 }
 
@@ -55,6 +58,7 @@ export interface OrchestratorTurnResult {
   usage: LlmUsage;
   loopDetected?: boolean;
   maxIterationsReached?: boolean;
+  toolCallsLimitReached?: boolean;
 }
 
 export const FINANCIAL_AGENT_SYSTEM_PROMPT = `Você é o Wallet Finance Agent V2, um assistente e consultor financeiro corporativo inteligente, determinístico, auditável e altamente confiável.
@@ -86,6 +90,8 @@ export async function runOrchestratorTurn(
   options: OrchestratorOptions = {},
 ): Promise<OrchestratorTurnResult> {
   const maxIterations = options.maxToolIterations ?? 5;
+  const maxToolCallsPerTurn = options.maxToolCallsPerTurn ?? 8;
+  const maxToolResultLength = options.maxToolResultLength ?? 2000;
   const systemPrompt = options.systemPromptOverride ?? FINANCIAL_AGENT_SYSTEM_PROMPT;
 
   const messages: LlmMessage[] = [];
@@ -137,8 +143,14 @@ export async function runOrchestratorTurn(
 
     // Processa as tool calls retornadas pelo LLM
     let loopDetected = false;
+    let toolLimitReached = false;
 
     for (const toolCall of assistantMsg.tool_calls) {
+      if (toolCallsExecuted.length >= maxToolCallsPerTurn) {
+        toolLimitReached = true;
+        break;
+      }
+
       const signature = `${toolCall.function.name}:${toolCall.function.arguments}`;
 
       // Detecção de loop: mesma ferramenta com mesmos argumentos chamada novamente
@@ -153,6 +165,9 @@ export async function runOrchestratorTurn(
         context,
         catalog,
       );
+
+      // Compactação de payload para controle da janela de contexto
+      toolResultMsg.content = compactToolOutput(toolResultMsg.content, maxToolResultLength);
 
       if (toolResultMsg.actionProposal) {
         actionProposals.push(toolResultMsg.actionProposal);
@@ -198,6 +213,25 @@ export async function runOrchestratorTurn(
         iterations,
         usage: totalUsage,
         loopDetected: true,
+      };
+    }
+
+    if (toolLimitReached) {
+      const limitFallbackMessage: LlmMessage = {
+        role: "assistant",
+        content:
+          "A consulta atingiu o limite de segurança de chamadas a ferramentas por turno. Aqui estão os dados consolidados até o momento.",
+      };
+      messages.push(limitFallbackMessage);
+
+      return {
+        finalMessage: limitFallbackMessage,
+        conversationHistory: messages,
+        toolCallsExecuted,
+        actionProposals,
+        iterations,
+        usage: totalUsage,
+        toolCallsLimitReached: true,
       };
     }
   }

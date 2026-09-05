@@ -5,15 +5,29 @@ import {
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
 import {
-  calculateEstimatedCost,
   ALLOWED_MODELS,
-  DEFAULT_MODEL,
+  DEFAULT_CHAT_MODEL as DEFAULT_MODEL,
   type AllowedModel,
-} from "../_shared/ai/openai-adapter.ts";
+  validateAndResolveModel,
+  AiModelNotAllowedError,
+} from "../_shared/ai/model-policy.ts";
+import {
+  calculateEstimatedCost,
+} from "../_shared/ai/cost-calculator.ts";
+import {
+  redactSensitiveAiData,
+  AI_ERROR_CODES,
+} from "../_shared/ai/audit-observability.ts";
+import {
+  buildTurnContext,
+  type ConversationRepository,
+  DEFAULT_RECENT_MESSAGES,
+} from "../_shared/ai/memory-core.ts";
 import {
   runOrchestratorTurn,
   type LlmMessage,
   type LlmRunner,
+  FINANCIAL_AGENT_SYSTEM_PROMPT,
 } from "../_shared/ai/orchestrator-core.ts";
 import {
   createQueryToolCatalog,
@@ -44,6 +58,7 @@ export interface OrchestratorHandlerDependencies {
   repoFactory: (context: AiExecutionContext) => FinancialQueryRepository;
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
+  conversationRepo?: ConversationRepository;
   documentPipelineRunner?: (
     input: ProcessDocumentPipelineInput,
   ) => Promise<ProcessDocumentPipelineResult>;
@@ -162,9 +177,10 @@ export async function handleOrchestratorHttpRequest(
 
     // Model routing com validação estrita server-side
     const rawModel = typeof body.model === "string" ? body.model.trim() : undefined;
-    const selectedModel = rawModel && (ALLOWED_MODELS as readonly string[]).includes(rawModel)
-      ? (rawModel as AllowedModel)
-      : DEFAULT_MODEL;
+    const selectedModel = validateAndResolveModel(rawModel, {
+      task: "chat",
+      fallbackToDefault: true,
+    });
 
     if (!workspaceId) {
       return new Response(
@@ -300,13 +316,93 @@ export async function handleOrchestratorHttpRequest(
     const catalog = createQueryToolCatalog(repository, { extended: true });
     const runner = dependencies.runnerFactory(selectedModel);
 
+    // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico
+    let turnInputMessages = messages;
+    let loadedSummary: string | null = null;
+    let contextTruncated = false;
+
+    if (dependencies.conversationRepo && conversationId) {
+      try {
+        const conv = await dependencies.conversationRepo.getConversation(
+          conversationId,
+          context.workspaceId,
+          context.userId,
+        );
+        if (conv) {
+          loadedSummary = conv.summary;
+          const recent = await dependencies.conversationRepo.listRecentMessages(
+            conversationId,
+            context.workspaceId,
+            DEFAULT_RECENT_MESSAGES,
+          );
+          const historyAsLlm: LlmMessage[] = recent.map((m) => ({
+            role: m.role as "user" | "assistant" | "system" | "tool",
+            content: m.content,
+            tool_calls: m.tool_calls as any,
+          }));
+          const currentMsg = messages[messages.length - 1];
+          const ctxResult = buildTurnContext({
+            systemPrompt: FINANCIAL_AGENT_SYSTEM_PROMPT,
+            summary: loadedSummary,
+            historyMessages: historyAsLlm,
+            currentMessage: currentMsg,
+          });
+          turnInputMessages = ctxResult.messages;
+          contextTruncated = ctxResult.contextTruncated;
+        }
+      } catch (err) {
+        console.warn("[handler] Falha ao carregar memória canônica:", err);
+      }
+    }
+
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)
-    const turnResult = await runOrchestratorTurn(messages, context, catalog, runner);
+    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner);
     const durationMs = Date.now() - startTime;
 
     const estimatedCostUsd = calculateEstimatedCost(selectedModel, turnResult.usage);
 
+    // Persistência da mensagem do usuário e resposta do assistente na memória canônica
+    if (dependencies.conversationRepo && conversationId) {
+      try {
+        const lastUserMsg = messages.filter((m) => m.role === "user").pop();
+        if (lastUserMsg) {
+          await dependencies.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: context.workspaceId,
+            userId: context.userId,
+            role: "user",
+            content: lastUserMsg.content,
+          });
+        }
+        if (turnResult.finalMessage?.content) {
+          await dependencies.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: context.workspaceId,
+            userId: context.userId,
+            role: "assistant",
+            content: turnResult.finalMessage.content,
+            tokensCount: turnResult.usage.totalTokens,
+          });
+        }
+      } catch (err) {
+        console.warn("[handler] Falha ao persistir mensagens na memória:", err);
+      }
+    }
+
     if (dependencies.auditLogger) {
+      const rawMetadata = {
+        correlationId,
+        conversationId,
+        model: selectedModel,
+        iterations: turnResult.iterations,
+        tokens: turnResult.usage.totalTokens,
+        estimatedCostUsd,
+        loopDetected: turnResult.loopDetected ?? false,
+        maxIterationsReached: turnResult.maxIterationsReached ?? false,
+        toolCallsLimitReached: turnResult.toolCallsLimitReached ?? false,
+        contextTruncated,
+      };
+
       await dependencies.auditLogger.logEvent({
         userId: context.userId,
         workspaceId: context.workspaceId,
@@ -314,16 +410,7 @@ export async function handleOrchestratorHttpRequest(
         durationMs,
         status: "success",
         recordsCount: turnResult.toolCallsExecuted.length,
-        metadata: {
-          correlationId,
-          conversationId,
-          model: selectedModel,
-          iterations: turnResult.iterations,
-          tokens: turnResult.usage.totalTokens,
-          estimatedCostUsd,
-          loopDetected: turnResult.loopDetected ?? false,
-          maxIterationsReached: turnResult.maxIterationsReached ?? false,
-        },
+        metadata: redactSensitiveAiData(rawMetadata) as Record<string, unknown>,
       });
     }
 
@@ -338,6 +425,7 @@ export async function handleOrchestratorHttpRequest(
         estimatedCostUsd,
         loopDetected: turnResult.loopDetected ?? false,
         maxIterationsReached: turnResult.maxIterationsReached ?? false,
+        toolCallsLimitReached: turnResult.toolCallsLimitReached ?? false,
         conversation_id: conversationId,
         correlation_id: correlationId,
       }),
@@ -354,6 +442,10 @@ export async function handleOrchestratorHttpRequest(
       status = err.status;
       rawError = err.code;
       standardCode = mapStandardErrorCode(err.code);
+    } else if (err instanceof AiModelNotAllowedError) {
+      status = err.status;
+      rawError = err.message;
+      standardCode = err.code;
     } else if (err instanceof Error) {
       const msg = err.message || "";
       if (err.name === "AbortError" || msg.includes("timeout") || msg.includes("aborted")) {

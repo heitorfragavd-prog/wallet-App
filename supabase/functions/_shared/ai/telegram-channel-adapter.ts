@@ -24,6 +24,14 @@ import {
   OperationsAgent,
   createSupabaseOperationsRepository,
 } from "./operations-agent.ts";
+import { calculateEstimatedCost } from "./cost-calculator.ts";
+import { redactSensitiveAiData } from "./audit-observability.ts";
+import {
+  type ConversationRepository,
+  buildTurnContext,
+  DEFAULT_RECENT_MESSAGES,
+} from "./memory-core.ts";
+import { FINANCIAL_AGENT_SYSTEM_PROMPT, type LlmMessage } from "./orchestrator-core.ts";
 
 // ─── TIPOS DO TELEGRAM ────────────────────────────────────────────────────────
 
@@ -656,6 +664,7 @@ export interface TelegramAdapterDependencies {
   runnerFactory: (model?: string) => LlmRunner;
   repoFactory: (context: AiExecutionContext) => FinancialQueryRepository;
   proposalRepo: ActionRepository;
+  conversationRepo?: ConversationRepository;
   mutator?: ActionDatabaseMutator;
   auditSink?: AuditEventSinkLike;
   documentPipelineRunner?: typeof processDocumentPipeline;
@@ -724,12 +733,90 @@ export async function handleTelegramTextMessage(
   const catalog = createQueryToolCatalog(repo, { extended: true, operationsAgent });
   const runner = deps.runnerFactory();
 
+  let conversationId: string | undefined;
+  let turnMessages: LlmMessage[] = [{ role: "user", content: text }];
+
+  if (deps.conversationRepo) {
+    try {
+      const conv = await deps.conversationRepo.createConversation({
+        workspaceId: identity.workspaceId,
+        userId: identity.userId,
+        title: `Telegram Chat ${params.chatId}`,
+        channel: "telegram",
+      });
+      conversationId = conv.id;
+      const recent = await deps.conversationRepo.listRecentMessages(
+        conversationId,
+        identity.workspaceId,
+        DEFAULT_RECENT_MESSAGES,
+      );
+      const historyAsLlm: LlmMessage[] = recent.map((m) => ({
+        role: m.role as "user" | "assistant" | "system" | "tool",
+        content: m.content,
+        tool_calls: m.tool_calls as any,
+      }));
+      const ctxResult = buildTurnContext({
+        systemPrompt: FINANCIAL_AGENT_SYSTEM_PROMPT,
+        summary: conv.summary,
+        historyMessages: historyAsLlm,
+        currentMessage: { role: "user", content: text },
+      });
+      turnMessages = ctxResult.messages;
+    } catch (err) {
+      console.warn("[telegram-adapter] Erro ao carregar memória canônica:", err);
+    }
+  }
+
   const turnResult = await runOrchestratorTurn(
-    [{ role: "user", content: text }],
+    turnMessages,
     context,
     catalog,
     runner,
   );
+
+  // Persistência das mensagens na memória canônica se repositório ativo
+  if (deps.conversationRepo && conversationId) {
+    try {
+      await deps.conversationRepo.appendMessage({
+        conversationId,
+        workspaceId: identity.workspaceId,
+        userId: identity.userId,
+        role: "user",
+        content: text,
+      });
+      if (turnResult.finalMessage?.content) {
+        await deps.conversationRepo.appendMessage({
+          conversationId,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          role: "assistant",
+          content: turnResult.finalMessage.content,
+          tokensCount: turnResult.usage?.totalTokens ?? 0,
+        });
+      }
+    } catch (err) {
+      console.warn("[telegram-adapter] Erro ao persistir mensagens:", err);
+    }
+  }
+
+  // Telemetria de custo e auditoria canônica protegida por redaction
+  if (deps.auditSink) {
+    const estimatedCostUsd = calculateEstimatedCost("gpt-4o-mini", turnResult.usage);
+    await deps.auditSink.logEvent({
+      userId: identity.userId,
+      workspaceId: identity.workspaceId,
+      toolName: "wallet_ai_orchestrator_telegram",
+      durationMs: 0,
+      status: "success",
+      metadata: redactSensitiveAiData({
+        correlationId: context.correlationId,
+        conversationId,
+        channel: "telegram",
+        tokens: turnResult.usage.totalTokens,
+        estimatedCostUsd,
+      }) as Record<string, unknown>,
+    });
+  }
 
   // Se foram geradas Action Proposals (intenção de escrita / WRITE)
   if (turnResult.actionProposals && turnResult.actionProposals.length > 0) {
