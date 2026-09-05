@@ -98,7 +98,38 @@ export interface ResolvedTelegramIdentity {
   userRole?: string; // 'owner' | 'admin' | 'member' | 'viewer'
   userName?: string;
   error?: string;
-  errorCode?: "UNAUTHORIZED" | "NOT_LINKED" | "GROUP_NOT_CONFIGURED" | "NO_WORKSPACE" | "FORBIDDEN";
+  errorCode?: "UNAUTHORIZED" | "NOT_LINKED" | "GROUP_NOT_CONFIGURED" | "NO_WORKSPACE" | "FORBIDDEN" | "NEED_WORKSPACE_SELECTION";
+}
+
+// ─── CACHE DE IDEMPOTÊNCIA DE UPDATE_ID (TELEGRAM REPLAY PROTECTION) ──────────
+
+const PROCESSED_UPDATE_CACHE = new Map<number, number>();
+const MAX_UPDATE_CACHE_SIZE = 5000;
+const UPDATE_CACHE_TTL_MS = 3600 * 1000; // 1 hora de retenção
+
+export function isTelegramUpdateProcessed(updateId?: number): boolean {
+  if (!updateId) return false;
+  const now = Date.now();
+  const timestamp = PROCESSED_UPDATE_CACHE.get(updateId);
+  if (!timestamp) return false;
+  if (now - timestamp > UPDATE_CACHE_TTL_MS) {
+    PROCESSED_UPDATE_CACHE.delete(updateId);
+    return false;
+  }
+  return true;
+}
+
+export function markTelegramUpdateProcessed(updateId?: number): void {
+  if (!updateId) return;
+  if (PROCESSED_UPDATE_CACHE.size >= MAX_UPDATE_CACHE_SIZE) {
+    const oldestKey = PROCESSED_UPDATE_CACHE.keys().next().value;
+    if (oldestKey !== undefined) PROCESSED_UPDATE_CACHE.delete(oldestKey);
+  }
+  PROCESSED_UPDATE_CACHE.set(updateId, Date.now());
+}
+
+export function clearTelegramUpdateCache(): void {
+  PROCESSED_UPDATE_CACHE.clear();
 }
 
 // ─── CLIENTE TELEGRAM API ─────────────────────────────────────────────────────
@@ -332,7 +363,7 @@ export function formatProposalMessage(proposal: ActionProposal): {
 
   let riskEmoji = "🟡";
   if (proposal.riskLevel === "LOW") riskEmoji = "🟢";
-  if (proposal.riskLevel === "HIGH" || proposal.riskLevel === "CRITICAL") riskEmoji = "🔴";
+  if (proposal.riskLevel === "HIGH") riskEmoji = "🔴";
 
   const lines: string[] = [
     `📋 <b>Proposta de Ação: ${escapeTelegramHtml(proposal.actionType)}</b>`,
@@ -521,38 +552,76 @@ export async function resolveTelegramIdentity(
 
   // 4. Resolução de Workspace em Chat Privado
   if (!matchedWorkspaceId) {
-    // Busca workspaces onde o usuário é dono
-    const { data: ownedWs } = await supabase
-      .from("workspaces")
-      .select("id")
-      .eq("user_id", matchedUserId)
-      .limit(2);
+    // 4.1 Verifica preferência salva em channel_mappings (channel_config)
+    if (telegramUserId || telegramChatId) {
+      const { data: cmCfg } = await supabase
+        .from("channel_mappings")
+        .select("channel_config")
+        .eq("channel_type", "telegram")
+        .eq("channel_id", String(telegramUserId || telegramChatId))
+        .eq("is_active", true)
+        .maybeSingle();
 
-    if (ownedWs && ownedWs.length > 0) {
-      matchedWorkspaceId = ownedWs[0].id;
-      matchedAccessLevel = "owner";
-    } else {
-      // Busca workspaces como membro
-      const { data: memberWs } = await supabase
-        .from("workspace_members")
-        .select("workspace_id, role")
-        .eq("user_id", matchedUserId)
-        .eq("status", "active")
-        .limit(2);
-
-      if (memberWs && memberWs.length > 0) {
-        matchedWorkspaceId = memberWs[0].workspace_id;
-        matchedAccessLevel = memberWs[0].role;
+      const savedWs = cmCfg?.channel_config?.selected_workspace_id || cmCfg?.channel_config?.workspace_id;
+      if (savedWs) {
+        matchedWorkspaceId = savedWs;
       }
     }
   }
 
   if (!matchedWorkspaceId) {
-    return {
-      authorized: false,
-      errorCode: "NO_WORKSPACE",
-      error: "Nenhum workspace ativo encontrado para esta conta.",
-    };
+    // 4.2 Coleta todos os workspaces aos quais o usuário pertence (dono ou membro ativo)
+    const { data: ownedWs } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", matchedUserId);
+
+    const { data: memberWs } = await supabase
+      .from("workspace_members")
+      .select("workspace_id, role")
+      .eq("user_id", matchedUserId)
+      .eq("status", "active");
+
+    const allWorkspaces = new Map<string, string>(); // wsId -> role
+
+    if (ownedWs && Array.isArray(ownedWs)) {
+      for (const w of ownedWs) {
+        if (w?.id) allWorkspaces.set(w.id, "owner");
+      }
+    }
+
+    if (memberWs && Array.isArray(memberWs)) {
+      for (const m of memberWs) {
+        if (m?.workspace_id && !allWorkspaces.has(m.workspace_id)) {
+          allWorkspaces.set(m.workspace_id, m.role || "member");
+        }
+      }
+    }
+
+    const totalWs = allWorkspaces.size;
+
+    if (totalWs === 0) {
+      return {
+        authorized: false,
+        errorCode: "NO_WORKSPACE",
+        error: "Nenhum workspace ativo encontrado para esta conta.",
+      };
+    }
+
+    if (totalWs === 1) {
+      // Exatamente 1 workspace: auto-resolve
+      const [singleWsId, singleRole] = Array.from(allWorkspaces.entries())[0];
+      matchedWorkspaceId = singleWsId;
+      matchedAccessLevel = singleRole;
+    } else {
+      // > 1 workspaces: NÃO escolher arbitrariamente!
+      return {
+        authorized: false,
+        errorCode: "NEED_WORKSPACE_SELECTION",
+        error:
+          "Você possui múltiplos workspaces cadastrados. Selecione o workspace ativo nas configurações da Wallet antes de interagir via Telegram.",
+      };
+    }
   }
 
   // Converte access_level para papéis RBAC canônicos
@@ -688,6 +757,7 @@ export async function handleTelegramCallback(
     messageId?: number;
     chatId?: string | number;
     telegramUserId: string | number;
+    isGroup?: boolean;
   },
   deps: TelegramAdapterDependencies,
 ): Promise<{
@@ -695,7 +765,7 @@ export async function handleTelegramCallback(
   updatedMessageText?: string;
   removeKeyboard: boolean;
 }> {
-  const { callbackData, telegramUserId } = params;
+  const { callbackData, telegramUserId, chatId } = params;
 
   let proposalId = "";
   let isConfirm = false;
@@ -722,16 +792,44 @@ export async function handleTelegramCallback(
     };
   }
 
-  // 1. Re-identificação do usuário que clicou (RBAC)
+  // 1. Re-identificação do usuário que clicou (RBAC) preservando o contexto do chat (grupo vs privado)
+  const isGroup = params.isGroup ?? (chatId ? Number(chatId) < 0 : false);
   const identity = await resolveTelegramIdentity(
-    { telegramUserId, isGroup: false },
+    { telegramUserId, telegramChatId: chatId, isGroup },
     deps.supabase,
   );
 
   if (!identity.authorized || !identity.userId || !identity.workspaceId) {
     return {
-      answerText: "Acesso negado: sua conta não está autorizada.",
+      answerText: `Acesso negado: ${identity.error || "sua conta não está autorizada."}`,
       removeKeyboard: false,
+    };
+  }
+
+  // 2. Busca a proposta no repositório canônico
+  const proposal = await deps.proposalRepo.getProposal(proposalId);
+  if (!proposal) {
+    return {
+      answerText: "Proposta de ação não encontrada.",
+      removeKeyboard: true,
+    };
+  }
+
+  // 3. Isolamento de Tenant estrito: a proposta DEVE pertencer ao workspace resolvido
+  if (proposal.workspaceId !== identity.workspaceId) {
+    return {
+      answerText: "Acesso negado: a proposta pertence a outro workspace.",
+      removeKeyboard: true,
+    };
+  }
+
+  // 4. Bloqueio incondicional de exclusão (deletar_transacao)
+  if (proposal.actionType === "deletar_transacao") {
+    return {
+      answerText: "Ação de exclusão bloqueada por política de segurança.",
+      updatedMessageText:
+        "⚠️ <b>Ação Bloqueada:</b> Exclusões de transações são bloqueadas por política de segurança e não podem ser confirmadas via Telegram.",
+      removeKeyboard: true,
     };
   }
 
@@ -743,13 +841,35 @@ export async function handleTelegramCallback(
     correlationId: `cb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
 
-  // 2. Fluxo de Cancelamento
+  // 5. Fluxo de Cancelamento
   if (isCancel) {
+    // Se já foi cancelada:
+    if (proposal.status === "cancelled") {
+      return {
+        answerText: "Esta proposta já foi cancelada anteriormente.",
+        updatedMessageText: "❌ <i>Esta proposta já havia sido cancelada anteriormente.</i>",
+        removeKeyboard: true,
+      };
+    }
+    // Se já foi confirmada ou executada:
+    if (proposal.status !== "prepared") {
+      return {
+        answerText: `Não é possível cancelar uma proposta no status "${proposal.status}".`,
+        updatedMessageText: `⚠️ <i>Esta proposta já foi processada (${proposal.status}) e não pode ser cancelada.</i>`,
+        removeKeyboard: true,
+      };
+    }
+
     try {
-      if (typeof deps.proposalRepo.cancelProposalAtomically === "function") {
-        await deps.proposalRepo.cancelProposalAtomically(proposalId, context);
-      } else {
-        await deps.proposalRepo.updateStatus(proposalId, "cancelled");
+      const cancelled = typeof deps.proposalRepo.cancelProposalAtomically === "function"
+        ? await deps.proposalRepo.cancelProposalAtomically(proposalId, context)
+        : (await deps.proposalRepo.updateStatus(proposalId, "cancelled"), true);
+
+      if (!cancelled) {
+        return {
+          answerText: "Esta proposta já foi cancelada ou processada concorrentemente.",
+          removeKeyboard: true,
+        };
       }
 
       return {
@@ -765,68 +885,140 @@ export async function handleTelegramCallback(
     }
   }
 
-  // 3. Fluxo de Confirmação
+  // 6. Fluxo de Confirmação
   if (isConfirm) {
-    try {
-      // Mutator padrão: se não fornecido, usa mock pass-through
-      const mutator: ActionDatabaseMutator = deps.mutator ?? {
-        executeMutation: async (actionType) => {
-          return {
-            success: true,
-            recordId: `mock_${actionType}_${Date.now()}`,
-          };
-        },
+    // Se já foi cancelada:
+    if (proposal.status === "cancelled") {
+      return {
+        answerText: "⚠️ Esta proposta foi cancelada e não pode ser confirmada.",
+        updatedMessageText: "❌ <i>Esta proposta foi cancelada anteriormente e não pode ser confirmada.</i>",
+        removeKeyboard: true,
       };
+    }
+    // Se já foi confirmada ou executada (duplo clique / replay):
+    if (proposal.status === "confirmed" || proposal.status === "executed") {
+      return {
+        answerText: "⚠️ Esta proposta já foi processada anteriormente.",
+        updatedMessageText: "ℹ️ <i>Esta proposta já havia sido confirmada anteriormente (duplo clique prevenido).</i>",
+        removeKeyboard: true,
+      };
+    }
+    // Se expirou:
+    if (proposal.status === "expired" || new Date(proposal.expiresAt).getTime() < Date.now()) {
+      return {
+        answerText: "⚠️ Esta proposta de ação expirou.",
+        updatedMessageText: "⚠️ <i>Esta proposta de ação expirou. Por favor, solicite novamente.</i>",
+        removeKeyboard: true,
+      };
+    }
 
-      const executionResult = await executeConfirmedProposal(
+    // RBAC: viewer não pode aprovar
+    if (identity.userRole === "viewer" || identity.userRole === "leitor") {
+      return {
+        answerText: "Acesso negado: usuários com permissão somente leitura não podem aprovar propostas.",
+        removeKeyboard: false,
+      };
+    }
+
+    // RBAC: member só pode aprovar próprias propostas
+    const isElevated = identity.userRole === "owner" || identity.userRole === "admin";
+    if (!isElevated && proposal.userId !== identity.userId) {
+      return {
+        answerText: "Acesso negado: você só pode aprovar suas próprias propostas de ação.",
+        removeKeyboard: false,
+      };
+    }
+
+    // Confirmação atômica condicional no repositório (prepared -> confirmed)
+    let confirmedProposal: ActionProposal = proposal;
+    if (typeof deps.proposalRepo.confirmProposalAtomically === "function") {
+      const confirmResult = await deps.proposalRepo.confirmProposalAtomically(
         proposalId,
         context,
-        deps.proposalRepo,
-        mutator,
         identity.userRole,
-        deps.auditSink,
       );
+      if (!confirmResult.success || !confirmResult.proposal) {
+        const code = confirmResult.code;
+        if (code === "WALLET_AI_ACTION_ALREADY_PROCESSED") {
+          return {
+            answerText: "⚠️ Esta proposta já foi processada anteriormente.",
+            updatedMessageText: "ℹ️ <i>Esta proposta já havia sido confirmada anteriormente (duplo clique prevenido).</i>",
+            removeKeyboard: true,
+          };
+        }
+        return {
+          answerText: `⚠️ ${confirmResult.error || "Falha ao confirmar proposta."}`,
+          removeKeyboard: true,
+        };
+      }
+      confirmedProposal = confirmResult.proposal;
+    } else {
+      await deps.proposalRepo.updateStatus(proposalId, "confirmed", { confirmedAt: new Date().toISOString() });
+      confirmedProposal.status = "confirmed";
+    }
+
+    // Auditoria de confirmação
+    if (deps.auditSink) {
+      await deps.auditSink.logEvent({
+        eventName: "proposal_confirmed",
+        proposalId: confirmedProposal.id,
+        actionType: confirmedProposal.actionType,
+        riskLevel: confirmedProposal.riskLevel,
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        correlationId: context.correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // SE NÃO HOUVER MUTATOR ATIVO (Fase 1 / Proposal-Only com 0 executores financeiros):
+    // Permanece em status 'confirmed', NÃO marca 'executed', NÃO cria mock recordId
+    if (!deps.mutator) {
+      return {
+        answerText: "Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.",
+        updatedMessageText: `✅ <b>Proposta Confirmada</b>\n\n${escapeTelegramHtml(
+          confirmedProposal.summary,
+        )}\n\n<i>Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.</i>`,
+        removeKeyboard: true,
+      };
+    }
+
+    // SE HOUVER MUTATOR FORNECIDO (ex: testes com mutator real ou executores futuros):
+    try {
+      await deps.mutator.executeMutation(
+        confirmedProposal.actionType,
+        confirmedProposal.payload as Record<string, unknown>,
+        context,
+      );
+
+      if (typeof deps.proposalRepo.executeProposalAtomically === "function") {
+        await deps.proposalRepo.executeProposalAtomically(proposalId);
+      } else {
+        await deps.proposalRepo.updateStatus(proposalId, "executed", { executedAt: new Date().toISOString() });
+      }
 
       return {
         answerText: "✅ Ação confirmada com sucesso!",
         updatedMessageText: `✅ <b>Ação Confirmada e Executada!</b>\n\n${escapeTelegramHtml(
-          executionResult.proposal.summary,
+          confirmedProposal.summary,
         )}\n\n<i>Status: Confirmado via Telegram por você.</i>`,
         removeKeyboard: true,
       };
     } catch (err: any) {
       const msg = err?.message || "";
-      const code = err?.code || "";
-
-      // Tratamento especial para Proposal-only (Fase de Rollout com 0 executores automáticos)
-      if (msg.includes("Proposal-only") || code === "WALLET_AI_ACTION_FORBIDDEN") {
+      if (msg.includes("Proposal-only") || err?.code === "WALLET_AI_ACTION_FORBIDDEN") {
         return {
-          answerText: "Proposta confirmada (modo Proposal-only)!",
-          updatedMessageText: `✅ <b>Proposta Confirmada pelo Usuário</b>\n\n<i>Status: Aprovada (modo Proposal-only: nenhuma mutação física executada no banco nesta fase de rollout).</i>`,
-          removeKeyboard: true,
-        };
-      }
-
-      // Replay / Double-click ou Proposta Expirada
-      if (code === "WALLET_AI_ACTION_ALREADY_PROCESSED" || msg.includes("já foi")) {
-        return {
-          answerText: "⚠️ Esta proposta já foi processada anteriormente.",
-          updatedMessageText: "ℹ️ <i>Esta proposta já havia sido confirmada anteriormente (duplo clique prevenido).</i>",
-          removeKeyboard: true,
-        };
-      }
-
-      if (code === "WALLET_AI_ACTION_EXPIRED" || msg.includes("expirou")) {
-        return {
-          answerText: "⚠️ Esta proposta de ação expirou.",
-          updatedMessageText: "⚠️ <i>Esta proposta de ação expirou. Por favor, solicite novamente.</i>",
+          answerText: "Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.",
+          updatedMessageText: `✅ <b>Proposta Confirmada</b>\n\n${escapeTelegramHtml(
+            confirmedProposal.summary,
+          )}\n\n<i>Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.</i>`,
           removeKeyboard: true,
         };
       }
 
       return {
-        answerText: `⚠️ Falha ao confirmar: ${msg}`,
-        updatedMessageText: `⚠️ <b>Ação Não Confirmada</b>\n\n${escapeTelegramHtml(msg)}`,
+        answerText: `⚠️ Falha ao executar: ${msg}`,
+        updatedMessageText: `⚠️ <b>Ação Não Executada</b>\n\n${escapeTelegramHtml(msg)}`,
         removeKeyboard: true,
       };
     }
@@ -951,6 +1143,14 @@ export async function processTelegramUpdate(
   update: TelegramUpdate,
   deps: TelegramAdapterDependencies,
 ): Promise<{ handled: boolean; result?: any; error?: string }> {
+  // 0. Idempotência de Updates via Sliding Window (FAIL-CLOSED contra replay de rede)
+  if (update?.update_id) {
+    if (isTelegramUpdateProcessed(update.update_id)) {
+      return { handled: true };
+    }
+    markTelegramUpdateProcessed(update.update_id);
+  }
+
   const api = deps.telegramApi ?? createDefaultTelegramApiClient(deps.telegramBotToken, deps.openaiApiKey);
 
   // 1. Processamento de Callbacks (Inline Buttons)

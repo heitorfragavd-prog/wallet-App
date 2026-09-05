@@ -9,6 +9,7 @@ import {
   formatProposalMessage,
   escapeTelegramHtml,
   markdownToTelegramHtml,
+  clearTelegramUpdateCache,
   type TelegramApiClient,
   type TelegramAdapterDependencies,
   type TelegramUpdate,
@@ -33,6 +34,7 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
   let answeredCallbacks: any[];
 
   beforeEach(() => {
+    clearTelegramUpdateCache();
     savedProposals = new Map<string, ActionProposal>();
     sentMessages = [];
     editedMessages = [];
@@ -907,6 +909,667 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
 
       const result = await processTelegramUpdate(update, deps);
       expect(result.handled).toBe(false);
+    });
+  });
+
+  // ─── 7. CHECKPOINT 9.5A.1 — HARDENING DO TELEGRAM ──────────────────────────
+  describe("7. Checkpoint 9.5A.1 — Hardening do Telegram (Fail-Closed, Replay, Multi-Workspace, Risk)", () => {
+    // 1. sem mutator -> nenhuma execução
+    it("1. sem mutator -> nenhuma execução (proposal transiciona para confirmed, não executed)", async () => {
+      const propId = "prop-no-mutator-chk";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa Café R$ 10",
+        payload: { valor: 10 },
+        idempotencyHash: "idem_cafe_10",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+        // mutator ausente
+      };
+
+      const cbResult = await handleTelegramCallback(
+        {
+          callbackData: `confirm_prop:${propId}`,
+          callbackQueryId: "cq_no_mut",
+          telegramUserId: TEST_TG_USER_ID,
+        },
+        deps,
+      );
+
+      expect(cbResult.answerText).toBe("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+      expect(cbResult.updatedMessageText).toContain("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+      expect(cbResult.updatedMessageText).not.toContain("Ação Confirmada e Executada");
+      expect(savedProposals.get(propId)?.status).toBe("confirmed");
+      expect(savedProposals.get(propId)?.executedAt).toBeNull();
+    });
+
+    // 2. proposal-only -> status confirmed, não executed
+    it("2. proposal-only -> status confirmed, não executed", async () => {
+      const propId = "prop-proposal-only-chk";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa Transporte R$ 25",
+        payload: { valor: 25 },
+        idempotencyHash: "idem_trans_25",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+        mutator: {
+          executeMutation: vi.fn(async () => {
+            throw new Error("Proposal-only: executores financeiros automáticos inativos");
+          }),
+        },
+      };
+
+      const cbResult = await handleTelegramCallback(
+        {
+          callbackData: `confirm_prop:${propId}`,
+          callbackQueryId: "cq_prop_only",
+          telegramUserId: TEST_TG_USER_ID,
+        },
+        deps,
+      );
+
+      expect(cbResult.answerText).toBe("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+      expect(cbResult.updatedMessageText).toContain("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+      expect(cbResult.updatedMessageText).not.toContain("Ação Confirmada e Executada");
+      expect(savedProposals.get(propId)?.status).toBe("confirmed");
+      expect(savedProposals.get(propId)?.executedAt).toBeNull();
+    });
+
+    // 3. mensagem não diz "executada" sem execução
+    it("3. mensagem não diz 'executada' sem execução", async () => {
+      const propId = "prop-msg-no-exec";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "criar_meta",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Criar meta Reserva",
+        payload: { nome: "Reserva" },
+        idempotencyHash: "idem_meta_1",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const cbResult = await handleTelegramCallback(
+        {
+          callbackData: `confirm_prop:${propId}`,
+          callbackQueryId: "cq_msg_no_exec",
+          telegramUserId: TEST_TG_USER_ID,
+        },
+        deps,
+      );
+
+      expect(cbResult.answerText).toBe("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+      expect(cbResult.updatedMessageText).not.toContain("Ação Confirmada e Executada");
+      expect(cbResult.updatedMessageText).not.toContain("executada com sucesso");
+      expect(cbResult.updatedMessageText).toContain("Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.");
+    });
+
+    // 4. delete bloqueado
+    it("4. delete bloqueado: deletar_transacao é barrado no Telegram", async () => {
+      const propId = "prop-del-chk";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "deletar_transacao",
+        actionVersion: "v1",
+        riskLevel: "HIGH",
+        summary: "Deletar transação tx-99",
+        payload: { transacao_id: "tx-99" },
+        idempotencyHash: "idem_del_99",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const mockMutator = { executeMutation: vi.fn() };
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+        mutator: mockMutator,
+      };
+
+      const cbResult = await handleTelegramCallback(
+        {
+          callbackData: `confirm_prop:${propId}`,
+          callbackQueryId: "cq_del_chk",
+          telegramUserId: TEST_TG_USER_ID,
+        },
+        deps,
+      );
+
+      expect(cbResult.answerText).toContain("bloqueada por política de segurança");
+      expect(cbResult.updatedMessageText).toContain("Ação Bloqueada");
+      expect(cbResult.removeKeyboard).toBe(true);
+      expect(mockMutator.executeMutation).not.toHaveBeenCalled();
+      expect(savedProposals.get(propId)?.status).toBe("prepared");
+    });
+
+    // 5. CRITICAL inexistente
+    it("5. CRITICAL inexistente no modelo de risco e formatação", () => {
+      const proposal: ActionProposal = {
+        id: "prop-risk-chk",
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "HIGH",
+        summary: "Transação de Risco",
+        payload: { valor: 50000 },
+        idempotencyHash: "idem_risk_chk",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      };
+
+      const formatted = formatProposalMessage(proposal);
+      expect(formatted.text).toContain("HIGH");
+      expect(formatted.text).not.toContain("CRITICAL");
+    });
+
+    // 6. 1 workspace resolve
+    it("6. 1 workspace resolve: auto-resolve quando usuário tem exatamente 1 workspace", async () => {
+      const singleWsSupabase = {
+        from: vi.fn((table: string) => {
+          const qb: any = {
+            select: () => qb,
+            eq: () => qb,
+            maybeSingle: async () => {
+              if (table === "channel_mappings") {
+                return {
+                  data: {
+                    user_id: "user-single-ws",
+                    workspace_id: null,
+                    channel_config: {},
+                    is_active: true,
+                    nome_exibicao: "Single WS User",
+                  },
+                };
+              }
+              return { data: null };
+            },
+            execute: async () => {
+              if (table === "workspaces") {
+                return { data: [{ id: "ws-single-111" }], error: null };
+              }
+              if (table === "workspace_members") {
+                return { data: [], error: null };
+              }
+              return { data: [], error: null };
+            },
+            then: (resolve: any, reject?: any) => {
+              return qb.execute().then(resolve, reject);
+            },
+          };
+          return qb;
+        }),
+      };
+
+      const identity = await resolveTelegramIdentity(
+        { telegramUserId: 123456, telegramChatId: 123456, isGroup: false },
+        singleWsSupabase as any,
+      );
+
+      expect(identity.authorized).toBe(true);
+      expect(identity.workspaceId).toBe("ws-single-111");
+    });
+
+    // 7. múltiplos workspaces não escolhe primeiro
+    it("7. múltiplos workspaces não escolhe primeiro: retorna NEED_WORKSPACE_SELECTION sem workspace explícito", async () => {
+      const multiWsSupabase = {
+        from: vi.fn((table: string) => {
+          const qb: any = {
+            select: () => qb,
+            eq: () => qb,
+            maybeSingle: async () => {
+              if (table === "channel_mappings") {
+                return {
+                  data: {
+                    user_id: "user-multi-ws",
+                    workspace_id: null,
+                    channel_config: {},
+                    is_active: true,
+                    nome_exibicao: "Multi WS User",
+                  },
+                };
+              }
+              return { data: null };
+            },
+            execute: async () => {
+              if (table === "workspaces") {
+                return { data: [{ id: "ws-alpha" }, { id: "ws-beta" }], error: null };
+              }
+              if (table === "workspace_members") {
+                return { data: [], error: null };
+              }
+              return { data: [], error: null };
+            },
+            then: (resolve: any, reject?: any) => {
+              return qb.execute().then(resolve, reject);
+            },
+          };
+          return qb;
+        }),
+      };
+
+      const identity = await resolveTelegramIdentity(
+        { telegramUserId: 123456, telegramChatId: 123456, isGroup: false },
+        multiWsSupabase as any,
+      );
+
+      expect(identity.authorized).toBe(false);
+      expect(identity.errorCode).toBe("NEED_WORKSPACE_SELECTION");
+      expect(identity.error).toContain("múltiplos workspaces");
+      expect(identity.workspaceId).toBeUndefined();
+    });
+
+    // 8. workspace explícito mapping funciona
+    it("8. workspace explícito mapping funciona: respeita selected_workspace_id com múltiplos workspaces", async () => {
+      const explicitWsSupabase = {
+        from: vi.fn((table: string) => {
+          const qb: any = {
+            select: () => qb,
+            eq: () => qb,
+            maybeSingle: async () => {
+              if (table === "channel_mappings") {
+                return {
+                  data: {
+                    user_id: "user-multi-ws",
+                    workspace_id: null,
+                    channel_config: { selected_workspace_id: "ws-beta" },
+                    is_active: true,
+                    nome_exibicao: "Multi WS User",
+                  },
+                };
+              }
+              return { data: null };
+            },
+            execute: async () => {
+              if (table === "workspaces") {
+                return { data: [{ id: "ws-alpha" }, { id: "ws-beta" }], error: null };
+              }
+              if (table === "workspace_members") {
+                return { data: [{ workspace_id: "ws-beta", role: "member", status: "active" }], error: null };
+              }
+              return { data: [], error: null };
+            },
+            then: (resolve: any, reject?: any) => {
+              return qb.execute().then(resolve, reject);
+            },
+          };
+          return qb;
+        }),
+      };
+
+      const identity = await resolveTelegramIdentity(
+        { telegramUserId: 123456, telegramChatId: 123456, isGroup: false },
+        explicitWsSupabase as any,
+      );
+
+      expect(identity.authorized).toBe(true);
+      expect(identity.workspaceId).toBe("ws-beta");
+    });
+
+    // 9. grupo valida chat + user
+    it("9. grupo valida chat + user: rejeita se grupo existe mas usuário não pertence ao workspace", async () => {
+      const groupSupabase = {
+        from: vi.fn((table: string) => {
+          const qb: any = {
+            select: () => qb,
+            eq: () => qb,
+            maybeSingle: async () => {
+              if (table === "channel_mappings") {
+                return {
+                  data: {
+                    user_id: "user-outsider",
+                    is_active: true,
+                    nome_exibicao: "User Outsider",
+                  },
+                };
+              }
+              if (table === "telegram_grupos_config") {
+                return {
+                  data: {
+                    workspace_id: "ws-group-only",
+                    chat_id: "-100777",
+                  },
+                };
+              }
+              return { data: null };
+            },
+            execute: async () => ({ data: [], error: null }),
+          };
+          return qb;
+        }),
+      };
+
+      const identity = await resolveTelegramIdentity(
+        { telegramUserId: 777, telegramChatId: -100777, isGroup: true },
+        groupSupabase as any,
+      );
+
+      expect(identity.authorized).toBe(false);
+      expect(identity.errorCode).toBe("FORBIDDEN");
+      expect(identity.error).toContain("não possui permissão de acesso ao workspace deste grupo");
+    });
+
+    // 10. callback grupo mantém contexto
+    it("10. callback grupo mantém contexto: propaga isGroup: true e chatId para autorização", async () => {
+      const propId = "prop-group-chk-1";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: "ws-group-only",
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa Grupo R$ 150",
+        payload: { valor: 150 },
+        idempotencyHash: "idem_grp_chk",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const outsiderSupabase = {
+        from: vi.fn((table: string) => {
+          const qb: any = {
+            select: () => qb,
+            eq: () => qb,
+            maybeSingle: async () => {
+              if (table === "channel_mappings") {
+                return { data: { user_id: TEST_USER_ID, is_active: true } };
+              }
+              if (table === "telegram_grupos_config") {
+                return { data: { workspace_id: "ws-group-only", chat_id: String(TEST_GROUP_CHAT_ID) } };
+              }
+              return { data: null };
+            },
+            execute: async () => ({ data: [], error: null }),
+          };
+          return qb;
+        }),
+      };
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: outsiderSupabase as any,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const cbResult = await handleTelegramCallback(
+        {
+          callbackData: `confirm_prop:${propId}`,
+          callbackQueryId: "cq_grp_chk",
+          telegramUserId: TEST_TG_USER_ID,
+          chatId: TEST_GROUP_CHAT_ID,
+          isGroup: true,
+        },
+        deps,
+      );
+
+      expect(cbResult.answerText).toContain("Acesso negado");
+      expect(savedProposals.get(propId)?.status).toBe("prepared");
+    });
+
+    // 11. mesmo update_id não duplica proposal
+    it("11. mesmo update_id não duplica proposal: replay de update_id é ignorado", async () => {
+      clearTelegramUpdateCache();
+
+      const mockRunner = {
+        generateCompletion: vi.fn(async () => ({
+          message: { role: "assistant" as const, content: "Resposta única" },
+        })),
+      };
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => mockRunner as any,
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const update: TelegramUpdate = {
+        update_id: 888999,
+        message: {
+          message_id: 882,
+          from: { id: TEST_TG_USER_ID, first_name: "Heitor" },
+          chat: { id: TEST_TG_CHAT_ID, type: "private" },
+          date: Date.now(),
+          text: "Qual é o saldo?",
+        },
+      };
+
+      const first = await processTelegramUpdate(update, deps);
+      expect(first.handled).toBe(true);
+      expect(mockRunner.generateCompletion).toHaveBeenCalledTimes(1);
+
+      const second = await processTelegramUpdate(update, deps);
+      expect(second.handled).toBe(true);
+      expect(mockRunner.generateCompletion).toHaveBeenCalledTimes(1);
+    });
+
+    // 12. callback repetido não duplica
+    it("12. callback repetido não duplica: duplo clique é tratado como idempotente", async () => {
+      const propId = "prop-double-chk";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa R$ 50",
+        payload: { valor: 50 },
+        idempotencyHash: "idem_dchk_50",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const first = await handleTelegramCallback(
+        { callbackData: `cancel_prop:${propId}`, callbackQueryId: "cq_dchk_1", telegramUserId: TEST_TG_USER_ID },
+        deps,
+      );
+      expect(first.answerText).toContain("Proposta cancelada");
+      expect(savedProposals.get(propId)?.status).toBe("cancelled");
+
+      const second = await handleTelegramCallback(
+        { callbackData: `cancel_prop:${propId}`, callbackQueryId: "cq_dchk_2", telegramUserId: TEST_TG_USER_ID },
+        deps,
+      );
+      expect(second.answerText).toContain("Esta proposta já foi cancelada");
+    });
+
+    // 13. confirm após cancel falha
+    it("13. confirm após cancel falha: bloqueia aprovação de proposta cancelada", async () => {
+      const propId = "prop-c-after-c";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa R$ 80",
+        payload: { valor: 80 },
+        idempotencyHash: "idem_cac",
+        status: "cancelled",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const res = await handleTelegramCallback(
+        { callbackData: `confirm_prop:${propId}`, callbackQueryId: "cq_cac", telegramUserId: TEST_TG_USER_ID },
+        deps,
+      );
+
+      expect(res.answerText).toContain("foi cancelada e não pode ser confirmada");
+      expect(savedProposals.get(propId)?.status).toBe("cancelled");
+    });
+
+    // 14. cancel após confirm falha
+    it("14. cancel após confirm falha: bloqueia cancelamento de proposta confirmada", async () => {
+      const propId = "prop-c-after-conf";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: TEST_WORKSPACE_ID,
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa R$ 80",
+        payload: { valor: 80 },
+        idempotencyHash: "idem_conf_then_cancel",
+        status: "confirmed",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: new Date().toISOString(),
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const res = await handleTelegramCallback(
+        { callbackData: `cancel_prop:${propId}`, callbackQueryId: "cq_conf_c", telegramUserId: TEST_TG_USER_ID },
+        deps,
+      );
+
+      expect(res.answerText).toContain("Não é possível cancelar uma proposta");
+      expect(res.answerText).toContain("confirmed");
+      expect(savedProposals.get(propId)?.status).toBe("confirmed");
+    });
+
+    // 15. outro workspace falha
+    it("15. outro workspace falha: cross-workspace callback é barrado", async () => {
+      const propId = "prop-cross-ws";
+      savedProposals.set(propId, {
+        id: propId,
+        workspaceId: "workspace-stranger-999",
+        userId: TEST_USER_ID,
+        actionType: "cadastrar_transacao",
+        actionVersion: "v1",
+        riskLevel: "LOW",
+        summary: "Despesa Estranha R$ 80",
+        payload: { valor: 80 },
+        idempotencyHash: "idem_cross",
+        status: "prepared",
+        expiresAt: new Date(Date.now() + 100000).toISOString(),
+        confirmedAt: null,
+        executedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase, // Resolve para TEST_WORKSPACE_ID
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+      };
+
+      const res = await handleTelegramCallback(
+        { callbackData: `confirm_prop:${propId}`, callbackQueryId: "cq_cross", telegramUserId: TEST_TG_USER_ID },
+        deps,
+      );
+
+      expect(res.answerText).toContain("pertence a outro workspace");
+      expect(savedProposals.get(propId)?.status).toBe("prepared");
     });
   });
 });
