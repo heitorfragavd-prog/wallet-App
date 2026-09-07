@@ -149,6 +149,60 @@ export function clearTelegramUpdateCache(): void {
   PROCESSED_UPDATE_CACHE.clear();
 }
 
+// ─── IDEMPOTÊNCIA DISTRIBUÍDA (EDGE MULTI-INSTÂNCIA) ──────────────────────────
+
+export interface TelegramIdempotencyRepository {
+  claimUpdate(updateId: number, botId?: string, chatId?: number): Promise<boolean>;
+}
+
+export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotencyRepository {
+  constructor(private readonly client: any) {}
+
+  async claimUpdate(updateId: number, botId = "default", chatId?: number): Promise<boolean> {
+    try {
+      const { data, error } = await this.client
+        .from("telegram_processed_updates")
+        .insert({
+          update_id: updateId,
+          bot_id: botId,
+          chat_id: chatId ?? null,
+        })
+        .select("update_id")
+        .maybeSingle();
+
+      if (error) {
+        // Código PostgreSQL 23505 = unique_violation (update já processado ou em processamento)
+        if (
+          error.code === "23505" ||
+          error.message?.includes("duplicate key") ||
+          error.message?.includes("unique constraint") ||
+          error.message?.includes("pk_telegram_processed_updates")
+        ) {
+          return false;
+        }
+        // Fallback resiliente para o cache em memória se a tabela não responder
+        console.warn("[telegram-idempotency] Erro ao registrar idempotência distribuída:", error.message);
+        if (isTelegramUpdateProcessed(updateId)) {
+          return false;
+        }
+        markTelegramUpdateProcessed(updateId);
+        return true;
+      }
+
+      // Se inseriu com sucesso, marca também no cache local L1 para rapidez
+      markTelegramUpdateProcessed(updateId);
+      return Boolean(data);
+    } catch (err) {
+      console.warn("[telegram-idempotency] Exceção no claim distribuído:", err);
+      if (isTelegramUpdateProcessed(updateId)) {
+        return false;
+      }
+      markTelegramUpdateProcessed(updateId);
+      return true;
+    }
+  }
+}
+
 // ─── CLIENTE TELEGRAM API ─────────────────────────────────────────────────────
 
 export interface TelegramApiClient {
@@ -689,6 +743,7 @@ export interface TelegramAdapterDependencies {
   ) => Promise<{ isDuplicate: boolean; existingRecordId?: string; type?: string }>;
   operationsAgent?: OperationsAgent;
   operationsAgentFactory?: (context: AiExecutionContext) => OperationsAgent;
+  idempotencyRepo?: TelegramIdempotencyRepository;
 }
 
 // ─── MANIPULADORES DE MENSAGENS E EVENTOS ─────────────────────────────────────
@@ -1300,12 +1355,28 @@ export async function processTelegramUpdate(
   deps: TelegramAdapterDependencies,
   options?: { correlationId?: string },
 ): Promise<{ handled: boolean; result?: any; error?: string }> {
-  // 0. Idempotência de Updates via Sliding Window (FAIL-CLOSED contra replay de rede)
+  // 0. Idempotência de Updates: Distribuída (Postgres) com Fallback L1 (Sliding Window)
   if (update?.update_id) {
-    if (isTelegramUpdateProcessed(update.update_id)) {
+    const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id;
+    let claimed = false;
+
+    if (deps.idempotencyRepo) {
+      claimed = await deps.idempotencyRepo.claimUpdate(update.update_id, "default", chatId);
+    } else if (deps.supabase) {
+      const defaultRepo = new SupabaseTelegramIdempotencyRepository(deps.supabase);
+      claimed = await defaultRepo.claimUpdate(update.update_id, "default", chatId);
+    } else {
+      if (isTelegramUpdateProcessed(update.update_id)) {
+        return { handled: true };
+      }
+      markTelegramUpdateProcessed(update.update_id);
+      claimed = true;
+    }
+
+    if (!claimed) {
+      // Replay detectado no cluster distribuído: descarta silenciosamente
       return { handled: true };
     }
-    markTelegramUpdateProcessed(update.update_id);
   }
 
   const api = deps.telegramApi ?? createDefaultTelegramApiClient(deps.telegramBotToken, deps.openaiApiKey);
