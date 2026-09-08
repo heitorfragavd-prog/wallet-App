@@ -7,7 +7,8 @@ export interface EyemobileConfig {
   id?: string;
   user_id?: string;
   access_key: string;
-  secret_key: string;
+  secret_key?: string;
+  has_secret?: boolean;
   environment: "production" | "staging";
   store_id: string | null;
   default_conta_id: string | null;
@@ -66,20 +67,31 @@ export const useEyemobileConfig = () => {
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch Config
+      // 1. Fetch Config com colunas seguras (secret_key e revocada no banco para authenticated)
       const { data: configData, error: configError } = await supabase
         .from("eyemobile_config")
-        .select("*")
+        .select("id, user_id, access_key, environment, store_id, default_conta_id, default_categoria_receita_id, default_categoria_taxa_id, auto_sync_sales, auto_sync_stock, last_synced_offset, created_at, updated_at")
         .maybeSingle();
 
       if (configError) throw configError;
+
+      let hasSecret = false;
+      try {
+        const { data: statusData } = await supabase.rpc("get_eyemobile_config_status").maybeSingle();
+        if (statusData) {
+          hasSecret = Boolean((statusData as { has_secret?: boolean }).has_secret);
+        }
+      } catch {
+        // RPC fallback
+      }
 
       if (configData) {
         setConfig({
           id: configData.id,
           user_id: configData.user_id,
           access_key: configData.access_key,
-          secret_key: configData.secret_key,
+          secret_key: "",
+          has_secret: hasSecret,
           environment: configData.environment as "production" | "staging",
           store_id: configData.store_id,
           default_conta_id: configData.default_conta_id,
@@ -100,16 +112,16 @@ export const useEyemobileConfig = () => {
         .from("eyemobile_sync_logs")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(10);
+        .limit(20);
 
       if (logsError) throw logsError;
-      setLogs((logsData || []) as EyemobileSyncLog[]);
+      setLogs((logsData as unknown as EyemobileSyncLog[]) || []);
 
     } catch (error: any) {
       logger.error("useEyemobileConfig", "Erro ao carregar configurações do Eyemobile", { error: error.message });
       toast({
-        title: "Erro ao carregar configurações",
-        description: error.message || "Erro desconhecido",
+        title: "Erro ao carregar",
+        description: "Não foi possível carregar as configurações do Eyemobile.",
         variant: "destructive",
       });
     } finally {
@@ -124,11 +136,19 @@ export const useEyemobileConfig = () => {
       const userId = userRes.data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado.");
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...newConfig,
         user_id: userId,
         updated_at: new Date().toISOString(),
       };
+
+      // Se a secret_key estiver vazia ou não informada, preserva a existente no banco
+      if (!payload.secret_key || String(payload.secret_key).trim() === "") {
+        delete payload.secret_key;
+      }
+      delete payload.has_secret;
+
+      const safeColumns = "id, user_id, access_key, environment, store_id, default_conta_id, default_categoria_receita_id, default_categoria_taxa_id, auto_sync_sales, auto_sync_stock, last_synced_offset, created_at, updated_at";
 
       let result;
       if (config?.id) {
@@ -136,13 +156,13 @@ export const useEyemobileConfig = () => {
           .from("eyemobile_config")
           .update(payload)
           .eq("id", config.id)
-          .select()
+          .select(safeColumns)
           .single();
       } else {
         result = await supabase
           .from("eyemobile_config")
           .insert([payload])
-          .select()
+          .select(safeColumns)
           .single();
       }
 

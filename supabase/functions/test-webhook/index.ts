@@ -3,39 +3,13 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isAllowedWebhookUrl, validateSafeExternalUrl } from "../_shared/ssrf-validator.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
-
-function isAllowedWebhookUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-    const hostname = parsed.hostname.toLowerCase();
-    
-    // Bloqueia loopback e faixas de rede privada/metadata (SSRF)
-    if (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "0.0.0.0" ||
-      hostname === "::1" ||
-      hostname === "169.254.169.254" ||
-      hostname.startsWith("10.") ||
-      hostname.startsWith("192.168.") ||
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
-      hostname.endsWith(".internal") ||
-      hostname.endsWith(".local")
-    ) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -75,6 +49,20 @@ serve(async (req) => {
       });
     }
 
+    // Autorização de papel: apenas administradores podem testar webhooks
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (!profile || profile.role !== "admin") {
+      return new Response(JSON.stringify({ error: "Acesso negado: apenas administradores podem testar webhooks" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     // Buscar webhook URL configurada
     const { data: webhookSetting, error: webhookError } = await supabaseAdmin
       .from("system_settings")
@@ -97,11 +85,12 @@ serve(async (req) => {
 
     const webhookUrl = webhookSetting.value;
 
-    if (!isAllowedWebhookUrl(webhookUrl)) {
+    const urlCheck = await validateSafeExternalUrl(webhookUrl);
+    if (!urlCheck.valid) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "URL de webhook insegura ou apontando para rede interna (bloqueio SSRF)",
+          error: `URL de webhook insegura: ${urlCheck.reason || "bloqueio SSRF"}`,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -149,6 +138,7 @@ serve(async (req) => {
         },
         body: JSON.stringify(testPayload),
         signal: controller.signal,
+        redirect: "error", // Impede bypass via redirecionamentos HTTP para IPs internos
       });
 
       clearTimeout(timeoutId);

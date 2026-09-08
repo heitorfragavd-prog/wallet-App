@@ -86,8 +86,12 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
 
     expect(content).toMatch(/req\.headers\.get\(["']Authorization["']\)/i);
     expect(content).toMatch(/supabaseAdmin\.auth\.getUser\(token\)/);
-    expect(content).toMatch(/isAllowedWebhookUrl/);
-    expect(content).toMatch(/169\.254\.169\.254/); // Bloqueio de endpoint de metadata
+    expect(content).toMatch(/isAllowedWebhookUrl|validateSafeExternalUrl/);
+    
+    // Valida que o módulo centralizado de SSRF bloqueia metadata de nuvem
+    const validatorPath = path.join(rootDir, "supabase/functions/_shared/ssrf-validator.ts");
+    const validatorContent = fs.readFileSync(validatorPath, "utf8");
+    expect(validatorContent).toMatch(/169\.254\.169\.254/);
   });
 
   it("VULN-05: gerar-recibo exige autenticação e escapa entidades HTML", () => {

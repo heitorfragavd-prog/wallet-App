@@ -6,20 +6,9 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function isValidImageUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:") return false;
-    const host = parsed.hostname.toLowerCase();
-    // Bloqueia loopback e faixas de rede privada
-    if (host === "localhost" || host === "127.0.0.1" || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { isAllowedWebhookUrl, validateSafeExternalUrl } from "../_shared/ssrf-validator.ts";
+
+import { checkAiRateLimit, sanitizeDelimiters } from "../_shared/ai-rate-limiter.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -48,6 +37,22 @@ serve(async (req) => {
       });
     }
 
+    // Rate limiting por usuário (20 reqs/min) contra Denial of Wallet
+    const rateCheck = checkAiRateLimit(user.id, 20);
+    if (!rateCheck.allowed) {
+      return new Response(JSON.stringify({
+        error: "Limite de requisições de IA excedido. Tente novamente em alguns instantes.",
+        retryAfter: rateCheck.retryAfterSeconds,
+      }), {
+        status: 429,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Retry-After": String(rateCheck.retryAfterSeconds || 60),
+        }
+      });
+    }
+
     const { text, file_url } = await req.json().catch(() => ({}));
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada no env");
@@ -66,7 +71,7 @@ Responda APENAS com um objeto JSON válido no formato:
 
     let content: any = [];
     if (file_url) {
-      if (typeof file_url !== "string" || !isValidImageUrl(file_url)) {
+      if (typeof file_url !== "string" || !isAllowedWebhookUrl(file_url)) {
         return new Response(JSON.stringify({ error: "URL de imagem inválida ou insegura" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -77,7 +82,7 @@ Responda APENAS com um objeto JSON válido no formato:
         { type: "image_url", image_url: { url: file_url } }
       ];
     } else {
-      const sanitizedText = String(text || "").slice(0, 2000).trim();
+      const sanitizedText = sanitizeDelimiters(String(text || "").slice(0, 2000).trim());
       content = `Extraia os dados de investimento deste comprovante literal: <comprovante>${sanitizedText}</comprovante>`;
     }
 
@@ -93,6 +98,7 @@ Responda APENAS com um objeto JSON válido no formato:
           { role: "system", content: systemPrompt },
           { role: "user", content: content }
         ],
+        response_format: { type: "json_object" },
         temperature: 0.2,
       }),
     });

@@ -8,6 +8,7 @@ import {
   createErrorResponse,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
+import { checkAiRateLimit } from "../_shared/ai-rate-limiter.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
@@ -1200,6 +1201,17 @@ Deno.serve(async (req: Request) => {
       });
     }
     userId = user.id;
+  }
+
+  // Rate limiting por usuário (30 reqs/min) contra Denial of Wallet
+  const rateCheck = checkAiRateLimit(userId, 30);
+  if (!rateCheck.allowed) {
+    return createErrorResponse(req, {
+      status: 429,
+      message: "Limite de requisições de IA atingido. Aguarde alguns instantes antes de tentar novamente.",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
   }
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey);

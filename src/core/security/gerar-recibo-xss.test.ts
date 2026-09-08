@@ -49,4 +49,15 @@ describe("gerar-recibo — Sanitização e Mitigação de XSS", () => {
     expect(escapeHtml(undefined)).toBe("");
     expect(escapeHtml(12345)).toBe("12345");
   });
+
+  it("Garante que Recibos.tsx usa sandbox com allow-modals e allow-same-origin SEM allow-scripts", async () => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const recibosPath = path.resolve(process.cwd(), "src/pages/Recibos.tsx");
+    const code = fs.readFileSync(recibosPath, "utf-8");
+
+    expect(code).toContain('sandbox="allow-modals allow-same-origin"');
+    // Crucial: allow-scripts NUNCA pode ser incluído no sandbox do preview
+    expect(code).not.toContain("allow-scripts");
+  });
 });

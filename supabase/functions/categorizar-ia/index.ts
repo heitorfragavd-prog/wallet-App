@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { checkAiRateLimit, sanitizeDelimiters } from "../_shared/ai-rate-limiter.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,12 +34,33 @@ serve(async (req) => {
       });
     }
 
+    // Rate limiting por usuário (20 reqs/min) contra Denial of Wallet
+    const rateCheck = checkAiRateLimit(user.id, 20);
+    if (!rateCheck.allowed) {
+      return new Response(JSON.stringify({
+        error: "Limite de requisições de IA excedido. Tente novamente em alguns instantes.",
+        retryAfter: rateCheck.retryAfterSeconds,
+      }), {
+        status: 429,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Retry-After": String(rateCheck.retryAfterSeconds || 60),
+        }
+      });
+    }
+
     const { descricao, valor, tipo } = await req.json().catch(() => ({}));
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada");
 
-    // Sanitização estrita e mitigação de Prompt Injection
-    const sanitizedDescricao = String(descricao || "").slice(0, 250).replace(/[\r\n\t]/g, " ").trim();
+    // Defesa em profundidade contra Prompt Injection:
+    // 1. Limite estrito de tamanho
+    // 2. Remoção de tags de escape que poderiam fechar delimitadores
+    // 3. Delimitadores estruturais
+    // 4. Instrução de sistema explícita de desconfiança
+    // 5. response_format: json_object para impedir evasão de formato
+    const sanitizedDescricao = sanitizeDelimiters(String(descricao || "").slice(0, 250).replace(/[\r\n\t]/g, " ").trim());
     const cleanTipo = tipo === "receita" ? "receita" : "despesa";
     const cleanValor = typeof valor === "number" && isFinite(valor) ? valor : Number(valor) || 0;
 
@@ -66,6 +88,7 @@ Responda APENAS em JSON válido no formato:
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
+        response_format: { type: "json_object" },
         temperature: 0.2,
         max_tokens: 150,
       }),

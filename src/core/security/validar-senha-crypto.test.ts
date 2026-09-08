@@ -48,9 +48,10 @@ async function verifyPassword(password: string, salt: string, storedHash: string
   return legacyHash === storedHash;
 }
 
-async function createInvestmentToken(userId: string, secretKey: string): Promise<string> {
-  const expiresAt = Date.now() + 30 * 60 * 1000;
-  const payload = `${userId}:${expiresAt}`;
+async function createInvestmentToken(userId: string, secretKey: string, purpose = "investimentos_auth", customExpiresAt?: number): Promise<string> {
+  const expiresAt = customExpiresAt ?? (Date.now() + 30 * 60 * 1000);
+  const nonce = crypto.randomUUID();
+  const payload = `${userId}:${expiresAt}:${purpose}:${nonce}`;
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -77,8 +78,9 @@ async function verifyInvestmentToken(token: string, secretKey: string, expectedU
     return false;
   }
 
-  const [userId, expiresAtStr] = payload.split(":");
+  const [userId, expiresAtStr, purpose] = payload.split(":");
   if (userId !== expectedUserId) return false;
+  if (purpose && purpose !== "investimentos_auth") return false;
 
   const expiresAt = Number(expiresAtStr);
   if (isNaN(expiresAt) || Date.now() > expiresAt) return false;
@@ -155,11 +157,22 @@ describe("Criptografia e Validação de Senha de Investimentos", () => {
     expect(isValidForAttacker).toBe(false);
   });
 
-  it("Rejeita token com assinatura adulterada", async () => {
-    const token = await createInvestmentToken("test-user-123", secretKey);
-    const tamperedToken = token.slice(0, -4) + "0000";
-
-    const isValid = await verifyInvestmentToken(tamperedToken, secretKey, "test-user-123");
+  it("Rejeita token expirado", async () => {
+    // Token expirado há 10 segundos
+    const expiredToken = await createInvestmentToken("test-user-123", secretKey, "investimentos_auth", Date.now() - 10000);
+    const isValid = await verifyInvestmentToken(expiredToken, secretKey, "test-user-123");
     expect(isValid).toBe(false);
+  });
+
+  it("Rejeita token com finalidade diferente de investimentos_auth", async () => {
+    const wrongPurposeToken = await createInvestmentToken("test-user-123", secretKey, "outra_finalidade");
+    const isValid = await verifyInvestmentToken(wrongPurposeToken, secretKey, "test-user-123");
+    expect(isValid).toBe(false);
+  });
+
+  it("Gera nonces aleatórios distintos para chamadas consecutivas", async () => {
+    const token1 = await createInvestmentToken("test-user-123", secretKey);
+    const token2 = await createInvestmentToken("test-user-123", secretKey);
+    expect(token1).not.toBe(token2);
   });
 });

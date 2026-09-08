@@ -92,10 +92,31 @@ REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM anon;
 GRANT EXECUTE ON FUNCTION public.get_eyemobile_config_status() TO authenticated;
 
--- 3. Protecao de colunas em senha_investimentos
-REVOKE SELECT ON public.senha_investimentos FROM authenticated;
-GRANT SELECT (id, user_id, tentativas_falhas, bloqueado_ate, created_at, updated_at)
-  ON public.senha_investimentos TO authenticated;
-GRANT INSERT, UPDATE, DELETE ON public.senha_investimentos TO authenticated;
+-- 3. Protecao de senha_investimentos
+-- REGRA DE SEGURANCA: authenticated e anon NUNCA acessam senha_investimentos diretamente.
+-- Nem SELECT, nem INSERT, nem UPDATE, nem DELETE.
+-- Toda operacao (cadastro, validacao, contadores de tentativa, bloqueio) e intermediada
+-- exclusivamente pela Edge Function 'validar-senha' via service_role.
+-- Isso impede que usuarios forjem hash, zerem contadores de falhas ou removam bloqueios.
+REVOKE ALL ON public.senha_investimentos FROM authenticated, anon, public;
+
+-- RPC SECURITY DEFINER para verificar se o usuario possui senha configurada
+-- Nao expoe o hash, tentativas nem informacoes sensiveis
+CREATE OR REPLACE FUNCTION public.has_senha_investimentos()
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.senha_investimentos
+    WHERE user_id = auth.uid()
+  );
+END;
+$$;
+REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM anon;
+GRANT EXECUTE ON FUNCTION public.has_senha_investimentos() TO authenticated;
 
 COMMIT;
