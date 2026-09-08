@@ -22,7 +22,7 @@ const base: Colaborador = {
   foto_url: null,
   tipo: "funcionario",
   cargo: "Atendente",
-  data_admissao: new Date(Date.now() - 80 * 86400000).toISOString().slice(0, 10),
+  data_admissao: "2026-06-06",
   data_demissao: null,
   salario_bruto: 1621,
   vale_transporte: 0,
@@ -31,7 +31,7 @@ const base: Colaborador = {
   status: "ativo",
   dias_experiencia: 90,
   carga_horaria_semanal: 44,
-  created_at: new Date(Date.now() - 80 * 86400000).toISOString(),
+  created_at: "2026-01-01T00:00:00Z",
 };
 
 const colaboradores: Colaborador[] = [
