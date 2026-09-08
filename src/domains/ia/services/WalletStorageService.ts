@@ -1,5 +1,5 @@
 /**
- * WalletStorageService — Storage Privado de Anexos da Wallet IA (Etapa 2.1b)
+ * WalletStorageService — Storage Privado de Anexos da Wallet IA
  * 
  * Regras:
  * - Bucket 'chat-attachments' privado (não-público).
@@ -67,7 +67,7 @@ export class WalletStorageService {
       });
 
     if (error) {
-      throw new Error(`Erro ao fazer upload do anexo: ${error.message}`);
+      throw new Error(`Falha no upload para o storage: ${error.message}`);
     }
 
     return {
@@ -79,34 +79,42 @@ export class WalletStorageService {
   }
 
   /**
-   * Obtém URL assinada temporária para visualização de anexo privado.
+   * Obtém uma Signed URL temporária (60 minutos) para visualização segura do anexo.
    */
-  static async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string | null> {
-    if (!storagePath) return null;
-
+  static async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
     const cached = signedUrlCache.get(storagePath);
     const now = Date.now();
-    if (cached && cached.expiresAt > now + 60000) {
+    if (cached && cached.expiresAt > now + 300_000) {
       return cached.url;
     }
 
-    try {
-      const { data, error } = await supabase.storage
-        .from(CHAT_ATTACHMENTS_BUCKET)
-        .createSignedUrl(storagePath, expiresInSeconds);
+    const { data, error } = await supabase.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .createSignedUrl(storagePath, expiresInSeconds);
 
-      if (error || !data?.signedUrl) {
-        return null;
-      }
+    if (error || !data?.signedUrl) {
+      throw new Error(`Falha ao gerar signed URL para ${storagePath}: ${error?.message || "URL vazia"}`);
+    }
 
-      signedUrlCache.set(storagePath, {
-        url: data.signedUrl,
-        expiresAt: now + expiresInSeconds * 1000,
-      });
+    signedUrlCache.set(storagePath, {
+      url: data.signedUrl,
+      expiresAt: now + expiresInSeconds * 1000,
+    });
 
-      return data.signedUrl;
-    } catch {
-      return null;
+    return data.signedUrl;
+  }
+
+  /**
+   * Remove anexo do storage privado.
+   */
+  static async deleteAttachment(storagePath: string): Promise<void> {
+    signedUrlCache.delete(storagePath);
+    const { error } = await supabase.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .remove([storagePath]);
+
+    if (error) {
+      throw new Error(`Falha ao deletar anexo ${storagePath}: ${error.message}`);
     }
   }
 }

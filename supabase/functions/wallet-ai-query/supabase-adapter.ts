@@ -207,14 +207,46 @@ export function createSupabaseAuthorizationDependencies(
       return { id: data.user.id };
     },
     async findOwnedWorkspace(workspaceId, userId) {
-      const { data, error } = await client
+      // 1. Verifica se é dono do workspace
+      const { data: ownerData } = await client
         .from("workspaces")
         .select("id")
         .eq("id", workspaceId)
         .eq("user_id", userId)
         .maybeSingle();
-      if (error || !data) return null;
-      return { id: data.id };
+      if (ownerData) return { id: ownerData.id };
+
+      // 2. Verifica se é membro autorizado na tabela workspace_members
+      const { data: memberData } = await client
+        .from("workspace_members")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .eq("active", true)
+        .maybeSingle();
+      if (memberData) return { id: workspaceId };
+
+      return null;
+    },
+    async verifyConversationOwnership(conversationId, workspaceId, userId) {
+      // 1. Tabela canônica Wallet AI Conversations (isolamento por workspace e usuário)
+      const { data: canonicalData } = await client
+        .from("wallet_ai_conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (canonicalData !== null) return true;
+
+      // 2. Fallback legado para chat_conversas (apenas se existir e pertencer ao usuário)
+      const { data: legacyData } = await client
+        .from("chat_conversas")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      return legacyData !== null;
     },
   };
 }

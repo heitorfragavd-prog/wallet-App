@@ -1,3 +1,6 @@
+import type { ActionProposal } from "./action-types.ts";
+import { CANONICAL_ACTIONS } from "./action-types.ts";
+import { prepareActionProposal } from "./action-gateway.ts";
 import type { AiExecutionContext } from "./auth.ts";
 import { executeQueryTool, type QueryToolCatalog, type QueryToolResult } from "./query-tools.ts";
 
@@ -15,12 +18,47 @@ export interface OpenAiToolMessage {
   tool_call_id: string;
   name: string;
   content: string;
+  actionProposal?: ActionProposal;
+  result?: QueryToolResult;
 }
 
-export interface DispatchedToolExecution {
-  message: OpenAiToolMessage;
-  result?: QueryToolResult;
-  error?: string;
+function generateProposalSummary(actionType: string, args: Record<string, unknown>): string {
+  switch (actionType) {
+    case "cadastrar_transacao": {
+      const tipo = args.tipo === "receita" ? "receita" : "despesa";
+      const val = typeof args.valor === "number" ? args.valor.toFixed(2) : String(args.valor ?? "0");
+      const desc = args.descricao ? ` ("${args.descricao}")` : "";
+      return `Cadastrar ${tipo} de R$ ${val}${desc}`;
+    }
+    case "atualizar_transacao":
+      return `Atualizar transação ${args.transacao_id ?? ""}`;
+    case "deletar_transacao":
+      return `Excluir transação ${args.transacao_id ?? ""}`;
+    case "cadastrar_divida": {
+      const val = typeof args.valor_total === "number" ? args.valor_total.toFixed(2) : String(args.valor_total ?? "0");
+      const credor = args.credor ? ` com ${args.credor}` : "";
+      return `Cadastrar dívida de R$ ${val}${credor}`;
+    }
+    case "atualizar_divida":
+      return `Atualizar status da dívida ${args.divida_id ?? ""}`;
+    case "cadastrar_meta": {
+      const val = typeof args.valor_alvo === "number" ? args.valor_alvo.toFixed(2) : String(args.valor_alvo ?? "0");
+      return `Criar meta "${args.nome ?? ""}" com alvo de R$ ${val}`;
+    }
+    case "atualizar_meta":
+      return `Atualizar progresso da meta ${args.meta_id ?? ""}`;
+    case "criar_conta":
+      return `Criar conta "${args.nome ?? ""}" (${args.tipo ?? "corrente"})`;
+    case "atualizar_conta":
+      return `Atualizar dados da conta ${args.conta_id ?? ""}`;
+    case "atualizar_custo_produto_eyemobile": {
+      const prod = args.produto_nome || args.produto_id || args.codigo_barras || "produto";
+      const custo = typeof args.novo_custo === "number" ? args.novo_custo.toFixed(2) : String(args.novo_custo ?? "0");
+      return `Atualizar custo de "${prod}" para R$ ${custo}`;
+    }
+    default:
+      return `Operação ${actionType}`;
+  }
 }
 
 export async function dispatchOpenAiToolCall(
@@ -47,6 +85,46 @@ export async function dispatchOpenAiToolCall(
     };
   }
 
+  // Se a tool for uma mutação WRITE (Action Proposal)
+  if (toolName in CANONICAL_ACTIONS) {
+    try {
+      const proposal = prepareActionProposal({
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        conversationId: context.conversationId,
+        actionType: toolName,
+        summary: generateProposalSummary(toolName, parsedArgs),
+        payload: parsedArgs,
+        correlationId: context.correlationId,
+      });
+
+      return {
+        role: "tool",
+        tool_call_id: toolCall.id,
+        name: toolName,
+        content: JSON.stringify({
+          status: "prepared",
+          action_type: proposal.actionType,
+          proposal_id: proposal.id,
+          risk_level: proposal.riskLevel,
+          summary: proposal.summary,
+          requires_confirmation: true,
+          message: `Proposta de ação gerada com sucesso (ID: ${proposal.id}, Risco: ${proposal.riskLevel}). Nenhuma alteração foi efetuada no banco. O usuário deve revisar e confirmar a ação explicitamente na interface.`,
+        }),
+        actionProposal: proposal,
+      };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "action_proposal_failed";
+      return {
+        role: "tool",
+        tool_call_id: toolCall.id,
+        name: toolName,
+        content: JSON.stringify({ error: errorMessage }),
+      };
+    }
+  }
+
+  // Caso seja ferramenta de consulta READ
   try {
     const result = await executeQueryTool(toolName, parsedArgs, context, catalog);
     return {
@@ -54,6 +132,7 @@ export async function dispatchOpenAiToolCall(
       tool_call_id: toolCall.id,
       name: toolName,
       content: JSON.stringify(result),
+      result,
     };
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : "tool_execution_failed";

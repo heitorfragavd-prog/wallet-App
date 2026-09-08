@@ -1,18 +1,12 @@
 /**
- * WalletIAPage — Etapa 1 da Wallet IA Unificada
+ * WalletIAPage — Frontend Unificado da Wallet IA
  *
- * Interface única "Wallet IA" que substitui os três seletores
- * [Agent V2] [Consulta Rápida] [IA Legada].
- *
- * Internamente usa:
+ * Interface única "Wallet IA" com experiência conversacional integrada:
  *  - useWalletIA → orquestrador + router
- *  - useConversas → sidebar persistente (reutiliza tabela chat_conversas)
- *  - useChatFinanceiro → persistência de mensagens (chat_mensagens)
+ *  - useConversas → sidebar persistente
  *  - AgentVisualizationRenderer → gráficos inline no chat
- *  - AgentActionProposalCard → propostas de ação inline no chat
- *  - ConversasSidebar → sidebar reutilizada da IA Legada
- *
- * O usuário NUNCA vê "Agent V2", "Consulta Rápida" ou "IA Legada".
+ *  - AgentActionProposalCard → propostas de ação inline no chat com aprovação do usuário
+ *  - ConversasSidebar → navegação lateral de histórico
  */
 
 import React, {
@@ -38,10 +32,8 @@ import { AgentVisualizationRenderer } from "@/domains/ia/components/AgentVisuali
 import { AgentActionProposalCard } from "@/domains/ia/components/AgentActionProposalCard";
 import { useConversas } from "@/domains/ia/hooks/useConversas";
 import { useWalletIA, type WalletIAMessage, type WalletIAAttachment } from "@/domains/ia/hooks/useWalletIA";
-import { WalletStorageService } from "@/domains/ia/services/WalletStorageService";
 import { optimizeImageForVision } from "@/domains/ia/utils/imageOptimizer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-
 
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
@@ -51,9 +43,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 import { cn } from "@/lib/utils";
-import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
+import type { ActionProposal } from "../../supabase/functions/_shared/ai/action-types";
 
-// ─── Fast Query determinístico (reutiliza a lógica da Consulta Rápida) ────────
+// ─── Fast Query determinístico ───────────────────────────────────────────────
 
 const formatCurrency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -113,17 +105,11 @@ function somaPorMetodo(lista: Array<{ valor: number; metodo?: string | null }>):
 
 /** Linha de vendas brutas do PDV Eyemobile para um período. */
 interface VendasPDV {
-  /** Vendas brutas filtradas para hoje (sem cancelamentos). */
   hojeTotal: number;
-  /** Vendas brutas do mês atual. */
   mesTotal: number;
-  /** Vendas brutas de ontem. */
   ontemTotal: number;
-  /** Vendas brutas dos últimos 7 dias. */
   semanaTotal: number;
-  /** true = Eyemobile respondeu com dados reais ou fallback local com dados. */
   disponivel: boolean;
-  /** true = dado veio da tabela local de transações (fallback), não da API ao vivo. */
   isLocalFallback?: boolean;
 }
 
@@ -131,10 +117,8 @@ interface DadosIA {
   receitas: Array<{ valor: number; data: string; descricao?: string; metodo_pagamento?: string | null }>;
   despesas: Array<{ valor: number; data: string; descricao?: string }>;
   contas: Array<{ nome: string; saldo_atual: number; tipo: string }>;
-  /** Vendas brutas do PDV Eyemobile. NUNCA misturar com receitas. */
   vendas?: VendasPDV;
 }
-
 
 function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
   const p = norm(pergunta);
@@ -175,12 +159,8 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
     return `📊 **Despesas ${filtro.label}:**\n\n- **Total:** **${formatCurrency(total)}** (${lista.length} lançamentos)${top}`;
   }
 
-  // ── VENDAS (PDV Eyemobile) — "vendi", "faturei", "faturamento", "vendas" ───
-  // REGRA: perguntas sobre VENDAS usam o PDV Eyemobile (valor BRUTO do que foi vendido).
-  // NUNCA substituir silenciosamente por Receitas se Eyemobile estiver indisponível.
-  const isVendasQuery =
-    p.includes("vend") || p.includes("fatur");
-
+  // ── VENDAS (PDV Eyemobile) ──────────────────────────────────────────────────
+  const isVendasQuery = p.includes("vend") || p.includes("fatur");
   if (isVendasQuery) {
     if (!vendas || !vendas.disponivel) {
       return `🏪 **Vendas do PDV:**\n\n⚠️ Não consegui consultar as vendas do Eyemobile agora.\n\nPosso consultar suas **receitas registradas** (entradas financeiras na Wallet), mas elas representam uma métrica diferente — já líquidas de taxas e com outras fontes incluídas.\n\nTente novamente em instantes ou pergunte sobre **"receitas"** se quiser ver as entradas financeiras.`;
@@ -199,10 +179,7 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
     return `🏪 **Vendas ${label} (PDV Eyemobile):**\n\n- **Total bruto vendido:** **${formatCurrency(total)}**\n\n> 💡 Este valor representa o faturamento bruto do PDV. Para ver as **entradas financeiras líquidas** (após taxas), pergunte sobre "receitas".${localNote}`;
   }
 
-  // ── RECEITAS / ENTRADAS FINANCEIRAS (Wallet) — "receita", "entrou", "recebi" ─
-  // REGRA: perguntas sobre RECEITAS usam a camada financeira da Wallet
-  // (inclui Pix/Cartão líquidos da Divipay + Dinheiro PDV + manuais).
-  // NUNCA substituir por Vendas Eyemobile se Receitas estiverem indisponíveis.
+  // ── RECEITAS (Wallet) ───────────────────────────────────────────────────────
   const isReceitasQuery =
     p.includes("receita") || p.includes("receb") || p.includes("entrou") || p.includes("entrada");
 
@@ -231,7 +208,6 @@ function gerarRespostaRapida(pergunta: string, dados: DadosIA): string {
   return `🤖 **Resumo financeiro rápido:**\n\n1. **Vendas de hoje (PDV):** **${vendasHojeStr}**\n2. **Receitas de hoje (Wallet):** **${formatCurrency(receitasHoje)}**\n3. **Receitas no mês:** **${formatCurrency(totalReceitasMes)}**\n4. **Despesas no mês:** **${formatCurrency(totalDespesasMes)}**\n5. **Saldo em contas:** **${formatCurrency(saldoTotal)}**`;
 }
 
-
 // ─── Componente de Mensagem ───────────────────────────────────────────────────
 
 const MessageBubble: React.FC<{
@@ -243,7 +219,6 @@ const MessageBubble: React.FC<{
 
   return (
     <div className={cn("flex gap-3 group", isUser && "justify-end")}>
-      {/* Avatar IA */}
       {!isUser && (
         <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow-sm">
           <Brain className="w-4 h-4 text-white" />
@@ -251,7 +226,6 @@ const MessageBubble: React.FC<{
       )}
 
       <div className={cn("max-w-[80%] space-y-2", isUser && "items-end")}>
-        {/* Imagem anexada */}
         {msg.imageDataUrl && (
           <img
             src={msg.imageDataUrl}
@@ -260,7 +234,6 @@ const MessageBubble: React.FC<{
           />
         )}
 
-        {/* Balão de mensagem */}
         {msg.content && (
           <div
             className={cn(
@@ -282,14 +255,12 @@ const MessageBubble: React.FC<{
           </div>
         )}
 
-        {/* Visualização (gráfico, KPI, tabela) */}
         {msg.visualization && !isUser && (
           <div className="mt-2">
             <AgentVisualizationRenderer contract={msg.visualization} />
           </div>
         )}
 
-        {/* Proposta de Acao - GAP Etapa 4: orchestrator nao produz proposals ainda */}
         {msg.actionProposal && !isUser && onConfirmAction && onCancelAction && (
           <div className="mt-2">
             <AgentActionProposalCard
@@ -297,12 +268,11 @@ const MessageBubble: React.FC<{
               onConfirm={onConfirmAction}
               onCancel={onCancelAction}
               disabled={true}
-              disabledReason="Execucao via Wallet IA chegara na Etapa 4 - Action Gateway. Nenhuma acao foi realizada."
+              disabledReason="Execução via Wallet IA em validação. Nenhuma alteração foi realizada."
             />
           </div>
         )}
 
-        {/* Metadados de observabilidade (apenas em dev) */}
         {msg.routeUsed && import.meta.env.DEV && (
           <div className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
             {msg.routeUsed === "FAST_QUERY" && <Zap className="w-2.5 h-2.5" />}
@@ -312,13 +282,11 @@ const MessageBubble: React.FC<{
           </div>
         )}
 
-        {/* Horário */}
         <p className="text-[10px] text-muted-foreground/60 px-1">
           {msg.createdAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
         </p>
       </div>
 
-      {/* Avatar usuário */}
       {isUser && (
         <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center shadow-sm border border-border/50">
           <span className="text-xs font-semibold text-muted-foreground">EU</span>
@@ -334,7 +302,6 @@ export default function WalletIAPage() {
   const { activeWorkspace } = useWorkspace();
   const { toast } = useToast();
 
-  // ── Sidebar de conversas ──────────────────────────────────────────────────
   const {
     conversas,
     isLoading: conversasLoading,
@@ -346,23 +313,17 @@ export default function WalletIAPage() {
 
   const [conversaAtiva, setConversaAtiva] = useState<string | null>(null);
 
-  // Seleciona a primeira conversa ao carregar
   useEffect(() => {
     if (conversasLoading || conversaAtiva) return;
     if (conversas.length > 0) setConversaAtiva(conversas[0].id);
   }, [conversas, conversasLoading, conversaAtiva]);
 
-  // ── Dados financeiros para a Consulta Rápida ──────────────────────────────
   const inicioJanela = useMemo(() => {
-    // CORREÇÃO (Etapa 1.1): Usa Date aritmético real.
-    // ORDEM IMPORTANTE: setDate(1) ANTES de setMonth() para evitar overflow.
-    // Ex: 31/Dez → setMonth(11-3=8=Set): Set não tem 31 dias → overflow para Out.
-    // Com setDate(1) primeiro: 1/Dez → setMonth(8=Set) → 1/Set ✅
     const d = new Date();
-    d.setDate(1);                   // primeiro dia do mês atual (evita overflow)
-    d.setMonth(d.getMonth() - 3);  // 3 meses atrás
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 3);
     const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0"); // +1 porque getMonth() é 0-indexed
+    const m = String(d.getMonth() + 1).padStart(2, "0");
     return `${y}-${m}-01`;
   }, []);
 
@@ -381,8 +342,6 @@ export default function WalletIAPage() {
     staleTime: 1000 * 60 * 5,
   });
 
-  // Eyemobile — vendas brutas do PDV.
-  // Dois hooks separados: um para hoje (preciso), um para o mês corrente.
   const hoje = new Date();
   const hojeStr = isoDay(hoje);
   const ontem = new Date(hoje); ontem.setDate(ontem.getDate() - 1);
@@ -396,8 +355,6 @@ export default function WalletIAPage() {
   const { data: eyemobileMes } = useEyemobileDashboard({ startDate: inicioMes, endDate: hojeStr });
 
   const vendas: VendasPDV = useMemo(() => {
-    // configured=true → Eyemobile respondeu (online ou fallback local com dados)
-    // configured=false && !isLocalFallback → Eyemobile não configurado ou erro sem dados
     const disponivel = !!(
       eyemobileHoje?.configured ||
       eyemobileHoje?.isLocalFallback ||
@@ -421,20 +378,18 @@ export default function WalletIAPage() {
     [receitas, despesas, contas, vendas]
   );
 
-  // Só passa fastQueryFn quando os dados de receitas estão prontos.
-  // Se ainda estiver carregando (Divipay incluso), a pergunta vai para Agent V2
-  // e retorna dados reais do banco em vez de R$ 0,00 por dados incompletos.
   const fastQueryFn = useCallback(
     (pergunta: string) => gerarRespostaRapida(pergunta, dadosFinanceiros),
     [dadosFinanceiros]
   );
   const fastQueryFnReady = receitasLoading ? undefined : fastQueryFn;
 
-  // ── Persistência de mensagens ─────────────────────────────────────────────
   const onMessagePersist = useCallback(
     async (msg: WalletIAMessage, conversaId: string) => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user?.id) return;
+
         const rawB64 = msg.imageDataUrl
           ? msg.imageDataUrl.includes(",")
             ? msg.imageDataUrl.split(",")[1]
@@ -466,7 +421,6 @@ export default function WalletIAPage() {
     [atualizarUltimaMensagem]
   );
 
-  // ── Hook central Wallet IA ────────────────────────────────────────────────
   const { messages, isLoading, currentStatus, sendMessage, clearChat, loadHistory } =
     useWalletIA({
       workspaceId: activeWorkspace?.id,
@@ -480,17 +434,12 @@ export default function WalletIAPage() {
       },
     });
 
-  // ── Action Proposal callbacks ─────────────────────────────────────────────
-  // REGRA ABSOLUTA: o card da proposta ser renderizado NÃO executa nada.
-  // A execução só ocorre quando o usuário confirmar explicitamente via onConfirmAction.
-  // Por enquanto, exibe toast informativo e aguarda infraestrutura do Action Gateway
-  // (Etapa 4) para execução real. Nenhuma mutação financeira ocorre aqui.
   const handleConfirmAction = useCallback(
     (proposalId: string, _payload?: Record<string, unknown>) => {
       logger.info("WalletIAPage", "Proposta de ação confirmada pelo usuário", { proposalId });
       toast({
         title: "Ação registrada",
-        description: "A proposta foi confirmada. A execução automática chegará na Etapa 4 — Action Gateway.",
+        description: "A proposta foi confirmada. A execução automática chegará na Etapa 9.3 — Action Gateway.",
       });
     },
     [toast]
@@ -508,7 +457,6 @@ export default function WalletIAPage() {
     [toast]
   );
 
-  // ── Carregar histórico ao trocar de conversa ──────────────────────────────
   useEffect(() => {
     if (!conversaAtiva) {
       clearChat();
@@ -518,7 +466,7 @@ export default function WalletIAPage() {
     const loadConversaHistory = async () => {
       const { data, error } = await supabase
         .from("chat_mensagens")
-        .select("id, role, conteudo, imagem_base64, storage_path, file_name, mime_type, file_size, created_at")
+        .select("id, role, conteudo, imagem_base64, created_at")
         .eq("conversa_id", conversaAtiva)
         .order("created_at", { ascending: true });
 
@@ -527,43 +475,27 @@ export default function WalletIAPage() {
         return;
       }
 
-      const history: WalletIAMessage[] = await Promise.all(
-        (data ?? []).map(async (row) => {
-          let resolvedImageUrl: string | undefined = undefined;
+      const history: WalletIAMessage[] = (data ?? []).map((row) => {
+        const resolvedImageUrl = row.imagem_base64
+          ? `data:image/jpeg;base64,${row.imagem_base64}`
+          : undefined;
 
-          // Anexo novo em Storage privado: gera Signed URL temporária
-          if (row.storage_path) {
-            const signed = await WalletStorageService.getSignedUrl(row.storage_path);
-            if (signed) resolvedImageUrl = signed;
-          }
-          // Anexo legado em base64: renderiza normalmente
-          else if (row.imagem_base64) {
-            resolvedImageUrl = `data:image/jpeg;base64,${row.imagem_base64}`;
-          }
-
-          return {
-            id: row.id,
-            role: row.role as "user" | "assistant",
-            content: row.conteudo,
-            createdAt: new Date(row.created_at),
-            imageDataUrl: resolvedImageUrl,
-            storagePath: row.storage_path,
-            fileName: row.file_name,
-            mimeType: row.mime_type,
-            fileSize: row.file_size,
-          };
-        })
-      );
+        return {
+          id: row.id,
+          role: row.role as "user" | "assistant",
+          content: row.conteudo,
+          createdAt: new Date(row.created_at),
+          imageDataUrl: resolvedImageUrl,
+        };
+      });
 
       loadHistory(history);
     };
-
 
     clearChat();
     loadConversaHistory();
   }, [conversaAtiva]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Gerenciamento de conversas ────────────────────────────────────────────
   const handleNovaConversa = async () => {
     try {
       const nova = await criarConversa.mutateAsync("Nova Conversa");
@@ -578,18 +510,16 @@ export default function WalletIAPage() {
     if (id !== conversaAtiva) setConversaAtiva(id);
   };
 
-  // Geração automática de título após 1ª resposta
   const handleAutoTitle = useCallback(
     async (conversaId: string, primeiraMsg: string) => {
-      const conversa = conversas.find((c) => c.id === conversaId);
-      if (conversa?.titulo !== "Nova Conversa") return;
+      const conv = conversas.find((c) => c.id === conversaId);
+      if (!conv || conv.titulo !== "Nova Conversa") return;
       const titulo = primeiraMsg.trim().slice(0, 50) || "Nova Conversa";
       renomearConversa.mutate({ id: conversaId, titulo });
     },
     [conversas, renomearConversa]
   );
 
-  // ── Input e anexos ────────────────────────────────────────────────────────
   const [inputText, setInputText] = useState("");
   const [attachment, setAttachment] = useState<WalletIAAttachment | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -597,14 +527,13 @@ export default function WalletIAPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [messages, isLoading]);
 
   const handleSend = async () => {
     const text = inputText.trim();
     if ((!text && !attachment) || isLoading) return;
 
-    // Criar conversa automaticamente se não houver uma ativa
     let cId = conversaAtiva;
     if (!cId) {
       try {
@@ -623,7 +552,6 @@ export default function WalletIAPage() {
 
     await sendMessage(text, att ? [att] : undefined);
 
-    // Título automático
     if (cId && text) {
       await handleAutoTitle(cId, text);
     }
@@ -666,14 +594,10 @@ export default function WalletIAPage() {
     e.target.value = "";
   };
 
-
-
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <DashboardLayout>
       <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-        {/* Sidebar de conversas (reutilizada da IA Legada) */}
+        {/* Sidebar de conversas */}
         <ConversasSidebar
           conversas={conversas}
           conversaAtiva={conversaAtiva}
@@ -714,7 +638,6 @@ export default function WalletIAPage() {
 
           {/* Área de mensagens */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Estado vazio */}
             {messages.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center h-full text-center gap-4">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500/20 to-violet-600/20 border border-purple-500/20 flex items-center justify-center">
@@ -726,7 +649,6 @@ export default function WalletIAPage() {
                     Pergunte sobre suas finanças, envie uma nota fiscal ou peça uma análise.
                   </p>
                 </div>
-                {/* Sugestões */}
                 <div className="flex flex-wrap gap-2 justify-center mt-2">
                   {[
                     "Quanto vendi hoje?",
@@ -750,7 +672,6 @@ export default function WalletIAPage() {
               </div>
             )}
 
-            {/* Mensagens */}
             {messages.map((msg) => (
               <MessageBubble
                 key={msg.id}
@@ -760,7 +681,6 @@ export default function WalletIAPage() {
               />
             ))}
 
-            {/* Status de loading */}
             {isLoading && (
               <div className="flex gap-3">
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow-sm">
@@ -780,7 +700,6 @@ export default function WalletIAPage() {
 
           {/* Input de mensagem */}
           <div className="flex-shrink-0 border-t border-border/50 bg-card/50 backdrop-blur-sm p-4">
-            {/* Preview de anexo */}
             {attachment && (
               <div className="mb-3 flex items-center gap-2 p-2 rounded-xl bg-muted/50 border border-border/50">
                 {attachment.type === "image" ? (
@@ -801,7 +720,6 @@ export default function WalletIAPage() {
             )}
 
             <div className="flex items-end gap-2">
-              {/* Botão de anexo */}
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isLoading}
@@ -818,7 +736,6 @@ export default function WalletIAPage() {
                 onChange={handleFileSelect}
               />
 
-              {/* Textarea */}
               <div className="flex-1 relative">
                 <textarea
                   ref={textareaRef}
@@ -842,7 +759,6 @@ export default function WalletIAPage() {
                 />
               </div>
 
-              {/* Botão enviar */}
               <Button
                 onClick={handleSend}
                 disabled={isLoading || (!inputText.trim() && !attachment)}
