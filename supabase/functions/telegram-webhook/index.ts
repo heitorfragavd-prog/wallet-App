@@ -33,6 +33,7 @@ import { createFinancialRepository } from "../_shared/ai/financial-repository.ts
 import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
+import { validateTelegramWebhookSecret } from "../_shared/ai/telegram-webhook-auth.ts";
 import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
 import {
   cleanDigits,
@@ -761,7 +762,12 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
-      const setResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`).then(r => r.json());
+      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+      let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`;
+      if (telegramWebhookSecret) {
+        setWebhookUrl += `&secret_token=${encodeURIComponent(telegramWebhookSecret)}`;
+      }
+      const setResp = await fetch(setWebhookUrl).then(r => r.json());
       const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
       return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -832,6 +838,30 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ─── SEGURANÇA (FASE 10.3): Validação Fail-Closed do Webhook Secret do Telegram ───
+    const isTelegramWebhookUpdate = Boolean(
+      body?.update_id !== undefined ||
+      body?.message ||
+      body?.callback_query ||
+      body?.channel_post ||
+      body?.edited_message
+    );
+
+    if (isTelegramWebhookUpdate) {
+      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+      const authResult = validateTelegramWebhookSecret(req.headers, telegramWebhookSecret, {
+        isProduction: Deno.env.get("ENVIRONMENT") === "production" || !Deno.env.get("DENO_DEPLOYMENT_ID"),
+      });
+
+      if (!authResult.authorized) {
+        console.warn(`[telegram-webhook] Webhook não autorizado: ${authResult.reason}`);
+        return new Response(
+          JSON.stringify({ error: "Unauthorized Telegram webhook", code: authResult.reason }),
+          { status: authResult.statusCode || 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
     }
 
     const sendReplyWithButtons = async (replyChatId: string | number, replyText: string, buttons: Array<Array<{ text: string; callback_data: string }>>) => {
