@@ -137,7 +137,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
     async listBalances(context) {
       const rows = await execute(scopedQuery(
         "contas_usuario",
-        "id,user_id,workspace_id,nome,tipo,saldo,saldo_atual",
+        "id,user_id,workspace_id,nome,tipo,saldo_atual",
         context,
       ));
       return rows.map((row): CanonicalBalance => {
@@ -145,7 +145,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
         return {
           accountId: String(row.id),
           name: String(row.nome),
-          amount: amount(row.saldo_atual ?? row.saldo),
+          amount: amount(row.saldo_atual ?? (row as Record<string, unknown>).saldo),
           type: String(row.tipo),
         };
       });

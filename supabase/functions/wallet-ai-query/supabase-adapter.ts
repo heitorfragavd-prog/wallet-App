@@ -251,17 +251,32 @@ export function createSupabaseAuthorizationDependencies(
   };
 }
 
+export interface AiQueryAuditEvent {
+  userId: string;
+  workspaceId: string;
+  tool?: string;
+  toolName?: string;
+  durationMs: number;
+  status: "success" | "error";
+  errorCode?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export async function writeSupabaseAiAudit(
   client: SupabaseClientLike,
   event: AiQueryAuditEvent,
 ): Promise<void> {
-  const { error } = await client.from("wallet_ai_audit_events").insert({
+  const insertPayload: Record<string, unknown> = {
     user_id: event.userId,
     workspace_id: event.workspaceId,
-    tool_name: event.tool,
+    tool_name: event.tool || event.toolName || "wallet_ai_orchestrator",
     execution_status: event.status,
     duration_ms: Math.max(0, Math.round(event.durationMs)),
     error_code: event.errorCode ?? null,
-  });
+  };
+  if (event.metadata !== undefined) {
+    insertPayload.metadata = event.metadata;
+  }
+  const { error } = await client.from("wallet_ai_audit_events").insert(insertPayload);
   if (error) throw new Error("audit_write_failed");
 }

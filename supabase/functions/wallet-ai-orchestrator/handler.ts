@@ -368,6 +368,17 @@ export async function handleOrchestratorHttpRequest(
 
     const estimatedCostUsd = calculateEstimatedCost(selectedModel, turnResult.usage);
 
+    // Persistência canônica das Propostas de Ação geradas no turno
+    if (dependencies.saveProposalFn && turnResult.actionProposals && turnResult.actionProposals.length > 0) {
+      for (const proposal of turnResult.actionProposals) {
+        try {
+          await dependencies.saveProposalFn(context, proposal);
+        } catch (propErr) {
+          console.warn("[handler] Falha ao persistir proposta no banco:", propErr);
+        }
+      }
+    }
+
     // Persistência da mensagem do usuário e resposta do assistente na memória canônica
     if (dependencies.conversationRepo && conversationId) {
       try {

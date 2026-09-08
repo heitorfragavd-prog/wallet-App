@@ -105,4 +105,21 @@ describe("financial repository", () => {
       expect(cols).not.toContain("deduplication_key");
     }
   });
+
+  it("does NOT request saldo column in contas_usuario (only saldo_atual exists)", async () => {
+    let capturedColumns = "";
+    const repository = createFinancialRepository(async (query) => {
+      if (query.table === "contas_usuario") {
+        capturedColumns = query.columns;
+      }
+      return [];
+    });
+
+    await repository.listBalances(context);
+
+    expect(capturedColumns).toContain("saldo_atual");
+    // Column 'saldo' does not exist in contas_usuario and causes PostgREST error
+    const cols = capturedColumns.split(",");
+    expect(cols).not.toContain("saldo");
+  });
 });
