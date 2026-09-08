@@ -32,9 +32,11 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
   let sentMessages: any[];
   let editedMessages: any[];
   let answeredCallbacks: any[];
+  let processedUpdatesInDb: Set<string>;
 
   beforeEach(() => {
     clearTelegramUpdateCache();
+    processedUpdatesInDb = new Set<string>();
     savedProposals = new Map<string, ActionProposal>();
     sentMessages = [];
     editedMessages = [];
@@ -125,6 +127,12 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
             queryBuilder._filters[col] = val;
             return queryBuilder;
           }),
+          insert: vi.fn((payload: any) => {
+            queryBuilder._insertPayload = payload;
+            return queryBuilder;
+          }),
+          delete: vi.fn(() => queryBuilder),
+          lt: vi.fn(() => queryBuilder),
           limit: vi.fn(() => queryBuilder),
           then: (resolve: any, reject?: any) => {
             return queryBuilder.execute().then(resolve, reject);
@@ -137,6 +145,27 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
             return res;
           }),
           execute: async () => {
+            if (table === "telegram_processed_updates") {
+              if (queryBuilder._insertPayload) {
+                const key = `${queryBuilder._insertPayload.bot_id || "default"}:${queryBuilder._insertPayload.update_id}`;
+                if (processedUpdatesInDb.has(key)) {
+                  return {
+                    data: null,
+                    error: {
+                      code: "23505",
+                      message: 'duplicate key value violates unique constraint "pk_telegram_processed_updates"',
+                    },
+                  };
+                }
+                processedUpdatesInDb.add(key);
+                return {
+                  data: { update_id: queryBuilder._insertPayload.update_id },
+                  error: null,
+                };
+              }
+              return { data: [], error: null };
+            }
+
             if (table === "channel_mappings") {
               if (
                 queryBuilder._filters["channel_type"] === "telegram" &&

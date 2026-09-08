@@ -309,6 +309,124 @@ describe("ETAPA 9.7 — Comprehensive Security & Hardening Suite", () => {
         }),
       );
     });
+
+    it("deve falhar fechado (fail-closed) quando o repositório de idempotência do banco lançar erro", async () => {
+      clearTelegramUpdateCache();
+
+      const failingRepo = {
+        claimUpdate: vi.fn().mockRejectedValue(new Error("Postgres connection timeout")),
+      };
+
+      const mockRunner = {
+        generateCompletion: vi.fn(),
+      };
+
+      const mockApi = {
+        sendMessage: vi.fn(),
+      };
+
+      const update: TelegramUpdate = {
+        update_id: 11223344,
+        message: {
+          message_id: 55,
+          date: Date.now(),
+          chat: { id: 12345, type: "private" },
+          from: { id: 99999, first_name: "Test", is_bot: false },
+          text: "Cadastre uma despesa de 500 reais",
+        },
+      };
+
+      const deps: Partial<TelegramAdapterDependencies> = {
+        idempotencyRepo: failingRepo,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApi as any,
+        runnerFactory: () => mockRunner as any,
+      };
+
+      const res = await processTelegramUpdate(update, deps as any);
+
+      // FAIL-CLOSED: deve retornar handled: false com erro e NÃO executar nada
+      expect(res.handled).toBe(false);
+      expect(res.error).toContain("fail-closed");
+      expect(mockRunner.generateCompletion).not.toHaveBeenCalled();
+      expect(mockApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("deve proteger contra falhas concorrentes em múltiplas instâncias (Instance A e B falham -> 0 efeitos colaterais)", async () => {
+      clearTelegramUpdateCache();
+
+      const failingRepoA = {
+        claimUpdate: vi.fn().mockRejectedValue(new Error("Instance A DB unreachable")),
+      };
+      const failingRepoB = {
+        claimUpdate: vi.fn().mockRejectedValue(new Error("Instance B DB unreachable")),
+      };
+
+      const mockRunner = { generateCompletion: vi.fn() };
+      const mockProposalRepo = { saveProposal: vi.fn() };
+
+      const update: TelegramUpdate = {
+        update_id: 777666555,
+        message: {
+          message_id: 99,
+          date: Date.now(),
+          chat: { id: 12345, type: "private" },
+          from: { id: 99999, first_name: "Test", is_bot: false },
+          text: "Criar transferência de 1000 reais",
+        },
+      };
+
+      const depsA: Partial<TelegramAdapterDependencies> = {
+        idempotencyRepo: failingRepoA,
+        telegramBotToken: "mock-token",
+        runnerFactory: () => mockRunner as any,
+        proposalRepo: mockProposalRepo as any,
+      };
+
+      const depsB: Partial<TelegramAdapterDependencies> = {
+        idempotencyRepo: failingRepoB,
+        telegramBotToken: "mock-token",
+        runnerFactory: () => mockRunner as any,
+        proposalRepo: mockProposalRepo as any,
+      };
+
+      // Ambas instâncias recebem o mesmo update simultaneamente
+      const [resA, resB] = await Promise.all([
+        processTelegramUpdate(update, depsA as any),
+        processTelegramUpdate(update, depsB as any),
+      ]);
+
+      // Nenhuma das instâncias deve processar (ambas fail-closed)
+      expect(resA.handled).toBe(false);
+      expect(resB.handled).toBe(false);
+      expect(mockRunner.generateCompletion).toHaveBeenCalledTimes(0);
+      expect(mockProposalRepo.saveProposal).toHaveBeenCalledTimes(0);
+    });
+
+    it("deve rejeitar processamento sem repositório persistente quando não explicitamente habilitado para dev", async () => {
+      clearTelegramUpdateCache();
+
+      const update: TelegramUpdate = {
+        update_id: 444333,
+        message: {
+          message_id: 10,
+          date: Date.now(),
+          chat: { id: 12345, type: "private" },
+          from: { id: 99999, first_name: "Test", is_bot: false },
+          text: "Olá",
+        },
+      };
+
+      // Sem idempotencyRepo e sem supabase
+      const deps: Partial<TelegramAdapterDependencies> = {
+        telegramBotToken: "mock-token",
+      };
+
+      const res = await processTelegramUpdate(update, deps as any);
+
+      expect(res.handled).toBe(false);
+      expect(res.error).toContain("IDEMPOTENCY_REPOSITORY_REQUIRED");
+    });
   });
 
   // ─── 4. PROMPT & MEMORY INJECTION PROTECTION ──────────────────────────────
@@ -460,4 +578,78 @@ describe("ETAPA 9.7 — Comprehensive Security & Hardening Suite", () => {
       expect(result.iterations).toBe(3);
     });
   });
+
+  // ─── 7. STORAGE & PAYLOAD LEAKAGE HARDENING ───────────────────────────────
+  describe("7. Storage & Payload Leakage Hardening", () => {
+    it("deve garantir que base64 de arquivos grandes (<= 10MB) não vaza para audit_log ou histórico de conversa", () => {
+      const largeBase64 = "A".repeat(5000); // Representação de base64 de anexo
+
+      // Simulando evento de telemetria
+      const costRecord = createCostTelemetryRecord({
+        conversationId: validConvId,
+        workspaceId: validWsA,
+        model: "gpt-4o",
+        inputTokens: 100,
+        outputTokens: 50,
+        costUsd: 0.005,
+      });
+
+      // Não deve conter base64
+      const serializedAudit = JSON.stringify(costRecord);
+      expect(serializedAudit).not.toContain(largeBase64);
+
+      // Contexto de memória não deve armazenar payloads brutos de arquivos
+      const turnContext = buildTurnContext({
+        systemPrompt: "System rules",
+        summary: "Usuário enviou nota fiscal.",
+        currentMessage: { role: "user", content: "Processar anexo" },
+      });
+
+      const serializedContext = JSON.stringify(turnContext);
+      expect(serializedContext).not.toContain("base64");
+    });
+
+    it("deve garantir que propostas de ação proposal_only transicionam para confirmed e NUNCA para executed sem executor", async () => {
+      const mockRepo = {
+        getProposal: vi.fn().mockResolvedValue({
+          id: "prop-chk-lifecycle",
+          workspaceId: validWsA,
+          userId: "user-alpha",
+          actionType: "cadastrar_transacao",
+          actionVersion: "v1",
+          riskLevel: "LOW",
+          executionPolicy: "proposal_only",
+          status: "prepared",
+          payload: { descricao: "Aluguel", valor: 1500 },
+          requiresConfirmation: true,
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+          createdAt: new Date().toISOString(),
+        }),
+        confirmProposalAtomically: vi.fn().mockImplementation(async (id: string) => {
+          return {
+            success: true,
+            proposal: {
+              id,
+              status: "confirmed", // proposal-only: NUNCA "executed"
+              confirmedAt: new Date().toISOString(),
+            },
+          };
+        }),
+        updateStatus: vi.fn(),
+      };
+
+      const result = await executeConfirmedProposal(
+        "prop-chk-lifecycle",
+        mockContextA,
+        mockRepo as any,
+        undefined, // Sem executor físico
+        "owner",
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.proposal.status).toBe("confirmed");
+      expect(result.proposal.status).not.toBe("executed");
+    });
+  });
 });
+

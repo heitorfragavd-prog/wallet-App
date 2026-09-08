@@ -323,7 +323,7 @@ export async function executeConfirmedProposal(
   proposalId: string,
   context: AiExecutionContext,
   repository: ActionRepository,
-  mutator: ActionDatabaseMutator,
+  mutator?: ActionDatabaseMutator,
   userRole?: string,
   auditLogger?: AuditEventSinkLike,
 ): Promise<{ success: boolean; executedRecordId?: string; proposal: ActionProposal }> {
@@ -401,6 +401,18 @@ export async function executeConfirmedProposal(
         approver_role: userRole ?? "unknown",
       },
     });
+  }
+
+  // Se não houver mutator fornecido (fase proposal-only com 0 executores físicos ativos):
+  // A proposta é formalmente confirmada pelo usuário, sem execução física no banco.
+  if (!mutator) {
+    return {
+      success: true,
+      proposal: {
+        ...proposal,
+        status: "confirmed",
+      },
+    };
   }
 
   try {

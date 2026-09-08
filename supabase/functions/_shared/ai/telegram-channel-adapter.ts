@@ -151,7 +151,17 @@ export function clearTelegramUpdateCache(): void {
 
 // ─── IDEMPOTÊNCIA DISTRIBUÍDA (EDGE MULTI-INSTÂNCIA) ──────────────────────────
 
+let lastCleanupAt = 0;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hora entre expurgos oportunísticos
+
 export interface TelegramIdempotencyRepository {
+  /**
+   * Reivindica atomicamente o processamento de um update_id do Telegram.
+   * Retorna:
+   * - true: reivindicação bem-sucedida (primeira vez que este update é visto)
+   * - false: já reivindicado anteriormente (replay detectado - deve ser descartado)
+   * Lança exceção se o repositório falhar (FAIL-CLOSED: banco indisponível, timeout, erro de rede).
+   */
   claimUpdate(updateId: number, botId?: string, chatId?: number): Promise<boolean>;
 }
 
@@ -159,8 +169,35 @@ export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotenc
   constructor(private readonly client: any) {}
 
   async claimUpdate(updateId: number, botId = "default", chatId?: number): Promise<boolean> {
+    // 1. Otimização L1 (leitura rápida em memória na mesma instância)
+    if (isTelegramUpdateProcessed(updateId)) {
+      return false; // Replay já registrado localmente
+    }
+
+    // 2. Limpeza oportunística não-bloqueante de registros expirados (> 48h)
+    const now = Date.now();
+    if (now - lastCleanupAt > CLEANUP_INTERVAL_MS) {
+      lastCleanupAt = now;
+      try {
+        Promise.resolve(
+          this.client
+            .from("telegram_processed_updates")
+            .delete()
+            .lt("expires_at", new Date(now).toISOString()),
+        ).catch((cleanErr: any) => {
+          console.warn("[telegram-idempotency] Cleanup oportunístico falhou:", cleanErr?.message || cleanErr);
+        });
+      } catch {
+        // Safe fire-and-forget
+      }
+    }
+
+    // 3. Reivindicação atômica no banco de dados (distribuído)
+    let data: any;
+    let error: any;
+
     try {
-      const { data, error } = await this.client
+      const res = await this.client
         .from("telegram_processed_updates")
         .insert({
           update_id: updateId,
@@ -170,36 +207,35 @@ export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotenc
         .select("update_id")
         .maybeSingle();
 
-      if (error) {
-        // Código PostgreSQL 23505 = unique_violation (update já processado ou em processamento)
-        if (
-          error.code === "23505" ||
-          error.message?.includes("duplicate key") ||
-          error.message?.includes("unique constraint") ||
-          error.message?.includes("pk_telegram_processed_updates")
-        ) {
-          return false;
-        }
-        // Fallback resiliente para o cache em memória se a tabela não responder
-        console.warn("[telegram-idempotency] Erro ao registrar idempotência distribuída:", error.message);
-        if (isTelegramUpdateProcessed(updateId)) {
-          return false;
-        }
+      data = res?.data;
+      error = res?.error;
+    } catch (dbEx: any) {
+      // FAIL-CLOSED: Queda de banco/rede lançada como exceção fatal para impedir processamento
+      console.error("[telegram-idempotency] Exceção de rede no claim distribuído (FAIL-CLOSED):", dbEx);
+      throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${dbEx?.message || "Erro de conexão com o banco"}`);
+    }
+
+    if (error) {
+      // Código PostgreSQL 23505 = unique_violation (update já processado ou em processamento por outra réplica)
+      if (
+        error.code === "23505" ||
+        error.message?.includes("duplicate key") ||
+        error.message?.includes("unique constraint") ||
+        error.message?.includes("pk_telegram_processed_updates")
+      ) {
+        // Marca no L1 para que próximas chamadas nesta mesma instância nem precisem bater no banco
         markTelegramUpdateProcessed(updateId);
-        return true;
+        return false; // Replay detectado
       }
 
-      // Se inseriu com sucesso, marca também no cache local L1 para rapidez
-      markTelegramUpdateProcessed(updateId);
-      return Boolean(data);
-    } catch (err) {
-      console.warn("[telegram-idempotency] Exceção no claim distribuído:", err);
-      if (isTelegramUpdateProcessed(updateId)) {
-        return false;
-      }
-      markTelegramUpdateProcessed(updateId);
-      return true;
+      // FAIL-CLOSED: Qualquer outro erro de banco (permissão, timeout, tabela indisponível)
+      console.error("[telegram-idempotency] Erro no banco de dados durante claim distribuído (FAIL-CLOSED):", error.message);
+      throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${error.message}`);
     }
+
+    // Sucesso no banco: marca também no cache local L1 da réplica para otimização
+    markTelegramUpdateProcessed(updateId);
+    return Boolean(data !== null && data !== undefined);
   }
 }
 
@@ -744,6 +780,7 @@ export interface TelegramAdapterDependencies {
   operationsAgent?: OperationsAgent;
   operationsAgentFactory?: (context: AiExecutionContext) => OperationsAgent;
   idempotencyRepo?: TelegramIdempotencyRepository;
+  allowMemoryOnlyIdempotency?: boolean;
 }
 
 // ─── MANIPULADORES DE MENSAGENS E EVENTOS ─────────────────────────────────────
@@ -1355,17 +1392,45 @@ export async function processTelegramUpdate(
   deps: TelegramAdapterDependencies,
   options?: { correlationId?: string },
 ): Promise<{ handled: boolean; result?: any; error?: string }> {
-  // 0. Idempotência de Updates: Distribuída (Postgres) com Fallback L1 (Sliding Window)
+  // 0. Idempotência de Updates: Distribuída (Postgres) com Fail-Closed Estrito
   if (update?.update_id) {
     const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id;
     let claimed = false;
 
     if (deps.idempotencyRepo) {
-      claimed = await deps.idempotencyRepo.claimUpdate(update.update_id, "default", chatId);
+      try {
+        claimed = await deps.idempotencyRepo.claimUpdate(update.update_id, "default", chatId);
+      } catch (err: any) {
+        // FAIL-CLOSED: Falha de infraestrutura no claim distribuído rejeita o update
+        console.error("[telegram-idempotency] Update rejeitado por fail-closed (idempotencyRepo):", err?.message || err);
+        return {
+          handled: false,
+          error: `Erro de idempotência distribuída (fail-closed): ${err?.message || "DB failure"}`,
+        };
+      }
     } else if (deps.supabase) {
-      const defaultRepo = new SupabaseTelegramIdempotencyRepository(deps.supabase);
-      claimed = await defaultRepo.claimUpdate(update.update_id, "default", chatId);
+      try {
+        const defaultRepo = new SupabaseTelegramIdempotencyRepository(deps.supabase);
+        claimed = await defaultRepo.claimUpdate(update.update_id, "default", chatId);
+      } catch (err: any) {
+        // FAIL-CLOSED: Falha de infraestrutura no claim distribuído rejeita o update
+        console.error("[telegram-idempotency] Update rejeitado por fail-closed (defaultRepo):", err?.message || err);
+        return {
+          handled: false,
+          error: `Erro de idempotência distribuída (fail-closed): ${err?.message || "DB failure"}`,
+        };
+      }
     } else {
+      // Política explícita: Em produção/Edge, repositório persistente é obrigatório.
+      // Somente permite memory-only se expressamente habilitado para testes/dev
+      const allowMemoryOnly = Boolean(deps.allowMemoryOnlyIdempotency);
+      if (!allowMemoryOnly) {
+        console.error("[telegram-idempotency] FAIL-CLOSED: Repositório persistente de idempotência não fornecido.");
+        return {
+          handled: false,
+          error: "IDEMPOTENCY_REPOSITORY_REQUIRED: Repositório persistente obrigatório em ambiente de execução.",
+        };
+      }
       if (isTelegramUpdateProcessed(update.update_id)) {
         return { handled: true };
       }
@@ -1374,7 +1439,7 @@ export async function processTelegramUpdate(
     }
 
     if (!claimed) {
-      // Replay detectado no cluster distribuído: descarta silenciosamente
+      // Replay detectado no cluster distribuído ou cache L1: descarta silenciosamente
       return { handled: true };
     }
   }

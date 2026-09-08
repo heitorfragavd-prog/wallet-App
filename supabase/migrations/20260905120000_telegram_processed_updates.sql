@@ -17,5 +17,9 @@ CREATE INDEX IF NOT EXISTS idx_telegram_processed_updates_expires_at
 -- RLS: Tabela de infraestrutura backend estritamente service_role (Edge Functions)
 ALTER TABLE public.telegram_processed_updates ENABLE ROW LEVEL SECURITY;
 
+-- Garantir isolamento estrito: revogar todo acesso de roles públicas e autenticadas do PostgREST
+REVOKE ALL ON TABLE public.telegram_processed_updates FROM anon, authenticated;
+GRANT ALL ON TABLE public.telegram_processed_updates TO service_role;
+
 COMMENT ON TABLE public.telegram_processed_updates IS
-    'Armazena update_ids processados pelo Telegram webhook para garantir idempotência distribuída multi-instância.';
+    'Armazena update_ids processados pelo Telegram webhook para garantir idempotência distribuída multi-instância. Limpeza via delete oportunístico ou rotina de retenção.';
