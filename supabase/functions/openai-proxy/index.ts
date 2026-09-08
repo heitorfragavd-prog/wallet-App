@@ -363,10 +363,10 @@ async function consultarVendasEyemobile(
             metadata: { status: response.status },
           });
         }
-      } catch (syncErr: any) {
+      } catch (syncErr: unknown) {
         logger.warn("Falha ao invocar eyemobile-sync", {
           operation: "consultarVendasEyemobile",
-          metadata: { error: syncErr.message },
+          metadata: { error: syncErr instanceof Error ? syncErr.message : String(syncErr) },
         });
       }
     }
@@ -416,14 +416,15 @@ async function consultarVendasEyemobile(
       observacao: "Nenhuma venda encontrada para esta data ou período no PDV Eyemobile.",
     };
     return resultado;
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error("Exceção ao consultar vendas Eyemobile", {
       operation: "consultarVendasEyemobile",
-      metadata: { error: err.message },
+      metadata: { error: errorMsg },
     });
     return {
       erro: "Erro interno ao consultar vendas do Eyemobile.",
-      detalhe: err.message,
+      detalhe: errorMsg,
     };
   }
 }
@@ -654,14 +655,15 @@ async function consultarSaidasCaixaPeriodo(
     };
 
     return resultado;
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error("Exceção ao consultar saídas de caixa", {
       operation: "consultarSaidasCaixaPeriodo",
-      metadata: { error: err.message },
+      metadata: { error: errorMsg },
     });
     return {
       erro: "Erro ao consultar saídas de caixa do período.",
-      detalhe: err.message
+      detalhe: errorMsg
     };
   }
 }
@@ -1150,11 +1152,12 @@ Deno.serve(async (req: Request) => {
           headers: withCorrelationHeader({ ...CORS_HEADERS, "Content-Type": "application/json" }, correlationId),
         },
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error("Exceção na transcrição Whisper", {
         correlationId,
         operation: "transcribe_audio",
-        metadata: { error: err.message },
+        metadata: { error: errorMsg },
       });
       return createErrorResponse(req, {
         status: 500,

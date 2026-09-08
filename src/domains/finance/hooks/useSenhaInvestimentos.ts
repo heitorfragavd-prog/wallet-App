@@ -41,7 +41,7 @@ export function useSenhaInvestimentos() {
 
       if (error) throw error;
       setHasPassword(!!data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error("useSenhaInvestimentos", "Erro ao verificar existência de senha", { error: err.message });
     } finally {
       setLoading(false);
@@ -87,7 +87,7 @@ export function useSenhaInvestimentos() {
         return true;
       }
       throw new Error(resp.data?.error || "Falha no cadastro");
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error("useSenhaInvestimentos", "Erro no cadastro de senha", { error: err.message });
       toast({
         variant: "destructive",
@@ -141,7 +141,7 @@ export function useSenhaInvestimentos() {
         }
         return false;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error("useSenhaInvestimentos", "Erro na validação de senha", { error: err.message });
       toast({
         variant: "destructive",

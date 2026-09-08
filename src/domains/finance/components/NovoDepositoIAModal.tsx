@@ -20,9 +20,7 @@ import {
 import {
   Sparkles,
   UploadCloud,
-  FileText,
   Loader2,
-  Calendar as CalendarIcon,
   CheckCircle,
 } from "lucide-react";
 import { useDepositosInvestimento } from "../hooks/useDepositosInvestimento";
@@ -84,6 +82,7 @@ export const NovoDepositoIAModal: React.FC<NovoDepositoIAModalProps> = ({
       onSuccess();
       onOpenChange(false);
     } catch (_) {
+      // Falha silenciosa no envio; UI permanece no estado atual
     } finally {
       setLoading(false);
     }
@@ -117,6 +116,7 @@ export const NovoDepositoIAModal: React.FC<NovoDepositoIAModalProps> = ({
         setPreviewMode(true);
       }
     } catch (_) {
+      // Falha na análise IA de texto tratada silenciosamente
     } finally {
       setLoading(false);
     }
@@ -160,6 +160,7 @@ export const NovoDepositoIAModal: React.FC<NovoDepositoIAModalProps> = ({
         setPreviewMode(true);
       }
     } catch (_) {
+      // Falha no upload e análise OCR tratada silenciosamente
     } finally {
       setLoading(false);
     }

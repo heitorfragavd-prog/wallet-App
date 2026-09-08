@@ -28,7 +28,7 @@ export default function EquipePage() {
   const colaboradoresQuery = useColaboradores();
   const obligationsQuery = useEquipeObrigacoesMensais();
   const resumoQuery = useEquipeResumo();
-  const colaboradores = colaboradoresQuery.data ?? [];
+  const colaboradores = useMemo(() => colaboradoresQuery.data ?? [], [colaboradoresQuery.data]);
   const resumo = resumoQuery.data;
 
   const regimeEncargos = activeWorkspace?.regime_encargos ?? "geral";
@@ -40,15 +40,15 @@ export default function EquipePage() {
   }), [colaboradores]);
   const filtered = useMemo(() => colaboradores.filter((item) => filter === "todos" || item.tipo === filter), [colaboradores, filter]);
   const custoMensal = useMemo(() => colaboradores.reduce((total, item) => total + colaboradorMonthlyCost(item, regimeEncargos), 0), [colaboradores, regimeEncargos]);
-  const experiencias = colaboradores.filter((item) => {
+  const experiencias = useMemo(() => colaboradores.filter((item) => {
     if (item.tipo !== "funcionario" || !item.data_admissao) return false;
     const est = resolverEstadoContrato({
       statusPersistido: item.status,
       dataAdmissao: item.data_admissao,
       diasExperiencia: item.dias_experiencia || 90,
     });
-    return (est.estado === "experiencia" && est.diasRestantes <= 15) || est.estado === "decisao";
-  }).length;
+    return (est?.estado === "experiencia" && est.diasRestantes !== null && est.diasRestantes <= 15) || est?.estado === "decisao";
+  }).length, [colaboradores]);
 
   return (
     <DashboardLayout>

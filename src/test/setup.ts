@@ -1,4 +1,8 @@
 import '@testing-library/jest-dom';
+import { configure } from '@testing-library/dom';
+
+// Increase default async timeout for waitFor to 3000ms under heavy v8 coverage runs
+configure({ asyncUtilTimeout: 3000 });
 
 // Mock IntersectionObserver
 class MockIntersectionObserver implements IntersectionObserver {

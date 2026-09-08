@@ -8,7 +8,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// @ts-ignore
+// @ts-expect-error Deno runtime global
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -69,7 +69,7 @@ Deno.serve(async (req: Request) => {
         status: 200,
         headers: { "Content-Type": "application/json", ...CORS_HEADERS }
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[ChatGPT Endpoint Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }
@@ -89,7 +89,7 @@ Deno.serve(async (req: Request) => {
       const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
 
       // 1. Verificar se existe mapeamento ativo para este canal do Telegram
-      let { data: mapping } = await supabase
+      const { data: mapping } = await supabase
         .from("channel_mappings")
         .select("*")
         .eq("channel_type", "telegram")
@@ -123,10 +123,10 @@ Deno.serve(async (req: Request) => {
       });
 
       // Executa o processamento em background
-      // @ts-ignore
+      // @ts-expect-error EdgeRuntime global
       EdgeRuntime.waitUntil((async () => {
         try {
-          let text = message.text || message.caption || "";
+          const text = message.text || message.caption || "";
           let imageBase64: string | undefined;
 
           // Se tiver imagem, obter a de maior resolução
@@ -158,7 +158,7 @@ Deno.serve(async (req: Request) => {
       })());
 
       return response;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[Telegram Endpoint Route Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }
@@ -203,14 +203,15 @@ Deno.serve(async (req: Request) => {
       });
 
       // Executa o processamento em background
-      // @ts-ignore
+      // @ts-expect-error EdgeRuntime global
       EdgeRuntime.waitUntil((async () => {
         try {
           const messageContent = messageData.message || {};
-          let text = messageContent.conversation || 
-                     messageContent.extendedTextMessage?.text || 
-                     messageContent.imageMessage?.caption || 
-                     "";
+          const text =
+            messageContent.conversation ||
+            messageContent.extendedTextMessage?.text ||
+            messageContent.imageMessage?.caption ||
+            "";
 
           let imageBase64: string | undefined;
 
@@ -240,7 +241,7 @@ Deno.serve(async (req: Request) => {
       })());
 
       return response;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[WhatsApp Endpoint Route Error]", err);
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
     }

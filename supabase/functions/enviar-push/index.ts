@@ -89,7 +89,7 @@ serve(async (req) => {
         };
         await webpush.sendNotification(pushSubscription, payload);
         enviosComSucesso++;
-      } catch (err: any) {
+      } catch (err: unknown) {
         const msg = err?.message || String(err);
         erros.push(msg);
         // Se a subscription expirou ou foi revogada (404/410), remove do banco
@@ -113,7 +113,7 @@ serve(async (req) => {
       JSON.stringify({ success: sucesso, envios: enviosComSucesso, total: subs.length }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -18,7 +18,38 @@ export const OPENAI_FINANCIAL_TOOLS: OpenAiFunctionDefinition[] = [
     function: {
       name: "buscar_receitas",
       description:
-        "Busca receitas operacionais no período especificado. Retorna lista com data, valor, categoria, descrição e referências canônicas.",
+        "Busca RECEITAS FINANCEIRAS registradas na Wallet no período especificado. " +
+        "Inclui: Pix e Cartão (líquidos de taxas Divipay) + Dinheiro PDV Eyemobile + Receitas manuais importadas. " +
+        "IMPORTANTE: este é o valor JÁ LÍQUIDO de taxas — diferente do faturamento bruto. " +
+        "NÃO usar para responder 'quanto vendi?' ou 'qual meu faturamento?'. " +
+        "Para VENDAS BRUTAS do PDV, use buscar_vendas_pdv.",
+      parameters: {
+        type: "object",
+        properties: {
+          start: {
+            type: "string",
+            description: "Data inicial no formato YYYY-MM-DD",
+          },
+          end: {
+            type: "string",
+            description: "Data final no formato YYYY-MM-DD",
+          },
+        },
+        required: ["start", "end"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "buscar_vendas_pdv",
+      description:
+        "Busca VENDAS BRUTAS do PDV Eyemobile no período especificado. " +
+        "Este é o FATURAMENTO BRUTO — o valor total vendido no caixa antes das taxas. " +
+        "Usar para responder: 'quanto vendi?', 'qual meu faturamento?', 'como estão as vendas?'. " +
+        "NÃO confundir com receitas: vendas brutas > receitas líquidas (diferença = taxas Divipay). " +
+        "Se retornar vazio, Eyemobile pode estar offline ou sem sincronização para o período.",
       parameters: {
         type: "object",
         properties: {

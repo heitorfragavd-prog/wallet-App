@@ -96,7 +96,7 @@ export function useConfiguracoesInvestimentos() {
         description: "Configurações de investimentos salvas!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useConfiguracoesInvestimentos", "Erro ao salvar configurações", { error: err.message });
       toast({
         variant: "destructive",
@@ -128,7 +128,7 @@ export function useConfiguracoesInvestimentos() {
         return true;
       }
       throw new Error(resp.data?.error || "Erro desconhecido");
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error("useConfiguracoesInvestimentos", "Erro ao atualizar cotações", { error: err.message });
       toast({
         variant: "destructive",

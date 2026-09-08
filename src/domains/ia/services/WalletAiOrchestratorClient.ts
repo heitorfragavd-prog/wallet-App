@@ -134,6 +134,27 @@ export class WalletAiOrchestratorClient {
 
     const json = await response.json().catch(() => ({}));
 
+    // Erro de cota/chave OpenAI — propagar com mensagem específica
+    if (
+      response.status === 429 ||
+      json.error === "openai_quota_exceeded" ||
+      json.error === "openai_api_error_429"
+    ) {
+      throw new WalletAiOrchestratorError(
+        "openai_quota_exceeded",
+        "Limite de uso da IA atingido. Verifique os créditos da chave OpenAI nas configurações.",
+        response.status,
+      );
+    }
+
+    if (response.status === 401 && json.error === "openai_invalid_key") {
+      throw new WalletAiOrchestratorError(
+        "openai_invalid_key",
+        "Chave OpenAI inválida ou expirada. Reconfigure nas configurações de IA.",
+        401,
+      );
+    }
+
     if (!response.ok || json.success === false) {
       const errorCode = json.code ?? json.error ?? "WALLET_AI_TOOL_ERROR";
       throw new WalletAiOrchestratorError(

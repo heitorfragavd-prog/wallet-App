@@ -124,7 +124,7 @@ const Categorias = () => {
       if (error) throw error;
       await refetch();
       toast({ title: "Sucesso!", description: "Categorias padrão importadas com sucesso." });
-    } catch (error) {
+    } catch (_error) {
       toast({ title: "Erro", description: "Não foi possível importar as categorias padrão.", variant: "destructive" });
     }
   };

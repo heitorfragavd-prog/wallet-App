@@ -64,7 +64,7 @@ export default function AdminPlans() {
             })) || [];
             
             setPlans(plansWithFeatures);
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao carregar planos");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -100,7 +100,7 @@ export default function AdminPlans() {
             setIsDialogOpen(false);
             fetchPlans();
             resetForm();
-        } catch (error) {
+        } catch (_error) {
             const errorMessage = error instanceof Error ? error.message : "Erro ao salvar plano";
             toast.error(errorMessage);
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
@@ -119,7 +119,7 @@ export default function AdminPlans() {
             if (error) throw error;
             toast.success("Plano excluído com sucesso!");
             fetchPlans();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao excluir plano");
         }
     };

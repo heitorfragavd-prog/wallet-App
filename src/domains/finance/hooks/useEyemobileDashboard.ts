@@ -7,7 +7,7 @@ import { useRef } from "react";
 function toISODate(dateStr: string): string {
   if (!dateStr) return dateStr;
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
-  const parts = dateStr.split(/[\/\-]/);
+  const parts = dateStr.split(/[/-]/);
   if (parts.length === 3 && parts[2].length === 4) {
     const [day, month, year] = parts;
     return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;

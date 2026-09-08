@@ -97,7 +97,7 @@ export const NovaDespesaModal: React.FC<NovaDespesaModalProps> = ({
       setValorStr("0,00");
       setObservacoes("");
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Erro ao criar despesa",
         description: err.message || "Tente novamente.",

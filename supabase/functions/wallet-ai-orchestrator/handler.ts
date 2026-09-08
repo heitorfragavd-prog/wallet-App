@@ -44,6 +44,7 @@ import {
   type ProcessDocumentPipelineResult,
 } from "../_shared/ai/document-pipeline.ts";
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
+import type { EyemobileLiveClient } from "../wallet-ai-query/supabase-adapter.ts";
 
 export interface AuditEventLogger {
   logEvent(event: {
@@ -86,7 +87,10 @@ export interface OrchestratorHandlerDependencies {
     context: AiExecutionContext,
     proposal: ActionProposal,
   ) => Promise<void>;
+  /** Factory para o cliente ao vivo do Eyemobile. Opcional — se ausente, usa cache sincronizado. */
+  eyemobileLiveClientFactory?: (context: AiExecutionContext) => EyemobileLiveClient;
 }
+
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -319,7 +323,8 @@ export async function handleOrchestratorHttpRequest(
     );
 
     const repository = dependencies.repoFactory(context);
-    const catalog = createQueryToolCatalog(repository, { extended: true });
+    const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
+    const catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
     const runner = dependencies.runnerFactory(selectedModel);
 
     // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico
@@ -474,6 +479,9 @@ export async function handleOrchestratorHttpRequest(
         toolCallsLimitReached: turnResult.toolCallsLimitReached ?? false,
         errorCode: turnResult.errorCode,
         contextTruncated,
+        provider: turnResult.provider ?? "openai",
+        fallback: turnResult.fallback ?? false,
+        fallbackReason: turnResult.fallbackReason ?? null,
       };
 
       await dependencies.auditLogger.logEvent({
@@ -502,11 +510,18 @@ export async function handleOrchestratorHttpRequest(
         errorCode: turnResult.errorCode,
         conversation_id: conversationId,
         correlation_id: correlationId,
+        provider: turnResult.provider ?? "openai",
+        fallback: turnResult.fallback ?? false,
+        fallbackReason: turnResult.fallbackReason ?? null,
       }),
       { status: 200, headers: responseHeaders },
     );
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
+    const correlationId = (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now())
+    ).slice(0, 8).toUpperCase();
 
     let status = 500;
     let rawError = "internal_server_error";
@@ -526,10 +541,14 @@ export async function handleOrchestratorHttpRequest(
         status = 504;
         rawError = "timeout";
         standardCode = "WALLET_AI_TIMEOUT";
-      } else if (msg.includes("openai_api_error_429")) {
+      } else if (msg.includes("openai_api_error_429") || msg === "openai_quota_exceeded") {
         status = 429;
         rawError = "rate_limit_exceeded";
         standardCode = "WALLET_AI_PROVIDER_RATE_LIMIT";
+      } else if (msg === "openai_invalid_key") {
+        status = 401;
+        rawError = "openai_invalid_key";
+        standardCode = "WALLET_AI_PROVIDER_ERROR";
       } else if (msg.includes("openai_api_error_")) {
         status = 502;
         rawError = "provider_error";
@@ -569,3 +588,4 @@ export async function handleOrchestratorHttpRequest(
     );
   }
 }
+
