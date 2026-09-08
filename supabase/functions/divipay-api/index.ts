@@ -202,29 +202,17 @@ serve(async (req) => {
       { auth: { autoRefreshToken: false, persistSession: false } },
     )
 
-    const token = authHeader.replace('Bearer ', '').trim()
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
     const serviceRoleKey = (Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim()
 
-    let isServiceRole = token === serviceRoleKey
-    if (!isServiceRole) {
-      try {
-        const parts = token.split('.')
-        if (parts.length === 3) {
-          const payload = JSON.parse(atob(parts[1]))
-          if (payload.role === 'service_role') {
-            isServiceRole = true
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
+    // Service-role é autorizado SOMENTE se o token corresponder exatamente à secret key do backend
+    const isServiceRole = Boolean(serviceRoleKey && token === serviceRoleKey)
 
     const requestBody = await req.json().catch(() => ({}))
     let targetUserId = ''
 
     if (isServiceRole && requestBody.user_id) {
-      targetUserId = requestBody.user_id
+      targetUserId = String(requestBody.user_id)
     } else {
       const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
       if (authError || !user) {

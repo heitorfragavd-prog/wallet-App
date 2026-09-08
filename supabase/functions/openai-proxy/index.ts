@@ -1182,23 +1182,12 @@ Deno.serve(async (req: Request) => {
 
   let userId: string;
 
-  // Validação segura do JWT / Service Role para chamadas internas e de usuários
-  let isServiceRoleCall = Boolean(jwt === supabaseServiceKey && body.user_id);
-  if (!isServiceRoleCall && jwt.startsWith("eyJ")) {
-    try {
-      const payloadBase64 = jwt.split(".")[1];
-      const decoded = JSON.parse(atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/")));
-      if (decoded.role === "service_role" || decoded.iss === "supabase") {
-        isServiceRoleCall = true;
-      }
-    } catch (_) {
-      // Ignora payload malformado para prosseguir com autenticação padrão
-    }
-  }
+  // Validação segura: service-role SOMENTE por correspondência exata com o secret do backend
+  const isServiceRoleCall = Boolean(supabaseServiceKey && jwt === supabaseServiceKey && body.user_id);
 
-  if (isServiceRoleCall && body.user_id) {
-    // Chamada interna autorizada por service-role (ex: telegram-webhook)
-    userId = body.user_id;
+  if (isServiceRoleCall) {
+    // Chamada interna autorizada exclusivamente pela chave service-role
+    userId = String(body.user_id);
   } else {
     const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);

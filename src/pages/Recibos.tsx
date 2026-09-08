@@ -52,14 +52,14 @@ const Recibos = () => {
     }
   };
 
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
   const handleImprimir = () => {
     if (!reciboHtml) return;
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(reciboHtml);
-    win.document.close();
-    win.focus();
-    win.print();
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.focus();
+      iframeRef.current.contentWindow.print();
+    }
   };
 
   return (
@@ -121,7 +121,9 @@ const Recibos = () => {
               </div>
               {reciboHtml ? (
                 <iframe
+                  ref={iframeRef}
                   title="Preview do recibo"
+                  sandbox="allow-modals"
                   srcDoc={reciboHtml}
                   className="w-full h-[500px] rounded-lg border border-border bg-white"
                 />

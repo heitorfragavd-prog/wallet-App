@@ -117,8 +117,24 @@ function parseNFeXml(xmlText: string) {
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const authHeader = req.headers.get("Authorization");
+  const cronSecret = Deno.env.get("CRON_SECRET");
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+
+  const isAuthorized = Boolean(
+    (supabaseServiceKey && token === supabaseServiceKey) ||
+    (cronSecret && token === cronSecret)
+  );
+
+  if (!isAuthorized) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const telegramBotToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey, {

@@ -6,41 +6,110 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function hashPassword(password: string, salt: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + salt);
+async function derivePbkdf2Hash(password: string, salt: string): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: enc.encode(salt),
+      iterations: 100000,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    256
+  );
+  const hashArray = Array.from(new Uint8Array(derivedBits));
+  const hex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `$pbkdf2$100000$${hex}`;
+}
+
+async function verifyPassword(password: string, salt: string, storedHash: string): Promise<boolean> {
+  if (storedHash.startsWith("$pbkdf2$100000$")) {
+    const computed = await derivePbkdf2Hash(password, salt);
+    return computed === storedHash;
+  }
+  // Retrocompatibilidade segura com SHA-256 legado
+  const enc = new TextEncoder();
+  const data = enc.encode(password + salt);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const legacyHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return legacyHash === storedHash;
+}
+
+async function createInvestmentToken(userId: string, secretKey: string): Promise<string> {
+  const expiresAt = Date.now() + 30 * 60 * 1000;
+  const payload = `${userId}:${expiresAt}`;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secretKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
+  const sigHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return `inv_${btoa(payload)}.${sigHex}`;
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false, autoRefreshToken: false }
     });
 
-    const { mode, user_id, senha } = await req.json();
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
 
-    if (!user_id || !senha) {
-      return new Response(JSON.stringify({ error: "Parâmetros inválidos" }), {
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Proteção estrita contra IDOR: a identidade é SEMPRE obtida do token verificado
+    const authenticatedUserId = user.id;
+
+    const { mode, senha } = await req.json().catch(() => ({}));
+
+    if (!senha || typeof senha !== "string" || senha.trim().length === 0) {
+      return new Response(JSON.stringify({ error: "Senha inválida ou vazia" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
-    // Usar user_id como salt
-    const hash = await hashPassword(senha, user_id);
+    // Salting por usuário + PBKDF2 com 100.000 iterações
+    const userSalt = `wallet_inv_${authenticatedUserId}`;
 
     if (mode === "cadastrar") {
+      const hash = await derivePbkdf2Hash(senha, userSalt);
+
       const { error } = await supabaseAdmin
         .from("senha_investimentos")
         .upsert({
-          user_id,
+          user_id: authenticatedUserId,
           senha_hash: hash,
           tentativas_falhas: 0,
           bloqueado_ate: null,
@@ -49,7 +118,8 @@ serve(async (req) => {
 
       if (error) throw error;
 
-      return new Response(JSON.stringify({ success: true, token: "invest_jwt_" + crypto.randomUUID() }), {
+      const sessionToken = await createInvestmentToken(authenticatedUserId, supabaseServiceKey);
+      return new Response(JSON.stringify({ success: true, token: sessionToken }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
@@ -58,7 +128,7 @@ serve(async (req) => {
       const { data, error } = await supabaseAdmin
         .from("senha_investimentos")
         .select("*")
-        .eq("user_id", user_id)
+        .eq("user_id", authenticatedUserId)
         .maybeSingle();
 
       if (error) throw error;
@@ -69,7 +139,7 @@ serve(async (req) => {
         });
       }
 
-      // Verificar bloqueio
+      // Verificar bloqueio temporal
       if (data.bloqueado_ate) {
         const bloqueadoAte = new Date(data.bloqueado_ate);
         if (new Date() < bloqueadoAte) {
@@ -79,20 +149,31 @@ serve(async (req) => {
         }
       }
 
-      const match = hash === data.senha_hash;
+      const match = await verifyPassword(senha, userSalt, data.senha_hash);
 
       if (match) {
-        // Sucesso: resetar tentativas
+        // Se a senha estava em formato legado, atualiza atomicamente para PBKDF2
+        let newHash = data.senha_hash;
+        if (!data.senha_hash.startsWith("$pbkdf2$")) {
+          newHash = await derivePbkdf2Hash(senha, userSalt);
+        }
+
         await supabaseAdmin
           .from("senha_investimentos")
-          .update({ tentativas_falhas: 0, bloqueado_ate: null })
-          .eq("user_id", user_id);
+          .update({
+            senha_hash: newHash,
+            tentativas_falhas: 0,
+            bloqueado_ate: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq("user_id", authenticatedUserId);
 
-        return new Response(JSON.stringify({ valido: true, token: "invest_jwt_" + crypto.randomUUID() }), {
+        const sessionToken = await createInvestmentToken(authenticatedUserId, supabaseServiceKey);
+        return new Response(JSON.stringify({ valido: true, token: sessionToken }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       } else {
-        // Falha: incrementar tentativas
+        // Falha: incrementar tentativas com bloqueio progressivo
         const novasTentativas = (data.tentativas_falhas || 0) + 1;
         const bloqueado = novasTentativas >= 3;
         const bloqueadoAte = bloqueado ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null;
@@ -104,7 +185,7 @@ serve(async (req) => {
             bloqueado_ate: bloqueadoAte,
             updated_at: new Date().toISOString(),
           })
-          .eq("user_id", user_id);
+          .eq("user_id", authenticatedUserId);
 
         return new Response(JSON.stringify({
           valido: false,
@@ -121,7 +202,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (err: unknown) {
-    return new Response(JSON.stringify({ error: err.message, success: false }), {
+    const message = err instanceof Error ? err.message : "Erro interno";
+    return new Response(JSON.stringify({ error: message, success: false }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });

@@ -55,11 +55,45 @@ function valorPorExtenso(valor: number): string {
   return partes.join(" e ");
 }
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+
+function escapeHtml(str: unknown): string {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { valor, pagador, recebedor, descricao, data, cidade } = await req.json();
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const { valor, pagador, recebedor, descricao, data, cidade } = await req.json().catch(() => ({}));
 
     if (!valor || !pagador || !recebedor) {
       return new Response(JSON.stringify({ error: "valor, pagador e recebedor são obrigatórios." }), {
@@ -69,16 +103,28 @@ serve(async (req) => {
     }
 
     const valorNum = Number(valor);
+    if (isNaN(valorNum) || valorNum < 0) {
+      return new Response(JSON.stringify({ error: "Valor monetário inválido." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const safePagador = escapeHtml(pagador);
+    const safeRecebedor = escapeHtml(recebedor);
+    const safeDescricao = escapeHtml(descricao || "prestação de serviços / pagamento");
+    const safeCidade = escapeHtml(cidade || "____________________");
+
     const dataFormatada = data
       ? new Date(`${data}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })
       : new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
-    const cidadeUf = cidade || "____________________";
+    const safeDataFormatada = escapeHtml(dataFormatada);
 
     const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Recibo - ${recebedor}</title>
+<title>Recibo - ${safeRecebedor}</title>
 <style>
   body { font-family: Georgia, serif; max-width: 700px; margin: 40px auto; padding: 40px; border: 2px solid #333; color: #222; }
   h1 { text-align: center; letter-spacing: 8px; margin-bottom: 4px; }
@@ -94,20 +140,20 @@ serve(async (req) => {
 </head>
 <body>
   <h1>RECIBO</h1>
-  <div class="valor-destaque">${formatBRL(valorNum)}</div>
+  <div class="valor-destaque">${escapeHtml(formatBRL(valorNum))}</div>
   <p class="texto">
-    Recebemos de <strong>${pagador}</strong> a quantia de
-    <strong>${formatBRL(valorNum)}</strong> (${valorPorExtenso(valorNum)}),
-    referente a <strong>${descricao || "prestação de serviços / pagamento"}</strong>.
+    Recebemos de <strong>${safePagador}</strong> a quantia de
+    <strong>${escapeHtml(formatBRL(valorNum))}</strong> (${escapeHtml(valorPorExtenso(valorNum))}),
+    referente a <strong>${safeDescricao}</strong>.
   </p>
   <p class="texto">
     Para maior clareza, firmamos o presente recibo, dando plena e irrevogável quitação
     do valor acima descrito.
   </p>
-  <p class="data-cidade">${cidadeUf}, ${dataFormatada}</p>
+  <p class="data-cidade">${safeCidade}, ${safeDataFormatada}</p>
   <div class="assinatura">
     <div class="linha"></div>
-    <p class="nome">${recebedor}</p>
+    <p class="nome">${safeRecebedor}</p>
     <p>Recebedor</p>
   </div>
 </body>
@@ -117,7 +163,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e: unknown) {
-    return new Response(JSON.stringify({ error: e.message || "Erro ao gerar recibo" }), {
+    const msg = e instanceof Error ? e.message : "Erro ao gerar recibo";
+    return new Response(JSON.stringify({ error: msg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
