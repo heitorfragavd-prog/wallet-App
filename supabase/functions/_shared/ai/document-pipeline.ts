@@ -15,14 +15,10 @@
  */
 
 import {
-  cleanDigits,
-  validateLinhaDigitavel,
-  reconcileBoleto,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
 import {
   processBoletoDocument,
-  type BoletoExtractedData,
   type ProcessBoletoOutput,
 } from "./boleto-service.ts";
 import {
@@ -33,7 +29,6 @@ import {
   prepareActionProposal,
   type ActionProposal,
 } from "./action-gateway.ts";
-import type { ActionRiskLevel } from "./action-types.ts";
 
 // ─── LIMITES E CONSTANTES DE SEGURANÇA ─────────────────────────────────────────
 
@@ -412,7 +407,7 @@ export async function processDocumentPipeline(
   );
 
   // 3. Classificação Fail-Closed
-  let docType = classifyDocumentType({
+  const docType = classifyDocumentType({
     documentTypeHint: input.documentTypeHint,
     fileName: input.fileName,
     textContext: input.textContext,
@@ -665,7 +660,7 @@ export async function processDocumentPipeline(
           openaiApiKey: input.openaiApiKey,
           workspaceId: input.workspaceId,
         });
-      } catch (err: any) {
+      } catch (_err: unknown) {
         const durationMs = Date.now() - startTime;
         return {
           success: false,
@@ -939,8 +934,9 @@ export async function processDocumentPipeline(
       correlationId,
       durationMs,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
+    const errMsg = err instanceof Error ? err.message : "Erro interno no processamento do documento.";
     return {
       success: false,
       documentType: docType,
@@ -949,7 +945,7 @@ export async function processDocumentPipeline(
       data: {},
       validation: {
         isValid: false,
-        errors: [err?.message || "Erro interno no processamento do documento."],
+        errors: [errMsg],
         warnings: [],
       },
       hasPromptInjection: injectionCheck.hasInjection,

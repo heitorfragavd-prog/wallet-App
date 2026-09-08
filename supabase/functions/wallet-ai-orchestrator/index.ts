@@ -1,4 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import type { AiExecutionContext } from "../_shared/ai/auth.ts";
+import type { ActionProposal } from "../_shared/ai/action-types.ts";
 import { FailoverLlmRunner } from "../_shared/ai/failover-runner.ts";
 import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
 import { GeminiLlmRunner } from "../_shared/ai/gemini-adapter.ts";
@@ -32,8 +34,9 @@ const adminClient = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 }) as unknown as SupabaseClientLike;
 
-const proposalRepo = new SupabaseActionProposalRepository(adminClient as any);
-const conversationRepo = new SupabaseConversationRepository(adminClient as any);
+const rawSupabaseClient = adminClient as unknown as SupabaseClient;
+const proposalRepo = new SupabaseActionProposalRepository(rawSupabaseClient);
+const conversationRepo = new SupabaseConversationRepository(rawSupabaseClient);
 
 const authDeps = createSupabaseAuthorizationDependencies(adminClient);
 
@@ -71,7 +74,7 @@ const auditLogger = {
 };
 
 const findDuplicateFn = async (
-  _ctx: any,
+  _ctx: AiExecutionContext,
   params: {
     workspaceId: string;
     chaveAcesso?: string;
@@ -83,25 +86,27 @@ const findDuplicateFn = async (
 ) => {
   try {
     if (params.chaveAcesso) {
-      const { data } = await (adminClient as any)
+      const { data } = await rawSupabaseClient
         .from("wallet_ai_action_proposals")
         .select("id, status")
         .eq("workspace_id", params.workspaceId)
         .contains("payload", { chave_acesso: params.chaveAcesso })
         .limit(1);
-      if (data && data.length > 0) {
-        return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+      const rows = data as Array<{ id: string }> | null;
+      if (rows && rows.length > 0) {
+        return { isDuplicate: true, existingRecordId: rows[0].id, type: "proposal" };
       }
     }
     if (params.linhaDigitavel) {
-      const { data } = await (adminClient as any)
+      const { data } = await rawSupabaseClient
         .from("wallet_ai_action_proposals")
         .select("id, status")
         .eq("workspace_id", params.workspaceId)
         .contains("payload", { linha_digitavel: params.linhaDigitavel })
         .limit(1);
-      if (data && data.length > 0) {
-        return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+      const rows = data as Array<{ id: string }> | null;
+      if (rows && rows.length > 0) {
+        return { isDuplicate: true, existingRecordId: rows[0].id, type: "proposal" };
       }
     }
   } catch {
@@ -110,7 +115,7 @@ const findDuplicateFn = async (
   return { isDuplicate: false };
 };
 
-const saveProposalFn = async (_ctx: any, proposal: any) => {
+const saveProposalFn = async (_ctx: AiExecutionContext, proposal: ActionProposal) => {
   await proposalRepo.saveProposal(proposal);
 };
 

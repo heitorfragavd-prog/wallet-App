@@ -154,7 +154,7 @@ export async function callVisionWithFailover(options: VisionCallOptions): Promis
   let fallbackCount = 0;
 
   // Helper para chamar a API do Gemini
-  const executeGeminiCall = async (apiKey: string, slotName: "gemini_primary" | "gemini_backup"): Promise<{ ok: boolean; status: number; text: string; errorReason?: string }> => {
+  const executeGeminiCall = async (apiKey: string, _slotName: "gemini_primary" | "gemini_backup"): Promise<{ ok: boolean; status: number; text: string; errorReason?: string }> => {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -198,8 +198,9 @@ export async function callVisionWithFailover(options: VisionCallOptions): Promis
       else if (status >= 500) reason = `server_error_${status}`;
 
       return { ok: false, status, text: "", errorReason: reason };
-    } catch (err: any) {
-      if (err?.name === "AbortError" || String(err?.message).includes("timeout") || String(err?.message).includes("aborted")) {
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (error?.name === "AbortError" || String(error?.message).includes("timeout") || String(error?.message).includes("aborted")) {
         return { ok: false, status: 504, text: "", errorReason: "timeout" };
       }
       return { ok: false, status: 500, text: "", errorReason: `network_error` };
@@ -357,8 +358,9 @@ export async function processDanfeDocument(
 ): Promise<ProcessDanfeOutput> {
   const fetchFn = input.fetchImpl || fetch;
   const model = input.model || DEFAULT_DANFE_MODEL;
-  const effectiveOpenAiKey = input.openaiApiKey || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("OPENAI_API_KEY") : undefined);
-  const effectiveGeminiBackupKey = input.geminiApiKeyBackup || (typeof (globalThis as any).Deno !== "undefined" ? (globalThis as any).Deno.env.get("GEMINI_API_KEY_BACKUP") : undefined);
+  const denoEnv = (globalThis as { Deno?: { env: { get(k: string): string | undefined } } }).Deno;
+  const effectiveOpenAiKey = input.openaiApiKey || denoEnv?.env.get("OPENAI_API_KEY");
+  const effectiveGeminiBackupKey = input.geminiApiKeyBackup || denoEnv?.env.get("GEMINI_API_KEY_BACKUP");
   const correlationId = input.workspaceId || "anon";
 
   // Normalizar MIME type (suportar PDF e imagens corretamente)
@@ -391,7 +393,7 @@ export async function processDanfeDocument(
   // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
   let rotationApplied: 0 | 90 | 180 | 270 = 0;
   let detectedRotation = 0;
-  let orientationSource: "openai_proxy" | "gemini" | "openai" | "none" = "none";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let docAnalysis: Record<string, any> | null = null;
   let originalWidth = 0;
   let originalHeight = 0;
@@ -426,7 +428,6 @@ export async function processDanfeDocument(
           finalCredentialSlot = orientCall.credentialSlot;
           finalProviderUsed = orientCall.providerUsed;
         }
-        orientationSource = orientCall.providerUsed as any;
 
         const parsed = JSON.parse(orientCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
 
@@ -463,9 +464,6 @@ export async function processDanfeDocument(
   }
 
   // ── 2. Extração de Cabeçalho e Totais (SEMPRE sobre a imagem já rotacionada em pé) ──
-  let headerHttpStatus = 200;
-  let headerResponseLength = 0;
-
   if (!docAnalysis) {
     try {
       const headerCall = await callVisionWithFailover({
@@ -480,7 +478,6 @@ export async function processDanfeDocument(
         correlationId,
       });
 
-      headerHttpStatus = headerCall.status;
       if (headerCall.fallbackUsed) {
         fallbackUsedInAnyStep = true;
         fallbackCountReported = Math.max(fallbackCountReported, headerCall.fallbackCount);
@@ -490,7 +487,6 @@ export async function processDanfeDocument(
       }
 
       if (headerCall.ok && headerCall.text) {
-        headerResponseLength = headerCall.text.length;
         docAnalysis = JSON.parse(
           headerCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
         );
@@ -506,7 +502,7 @@ export async function processDanfeDocument(
   let cropSource: "detected" | "fallback" = "fallback";
   let topRatio = 0.24;
   let bottomRatio = 0.90;
-  let cropWidth = rotatedWidth || originalWidth || 2048;
+  const cropWidth = rotatedWidth || originalWidth || 2048;
   let cropHeight = Math.floor((rotatedHeight || originalHeight || 2048) * (bottomRatio - topRatio));
 
   if (!isPdf) {
@@ -530,9 +526,7 @@ export async function processDanfeDocument(
   }
 
   // ── 4. Extração de Itens da Tabela com Failover ───────────────────────────
-  let rawItemsList: any[] = [];
-  let productsHttpStatus = 200;
-  let productsResponseLength = 0;
+  let rawItemsList: unknown[] = [];
 
   try {
     const productsCall = await callVisionWithFailover({
@@ -547,7 +541,6 @@ export async function processDanfeDocument(
       correlationId,
     });
 
-    productsHttpStatus = productsCall.status;
     if (productsCall.fallbackUsed) {
       fallbackUsedInAnyStep = true;
       fallbackCountReported = Math.max(fallbackCountReported, productsCall.fallbackCount);
@@ -557,7 +550,6 @@ export async function processDanfeDocument(
     }
 
     if (productsCall.ok && productsCall.text) {
-      productsResponseLength = productsCall.text.length;
       const parsed = JSON.parse(
         productsCall.text.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim(),
       );

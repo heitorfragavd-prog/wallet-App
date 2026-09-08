@@ -1,11 +1,9 @@
 import type { ActionProposal } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
-import {
-  executeConfirmedProposal,
-  ActionGatewayError,
-  type ActionRepository,
-  type ActionDatabaseMutator,
-  type AuditEventSinkLike,
+import type {
+  ActionRepository,
+  ActionDatabaseMutator,
+  AuditEventSinkLike,
 } from "./action-gateway.ts";
 import {
   runOrchestratorTurn,
@@ -166,6 +164,7 @@ export interface TelegramIdempotencyRepository {
 }
 
 export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotencyRepository {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   constructor(private readonly client: any) {}
 
   async claimUpdate(updateId: number, botId = "default", chatId?: number): Promise<boolean> {
@@ -184,8 +183,9 @@ export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotenc
             .from("telegram_processed_updates")
             .delete()
             .lt("expires_at", new Date(now).toISOString()),
-        ).catch((cleanErr: any) => {
-          console.warn("[telegram-idempotency] Cleanup oportunístico falhou:", cleanErr?.message || cleanErr);
+        ).catch((cleanErr: unknown) => {
+          const msg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
+          console.warn("[telegram-idempotency] Cleanup oportunístico falhou:", msg);
         });
       } catch {
         // Safe fire-and-forget
@@ -193,9 +193,6 @@ export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotenc
     }
 
     // 3. Reivindicação atômica no banco de dados (distribuído)
-    let data: any;
-    let error: any;
-
     try {
       const res = await this.client
         .from("telegram_processed_updates")
@@ -207,35 +204,40 @@ export class SupabaseTelegramIdempotencyRepository implements TelegramIdempotenc
         .select("update_id")
         .maybeSingle();
 
-      data = res?.data;
-      error = res?.error;
-    } catch (dbEx: any) {
-      // FAIL-CLOSED: Queda de banco/rede lançada como exceção fatal para impedir processamento
-      console.error("[telegram-idempotency] Exceção de rede no claim distribuído (FAIL-CLOSED):", dbEx);
-      throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${dbEx?.message || "Erro de conexão com o banco"}`);
-    }
+      const data = res?.data;
+      const error = res?.error;
 
-    if (error) {
-      // Código PostgreSQL 23505 = unique_violation (update já processado ou em processamento por outra réplica)
-      if (
-        error.code === "23505" ||
-        error.message?.includes("duplicate key") ||
-        error.message?.includes("unique constraint") ||
-        error.message?.includes("pk_telegram_processed_updates")
-      ) {
-        // Marca no L1 para que próximas chamadas nesta mesma instância nem precisem bater no banco
-        markTelegramUpdateProcessed(updateId);
-        return false; // Replay detectado
+      // 4. Se o banco retornou erro de chave duplicada (23505) ou similar:
+      if (error) {
+        if (
+          error.code === "23505" ||
+          error.message?.includes("duplicate") ||
+          error.message?.includes("unique") ||
+          error.message?.includes("already exists")
+        ) {
+          // Marca no cache local L1 também para otimizar futuras checagens locais
+          markTelegramUpdateProcessed(updateId);
+          return false; // Replay detectado no banco
+        }
+
+        // FAIL-CLOSED: Qualquer outro erro de banco rejeita o claim e propaga o erro
+        console.error("[telegram-idempotency] Erro no banco durante claimUpdate (FAIL-CLOSED):", error);
+        throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${error.message || "Unknown database error"}`);
       }
 
-      // FAIL-CLOSED: Qualquer outro erro de banco (permissão, timeout, tabela indisponível)
-      console.error("[telegram-idempotency] Erro no banco de dados durante claim distribuído (FAIL-CLOSED):", error.message);
-      throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${error.message}`);
-    }
+      // Se inseriu com sucesso, é o primeiro processamento (claim bem-sucedido)
+      if (data) {
+        markTelegramUpdateProcessed(updateId);
+        return true;
+      }
 
-    // Sucesso no banco: marca também no cache local L1 da réplica para otimização
-    markTelegramUpdateProcessed(updateId);
-    return Boolean(data !== null && data !== undefined);
+      return false;
+    } catch (dbEx: unknown) {
+      // FAIL-CLOSED: Queda de banco/rede lançada como exceção fatal para impedir processamento
+      console.error("[telegram-idempotency] Exceção de rede no claim distribuído (FAIL-CLOSED):", dbEx);
+      const msg = dbEx instanceof Error ? dbEx.message : "Erro de conexão com o banco";
+      throw new Error(`DB_IDEMPOTENCY_CLAIM_FAILED: ${msg}`);
+    }
   }
 }
 
@@ -505,6 +507,7 @@ export async function resolveTelegramIdentity(
     telegramChatId?: string | number;
     isGroup: boolean;
   },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
 ): Promise<ResolvedTelegramIdentity> {
   const { telegramUserId, telegramChatId, isGroup } = params;
@@ -753,6 +756,7 @@ export async function resolveTelegramIdentity(
 // ─── DEPENDÊNCIAS DO ADAPTER ──────────────────────────────────────────────────
 
 export interface TelegramAdapterDependencies {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
   telegramBotToken: string;
   telegramApi?: TelegramApiClient;
@@ -856,7 +860,7 @@ export async function handleTelegramTextMessage(
       const historyAsLlm: LlmMessage[] = recent.map((m) => ({
         role: m.role as "user" | "assistant" | "system" | "tool",
         content: m.content,
-        tool_calls: m.tool_calls as any,
+        tool_calls: m.tool_calls as LlmMessage["tool_calls"],
       }));
       const ctxResult = buildTurnContext({
         systemPrompt: FINANCIAL_AGENT_SYSTEM_PROMPT,
@@ -1125,9 +1129,10 @@ export async function handleTelegramCallback(
         updatedMessageText: "❌ <b>Proposta Cancelada</b>\n\nNenhuma alteração foi realizada na sua carteira.",
         removeKeyboard: true,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "falha na operação";
       return {
-        answerText: `Erro ao cancelar: ${err?.message || "falha na operação"}`,
+        answerText: `Erro ao cancelar: ${errMsg}`,
         removeKeyboard: true,
       };
     }
@@ -1252,9 +1257,10 @@ export async function handleTelegramCallback(
         )}\n\n<i>Status: Confirmado via Telegram por você.</i>`,
         removeKeyboard: true,
       };
-    } catch (err: any) {
-      const msg = err?.message || "";
-      if (msg.includes("Proposal-only") || err?.code === "WALLET_AI_ACTION_FORBIDDEN") {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: string }).code : undefined;
+      if (msg.includes("Proposal-only") || code === "WALLET_AI_ACTION_FORBIDDEN") {
         return {
           answerText: "Proposta confirmada. Nenhuma alteração financeira foi executada automaticamente.",
           updatedMessageText: `✅ <b>Proposta Confirmada</b>\n\n${escapeTelegramHtml(
@@ -1391,7 +1397,7 @@ export async function processTelegramUpdate(
   update: TelegramUpdate,
   deps: TelegramAdapterDependencies,
   options?: { correlationId?: string },
-): Promise<{ handled: boolean; result?: any; error?: string }> {
+): Promise<{ handled: boolean; result?: unknown; error?: string }> {
   // 0. Idempotência de Updates: Distribuída (Postgres) com Fail-Closed Estrito
   if (update?.update_id) {
     const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id;
@@ -1400,24 +1406,26 @@ export async function processTelegramUpdate(
     if (deps.idempotencyRepo) {
       try {
         claimed = await deps.idempotencyRepo.claimUpdate(update.update_id, "default", chatId);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // FAIL-CLOSED: Falha de infraestrutura no claim distribuído rejeita o update
-        console.error("[telegram-idempotency] Update rejeitado por fail-closed (idempotencyRepo):", err?.message || err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[telegram-idempotency] Update rejeitado por fail-closed (idempotencyRepo):", errMsg);
         return {
           handled: false,
-          error: `Erro de idempotência distribuída (fail-closed): ${err?.message || "DB failure"}`,
+          error: `Erro de idempotência distribuída (fail-closed): ${errMsg}`,
         };
       }
     } else if (deps.supabase) {
       try {
         const defaultRepo = new SupabaseTelegramIdempotencyRepository(deps.supabase);
         claimed = await defaultRepo.claimUpdate(update.update_id, "default", chatId);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // FAIL-CLOSED: Falha de infraestrutura no claim distribuído rejeita o update
-        console.error("[telegram-idempotency] Update rejeitado por fail-closed (defaultRepo):", err?.message || err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[telegram-idempotency] Update rejeitado por fail-closed (defaultRepo):", errMsg);
         return {
           handled: false,
-          error: `Erro de idempotência distribuída (fail-closed): ${err?.message || "DB failure"}`,
+          error: `Erro de idempotência distribuída (fail-closed): ${errMsg}`,
         };
       }
     } else {

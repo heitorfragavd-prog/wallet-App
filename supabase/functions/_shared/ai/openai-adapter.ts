@@ -8,8 +8,6 @@ export {
 } from "./model-policy.ts";
 export { calculateEstimatedCost } from "./cost-calculator.ts";
 import {
-  ALLOWED_MODELS,
-  DEFAULT_CHAT_MODEL,
   type AllowedModel,
   validateAndResolveModel,
 } from "./model-policy.ts";

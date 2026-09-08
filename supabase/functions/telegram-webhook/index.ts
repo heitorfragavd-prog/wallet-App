@@ -1060,14 +1060,18 @@ serve(async (req) => {
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
     const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const proposalRepo = new SupabaseActionProposalRepository(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mutator = new SupabaseActionDatabaseMutator(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const conversationRepo = new SupabaseConversationRepository(supabase as any);
 
     const adapterDeps: TelegramAdapterDependencies = {
       supabase,
       telegramBotToken: telegramBotToken || "",
       runnerFactory: (model) => new OpenAiLlmRunner({ apiKey: openaiApiKey, model }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       repoFactory: () => createFinancialRepository((query) => executeSupabaseFinancialQuery(supabase as any, query)),
       proposalRepo,
       mutator,
@@ -1113,7 +1117,7 @@ serve(async (req) => {
         if (updateResult.handled) {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("[telegram-webhook] Erro no processTelegramUpdate:", err);
       }
     }

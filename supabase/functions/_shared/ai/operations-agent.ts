@@ -77,7 +77,7 @@ export class OperationsAgent {
           durationMs,
           ...extra,
         },
-      } as any);
+      } as Parameters<AuditEventSink["logEvent"]>[0]);
     } catch {
       // Falha no log de auditoria não aborta a operação analítica
     }
@@ -148,10 +148,11 @@ export class OperationsAgent {
       });
 
       return result;
-    } catch (err: any) {
+    } catch (err: unknown) {
       const durationMs = Date.now() - startTime;
+      const errMsg = err instanceof Error ? err.message : String(err);
       await this.logAudit("operations_error", context, durationMs, {
-        error: err?.message,
+        error: errMsg,
         operation: "validarFechamentoCaixa",
       });
       throw err;
@@ -227,10 +228,11 @@ export class OperationsAgent {
         source: sales.some((s) => s.source === "eyemobile") ? "eyemobile_api_realtime" : "banco_local",
         warnings: [],
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       const durationMs = Date.now() - startTime;
+      const errMsg = err instanceof Error ? err.message : String(err);
       await this.logAudit("operations_error", context, durationMs, {
-        error: err?.message,
+        error: errMsg,
         operation: "consultarVendasOperacionais",
       });
       throw err;
@@ -315,6 +317,7 @@ export class OperationsAgent {
 /**
  * Cria repositório de operações utilizando cliente Supabase com isolamento de workspace.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSupabaseOperationsRepository(supabase: any): OperationsRepository {
   return {
     async listOperationalSales(context, date) {
@@ -329,16 +332,16 @@ export function createSupabaseOperationsRepository(supabase: any): OperationsRep
         throw new OperationsError("WALLET_AI_OPERATIONS_DATA_UNAVAILABLE", `Erro ao listar vendas: ${error.message}`);
       }
 
-      return (data || []).map((row: any) => ({
-        id: row.id,
-        workspaceId: row.workspace_id,
-        userId: row.user_id,
-        date: row.data,
+      return (data || []).map((row: Record<string, unknown>) => ({
+        id: String(row.id || ""),
+        workspaceId: String(row.workspace_id || ""),
+        userId: String(row.user_id || ""),
+        date: String(row.data || ""),
         amount: Number(row.valor || 0),
         type: "receita" as const,
-        paymentMethod: normalizePaymentMethod(row.metodo_pagamento),
-        description: row.descricao || "",
-        source: row.observacoes?.includes("eyemobile") ? ("eyemobile" as const) : ("local" as const),
+        paymentMethod: normalizePaymentMethod(String(row.metodo_pagamento || "")),
+        description: String(row.descricao || ""),
+        source: String(row.observacoes || "").includes("eyemobile") ? ("eyemobile" as const) : ("local" as const),
       }));
     },
 
@@ -356,22 +359,22 @@ export function createSupabaseOperationsRepository(supabase: any): OperationsRep
 
       // Filtra saídas operacionais e sangrias de caixa
       return (data || [])
-        .filter((row: any) => {
+        .filter((row: Record<string, unknown>) => {
           const desc = String(row.descricao || "").toLowerCase();
           const obs = String(row.observacoes || "").toLowerCase();
-          const isCash = normalizePaymentMethod(row.metodo_pagamento) === "dinheiro";
+          const isCash = normalizePaymentMethod(String(row.metodo_pagamento || "")) === "dinheiro";
           const isSangria = desc.includes("sangria") || desc.includes("saque") || desc.includes("divipay") || obs.includes("sangria");
           return isCash || isSangria;
         })
-        .map((row: any) => ({
-          id: row.id,
-          workspaceId: row.workspace_id,
-          userId: row.user_id,
-          date: row.data,
+        .map((row: Record<string, unknown>) => ({
+          id: String(row.id || ""),
+          workspaceId: String(row.workspace_id || ""),
+          userId: String(row.user_id || ""),
+          date: String(row.data || ""),
           amount: Number(row.valor || 0),
           type: "despesa" as const,
-          paymentMethod: normalizePaymentMethod(row.metodo_pagamento),
-          description: row.descricao || "",
+          paymentMethod: normalizePaymentMethod(String(row.metodo_pagamento || "")),
+          description: String(row.descricao || ""),
           source: "local" as const,
         }));
     },

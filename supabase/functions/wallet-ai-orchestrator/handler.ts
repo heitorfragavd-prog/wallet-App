@@ -5,10 +5,7 @@ import {
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
 import {
-  ALLOWED_MODELS,
-  DEFAULT_CHAT_MODEL as DEFAULT_MODEL,
   DEFAULT_SUMMARY_MODEL,
-  type AllowedModel,
   validateAndResolveModel,
   AiModelNotAllowedError,
 } from "../_shared/ai/model-policy.ts";
@@ -17,7 +14,6 @@ import {
 } from "../_shared/ai/cost-calculator.ts";
 import {
   redactSensitiveAiData,
-  AI_ERROR_CODES,
 } from "../_shared/ai/audit-observability.ts";
 import {
   buildTurnContext,
@@ -349,7 +345,7 @@ export async function handleOrchestratorHttpRequest(
           const historyAsLlm: LlmMessage[] = recent.map((m) => ({
             role: m.role as "user" | "assistant" | "system" | "tool",
             content: m.content,
-            tool_calls: m.tool_calls as any,
+            tool_calls: m.tool_calls as LlmMessage["tool_calls"],
           }));
           const currentMsg = messages[messages.length - 1];
           const ctxResult = buildTurnContext({

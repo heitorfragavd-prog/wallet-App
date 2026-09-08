@@ -7,6 +7,7 @@ import type {
   FinancialSourceReference,
 } from "./financial-types.ts";
 import type { OperationsAgent } from "./operations-agent.ts";
+import type { PaymentMethod } from "./operations-types.ts";
 import type { EyemobileLiveClient } from "../../wallet-ai-query/supabase-adapter.ts";
 
 export interface DatePeriod {
@@ -314,7 +315,7 @@ export function createQueryToolCatalog(
       const date = String(args.data || args.turno_data || "");
       const shift = args.turno ? String(args.turno) : undefined;
       const reportedTotal = args.valor_relatado != null ? Number(args.valor_relatado) : undefined;
-      const reportedByMethod = args.valores_por_meio as any;
+      const reportedByMethod = args.valores_por_meio as Partial<Record<PaymentMethod, number>> | undefined;
 
       const closingResult = await opAgent.validarFechamentoCaixa(
         {

@@ -306,6 +306,7 @@ export async function generateConversationSummary(
  * Implementação do repositório canônico sobre o Supabase
  */
 export class SupabaseConversationRepository implements ConversationRepository {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   constructor(private readonly client: any) {}
 
   async getConversation(

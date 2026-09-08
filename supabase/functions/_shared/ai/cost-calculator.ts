@@ -8,7 +8,7 @@
  * - Modelos desconhecidos: NÃO fingir custo zero, retornar -1 (unknown/unavailable).
  */
 
-import { ALLOWED_MODELS, type AllowedModel, DEFAULT_CHAT_MODEL } from "./model-policy.ts";
+import type { AllowedModel } from "./model-policy.ts";
 
 export interface ModelPricing {
   inputPerMillion: number;

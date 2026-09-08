@@ -261,7 +261,7 @@ export function reconcileCashClosing(params: ReconcileCashClosingParams): CashCl
     expectedWithdrawalsCents[method] += toCents(w.amount);
   }
 
-  const differencesByMethod: Record<PaymentMethod, PaymentMethodDifference> = {} as any;
+  const differencesByMethod = {} as Record<PaymentMethod, PaymentMethodDifference>;
 
   let totalExpectedCents = 0;
   let totalReportedCentsFromMethods = 0;
