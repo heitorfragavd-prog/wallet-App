@@ -69,7 +69,11 @@ const runnerFactory = (model?: string) => {
 
 const auditLogger = {
   logEvent: async (event: Parameters<typeof writeSupabaseAiAudit>[1]) => {
-    await writeSupabaseAiAudit(adminClient, event);
+    try {
+      await writeSupabaseAiAudit(adminClient, event);
+    } catch (err) {
+      console.warn("[wallet-ai-orchestrator] Falha ao registrar log de auditoria:", err);
+    }
   },
 };
 
