@@ -100,6 +100,17 @@ export const MSG_BLOQUEIO_APLICANDO_IGNORAR =
   "⏳ Este preço já está sendo aplicado no Eyemobile e não pode ser ignorado no momento.";
 
 /**
+ * Timeout padrão para chamadas remotas de sincronização com Eyemobile: 25 segundos (25.000 ms).
+ * Deve ser estritamente inferior ao tempo de expiração do stale lock (180 segundos).
+ */
+export const DEFAULT_TIMEOUT_MS = 25000;
+
+/**
+ * Janela segura para expiração e recuperação atômica de stale lock: 180 segundos (3 minutos / 180.000 ms).
+ */
+export const DEFAULT_STALE_LOCK_THRESHOLD_MS = 180000;
+
+/**
  * Contrato rigoroso de sucesso da resposta do Eyemobile
  * Exige status === 200 E json.success === true
  */
@@ -130,7 +141,7 @@ export async function acquireAlertaLock(
   const client = supabase as SupabaseClientLike;
   const now = params.nowDate || new Date();
   const nowIso = now.toISOString();
-  const staleThresholdMs = params.staleThresholdMs ?? 180000; // 3 minutos
+  const staleThresholdMs = params.staleThresholdMs ?? DEFAULT_STALE_LOCK_THRESHOLD_MS;
   const staleCutoffIso = new Date(now.getTime() - staleThresholdMs).toISOString();
 
   try {
@@ -230,7 +241,7 @@ export async function executeEyemobilePriceSync(
     fetchFn?: typeof fetch;
   }
 ): Promise<PriceSyncResult> {
-  const timeoutMs = options?.timeoutMs ?? 25000; // 25 segundos
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const fetchFn = options?.fetchFn || fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

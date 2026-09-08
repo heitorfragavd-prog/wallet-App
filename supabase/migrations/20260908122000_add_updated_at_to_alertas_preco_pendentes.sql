@@ -68,31 +68,19 @@ BEGIN
     RAISE EXCEPTION 'Alerta % não possui produto_eyemobile_id associado', p_alerta_id;
   END IF;
 
-  -- Invariante 3: Atualizar produto no espelho local usando a chave canônica eyemobile_id
+  -- Invariante 3: Atualizar produto no espelho local usando estritamente a chave canônica eyemobile_id
+  -- com isolamento obrigatório por user_id e workspace_id (sem adivinhar ou fallback por codigo)
   UPDATE public.produtos_eyemobile
-  SET preco_venda = p_novo_preco,
-      updated_at = now()
+  SET preco_venda = p_novo_preco
   WHERE eyemobile_id = v_produto_eyemobile_id
     AND user_id = p_user_id
     AND workspace_id = p_workspace_id;
 
   GET DIAGNOSTICS v_produto_rows = ROW_COUNT;
 
-  -- Fallback de correspondência por codigo caso eyemobile_id local seja nulo
-  IF v_produto_rows = 0 THEN
-    UPDATE public.produtos_eyemobile
-    SET preco_venda = p_novo_preco,
-        updated_at = now()
-    WHERE codigo = v_produto_eyemobile_id
-      AND user_id = p_user_id
-      AND workspace_id = p_workspace_id;
-
-    GET DIAGNOSTICS v_produto_rows = ROW_COUNT;
-  END IF;
-
-  -- Exigir exatamente UMA correspondência
+  -- Exigir exatamente UMA correspondência canônica
   IF v_produto_rows <> 1 THEN
-    RAISE EXCEPTION 'Esperado atualizar exatamente 1 produto em produtos_eyemobile (linhas afetadas: % para id %)', v_produto_rows, v_produto_eyemobile_id;
+    RAISE EXCEPTION 'Esperado atualizar exatamente 1 produto em produtos_eyemobile para eyemobile_id % (linhas afetadas: %)', v_produto_eyemobile_id, v_produto_rows;
   END IF;
 
   -- Invariante 4: Atualizar alerta para 'aplicado' na mesma transação

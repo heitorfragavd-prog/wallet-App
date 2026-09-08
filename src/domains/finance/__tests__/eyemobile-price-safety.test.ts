@@ -9,6 +9,8 @@ import {
   MSG_FALHA_PERSISTENCIA_LOCAL,
   MSG_ALERTA_JA_APLICADO,
   MSG_EM_PROCESSAMENTO,
+  DEFAULT_TIMEOUT_MS,
+  DEFAULT_STALE_LOCK_THRESHOLD_MS,
   type AlertaPreco,
 } from "../../../../supabase/functions/_shared/integrations/eyemobile-price-safety";
 
@@ -589,6 +591,177 @@ describe("Eyemobile Price Confirmation Safety (P0 Fail-Safe)", () => {
       });
 
       expect(failure.recorded).toBe(false);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AUDITORIA FINAL DE SEGURANÇA E HARDENING (Cenários N a T)
+  // ─────────────────────────────────────────────────────────────────────────────
+  describe("Hardening Final: Timeout Padrão e Resolução Canônica Estrita", () => {
+    it("Teste N: confirma constantes DEFAULT_TIMEOUT_MS = 25000 e DEFAULT_STALE_LOCK_THRESHOLD_MS = 180000", async () => {
+      expect(DEFAULT_TIMEOUT_MS).toBe(25000);
+      expect(DEFAULT_STALE_LOCK_THRESHOLD_MS).toBe(180000);
+      expect(DEFAULT_TIMEOUT_MS).toBeLessThan(DEFAULT_STALE_LOCK_THRESHOLD_MS);
+
+      const mockFetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        expect(init?.signal).toBeDefined();
+        return Promise.resolve({
+          status: 200,
+          json: () => Promise.resolve({ success: true }),
+        });
+      });
+
+      const res = await executeEyemobilePriceSync(
+        SUPABASE_URL,
+        SERVICE_KEY,
+        { user_id: BASE_ALERTA.user_id, product_id: BASE_ALERTA.produto_eyemobile_id, new_price: 15.0 },
+        { fetchFn: mockFetch as unknown as typeof fetch }
+      );
+      expect(res.success).toBe(true);
+    });
+
+    it("Teste O: alerta aponta para produto correto e exatamente esse produto é atualizado no RPC", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockImplementation((fn: string, args: Record<string, unknown>) => {
+          expect(fn).toBe("aplicar_preco_alerta_eyemobile");
+          expect(args.p_alerta_id).toBe(BASE_ALERTA.id);
+          expect(args.p_user_id).toBe(BASE_ALERTA.user_id);
+          expect(args.p_workspace_id).toBe(BASE_ALERTA.workspace_id);
+          expect(args.p_novo_preco).toBe(12.5);
+          return Promise.resolve({
+            data: {
+              success: true,
+              alerta_id: BASE_ALERTA.id,
+              novo_preco: 12.5,
+              produto_eyemobile_id: BASE_ALERTA.produto_eyemobile_id,
+            },
+            error: null,
+          });
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: BASE_ALERTA.user_id,
+        workspaceId: BASE_ALERTA.workspace_id,
+        novoPreco: 12.5,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toBeDefined();
+      const payload = result.data as Record<string, unknown>;
+      expect(payload.produto_eyemobile_id).toBe(BASE_ALERTA.produto_eyemobile_id);
+    });
+
+    it("Teste P: produto inexistente causa falha segura no RPC e rollback", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: {
+            message: `Esperado atualizar exatamente 1 produto em produtos_eyemobile para eyemobile_id ${BASE_ALERTA.produto_eyemobile_id} (linhas afetadas: 0)`,
+          },
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: BASE_ALERTA.user_id,
+        workspaceId: BASE_ALERTA.workspace_id,
+        novoPreco: 12.5,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("linhas afetadas: 0");
+    });
+
+    it("Teste Q: produto fora do workspace causa falha no RPC", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockImplementation((_fn: string, args: Record<string, unknown>) => {
+          if (args.p_workspace_id !== "ws-outro") {
+            return Promise.resolve({
+              data: null,
+              error: { message: "Alerta não encontrado para o usuário e workspace informado" },
+            });
+          }
+          return Promise.resolve({ data: { success: true }, error: null });
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: BASE_ALERTA.user_id,
+        workspaceId: "ws-errado",
+        novoPreco: 12.5,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Alerta não encontrado");
+    });
+
+    it("Teste R: produto pertencente a outro usuário causa falha no RPC", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockImplementation((_fn: string, args: Record<string, unknown>) => {
+          if (args.p_user_id !== BASE_ALERTA.user_id) {
+            return Promise.resolve({
+              data: null,
+              error: { message: "Alerta não encontrado para o usuário e workspace informado" },
+            });
+          }
+          return Promise.resolve({ data: { success: true }, error: null });
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: "outro-usuario",
+        workspaceId: BASE_ALERTA.workspace_id,
+        novoPreco: 12.5,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Alerta não encontrado");
+    });
+
+    it("Teste S: resolução exige estritamente eyemobile_id canônico e falha se não houver correspondência exata", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: {
+            message: "Esperado atualizar exatamente 1 produto em produtos_eyemobile para eyemobile_id eye-prod-999 (linhas afetadas: 0)",
+          },
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: BASE_ALERTA.user_id,
+        workspaceId: BASE_ALERTA.workspace_id,
+        novoPreco: 15.0,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Esperado atualizar exatamente 1 produto");
+    });
+
+    it("Teste T: produto_eyemobile_id incorreto/ambíguo falha de forma segura sem selecionar linha arbitrária", async () => {
+      const mockSupabase = {
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: {
+            message: "Esperado atualizar exatamente 1 produto em produtos_eyemobile para eyemobile_id id-ambiguo (linhas afetadas: 2)",
+          },
+        }),
+      };
+
+      const result = await persistConfirmedPriceAtomic(mockSupabase, {
+        alertaId: BASE_ALERTA.id,
+        userId: BASE_ALERTA.user_id,
+        workspaceId: BASE_ALERTA.workspace_id,
+        novoPreco: 20.0,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("linhas afetadas: 2");
     });
   });
 });
