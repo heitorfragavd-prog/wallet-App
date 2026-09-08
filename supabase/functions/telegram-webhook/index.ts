@@ -24,7 +24,6 @@ import {
   type DanfeItemV2,
 } from "../_shared/danfe-gemini-v2.ts";
 import {
-<<<<<<< HEAD
   processTelegramUpdate,
   type TelegramAdapterDependencies,
 } from "../_shared/ai/telegram-channel-adapter.ts";
@@ -35,7 +34,7 @@ import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
 import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
-=======
+import {
   cleanDigits,
   reconcileBoleto,
   validateLinhaDigitavel,
@@ -48,9 +47,6 @@ import {
   recoverBoletoLineWithFailover,
   type RegionCandidate,
 } from "../_shared/ai/boleto-service.ts";
-
-
->>>>>>> origin/develop
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
