@@ -200,7 +200,7 @@ export async function processWalletDocument(
       `• **Arquivo:** ${input.fileName}`,
       `• **Tipo:** Comprovante / Recibo`,
       ``,
-      `ℹ️ *A conciliação automática de comprovantes com contas bancárias e extrato será ativada.*`,
+      `ℹ️ *A conciliação automática de comprovantes com contas bancárias e extrato será ativada na Etapa 2.2B.*`,
       ``,
       `🔒 *Nenhuma alteração foi realizada nas suas contas.*`,
     ].join("\n");
