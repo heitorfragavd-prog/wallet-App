@@ -6,6 +6,8 @@ import type {
   FinancialPeriodContext,
   FinancialSourceReference,
 } from "./financial-types.ts";
+import type { OperationsAgent } from "./operations-agent.ts";
+import type { PaymentMethod } from "./operations-types.ts";
 import type { EyemobileLiveClient } from "../../wallet-ai-query/supabase-adapter.ts";
 
 export interface DatePeriod {
@@ -113,11 +115,23 @@ function sourceReferences(records: CanonicalFinancialRecord[]): FinancialSourceR
   return [...grouped.entries()].map(([type, ids]) => ({ type, ids }));
 }
 
+export interface QueryToolCatalogOptions {
+  extended?: boolean;
+  operationsAgent?: OperationsAgent;
+  eyemobileClient?: EyemobileLiveClient;
+}
+
 export function createQueryToolCatalog(
   repository: FinancialQueryRepository,
-  eyemobileClient?: EyemobileLiveClient,
+  optionsOrEyemobileClient: QueryToolCatalogOptions | EyemobileLiveClient = {},
 ): QueryToolCatalog {
-  return {
+  const options: QueryToolCatalogOptions =
+    optionsOrEyemobileClient && "fetchSales" in optionsOrEyemobileClient
+      ? { eyemobileClient: optionsOrEyemobileClient }
+      : (optionsOrEyemobileClient as QueryToolCatalogOptions) ?? {};
+
+  const eyemobileClient = options.eyemobileClient;
+  const catalog: QueryToolCatalog = {
     buscar_receitas: async (args, context) => {
       const period = validatePeriod(args);
       const records = await repository.listRevenues(context, period);
@@ -261,6 +275,99 @@ export function createQueryToolCatalog(
       );
     },
   };
+
+  if (options.extended) {
+    catalog.consultar_fluxo_caixa = async (args, context) => {
+      const period = validatePeriod(args);
+      const [revenues, expenses] = await Promise.all([
+        repository.listRevenues(context, period),
+        repository.listExpenses(context, period),
+      ]);
+      const totalEntradas = revenues.reduce((acc, r) => acc + r.amount, 0);
+      const totalSaidas = expenses.reduce((acc, r) => acc + r.amount, 0);
+      const resultado = totalEntradas - totalSaidas;
+
+      return baseResult(
+        "consultar_fluxo_caixa",
+        context,
+        period,
+        {
+          totalEntradas,
+          totalSaidas,
+          fluxoLiquido: resultado,
+          quantidadeReceitas: revenues.length,
+          quantidadeDespesas: expenses.length,
+        },
+        [...sourceReferences(revenues), ...sourceReferences(expenses)],
+        { fluxoLiquido: "totalEntradas - totalSaidas" },
+      );
+    };
+    catalog.consultar_contas = catalog.consultar_saldos;
+    catalog.consultar_receitas = catalog.buscar_receitas;
+    catalog.consultar_despesas = catalog.buscar_despesas;
+    catalog.consultar_transacoes = catalog.buscar_transacoes;
+  }
+
+  if (options.operationsAgent) {
+    const opAgent = options.operationsAgent;
+
+    catalog.validar_fechamento_caixa = async (args, context) => {
+      const date = String(args.data || args.turno_data || "");
+      const shift = args.turno ? String(args.turno) : undefined;
+      const reportedTotal = args.valor_relatado != null ? Number(args.valor_relatado) : undefined;
+      const reportedByMethod = args.valores_por_meio as Partial<Record<PaymentMethod, number>> | undefined;
+
+      const closingResult = await opAgent.validarFechamentoCaixa(
+        {
+          workspaceId: context.workspaceId,
+          userId: context.userId,
+          date,
+          shift,
+          reportedTotal,
+          reportedByMethod,
+          correlationId: context.correlationId,
+        },
+        context,
+      );
+
+      return baseResult(
+        "validar_fechamento_caixa",
+        context,
+        { start: date, end: date },
+        closingResult,
+        [],
+        { diferenca: "totalInformado - totalEsperado" },
+        closingResult.warnings,
+      );
+    };
+
+    catalog.consultar_vendas_eyemobile = async (args, context) => {
+      const startDate = String(args.data_inicio || args.data || "");
+      const endDate = args.data_fim ? String(args.data_fim) : startDate;
+
+      const salesResult = await opAgent.consultarVendasOperacionais(
+        {
+          workspaceId: context.workspaceId,
+          startDate,
+          endDate,
+          correlationId: context.correlationId,
+        },
+        context,
+      );
+
+      return baseResult(
+        "consultar_vendas_eyemobile",
+        context,
+        salesResult.period,
+        salesResult,
+        [],
+        { totalSales: "soma das vendas operacionais no período" },
+        salesResult.warnings,
+      );
+    };
+  }
+
+  return catalog;
 }
 
 export async function executeQueryTool(

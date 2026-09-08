@@ -1,5 +1,5 @@
 /**
- * useWalletIA — Hook central da Wallet IA unificada (Etapa 1)
+ * useWalletIA — Hook central da Wallet IA unificada
  *
  * Responsabilidade: Orquestrar o envio de mensagens para o motor correto
  * (FAST_QUERY, AGENT_V2, DOCUMENT) de forma totalmente opaca para a interface.
@@ -13,9 +13,9 @@
  *
  * Internamente, o hook usa:
  *   - WalletAIRouter para decidir a rota
- *   - gerarRespostaIA() (Consulta Rápida) para FAST_QUERY
+ *   - fastQueryFn() (Consulta Rápida) para FAST_QUERY
  *   - WalletAiOrchestratorClient para AGENT_V2
- *   - useChatFinanceiro.sendMessage para DOCUMENT/LEGACY
+ *   - processWalletDocument para DOCUMENT
  */
 
 import { useState, useCallback, useMemo } from "react";
@@ -28,7 +28,6 @@ import {
 } from "../services/WalletAiOrchestratorClient";
 import { processWalletDocument } from "../services/WalletDocumentService";
 import type { ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
-
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -66,7 +65,6 @@ export interface WalletIAAttachment {
   storagePath?: string;
   size?: number;
 }
-
 
 export interface UseWalletIAOptions {
   workspaceId?: string;
@@ -137,7 +135,6 @@ export function useWalletIA(options: UseWalletIAOptions) {
       if (isLoading) return;
 
       const correlationId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
-
       const firstAtt = attachments?.[0];
 
       // 1. Montar mensagem do usuário
@@ -156,7 +153,6 @@ export function useWalletIA(options: UseWalletIAOptions) {
       };
 
       setMessages((prev) => [...prev, userMessage]);
-
       setIsLoading(true);
 
       // 2. Persistir mensagem do usuário
@@ -171,11 +167,6 @@ export function useWalletIA(options: UseWalletIAOptions) {
       const routeDecision = routeMessage({
         message: trimmed,
         attachments: attachments?.map((a) => ({ type: a.type, mimeType: a.mimeType })),
-        conversationHistory: messages.slice(-10).map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-        workspaceId,
       });
 
       setCurrentStatus(STATUS_MESSAGES[routeDecision.route]);
@@ -193,7 +184,6 @@ export function useWalletIA(options: UseWalletIAOptions) {
 
         // ── FAST_QUERY ──────────────────────────────────────────────────────
         if (routeDecision.route === "FAST_QUERY" && fastQueryFn && dadosFinanceiros) {
-          // Pequeno delay para UX (evitar resposta instantânea que parece automática)
           await new Promise((r) => setTimeout(r, 300));
           const resposta = fastQueryFn(trimmed);
 
@@ -266,10 +256,10 @@ export function useWalletIA(options: UseWalletIAOptions) {
             createdAt: new Date(),
             routeUsed: routeDecision.route,
             toolCalls: response.toolCalls,
+            actionProposal: response.actionProposals?.[0],
             correlationId,
           };
         }
-
 
         setMessages((prev) => [...prev, assistantMessage]);
 

@@ -179,7 +179,7 @@ export async function callBoletoVisionWithFailover(options: VisionBoletoCallOpti
 
       primaryErrorReason = `openai_http_${primaryStatus}`;
     } catch (err: unknown) {
-      primaryErrorReason = (err instanceof Error && err.name === "AbortError") ? "timeout" : "network_error";
+      primaryErrorReason = (err as Error)?.name === "AbortError" ? "timeout" : "network_error";
     }
   } else {
     primaryErrorReason = "openai_api_key_missing";
@@ -925,7 +925,7 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
       throw new Error(`Falha na extração visual do boleto (status: ${visionResult.status})`);
     }
 
-    let parsedJson: Record<string, string | number | null | undefined> = {};
+    let parsedJson: Record<string, unknown> = {};
     try {
       const cleaned = visionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
       parsedJson = JSON.parse(cleaned);

@@ -19,6 +19,7 @@ import {
   type DanfeItemV2,
   type DanfeValidationResultV2,
 } from "../danfe-gemini-v2.ts";
+import { DEFAULT_DOCUMENT_MODEL } from "./model-policy.ts";
 
 export {
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
@@ -114,7 +115,7 @@ export {
   PROMPT_ORIENTACAO_DANFE,
 };
 
-const DEFAULT_DANFE_MODEL = "gemini-3.6-flash";
+const DEFAULT_DANFE_MODEL = DEFAULT_DOCUMENT_MODEL;
 
 export interface VisionCallOptions {
   prompt: string;
@@ -198,8 +199,8 @@ export async function callVisionWithFailover(options: VisionCallOptions): Promis
 
       return { ok: false, status, text: "", errorReason: reason };
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if ((err instanceof Error && err.name === "AbortError") || errMsg.includes("timeout") || errMsg.includes("aborted")) {
+      const error = err as Error;
+      if (error?.name === "AbortError" || String(error?.message).includes("timeout") || String(error?.message).includes("aborted")) {
         return { ok: false, status: 504, text: "", errorReason: "timeout" };
       }
       return { ok: false, status: 500, text: "", errorReason: `network_error` };
@@ -352,52 +353,14 @@ export async function callVisionWithFailover(options: VisionCallOptions): Promis
 }
 
 
-interface DanfeHeaderCandidate {
-  fornecedor?: string | null;
-  emitente?: string | null;
-  razao_social?: string | null;
-  nome_fornecedor?: string | null;
-  cnpj_fornecedor?: string | null;
-  cnpj_emitente?: string | null;
-  cnpj?: string | null;
-  numero_nf?: string | null;
-  numero?: string | null;
-  n_nf?: string | null;
-  serie_nf?: string | null;
-  serie?: string | null;
-  data_emissao?: string | null;
-  emissao?: string | null;
-  chave_acesso?: string | null;
-  chave?: string | null;
-  pagina_atual?: number | string | null;
-  total_paginas?: number | string | null;
-}
-
-interface DanfeTotalsCandidate {
-  valor_produtos?: number | string | null;
-  total_produtos?: number | string | null;
-  valor_total_produtos?: number | string | null;
-  valor_total_nf?: number | string | null;
-  valor_total?: number | string | null;
-  total_nota?: number | string | null;
-}
-
-interface DanfeDocAnalysis extends DanfeHeaderCandidate, DanfeTotalsCandidate {
-  cabecalho?: DanfeHeaderCandidate;
-  valores_totais?: DanfeTotalsCandidate;
-  totais?: DanfeTotalsCandidate;
-  regiao_tabela_produtos?: { top?: number; bottom?: number };
-}
-
 export async function processDanfeDocument(
   input: ProcessDanfeInput,
 ): Promise<ProcessDanfeOutput> {
   const fetchFn = input.fetchImpl || fetch;
   const model = input.model || DEFAULT_DANFE_MODEL;
-  type DenoGlobal = { Deno?: { env: { get(key: string): string | undefined } } };
-  const denoEnv = (globalThis as unknown as DenoGlobal).Deno?.env;
-  const effectiveOpenAiKey = input.openaiApiKey || denoEnv?.get("OPENAI_API_KEY");
-  const effectiveGeminiBackupKey = input.geminiApiKeyBackup || denoEnv?.get("GEMINI_API_KEY_BACKUP");
+  const denoEnv = (globalThis as { Deno?: { env: { get(k: string): string | undefined } } }).Deno;
+  const effectiveOpenAiKey = input.openaiApiKey || denoEnv?.env.get("OPENAI_API_KEY");
+  const effectiveGeminiBackupKey = input.geminiApiKeyBackup || denoEnv?.env.get("GEMINI_API_KEY_BACKUP");
   const correlationId = input.workspaceId || "anon";
 
   // Normalizar MIME type (suportar PDF e imagens corretamente)
@@ -430,7 +393,8 @@ export async function processDanfeDocument(
   // ── 0 & 1. Detecção de Orientação e Rotação Matricial (apenas para imagens) ──
   let rotationApplied: 0 | 90 | 180 | 270 = 0;
   let detectedRotation = 0;
-  let docAnalysis: DanfeDocAnalysis | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let docAnalysis: Record<string, any> | null = null;
   let originalWidth = 0;
   let originalHeight = 0;
   let rotatedWidth = 0;

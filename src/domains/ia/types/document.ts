@@ -1,5 +1,5 @@
 /**
- * Contrato único de Document Intelligence — Etapa 2.2A (Boleto & DANFE)
+ * Contrato único de Document Intelligence — Wallet IA
  */
 
 export type DocumentClassification =

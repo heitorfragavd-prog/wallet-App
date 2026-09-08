@@ -24,6 +24,17 @@ import {
   type DanfeItemV2,
 } from "../_shared/danfe-gemini-v2.ts";
 import {
+  processTelegramUpdate,
+  type TelegramAdapterDependencies,
+} from "../_shared/ai/telegram-channel-adapter.ts";
+import { SupabaseActionProposalRepository } from "../_shared/ai/action-repository.ts";
+import { SupabaseActionDatabaseMutator } from "../_shared/ai/action-executor-registry.ts";
+import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
+import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
+import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
+import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
+import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
+import {
   cleanDigits,
   reconcileBoleto,
   validateLinhaDigitavel,
@@ -36,8 +47,6 @@ import {
   recoverBoletoLineWithFailover,
   type RegionCandidate,
 } from "../_shared/ai/boleto-service.ts";
-
-
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1047,6 +1056,72 @@ serve(async (req) => {
     };
 
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
+    const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proposalRepo = new SupabaseActionProposalRepository(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mutator = new SupabaseActionDatabaseMutator(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conversationRepo = new SupabaseConversationRepository(supabase as any);
+
+    const adapterDeps: TelegramAdapterDependencies = {
+      supabase,
+      telegramBotToken: telegramBotToken || "",
+      runnerFactory: (model) => new OpenAiLlmRunner({ apiKey: openaiApiKey, model }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      repoFactory: () => createFinancialRepository((query) => executeSupabaseFinancialQuery(supabase as any, query)),
+      proposalRepo,
+      mutator,
+      conversationRepo,
+      documentPipelineRunner: processDocumentPipeline,
+      openaiApiKey,
+      geminiApiKey,
+      geminiApiKeyBackup,
+      findDuplicateFn: async (_ctx, params) => {
+        try {
+          if (params.chaveAcesso) {
+            const { data } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .contains("payload", { chave_acesso: params.chaveAcesso })
+              .limit(1);
+            if (data && data.length > 0) {
+              return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+            }
+          }
+          if (params.linhaDigitavel) {
+            const { data } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .contains("payload", { linha_digitavel: params.linhaDigitavel })
+              .limit(1);
+            if (data && data.length > 0) {
+              return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+            }
+          }
+        } catch {
+          // Fail-safe
+        }
+        return { isDuplicate: false };
+      },
+    };
+
+    if (body?.message || body?.callback_query) {
+      try {
+        const updateResult = await processTelegramUpdate(body, adapterDeps);
+        if (updateResult.handled) {
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } catch (err: unknown) {
+        console.error("[telegram-webhook] Erro no processTelegramUpdate:", err);
+      }
+    }
+
     const message = body?.message as Record<string, unknown> | undefined;
     const callbackQuery = body?.callback_query as Record<string, unknown> | undefined;
 
@@ -1112,14 +1187,9 @@ serve(async (req) => {
         if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
       }
 
-      // 6. Fallback para qualquer usuário ativo no sistema
+      // 6. Fail-closed: se o usuário não foi autenticado, encerra sem executar
       if (!cbUserId) {
-        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
-        cbUserId = anyUser?.user_id || "";
-      }
-
-      if (!cbUserId) {
-        await answerCallback(callbackQuery.id as string | number, "Usuário não encontrado.");
+        await answerCallback(callbackQuery.id as string | number, "Usuário não autorizado.");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
@@ -1752,12 +1822,7 @@ serve(async (req) => {
         userId = ws?.user_id || "";
       }
 
-      // Fallback para primeiro usuário ativo vinculado se não houver dono explícito
-      if (!userId) {
-        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
-        userId = anyUser?.user_id || "";
-      }
-
+      // Fail-closed: se não houver dono/administrador explícito vinculado, encerra
       if (!userId) {
         await sendReply("⚠️ Não foi possível identificar a conta administradora para este grupo.");
         return new Response("OK", { status: 200, headers: corsHeaders });

@@ -1,34 +1,18 @@
 /**
- * WalletAIRouter — Etapa 1.1 / Etapa 1.4 (semântica financeira)
+ * WalletAIRouter — Roteador Semântico e Heurístico da Wallet IA
  *
- * CORREÇÃO ETAPA 1.1:
- *   Padrões de análise complexa avaliados ANTES de FAST_QUERY.
- *
- * CORREÇÃO ETAPA 1.4 — SEPARAÇÃO SEMÂNTICA:
- *   VENDAS = valor bruto do PDV Eyemobile (o que foi vendido).
- *   RECEITAS = entradas financeiras registradas na Wallet (líquido de taxas).
- *   São métricas DIFERENTES e não devem ser intercambiadas.
- *
- *   - "quanto vendi?" / "faturamento?" → FAST_QUERY (intenção: VENDAS)
- *   - "quanto recebi?" / "entrou?" → FAST_QUERY (intenção: RECEITAS)
- *   - "por que receita < vendas?" → AGENT_V2 (cross-métrica)
- *
- * REGRA FUNDAMENTAL:
- *   FAST_QUERY é uma OTIMIZAÇÃO, nunca uma REDUÇÃO de inteligência.
- *   Em caso de dúvida, AGENT_V2.
+ * Responsabilidade: Determinar com máxima precisão se a mensagem do usuário deve ir para:
+ *   - FAST_QUERY: Consulta rápida determinística (Vendas Eyemobile, Receitas Wallet, Saldo)
+ *   - AGENT_V2: Consulta complexa / analítica / mutação / ActionProposal
+ *   - DOCUMENT: Documento anexado detectado
+ *   - CONVERSATIONAL: Conversa casual
  */
 
-export type WalletAIRoute =
-  | "FAST_QUERY"
-  | "AGENT_V2"
-  | "DOCUMENT"
-  | "CONVERSATIONAL";
+export type WalletAIRoute = "FAST_QUERY" | "AGENT_V2" | "DOCUMENT" | "CONVERSATIONAL";
 
 export interface RouterInput {
   message: string;
-  attachments?: Array<{ type: "image" | "pdf"; mimeType: string }>;
-  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
-  workspaceId?: string;
+  attachments?: unknown[];
 }
 
 export interface RouterDecision {
@@ -36,20 +20,16 @@ export interface RouterDecision {
   reason: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Normalização
-// ─────────────────────────────────────────────────────────────────────────────
-
 const norm = (s: string): string =>
   s
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[?!.,;:]+$/g, "") // remove pontuacao terminal
+    .replace(/[?!.,;:]+$/g, "")
     .trim();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. AÇÕES — mutações de dados (Agent V2 com ActionProposal)
+// 1. INTENÇÕES DE AÇÃO / MUTAÇÃO → obrigatoriamente Agent V2
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ACTION_PATTERNS: RegExp[] = [
@@ -65,46 +45,27 @@ const ACTION_PATTERNS: RegExp[] = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. ANÁLISE COMPLEXA — avaliada ANTES de FAST_QUERY
-//    Inclui:
-//    - Modificadores analíticos (por que, compare, detalhe...)
-//    - CROSS-MÉTRICA: perguntas que envolvem VENDAS e RECEITAS juntas
-//      (precisam consultar Eyemobile + Wallet ao mesmo tempo → Agent V2)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AGENT_V2_PATTERNS: RegExp[] = [
-  // Comparativos
   /compare|compara(r)?|comparativo|versus|vs\./,
-  // Análise e detalhamento
-  /(analise|analisa|analisar|analise)/,
-  /(explique|explica|explicar|explica(r)?)/,
+  /(analise|analisa|analisar)/,
+  /(explique|explica|explicar)/,
   /mais (detalhes|informacoes|informacao)/,
   /detalha(r|ndo)?|detalhe/,
-  // Motivos / causas — CRÍTICO: captura "quanto vendi e por que caiu?"
   /por que|porque|motivo|causa|razao/,
-  // Categorização e agrupamento — CRÍTICO: captura "por categoria", "por forma"
   /por (categoria|metodo|forma de pagamento|fornecedor|cliente|produto|tipo)/,
   /quebr(a|e|ar) por|agrupar? por|separa(r|r por)/,
-  // Tendências e projeções
   /evolucao|historico|tendencia|tendencias|crescimento|queda/,
   /projecao|previsao|proximo mes|proximos meses|forecast/,
-  // Gráficos e visualizações
   /(grafico|chart|visualiz|mostre (em|como)|plote)/,
-  // Multi-período — análise temporal
   /trimestre|semestre|anual|ano todo|12 meses/,
-  // Rankings
   /(maiores|menores|principais|top [0-9]+) (despesas|receitas|gastos|categorias)/,
   /mais (gasto|vendido|pago|caro)/,
-  // Fluxo de caixa
   /fluxo de caixa/,
-  // Pedidos de explicação e resumo elaborado
   /me (conta|explica|diz|fale sobre|ajuda)/,
   /quero (ver|entender|saber mais|uma analise)/,
   /qual (a diferenca|o impacto|o motivo)/,
-  // CROSS-MÉTRICA (Etapa 1.4): pergunta envolve VENDAS e RECEITAS ao mesmo tempo.
-  // Estas perguntas precisam cruzar Eyemobile + Wallet → obrigatoriamente Agent V2.
-  // Ex: "por que minha receita é menor que minhas vendas?"
-  //     "diferença entre receita e faturamento"
-  //     "receita vs vendas"
   /vend.*receit|receit.*vend/,
   /fatur.*receit|receit.*fatur/,
   /(diferenca|diferença).*(vend|fatur|receit)/,
@@ -114,12 +75,7 @@ const AGENT_V2_PATTERNS: RegExp[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. CONSULTA RÁPIDA — só após confirmar ausência de análise complexa
-//    Apenas consultas pontuais e simples respondidas localmente.
-//
-//    SEPARAÇÃO SEMÂNTICA (Etapa 1.4):
-//    VENDAS_PDV: intenção "vendi/faturei/faturamento/vendas" → fonte Eyemobile
-//    RECEITAS:   intenção "recebi/entrou/receita/entrada"   → fonte Wallet
+// 3. CONSULTA RÁPIDA — apenas consultas pontuais e simples respondidas localmente
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Intenção VENDAS — consulta de faturamento bruto do PDV Eyemobile. */
@@ -156,15 +112,6 @@ const FAST_QUERY_OUTROS_PATTERNS: RegExp[] = [
 
 /**
  * Decide a rota com base em heurísticas determinísticas.
- *
- * Ordem de prioridade (da maior para a menor):
- *   1. Documento anexado → DOCUMENT
- *   2. Intenção de ação/mutação → AGENT_V2
- *   3. Análise complexa / cross-métrica → AGENT_V2 (avaliada ANTES de FAST_QUERY)
- *   4a. Consulta pontual de VENDAS → FAST_QUERY (intenção: vendas PDV)
- *   4b. Consulta pontual de RECEITAS → FAST_QUERY (intenção: receitas Wallet)
- *   4c. Consulta pontual outros → FAST_QUERY
- *   5. Default → AGENT_V2 (fallback seguro)
  */
 export function routeMessage(input: RouterInput): RouterDecision {
   const { message, attachments } = input;
@@ -188,8 +135,6 @@ export function routeMessage(input: RouterInput): RouterDecision {
   }
 
   // 3. Análise complexa ou cross-métrica → Agent V2 (PRIORIDADE SOBRE FAST_QUERY)
-  //    Captura modificadores como "por que", "por categoria", "compare",
-  //    e perguntas que cruzam Vendas + Receitas ao mesmo tempo.
   if (AGENT_V2_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "AGENT_V2",
