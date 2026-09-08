@@ -218,6 +218,11 @@ describe("ETAPA 9.7 — Comprehensive Security & Hardening Suite", () => {
         expect(def.requiresConfirmation).toBe(true);
       }
     });
+
+    it("deve garantir que cadastrar_transacao possui riskLevel canônico MEDIUM", () => {
+      expect(CANONICAL_ACTIONS.cadastrar_transacao.riskLevel).toBe("MEDIUM");
+      expect(CANONICAL_ACTIONS.cadastrar_transacao.executionPolicy).toBe("proposal_only");
+    });
   });
 
   // ─── 3. DISTRIBUTED TELEGRAM IDEMPOTENCY ──────────────────────────────────
@@ -617,7 +622,7 @@ describe("ETAPA 9.7 — Comprehensive Security & Hardening Suite", () => {
           userId: "user-alpha",
           actionType: "cadastrar_transacao",
           actionVersion: "v1",
-          riskLevel: "LOW",
+          riskLevel: "MEDIUM",
           executionPolicy: "proposal_only",
           status: "prepared",
           payload: { descricao: "Aluguel", valor: 1500 },
