@@ -1,23 +1,19 @@
 /**
  * gerar-recibo-xss.test.ts
  * 
- * Testes unitários para comprovar a mitigação de XSS e injeção de HTML no recibo:
- * - Payloads maliciosos em nomes, descrições e cidades
+ * Testes unitários de segurança importando e executando o módulo de produção:
+ * - Sanitização contra Cross-Site Scripting (XSS)
+ * - Execução do buildReciboHtml de produção com payloads maliciosos
  * - Neutralização de scripts, event handlers e tags HTML
+ * - Validação da política de sandbox do iframe e fallback Blob em Recibos.tsx
  */
 import { describe, it, expect } from "vitest";
+import { escapeHtml, buildReciboHtml } from "../../../supabase/functions/_shared/gerar-recibo-core.ts";
+import * as fs from "fs";
+import * as path from "path";
 
-function escapeHtml(str: unknown): string {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-describe("gerar-recibo — Sanitização e Mitigação de XSS", () => {
-  it("Neutraliza tags <script>alert(1)</script>", () => {
+describe("gerar-recibo — Sanitização e Mitigação de XSS com Módulo de Produção", () => {
+  it("Importa e executa diretamente escapeHtml de produção contra tags <script>", () => {
     const maliciousInput = "<script>alert('XSS')</script>";
     const sanitized = escapeHtml(maliciousInput);
 
@@ -35,29 +31,42 @@ describe("gerar-recibo — Sanitização e Mitigação de XSS", () => {
     expect(sanitized).toContain("&quot;");
   });
 
-  it("Neutraliza injeção em atributos com aspas duplas e simples", () => {
-    const maliciousInput = '" onmouseover="alert(1)" data-x=\'injection\'';
-    const sanitized = escapeHtml(maliciousInput);
+  it("Executa buildReciboHtml de produção e comprova neutralização de XSS no HTML gerado", () => {
+    const html = buildReciboHtml({
+      valor: 1500,
+      pagador: "Empresa <script>alert('XSS_PAGADOR')</script>",
+      recebedor: "João <img src=x onerror=alert(1)>",
+      descricao: "Serviço com 'payload' \"injetado\"",
+      cidade: "São Paulo <svg onload=alert(2)>",
+    });
 
-    expect(sanitized).not.toContain('"');
-    expect(sanitized).not.toContain("'");
-    expect(sanitized).toBe("&quot; onmouseover=&quot;alert(1)&quot; data-x=&#039;injection&#039;");
+    // Garante que NENHUM elemento executável foi inserido no HTML retornado
+    expect(html).not.toContain("<script>alert('XSS_PAGADOR')</script>");
+    expect(html).not.toContain("<img src=x onerror=alert(1)>");
+    expect(html).not.toContain("<svg onload=alert(2)>");
+
+    // Garante que os caracteres foram escapados de forma segura
+    expect(html).toContain("&lt;script&gt;alert(&#039;XSS_PAGADOR&#039;)&lt;/script&gt;");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("&lt;svg onload=alert(2)&gt;");
   });
 
-  it("Manipula graciosamente valores nulos ou indefinidos sem quebrar", () => {
-    expect(escapeHtml(null)).toBe("");
-    expect(escapeHtml(undefined)).toBe("");
-    expect(escapeHtml(12345)).toBe("12345");
-  });
-
-  it("Garante que Recibos.tsx usa sandbox com allow-modals e allow-same-origin SEM allow-scripts", async () => {
-    const fs = await import("fs");
-    const path = await import("path");
+  it("Garante que Recibos.tsx usa sandbox estrito: allow-modals e allow-same-origin SEM allow-scripts", () => {
     const recibosPath = path.resolve(process.cwd(), "src/pages/Recibos.tsx");
     const code = fs.readFileSync(recibosPath, "utf-8");
 
+    // Verifica que o sandbox está configurado
     expect(code).toContain('sandbox="allow-modals allow-same-origin"');
-    // Crucial: allow-scripts NUNCA pode ser incluído no sandbox do preview
+    // CRUCIAL: allow-scripts NUNCA pode estar presente no sandbox do preview
     expect(code).not.toContain("allow-scripts");
+  });
+
+  it("Valida suporte a fallback Blob e escape seguro de entidades em Recibos.tsx", () => {
+    const recibosPath = path.resolve(process.cwd(), "src/pages/Recibos.tsx");
+    const code = fs.readFileSync(recibosPath, "utf-8");
+
+    expect(code).toContain('new Blob([reciboHtml], { type: "text/html;charset=utf-8" })');
+    expect(code).toContain("URL.createObjectURL(blob)");
+    expect(code).toContain("URL.revokeObjectURL(blobUrl)");
   });
 });

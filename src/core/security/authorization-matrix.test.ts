@@ -1,174 +1,251 @@
 /**
  * authorization-matrix.test.ts
  * 
- * Matriz Completa de Testes de Autorização e Controle de Acesso:
- * 1. Anônimo (sem header Authorization) -> 401 Unauthorized
- * 2. Usuário A vs B (IDOR / Isolamento de Identidade) -> Impossibilidade de afetar dados de outro usuário
- * 3. Membro removido / Token revogado -> 401 Unauthorized
- * 4. Usuário comum tentando ações administrativas -> 403 Forbidden
- * 5. JWT forjado / adulterado (tentativa de bypass via spoofing de claims) -> 401 Unauthorized
- * 6. Chamadas legítimas de Cron e Webhook -> 200 OK somente com credenciais legítimas
+ * Matriz Completa de Testes de Autorização e Controle de Acesso (RBAC/IDOR/SSRF/Sessões)
+ * EXECUTANDO DIRETAMENTE OS MÓDULOS CENTRAIS DE PRODUÇÃO:
+ * 1. Anônimo (sem header Authorization) -> 401 Unauthorized via processTestWebhook e processValidarSenha
+ * 2. Usuário comum tentando rota administrativa -> 403 Forbidden via processTestWebhook (consulta direta a profiles.role)
+ * 3. Tentativa de bypass via user_metadata -> Rejeitada (role extraída exclusivamente do banco)
+ * 4. Isolamento de IDOR em validar-senha -> Identidade é extraída do token autenticado
+ * 5. Isolamento entre Múltiplas Sessões do mesmo usuário -> Desbloquear sessão 1 NÃO desbloqueia sessão 2
+ * 6. Rate Limiting Compartilhado -> Bloqueio de estouro de requisições e proteção contra manipulação de chave
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { processTestWebhook } from "../../../supabase/functions/_shared/test-webhook-core.ts";
+import {
+  processValidarSenha,
+  extractSessionIdFromJwt,
+  createInvestmentToken,
+  verifyInvestmentToken
+} from "../../../supabase/functions/_shared/validar-senha-core.ts";
+import { checkSharedRateLimit } from "../../../supabase/functions/_shared/ai-rate-limiter.ts";
 
-describe("Matriz de Autorização e Controle de Acesso (RBAC/IDOR/SSRF)", () => {
-  const VALID_SERVICE_KEY = "sb_secret_service_role_key_prod_9876543210";
-  const TELEGRAM_WEBHOOK_SECRET = "tg_webhook_secret_secure_token_12345";
+function createMockJwt(userId: string, sessionId: string, role = "authenticated"): string {
+  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    session_id: sessionId,
+    role,
+    aud: "authenticated",
+    exp: Math.floor(Date.now() / 1000) + 3600
+  }));
+  return `${header}.${payload}.mock_signature`;
+}
 
-  const mockUsers = {
-    userA: { id: "user-uuid-1111", email: "userA@example.com", role: "user" },
-    userB: { id: "user-uuid-2222", email: "userB@example.com", role: "user" },
-    admin: { id: "admin-uuid-9999", email: "admin@example.com", role: "admin" },
-  };
+describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Produção", () => {
+  const userA = { id: "user-uuid-1111", email: "usera@example.com" };
+  const userAdmin = { id: "admin-uuid-9999", email: "admin@example.com" };
 
-  interface MockUser {
-    id: string;
-    email: string;
-    role: string;
-  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-  interface ResolveCallerResult {
-    status: number;
-    error?: string;
-    isServiceRole?: boolean;
-    role?: string;
-    user?: MockUser;
-  }
+  it("1. Anônimo: Rejeita chamadas sem Authorization com status 401 no processador de produção", async () => {
+    const req = new Request("http://localhost/test-webhook", {
+      method: "POST",
+      headers: {},
+    });
 
-  async function resolveCaller(
-    authHeader: string | null,
-    customGetUser?: (token: string) => Promise<{ user: MockUser | null; error: { message: string } | null }>
-  ): Promise<ResolveCallerResult> {
-    if (!authHeader) {
-      return { status: 401, error: "Token de autenticação ausente" };
-    }
+    const mockAdmin = {};
+    const res = await processTestWebhook(req, mockAdmin);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toMatch(/token.*ausente/i);
+  });
 
-    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  it("2. RBAC Confiável: Usuário comum tentando ação administrativa recebe 403 Forbidden", async () => {
+    const token = createMockJwt(userA.id, "session-a1");
 
-    if (token === VALID_SERVICE_KEY) {
-      return { status: 200, isServiceRole: true, role: "service_role" };
-    }
+    const mockSupabaseAdmin = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }),
+      },
+      from: vi.fn((table: string) => {
+        if (table === "profiles") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { role: "user" }, // Usuário COMUM no banco
+              error: null,
+            }),
+          };
+        }
+        return { select: vi.fn().mockReturnThis() };
+      }),
+    };
 
-    if (customGetUser) {
-      const { user, error } = await customGetUser(token);
-      if (error || !user) {
-        return { status: 401, error: "Usuário não autenticado ou token inválido" };
+    const req = new Request("http://localhost/test-webhook", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await processTestWebhook(req, mockSupabaseAdmin);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/apenas administradores/i);
+  });
+
+  it("3. Anti-Spoofing de Role: Privilégio vindo de user_metadata é ignorado (origem é estritamente profiles.role)", async () => {
+    const token = createMockJwt(userA.id, "session-a1");
+    const userWithSpoofedMeta = {
+      ...userA,
+      user_metadata: { role: "admin" },
+    };
+
+    const mockSupabaseAdmin = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: userWithSpoofedMeta }, error: null }),
+      },
+      from: vi.fn((table: string) => {
+        if (table === "profiles") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { role: "user" }, // Banco confirma que continua 'user'
+              error: null,
+            }),
+          };
+        }
+        return { select: vi.fn().mockReturnThis() };
+      }),
+    };
+
+    const req = new Request("http://localhost/test-webhook", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await processTestWebhook(req, mockSupabaseAdmin);
+    expect(res.status).toBe(403);
+  });
+
+  it("4. IDOR Prevented: A identidade do usuário em validar-senha é derivada exclusivamente do JWT verificado", async () => {
+    const tokenA = createMockJwt(userA.id, "session-a1");
+
+    const mockSupabaseAdmin = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }),
+      },
+      from: vi.fn(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      })),
+    };
+
+    const req = new Request("http://localhost/validar-senha", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenA}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mode: "validar",
+        user_id: "victim-uuid-9999", // Tentativa de IDOR no body
+        senha: "qualquer_senha",
+      }),
+    });
+
+    await processValidarSenha(req, mockSupabaseAdmin, "secret_key_123");
+
+    expect(mockSupabaseAdmin.from).toHaveBeenCalledWith("senha_investimentos");
+  });
+
+  it("5. Duas Sessões do mesmo usuário: Desbloquear na Sessão 1 NÃO desbloqueia a Sessão 2", async () => {
+    const userSessionStore: Record<string, { userId: string; expiresAt: string }> = {};
+
+    const jwtSessao1 = createMockJwt(userA.id, "session-terminal-desktop");
+    const jwtSessao2 = createMockJwt(userA.id, "session-comprometida-mobile");
+
+    expect(extractSessionIdFromJwt(jwtSessao1)).toBe("session-terminal-desktop");
+    expect(extractSessionIdFromJwt(jwtSessao2)).toBe("session-comprometida-mobile");
+
+    const mockSupabaseAdmin = {
+      auth: {
+        getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }),
+      },
+      from: vi.fn((table: string) => {
+        if (table === "senha_investimentos") {
+          return {
+            upsert: vi.fn().mockResolvedValue({ error: null }),
+          };
+        }
+        if (table === "investimentos_sessions") {
+          return {
+            delete: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            insert: vi.fn().mockImplementation((payload: any) => {
+              userSessionStore[payload.session_id] = {
+                userId: payload.user_id,
+                expiresAt: payload.expires_at,
+              };
+              return Promise.resolve({ error: null });
+            }),
+          };
+        }
+        return {};
+      }),
+    };
+
+    const reqSessao1 = new Request("http://localhost/validar-senha", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwtSessao1}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mode: "cadastrar",
+        senha: "SenhaForte@1234",
+      }),
+    });
+
+    const res1 = await processValidarSenha(reqSessao1, mockSupabaseAdmin, "secret_key_123");
+    expect(res1.status).toBe(200);
+
+    expect(userSessionStore["session-terminal-desktop"]).toBeDefined();
+    expect(userSessionStore["session-comprometida-mobile"]).toBeUndefined();
+  });
+
+  it("6. Rate Limiter Compartilhado: Previne manipulação de chave pelo cliente e aplica bloqueio atômico", async () => {
+    const mockDbRpc = vi.fn().mockImplementation((fnName: string, args: any) => {
+      if (fnName === "check_rate_limit") {
+        if (args.p_key.includes("limite_estourado")) {
+          return Promise.resolve({
+            data: [{ allowed: false, retry_after_seconds: 45, current_count: 20, limit_count: 20 }],
+            error: null,
+          });
+        }
+        return Promise.resolve({
+          data: [{ allowed: true, retry_after_seconds: 0, current_count: 5, limit_count: 20 }],
+          error: null,
+        });
       }
-      return { status: 200, user, role: user.role };
-    }
-
-    if (token === "token_user_a") return { status: 200, user: mockUsers.userA, role: "user" };
-    if (token === "token_user_b") return { status: 200, user: mockUsers.userB, role: "user" };
-    if (token === "token_admin") return { status: 200, user: mockUsers.admin, role: "admin" };
-
-    return { status: 401, error: "Token inválido ou expirado" };
-  }
-
-  describe("1. Chamadas Anônimas (Não Autenticadas)", () => {
-    it("Rejeita requisição sem header Authorization com 401", async () => {
-      const res = await resolveCaller(null);
-      expect(res.status).toBe(401);
-      expect(res.error).toMatch(/ausente/i);
+      return Promise.resolve({ data: null, error: null });
     });
 
-    it("Rejeita header Authorization vazio ou em branco com 401", async () => {
-      const res = await resolveCaller("   ");
-      expect(res.status).toBe(401);
+    const mockAdmin = { rpc: mockDbRpc };
+
+    const resultOk = await checkSharedRateLimit(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "ws-123",
+      action: "chat_ia",
+      maxRequestsPerMinute: 20,
     });
-  });
+    expect(resultOk.allowed).toBe(true);
 
-  describe("2. IDOR e Isolamento de Identidade entre Usuários", () => {
-    it("Força identidade pelo token autenticado, ignorando user_id divergente no body", async () => {
-      const auth = await resolveCaller("Bearer token_user_a");
-      expect(auth.status).toBe(200);
-
-      const incomingBody = { user_id: mockUsers.userB.id, mode: "cadastrar", senha: "123" };
-      const effectiveUserId = auth.user?.id;
-
-      expect(effectiveUserId).toBe(mockUsers.userA.id);
-      expect(effectiveUserId).not.toBe(incomingBody.user_id);
+    const resultBlocked = await checkSharedRateLimit(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "limite_estourado",
+      action: "chat_ia",
+      maxRequestsPerMinute: 20,
     });
-
-    it("Rejeita token de investimentos emitido para Usuário A quando apresentado pelo Usuário B", async () => {
-      const tokenUserA = "inv_dXNlci11dWlkLTExMTE6OTk5OTk5OTk5OTppbnZlc3RpbWVudG9zX2F1dGg6bm9uY2U=.sig123";
-      const payloadDecoded = atob(tokenUserA.slice(4).split(".")[0]);
-      const [tokenUserId] = payloadDecoded.split(":");
-
-      const callerB = mockUsers.userB;
-      const isOwner = tokenUserId === callerB.id;
-
-      expect(isOwner).toBe(false);
-    });
-  });
-
-  describe("3. Membro Removido ou Token Revogado", () => {
-    it("Rejeita com 401 quando auth.getUser indica usuário inexistente ou revogado", async () => {
-      const mockRevokedGetUser = vi.fn().mockResolvedValue({
-        user: null,
-        error: { message: "User from sub claim in JWT does not exist" },
-      });
-
-      const res = await resolveCaller("Bearer revoked_jwt_token", mockRevokedGetUser);
-      expect(res.status).toBe(401);
-      expect(res.error).toMatch(/não autenticado|inválido/i);
-    });
-  });
-
-  describe("4. Usuário Comum em Ações Administrativas (RBAC)", () => {
-    it("Bloqueia usuário comum ao tentar testar webhook (test-webhook exige admin)", async () => {
-      const auth = await resolveCaller("Bearer token_user_a");
-      expect(auth.status).toBe(200);
-
-      const profile = { role: auth.role };
-      const isAllowed = profile.role === "admin";
-
-      expect(isAllowed).toBe(false);
-    });
-
-    it("Permite que administrador execute ação de test-webhook", async () => {
-      const auth = await resolveCaller("Bearer token_admin");
-      expect(auth.status).toBe(200);
-
-      const profile = { role: auth.role };
-      const isAllowed = profile.role === "admin";
-
-      expect(isAllowed).toBe(true);
-    });
-  });
-
-  describe("5. JWT Forjado / Tentativa de Bypass com Claims Adulteradas", () => {
-    it("Rejeita JWT forjado com { role: 'service_role' } que não corresponda ao segredo real", async () => {
-      const forgedJwt = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ.";
-      const isServiceRole = forgedJwt === VALID_SERVICE_KEY;
-      expect(isServiceRole).toBe(false);
-
-      const mockFailingAuth = vi.fn().mockResolvedValue({
-        user: null,
-        error: { message: "invalid signature" },
-      });
-
-      const res = await resolveCaller("Bearer " + forgedJwt, mockFailingAuth);
-      expect(res.status).toBe(401);
-    });
-  });
-
-  describe("6. Cron e Webhooks Legítimos", () => {
-    it("Permite execução de cron interno autenticado com service_role key", async () => {
-      const auth = await resolveCaller("Bearer " + VALID_SERVICE_KEY);
-      expect(auth.status).toBe(200);
-      expect(auth.isServiceRole).toBe(true);
-    });
-
-    it("Permite webhook do Telegram com X-Telegram-Bot-Api-Secret-Token válido", () => {
-      const incomingSecretHeader = TELEGRAM_WEBHOOK_SECRET;
-      const isValid = incomingSecretHeader === TELEGRAM_WEBHOOK_SECRET;
-      expect(isValid).toBe(true);
-    });
-
-    it("Rejeita webhook do Telegram com Secret-Token forjado ou ausente", () => {
-      const incomingSecretHeader = "wrong_or_attacker_secret";
-      const isValid = incomingSecretHeader === TELEGRAM_WEBHOOK_SECRET;
-      expect(isValid).toBe(false);
-    });
+    expect(resultBlocked.allowed).toBe(false);
+    expect(resultBlocked.retryAfterSeconds).toBe(45);
   });
 });

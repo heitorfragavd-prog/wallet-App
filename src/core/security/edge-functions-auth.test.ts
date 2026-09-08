@@ -52,9 +52,11 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
   });
 
   it("VULN-02: validar-senha exige token de autenticação e obtém userId com segurança", () => {
-    const filePath = path.join(rootDir, "supabase/functions/validar-senha/index.ts");
-    expect(fs.existsSync(filePath)).toBe(true);
-    const content = fs.readFileSync(filePath, "utf8");
+    const entryPath = path.join(rootDir, "supabase/functions/validar-senha/index.ts");
+    const corePath = path.join(rootDir, "supabase/functions/_shared/validar-senha-core.ts");
+    expect(fs.existsSync(entryPath)).toBe(true);
+    expect(fs.existsSync(corePath)).toBe(true);
+    const content = fs.readFileSync(entryPath, "utf8") + "\n" + fs.readFileSync(corePath, "utf8");
 
     // Exige Authorization header
     expect(content).toMatch(/req\.headers\.get\(["']Authorization["']\)/i);
@@ -81,8 +83,9 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
   });
 
   it("VULN-04: test-webhook exige autenticação e implementa proteção anti-SSRF", () => {
-    const filePath = path.join(rootDir, "supabase/functions/test-webhook/index.ts");
-    const content = fs.readFileSync(filePath, "utf8");
+    const entryPath = path.join(rootDir, "supabase/functions/test-webhook/index.ts");
+    const corePath = path.join(rootDir, "supabase/functions/_shared/test-webhook-core.ts");
+    const content = fs.readFileSync(entryPath, "utf8") + "\n" + fs.readFileSync(corePath, "utf8");
 
     expect(content).toMatch(/req\.headers\.get\(["']Authorization["']\)/i);
     expect(content).toMatch(/supabaseAdmin\.auth\.getUser\(token\)/);
@@ -95,8 +98,9 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
   });
 
   it("VULN-05: gerar-recibo exige autenticação e escapa entidades HTML", () => {
-    const filePath = path.join(rootDir, "supabase/functions/gerar-recibo/index.ts");
-    const content = fs.readFileSync(filePath, "utf8");
+    const entryPath = path.join(rootDir, "supabase/functions/gerar-recibo/index.ts");
+    const corePath = path.join(rootDir, "supabase/functions/_shared/gerar-recibo-core.ts");
+    const content = fs.readFileSync(entryPath, "utf8") + "\n" + fs.readFileSync(corePath, "utf8");
 
     expect(content).toMatch(/req\.headers\.get\(["']Authorization["']\)/i);
     expect(content).toMatch(/supabaseAdmin\.auth\.getUser\(token\)/);

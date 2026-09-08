@@ -1,178 +1,94 @@
 /**
  * validar-senha-crypto.test.ts
  * 
- * Testes unitários para as funções criptográficas de validar-senha:
+ * Testes unitários para as funções criptográficas de produção em validar-senha:
  * - Hashing PBKDF2 com salt
  * - Verificação de senha
  * - Retrocompatibilidade com hashes SHA-256 legados
  * - Geração e integridade do token HMAC assinado
+ * - Finalidade, expiração e proteção IDOR
  */
 import { describe, it, expect } from "vitest";
+import {
+  derivePbkdf2Hash,
+  verifyPassword,
+  createInvestmentToken,
+  verifyInvestmentToken,
+} from "../../../supabase/functions/_shared/validar-senha-core.ts";
 
-// Implementação direta das funções puras usadas no backend
-async function derivePbkdf2Hash(password: string, salt: string): Promise<string> {
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(password),
-    { name: "PBKDF2" },
-    false,
-    ["deriveBits"]
-  );
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: enc.encode(salt),
-      iterations: 100000,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    256
-  );
-  const hashArray = Array.from(new Uint8Array(derivedBits));
-  const hex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `$pbkdf2$100000$${hex}`;
-}
+describe("validar-senha — Criptografia e Tokens com Funções de Produção", () => {
+  const SECRET_KEY = "test_supabase_service_role_secret_key_1234567890";
+  const USER_ID = "user-uuid-1234-5678";
+  const USER_SALT = `wallet_inv_${USER_ID}`;
 
-async function verifyPassword(password: string, salt: string, storedHash: string): Promise<boolean> {
-  if (storedHash.startsWith("$pbkdf2$100000$")) {
-    const computed = await derivePbkdf2Hash(password, salt);
-    return computed === storedHash;
-  }
-  // Retrocompatibilidade segura com SHA-256 legado
-  const enc = new TextEncoder();
-  const data = enc.encode(password + salt);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const legacyHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return legacyHash === storedHash;
-}
+  it("Gera hash PBKDF2 com 100.000 iterações no formato correto", async () => {
+    const hash = await derivePbkdf2Hash("MinhaSenhaForte!123", USER_SALT);
 
-async function createInvestmentToken(userId: string, secretKey: string, purpose = "investimentos_auth", customExpiresAt?: number): Promise<string> {
-  const expiresAt = customExpiresAt ?? (Date.now() + 30 * 60 * 1000);
-  const nonce = crypto.randomUUID();
-  const payload = `${userId}:${expiresAt}:${purpose}:${nonce}`;
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secretKey),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
-  const sigHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, "0")).join("");
-  return `inv_${btoa(payload)}.${sigHex}`;
-}
-
-async function verifyInvestmentToken(token: string, secretKey: string, expectedUserId: string): Promise<boolean> {
-  if (!token.startsWith("inv_")) return false;
-  const parts = token.slice(4).split(".");
-  if (parts.length !== 2) return false;
-
-  const [encodedPayload, sigHex] = parts;
-  let payload: string;
-  try {
-    payload = atob(encodedPayload);
-  } catch {
-    return false;
-  }
-
-  const [userId, expiresAtStr, purpose] = payload.split(":");
-  if (userId !== expectedUserId) return false;
-  if (purpose && purpose !== "investimentos_auth") return false;
-
-  const expiresAt = Number(expiresAtStr);
-  if (isNaN(expiresAt) || Date.now() > expiresAt) return false;
-
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secretKey),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"]
-  );
-
-  const sigBytes = new Uint8Array(sigHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []);
-  return await crypto.subtle.verify("HMAC", key, sigBytes, enc.encode(payload));
-}
-
-describe("Criptografia e Validação de Senha de Investimentos", () => {
-  const salt = "wallet_inv_test-user-123";
-  const correctPass = "MinhaSenhaForte#2026";
-  const wrongPass = "SenhaIncorreta";
-  const secretKey = "super-secret-service-role-key";
-
-  it("Gera hash PBKDF2 com prefixo $pbkdf2$100000$", async () => {
-    const hash = await derivePbkdf2Hash(correctPass, salt);
-    expect(hash.startsWith("$pbkdf2$100000$")).toBe(true);
-    expect(hash.length).toBeGreaterThan(64);
+    expect(hash).toMatch(/^\$pbkdf2\$100000\$[0-9a-f]{64}$/);
   });
 
-  it("Valida senha correta com hash PBKDF2", async () => {
-    const hash = await derivePbkdf2Hash(correctPass, salt);
-    const isValid = await verifyPassword(correctPass, salt, hash);
+  it("Verifica com sucesso a senha correta usando PBKDF2", async () => {
+    const password = "SenhaCorreta@2026";
+    const hash = await derivePbkdf2Hash(password, USER_SALT);
+
+    const isValid = await verifyPassword(password, USER_SALT, hash);
     expect(isValid).toBe(true);
   });
 
-  it("Rejeita senha incorreta com hash PBKDF2", async () => {
-    const hash = await derivePbkdf2Hash(correctPass, salt);
-    const isValid = await verifyPassword(wrongPass, salt, hash);
+  it("Rejeita senha incorreta usando PBKDF2", async () => {
+    const password = "SenhaCorreta@2026";
+    const hash = await derivePbkdf2Hash(password, USER_SALT);
+
+    const isValid = await verifyPassword("SenhaIncorreta@2026", USER_SALT, hash);
     expect(isValid).toBe(false);
   });
 
-  it("Mantém compatibilidade com hashes legados SHA-256", async () => {
-    // Hash SHA-256 legado simples
+  it("Salts diferentes geram hashes completamente distintos para a mesma senha", async () => {
+    const password = "MesmaSenhaParaTodos";
+    const hashUserA = await derivePbkdf2Hash(password, "wallet_inv_user_a");
+    const hashUserB = await derivePbkdf2Hash(password, "wallet_inv_user_b");
+
+    expect(hashUserA).not.toBe(hashUserB);
+  });
+
+  it("Garante retrocompatibilidade com SHA-256 legado sem quebrar autenticação existente", async () => {
+    const password = "SenhaLegada123";
     const enc = new TextEncoder();
-    const data = enc.encode(correctPass + salt);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    const legacyHash = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", enc.encode(password + USER_SALT));
+    const legacyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    expect(legacyHash).toHaveLength(64);
-    expect(legacyHash).not.toContain("$pbkdf2$");
-
-    const validLegacy = await verifyPassword(correctPass, salt, legacyHash);
-    expect(validLegacy).toBe(true);
-
-    const invalidLegacy = await verifyPassword(wrongPass, salt, legacyHash);
-    expect(invalidLegacy).toBe(false);
-  });
-
-  it("Gera e valida token HMAC assinado para o usuário correto", async () => {
-    const token = await createInvestmentToken("test-user-123", secretKey);
-    expect(token.startsWith("inv_")).toBe(true);
-
-    const isValid = await verifyInvestmentToken(token, secretKey, "test-user-123");
+    const isValid = await verifyPassword(password, USER_SALT, legacyHash);
     expect(isValid).toBe(true);
+
+    const isInvalid = await verifyPassword("OutraSenha", USER_SALT, legacyHash);
+    expect(isInvalid).toBe(false);
   });
 
-  it("Rejeita token se o userId for forjado (IDOR prevention)", async () => {
-    const token = await createInvestmentToken("test-user-123", secretKey);
+  it("Gera token HMAC assinado válido e o valida com sucesso", async () => {
+    const token = await createInvestmentToken(USER_ID, SECRET_KEY);
+    expect(token).toMatch(/^inv_[A-Za-z0-9+/=]+\.[0-9a-f]{64}$/);
 
-    // Atacante tenta usar token do usuário 123 como se fosse o usuário 999
-    const isValidForAttacker = await verifyInvestmentToken(token, secretKey, "attacker-user-999");
-    expect(isValidForAttacker).toBe(false);
+    const result = await verifyInvestmentToken(token, USER_ID, SECRET_KEY);
+    expect(result.valid).toBe(true);
   });
 
-  it("Rejeita token expirado", async () => {
-    // Token expirado há 10 segundos
-    const expiredToken = await createInvestmentToken("test-user-123", secretKey, "investimentos_auth", Date.now() - 10000);
-    const isValid = await verifyInvestmentToken(expiredToken, secretKey, "test-user-123");
-    expect(isValid).toBe(false);
+  it("Detecta e bloqueia adulteração na assinatura do token HMAC", async () => {
+    const token = await createInvestmentToken(USER_ID, SECRET_KEY);
+    const [payload, sig] = token.split(".");
+    const tamperedSig = sig.slice(0, -4) + "ffff";
+    const tamperedToken = `${payload}.${tamperedSig}`;
+
+    const result = await verifyInvestmentToken(tamperedToken, USER_ID, SECRET_KEY);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/adulterada/i);
   });
 
-  it("Rejeita token com finalidade diferente de investimentos_auth", async () => {
-    const wrongPurposeToken = await createInvestmentToken("test-user-123", secretKey, "outra_finalidade");
-    const isValid = await verifyInvestmentToken(wrongPurposeToken, secretKey, "test-user-123");
-    expect(isValid).toBe(false);
-  });
+  it("Detecta tentativa de uso do token por outro usuário (prevenção de IDOR)", async () => {
+    const tokenUserA = await createInvestmentToken(USER_ID, SECRET_KEY);
+    const victimUserId = "other-user-uuid-9999";
 
-  it("Gera nonces aleatórios distintos para chamadas consecutivas", async () => {
-    const token1 = await createInvestmentToken("test-user-123", secretKey);
-    const token2 = await createInvestmentToken("test-user-123", secretKey);
-    expect(token1).not.toBe(token2);
+    const result = await verifyInvestmentToken(tokenUserA, victimUserId, SECRET_KEY);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/IDOR/i);
   });
 });

@@ -2,7 +2,34 @@
  * ssrf-validator.ts
  *
  * Módulo centralizado de validação Anti-SSRF para Edge Functions da Wallet App.
+ *
+ * POLÍTICA DE SEGURANÇA:
+ * 1. Protocolo: Apenas HTTPS estrito (porta 443). HTTP inseguro desabilitado.
+ * 2. Bloqueio de Redes Privadas e Reservadas (IPv4 e IPv6):
+ *    - Loopback: 127.0.0.0/8, ::1
+ *    - Link-Local / Cloud Metadata: 169.254.0.0/16, fd00:ec2::254, fe80::/10
+ *    - RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+ *    - CGNAT: 100.64.0.0/10
+ *    - Hostnames de nuvem: metadata.google.internal, instance-data, etc.
+ * 3. Bloqueio de Destinos Arbitrários (Mitigação de DNS Rebinding em HTTPS):
+ *    Como a Web API padrão `fetch` no Deno runtime não suporta IP pinning com validação
+ *    de SNI customizada simultaneamente, a política de produção adota FAIL-CLOSED para destinos
+ *    não autorizados: apenas domínios explicitamente permitidos na ALLOWLIST são aceitos.
  */
+
+// Allowlist de provedores e domínios de webhook homologados
+export const ALLOWED_WEBHOOK_DOMAINS = [
+  "hooks.zapier.com",
+  "hook.integromat.com",
+  "hook.eu1.make.com",
+  "hook.us1.make.com",
+  "discord.com",
+  "discordapp.com",
+  "api.slack.com",
+  "hooks.slack.com",
+  "api.telegram.org",
+  "api.github.com",
+];
 
 export function isPrivateOrRestrictedIp(ip: string): boolean {
   const clean = ip.replace(/^\[|\]$/g, "").trim().toLowerCase();
@@ -73,14 +100,28 @@ export function isPrivateOrRestrictedIp(ip: string): boolean {
   return false;
 }
 
-export function isAllowedWebhookUrl(rawUrl: string): boolean {
+export function isAllowedWebhookUrl(rawUrl: string, enforceAllowlist = true): boolean {
   try {
     const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+
+    // 1. Apenas HTTPS estrito (sem HTTP em produção)
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+
+    // 2. Não permitir portas não padrão
+    if (parsed.port && parsed.port !== "443") {
+      return false;
+    }
+
+    // 3. Bloquear credenciais embutidas na URL (ex: https://admin:pass@host)
+    if (parsed.username || parsed.password) {
+      return false;
+    }
 
     const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
 
-    // Hostnames reservados / internos / metadata
+    // 4. Hostnames reservados / internos / metadata
     if (
       hostname === "localhost" ||
       hostname.endsWith(".localhost") ||
@@ -93,9 +134,19 @@ export function isAllowedWebhookUrl(rawUrl: string): boolean {
       return false;
     }
 
-    // IP direto
+    // 5. Bloquear IP direto
     if (isPrivateOrRestrictedIp(hostname)) {
       return false;
+    }
+
+    // 6. Mitigação contra DNS Rebinding: Restringir a domínios previamente aprovados
+    if (enforceAllowlist) {
+      const isDomainApproved = ALLOWED_WEBHOOK_DOMAINS.some(
+        domain => hostname === domain || hostname.endsWith(`.${domain}`)
+      );
+      if (!isDomainApproved) {
+        return false;
+      }
     }
 
     return true;
@@ -105,11 +156,19 @@ export function isAllowedWebhookUrl(rawUrl: string): boolean {
 }
 
 /**
- * Validação assíncrona com resolução de DNS (Anti-DNS Rebinding)
+ * Validação assíncrona com verificação de DNS e restrição de saída segura
  */
-export async function validateSafeExternalUrl(rawUrl: string): Promise<{ valid: boolean; reason?: string }> {
-  if (!isAllowedWebhookUrl(rawUrl)) {
-    return { valid: false, reason: "URL bloqueada por conter endereço IP, protocolo ou domínio restrito." };
+export async function validateSafeExternalUrl(
+  rawUrl: string,
+  options: { enforceAllowlist?: boolean } = {}
+): Promise<{ valid: boolean; reason?: string }> {
+  const { enforceAllowlist = true } = options;
+
+  if (!isAllowedWebhookUrl(rawUrl, enforceAllowlist)) {
+    return {
+      valid: false,
+      reason: "URL bloqueada: protocolo inseguro, porta não padrão, domínio não homologado ou endereço restrito.",
+    };
   }
 
   try {
@@ -126,13 +185,17 @@ export async function validateSafeExternalUrl(rawUrl: string): Promise<{ valid: 
         const aaaaRecords = await Deno.resolveDns(hostname, "AAAA").catch(() => []);
         const allRecords = [...aRecords, ...aaaaRecords];
 
+        if (allRecords.length === 0) {
+          return { valid: false, reason: "Falha na resolução de DNS do destino." };
+        }
+
         for (const record of allRecords) {
           if (isPrivateOrRestrictedIp(record)) {
             return { valid: false, reason: `Resolução DNS (${record}) aponta para IP interno ou restrito.` };
           }
         }
       } catch {
-        // Falha no DNS tratada fail-closed se a URL for obrigatória
+        return { valid: false, reason: "Erro ao resolver DNS do domínio (fail-closed)." };
       }
     }
 

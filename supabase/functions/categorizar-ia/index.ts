@@ -1,13 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-import { checkAiRateLimit, sanitizeDelimiters } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, sanitizeAiInput } from "../_shared/ai-rate-limiter.ts";
 
-const corsHeaders = {
+export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-serve(async (req) => {
+export async function handleCategorizarIA(req: Request, injectedSupabaseAdmin?: any): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
@@ -19,9 +19,9 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const supabaseAdmin = injectedSupabaseAdmin || createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false, autoRefreshToken: false }
     });
 
@@ -34,11 +34,20 @@ serve(async (req) => {
       });
     }
 
-    // Rate limiting por usuário (20 reqs/min) contra Denial of Wallet
-    const rateCheck = checkAiRateLimit(user.id, 20);
+    const body = await req.json().catch(() => ({}));
+    const { descricao, valor, tipo, workspace_id } = body;
+
+    // Rate limiting atômico compartilhado via DB
+    const rateCheck = await checkSharedRateLimit(supabaseAdmin, {
+      userId: user.id,
+      workspaceId: workspace_id,
+      action: "categorizar_ia",
+      maxRequestsPerMinute: 20,
+    });
+
     if (!rateCheck.allowed) {
       return new Response(JSON.stringify({
-        error: "Limite de requisições de IA excedido. Tente novamente em alguns instantes.",
+        error: rateCheck.reason || "Limite de requisições de IA excedido.",
         retryAfter: rateCheck.retryAfterSeconds,
       }), {
         status: 429,
@@ -50,17 +59,10 @@ serve(async (req) => {
       });
     }
 
-    const { descricao, valor, tipo } = await req.json().catch(() => ({}));
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada");
 
-    // Defesa em profundidade contra Prompt Injection:
-    // 1. Limite estrito de tamanho
-    // 2. Remoção de tags de escape que poderiam fechar delimitadores
-    // 3. Delimitadores estruturais
-    // 4. Instrução de sistema explícita de desconfiança
-    // 5. response_format: json_object para impedir evasão de formato
-    const sanitizedDescricao = sanitizeDelimiters(String(descricao || "").slice(0, 250).replace(/[\r\n\t]/g, " ").trim());
+    const sanitizedDescricao = sanitizeAiInput(String(descricao || "").slice(0, 250).replace(/[\r\n\t]/g, " ").trim());
     const cleanTipo = tipo === "receita" ? "receita" : "despesa";
     const cleanValor = typeof valor === "number" && isFinite(valor) ? valor : Number(valor) || 0;
 
@@ -115,4 +117,6 @@ Responda APENAS em JSON válido no formato:
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-});
+}
+
+serve((req) => handleCategorizarIA(req));
