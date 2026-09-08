@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";
@@ -64,9 +64,7 @@ import { useSubcategorias } from "@/domains/finance/hooks/useSubcategorias";
 import { useCentrosCusto } from "@/domains/finance/hooks/useCentrosCusto";
 import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { usePrivacy } from "@/contexts/PrivacyContext";
-import { supabase } from "@/integrations/supabase/client";
 
 import { PaymentMethodSelector } from "@/domains/finance/components/PaymentMethodSelector";
 import { AccountSelector } from "@/domains/finance/components/AccountSelector";
@@ -74,24 +72,21 @@ import { TagsInput } from "@/domains/finance/components/TagsInput";
 import { AttachmentUploader } from "@/domains/finance/components/AttachmentUploader";
 import { PaymentMethod, AnexoTransacao } from "@/domains/finance/types";
 
-// Função para formatar data
-const formatarData = (dataString: string) => {
-  if (!dataString) return "";
-  const [ano, mes, dia] = dataString.split("T")[0].split("-");
-  return `${dia}/${mes}/${ano}`;
-};
+import { formatarData, formatarDataParaSaoPaulo, getHojeSaoPaulo, calcularTotalReceitasDoDia } from "@/domains/finance/utils/dateHelpers";
 
-// Função para formatar data relativa
+// Função para formatar data relativa com alinhamento em America/Sao_Paulo
 const formatarDataRelativa = (dataString: string) => {
   if (!dataString) return "";
-  const data = new Date(dataString.split("T")[0] + "T12:00:00");
-  const hoje = new Date();
-  hoje.setHours(12, 0, 0, 0);
-  const ontem = new Date(hoje);
-  ontem.setDate(ontem.getDate() - 1);
-  
-  if (data.toDateString() === hoje.toDateString()) return "Hoje";
-  if (data.toDateString() === ontem.toDateString()) return "Ontem";
+  const spDate = formatarDataParaSaoPaulo(dataString);
+  if (!spDate) return "";
+  const hoje = getHojeSaoPaulo();
+
+  const [ano, mes, dia] = hoje.split("-").map(Number);
+  const ontemDate = new Date(ano, mes - 1, dia - 1);
+  const ontem = formatarDataParaSaoPaulo(ontemDate);
+
+  if (spDate === hoje) return "Hoje";
+  if (spDate === ontem) return "Ontem";
   return formatarData(dataString);
 };
 
@@ -115,7 +110,6 @@ const Receitas = () => {
   const { toast } = useToast();
   const { isPrivate, formatCurrency } = usePrivacy();
   const { categoriasReceita } = useCategorias();
-  const { activeWorkspace } = useWorkspace();
 
   // ── Filtro de data
   const { dateRange, setRange, clearFilter } = useDateRangeFilter({ defaultPeriod: 'month' });
@@ -127,15 +121,14 @@ const Receitas = () => {
 
   const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalReceitas();
  
-  // Busca a receita do dia atual de forma independente (sempre do dia de hoje)
-  const hojeLocalStr = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  })();
-  const { receitas: receitasDeHoje } = useReceitas({
-    startDate: hojeLocalStr,
-    endDate: hojeLocalStr,
+  // Busca a receita do dia atual de forma independente (sempre do dia de hoje no fuso America/Sao_Paulo)
+  const hojeLocal = useMemo(() => getHojeSaoPaulo(), []);
+  const { receitas: receitasDeHoje, loading: loadingDeHoje } = useReceitas({
+    startDate: hojeLocal,
+    endDate: hojeLocal,
   });
+
+  const loadingCardHoje = loadingDeHoje && (!receitas || !receitas.some((r) => formatarDataParaSaoPaulo(r.data) === hojeLocal));
 
   // Busca as receitas do mês completo correspondente ao período selecionado
   const { startOfCurrentMonth, endOfCurrentMonth } = useMemo(() => {
@@ -337,7 +330,6 @@ const Receitas = () => {
   const { 
     receitasFiltradas, 
     receitasAgrupadas, 
-    totalReceitas, 
     totalReceitasDoDia,
     metodoList,
     hourlyData,
@@ -364,16 +356,10 @@ const Receitas = () => {
     });
 
     const total = receitasDoMes.reduce((sum, r) => sum + r.valor, 0);
-    const media = receitasDoMes.length > 0 ? total / Math.max(1, new Set(receitasDoMes.map(r => r.data.substring(0, 7))).size) : 0;
 
-    const hoje = new Date();
-    hoje.setHours(12, 0, 0, 0);
-    const hojeStr = hoje.toISOString().split("T")[0]; // YYYY-MM-DD local
-    const receitasDoDia = receitasDeHoje.filter((r) => {
-      const dataStr = new Date(r.data.split("T")[0] + "T12:00:00").toISOString().split("T")[0];
-      return dataStr === hojeStr;
-    });
-    const totalReceitasDoDia = receitasDoDia.reduce((sum, r) => sum + r.valor, 0);
+    // Receitas de Hoje com alinhamento rigoroso em America/Sao_Paulo e resiliência
+    const totalDedicado = calcularTotalReceitasDoDia(receitasDeHoje, hojeLocal);
+    const totalReceitasDoDia = totalDedicado > 0 ? totalDedicado : calcularTotalReceitasDoDia(receitas, hojeLocal);
 
     // 1. Meios de Pagamento breakdown (using filtered revenues)
     const totalFiltrado = filtradas.reduce((sum, r) => sum + r.valor, 0);
@@ -452,7 +438,7 @@ const Receitas = () => {
       hourlyData,
       totalFiltrado,
     };
-  }, [receitas, receitasDeHoje, receitasDoMes, filtro, categoriaFiltro, visibleCount]);
+  }, [receitas, receitasDeHoje, receitasDoMes, hojeLocal, filtro, categoriaFiltro, visibleCount]);
 
   const limparFiltros = () => {
     setFiltro("");
@@ -489,7 +475,7 @@ const Receitas = () => {
               <div className="flex items-center justify-between gap-1.5">
                 <div className="min-w-0 flex-1">
                   <p className="text-xs text-muted-foreground truncate" title="Receitas do Dia">Receitas do Dia</p>
-                  {loading ? (
+                  {loadingCardHoje ? (
                     <Skeleton className="h-6 sm:h-7 w-20 sm:w-24 mt-1" />
                   ) : (
                     <p className="text-sm sm:text-base xl:text-lg font-bold text-foreground mt-0.5 whitespace-nowrap">
