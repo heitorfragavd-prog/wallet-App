@@ -231,57 +231,118 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
 
   test('3. Senha de Investimentos: Cadastro, rejeição de recadastro e ciclo de vida', async () => {
     await ensureUser1();
-    // 3.1 Primeiro cadastro da senha de investimentos (PBKDF2 via RPC segura)
-    const _cadRes = await postgrest('/rpc/cadastrar_senha_investimentos', {
+    // 3.1 Primeiro cadastro da senha de investimentos via Edge Function real
+    const cadRes = await fetch(`${SUPABASE_URL}/functions/v1/validar-senha`, {
       method: 'POST',
-      token: user1Token,
-      body: { p_senha_hash: '$pbkdf2$100000$salt_homolog$hash_invest_123' }
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mode: 'cadastrar',
+        senha: 'InvestPass@123',
+      })
     });
-    // 3.2 Tentativa de recadastro direto sem autorizacao
-    const recadRes = await postgrest('/rpc/cadastrar_senha_investimentos', {
-      method: 'POST',
-      token: user1Token,
-      body: { p_senha_hash: '$pbkdf2$100000$novo_hash' }
-    });
-    // Se a funcao ja existir ou falhar, deve retornar falso ou erro
-    if (recadRes.ok) {
-      expect(recadRes.data).toBe(false);
-    }
+    expect([200, 201]).toContain(cadRes.status);
+    const cadData = await cadRes.json();
+    expect(cadData.success).toBe(true);
 
-    // 3.3 Verificacao de desbloqueio com hash
-    const sessionTokenA = 'sess_desktop_token_' + timestamp;
-    const unlockRes = await postgrest('/rpc/desbloquear_sessao_investimentos', {
+    // 3.2 Tentativa de recadastro direto (DEVE ser rejeitado com 409 Conflict)
+    const recadRes = await fetch(`${SUPABASE_URL}/functions/v1/validar-senha`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mode: 'cadastrar',
+        senha: 'NovaSenhaHack@123',
+      })
+    });
+    expect(recadRes.status).toBe(409);
+
+    // 3.3 Verificacao via RPC has_senha_investimentos
+    const hasSenha = await postgrest('/rpc/has_senha_investimentos', {
       method: 'POST',
       token: user1Token,
-      body: {
-        p_user_id: user1Id,
-        p_session_id: sessionTokenA,
-        p_expected_hash: '$pbkdf2$100000$salt_homolog$hash_invest_123',
-        p_new_hash: null,
-        p_expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      }
     });
-    // Como a RPC de desbloqueio foi concedida estritamente ao service_role na Fase A,
-    // o cliente comum recebe 403 / 404 caso chame diretamente via REST (bloqueio esperado)
-    // ou se chamada via backend valida o hash
-    expect([200, 401, 403, 404]).toContain(unlockRes.status);
+    expect(hasSenha.ok).toBe(true);
+    expect(hasSenha.data).toBe(true);
+
+    // 3.4 Tentativa com senha incorreta: falha e contabiliza tentativas
+    const failAttempt = await fetch(`${SUPABASE_URL}/functions/v1/validar-senha`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mode: 'validar',
+        senha: 'SenhaErrada@999',
+      })
+    });
+    const failData = await failAttempt.json();
+    expect(failData.valido).toBe(false);
   });
 
   test('4. Duas sessões concorrentes: Desbloquear uma NÃO desbloqueia a outra', async () => {
     await ensureUser1();
-    // 4.1 Token de sessao A e B
-    const _sessionA = 'session_desk_' + timestamp;
-    const sessionB = 'session_mobi_' + timestamp;
-
-    // Chamada a is_investimentos_unlocked na sessao B sem desbloqueio
-    const checkB = await postgrest('/rpc/is_investimentos_unlocked', {
+    // 4.1 Sessão A: desbloqueia via validar-senha com a senha correta
+    const unlockA = await fetch(`${SUPABASE_URL}/functions/v1/validar-senha`, {
       method: 'POST',
-      token: user1Token,
-      headers: { 'x-session-id': sessionB },
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mode: 'validar',
+        senha: 'InvestPass@123',
+      })
+    });
+    expect(unlockA.status).toBe(200);
+    const dataA = await unlockA.json();
+    expect(dataA.valido).toBe(true);
+    const tokenInvestA = dataA.token;
+    expect(tokenInvestA).toBeDefined();
+
+    // 4.2 Sessão B: segundo login do mesmo usuário (novo JWT com jti/session_id diferente)
+    const loginSessionB = await authCall('/token?grant_type=password', {
+      email: user1Email,
+      password: testPassword,
+    });
+    expect(loginSessionB.ok).toBe(true);
+    const user1TokenSessionB = (loginSessionB.data as Record<string, string>).access_token;
+
+    // 4.3 Verificacao: O token emitido para a Sessão A NÃO valida na Sessão B
+    const checkBWithTokenA = await fetch(`${SUPABASE_URL}/functions/v1/validar-senha`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1TokenSessionB}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        mode: 'verify_token',
+        token: tokenInvestA,
+      })
+    });
+    // Deve ser recusado com 401 não autorizado para a sessão concorrente
+    expect(checkBWithTokenA.status).toBe(401);
+    const verifyBData = await checkBWithTokenA.json();
+    expect(verifyBData.valid).toBe(false);
+
+    // 4.4 Verificação no banco: is_investimentos_unlocked na Sessão B retorna false
+    const dbCheckB = await postgrest('/rpc/is_investimentos_unlocked', {
+      method: 'POST',
+      token: user1TokenSessionB,
       body: { p_user_id: user1Id }
     });
-    if (checkB.ok) {
-      expect(checkB.data).toBe(false);
+    if (dbCheckB.ok) {
+      expect(dbCheckB.data).toBe(false);
     }
   });
 
