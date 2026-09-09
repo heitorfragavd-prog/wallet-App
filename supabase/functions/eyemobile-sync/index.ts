@@ -648,12 +648,38 @@ serve(async (req) => {
         const timeoutMs = 25000;
         const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-        let resp: Response;
+        let json: unknown;
         try {
-          resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, {
+          const resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, {
             headers: pHeaders,
             signal: controller.signal,
           });
+
+          if (!resp.ok) {
+            console.error(`[eyemobile-sync] Resposta HTTP de erro da Eyemobile (página ${page}): ${resp.status}`);
+            return new Response(JSON.stringify({
+              success: false,
+              code: "remote_http_error",
+              error: `A API da Eyemobile retornou status HTTP ${resp.status} na página ${page}. Sincronização abortada por integridade.`
+            }), {
+              status: 502,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
+
+          try {
+            json = await resp.json();
+          } catch (jsonErr) {
+            console.error(`[eyemobile-sync] Erro ao decodificar JSON da Eyemobile (página ${page}):`, jsonErr);
+            return new Response(JSON.stringify({
+              success: false,
+              code: "remote_parse_error",
+              error: `Resposta da Eyemobile na página ${page} não é um JSON válido. Sincronização abortada.`
+            }), {
+              status: 502,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
         } catch (fetchErr: any) {
           if (fetchErr?.name === "AbortError" || controller.signal.aborted) {
             console.error(`[eyemobile-sync] Timeout ao buscar produtos na página ${page} (>25s)`);
@@ -677,33 +703,6 @@ serve(async (req) => {
           });
         } finally {
           clearTimeout(timer);
-        }
-
-        if (!resp.ok) {
-          console.error(`[eyemobile-sync] Resposta HTTP de erro da Eyemobile (página ${page}): ${resp.status}`);
-          return new Response(JSON.stringify({
-            success: false,
-            code: "remote_http_error",
-            error: `A API da Eyemobile retornou status HTTP ${resp.status} na página ${page}. Sincronização abortada por integridade.`
-          }), {
-            status: 502,
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
-          });
-        }
-
-        let json: unknown;
-        try {
-          json = await resp.json();
-        } catch (jsonErr) {
-          console.error(`[eyemobile-sync] Erro ao decodificar JSON da Eyemobile (página ${page}):`, jsonErr);
-          return new Response(JSON.stringify({
-            success: false,
-            code: "remote_parse_error",
-            error: `Resposta da Eyemobile na página ${page} não é um JSON válido. Sincronização abortada.`
-          }), {
-            status: 502,
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
-          });
         }
 
         const pageValidation = validateRemoteProductsPage(json);
@@ -827,7 +826,7 @@ serve(async (req) => {
       // 7. Executar Updates com FAIL-FAST
       for (const item of plan.toUpdate) {
         const { localProduct, remoteProduct } = item;
-        const { error: updErr } = await supabaseAdmin
+        const { data: updatedRow, error: updErr } = await supabaseAdmin
           .from("produtos_eyemobile")
           .update({
             descricao: remoteProduct.descricao,
@@ -842,10 +841,12 @@ serve(async (req) => {
           })
           .eq("id", localProduct.id)
           .eq("user_id", targetUserId)
-          .eq("workspace_id", syncWorkspaceId);
+          .eq("workspace_id", syncWorkspaceId)
+          .select("id")
+          .maybeSingle();
 
-        if (updErr) {
-          console.error(`[eyemobile-sync] Erro ao atualizar produto ${localProduct.id}:`, updErr);
+        if (updErr || !updatedRow || updatedRow.id !== localProduct.id) {
+          console.error(`[eyemobile-sync] Erro ao atualizar produto ${localProduct.id}:`, updErr || "Nenhuma row afetada");
           writeErrors.push({ operation: "update", id: localProduct.id, error: "Falha ao atualizar produto." });
           break; // Fail-fast: interrompe imediatamente!
         } else {
@@ -853,10 +854,10 @@ serve(async (req) => {
         }
       }
 
-      // 8. Executar Inserts com FAIL-FAST (somente se updates passaram sem erro)
+      // 8. Executar Inserts com verificação de ID criado e FAIL-FAST (somente se updates passaram sem erro)
       if (writeErrors.length === 0) {
         for (const remoteProduct of plan.toInsert) {
-          const { error: insErr } = await supabaseAdmin
+          const { data: insertedRow, error: insErr } = await supabaseAdmin
             .from("produtos_eyemobile")
             .insert({
               user_id: targetUserId,
@@ -871,10 +872,12 @@ serve(async (req) => {
               margem_real_percentual: remoteProduct.margemReal,
               ativo: true,
               ultima_atualizacao_custo: new Date().toISOString(),
-            });
+            })
+            .select("id")
+            .single();
 
-          if (insErr) {
-            console.error(`[eyemobile-sync] Erro ao inserir produto ${remoteProduct.eyemobileId}:`, insErr);
+          if (insErr || !insertedRow?.id) {
+            console.error(`[eyemobile-sync] Erro ao inserir produto ${remoteProduct.eyemobileId}:`, insErr || "ID não retornado");
             writeErrors.push({ operation: "insert", id: remoteProduct.eyemobileId, error: "Falha ao inserir produto." });
             break; // Fail-fast: interrompe imediatamente!
           } else {
@@ -883,20 +886,22 @@ serve(async (req) => {
         }
       }
 
-      // 9. Executar Desativações com FAIL-FAST (somente se updates E inserts passaram sem erro)
+      // 9. Executar Desativações com verificação de row afetada e FAIL-FAST (somente se updates E inserts passaram sem erro)
       if (writeErrors.length === 0) {
         for (const localProduct of plan.toDeactivate) {
-          const { error: deactErr } = await supabaseAdmin
+          const { data: deactivatedRow, error: deactErr } = await supabaseAdmin
             .from("produtos_eyemobile")
             .update({
               ativo: false
             })
             .eq("id", localProduct.id)
             .eq("user_id", targetUserId)
-            .eq("workspace_id", syncWorkspaceId);
+            .eq("workspace_id", syncWorkspaceId)
+            .select("id")
+            .maybeSingle();
 
-          if (deactErr) {
-            console.error(`[eyemobile-sync] Erro ao desativar produto ${localProduct.id}:`, deactErr);
+          if (deactErr || !deactivatedRow || deactivatedRow.id !== localProduct.id) {
+            console.error(`[eyemobile-sync] Erro ao desativar produto ${localProduct.id}:`, deactErr || "Nenhuma row afetada");
             writeErrors.push({ operation: "deactivate", id: localProduct.id, error: "Falha ao desativar produto." });
             break; // Fail-fast: interrompe imediatamente!
           } else {

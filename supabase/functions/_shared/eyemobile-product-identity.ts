@@ -175,9 +175,9 @@ export type PageValidationResult = PageValidationSuccess | PageValidationFailure
  * Contrato:
  * - payload deve ser objeto JSON não-nulo e não-array;
  * - payload.data deve ser estritamente um Array;
- * - has_more deve ser booleano quando presente;
+ * - has_more é OBRIGATÓRIO e deve ser estritamente do tipo boolean;
  * - has_more === true + data.length === 0 -> incomplete_snapshot;
- * - payload inválido -> invalid_remote_snapshot;
+ * - payload inválido ou sem has_more booleano -> invalid_remote_snapshot;
  * - página válida -> retorna itens raw + hasMore.
  */
 export function validateRemoteProductsPage(payload: unknown): PageValidationResult {
@@ -199,17 +199,18 @@ export function validateRemoteProductsPage(payload: unknown): PageValidationResu
     };
   }
 
-  let hasMore = false;
-  if ("has_more" in obj && obj.has_more !== undefined && obj.has_more !== null) {
-    if (typeof obj.has_more !== "boolean") {
-      return {
-        ok: false,
-        code: "invalid_remote_snapshot",
-        error: "Propriedade 'has_more' da resposta da Eyemobile deve ser do tipo boolean.",
-      };
-    }
-    hasMore = obj.has_more;
+  if (
+    !Object.prototype.hasOwnProperty.call(obj, "has_more") ||
+    typeof obj.has_more !== "boolean"
+  ) {
+    return {
+      ok: false,
+      code: "invalid_remote_snapshot",
+      error: "Resposta da Eyemobile deve conter a propriedade 'has_more' do tipo boolean.",
+    };
   }
+
+  const hasMore = obj.has_more;
 
   if (hasMore && obj.data.length === 0) {
     return {

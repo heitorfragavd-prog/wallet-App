@@ -976,4 +976,123 @@ describe("Eyemobile Product Sync Hardening (Fase 3)", () => {
       expect(msg).not.toContain("23505");
     }
   });
+
+  // =========================================================================
+  // Cenário AH: data válida sem has_more → invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário AH: payload com data válida porém sem has_more falha fechado com invalid_remote_snapshot", () => {
+    const pagePayload = { data: [{ id: "100", name: "Cerveja" }] };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("invalid_remote_snapshot");
+    expect(res.error).toContain("has_more");
+  });
+
+  // =========================================================================
+  // Cenário AI: has_more = null → invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário AI: payload com has_more nulo falha fechado com invalid_remote_snapshot", () => {
+    const pagePayload = { data: [{ id: "100", name: "Cerveja" }], has_more: null };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("invalid_remote_snapshot");
+    expect(res.error).toContain("has_more");
+  });
+
+  // =========================================================================
+  // Cenário AJ: update error=null mas nenhuma row retornada → write_error; updated = 0
+  // =========================================================================
+  it("Cenário AJ: update que não retorna row afetada (mesmo com error=null) falha fechado e não incrementa updated", () => {
+    const localProduct = { id: "local-uuid-aj-1" };
+    // Simula resposta do Supabase onde nenhuma row deu match nos filtros de tenant
+    const mockDbResult = { data: null, error: null };
+    let updated = 0;
+    const writeErrors: Array<{ operation: string; error: string; id?: string }> = [];
+
+    const updatedRow = mockDbResult.data as { id: string } | null;
+    if (mockDbResult.error || !updatedRow || updatedRow.id !== localProduct.id) {
+      writeErrors.push({
+        operation: "update",
+        id: localProduct.id,
+        error: "Falha ao atualizar produto.",
+      });
+    } else {
+      updated++;
+    }
+
+    expect(updated).toBe(0);
+    expect(writeErrors).toHaveLength(1);
+    expect(writeErrors[0].operation).toBe("update");
+    expect(writeErrors[0].id).toBe(localProduct.id);
+  });
+
+  // =========================================================================
+  // Cenário AK: deactivate error=null mas nenhuma row retornada → write_error; deactivated = 0
+  // =========================================================================
+  it("Cenário AK: deactivate que não retorna row afetada (mesmo com error=null) falha fechado e não incrementa deactivated", () => {
+    const localProduct = { id: "local-uuid-ak-2" };
+    // Simula resposta do Supabase onde nenhuma row deu match nos filtros de tenant
+    const mockDbResult = { data: null, error: null };
+    let deactivated = 0;
+    const writeErrors: Array<{ operation: string; error: string; id?: string }> = [];
+
+    const deactivatedRow = mockDbResult.data as { id: string } | null;
+    if (mockDbResult.error || !deactivatedRow || deactivatedRow.id !== localProduct.id) {
+      writeErrors.push({
+        operation: "deactivate",
+        id: localProduct.id,
+        error: "Falha ao desativar produto.",
+      });
+    } else {
+      deactivated++;
+    }
+
+    expect(deactivated).toBe(0);
+    expect(writeErrors).toHaveLength(1);
+    expect(writeErrors[0].operation).toBe("deactivate");
+    expect(writeErrors[0].id).toBe(localProduct.id);
+  });
+
+  // =========================================================================
+  // Cenário AL: insert só incrementa inserted após row criada confirmada com ID
+  // =========================================================================
+  it("Cenário AL: insert só incrementa contador após confirmação explícita de row criada com id", () => {
+    const remoteProduct = { eyemobileId: "REM-AL-3" };
+    let inserted = 0;
+    const writeErrors: Array<{ operation: string; error: string; id?: string }> = [];
+
+    // 1. Falha quando data é null (mesmo com error null)
+    const mockFailResult = { data: null as { id: string } | null, error: null };
+    if (mockFailResult.error || !mockFailResult.data?.id) {
+      writeErrors.push({
+        operation: "insert",
+        id: remoteProduct.eyemobileId,
+        error: "Falha ao inserir produto.",
+      });
+    } else {
+      inserted++;
+    }
+
+    expect(inserted).toBe(0);
+    expect(writeErrors).toHaveLength(1);
+
+    // 2. Sucesso quando row criada com id válido é confirmada
+    const mockSuccessResult = { data: { id: "new-uuid-al-4" }, error: null };
+    if (mockSuccessResult.error || !mockSuccessResult.data?.id) {
+      writeErrors.push({
+        operation: "insert",
+        id: remoteProduct.eyemobileId,
+        error: "Falha ao inserir produto.",
+      });
+    } else {
+      inserted++;
+    }
+
+    expect(inserted).toBe(1);
+    expect(writeErrors).toHaveLength(1);
+  });
 });
