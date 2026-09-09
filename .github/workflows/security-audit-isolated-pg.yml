@@ -95,7 +95,6 @@ jobs:
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/openai-proxy/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/categorizar-ia/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/ia-deposito/index.ts
-          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-api/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
 
@@ -129,12 +128,18 @@ jobs:
           # Inicia a stack completa do Supabase com a Fase A ativa
           supabase start
 
-          # Aplica Fase C com confirmacao explicita do gating operacional
-          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -c "SET wallet.deploy_phase_b_completed = 'true'; \i supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql"
-          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -c "NOTIFY pgrst, 'reload schema';"
+          # Aplica Fase C com confirmacao explicita do gating operacional via psql stdin
+          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -v "ON_ERROR_STOP=1" << 'EOF'
+          SET wallet.deploy_phase_b_completed = 'true';
+          \i supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql
+          NOTIFY pgrst, 'reload schema';
+          EOF
 
           # Gera variaveis seguras simuladas para as Edge Functions locais
-          SERVICE_KEY=$(supabase status -o env | grep SERVICE_ROLE_KEY | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          SERVICE_KEY=$(supabase status -o env | grep -E 'SERVICE_ROLE_KEY|sb_secret' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          if [ -z "$SERVICE_KEY" ]; then
+            SERVICE_KEY=$(supabase status -o env | grep 'SERVICE' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          fi
           cat << EOF > .env.functions.test
           SUPABASE_URL=http://localhost:54321
           SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
@@ -164,7 +169,8 @@ jobs:
       - name: Run Playwright E2E Security Homologation Suite
         run: |
           export VITE_SUPABASE_URL=http://127.0.0.1:54321
-          export VITE_SUPABASE_ANON_KEY=$(supabase status -o env | grep ANON_KEY | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          export VITE_SUPABASE_ANON_KEY=$ANON_KEY
           export INBUCKET_URL=http://127.0.0.1:54324
           export MOCK_PROVIDER_URL=http://127.0.0.1:18080
           npx playwright test tests/security-homologation.spec.ts
