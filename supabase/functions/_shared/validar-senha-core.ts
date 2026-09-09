@@ -190,6 +190,17 @@ export async function processValidarSenha(
     const authenticatedUserId = user.id;
     const authenticatedSessionId = extractSessionIdFromJwt(token);
 
+    // Rejeição fail-closed imediata se session_id ou jti estiverem ausentes do token JWT
+    if (!authenticatedSessionId || typeof authenticatedSessionId !== "string" || authenticatedSessionId.trim().length === 0) {
+      return new Response(JSON.stringify({
+        error: "Sessão inválida ou não identificada: session_id ou jti ausente no token",
+        valid: false
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const body = await req.json().catch(() => ({}));
     const { mode, senha, senha_atual, nova_senha, token: invToken } = body;
 
@@ -204,12 +215,12 @@ export async function processValidarSenha(
         });
       }
 
-      // Validação criptográfica HMAC
+      // Validação criptográfica HMAC vinculada obrigatoriamente à sessão autenticada atual
       const verification = await verifyInvestmentToken(
         invToken,
         authenticatedUserId,
         serviceKey,
-        authenticatedSessionId || undefined
+        authenticatedSessionId
       );
 
       if (!verification.valid) {
@@ -219,29 +230,27 @@ export async function processValidarSenha(
         });
       }
 
-      // Validação da sessão ativa no banco de dados
-      if (authenticatedSessionId) {
-        const { data: activeSession, error: sessionErr } = await supabaseAdmin
-          .from("investimentos_sessions")
-          .select("expires_at")
-          .eq("session_id", authenticatedSessionId)
-          .eq("user_id", authenticatedUserId)
-          .maybeSingle();
+      // Validação da sessão ativa no banco de dados (obrigatória — sem bypass)
+      const { data: activeSession, error: sessionErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .select("expires_at")
+        .eq("session_id", authenticatedSessionId)
+        .eq("user_id", authenticatedUserId)
+        .maybeSingle();
 
-        if (sessionErr) {
-          console.error("[validar-senha] Erro ao consultar sessão no DB:", sessionErr);
-          return new Response(JSON.stringify({ valid: false, error: "Erro de validação no banco de dados" }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
-          });
-        }
+      if (sessionErr) {
+        console.error("[validar-senha] Erro ao consultar sessão no DB:", sessionErr);
+        return new Response(JSON.stringify({ valid: false, error: "Erro de validação no banco de dados" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
 
-        if (!activeSession || new Date(activeSession.expires_at) <= new Date()) {
-          return new Response(JSON.stringify({ valid: false, error: "Sessão de investimentos expirada ou revogada" }), {
-            status: 401,
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
-          });
-        }
+      if (!activeSession || new Date(activeSession.expires_at) <= new Date()) {
+        return new Response(JSON.stringify({ valid: false, error: "Sessão de investimentos expirada ou revogada" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
       return new Response(JSON.stringify({ valid: true }), {
@@ -254,18 +263,18 @@ export async function processValidarSenha(
     // 2. invalidar_sessao
     // -----------------------------------------------------------------------
     if (mode === "invalidar_sessao") {
-      if (authenticatedSessionId) {
-        const { error: delErr } = await supabaseAdmin
-          .from("investimentos_sessions")
-          .delete()
-          .eq("session_id", authenticatedSessionId);
+      const { error: delErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .delete()
+        .eq("session_id", authenticatedSessionId)
+        .eq("user_id", authenticatedUserId);
 
-        if (delErr) {
-          return new Response(JSON.stringify({ success: false, error: "Erro ao encerrar sessão no banco" }), {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
-          });
-        }
+      if (delErr) {
+        console.error("[validar-senha] Erro ao excluir sessão do banco:", delErr);
+        return new Response(JSON.stringify({ success: false, error: "Erro ao encerrar sessão no banco" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
       return new Response(JSON.stringify({ success: true, message: "Sessão de investimentos encerrada" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -330,20 +339,25 @@ export async function processValidarSenha(
         throw insertErr;
       }
 
-      // Registra a sessão atual desbloqueada
-      if (authenticatedSessionId) {
-        const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-        const { error: sessErr } = await supabaseAdmin
-          .from("investimentos_sessions")
-          .insert({
-            session_id: authenticatedSessionId,
-            user_id: authenticatedUserId,
-            expires_at: expiresAt,
-          });
-        if (sessErr) throw sessErr;
+      // Registra a sessão atual desbloqueada (obrigatório e fail-closed)
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      const { error: sessErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .insert({
+          session_id: authenticatedSessionId,
+          user_id: authenticatedUserId,
+          expires_at: expiresAt,
+        });
+
+      if (sessErr) {
+        console.error("[validar-senha] Falha ao registrar sessão desbloqueada no cadastro:", sessErr);
+        return new Response(JSON.stringify({ error: "Falha ao registrar sessão desbloqueada no banco" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
-      const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId || undefined);
+      const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId);
       return new Response(JSON.stringify({ success: true, token: sessionToken }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -385,14 +399,15 @@ export async function processValidarSenha(
 
       const match = await verifyPassword(senha_atual, userSalt, record.senha_hash);
       if (!match) {
-        // Incremento atômico de falha
-        await supabaseAdmin.rpc("registrar_falha_senha_investimentos", { p_user_id: authenticatedUserId })
-          .catch(() => {
-            return supabaseAdmin
-              .from("senha_investimentos")
-              .update({ tentativas_falhas: (record.tentativas_falhas || 0) + 1, updated_at: new Date().toISOString() })
-              .eq("user_id", authenticatedUserId);
+        // Incremento atômico de falha — Fail-closed estrito sem fallback não-atômico
+        const { error: rpcErr } = await supabaseAdmin.rpc("registrar_falha_senha_investimentos", { p_user_id: authenticatedUserId });
+        if (rpcErr) {
+          console.error("[validar-senha] Falha crítica na RPC registrar_falha_senha_investimentos:", rpcErr);
+          return new Response(JSON.stringify({ error: "Erro interno ao processar validação de segurança" }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
           });
+        }
 
         return new Response(JSON.stringify({ error: "Senha atual incorreta" }), {
           status: 401,
@@ -402,6 +417,7 @@ export async function processValidarSenha(
 
       const newHash = await derivePbkdf2Hash(nova_senha, userSalt);
 
+      // Atualiza o hash com lock otimista garantindo que não foi modificado concorrentemente
       const { error: updateErr } = await supabaseAdmin
         .from("senha_investimentos")
         .update({
@@ -410,29 +426,44 @@ export async function processValidarSenha(
           bloqueado_ate: null,
           updated_at: new Date().toISOString(),
         })
-        .eq("user_id", authenticatedUserId);
+        .eq("user_id", authenticatedUserId)
+        .eq("senha_hash", record.senha_hash);
 
       if (updateErr) throw updateErr;
 
-      // REVOGA TODAS as sessões anteriores de investimentos deste usuário
-      await supabaseAdmin
+      // REVOGA TODAS as sessões anteriores de investimentos deste usuário (fail-closed)
+      const { error: delAllErr } = await supabaseAdmin
         .from("investimentos_sessions")
         .delete()
         .eq("user_id", authenticatedUserId);
 
-      // Desbloqueia a sessão atual
-      if (authenticatedSessionId) {
-        const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-        await supabaseAdmin
-          .from("investimentos_sessions")
-          .insert({
-            session_id: authenticatedSessionId,
-            user_id: authenticatedUserId,
-            expires_at: expiresAt,
-          });
+      if (delAllErr) {
+        console.error("[validar-senha] Falha crítica ao revogar sessões anteriores:", delAllErr);
+        return new Response(JSON.stringify({ error: "Falha ao revogar sessões anteriores no banco" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
-      const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId || undefined);
+      // Desbloqueia exclusivamente a sessão atual
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      const { error: insSessErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .insert({
+          session_id: authenticatedSessionId,
+          user_id: authenticatedUserId,
+          expires_at: expiresAt,
+        });
+
+      if (insSessErr) {
+        console.error("[validar-senha] Falha crítica ao registrar nova sessão desbloqueada:", insSessErr);
+        return new Response(JSON.stringify({ error: "Falha ao registrar nova sessão desbloqueada" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId);
       return new Response(JSON.stringify({ success: true, message: "Senha alterada com sucesso", token: sessionToken }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -477,18 +508,55 @@ export async function processValidarSenha(
           newHash = await derivePbkdf2Hash(senha, userSalt);
         }
 
-        await supabaseAdmin
-          .from("senha_investimentos")
-          .update({
-            senha_hash: newHash,
-            tentativas_falhas: 0,
-            bloqueado_ate: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq("user_id", authenticatedUserId);
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
-        if (authenticatedSessionId) {
-          const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        // Tentativa de desbloqueio atômico via RPC desbloquear_sessao_investimentos
+        // que garante que a senha não foi alterada concorrentemente enquanto PBKDF2 rodava
+        const { data: unlockOk, error: unlockErr } = await supabaseAdmin.rpc("desbloquear_sessao_investimentos", {
+          p_user_id: authenticatedUserId,
+          p_session_id: authenticatedSessionId,
+          p_expected_hash: data.senha_hash,
+          p_new_hash: newHash,
+          p_expires_at: expiresAt,
+        });
+
+        if (unlockErr) {
+          // Fallback seguro: checagem estrita de versão do hash
+          const { data: currentRecord, error: checkErr } = await supabaseAdmin
+            .from("senha_investimentos")
+            .select("senha_hash")
+            .eq("user_id", authenticatedUserId)
+            .maybeSingle();
+
+          if (checkErr || !currentRecord || currentRecord.senha_hash !== data.senha_hash) {
+            return new Response(JSON.stringify({
+              valido: false,
+              error: "A senha foi alterada concorrentemente. Autenticação com credencial anterior rejeitada."
+            }), {
+              status: 409,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
+
+          // Atualiza hash garantindo correspondência
+          const { error: updErr } = await supabaseAdmin
+            .from("senha_investimentos")
+            .update({
+              senha_hash: newHash,
+              tentativas_falhas: 0,
+              bloqueado_ate: null,
+              updated_at: new Date().toISOString()
+            })
+            .eq("user_id", authenticatedUserId)
+            .eq("senha_hash", data.senha_hash);
+
+          if (updErr) {
+            return new Response(JSON.stringify({ valido: false, error: "Concorrência detectada na validação" }), {
+              status: 409,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
+
           const { error: sessErr } = await supabaseAdmin
             .from("investimentos_sessions")
             .upsert({
@@ -504,35 +572,34 @@ export async function processValidarSenha(
               headers: { ...corsHeaders, "Content-Type": "application/json" }
             });
           }
+        } else if (!unlockOk) {
+          return new Response(JSON.stringify({
+            valido: false,
+            error: "A senha foi alterada concorrentemente. Autenticação com credencial antiga rejeitada."
+          }), {
+            status: 409,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
         }
 
-        const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId || undefined);
+        const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId);
         return new Response(JSON.stringify({ valido: true, token: sessionToken }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       } else {
-        // Incremento atômico de falha
+        // Incremento ATÔMICO estrito de falha — Fail-closed sem fallback inseguro
         const { data: falhaResult, error: falhaErr } = await supabaseAdmin
-          .rpc("registrar_falha_senha_investimentos", { p_user_id: authenticatedUserId })
-          .catch(() => ({ data: null, error: true }));
+          .rpc("registrar_falha_senha_investimentos", { p_user_id: authenticatedUserId });
 
-        let novasTentativas = (data.tentativas_falhas || 0) + 1;
-        let bloqueado = novasTentativas >= 3;
-
-        if (!falhaErr && falhaResult && falhaResult[0]) {
-          novasTentativas = falhaResult[0].tentativas_falhas;
-          bloqueado = falhaResult[0].bloqueado;
-        } else {
-          const bloqueadoAte = bloqueado ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null;
-          await supabaseAdmin
-            .from("senha_investimentos")
-            .update({
-              tentativas_falhas: novasTentativas,
-              bloqueado_ate: bloqueadoAte,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("user_id", authenticatedUserId);
+        if (falhaErr || !falhaResult || !falhaResult[0]) {
+          console.error("[validar-senha] Falha crítica na RPC registrar_falha_senha_investimentos:", falhaErr);
+          return new Response(JSON.stringify({ valido: false, error: "Erro interno ao registrar falha de segurança" }), {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
         }
+
+        const { tentativas_falhas: novasTentativas, bloqueado } = falhaResult[0];
 
         return new Response(JSON.stringify({
           valido: false,
@@ -540,6 +607,7 @@ export async function processValidarSenha(
           tentativas_restantes: Math.max(0, 3 - novasTentativas),
           error: bloqueado ? "Acesso bloqueado por 30 minutos após 3 tentativas inválidas." : "Senha incorreta"
         }), {
+          status: 401,
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }

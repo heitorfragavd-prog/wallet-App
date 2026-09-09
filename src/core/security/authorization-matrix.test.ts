@@ -19,7 +19,7 @@ import {
   verifyInvestmentToken,
   derivePbkdf2Hash,
 } from "../../../supabase/functions/_shared/validar-senha-core.ts";
-import { checkSharedRateLimit } from "../../../supabase/functions/_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, reconcileAiTokens } from "../../../supabase/functions/_shared/ai-rate-limiter.ts";
 
 function createMockJwt(userId: string, sessionId: string, role = "authenticated"): string {
   const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
@@ -339,9 +339,20 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
     const userSalt = `wallet_inv_${userA.id}`;
     const hashAtual = await derivePbkdf2Hash("SenhaAtual@123", userSalt);
 
-    const deleteSessionsMock = vi.fn().mockReturnValue({ error: null });
-    const updateSenhaMock = vi.fn().mockReturnValue({ error: null });
+    const deleteSessionsMock = vi.fn();
+    const updateSenhaMock = vi.fn();
     const rpcMock = vi.fn().mockResolvedValue({ data: [{ tentativas_falhas: 1, bloqueado: false }], error: null });
+
+    const createChain = (cb?: Function) => {
+      const chain: any = {
+        eq: vi.fn((col: string, val: any) => {
+          if (cb) cb(col, val);
+          return chain;
+        }),
+        then: (resolve: any) => Promise.resolve({ error: null }).then(resolve),
+      };
+      return chain;
+    };
 
     const mockSupabaseAdmin = {
       auth: {
@@ -363,16 +374,12 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
               },
               error: null,
             }),
-            update: vi.fn().mockReturnValue({
-              eq: updateSenhaMock,
-            }),
+            update: vi.fn(() => createChain(updateSenhaMock)),
           };
         }
         if (table === "investimentos_sessions") {
           return {
-            delete: vi.fn().mockReturnValue({
-              eq: deleteSessionsMock,
-            }),
+            delete: vi.fn(() => createChain(deleteSessionsMock)),
             insert: vi.fn().mockResolvedValue({ error: null }),
           };
         }
@@ -489,10 +496,14 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
 
     const mockAdminFalhaDelete = {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }) },
-      from: vi.fn(() => ({
-        delete: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockResolvedValue({ error: { message: "Foreign key lock timeout" } }),
-      })),
+      from: vi.fn(() => {
+        const chain: any = {
+          delete: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockImplementation(() => chain),
+          then: (resolve: any) => Promise.resolve({ error: { message: "Foreign key lock timeout" } }).then(resolve),
+        };
+        return chain;
+      }),
     };
 
     const req = new Request("http://localhost/validar-senha", {
@@ -551,5 +562,208 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
     expect(resBlocked.allowed).toBe(false);
     expect(resBlocked.retryAfterSeconds).toBe(900);
     expect(resBlocked.reason).toMatch(/orçamento.*atingido/i);
+  });
+
+  it("13. Fail-Closed no JWT: Rejeita imediatamente com 401 se session_id e jti estiverem ausentes", async () => {
+    const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const payload = btoa(JSON.stringify({
+      sub: userA.id,
+      role: "authenticated",
+      aud: "authenticated",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }));
+    const tokenWithoutSession = `${header}.${payload}.mock_sig`;
+
+    const mockAdmin = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }) },
+    };
+
+    const req = new Request("http://localhost/validar-senha", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenWithoutSession}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "verify_token", token: "any-token" }),
+    });
+
+    const res = await processValidarSenha(req, mockAdmin, "secret_key_123");
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toMatch(/session_id ou jti ausente/i);
+    expect(body.valid).toBe(false);
+  });
+
+  it("14. Fail-Closed na Falha de Senha: Erro na RPC registrar_falha_senha_investimentos retorna 500 sem fallback", async () => {
+    const tokenA = createMockJwt(userA.id, "session-a1");
+    const userSalt = `wallet_inv_${userA.id}`;
+    const hashOriginal = await derivePbkdf2Hash("SenhaCorreta@123", userSalt);
+
+    const updateSpy = vi.fn();
+    const mockAdmin = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }) },
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "Deadlock detected in RPC" } }),
+      from: vi.fn((table: string) => {
+        if (table === "senha_investimentos") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                id: "senha-1",
+                user_id: userA.id,
+                senha_hash: hashOriginal,
+                tentativas_falhas: 0,
+                bloqueado_ate: null,
+              },
+              error: null,
+            }),
+            update: updateSpy,
+          };
+        }
+        return {};
+      }),
+    };
+
+    const req = new Request("http://localhost/validar-senha", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "validar", senha: "SenhaIncorreta!" }),
+    });
+
+    const res = await processValidarSenha(req, mockAdmin, "secret_key_123");
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/Erro interno ao registrar falha de segurança/i);
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("15. Fail-Closed no Orçamento de IA: Erro na RPC check_rate_limit bloqueia imediatamente o consumo", async () => {
+    // 15a. Erro geral na RPC de RPM -> Fail-closed imediato (allowed: false)
+    const mockRpmError = {
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "Database timeout" } }),
+    };
+
+    const resRpm = await checkSharedRateLimit(mockRpmError, {
+      userId: userA.id,
+      workspaceId: "ws-critical",
+      action: "chat_ia",
+      maxRequestsPerMinute: 20,
+    });
+    expect(resRpm.allowed).toBe(false);
+    expect(resRpm.reason).toMatch(/temporariamente indisponível|erro/i);
+
+    // 15b. RPM passa, mas RPC de cota de tokens (TPH) falha -> Fail-closed estrito
+    const mockTphError = {
+      rpc: vi.fn().mockImplementation((fnName: string, args: any) => {
+        if (args.p_key.includes(":tph")) {
+          return Promise.resolve({ data: null, error: { message: "TPH RPC error" } });
+        }
+        return Promise.resolve({ data: [{ allowed: true, current_count: 1, limit_count: 20 }], error: null });
+      }),
+    };
+
+    const resTph = await checkSharedRateLimit(mockTphError, {
+      userId: userA.id,
+      workspaceId: "ws-critical",
+      action: "chat_ia",
+      maxRequestsPerMinute: 20,
+      reserveTokens: 2000,
+      maxTokensPerHour: 50000,
+    });
+
+    expect(resTph.allowed).toBe(false);
+    expect(resTph.reason).toMatch(/bloqueada por segurança|erro ao verificar cota/i);
+  });
+
+  it("16. Reserva Prévia e Reconciliação de Tokens: delta positivo, negativo e erro a montante", async () => {
+    const rpcMock = vi.fn().mockResolvedValue({ error: null });
+    const mockAdmin = { rpc: rpcMock };
+
+    // 16a. Consumo real menor que a reserva (delta negativo -> devolve cota)
+    await reconcileAiTokens(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "ws-100",
+      action: "openai_proxy",
+      reservedTokens: 2000,
+      actualTokensConsumed: 1200,
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
+      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
+      p_delta: -800,
+    });
+
+    // 16b. Consumo real maior que a reserva (delta positivo -> debita excedente)
+    await reconcileAiTokens(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "ws-100",
+      action: "openai_proxy",
+      reservedTokens: 1000,
+      actualTokensConsumed: 1500,
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
+      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
+      p_delta: 500,
+    });
+
+    // 16c. Erro a montante (consumo 0 -> estorno total da reserva)
+    await reconcileAiTokens(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "ws-100",
+      action: "openai_proxy",
+      reservedTokens: 2000,
+      actualTokensConsumed: 0,
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
+      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
+      p_delta: -2000,
+    });
+  });
+
+  it("17. Concorrência: Validação com credencial antiga é rejeitada com 409 se a senha for alterada durante o processo", async () => {
+    const tokenA = createMockJwt(userA.id, "session-terminal");
+    const userSalt = `wallet_inv_${userA.id}`;
+    const hashOriginal = await derivePbkdf2Hash("SenhaOriginal@123", userSalt);
+
+    const mockAdmin = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }) },
+      rpc: vi.fn().mockImplementation((fnName: string) => {
+        if (fnName === "desbloquear_sessao_investimentos") {
+          return Promise.resolve({ data: false, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      }),
+      from: vi.fn((table: string) => {
+        if (table === "senha_investimentos") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                id: "senha-1",
+                user_id: userA.id,
+                senha_hash: hashOriginal,
+                tentativas_falhas: 0,
+                bloqueado_ate: null,
+              },
+              error: null,
+            }),
+          };
+        }
+        return {};
+      }),
+    };
+
+    const req = new Request("http://localhost/validar-senha", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokenA}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "validar", senha: "SenhaOriginal@123" }),
+    });
+
+    const res = await processValidarSenha(req, mockAdmin, "secret_key_123");
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.valido).toBe(false);
+    expect(body.error).toMatch(/alterada concorrentemente/i);
   });
 });

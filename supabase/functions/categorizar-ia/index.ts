@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-import { checkSharedRateLimit, sanitizeAiInput } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, sanitizeAiInput, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,12 +37,16 @@ export async function handleCategorizarIA(req: Request, injectedSupabaseAdmin?: 
     const body = await req.json().catch(() => ({}));
     const { descricao, valor, tipo, workspace_id } = body;
 
-    // Rate limiting atômico compartilhado via DB
+    const estimatedTokens = 300;
+
+    // Rate limiting atômico compartilhado via DB com reserva prévia
     const rateCheck = await checkSharedRateLimit(supabaseAdmin, {
       userId: user.id,
       workspaceId: workspace_id,
       action: "categorizar_ia",
       maxRequestsPerMinute: 20,
+      reserveTokens: estimatedTokens,
+      maxTokensPerHour: 50000,
     });
 
     if (!rateCheck.allowed) {
@@ -97,6 +101,13 @@ Responda APENAS em JSON válido no formato:
     });
 
     if (!response.ok) {
+      await reconcileAiTokens(supabaseAdmin, {
+        userId: user.id,
+        workspaceId: workspace_id,
+        action: "categorizar_ia",
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: 0,
+      }).catch(() => {});
       throw new Error(`OpenAI API error: ${response.status}`);
     }
 
@@ -108,14 +119,15 @@ Responda APENAS em JSON válido no formato:
 
     const result = JSON.parse(content.trim());
 
-    if (data.usage?.total_tokens) {
-      checkSharedRateLimit(supabaseAdmin, {
-        userId: user.id,
-        workspaceId: workspace_id,
-        action: "categorizar_ia",
-        tokensConsumed: data.usage.total_tokens,
-      }).catch(() => {});
-    }
+    // Reconcilia a reserva com o consumo real
+    const actualTokens = data.usage?.total_tokens || 0;
+    await reconcileAiTokens(supabaseAdmin, {
+      userId: user.id,
+      workspaceId: workspace_id,
+      action: "categorizar_ia",
+      reservedTokens: estimatedTokens,
+      actualTokensConsumed: actualTokens,
+    });
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

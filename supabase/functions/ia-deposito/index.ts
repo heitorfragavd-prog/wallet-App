@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { isAllowedWebhookUrl, validateSafeExternalUrl } from "../_shared/ssrf-validator.ts";
-import { checkSharedRateLimit, sanitizeAiInput } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, sanitizeAiInput, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,12 +38,16 @@ export async function handleIaDeposito(req: Request, injectedSupabaseAdmin?: any
     const body = await req.json().catch(() => ({}));
     const { text, file_url, workspace_id } = body;
 
-    // Rate limiting atômico compartilhado via DB
+    const estimatedTokens = 800;
+
+    // Rate limiting atômico compartilhado via DB com reserva prévia de tokens
     const rateCheck = await checkSharedRateLimit(supabaseAdmin, {
       userId: user.id,
       workspaceId: workspace_id,
       action: "ia_deposito",
       maxRequestsPerMinute: 20,
+      reserveTokens: estimatedTokens,
+      maxTokensPerHour: 50000,
     });
 
     if (!rateCheck.allowed) {
@@ -127,6 +131,14 @@ Responda exclusivamente em formato JSON estruturado com os campos acima.`;
     if (!response.ok) {
       const errText = await response.text();
       console.error("OpenAI OCR error:", response.status, errText);
+      await reconcileAiTokens(supabaseAdmin, {
+        userId: user.id,
+        workspaceId: workspace_id,
+        action: "ia_deposito",
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: 0,
+      }).catch(() => {});
+
       return new Response(JSON.stringify({ error: "Falha na análise inteligente do comprovante" }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -137,14 +149,15 @@ Responda exclusivamente em formato JSON estruturado com os campos acima.`;
     const rawContent = openAiData.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(rawContent);
 
-    if (openAiData.usage?.total_tokens) {
-      checkSharedRateLimit(supabaseAdmin, {
-        userId: user.id,
-        workspaceId: workspace_id,
-        action: "ia_deposito",
-        tokensConsumed: openAiData.usage.total_tokens,
-      }).catch(() => {});
-    }
+    // Reconcilia a reserva prévia com o consumo real apurado
+    const actualTokens = openAiData.usage?.total_tokens || 0;
+    await reconcileAiTokens(supabaseAdmin, {
+      userId: user.id,
+      workspaceId: workspace_id,
+      action: "ia_deposito",
+      reservedTokens: estimatedTokens,
+      actualTokensConsumed: actualTokens,
+    });
 
     return new Response(JSON.stringify({ success: true, data: parsed }), {
       status: 200,

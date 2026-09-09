@@ -94,27 +94,38 @@ export async function checkSharedRateLimit(
       };
     }
 
-    // 2. Verificação e Débito Proporcional de Tokens por Hora (TPH)
-    if (tokensConsumed > 0 && maxTokensPerHour > 0) {
+    // 2. Verificação e Débito/Reserva de Tokens por Hora (TPH)
+    const tokensToCharge = Math.max(0, Math.round(options.tokensConsumed || options.reserveTokens || 0));
+    if (tokensToCharge > 0 && maxTokensPerHour > 0) {
       const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
       const { data: tokenResult, error: tokenError } = await supabaseAdmin.rpc("check_rate_limit", {
         p_key: tokenBucketKey,
         p_max_requests: maxTokensPerHour, // Teto total de tokens por hora
         p_window_seconds: 3600,
-        p_cost: Math.max(1, Math.round(tokensConsumed)), // Contabilização PROPORCIONAL exata
+        p_cost: tokensToCharge, // Contabilização / Reserva de tokens
       });
 
-      if (!tokenError) {
-        const tokenRow = Array.isArray(tokenResult) ? tokenResult[0] : tokenResult;
-        if (tokenRow && !tokenRow.allowed) {
-          return {
-            allowed: false,
-            retryAfterSeconds: tokenRow.retry_after_seconds || 300,
-            currentCount: tokenRow.current_count,
-            limit: maxTokensPerHour,
-            reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
-          };
-        }
+      // Fail-closed estrito: se a RPC falhar ou retornar erro, NÃO autoriza
+      if (tokenError) {
+        console.error("[ai-rate-limiter] Erro crítico na RPC ao verificar TPH:", tokenError);
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          currentCount: maxTokensPerHour,
+          limit: maxTokensPerHour,
+          reason: "Erro ao verificar cota de processamento de IA. Requisição bloqueada por segurança.",
+        };
+      }
+
+      const tokenRow = Array.isArray(tokenResult) ? tokenResult[0] : tokenResult;
+      if (!tokenRow || !tokenRow.allowed) {
+        return {
+          allowed: false,
+          retryAfterSeconds: tokenRow?.retry_after_seconds || 300,
+          currentCount: tokenRow?.current_count ?? maxTokensPerHour,
+          limit: maxTokensPerHour,
+          reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
+        };
       }
     }
 
@@ -130,8 +141,41 @@ export async function checkSharedRateLimit(
       retryAfterSeconds: 30,
       currentCount: maxRequestsPerMinute,
       limit: maxRequestsPerMinute,
-      reason: "Erro ao validar cota de requisições.",
+      reason: "Erro interno ao validar cota de requisições.",
     };
+  }
+}
+
+export async function reconcileAiTokens(
+  supabaseAdmin: any,
+  options: {
+    userId: string;
+    workspaceId?: string;
+    action?: string;
+    reservedTokens: number;
+    actualTokensConsumed: number;
+  }
+): Promise<void> {
+  const { userId, workspaceId, action = "ai_request", reservedTokens, actualTokensConsumed } = options;
+  if (!userId || !supabaseAdmin) return;
+  const delta = Math.round(actualTokensConsumed - reservedTokens);
+  if (delta === 0) return;
+
+  const cleanUser = sanitizeKeyComponent(userId);
+  const cleanWs = sanitizeKeyComponent(workspaceId, "personal");
+  const cleanAction = sanitizeKeyComponent(action);
+  const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
+
+  try {
+    const { error } = await supabaseAdmin.rpc("reconcile_rate_limit", {
+      p_key: tokenBucketKey,
+      p_delta: delta,
+    });
+    if (error) {
+      console.warn("[ai-rate-limiter] Erro ao reconciliar tokens no banco:", error);
+    }
+  } catch (err) {
+    console.warn("[ai-rate-limiter] Exceção na reconciliação de tokens:", err);
   }
 }
 

@@ -8,7 +8,7 @@ import {
   createErrorResponse,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
-import { checkSharedRateLimit, checkAiRateLimit } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, checkAiRateLimit, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
@@ -1205,19 +1205,23 @@ Deno.serve(async (req: Request) => {
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-  // Rate limiting atômico compartilhado por usuário e workspace contra Denial of Wallet
+  // Estimativa segura para reserva prévia contra Denial of Wallet
+  const estimatedTokens = Math.min(4000, Math.max(500, Number(body.max_tokens || 2000)));
+
+  // Rate limiting atômico compartilhado: RPM + Reserva prévia de Tokens por Hora
   const rateCheck = await checkSharedRateLimit(supabase, {
     userId,
     workspaceId: body.workspace_id,
     action: "openai_proxy",
     maxRequestsPerMinute: 30,
+    reserveTokens: estimatedTokens,
     maxTokensPerHour: 100000,
   }).catch(() => checkAiRateLimit(userId, 30));
 
   if (!rateCheck.allowed) {
     return createErrorResponse(req, {
       status: 429,
-      message: (rateCheck as any).reason || "Limite de requisições de IA atingido. Aguarde alguns instantes antes de tentar novamente.",
+      message: (rateCheck as any).reason || "Limite de requisições ou orçamento de IA atingido.",
       correlationId,
       corsHeaders: CORS_HEADERS,
     });
@@ -1327,6 +1331,16 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         errorCode,
         metadata: { status: response.status, error: JSON.stringify(data).slice(0, 300) },
       });
+
+      // Libera a reserva prévia em caso de erro no upstream
+      reconcileAiTokens(supabase, {
+        userId,
+        workspaceId: body.workspace_id,
+        action: "openai_proxy",
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: 0,
+      }).catch(() => {});
+
       return createErrorResponse(req, {
         status: isRateLimit ? 429 : isTimeout ? 504 : response.status >= 500 ? 502 : response.status,
         code: errorCode,
@@ -1360,14 +1374,14 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         execution_status: "success",
       }).then(() => {});
 
-      if (usage.total_tokens && usage.total_tokens > 0) {
-        checkSharedRateLimit(supabase, {
-          userId,
-          workspaceId: body.workspace_id,
-          action: "openai_proxy",
-          tokensConsumed: usage.total_tokens,
-        }).catch((err) => logger.warn("Falha ao debitar tokens consumidos", { error: String(err) }));
-      }
+      // Reconciliação exata: ajusta a diferença entre a reserva prévia e o consumo real
+      reconcileAiTokens(supabase, {
+        userId,
+        workspaceId: body.workspace_id,
+        action: "openai_proxy",
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: usage.total_tokens || 0,
+      }).catch((err) => logger.warn("Falha ao reconciliar tokens consumidos", { error: String(err) }));
 
       return new Response(JSON.stringify({ ...data, correlation_id: correlationId }), {
         status: 200,

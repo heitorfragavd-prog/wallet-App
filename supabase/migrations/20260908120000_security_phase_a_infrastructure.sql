@@ -1,17 +1,27 @@
--- Migration: 20260908120000_security_column_protection.sql
+﻿-- =========================================================================
+-- Migration: 20260908120000_security_phase_a_infrastructure.sql
+-- FASE A: Criacao de Infraestrutura e RPCs compativeis
 -- LOCAL APENAS -- NAO APLICAR REMOTAMENTE SEM APROVACAO
--- Objetivo: Hardening de segredos, RLS por sessao de investimentos, protecao atomica de role, rate limiting concorrente
+--
+-- Objetivo:
+-- 1. Criar tabelas auxiliares (rate_limits, investimentos_sessions) com acesso restrito desde a criacao.
+-- 2. Criar RPCs seguras para consulta de status sem exposicao de segredos.
+-- 3. Criar funcoes atomicas para controle de tentativas e sessoes de investimentos.
+-- 4. Blindar triggers de profiles.role contra escalacao de privilegios.
+--
+-- NOTA DE RETROCOMPATIBILIDADE (FASE A):
+-- As colunas existentes e politicas de RLS antigas NAO sao revogadas nesta fase,
+-- permitindo que as Edge Functions e Frontend atuais continuem em operacao
+-- enquanto o deploy de codigo (Fase B) e realizado.
+-- =========================================================================
 
 BEGIN;
 
 -- =========================================================================
--- 1. Protecao de colunas em divipay_config
+-- 1. RPCs de Status de Configuracoes (Leitura Segura sem Secrets)
 -- =========================================================================
-REVOKE SELECT ON public.divipay_config FROM authenticated;
-GRANT SELECT (id, user_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at)
-  ON public.divipay_config TO authenticated;
-GRANT INSERT, UPDATE, DELETE ON public.divipay_config TO authenticated;
 
+-- Divipay Status RPC
 CREATE OR REPLACE FUNCTION public.get_divipay_config_status()
 RETURNS TABLE(
   id UUID,
@@ -26,7 +36,7 @@ RETURNS TABLE(
   updated_at TIMESTAMPTZ
 )
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 BEGIN
   RETURN QUERY
   SELECT
@@ -44,19 +54,11 @@ BEGIN
   WHERE c.user_id = auth.uid()
   LIMIT 1;
 END;
-$$;
-REVOKE ALL ON FUNCTION public.get_divipay_config_status() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_divipay_config_status() FROM anon;
+;
+REVOKE ALL ON FUNCTION public.get_divipay_config_status() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_divipay_config_status() TO authenticated;
 
--- =========================================================================
--- 2. Protecao de colunas em eyemobile_config
--- =========================================================================
-REVOKE SELECT ON public.eyemobile_config FROM authenticated;
-GRANT SELECT (id, user_id, access_key, environment, store_id, default_conta_id, default_categoria_receita_id, default_categoria_taxa_id, auto_sync_sales, auto_sync_stock, last_synced_offset, created_at, updated_at)
-  ON public.eyemobile_config TO authenticated;
-GRANT INSERT, UPDATE, DELETE ON public.eyemobile_config TO authenticated;
-
+-- Eyemobile Status RPC
 CREATE OR REPLACE FUNCTION public.get_eyemobile_config_status()
 RETURNS TABLE(
   id UUID,
@@ -69,7 +71,7 @@ RETURNS TABLE(
   updated_at TIMESTAMPTZ
 )
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 BEGIN
   RETURN QUERY
   SELECT
@@ -85,34 +87,30 @@ BEGIN
   WHERE c.user_id = auth.uid()
   LIMIT 1;
 END;
-$$;
-REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM anon;
+;
+REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_eyemobile_config_status() TO authenticated;
 
--- =========================================================================
--- 3. Protecao de senha_investimentos e Incremento Atomico de Falhas
--- =========================================================================
-REVOKE ALL ON public.senha_investimentos FROM authenticated, anon, public;
-
+-- Senha Investimentos Status RPC
 CREATE OR REPLACE FUNCTION public.has_senha_investimentos()
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 BEGIN
   RETURN EXISTS (
     SELECT 1 FROM public.senha_investimentos
     WHERE user_id = auth.uid()
   );
 END;
-$$;
-REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM anon;
+;
+REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.has_senha_investimentos() TO authenticated;
 
--- RPC Atomica para registrar falha e calcular bloqueio sem race conditions
+-- =========================================================================
+-- 2. Incremento Atomico de Falhas de Senha de Investimentos
+-- =========================================================================
 CREATE OR REPLACE FUNCTION public.registrar_falha_senha_investimentos(p_user_id UUID)
 RETURNS TABLE (
   tentativas_falhas INTEGER,
@@ -122,7 +120,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 DECLARE
   v_tentativas INTEGER;
   v_bloqueado_ate TIMESTAMPTZ;
@@ -145,19 +143,15 @@ BEGIN
 
   RETURN QUERY SELECT v_tentativas, v_bloqueado, v_bloqueado_ate;
 END;
-$$;
-
+;
 REVOKE ALL ON FUNCTION public.registrar_falha_senha_investimentos(UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.registrar_falha_senha_investimentos(UUID) TO service_role;
 
 -- =========================================================================
--- 4. Blindagem Robusta de profiles.role (Triggers Compatíveis com SECURITY DEFINER)
+-- 3. Blindagem de profiles.role (Triggers Compativeis com SECURITY DEFINER)
 -- =========================================================================
-REVOKE UPDATE ON public.profiles FROM authenticated, anon, PUBLIC;
-GRANT UPDATE (name, organization_name, telefone, updated_at) ON public.profiles TO authenticated;
-
 CREATE OR REPLACE FUNCTION public.protect_profiles_role()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS 
 DECLARE
   v_caller_role TEXT;
   v_is_caller_admin BOOLEAN := false;
@@ -195,7 +189,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_protect_profiles_role ON public.profiles;
 CREATE TRIGGER trg_protect_profiles_role
@@ -203,7 +197,7 @@ BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.protect_profiles_role();
 
 CREATE OR REPLACE FUNCTION public.enforce_profiles_role_insert()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS 
 DECLARE
   v_caller_role TEXT;
   v_is_caller_admin BOOLEAN := false;
@@ -235,7 +229,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_enforce_profiles_role_insert ON public.profiles;
 CREATE TRIGGER trg_enforce_profiles_role_insert
@@ -243,13 +237,13 @@ BEFORE INSERT ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.enforce_profiles_role_insert();
 
 -- =========================================================================
--- 5. Rate Limiter Compartilhado e Atomico (Safe ON CONFLICT Concorrente)
+-- 4. Rate Limiter Compartilhado e Atomico
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.rate_limits (
   bucket_key TEXT PRIMARY KEY,
-  request_count INTEGER NOT NULL DEFAULT 1,
-  window_start TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_request TIMESTAMPTZ NOT NULL DEFAULT now()
+  request_count INTEGER NOT NULL DEFAULT 0,
+  window_start TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  last_request TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
 REVOKE ALL ON public.rate_limits FROM authenticated, anon, PUBLIC;
@@ -270,7 +264,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 DECLARE
   v_now TIMESTAMPTZ := clock_timestamp();
   v_window_interval INTERVAL := (p_window_seconds || ' seconds')::interval;
@@ -283,38 +277,39 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Limpeza oportunista (5% das chamadas limpam registros > 1 hora)
+  -- Limpeza oportunista (5% das chamadas limpam registros antigos)
   IF random() < 0.05 THEN
-    DELETE FROM public.rate_limits WHERE window_start < v_now - interval '1 hour';
+    DELETE FROM public.rate_limits WHERE window_start < v_now - interval '2 hours';
   END IF;
 
-  -- Insercao atomica inicial com ON CONFLICT (protege contra ausencia da linha e race condition na primeira requisicao)
+  -- Inicializacao atomica da linha com contador 0 (protege contra race condition inicial)
   INSERT INTO public.rate_limits (bucket_key, request_count, window_start, last_request)
-  VALUES (p_key, v_cost, v_now, v_now)
+  VALUES (p_key, 0, v_now, v_now)
   ON CONFLICT (bucket_key) DO NOTHING;
 
-  -- Bloqueio da linha existente para atualizacao atomica
+  -- Bloqueio exclusivo em nivel de linha para atualizacao atomica
   SELECT * INTO v_record FROM public.rate_limits WHERE bucket_key = p_key FOR UPDATE;
 
-  -- Verifica se a janela expirou
+  -- 1. Verifica se a janela expirou
   IF v_now - v_record.window_start >= v_window_interval THEN
-    UPDATE public.rate_limits
-    SET request_count = v_cost, window_start = v_now, last_request = v_now
-    WHERE bucket_key = p_key;
-    RETURN QUERY SELECT true, 0, v_cost, p_max_requests;
+    IF v_cost <= p_max_requests THEN
+      UPDATE public.rate_limits
+      SET request_count = v_cost, window_start = v_now, last_request = v_now
+      WHERE bucket_key = p_key;
+      RETURN QUERY SELECT true, 0, v_cost, p_max_requests;
+    ELSE
+      v_retry_after := p_window_seconds;
+      RETURN QUERY SELECT false, v_retry_after, 0, p_max_requests;
+    END IF;
     RETURN;
   END IF;
 
-  -- Janela ativa: checa se permite o custo adicional
-  IF v_record.request_count + (CASE WHEN v_record.request_count = v_cost AND v_record.window_start = v_now THEN 0 ELSE v_cost END) <= p_max_requests THEN
-    IF NOT (v_record.request_count = v_cost AND v_record.window_start = v_now) THEN
-      UPDATE public.rate_limits
-      SET request_count = request_count + v_cost, last_request = v_now
-      WHERE bucket_key = p_key;
-      RETURN QUERY SELECT true, 0, v_record.request_count + v_cost, p_max_requests;
-    ELSE
-      RETURN QUERY SELECT true, 0, v_record.request_count, p_max_requests;
-    END IF;
+  -- 2. Janela ativa: verifica se permite o custo solicitado
+  IF v_record.request_count + v_cost <= p_max_requests THEN
+    UPDATE public.rate_limits
+    SET request_count = v_record.request_count + v_cost, last_request = v_now
+    WHERE bucket_key = p_key;
+    RETURN QUERY SELECT true, 0, v_record.request_count + v_cost, p_max_requests;
     RETURN;
   ELSE
     v_retry_after := GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_record.window_start + v_window_interval - v_now)))::INTEGER);
@@ -322,19 +317,38 @@ BEGIN
     RETURN;
   END IF;
 END;
-$$;
-
+;
 REVOKE ALL ON FUNCTION public.check_rate_limit(TEXT, INTEGER, INTEGER, INTEGER) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_rate_limit(TEXT, INTEGER, INTEGER, INTEGER) TO service_role;
 
+-- RPC de Reconciliacao de Tokens (ajuste posterior da reserva)
+CREATE OR REPLACE FUNCTION public.reconcile_rate_limit(
+  p_key TEXT,
+  p_delta INTEGER
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS 
+BEGIN
+  UPDATE public.rate_limits
+  SET request_count = GREATEST(0, request_count + p_delta),
+      last_request = clock_timestamp()
+  WHERE bucket_key = p_key;
+END;
+;
+REVOKE ALL ON FUNCTION public.reconcile_rate_limit(TEXT, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reconcile_rate_limit(TEXT, INTEGER) TO service_role;
+
 -- =========================================================================
--- 6. Sessao de Investimentos Vinculada a Sessao Autenticada
+-- 5. Sessao de Investimentos Vinculada a Sessao Autenticada
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.investimentos_sessions (
   session_id TEXT PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
 CREATE INDEX IF NOT EXISTS idx_investimentos_sessions_user ON public.investimentos_sessions(user_id);
@@ -343,13 +357,57 @@ CREATE INDEX IF NOT EXISTS idx_investimentos_sessions_expiry ON public.investime
 REVOKE ALL ON public.investimentos_sessions FROM authenticated, anon, PUBLIC;
 GRANT ALL ON public.investimentos_sessions TO service_role;
 
+-- RPC Atomica para Desbloqueio com Verificacao de Hash da Credencial (Prevencao de Race Condition com troca de senha)
+CREATE OR REPLACE FUNCTION public.desbloquear_sessao_investimentos(
+  p_user_id UUID,
+  p_session_id TEXT,
+  p_expected_hash TEXT,
+  p_new_hash TEXT,
+  p_expires_at TIMESTAMPTZ
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS 
+DECLARE
+  v_current_hash TEXT;
+BEGIN
+  SELECT senha_hash INTO v_current_hash
+  FROM public.senha_investimentos
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  IF v_current_hash IS NULL OR v_current_hash <> p_expected_hash THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.senha_investimentos
+  SET senha_hash = COALESCE(p_new_hash, v_current_hash),
+      tentativas_falhas = 0,
+      bloqueado_ate = null,
+      updated_at = clock_timestamp()
+  WHERE user_id = p_user_id;
+
+  INSERT INTO public.investimentos_sessions (session_id, user_id, expires_at)
+  VALUES (p_session_id, p_user_id, p_expires_at)
+  ON CONFLICT (session_id)
+  DO UPDATE SET expires_at = EXCLUDED.expires_at;
+
+  RETURN true;
+END;
+;
+REVOKE ALL ON FUNCTION public.desbloquear_sessao_investimentos(UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.desbloquear_sessao_investimentos(UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ) TO service_role;
+
+-- Funcao STABLE para checar se a sessao atual autenticada possui acesso liberado
 CREATE OR REPLACE FUNCTION public.is_investimentos_unlocked(p_user_id UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $$
+AS 
 DECLARE
   v_session_id TEXT;
 BEGIN
@@ -373,46 +431,8 @@ BEGIN
       AND expires_at > clock_timestamp()
   );
 END;
-$$;
-
+;
 REVOKE ALL ON FUNCTION public.is_investimentos_unlocked(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_investimentos_unlocked(UUID) TO authenticated, service_role;
-
--- Substituicao total das politicas antigas de investimentos
-DROP POLICY IF EXISTS "Users manage own investimentos" ON public.investimentos;
-CREATE POLICY "Users manage own investimentos" ON public.investimentos
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-DROP POLICY IF EXISTS "Users manage own depositos" ON public.depositos_investimentos;
-CREATE POLICY "Users manage own depositos" ON public.depositos_investimentos
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-DROP POLICY IF EXISTS "Users manage own metas_investimento" ON public.metas_investimento;
-CREATE POLICY "Users manage own metas_investimento" ON public.metas_investimento
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-DROP POLICY IF EXISTS "Users manage own historico" ON public.historico_rendimentos;
-CREATE POLICY "Users manage own historico" ON public.historico_rendimentos
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-DROP POLICY IF EXISTS "Users manage own proventos" ON public.proventos_esperados;
-CREATE POLICY "Users manage own proventos" ON public.proventos_esperados
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-DROP POLICY IF EXISTS "Users manage own configuracoes_investimentos" ON public.configuracoes_investimentos;
-CREATE POLICY "Users manage own configuracoes_investimentos" ON public.configuracoes_investimentos
-FOR ALL TO authenticated
-USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
-WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
 
 COMMIT;
