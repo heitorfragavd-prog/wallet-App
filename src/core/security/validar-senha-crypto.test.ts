@@ -91,4 +91,40 @@ describe("validar-senha — Criptografia e Tokens com Funções de Produção", 
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/IDOR/i);
   });
+
+  it("Vincula token à sessão autenticada: aceita na mesma sessão e rejeita em outra sessão", async () => {
+    const sessionDesktop = "session-desktop-123";
+    const sessionMobile = "session-mobile-456";
+
+    const tokenDesktop = await createInvestmentToken(USER_ID, SECRET_KEY, sessionDesktop);
+
+    // Na mesma sessão Desktop: válido
+    const resDesktop = await verifyInvestmentToken(tokenDesktop, USER_ID, SECRET_KEY, sessionDesktop);
+    expect(resDesktop.valid).toBe(true);
+
+    // Na sessão Mobile: rejeitado com violação de sessão
+    const resMobile = await verifyInvestmentToken(tokenDesktop, USER_ID, SECRET_KEY, sessionMobile);
+    expect(resMobile.valid).toBe(false);
+    expect(resMobile.reason).toMatch(/sessão autenticada atual/i);
+  });
+
+  it("Rejeita token com tempo de expiração ultrapassado", async () => {
+    // Simula token com data passada
+    const expiredPayload = `${USER_ID}:${Date.now() - 10000}:investimentos_auth:nonce-1:session-1`;
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(SECRET_KEY),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", key, enc.encode(expiredPayload));
+    const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+    const expiredToken = `inv_${btoa(expiredPayload)}.${sigHex}`;
+
+    const result = await verifyInvestmentToken(expiredToken, USER_ID, SECRET_KEY, "session-1");
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/expirado/i);
+  });
 });

@@ -137,6 +137,15 @@ Responda exclusivamente em formato JSON estruturado com os campos acima.`;
     const rawContent = openAiData.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(rawContent);
 
+    if (openAiData.usage?.total_tokens) {
+      checkSharedRateLimit(supabaseAdmin, {
+        userId: user.id,
+        workspaceId: workspace_id,
+        action: "ia_deposito",
+        tokensConsumed: openAiData.usage.total_tokens,
+      }).catch(() => {});
+    }
+
     return new Response(JSON.stringify({ success: true, data: parsed }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }

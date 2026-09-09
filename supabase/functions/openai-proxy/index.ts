@@ -8,7 +8,7 @@ import {
   createErrorResponse,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
-import { checkAiRateLimit } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, checkAiRateLimit } from "../_shared/ai-rate-limiter.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
@@ -1203,18 +1203,25 @@ Deno.serve(async (req: Request) => {
     userId = user.id;
   }
 
-  // Rate limiting por usuário (30 reqs/min) contra Denial of Wallet
-  const rateCheck = checkAiRateLimit(userId, 30);
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  // Rate limiting atômico compartilhado por usuário e workspace contra Denial of Wallet
+  const rateCheck = await checkSharedRateLimit(supabase, {
+    userId,
+    workspaceId: body.workspace_id,
+    action: "openai_proxy",
+    maxRequestsPerMinute: 30,
+    maxTokensPerHour: 100000,
+  }).catch(() => checkAiRateLimit(userId, 30));
+
   if (!rateCheck.allowed) {
     return createErrorResponse(req, {
       status: 429,
-      message: "Limite de requisições de IA atingido. Aguarde alguns instantes antes de tentar novamente.",
+      message: (rateCheck as any).reason || "Limite de requisições de IA atingido. Aguarde alguns instantes antes de tentar novamente.",
       correlationId,
       corsHeaders: CORS_HEADERS,
     });
   }
-
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
@@ -1352,6 +1359,15 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         duration_ms: Math.max(50, durationMs),
         execution_status: "success",
       }).then(() => {});
+
+      if (usage.total_tokens && usage.total_tokens > 0) {
+        checkSharedRateLimit(supabase, {
+          userId,
+          workspaceId: body.workspace_id,
+          action: "openai_proxy",
+          tokensConsumed: usage.total_tokens,
+        }).catch((err) => logger.warn("Falha ao debitar tokens consumidos", { error: String(err) }));
+      }
 
       return new Response(JSON.stringify({ ...data, correlation_id: correlationId }), {
         status: 200,

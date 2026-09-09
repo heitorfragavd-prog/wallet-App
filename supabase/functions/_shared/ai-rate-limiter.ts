@@ -3,17 +3,14 @@
  *
  * Controle compartilhado e atômico de Rate Limiting para Edge Functions de IA.
  * Utiliza o PostgreSQL (tabela rate_limits + RPC check_rate_limit) com row-level lock
- * para garantir sincronismo ACID entre múltiplos isolates e workers concorrentes do Deno.
+ * e UPSERT atômico (ON CONFLICT) para garantir consistência entre múltiplos isolates do Deno.
  *
- * ALGORITMO:
- * - Janela Fixa com Renovação Atômica por Chave Derivada Server-Side.
- * - Chave gerada no servidor: `ws:${workspaceId}:user:${userId}:${action}`.
- * - Limpeza periódica de registros antigos (> 1 hora).
- *
- * DEFESAS:
- * - O cliente NUNCA passa ou escolhe a chave diretamente (prevenção de spoofing).
- * - Distinção entre limite de requisições (RPM) e orçamento de consumo (Tokens).
- * - Fallback defensivo fail-closed em caso de erro crítico no banco de dados.
+ * RECURSOS:
+ * 1. Limite de Requisições por Minuto (RPM): default 20 req/min por chave.
+ * 2. Orçamento de Tokens por Hora (TPH): acumula proporcionalmente o consumo exato
+ *    de tokens (p_cost = tokensConsumed) contra o teto por workspace/usuário.
+ * 3. Chave gerada exclusivamente no servidor: `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:rpm`.
+ * 4. Fallback fail-closed em caso de erro crítico no banco de dados.
  */
 
 export interface RateLimitResult {
@@ -33,17 +30,11 @@ export interface RateLimitOptions {
   maxTokensPerHour?: number;
 }
 
-/**
- * Sanitiza identificadores para formação estrita da chave de bucket
- */
 function sanitizeKeyComponent(val?: string, fallback = "default"): string {
   if (!val || typeof val !== "string") return fallback;
   return val.replace(/[^a-zA-Z0-9_\-]/g, "").slice(0, 64) || fallback;
 }
 
-/**
- * Executa checagem atômica de rate limit via Supabase RPC (service_role)
- */
 export async function checkSharedRateLimit(
   supabaseAdmin: any,
   options: RateLimitOptions
@@ -70,7 +61,7 @@ export async function checkSharedRateLimit(
   const cleanWs = sanitizeKeyComponent(workspaceId, "personal");
   const cleanAction = sanitizeKeyComponent(action);
 
-  // Chave de requisições por minuto: ws:XXX:user:YYY:action
+  // 1. Verificação de Requisições por Minuto (RPM)
   const rpmBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:rpm`;
 
   try {
@@ -78,11 +69,11 @@ export async function checkSharedRateLimit(
       p_key: rpmBucketKey,
       p_max_requests: maxRequestsPerMinute,
       p_window_seconds: 60,
+      p_cost: 1,
     });
 
     if (rpmError) {
       console.error("[ai-rate-limiter] Erro RPC ao verificar RPM:", rpmError);
-      // Comportamento seguro em falhas: Fail-closed se o banco falhar
       return {
         allowed: false,
         retryAfterSeconds: 30,
@@ -103,13 +94,14 @@ export async function checkSharedRateLimit(
       };
     }
 
-    // Se houver consumo de tokens informado, verifica orçamento de tokens por hora
+    // 2. Verificação e Débito Proporcional de Tokens por Hora (TPH)
     if (tokensConsumed > 0 && maxTokensPerHour > 0) {
       const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
       const { data: tokenResult, error: tokenError } = await supabaseAdmin.rpc("check_rate_limit", {
         p_key: tokenBucketKey,
-        p_max_requests: Math.ceil(maxTokensPerHour / 1000), // blocos de 1k tokens
+        p_max_requests: maxTokensPerHour, // Teto total de tokens por hora
         p_window_seconds: 3600,
+        p_cost: Math.max(1, Math.round(tokensConsumed)), // Contabilização PROPORCIONAL exata
       });
 
       if (!tokenError) {
@@ -143,9 +135,6 @@ export async function checkSharedRateLimit(
   }
 }
 
-/**
- * Sanitiza texto de entrada para prevenir quebra de delimitadores em prompts de IA
- */
 export function sanitizeAiInput(input: string, maxChars = 2000): string {
   if (!input || typeof input !== "string") return "";
 
@@ -154,4 +143,26 @@ export function sanitizeAiInput(input: string, maxChars = 2000): string {
     .replace(/---+\s*(system|admin|assistant|prompt|instruction)/gi, "--- [sanitized]")
     .replace(/<\/?(system|instructions?|prompt)>/gi, "[sanitized]")
     .replace(/\[(system|assistant|admin)\]/gi, "[sanitized]");
+}
+
+// Fallback em memória para compatibilidade com consumidores legados ou testes unitários locais
+const inMemoryFallbackBuckets = new Map<string, { count: number; windowStart: number }>();
+
+export function checkAiRateLimit(
+  userId: string,
+  maxRequestsPerMinute = 20
+): { allowed: boolean; retryAfterSeconds?: number; currentCount: number } {
+  if (!userId) return { allowed: false, currentCount: 0 };
+  const now = Date.now();
+  const bucket = inMemoryFallbackBuckets.get(userId);
+  if (!bucket || now - bucket.windowStart >= 60000) {
+    inMemoryFallbackBuckets.set(userId, { count: 1, windowStart: now });
+    return { allowed: true, currentCount: 1 };
+  }
+  if (bucket.count < maxRequestsPerMinute) {
+    bucket.count++;
+    return { allowed: true, currentCount: bucket.count };
+  }
+  const retryAfterSeconds = Math.max(1, Math.ceil((bucket.windowStart + 60000 - now) / 1000));
+  return { allowed: false, retryAfterSeconds, currentCount: bucket.count };
 }

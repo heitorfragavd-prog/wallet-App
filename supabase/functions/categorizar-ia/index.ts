@@ -108,6 +108,15 @@ Responda APENAS em JSON válido no formato:
 
     const result = JSON.parse(content.trim());
 
+    if (data.usage?.total_tokens) {
+      checkSharedRateLimit(supabaseAdmin, {
+        userId: user.id,
+        workspaceId: workspace_id,
+        action: "categorizar_ia",
+        tokensConsumed: data.usage.total_tokens,
+      }).catch(() => {});
+    }
+
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
