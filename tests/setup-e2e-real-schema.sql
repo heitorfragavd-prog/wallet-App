@@ -253,6 +253,44 @@ CREATE TABLE IF NOT EXISTS public.configuracoes_investimentos (
 );
 ALTER TABLE public.configuracoes_investimentos ENABLE ROW LEVEL SECURITY;
 
+-- Políticas de baseline pré-Fase C (legadas, baseadas em auth.uid() = user_id)
+DROP POLICY IF EXISTS "Users manage own investimentos" ON public.investimentos;
+DROP POLICY IF EXISTS "investimentos_legacy" ON public.investimentos;
+CREATE POLICY "Users manage own investimentos" ON public.investimentos FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users manage own depositos" ON public.depositos_investimentos;
+DROP POLICY IF EXISTS "depositos_legacy" ON public.depositos_investimentos;
+CREATE POLICY "Users manage own depositos" ON public.depositos_investimentos FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users manage own metas" ON public.metas_investimento;
+CREATE POLICY "Users manage own metas" ON public.metas_investimento FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users manage own rendimentos" ON public.historico_rendimentos;
+CREATE POLICY "Users manage own rendimentos" ON public.historico_rendimentos FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users manage own proventos" ON public.proventos_esperados;
+CREATE POLICY "Users manage own proventos" ON public.proventos_esperados FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users manage own config_invest" ON public.configuracoes_investimentos;
+CREATE POLICY "Users manage own config_invest" ON public.configuracoes_investimentos FOR ALL TO authenticated USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, authenticated, service_role;
+
+-- Reproduz o estado real pré-Fase A: ia_configuracoes.api_key JÁ ESTAVA PROTEGIDA pela migration 20260826120000
+REVOKE SELECT ON public.ia_configuracoes FROM authenticated, anon, PUBLIC;
+GRANT SELECT (id, user_id, modelo, created_at, updated_at) ON public.ia_configuracoes TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_ia_config_status()
+RETURNS TABLE(id UUID, modelo TEXT, api_key_configurada BOOLEAN)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT c.id, c.modelo, (c.api_key IS NOT NULL AND length(trim(c.api_key)) > 0) AS api_key_configurada
+  FROM public.ia_configuracoes c WHERE c.user_id = auth.uid() LIMIT 1;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.get_ia_config_status() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_ia_config_status() TO authenticated;
 

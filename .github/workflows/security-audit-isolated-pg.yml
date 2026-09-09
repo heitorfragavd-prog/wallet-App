@@ -125,15 +125,8 @@ jobs:
           cp tests/setup-e2e-real-schema.sql supabase/migrations/20240101000000_setup_e2e_real_schema.sql
           cp supabase/all_migrations/20260908120000_security_phase_a_infrastructure.sql supabase/migrations/
 
-          # Inicia a stack completa do Supabase com a Fase A ativa
+          # Inicia a stack completa do Supabase com a Fase A ativa (Retrocompatibilidade)
           supabase start
-
-          # Aplica Fase C com confirmacao explicita do gating operacional via psql stdin
-          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -v "ON_ERROR_STOP=1" << 'EOF'
-          SET wallet.deploy_phase_b_completed = 'true';
-          \i supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql
-          NOTIFY pgrst, 'reload schema';
-          EOF
 
           # Gera variaveis seguras simuladas para as Edge Functions locais
           SERVICE_KEY=$(supabase status -o env | grep -E 'SERVICE_ROLE_KEY|sb_secret' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
@@ -158,13 +151,42 @@ jobs:
 
       - name: Install Playwright and Dependencies
         run: |
-          npm install --no-save @playwright/test
+          npm install --no-save @playwright/test pg
           npx playwright install --with-deps chromium
 
       - name: Start Mock External Providers (OpenAI, Divipay, Eyemobile)
         run: |
           node tests/mock-external-providers.cjs &
           sleep 2
+
+      - name: Build Legacy Application (SHA 8ae7c04) and New Application (Hardened)
+        run: |
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          ROOT_DIR="$(pwd)"
+          
+          # 1. Build da aplicação legada (SHA 8ae7c04)
+          git worktree add ../legacy-8ae7c04 8ae7c04
+          ln -s "$ROOT_DIR/node_modules" ../legacy-8ae7c04/node_modules
+          (cd ../legacy-8ae7c04 && VITE_SUPABASE_URL=http://127.0.0.1:54321 VITE_SUPABASE_ANON_KEY=$ANON_KEY npx vite build --outDir "$ROOT_DIR/dist-legacy")
+          git worktree remove ../legacy-8ae7c04 --force
+
+          # 2. Build da nova aplicação (Hardened)
+          VITE_SUPABASE_URL=http://127.0.0.1:54321 VITE_SUPABASE_ANON_KEY=$ANON_KEY npm run build
+
+      - name: Start Dual Static Servers (Legacy 4173 & New 4174)
+        run: |
+          node scripts/serve-dual-builds.cjs &
+          sleep 3
+
+      - name: Run Application Phase A -> B -> C Sequence Homologation Suite
+        run: |
+          export VITE_SUPABASE_URL=http://127.0.0.1:54321
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          export VITE_SUPABASE_ANON_KEY=$ANON_KEY
+          export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          export LEGACY_APP_URL=http://localhost:4173
+          export NEW_APP_URL=http://localhost:4174
+          npx playwright test tests/application-phase-abc-sequence.spec.ts
 
       - name: Run Playwright E2E Security Homologation Suite
         run: |
