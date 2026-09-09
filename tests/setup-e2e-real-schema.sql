@@ -126,7 +126,9 @@ CREATE TABLE IF NOT EXISTS public.divipay_config (
 ALTER TABLE public.divipay_config ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "divipay_own" ON public.divipay_config;
-CREATE POLICY "divipay_own" ON public.divipay_config FOR ALL TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "divipay_own" ON public.divipay_config FOR ALL TO authenticated 
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 
 CREATE TABLE IF NOT EXISTS public.eyemobile_config (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -147,7 +149,9 @@ CREATE TABLE IF NOT EXISTS public.eyemobile_config (
 ALTER TABLE public.eyemobile_config ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "eyemobile_own" ON public.eyemobile_config;
-CREATE POLICY "eyemobile_own" ON public.eyemobile_config FOR ALL TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "eyemobile_own" ON public.eyemobile_config FOR ALL TO authenticated 
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 
 -- 4. IA Configurações
 CREATE TABLE IF NOT EXISTS public.ia_configuracoes (
