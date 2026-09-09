@@ -388,8 +388,8 @@ BEGIN
   -- Workspaces isolados
   INSERT INTO public.workspaces (id, user_id, nome, tipo, is_default)
   VALUES 
-    ('wwwwwwww-1111-4111-8111-111111111111'::uuid, v_user_1, 'Workspace U1', 'PF', true),
-    ('wwwwwwww-2222-4222-8222-222222222222'::uuid, v_user_2, 'Workspace U2', 'PJ', true)
+    ('a1111111-1111-4111-8111-111111111111'::uuid, v_user_1, 'Workspace U1', 'PF', true),
+    ('b2222222-2222-4222-8222-222222222222'::uuid, v_user_2, 'Workspace U2', 'PJ', true)
   ON CONFLICT (id) DO NOTHING;
 
   -- Usuario 1 conectado: so enxerga seu workspace
