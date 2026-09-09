@@ -66,8 +66,80 @@ jobs:
         run: |
           psql -h localhost -U postgres -d postgres -f scripts/test-real-schema-compat.sql
 
+      - name: Run Phase A -> Phase B -> Phase C Sequential Rehearsal & Safe Contingency
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-rehearsal.sql
+
       - name: Run Real Concurrency Battery (Multiple Connections Pool)
         env:
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
         run: |
           node scripts/test-real-concurrency.cjs
+
+  edge-functions-validation:
+    name: Edge Functions Runtime Validation (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate Edge Functions on Deno Runtime
+        run: |
+          deno check supabase/functions/openai-proxy/index.ts
+          deno check supabase/functions/categorizar-ia/index.ts
+          deno check supabase/functions/ia-deposito/index.ts
+          deno check supabase/functions/divipay-api/index.ts
+          deno check supabase/functions/divipay-webhook/index.ts
+          deno check supabase/functions/validar-senha/index.ts
+
+  e2e-browser-homologation:
+    name: Full E2E Browser & Real Supabase Stack Homologation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Real Supabase Stack (PostgreSQL, Auth, PostgREST, Inbucket)
+        run: |
+          # Isola a migracao da Fase C para respeitar o gating durante o start inicial da Fase A
+          mkdir -p supabase/phase_c
+          mv supabase/migrations/20260908120001_security_phase_c_enforcement.sql supabase/phase_c/
+          supabase start
+          # Retorna a migracao para o diretorio apos o start
+          mv supabase/phase_c/20260908120001_security_phase_c_enforcement.sql supabase/migrations/
+          rm -rf supabase/phase_c
+
+      - name: Install Playwright and Dependencies
+        run: |
+          npm install --no-save @playwright/test
+          npx playwright install --with-deps chromium
+
+      - name: Start Mock External Providers (OpenAI, Divipay, Eyemobile)
+        run: |
+          node tests/mock-external-providers.cjs &
+          sleep 2
+
+      - name: Run Playwright E2E Security Homologation Suite
+        run: |
+          export VITE_SUPABASE_URL=http://127.0.0.1:54321
+          export VITE_SUPABASE_ANON_KEY=$(supabase status -o env | grep ANON_KEY | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          export INBUCKET_URL=http://127.0.0.1:54324
+          export MOCK_PROVIDER_URL=http://127.0.0.1:18080
+          npx playwright test tests/security-homologation.spec.ts
