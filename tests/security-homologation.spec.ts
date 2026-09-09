@@ -64,7 +64,9 @@ async function getEmailMessages(emailPrefix: string) {
         return data.messages;
       }
     }
-  } catch {}
+  } catch (e) {
+    void e;
+  }
 
   try {
     // 2. Tenta API do Inbucket legado
@@ -73,7 +75,9 @@ async function getEmailMessages(emailPrefix: string) {
       const iData = await inbucketRes.json();
       if (Array.isArray(iData)) return iData;
     }
-  } catch {}
+  } catch (e) {
+    void e;
+  }
 
   return [];
 }
