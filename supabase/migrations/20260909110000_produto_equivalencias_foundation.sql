@@ -1,5 +1,5 @@
 -- ============================================================
--- WALLET APP — SUBETAPA 9.1: FUNDAÇÃO DE IDENTIDADE CANÔNICA DE PRODUTOS
+-- WALLET APP — Correção de Integridade de Produtos — Fase 1: Fundação de Identidade Canônica
 -- Migration: 20260909110000_produto_equivalencias_foundation.sql
 -- Descrição: Criação da tabela produto_equivalencias, índices,
 --            gatilhos de integridade multi-tenant, RLS com tem_acesso_workspace

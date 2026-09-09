@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivalencias (Hardened)", () => {
+describe("Correção de Integridade de Produtos — Fase 1: Fundação de Identidade Canônica (Hardened)", () => {
   const migrationPath = path.resolve(
     __dirname,
     "../../../../supabase/migrations/20260909110000_produto_equivalencias_foundation.sql"

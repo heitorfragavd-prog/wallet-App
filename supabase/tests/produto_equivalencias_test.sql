@@ -1,5 +1,5 @@
 -- ============================================================
--- WALLET APP — SUBETAPA 9.1: pgTAP Schema Test Suite (Hardened & Complete)
+-- WALLET APP — Correção de Integridade de Produtos — Fase 1: pgTAP Schema Test Suite (Hardened & Complete)
 -- Test File: supabase/tests/produto_equivalencias_test.sql
 -- Total Asserts: 46
 -- ============================================================
