@@ -122,18 +122,22 @@ jobs:
           mkdir -p supabase/all_migrations
           mv supabase/migrations/* supabase/all_migrations/
 
-          # Copia o baseline real e as migrations da auditoria
+          # Copia o baseline real e a Fase A para o start
           cp tests/setup-e2e-real-schema.sql supabase/migrations/20240101000000_setup_e2e_real_schema.sql
           cp supabase/all_migrations/20260908120000_security_phase_a_infrastructure.sql supabase/migrations/
-          cp supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql supabase/migrations/
 
-          # Inicia a stack completa do Supabase
+          # Inicia a stack completa do Supabase com a Fase A ativa
           supabase start
 
+          # Aplica Fase C com confirmacao explicita do gating operacional
+          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -c "SET wallet.deploy_phase_b_completed = 'true'; \i supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql"
+          PGPASSWORD=postgres psql -h localhost -p 54322 -U postgres -d postgres -c "NOTIFY pgrst, 'reload schema';"
+
           # Gera variaveis seguras simuladas para as Edge Functions locais
-          cat << 'EOF' > .env.functions.test
+          SERVICE_KEY=$(supabase status -o env | grep SERVICE_ROLE_KEY | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          cat << EOF > .env.functions.test
           SUPABASE_URL=http://localhost:54321
-          SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY0OTk2NDgwMCwiZXhwIjoxOTY1NTMyODAwfQ.dummy_service_key_for_test
+          SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
           OPENAI_BASE_URL=http://localhost:18080/v1
           OPENAI_API_KEY=mock-openai-key-for-test
           EOF

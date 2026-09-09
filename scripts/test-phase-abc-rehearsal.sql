@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS public.eyemobile_config (
   secret_key TEXT,
   environment TEXT DEFAULT 'sandbox',
   store_id TEXT,
+  default_conta_id UUID,
+  default_categoria_receita_id UUID,
+  default_categoria_taxa_id UUID,
+  auto_sync_sales BOOLEAN DEFAULT true,
+  auto_sync_stock BOOLEAN DEFAULT true,
+  last_synced_offset INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
   updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
 );

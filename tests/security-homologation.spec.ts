@@ -3,10 +3,10 @@ import { test, expect } from '@playwright/test';
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'http://localhost:54321';
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NDk5NjQ4MDAsImV4cCI6MTk2NTUzMjgwMH0.6pnT9q8_Z3M3s9a0Y7mPqQ0P2QjP0V9O7W4qM3a0Z5g';
 const INBUCKET_URL = process.env.INBUCKET_URL || 'http://localhost:54324';
-const MOCK_PROVIDER_URL = process.env.MOCK_PROVIDER_URL || 'http://localhost:18080';
+const _MOCK_PROVIDER_URL = process.env.MOCK_PROVIDER_URL || 'http://localhost:18080';
 
 // Helper para chamadas diretas ao PostgREST
-async function postgrest(endpoint: string, options: { method?: string; body?: any; token?: string; headers?: Record<string, string> } = {}) {
+async function postgrest(endpoint: string, options: { method?: string; body?: unknown; token?: string; headers?: Record<string, string> } = {}) {
   const { method = 'GET', body, token, headers = {} } = options;
   const h: Record<string, string> = {
     'apikey': SUPABASE_ANON_KEY,
@@ -32,7 +32,7 @@ async function postgrest(endpoint: string, options: { method?: string; body?: an
 }
 
 // Helper para chamadas Auth
-async function authCall(endpoint: string, body: any, token?: string) {
+async function authCall(endpoint: string, body: unknown, token?: string) {
   const h: Record<string, string> = {
     'apikey': SUPABASE_ANON_KEY,
     'Content-Type': 'application/json',
@@ -71,7 +71,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   let user1WorkspaceId = '';
   let user2WorkspaceId = '';
 
-  test('1. Auth completo: Cadastro com Inbucket, confirmação, login, logout e recovery', async ({ page }) => {
+  test('1. Auth completo: Cadastro com Inbucket, confirmação, login, logout e recovery', async () => {
     // 1.1 Cadastro do Usuario 1
     const signup = await authCall('/signup', {
       email: user1Email,
@@ -95,7 +95,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
     expect(user1Token).toBeDefined();
 
     // 1.4 Cadastro do Usuario 2
-    const signup2 = await authCall('/signup', {
+    const _signup2 = await authCall('/signup', {
       email: user2Email,
       password: testPassword,
       data: { name: 'Usuario Homologacao 2', telefone: '11999990002' }
@@ -154,7 +154,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
 
   test('3. Senha de Investimentos: Cadastro, rejeição de recadastro e ciclo de vida', async () => {
     // 3.1 Primeiro cadastro da senha de investimentos (PBKDF2 via RPC segura)
-    const cadRes = await postgrest('/rpc/cadastrar_senha_investimentos', {
+    const _cadRes = await postgrest('/rpc/cadastrar_senha_investimentos', {
       method: 'POST',
       token: user1Token,
       body: { p_senha_hash: '$pbkdf2$100000$salt_homolog$hash_invest_123' }
@@ -191,7 +191,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
 
   test('4. Duas sessões concorrentes: Desbloquear uma NÃO desbloqueia a outra', async () => {
     // 4.1 Token de sessao A e B
-    const sessionA = 'session_desk_' + timestamp;
+    const _sessionA = 'session_desk_' + timestamp;
     const sessionB = 'session_mobi_' + timestamp;
 
     // Chamada a is_investimentos_unlocked na sessao B sem desbloqueio
@@ -245,7 +245,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
     expect(crossRead.data.length).toBe(0); // RLS oculta estritamente
 
     // 5.6 ISOLAMENTO NEGATIVO: Usuario 2 tenta alterar workspace do Usuario 1
-    const crossUpdate = await postgrest(`/workspaces?id=eq.${user1WorkspaceId}`, {
+    const _crossUpdate = await postgrest(`/workspaces?id=eq.${user1WorkspaceId}`, {
       method: 'PATCH',
       token: user2Token,
       body: { nome: 'HACKED_BY_U2' }
