@@ -1,4 +1,4 @@
-﻿-- =========================================================================
+-- =========================================================================
 -- test-isolated-pg-security.sql
 -- Suite de Testes Automatizados de Seguranca em PostgreSQL Real Isolado
 -- =========================================================================
@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS public.configuracoes_investimentos (
 );
 ALTER TABLE public.configuracoes_investimentos ENABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA auth TO postgres;
 
 COMMIT;
@@ -275,12 +276,34 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_a, 'role', 'authenticated')::text, true);
   ASSERT public.is_investimentos_unlocked(v_user_a) IS FALSE, 'Teste 5.3 falhou: JWT sem session_id/jti DEVE estar bloqueado';
 
-  -- Teste 6: RLS em public.investimentos
+  -- Setup de dados para teste de RLS em public.investimentos
   DELETE FROM public.investimentos WHERE user_id IN (v_user_a, v_user_b);
   INSERT INTO public.investimentos (user_id, ativo, valor) VALUES 
     (v_user_a, 'PETR4', 1000.00),
     (v_user_b, 'VALE3', 2000.00);
 
+  -- Cria sessao expirada para validar RLS
+  INSERT INTO public.investimentos_sessions (session_id, user_id, expires_at)
+  VALUES ('sess_expirada', v_user_a, clock_timestamp() - interval '10 minutes')
+  ON CONFLICT (session_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+
+  RAISE NOTICE 'Bateria principal de infraestrutura e logica concluida com sucesso.';
+END $$;
+
+-- =========================================================================
+-- 5. TESTES DE RLS, PERMISSOES E REVOGACOES COM ROLE AUTHENTICATED
+-- =========================================================================
+-- Executado como 'authenticated' para que as politicas RLS (TO authenticated) e
+-- restricoes de coluna se apliquem fielmente ao contexto real de producao.
+SET ROLE authenticated;
+
+DO $$
+DECLARE
+  v_user_a UUID := '11111111-1111-1111-1111-111111111111'::uuid;
+  v_rows_count INTEGER;
+  v_caught_expected_error BOOLEAN;
+  v_error_msg TEXT;
+BEGIN
   -- 6.1 Como User A na sessao bloqueada -> 0 linhas visiveis
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_a, 'role', 'authenticated', 'session_id', 'sess_mobile_comprometida')::text, true);
   SELECT count(*) INTO v_rows_count FROM public.investimentos;
@@ -292,22 +315,12 @@ BEGIN
   ASSERT v_rows_count = 1, 'Teste 6.2 falhou: RLS deve exibir exatamente 1 registro do proprio User A';
 
   -- 6.3 Teste de expiracao de sessao
-  UPDATE public.investimentos_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = 'sess_desktop';
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_a, 'role', 'authenticated', 'session_id', 'sess_expirada')::text, true);
   SELECT count(*) INTO v_rows_count FROM public.investimentos;
   ASSERT v_rows_count = 0, 'Teste 6.3 falhou: RLS deve bloquear apos a expiracao da sessao';
 
-  RAISE NOTICE 'Bateria principal de testes concluida com sucesso.';
-END $$;
+  RAISE NOTICE 'SUCESSO: Politicas de RLS de investimentos validadas confiavelmente sob a role authenticated.';
 
--- 5. TESTES DE PERMISSOES E REVOGACOES COM ROLE AUTHENTICATED
--- SEPARACAO RIGOROSA ENTRE EXECUCAO DA OPERACAO E ASSERCAO FINAL (ELIMINACAO DE FALSO-POSITIVO)
-SET ROLE authenticated;
-
-DO $$
-DECLARE
-  v_caught_expected_error BOOLEAN;
-  v_error_msg TEXT;
-BEGIN
   -- 7.1 Revogacao de client_secret em divipay_config
   v_caught_expected_error := false;
   BEGIN
