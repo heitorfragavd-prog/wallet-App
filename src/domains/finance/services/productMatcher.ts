@@ -1,6 +1,6 @@
 /**
  * WALLET APP — Correção de Integridade de Produtos — Fase 2
- * Módulo: Matcher Seguro e Determinístico de Produtos
+ * Módulo: Matcher Seguro e Determinístico de Produtos (Hardened)
  * Arquivo: src/domains/finance/services/productMatcher.ts
  *
  * Princípios e Invariantes Centrais:
@@ -9,18 +9,31 @@
  * 2. MATCHING AUTOMÁTICO RESTRITO:
  *    Apenas ocorre com equivalência confirmada na tabela produto_equivalencias
  *    (workspace_id + user_id + cnpj_fornecedor_normalizado + codigo_produto_fornecedor + confirmado_por_usuario = true).
- * 3. EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false):
+ * 3. FAIL-CLOSED NO FATOR DE CONVERSÃO:
+ *    NUNCA assumir fator = 1 se o valor no banco for nulo, indefinido, zero, negativo,
+ *    não numérico ou corrompido. Falhas de fator produzem erro de integridade explícito.
+ * 4. ERRO DE BANCO NÃO É NOT_FOUND:
+ *    Qualquer falha técnica em queries (lookup de equivalência, produto canônico ou sugestões)
+ *    produz status "error" (code: "database_error"), nunca mascarada como "not_found".
+ * 5. IDENTIDADE REMOTA EYEMOBILE OBRIGATÓRIA PARA MATCHED:
+ *    Se produtos_eyemobile.eyemobile_id for null ou vazio, o matcher recusa status "matched"
+ *    e retorna erro explícito (code: "missing_remote_product_id").
+ * 6. ERRO DE INTEGRIDADE NÃO VIRA SUGESTÃO:
+ *    Se existir equivalência confirmada inconsistente (produto inexistente, cross-tenant,
+ *    fator inválido ou sem eyemobile_id), o matcher falha fechado imediatamente e
+ *    NÃO mascara o problema caindo em busca fuzzy de sugestões.
+ * 7. EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false):
  *    NUNCA produz status "matched". É tratada estritamente como sugestão prioritária.
- * 4. DESCRIÇÃO NUNCA PRODUZ MATCH:
+ * 8. DESCRIÇÃO NUNCA PRODUZ MATCH:
  *    Mesmo descrição 100% idêntica produz apenas status "suggestion", NUNCA "matched".
- * 5. CÓDIGO COINCIDENTE NÃO PRODUZ MATCH:
+ * 9. CÓDIGO COINCIDENTE NÃO PRODUZ MATCH:
  *    produtos_eyemobile.codigo === nf_item.codigo_produto NUNCA produz match automático
  *    sem equivalência confirmada, pois os códigos têm semânticas e origens distintas.
- * 6. TENANT ISOLATION:
+ * 10. TENANT ISOLATION:
  *    Todas as buscas são estritamente delimitadas por workspace_id e user_id (defense-in-depth).
- * 7. OPERAÇÃO PURA (READ-ONLY):
+ * 11. OPERAÇÃO PURA (READ-ONLY):
  *    Nenhuma mutação operacional é realizada (sem escrita em estoque, custo, preço ou equivalências).
- * 8. EAN / GTIN:
+ * 12. EAN / GTIN:
  *    Não está padronizado ou persistido bilateralmente no momento. O campo é aceito no input
  *    para compatibilidade futura, mas NÃO é utilizado para resolução nesta fase.
  */
@@ -53,7 +66,7 @@ export interface ProductSuggestion {
   score?: number;
 }
 
-// ─── CONTRATO DE RESULTADO DO MATCHER ─────────────────────────────
+// ─── CONTRATO DE RESULTADO DO MATCHER (HARDENED) ─────────────────
 export type ProductMatchResult =
   | {
       status: "matched";
@@ -71,6 +84,20 @@ export type ProductMatchResult =
     }
   | {
       status: "invalid_input";
+      reason: string;
+    }
+  | {
+      status: "error";
+      code:
+        | "database_error"
+        | "invalid_equivalence"
+        | "invalid_conversion_factor"
+        | "missing_remote_product_id";
+      stage:
+        | "equivalence_lookup"
+        | "canonical_product_lookup"
+        | "suggestion_lookup"
+        | "integrity_validation";
       reason: string;
     };
 
@@ -93,6 +120,28 @@ export interface QueryFilterBuilderLike {
 
 export interface SupabaseClientLike {
   from: (table: string) => QueryFilterBuilderLike;
+}
+
+// ─── SANITIZAÇÃO DE ERROS ────────────────────────────────────────
+
+/**
+ * Sanitiza mensagens de erro de banco e bibliotecas externas.
+ * Remove tokens, senhas ou informações sensíveis antes de retornar no contrato.
+ */
+export function sanitizeErrorMessage(err: unknown, fallback: string): string {
+  if (!err) return fallback;
+  if (typeof err === "string") {
+    return err.replace(/Bearer\s+[A-Za-z0-9_\-.]+/gi, "Bearer [REDACTED]").trim() || fallback;
+  }
+  if (
+    typeof err === "object" &&
+    "message" in err &&
+    typeof (err as { message?: unknown }).message === "string"
+  ) {
+    const msg = (err as { message: string }).message;
+    return msg.replace(/Bearer\s+[A-Za-z0-9_\-.]+/gi, "Bearer [REDACTED]").trim() || fallback;
+  }
+  return fallback;
 }
 
 // ─── HELPERS PUROS DE NORMALIZAÇÃO ───────────────────────────────
@@ -208,21 +257,46 @@ export function calculateDescriptionSimilarity(descA: string, descB: string): nu
   return Math.round(score * 100) / 100;
 }
 
-// ─── FUNÇÃO PURA DE BUSCA DE SUGESTÕES ────────────────────────────
+// ─── FUNÇÃO DE BUSCA DE SUGESTÕES (HARDENED COM PROPAGAÇÃO DE ERRO) ───
 
 export interface CandidateProductRow {
   id: string;
-  eyemobile_id: string;
+  eyemobile_id?: string | null;
   codigo?: string | null;
   descricao: string;
   user_id: string;
   workspace_id: string;
 }
 
+export type SuggestionSearchResult =
+  | {
+      ok: true;
+      suggestions: ProductSuggestion[];
+    }
+  | {
+      ok: false;
+      error: {
+        code: "database_error";
+        stage: "suggestion_lookup";
+        reason: string;
+      };
+    };
+
 /**
  * Localiza sugestões de produtos Eyemobile a partir de descrição textual e/ou candidato pendente.
  * Retorna no máximo entre 3 e 5 sugestões, ordenadas por score de relevância.
  * NUNCA efetua escolha automática e NUNCA grava equivalência.
+ *
+ * NOTA TÉCNICA DE ESCALABILIDADE (TODO):
+ * Atualmente, a busca de sugestões carrega todos os produtos ativos do workspace/tenant
+ * e computa a similaridade em memória. Para catálogos pequenos e médios (até milhares de itens),
+ * isso é seguro, rápido e determinístico.
+ *
+ * TODO(perf): Antes da utilização massiva do matcher em importação batch de NFs com milhares
+ * de itens ou workspaces de altíssima volumetria, implementar candidate retrieval pré-filtrado
+ * no banco (ex: full-text search pg_trgm / tsvector ou ilike com LIMIT conservador de candidatos)
+ * antes do re-ranking detalhado em memória.
+ * IMPORTANTE: Nunca adicionar LIMIT 1 aleatório sem scoring como fallback de auto-matching.
  */
 export async function findProductSuggestions(
   workspaceId: string,
@@ -230,7 +304,7 @@ export async function findProductSuggestions(
   descricaoQuery?: string | null,
   pendingCandidate?: CandidateProductRow | null,
   client: SupabaseClientLike = defaultSupabase as unknown as SupabaseClientLike
-): Promise<ProductSuggestion[]> {
+): Promise<SuggestionSearchResult> {
   // Query de candidatos delimitada estritamente por workspace_id e user_id
   const { data: candidates, error } = await client
     .from("produtos_eyemobile")
@@ -238,24 +312,34 @@ export async function findProductSuggestions(
     .eq("workspace_id", workspaceId)
     .eq("user_id", userId);
 
-  if (error || !candidates || !Array.isArray(candidates)) {
-    return [];
+  if (error) {
+    return {
+      ok: false,
+      error: {
+        code: "database_error",
+        stage: "suggestion_lookup",
+        reason: sanitizeErrorMessage(error, "Falha técnica ao consultar candidatos para sugestão no banco de dados."),
+      },
+    };
+  }
+
+  if (!candidates || !Array.isArray(candidates)) {
+    return { ok: true, suggestions: [] };
   }
 
   const suggestions: ProductSuggestion[] = [];
   const seenUuids = new Set<string>();
 
   // 1. Se houver candidato de equivalência pendente (confirmado_por_usuario = false),
-  // ele é inserido como primeira sugestão com score de prioridade alta.
+  // ele é inserido como primeira sugestão com score de prioridade alta se possuir identidade básica válida.
   if (pendingCandidate) {
-    // Validar isolamento tenant do candidato pendente
     if (
       pendingCandidate.workspace_id === workspaceId &&
       pendingCandidate.user_id === userId
     ) {
       suggestions.push({
         produtoEyemobileUuid: pendingCandidate.id,
-        eyemobileId: pendingCandidate.eyemobile_id,
+        eyemobileId: pendingCandidate.eyemobile_id ? String(pendingCandidate.eyemobile_id).trim() : "",
         codigo: pendingCandidate.codigo ?? null,
         descricao: pendingCandidate.descricao,
         score: 0.90, // Sugestão prioritária por existência de vínculo prévio não confirmado
@@ -279,7 +363,7 @@ export async function findProductSuggestions(
       if (score >= 0.15) {
         scoredCandidates.push({
           produtoEyemobileUuid: prod.id,
-          eyemobileId: prod.eyemobile_id,
+          eyemobileId: prod.eyemobile_id ? String(prod.eyemobile_id).trim() : "",
           codigo: prod.codigo ?? null,
           descricao: prod.descricao,
           score,
@@ -302,10 +386,10 @@ export async function findProductSuggestions(
   }
 
   // Limite estrito de no máximo 5 sugestões
-  return suggestions.slice(0, 5);
+  return { ok: true, suggestions: suggestions.slice(0, 5) };
 }
 
-// ─── FLUXO PRINCIPAL DO MATCHER SEGURO ────────────────────────────
+// ─── FLUXO PRINCIPAL DO MATCHER SEGURO (HARDENED) ─────────────────
 
 /**
  * Executa o matching seguro e determinístico de um item de NF/fornecedor.
@@ -314,19 +398,26 @@ export async function findProductSuggestions(
  * 1. Validação estrita de parâmetros obrigatórios de tenant (userId, workspaceId).
  * 2. Normalização conservadora de CNPJ e código do fornecedor.
  * 3. Busca de equivalência confirmada na tabela produto_equivalencias:
+ *    - Se erro técnico na query: RETORNA ERRO IMEDIATAMENTE (nunca vira not_found).
  *    - Se confirmada (confirmado_por_usuario = true):
- *      Resolve o produto canônico correspondente em produtos_eyemobile e retorna "matched"
- *      com fator_conversao da equivalência.
+ *      a) Valida integridade referencial e multi-tenant no banco.
+ *      b) Valida fator_conversao (FAIL CLOSED: se inválido/nulo/zero/negativo, RETORNA ERRO, nunca assume 1).
+ *      c) Busca produto canônico em produtos_eyemobile (erro técnico retorna database_error).
+ *      d) Se produto canônico inexistente ou cross-tenant: RETORNA ERRO DE INTEGRIDADE (nunca cai em sugestão).
+ *      e) Valida eyemobile_id do produto canônico: se nulo ou vazio, RETORNA ERRO missing_remote_product_id.
+ *      f) Aprovado: retorna status "matched" com a identidade canônica e remota.
  *    - Se não confirmada (confirmado_por_usuario = false):
- *      NUNCA retorna "matched". Promove para o fluxo de sugestão.
- * 4. Se não houver equivalência confirmada:
+ *      NUNCA retorna "matched". Promove para o fluxo de sugestão como candidato prioritário.
+ * 4. Se não houver equivalência:
  *    - Busca sugestões baseadas na descrição do item ou equivalência pendente.
+ *    - Se erro na busca: RETORNA database_error (nunca vira not_found).
  *    - Se encontrar candidatos relevantes: retorna "suggestion" (máximo 5).
  *    - Se não encontrar nenhum candidato: retorna "not_found".
  *
  * PROIBIÇÕES E GARANTIAS:
  * - NENHUMA mutação em banco é realizada.
  * - NENHUM match automático por código idêntico ou descrição similar.
+ * - NENHUM fallback implícito para fator 1.
  */
 export async function matchProduct(
   input: ProductMatchInput,
@@ -369,39 +460,152 @@ export async function matchProduct(
       .eq("codigo_produto_fornecedor", codigoNormalizado)
       .maybeSingle();
 
-    if (!equivError && equivRow) {
-      // Defesa em profundidade multi-tenant: validação explícita no código
-      const isSameTenant =
-        equivRow.workspace_id === workspaceId && equivRow.user_id === userId;
+    // ERRO DE BANCO NÃO É NOT_FOUND: Propagar falha técnica imediatamente
+    if (equivError) {
+      return {
+        status: "error",
+        code: "database_error",
+        stage: "equivalence_lookup",
+        reason: sanitizeErrorMessage(equivError, "Falha técnica ao consultar equivalência no banco de dados."),
+      };
+    }
 
-      if (isSameTenant && equivRow.produto_eyemobile_uuid) {
-        // Buscar o produto canônico correspondente
+    if (equivRow) {
+      const equivData = equivRow as {
+        id: string;
+        user_id: string;
+        workspace_id: string;
+        produto_eyemobile_uuid: string;
+        fator_conversao: unknown;
+        confirmado_por_usuario: boolean;
+      };
+
+      // Se a equivalência foi CONFIRMADA pelo usuário, aplicamos fail-closed rigoroso:
+      // Qualquer anomalia de integridade deve falhar fechado com status "error",
+      // NUNCA presumir fator 1 e NUNCA degradar para sugestão fuzzy silenciosa!
+      if (equivData.confirmado_por_usuario === true) {
+        // A. Defesa em profundidade multi-tenant na própria linha de equivalência
+        if (equivData.workspace_id !== workspaceId || equivData.user_id !== userId) {
+          return {
+            status: "error",
+            code: "invalid_equivalence",
+            stage: "integrity_validation",
+            reason: "Equivalência confirmada viola regras de isolamento multi-tenant (cross-tenant).",
+          };
+        }
+
+        // B. Validação da chave canônica apontada
+        if (
+          !equivData.produto_eyemobile_uuid ||
+          typeof equivData.produto_eyemobile_uuid !== "string" ||
+          equivData.produto_eyemobile_uuid.trim() === ""
+        ) {
+          return {
+            status: "error",
+            code: "invalid_equivalence",
+            stage: "integrity_validation",
+            reason: "Equivalência confirmada não possui chave canônica (produto_eyemobile_uuid) válida.",
+          };
+        }
+
+        // C. Validação de fator_conversao (FAIL-CLOSED ABSOLUTO: NUNCA assumir 1)
+        const rawFator = equivData.fator_conversao;
+        const fatorNum = typeof rawFator === "number" ? rawFator : Number(rawFator);
+        if (
+          rawFator === null ||
+          rawFator === undefined ||
+          rawFator === "" ||
+          !Number.isFinite(fatorNum) ||
+          fatorNum <= 0
+        ) {
+          return {
+            status: "error",
+            code: "invalid_conversion_factor",
+            stage: "integrity_validation",
+            reason: `Fator de conversão da equivalência é inválido (${String(rawFator)}). Exige valor numérico finito maior que zero.`,
+          };
+        }
+
+        // D. Consulta ao produto canônico no banco
         const { data: prodRow, error: prodError } = await client
           .from("produtos_eyemobile")
           .select("id, eyemobile_id, codigo, descricao, user_id, workspace_id")
-          .eq("id", equivRow.produto_eyemobile_uuid)
+          .eq("id", equivData.produto_eyemobile_uuid)
           .eq("workspace_id", workspaceId)
           .eq("user_id", userId)
           .maybeSingle();
 
-        if (!prodError && prodRow && prodRow.workspace_id === workspaceId && prodRow.user_id === userId) {
-          // CENÁRIO A: EQUIVALÊNCIA CONFIRMADA PELO USUÁRIO -> MATCH VÁLIDO
-          if (equivRow.confirmado_por_usuario === true) {
-            const fatorNum = Number(equivRow.fator_conversao);
-            const fatorValido = Number.isFinite(fatorNum) && fatorNum > 0 ? fatorNum : 1;
+        if (prodError) {
+          return {
+            status: "error",
+            code: "database_error",
+            stage: "canonical_product_lookup",
+            reason: sanitizeErrorMessage(prodError, "Falha técnica ao consultar produto canônico no banco de dados."),
+          };
+        }
 
-            return {
-              status: "matched",
-              source: "confirmed_equivalence",
-              produtoEyemobileUuid: prodRow.id,
-              eyemobileId: prodRow.eyemobile_id,
-              fatorConversao: fatorValido,
-            };
+        // E. Produto canônico ausente no tenant -> ERRO DE INTEGRIDADE
+        if (!prodRow) {
+          return {
+            status: "error",
+            code: "invalid_equivalence",
+            stage: "integrity_validation",
+            reason: "Equivalência confirmada aponta para produto Eyemobile não encontrado no workspace do usuário.",
+          };
+        }
+
+        const prodData = prodRow as CandidateProductRow;
+
+        // F. Defesa em profundidade multi-tenant no produto
+        if (prodData.workspace_id !== workspaceId || prodData.user_id !== userId) {
+          return {
+            status: "error",
+            code: "invalid_equivalence",
+            stage: "integrity_validation",
+            reason: "Produto canônico vinculado à equivalência pertence a outro tenant.",
+          };
+        }
+
+        // G. Validação obrigatória de eyemobile_id (identidade remota)
+        if (
+          !prodData.eyemobile_id ||
+          typeof prodData.eyemobile_id !== "string" ||
+          prodData.eyemobile_id.trim() === ""
+        ) {
+          return {
+            status: "error",
+            code: "missing_remote_product_id",
+            stage: "integrity_validation",
+            reason: "Produto canônico vinculado não possui identificador remoto Eyemobile (eyemobile_id) válido.",
+          };
+        }
+
+        // TODOS OS CHECKS DE INTEGRIDADE APROVADOS: Retorno seguro de MATCHED
+        return {
+          status: "matched",
+          source: "confirmed_equivalence",
+          produtoEyemobileUuid: prodData.id,
+          eyemobileId: prodData.eyemobile_id.trim(),
+          fatorConversao: fatorNum,
+        };
+      }
+
+      // CENÁRIO: EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false)
+      // NUNCA produz "matched". Resolve o produto apenas para sugerir de forma prioritária.
+      if (equivData.produto_eyemobile_uuid) {
+        const { data: prodRow } = await client
+          .from("produtos_eyemobile")
+          .select("id, eyemobile_id, codigo, descricao, user_id, workspace_id")
+          .eq("id", equivData.produto_eyemobile_uuid)
+          .eq("workspace_id", workspaceId)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (prodRow) {
+          const prodCandidate = prodRow as CandidateProductRow;
+          if (prodCandidate.workspace_id === workspaceId && prodCandidate.user_id === userId) {
+            pendingCandidateRow = prodCandidate;
           }
-
-          // CENÁRIO C: EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false)
-          // JAMAIS PRODUZ "matched". Fica guardado como candidato prioritário para sugestão.
-          pendingCandidateRow = prodRow as CandidateProductRow;
         }
       }
     }
@@ -409,7 +613,7 @@ export async function matchProduct(
 
   // ─── 3. BUSCA DE SUGESTÕES (NUNCA RETORNA "matched") ───────────
   if (temDescricao || pendingCandidateRow) {
-    const suggestions = await findProductSuggestions(
+    const suggestionsResult = await findProductSuggestions(
       workspaceId,
       userId,
       input.descricao,
@@ -417,10 +621,20 @@ export async function matchProduct(
       client
     );
 
-    if (suggestions.length > 0) {
+    // Se houve erro técnico no banco durante a busca de sugestões, propagar como erro
+    if (!suggestionsResult.ok) {
+      return {
+        status: "error",
+        code: suggestionsResult.error.code,
+        stage: suggestionsResult.error.stage,
+        reason: suggestionsResult.error.reason,
+      };
+    }
+
+    if (suggestionsResult.suggestions.length > 0) {
       return {
         status: "suggestion",
-        suggestions,
+        suggestions: suggestionsResult.suggestions,
       };
     }
   }
