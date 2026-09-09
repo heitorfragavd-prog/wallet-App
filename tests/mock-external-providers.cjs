@@ -5,6 +5,7 @@ let stats = {
   divipayCalls: 0,
   eyemobileCalls: 0,
   lastOpenaiPayload: null,
+  openaiMode: 'success', // 'success' | 'error' | 'timeout'
 };
 
 const server = http.createServer((req, res) => {
@@ -16,9 +17,33 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/reset' && req.method === 'POST') {
-    stats = { openaiCalls: 0, divipayCalls: 0, eyemobileCalls: 0, lastOpenaiPayload: null };
+    stats = { 
+      openaiCalls: 0, 
+      divipayCalls: 0, 
+      eyemobileCalls: 0, 
+      lastOpenaiPayload: null,
+      openaiMode: 'success'
+    };
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true }));
+    return res.end(JSON.stringify({ ok: true, stats }));
+  }
+
+  if (url.pathname === '/mock/openai/mode' && req.method === 'POST') {
+    let modeBody = '';
+    req.on('data', chunk => { modeBody += chunk; });
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(modeBody);
+        if (parsed.mode) {
+          stats.openaiMode = parsed.mode;
+        }
+      } catch (e) {
+        // ignore
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, openaiMode: stats.openaiMode }));
+    });
+    return;
   }
 
   let body = '';
@@ -33,7 +58,9 @@ const server = http.createServer((req, res) => {
         stats.lastOpenaiPayload = body;
       }
 
-      if (url.searchParams.get('simulate') === 'timeout') {
+      const simulateMode = url.searchParams.get('simulate') || req.headers['x-simulate'] || stats.openaiMode;
+
+      if (simulateMode === 'timeout') {
         // Simular timeout nao respondendo de imediato
         return setTimeout(() => {
           res.writeHead(504, { 'Content-Type': 'application/json' });
@@ -41,10 +68,22 @@ const server = http.createServer((req, res) => {
         }, 3000);
       }
 
-      if (url.searchParams.get('simulate') === 'error') {
+      if (simulateMode === 'error') {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: { message: 'OpenAI Internal Error' } }));
+        return res.end(JSON.stringify({ 
+          error: { 
+            message: 'OpenAI Internal Error',
+            type: 'server_error',
+            code: 'service_unavailable'
+          } 
+        }));
       }
+
+      const mockAiContent = JSON.stringify({
+        categoria: 'alimentacao',
+        confianca: 0.95,
+        justificativa: 'Compra de suprimentos alimenticios'
+      });
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -57,7 +96,7 @@ const server = http.createServer((req, res) => {
             index: 0,
             message: {
               role: 'assistant',
-              content: 'Resposta simulada segura do provedor de IA.',
+              content: mockAiContent,
             },
             finish_reason: 'stop',
           },

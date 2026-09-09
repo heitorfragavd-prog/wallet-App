@@ -81,6 +81,7 @@ export async function handleCategorizarIA(
 
     const OPENAI_API_KEY = (typeof Deno !== "undefined" ? Deno.env.get("OPENAI_API_KEY") : process.env.OPENAI_API_KEY) || "";
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada");
+    const OPENAI_BASE_URL = ((typeof Deno !== "undefined" ? Deno.env.get("OPENAI_BASE_URL") : process.env.OPENAI_BASE_URL) || "https://api.openai.com/v1").replace(/\/$/, "");
 
     const sanitizedDescricao = sanitizeAiInput(String(descricao || "").slice(0, 250).replace(/[\r\n\t]/g, " ").trim());
     const cleanTipo = tipo === "receita" ? "receita" : "despesa";
@@ -105,7 +106,7 @@ Responda APENAS em JSON válido no formato:
     let isTimeout = false;
 
     try {
-      response = await doFetch("https://api.openai.com/v1/chat/completions", {
+      response = await doFetch(`${OPENAI_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${OPENAI_API_KEY}`,

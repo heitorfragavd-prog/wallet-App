@@ -1,9 +1,21 @@
 import { test, expect } from '@playwright/test';
+import { Client } from 'pg';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'http://localhost:54321';
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NDk5NjQ4MDAsImV4cCI6MTk2NTUzMjgwMH0.6pnT9q8_Z3M3s9a0Y7mPqQ0P2QjP0V9O7W4qM3a0Z5g';
 const INBUCKET_URL = process.env.INBUCKET_URL || 'http://localhost:54324';
 const _MOCK_PROVIDER_URL = process.env.MOCK_PROVIDER_URL || 'http://localhost:18080';
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+
+async function executeSql(query: string, params: unknown[] = []): Promise<any> {
+  const client = new Client({ connectionString: DATABASE_URL });
+  await client.connect();
+  try {
+    return await client.query(query, params);
+  } finally {
+    await client.end();
+  }
+}
 
 // Helper para chamadas diretas ao PostgREST
 async function postgrest(endpoint: string, options: { method?: string; body?: unknown; token?: string; headers?: Record<string, string> } = {}) {
@@ -460,12 +472,23 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
     }
   });
 
-  test('8. Edge Functions de IA: Reserva prévia no banco, bloqueio por quota e provedor simulado', async () => {
+  test('8. Edge Functions de IA: Separação de sucesso, quota e falha do provedor com reconciliação', async () => {
     await ensureUser1();
     await ensureUser2();
     await ensureUser1Workspace();
-    // 8.1 Chamada para categorizar-ia via Edge Function
-    const efRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
+
+    const mockStatsUrl = `${_MOCK_PROVIDER_URL}/stats`;
+    const mockResetUrl = `${_MOCK_PROVIDER_URL}/reset`;
+    const mockModeUrl = `${_MOCK_PROVIDER_URL}/mock/openai/mode`;
+
+    // =========================================================================
+    // 8.1 Cenário 1: Sucesso — Provedor simulado responde 200 válido
+    // =========================================================================
+    // Reseta estatísticas do mock e assegura modo 'success'
+    await fetch(mockResetUrl, { method: 'POST' });
+    await fetch(mockModeUrl, { method: 'POST', body: JSON.stringify({ mode: 'success' }) });
+
+    const successRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${user1Token}`,
@@ -478,10 +501,114 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
         workspace_id: user1WorkspaceId,
       })
     });
-    // Resposta esperada: 200 (se servico mock ativo), 429 (se quota esgotada), 403 (workspace) ou 401
-    expect([200, 401, 403, 429, 502]).toContain(efRes.status);
 
-    // 8.2 Chamada com workspace forjado de outro usuario -> DEVE retornar 403 ou 401 antes do provedor
+    // Exigir status 200 estrito (sem aceitação conjunta de erros)
+    expect(successRes.status).toBe(200);
+    const successData = await successRes.json();
+    expect(successData).toBeDefined();
+    expect(successData.categoria).toBe('alimentacao');
+    expect(successData.confianca).toBeGreaterThanOrEqual(0.9);
+
+    // Comprova que o provedor simulado foi chamado exatamente uma vez
+    const statsAfterSuccess = await (await fetch(mockStatsUrl)).json();
+    expect(statsAfterSuccess.openaiCalls).toBe(1);
+
+    // Confirma no banco a reserva e reconciliação com status 'reconciled' e outcome 'success'
+    const dbReservation = await executeSql(
+      `SELECT status, actual_tokens, outcome 
+       FROM public.ai_token_reservations 
+       WHERE user_id = $1 AND action = 'categorizar_ia' 
+       ORDER BY created_at DESC LIMIT 1;`,
+      [user1Id]
+    );
+    expect(dbReservation.rows.length).toBe(1);
+    expect(dbReservation.rows[0].status).toBe('reconciled');
+    expect(dbReservation.rows[0].outcome).toBe('success');
+    expect(Number(dbReservation.rows[0].actual_tokens)).toBe(50);
+
+    // =========================================================================
+    // 8.2 Cenário 2: Quota Esgotada — Rejeição 429 e provedor NÃO é chamado
+    // =========================================================================
+    // Zera os contadores do mock
+    await fetch(mockResetUrl, { method: 'POST' });
+
+    // Esgota a quota inserindo contagem no teto máximo no rate limiter
+    const rpmBucketKey = `ws:${user1WorkspaceId}:user:${user1Id}:categorizar_ia:rpm`;
+    await executeSql(
+      `INSERT INTO public.rate_limits (bucket_key, request_count, window_start, last_request)
+       VALUES ($1, 20, now(), now())
+       ON CONFLICT (bucket_key) DO UPDATE SET request_count = 20, window_start = now();`,
+      [rpmBucketKey]
+    );
+
+    const quotaRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        descricao: 'Tentativa após estourar a quota',
+        valor: 50.00,
+        workspace_id: user1WorkspaceId,
+      })
+    });
+
+    // Exigir status 429 estrito com mensagem de limite excedido
+    expect(quotaRes.status).toBe(429);
+    const quotaData = await quotaRes.json();
+    expect(quotaData.error).toMatch(/limite|excedido/i);
+
+    // Comprova que o provedor externo NÃO FOI CHAMADO
+    const statsAfterQuota = await (await fetch(mockStatsUrl)).json();
+    expect(statsAfterQuota.openaiCalls).toBe(0);
+
+    // Restaura a quota para não afetar os próximos testes
+    await executeSql(`DELETE FROM public.rate_limits WHERE bucket_key = $1;`, [rpmBucketKey]);
+
+    // =========================================================================
+    // 8.3 Cenário 3: Falha do Provedor — Tratamento de erro sem contabilizar como sucesso funcional
+    // =========================================================================
+    await fetch(mockResetUrl, { method: 'POST' });
+    // Configura o mock para simular erro HTTP 500
+    await fetch(mockModeUrl, { method: 'POST', body: JSON.stringify({ mode: 'error' }) });
+
+    const failRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        descricao: 'Compra durante falha da API externa',
+        valor: 75.00,
+        workspace_id: user1WorkspaceId,
+      })
+    });
+
+    // A função retorna fallback com confianca 0 (não é sucesso funcional)
+    const failData = await failRes.json();
+    expect(failData.confianca).toBe(0);
+
+    // Confirma no banco que a reconciliação foi registrada com outcome 'error'
+    const dbFailReservation = await executeSql(
+      `SELECT status, actual_tokens, outcome 
+       FROM public.ai_token_reservations 
+       WHERE user_id = $1 AND action = 'categorizar_ia' 
+       ORDER BY created_at DESC LIMIT 1;`,
+      [user1Id]
+    );
+    expect(dbFailReservation.rows.length).toBe(1);
+    expect(dbFailReservation.rows[0].outcome).toBe('error');
+
+    // Restaura o mock para modo 'success'
+    await fetch(mockModeUrl, { method: 'POST', body: JSON.stringify({ mode: 'success' }) });
+
+    // =========================================================================
+    // 8.4 Cenário 4: Workspace Spoofing — Rejeição prévia de autorização (403)
+    // =========================================================================
     const spoofedRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
       method: 'POST',
       headers: {
@@ -492,7 +619,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
       body: JSON.stringify({
         descricao: 'Teste Spoofed',
         valor: 50.00,
-        workspace_id: user2WorkspaceId, // Workspace pertencente ao Usuario 2
+        workspace_id: user2WorkspaceId,
       })
     });
     expect([401, 403]).toContain(spoofedRes.status);
