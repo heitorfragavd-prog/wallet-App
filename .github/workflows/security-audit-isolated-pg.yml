@@ -92,12 +92,12 @@ jobs:
 
       - name: Validate Edge Functions on Deno Runtime
         run: |
-          deno check supabase/functions/openai-proxy/index.ts
-          deno check supabase/functions/categorizar-ia/index.ts
-          deno check supabase/functions/ia-deposito/index.ts
-          deno check supabase/functions/divipay-api/index.ts
-          deno check supabase/functions/divipay-webhook/index.ts
-          deno check supabase/functions/validar-senha/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/openai-proxy/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/categorizar-ia/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/ia-deposito/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-api/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
 
   e2e-browser-homologation:
     name: Full E2E Browser & Real Supabase Stack Homologation
@@ -118,13 +118,34 @@ jobs:
 
       - name: Start Real Supabase Stack (PostgreSQL, Auth, PostgREST, Inbucket)
         run: |
-          # Isola a migracao da Fase C para respeitar o gating durante o start inicial da Fase A
-          mkdir -p supabase/phase_c
-          mv supabase/migrations/20260908120001_security_phase_c_enforcement.sql supabase/phase_c/
+          # Isola migrations legadas do repositório para inicialização com schema real consolidado
+          mkdir -p supabase/all_migrations
+          mv supabase/migrations/* supabase/all_migrations/
+
+          # Copia o baseline real e as migrations da auditoria
+          cp tests/setup-e2e-real-schema.sql supabase/migrations/20240101000000_setup_e2e_real_schema.sql
+          cp supabase/all_migrations/20260908120000_security_phase_a_infrastructure.sql supabase/migrations/
+          cp supabase/all_migrations/20260908120001_security_phase_c_enforcement.sql supabase/migrations/
+
+          # Inicia a stack completa do Supabase
           supabase start
-          # Retorna a migracao para o diretorio apos o start
-          mv supabase/phase_c/20260908120001_security_phase_c_enforcement.sql supabase/migrations/
-          rm -rf supabase/phase_c
+
+          # Gera variaveis seguras simuladas para as Edge Functions locais
+          cat << 'EOF' > .env.functions.test
+          SUPABASE_URL=http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY0OTk2NDgwMCwiZXhwIjoxOTY1NTMyODAwfQ.dummy_service_key_for_test
+          OPENAI_BASE_URL=http://localhost:18080/v1
+          OPENAI_API_KEY=mock-openai-key-for-test
+          EOF
+
+          # Inicia Edge Functions no runtime compatível local
+          supabase functions serve --env-file .env.functions.test --no-verify-jwt &
+          sleep 5
+
+          # Restaura o diretório de migrations original
+          rm -f supabase/migrations/20240101000000_setup_e2e_real_schema.sql
+          mv supabase/all_migrations/* supabase/migrations/
+          rm -rf supabase/all_migrations
 
       - name: Install Playwright and Dependencies
         run: |

@@ -10,6 +10,9 @@
 -- -------------------------------------------------------------------------
 BEGIN;
 
+DROP VIEW IF EXISTS public.divipay_config_safe, public.eyemobile_config_safe CASCADE;
+DROP TABLE IF EXISTS public.divipay_config, public.eyemobile_config, public.investimentos, public.workspaces, public.profiles, public.senha_investimentos, public.ai_token_reservations, public.rate_limits, public.investimentos_sessions CASCADE;
+
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (
   id UUID PRIMARY KEY,
