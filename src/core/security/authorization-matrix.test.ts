@@ -16,7 +16,6 @@ import {
   processValidarSenha,
   extractSessionIdFromJwt,
   createInvestmentToken,
-  verifyInvestmentToken,
   derivePbkdf2Hash,
 } from "../../../supabase/functions/_shared/validar-senha-core.ts";
 import { checkSharedRateLimit, reconcileAiTokens } from "../../../supabase/functions/_shared/ai-rate-limiter.ts";
@@ -35,7 +34,7 @@ function createMockJwt(userId: string, sessionId: string, role = "authenticated"
 
 describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Produção", () => {
   const userA = { id: "user-uuid-1111", email: "usera@example.com" };
-  const userAdmin = { id: "admin-uuid-9999", email: "admin@example.com" };
+  const _userAdmin = { id: "admin-uuid-9999", email: "admin@example.com" };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -184,10 +183,10 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
           return {
             delete: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
-            insert: vi.fn().mockImplementation((payload: any) => {
-              userSessionStore[payload.session_id] = {
-                userId: payload.user_id,
-                expiresAt: payload.expires_at,
+            insert: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+              userSessionStore[String(payload.session_id)] = {
+                userId: String(payload.user_id),
+                expiresAt: String(payload.expires_at),
               };
               return Promise.resolve({ error: null });
             }),
@@ -217,7 +216,7 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
   });
 
   it("6. Rate Limiter Compartilhado: Previne manipulação de chave pelo cliente e aplica bloqueio atômico", async () => {
-    const mockDbRpc = vi.fn().mockImplementation((fnName: string, args: any) => {
+    const mockDbRpc = vi.fn().mockImplementation((fnName: string, args: { p_key: string }) => {
       if (fnName === "check_rate_limit") {
         if (args.p_key.includes("limite_estourado")) {
           return Promise.resolve({
@@ -343,13 +342,13 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
     const updateSenhaMock = vi.fn();
     const rpcMock = vi.fn().mockResolvedValue({ data: [{ tentativas_falhas: 1, bloqueado: false }], error: null });
 
-    const createChain = (cb?: Function) => {
-      const chain: any = {
-        eq: vi.fn((col: string, val: any) => {
+    const createChain = (cb?: (col: string, val: unknown) => void) => {
+      const chain = {
+        eq: vi.fn((col: string, val: unknown) => {
           if (cb) cb(col, val);
           return chain;
         }),
-        then: (resolve: any) => Promise.resolve({ error: null }).then(resolve),
+        then: (resolve: (value: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve),
       };
       return chain;
     };
@@ -497,10 +496,11 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
     const mockAdminFalhaDelete = {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userA }, error: null }) },
       from: vi.fn(() => {
-        const chain: any = {
+        const chain = {
           delete: vi.fn().mockReturnThis(),
           eq: vi.fn().mockImplementation(() => chain),
-          then: (resolve: any) => Promise.resolve({ error: { message: "Foreign key lock timeout" } }).then(resolve),
+          then: (resolve: (value: { error: { message: string } }) => unknown) =>
+            Promise.resolve({ error: { message: "Foreign key lock timeout" } }).then(resolve),
         };
         return chain;
       }),
@@ -519,7 +519,7 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
   });
 
   it("12. Orçamento de IA: Contabiliza proporcionalmente tokens consumidos contra teto por hora", async () => {
-    const mockDbRpc = vi.fn().mockImplementation((fnName: string, args: any) => {
+    const mockDbRpc = vi.fn().mockImplementation((fnName: string, args: { p_key: string; p_cost: number }) => {
       if (fnName === "check_rate_limit") {
         if (args.p_key.includes(":tph") && args.p_cost >= 60000) {
           return Promise.resolve({
@@ -652,7 +652,7 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
 
     // 15b. RPM passa, mas RPC de cota de tokens (TPH) falha -> Fail-closed estrito
     const mockTphError = {
-      rpc: vi.fn().mockImplementation((fnName: string, args: any) => {
+      rpc: vi.fn().mockImplementation((fnName: string, args: { p_key: string }) => {
         if (args.p_key.includes(":tph")) {
           return Promise.resolve({ data: null, error: { message: "TPH RPC error" } });
         }

@@ -21,6 +21,11 @@ import {
 } from "../../../supabase/functions/_shared/ssrf-validator.ts";
 
 describe("Proteção Anti-SSRF em Requisições Externas", () => {
+  it("Valida lista de domínios permitidos", () => {
+    expect(ALLOWED_WEBHOOK_DOMAINS.length).toBeGreaterThan(0);
+    expect(ALLOWED_WEBHOOK_DOMAINS).toContain("api.openai.com");
+  });
+
   it("Valida diretamente a função isPrivateOrRestrictedIp", () => {
     expect(isPrivateOrRestrictedIp("127.0.0.1")).toBe(true);
     expect(isPrivateOrRestrictedIp("10.0.0.1")).toBe(true);

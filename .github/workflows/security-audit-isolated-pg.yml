@@ -44,10 +44,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install pg client for concurrency tests
+        run: npm install --no-save pg
 
       - name: Run PostgreSQL Security Battery (Phase A, Phase C, RLS, Concurrency & Column Security)
         env:
