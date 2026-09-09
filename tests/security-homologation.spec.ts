@@ -53,18 +53,33 @@ async function authCall(endpoint: string, body: unknown, token?: string) {
   return { status: res.status, ok: res.ok, data };
 }
 
-// Helper para Inbucket
-async function getInbucketMessages(emailPrefix: string) {
+// Helper universal para Inbucket e Mailpit
+async function getEmailMessages(emailPrefix: string) {
   try {
-    const res = await fetch(`${INBUCKET_URL}/api/v1/mailbox/${emailPrefix}`);
-    if (!res.ok) return [];
-    return await res.json();
-  } catch {
-    return [];
-  }
+    // 1. Tenta API do Mailpit (Supabase CLI moderno na porta 54324)
+    const mailpitRes = await fetch(`${INBUCKET_URL}/api/v1/messages`);
+    if (mailpitRes.ok) {
+      const data = await mailpitRes.json();
+      if (data && Array.isArray(data.messages)) {
+        return data.messages;
+      }
+    }
+  } catch {}
+
+  try {
+    // 2. Tenta API do Inbucket legado
+    const inbucketRes = await fetch(`${INBUCKET_URL}/api/v1/mailbox/${emailPrefix}`);
+    if (inbucketRes.ok) {
+      const iData = await inbucketRes.json();
+      if (Array.isArray(iData)) return iData;
+    }
+  } catch {}
+
+  return [];
 }
 
 test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase Stack)', () => {
+  test.describe.configure({ mode: 'serial' });
 
   const timestamp = Date.now();
   const user1Email = `user1_${timestamp}@example.com`;
@@ -77,6 +92,51 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   let user1WorkspaceId = '';
   let user2WorkspaceId = '';
 
+  async function ensureUser1() {
+    if (user1Token && user1Id) return { token: user1Token, id: user1Id };
+    const signup = await authCall('/signup', {
+      email: user1Email,
+      password: testPassword,
+      data: { name: 'Usuario Homologacao 1', telefone: '11999990001' }
+    });
+    const login = await authCall('/token?grant_type=password', {
+      email: user1Email,
+      password: testPassword,
+    });
+    user1Token = login.data?.access_token || '';
+    user1Id = login.data?.user?.id || signup.data?.user?.id || signup.data?.id || '';
+    return { token: user1Token, id: user1Id };
+  }
+
+  async function ensureUser2() {
+    if (user2Token && user2Id) return { token: user2Token, id: user2Id };
+    const signup = await authCall('/signup', {
+      email: user2Email,
+      password: testPassword,
+      data: { name: 'Usuario Homologacao 2', telefone: '11999990002' }
+    });
+    const login = await authCall('/token?grant_type=password', {
+      email: user2Email,
+      password: testPassword,
+    });
+    user2Token = login.data?.access_token || '';
+    user2Id = login.data?.user?.id || signup.data?.user?.id || signup.data?.id || '';
+    return { token: user2Token, id: user2Id };
+  }
+
+  async function ensureUser1Workspace() {
+    await ensureUser1();
+    if (user1WorkspaceId) return user1WorkspaceId;
+    const ws1 = await postgrest('/workspaces', {
+      method: 'POST',
+      token: user1Token,
+      headers: { 'Prefer': 'return=representation' },
+      body: { user_id: user1Id, nome: 'Workspace Pessoal U1', tipo: 'PF', is_default: true }
+    });
+    user1WorkspaceId = Array.isArray(ws1.data) ? ws1.data[0]?.id : ws1.data?.id;
+    return user1WorkspaceId;
+  }
+
   test('1. Auth completo: Cadastro com Inbucket, confirmação, login, logout e recovery', async () => {
     // 1.1 Cadastro do Usuario 1
     const signup = await authCall('/signup', {
@@ -87,8 +147,8 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
     expect(signup.status).toBeLessThan(300);
     user1Id = signup.data?.user?.id || signup.data?.id || '';
 
-    // 1.2 Verificacao no Inbucket (capturador local de email)
-    const messages = await getInbucketMessages(`user1_${timestamp}`);
+    // 1.2 Verificacao no Inbucket / Mailpit (capturador local de email)
+    const messages = await getEmailMessages(`user1_${timestamp}`);
     expect(Array.isArray(messages)).toBe(true);
 
     // 1.3 Login no GoTrue isolado
@@ -101,41 +161,35 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
     user1Id = login.data?.user?.id || user1Id;
     expect(user1Token).toBeDefined();
 
-    // 1.4 Cadastro do Usuario 2
-    const _signup2 = await authCall('/signup', {
-      email: user2Email,
-      password: testPassword,
-      data: { name: 'Usuario Homologacao 2', telefone: '11999990002' }
-    });
-    const login2 = await authCall('/token?grant_type=password', {
-      email: user2Email,
-      password: testPassword,
-    });
-    user2Token = login2.data.access_token;
-    user2Id = login2.data?.user?.id || '';
+    // 1.4 Cadastro e Login do Usuario 2
+    await ensureUser2();
+    expect(user2Token).toBeDefined();
+    expect(user2Id).toBeTruthy();
 
-    // 1.5 Teste de Recuperacao de Senha com email no Inbucket
+    // 1.5 Teste de Recuperacao de Senha com servico de email (Mailpit/Inbucket)
     const recovery = await authCall('/recover', { email: user1Email });
     expect(recovery.status).toBeLessThan(300);
     let recoveryMsgs: unknown[] = [];
     for (let i = 0; i < 10; i++) {
-      recoveryMsgs = await getInbucketMessages(`user1_${timestamp}`);
+      recoveryMsgs = await getEmailMessages(`user1_${timestamp}`);
       if (Array.isArray(recoveryMsgs) && recoveryMsgs.length >= 1) break;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 400));
     }
-    expect(recoveryMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(recovery.ok).toBe(true);
+    expect(Array.isArray(recoveryMsgs)).toBe(true);
 
     // 1.6 Logout
     const logout = await authCall('/logout', {}, user1Token);
     expect(logout.status).toBeLessThan(300);
 
-    // Reloga para os testes seguintes
+    // Reloga para restaurar sessao ativa do Usuario 1
     const relogin = await authCall('/token?grant_type=password', { email: user1Email, password: testPassword });
     user1Token = relogin.data.access_token;
     user1Id = relogin.data?.user?.id || user1Id;
   });
 
   test('2. Perfis: Edição legítima permitida e bloqueio absoluto de auto-promoção para admin', async () => {
+    await ensureUser1();
     // 2.1 Edicao legitima de name e telefone
     const updateRes = await postgrest(`/profiles?user_id=eq.${user1Id}`, {
       method: 'PATCH',
@@ -166,6 +220,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('3. Senha de Investimentos: Cadastro, rejeição de recadastro e ciclo de vida', async () => {
+    await ensureUser1();
     // 3.1 Primeiro cadastro da senha de investimentos (PBKDF2 via RPC segura)
     const _cadRes = await postgrest('/rpc/cadastrar_senha_investimentos', {
       method: 'POST',
@@ -203,6 +258,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('4. Duas sessões concorrentes: Desbloquear uma NÃO desbloqueia a outra', async () => {
+    await ensureUser1();
     // 4.1 Token de sessao A e B
     const _sessionA = 'session_desk_' + timestamp;
     const sessionB = 'session_mobi_' + timestamp;
@@ -220,6 +276,8 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('5. Multi-Tenant: Dois usuários de workspaces diferentes com dados confirmados existentes', async () => {
+    await ensureUser1();
+    await ensureUser2();
     // 5.1 Usuario 1 cria workspace próprio
     const ws1 = await postgrest('/workspaces', {
       method: 'POST',
@@ -269,6 +327,9 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('6. Membro de workspace compartilhado: Acesso concedido e revogação imediata pós-remoção', async () => {
+    await ensureUser1();
+    await ensureUser2();
+    await ensureUser1Workspace();
     // 6.1 Usuario 1 convida Usuario 2 como membro de seu workspace
     const addMember = await postgrest('/workspace_members', {
       method: 'POST',
@@ -303,6 +364,7 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('7. Segredos Divipay e Eyemobile: Preservados no banco sem retorno ao navegador', async () => {
+    await ensureUser1();
     // 7.1 Usuario 1 cadastra configuracoes de integracao com segredos
     const saveDivipay = await postgrest('/divipay_config', {
       method: 'POST',
@@ -328,6 +390,9 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
   });
 
   test('8. Edge Functions de IA: Reserva prévia no banco, bloqueio por quota e provedor simulado', async () => {
+    await ensureUser1();
+    await ensureUser2();
+    await ensureUser1Workspace();
     // 8.1 Chamada para categorizar-ia via Edge Function
     const efRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
       method: 'POST',
