@@ -1226,6 +1226,8 @@ Deno.serve(async (req: Request) => {
       corsHeaders: CORS_HEADERS,
     });
   }
+
+  const reservationId = (rateCheck as any).reservationId;
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
@@ -1332,13 +1334,16 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         metadata: { status: response.status, error: JSON.stringify(data).slice(0, 300) },
       });
 
-      // Libera a reserva prévia em caso de erro no upstream
-      reconcileAiTokens(supabase, {
+      // Libera a reserva prévia em caso de erro no upstream (ou retém estimativa se for timeout)
+      const outcome = isTimeout ? "timeout" : "error";
+      await reconcileAiTokens(supabase, {
         userId,
         workspaceId: body.workspace_id,
         action: "openai_proxy",
+        reservationId,
         reservedTokens: estimatedTokens,
-        actualTokensConsumed: 0,
+        actualTokensConsumed: outcome === "timeout" ? undefined : 0,
+        outcome,
       }).catch(() => {});
 
       return createErrorResponse(req, {
@@ -1374,13 +1379,15 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         execution_status: "success",
       }).then(() => {});
 
-      // Reconciliação exata: ajusta a diferença entre a reserva prévia e o consumo real
-      reconcileAiTokens(supabase, {
+      // Reconciliação exata durável: ajusta a diferença entre a reserva prévia e o consumo real
+      await reconcileAiTokens(supabase, {
         userId,
         workspaceId: body.workspace_id,
         action: "openai_proxy",
+        reservationId,
         reservedTokens: estimatedTokens,
         actualTokensConsumed: usage.total_tokens || 0,
+        outcome: "success",
       }).catch((err) => logger.warn("Falha ao reconciliar tokens consumidos", { error: String(err) }));
 
       return new Response(JSON.stringify({ ...data, correlation_id: correlationId }), {

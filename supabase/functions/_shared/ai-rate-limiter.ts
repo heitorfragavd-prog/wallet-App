@@ -19,6 +19,7 @@ export interface RateLimitResult {
   currentCount: number;
   limit: number;
   reason?: string;
+  reservationId?: string;
 }
 
 export interface RateLimitOptions {
@@ -27,6 +28,8 @@ export interface RateLimitOptions {
   action?: string;
   maxRequestsPerMinute?: number;
   tokensConsumed?: number;
+  reserveTokens?: number;
+  reservationId?: string;
   maxTokensPerHour?: number;
 }
 
@@ -94,18 +97,82 @@ export async function checkSharedRateLimit(
       };
     }
 
-    // 2. Verificação e Débito/Reserva de Tokens por Hora (TPH)
-    const tokensToCharge = Math.max(0, Math.round(options.tokensConsumed || options.reserveTokens || 0));
-    if (tokensToCharge > 0 && maxTokensPerHour > 0) {
+    // 2. Verificação e Débito/Reserva de Tokens por Hora (TPH) com Idempotência
+    const reserveTokens = options.reserveTokens ? Math.max(0, Math.round(options.reserveTokens)) : 0;
+    const directTokens = options.tokensConsumed ? Math.max(0, Math.round(options.tokensConsumed)) : 0;
+    let reservationId = options.reservationId;
+
+    if (reserveTokens > 0 && maxTokensPerHour > 0) {
+      const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
+
+      if (!reservationId) {
+        reservationId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `res_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      }
+
+      // Tentativa primária: RPC atômica reserve_ai_tokens (com rastreamento de janela e idempotência)
+      const { data: tokenResult, error: tokenError } = await supabaseAdmin.rpc("reserve_ai_tokens", {
+        p_reservation_id: reservationId,
+        p_key: tokenBucketKey,
+        p_user_id: userId,
+        p_workspace_id: workspaceId || null,
+        p_action: action,
+        p_reserved_tokens: reserveTokens,
+        p_max_tokens_per_hour: maxTokensPerHour,
+      });
+
+      if (tokenError) {
+        // Fallback para check_rate_limit caso a tabela de reservas esteja em migração
+        const { data: fallbackResult, error: fallbackError } = await supabaseAdmin.rpc("check_rate_limit", {
+          p_key: tokenBucketKey,
+          p_max_requests: maxTokensPerHour,
+          p_window_seconds: 3600,
+          p_cost: reserveTokens,
+        });
+
+        if (fallbackError) {
+          console.error("[ai-rate-limiter] Erro crítico na RPC ao verificar TPH:", fallbackError);
+          return {
+            allowed: false,
+            retryAfterSeconds: 60,
+            currentCount: maxTokensPerHour,
+            limit: maxTokensPerHour,
+            reason: "Erro ao verificar cota de processamento de IA. Requisição bloqueada por segurança.",
+          };
+        }
+
+        const fallbackRow = Array.isArray(fallbackResult) ? fallbackResult[0] : fallbackResult;
+        if (!fallbackRow || !fallbackRow.allowed) {
+          return {
+            allowed: false,
+            retryAfterSeconds: fallbackRow?.retry_after_seconds || 300,
+            currentCount: fallbackRow?.current_count ?? maxTokensPerHour,
+            limit: maxTokensPerHour,
+            reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
+          };
+        }
+      } else {
+        const tokenRow = Array.isArray(tokenResult) ? tokenResult[0] : tokenResult;
+        if (!tokenRow || !tokenRow.allowed) {
+          return {
+            allowed: false,
+            retryAfterSeconds: tokenRow?.retry_after_seconds || 300,
+            currentCount: tokenRow?.current_count ?? maxTokensPerHour,
+            limit: maxTokensPerHour,
+            reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
+          };
+        }
+      }
+    } else if (directTokens > 0 && maxTokensPerHour > 0) {
       const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
       const { data: tokenResult, error: tokenError } = await supabaseAdmin.rpc("check_rate_limit", {
         p_key: tokenBucketKey,
-        p_max_requests: maxTokensPerHour, // Teto total de tokens por hora
+        p_max_requests: maxTokensPerHour,
         p_window_seconds: 3600,
-        p_cost: tokensToCharge, // Contabilização / Reserva de tokens
+        p_cost: directTokens,
       });
 
-      // Fail-closed estrito: se a RPC falhar ou retornar erro, NÃO autoriza
       if (tokenError) {
         console.error("[ai-rate-limiter] Erro crítico na RPC ao verificar TPH:", tokenError);
         return {
@@ -133,6 +200,7 @@ export async function checkSharedRateLimit(
       allowed: true,
       currentCount: row.current_count,
       limit: maxRequestsPerMinute,
+      reservationId: reservationId || undefined,
     };
   } catch (err: any) {
     console.error("[ai-rate-limiter] Exceção crítica:", err);
@@ -152,14 +220,50 @@ export async function reconcileAiTokens(
     userId: string;
     workspaceId?: string;
     action?: string;
+    reservationId?: string;
     reservedTokens: number;
-    actualTokensConsumed: number;
+    actualTokensConsumed?: number;
+    outcome?: "success" | "error" | "timeout" | "missing_usage";
   }
-): Promise<void> {
-  const { userId, workspaceId, action = "ai_request", reservedTokens, actualTokensConsumed } = options;
-  if (!userId || !supabaseAdmin) return;
+): Promise<{ status: string; deltaApplied?: number }> {
+  const {
+    userId,
+    workspaceId,
+    action = "ai_request",
+    reservationId,
+    reservedTokens,
+    actualTokensConsumed,
+    outcome = "success",
+  } = options;
+
+  if (!userId || !supabaseAdmin) return { status: "skipped" };
+
+  // 1. Caminho primário: RPC reconcile_ai_tokens associada ao ID único e janela de origem
+  if (reservationId) {
+    try {
+      const { data, error } = await supabaseAdmin.rpc("reconcile_ai_tokens", {
+        p_reservation_id: reservationId,
+        p_actual_tokens: actualTokensConsumed != null ? Math.round(actualTokensConsumed) : null,
+        p_outcome: outcome,
+      });
+
+      if (!error && data) {
+        const row = Array.isArray(data) ? data[0] : data;
+        return { status: row?.status || "reconciled", deltaApplied: row?.delta_applied };
+      }
+    } catch (rpcErr) {
+      console.warn("[ai-rate-limiter] Erro ao chamar reconcile_ai_tokens:", rpcErr);
+    }
+  }
+
+  // 2. Fallback de reconciliação de taxa:
+  // "Timeout ou usage ausente não comprovam consumo zero; não estorne integralmente sem evidência."
+  if (outcome === "timeout" || actualTokensConsumed == null) {
+    return { status: "retained_conservative_estimate" };
+  }
+
   const delta = Math.round(actualTokensConsumed - reservedTokens);
-  if (delta === 0) return;
+  if (delta === 0) return { status: "no_delta" };
 
   const cleanUser = sanitizeKeyComponent(userId);
   const cleanWs = sanitizeKeyComponent(workspaceId, "personal");
@@ -174,8 +278,10 @@ export async function reconcileAiTokens(
     if (error) {
       console.warn("[ai-rate-limiter] Erro ao reconciliar tokens no banco:", error);
     }
+    return { status: error ? "error" : "reconciled", deltaApplied: delta };
   } catch (err) {
     console.warn("[ai-rate-limiter] Exceção na reconciliação de tokens:", err);
+    return { status: "exception" };
   }
 }
 

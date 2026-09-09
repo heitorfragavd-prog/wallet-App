@@ -63,6 +63,8 @@ export async function handleCategorizarIA(req: Request, injectedSupabaseAdmin?: 
       });
     }
 
+    const reservationId = rateCheck.reservationId;
+
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada");
 
@@ -105,8 +107,10 @@ Responda APENAS em JSON válido no formato:
         userId: user.id,
         workspaceId: workspace_id,
         action: "categorizar_ia",
+        reservationId,
         reservedTokens: estimatedTokens,
         actualTokensConsumed: 0,
+        outcome: "error",
       }).catch(() => {});
       throw new Error(`OpenAI API error: ${response.status}`);
     }
@@ -125,8 +129,10 @@ Responda APENAS em JSON válido no formato:
       userId: user.id,
       workspaceId: workspace_id,
       action: "categorizar_ia",
+      reservationId,
       reservedTokens: estimatedTokens,
       actualTokensConsumed: actualTokens,
+      outcome: "success",
     });
 
     return new Response(JSON.stringify(result), {

@@ -4,10 +4,12 @@
 -- LOCAL APENAS -- NAO APLICAR REMOTAMENTE SEM APROVACAO
 --
 -- Objetivo:
--- 1. Criar tabelas auxiliares (rate_limits, investimentos_sessions) com acesso restrito desde a criacao.
+-- 1. Criar tabelas auxiliares (rate_limits, investimentos_sessions, ai_token_reservations)
+--    com acesso restrito desde a criacao.
 -- 2. Criar RPCs seguras para consulta de status sem exposicao de segredos.
 -- 3. Criar funcoes atomicas para controle de tentativas e sessoes de investimentos.
--- 4. Blindar triggers de profiles.role contra escalacao de privilegios.
+-- 4. Criar controle duravel de reservas de IA com idempotencia e protecao contra virada de janela.
+-- 5. Blindar triggers de profiles.role contra escalacao de privilegios.
 --
 -- NOTA DE RETROCOMPATIBILIDADE (FASE A):
 -- As colunas existentes e politicas de RLS antigas NAO sao revogadas nesta fase,
@@ -36,7 +38,7 @@ RETURNS TABLE(
   updated_at TIMESTAMPTZ
 )
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 BEGIN
   RETURN QUERY
   SELECT
@@ -54,7 +56,7 @@ BEGIN
   WHERE c.user_id = auth.uid()
   LIMIT 1;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.get_divipay_config_status() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_divipay_config_status() TO authenticated;
 
@@ -71,7 +73,7 @@ RETURNS TABLE(
   updated_at TIMESTAMPTZ
 )
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 BEGIN
   RETURN QUERY
   SELECT
@@ -87,7 +89,7 @@ BEGIN
   WHERE c.user_id = auth.uid()
   LIMIT 1;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.get_eyemobile_config_status() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_eyemobile_config_status() TO authenticated;
 
@@ -97,14 +99,14 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 BEGIN
   RETURN EXISTS (
     SELECT 1 FROM public.senha_investimentos
     WHERE user_id = auth.uid()
   );
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.has_senha_investimentos() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.has_senha_investimentos() TO authenticated;
 
@@ -120,7 +122,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 DECLARE
   v_tentativas INTEGER;
   v_bloqueado_ate TIMESTAMPTZ;
@@ -143,7 +145,7 @@ BEGIN
 
   RETURN QUERY SELECT v_tentativas, v_bloqueado, v_bloqueado_ate;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.registrar_falha_senha_investimentos(UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.registrar_falha_senha_investimentos(UUID) TO service_role;
 
@@ -151,7 +153,7 @@ GRANT EXECUTE ON FUNCTION public.registrar_falha_senha_investimentos(UUID) TO se
 -- 3. Blindagem de profiles.role (Triggers Compativeis com SECURITY DEFINER)
 -- =========================================================================
 CREATE OR REPLACE FUNCTION public.protect_profiles_role()
-RETURNS TRIGGER AS 
+RETURNS TRIGGER AS $$
 DECLARE
   v_caller_role TEXT;
   v_is_caller_admin BOOLEAN := false;
@@ -189,7 +191,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
- LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_protect_profiles_role ON public.profiles;
 CREATE TRIGGER trg_protect_profiles_role
@@ -197,7 +199,7 @@ BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.protect_profiles_role();
 
 CREATE OR REPLACE FUNCTION public.enforce_profiles_role_insert()
-RETURNS TRIGGER AS 
+RETURNS TRIGGER AS $$
 DECLARE
   v_caller_role TEXT;
   v_is_caller_admin BOOLEAN := false;
@@ -229,7 +231,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
- LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_enforce_profiles_role_insert ON public.profiles;
 CREATE TRIGGER trg_enforce_profiles_role_insert
@@ -264,7 +266,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 DECLARE
   v_now TIMESTAMPTZ := clock_timestamp();
   v_window_interval INTERVAL := (p_window_seconds || ' seconds')::interval;
@@ -317,11 +319,206 @@ BEGIN
     RETURN;
   END IF;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.check_rate_limit(TEXT, INTEGER, INTEGER, INTEGER) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_rate_limit(TEXT, INTEGER, INTEGER, INTEGER) TO service_role;
 
--- RPC de Reconciliacao de Tokens (ajuste posterior da reserva)
+-- =========================================================================
+-- 5. Reservas Duraveis de Tokens de IA (Idempotencia e Protecao de Janela)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.ai_token_reservations (
+  reservation_id TEXT PRIMARY KEY,
+  bucket_key TEXT NOT NULL,
+  user_id UUID NOT NULL,
+  workspace_id TEXT,
+  action TEXT NOT NULL,
+  reserved_tokens INTEGER NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'reserved', -- 'reserved', 'reconciled'
+  actual_tokens INTEGER,
+  outcome TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  reconciled_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_reservations_bucket ON public.ai_token_reservations(bucket_key);
+CREATE INDEX IF NOT EXISTS idx_ai_reservations_status ON public.ai_token_reservations(status);
+
+REVOKE ALL ON public.ai_token_reservations FROM authenticated, anon, PUBLIC;
+GRANT ALL ON public.ai_token_reservations TO service_role;
+
+-- RPC para Reserva Atomica com Idempotencia e Gravacao da Janela
+CREATE OR REPLACE FUNCTION public.reserve_ai_tokens(
+  p_reservation_id TEXT,
+  p_key TEXT,
+  p_user_id UUID,
+  p_workspace_id TEXT,
+  p_action TEXT,
+  p_reserved_tokens INTEGER,
+  p_max_tokens_per_hour INTEGER
+)
+RETURNS TABLE (
+  allowed BOOLEAN,
+  retry_after_seconds INTEGER,
+  current_count INTEGER,
+  limit_count INTEGER,
+  reservation_id TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_now TIMESTAMPTZ := clock_timestamp();
+  v_window_interval INTERVAL := interval '1 hour';
+  v_tokens INTEGER := GREATEST(1, COALESCE(p_reserved_tokens, 1000));
+  v_record RECORD;
+  v_retry_after INTEGER := 0;
+  v_existing_res RECORD;
+BEGIN
+  IF p_reservation_id IS NULL OR length(trim(p_reservation_id)) = 0 THEN
+    RETURN QUERY SELECT false, 60, 0, p_max_tokens_per_hour, ''::TEXT;
+    RETURN;
+  END IF;
+
+  -- Checagem de Idempotencia: se a reserva ja existe
+  SELECT * INTO v_existing_res FROM public.ai_token_reservations WHERE reservation_id = p_reservation_id;
+  IF FOUND THEN
+    RETURN QUERY SELECT true, 0, v_existing_res.reserved_tokens, p_max_tokens_per_hour, p_reservation_id;
+    RETURN;
+  END IF;
+
+  -- Inicializacao atomica da linha no rate_limits
+  INSERT INTO public.rate_limits (bucket_key, request_count, window_start, last_request)
+  VALUES (p_key, 0, v_now, v_now)
+  ON CONFLICT (bucket_key) DO NOTHING;
+
+  SELECT * INTO v_record FROM public.rate_limits WHERE bucket_key = p_key FOR UPDATE;
+
+  -- 1. Verifica se a janela expirou
+  IF v_now - v_record.window_start >= v_window_interval THEN
+    IF v_tokens <= p_max_tokens_per_hour THEN
+      UPDATE public.rate_limits
+      SET request_count = v_tokens, window_start = v_now, last_request = v_now
+      WHERE bucket_key = p_key;
+
+      INSERT INTO public.ai_token_reservations (
+        reservation_id, bucket_key, user_id, workspace_id, action, reserved_tokens, window_start, status
+      ) VALUES (
+        p_reservation_id, p_key, p_user_id, p_workspace_id, p_action, v_tokens, v_now, 'reserved'
+      );
+
+      RETURN QUERY SELECT true, 0, v_tokens, p_max_tokens_per_hour, p_reservation_id;
+    ELSE
+      RETURN QUERY SELECT false, 3600, 0, p_max_tokens_per_hour, p_reservation_id;
+    END IF;
+    RETURN;
+  END IF;
+
+  -- 2. Janela ativa: verifica se cabe a reserva solicitada
+  IF v_record.request_count + v_tokens <= p_max_tokens_per_hour THEN
+    UPDATE public.rate_limits
+    SET request_count = v_record.request_count + v_tokens, last_request = v_now
+    WHERE bucket_key = p_key;
+
+    INSERT INTO public.ai_token_reservations (
+      reservation_id, bucket_key, user_id, workspace_id, action, reserved_tokens, window_start, status
+    ) VALUES (
+      p_reservation_id, p_key, p_user_id, p_workspace_id, p_action, v_tokens, v_record.window_start, 'reserved'
+    );
+
+    RETURN QUERY SELECT true, 0, v_record.request_count + v_tokens, p_max_tokens_per_hour, p_reservation_id;
+    RETURN;
+  ELSE
+    v_retry_after := GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_record.window_start + v_window_interval - v_now)))::INTEGER);
+    RETURN QUERY SELECT false, v_retry_after, v_record.request_count, p_max_tokens_per_hour, p_reservation_id;
+    RETURN;
+  END IF;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reserve_ai_tokens(TEXT, TEXT, UUID, TEXT, TEXT, INTEGER, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reserve_ai_tokens(TEXT, TEXT, UUID, TEXT, TEXT, INTEGER, INTEGER) TO service_role;
+
+-- RPC de Reconciliacao Idempotente com Protecao contra Virada de Janela
+CREATE OR REPLACE FUNCTION public.reconcile_ai_tokens(
+  p_reservation_id TEXT,
+  p_actual_tokens INTEGER,
+  p_outcome TEXT DEFAULT 'success'
+)
+RETURNS TABLE (
+  status TEXT,
+  delta_applied INTEGER
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_res RECORD;
+  v_rate RECORD;
+  v_delta INTEGER := 0;
+  v_effective_actual INTEGER;
+BEGIN
+  -- 1. Lock e busca da reserva
+  SELECT * INTO v_res
+  FROM public.ai_token_reservations
+  WHERE reservation_id = p_reservation_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT 'reservation_not_found'::TEXT, 0;
+    RETURN;
+  END IF;
+
+  -- 2. Idempotencia estrita: se ja reconciliada, ignora chamada repetida
+  IF v_res.status = 'reconciled' THEN
+    RETURN QUERY SELECT 'already_reconciled'::TEXT, 0;
+    RETURN;
+  END IF;
+
+  -- 3. Lock do bucket de rate limit correspondente
+  SELECT * INTO v_rate
+  FROM public.rate_limits
+  WHERE bucket_key = v_res.bucket_key
+  FOR UPDATE;
+
+  -- 4. Tratamento de timeout ou ausência de usage:
+  -- "Timeout ou usage ausente nao comprovam consumo zero; nao estorne integralmente sem evidencia."
+  IF p_outcome = 'timeout' OR p_outcome = 'missing_usage' OR p_actual_tokens IS NULL THEN
+    v_effective_actual := v_res.reserved_tokens; -- Mantém a estimativa conservadora debitada
+  ELSE
+    v_effective_actual := GREATEST(0, p_actual_tokens);
+  END IF;
+
+  -- 5. Protecao de Virada de Janela:
+  -- "Resposta atrasada nao pode alterar o orcamento de uma janela nova."
+  IF FOUND AND v_rate.window_start = v_res.window_start THEN
+    -- A janela atual e a mesma em que a reserva foi feita: ajusta o delta
+    v_delta := v_effective_actual - v_res.reserved_tokens;
+    UPDATE public.rate_limits
+    SET request_count = GREATEST(0, request_count + v_delta),
+        last_request = clock_timestamp()
+    WHERE bucket_key = v_res.bucket_key;
+  ELSE
+    -- A janela virou! A reserva pertencia a janela passada, entao nao mexe no contador da janela nova.
+    v_delta := 0;
+  END IF;
+
+  -- 6. Atualizacao de status da reserva
+  UPDATE public.ai_token_reservations
+  SET status = 'reconciled',
+      actual_tokens = v_effective_actual,
+      outcome = p_outcome,
+      reconciled_at = clock_timestamp()
+  WHERE reservation_id = p_reservation_id;
+
+  RETURN QUERY SELECT 'reconciled'::TEXT, v_delta;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reconcile_ai_tokens(TEXT, INTEGER, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reconcile_ai_tokens(TEXT, INTEGER, TEXT) TO service_role;
+
+-- Reconciliacao generica legada mantida para compatibilidade
 CREATE OR REPLACE FUNCTION public.reconcile_rate_limit(
   p_key TEXT,
   p_delta INTEGER
@@ -330,19 +527,19 @@ RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 BEGIN
   UPDATE public.rate_limits
   SET request_count = GREATEST(0, request_count + p_delta),
       last_request = clock_timestamp()
   WHERE bucket_key = p_key;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.reconcile_rate_limit(TEXT, INTEGER) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.reconcile_rate_limit(TEXT, INTEGER) TO service_role;
 
 -- =========================================================================
--- 5. Sessao de Investimentos Vinculada a Sessao Autenticada
+-- 6. Sessao de Investimentos Vinculada a Sessao Autenticada
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.investimentos_sessions (
   session_id TEXT PRIMARY KEY,
@@ -369,7 +566,7 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 DECLARE
   v_current_hash TEXT;
 BEGIN
@@ -396,7 +593,7 @@ BEGIN
 
   RETURN true;
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.desbloquear_sessao_investimentos(UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.desbloquear_sessao_investimentos(UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ) TO service_role;
 
@@ -407,7 +604,7 @@ LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS 
+AS $$
 DECLARE
   v_session_id TEXT;
 BEGIN
@@ -431,7 +628,7 @@ BEGIN
       AND expires_at > clock_timestamp()
   );
 END;
-;
+$$;
 REVOKE ALL ON FUNCTION public.is_investimentos_unlocked(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_investimentos_unlocked(UUID) TO authenticated, service_role;
 

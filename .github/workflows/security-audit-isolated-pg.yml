@@ -1,4 +1,4 @@
-﻿name: Security Audit Isolated PostgreSQL Tests
+name: Security Audit Isolated PostgreSQL Tests
 
 on:
   pull_request:
@@ -40,8 +40,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run PostgreSQL Security Battery (Phase A, Phase C, RLS, Concurrency & Column Security)
         env:
           PGPASSWORD: postgrespassword
         run: |
           psql -h localhost -U postgres -d postgres -f scripts/test-isolated-pg-security.sql
+
+      - name: Run Phase A/B/C Operational Gating Verification
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-gating.sql
+
+      - name: Run Real Concurrency Battery (Multiple Connections Pool)
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
+        run: |
+          node scripts/test-real-concurrency.js

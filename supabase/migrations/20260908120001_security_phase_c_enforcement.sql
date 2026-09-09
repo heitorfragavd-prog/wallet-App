@@ -3,18 +3,29 @@
 -- FASE C: Ativacao de Restricoes, Revogacao de Colunas e RLS Estrito
 -- LOCAL APENAS -- NAO APLICAR REMOTAMENTE SEM APROVACAO
 --
--- Pre-requisitos:
+-- Pre-requisitos Obrigatorios:
 -- 1. Fase A (20260908120000_security_phase_a_infrastructure.sql) executada.
--- 2. Fase B (Deploy das Edge Functions e Frontend com RPCs seguras) concluida.
---
--- Objetivo:
--- 1. Revogar SELECT sobre colunas de credenciais em divipay_config e eyemobile_config.
--- 2. Revogar todo acesso direto a senha_investimentos para roles publicas/autenticadas.
--- 3. Revogar permissao de alteracao direta do campo role em profiles.
--- 4. Substituir politicas de RLS em tabelas de investimentos para exigir sessao ativa desbloqueada.
+-- 2. Fase B (Deploy das Edge Functions e Frontend com RPCs seguras) concluida e verificada.
+-- 3. Variavel de sessao operacional: SET wallet.deploy_phase_b_completed = 'true';
 -- =========================================================================
 
 BEGIN;
+
+-- =========================================================================
+-- 0. Gating Operacional Pre-requisito (Impede execucao conjunta automatica com Fase A)
+-- =========================================================================
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'rate_limits')
+     OR NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'investimentos_sessions')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'is_investimentos_unlocked') THEN
+    RAISE EXCEPTION 'PRE-REQUISITO FALHOU: A Fase A (20260908120000_security_phase_a_infrastructure.sql) precisa ser aplicada antes da Fase C.';
+  END IF;
+
+  IF current_setting('wallet.deploy_phase_b_completed', true) IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'OPERACAO BLOQUEADA: A Fase C revoga colunas e ativa RLS estrito. Ela so pode ser executada APOS o deploy da Fase B (Frontend e Edge Functions). Para aplicar apos a validacao da Fase B, execute antes: SET wallet.deploy_phase_b_completed = ''true'';';
+  END IF;
+END $$;
 
 -- =========================================================================
 -- 1. Restricao de Colunas em divipay_config

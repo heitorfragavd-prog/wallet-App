@@ -64,6 +64,8 @@ export async function handleIaDeposito(req: Request, injectedSupabaseAdmin?: any
       });
     }
 
+    const reservationId = rateCheck.reservationId;
+
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY não configurada no env");
 
@@ -135,8 +137,10 @@ Responda exclusivamente em formato JSON estruturado com os campos acima.`;
         userId: user.id,
         workspaceId: workspace_id,
         action: "ia_deposito",
+        reservationId,
         reservedTokens: estimatedTokens,
         actualTokensConsumed: 0,
+        outcome: "error",
       }).catch(() => {});
 
       return new Response(JSON.stringify({ error: "Falha na análise inteligente do comprovante" }), {
@@ -155,8 +159,10 @@ Responda exclusivamente em formato JSON estruturado com os campos acima.`;
       userId: user.id,
       workspaceId: workspace_id,
       action: "ia_deposito",
+      reservationId,
       reservedTokens: estimatedTokens,
       actualTokensConsumed: actualTokens,
+      outcome: "success",
     });
 
     return new Response(JSON.stringify({ success: true, data: parsed }), {
