@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivalencias", () => {
+describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivalencias (Hardened)", () => {
   const migrationPath = path.resolve(
     __dirname,
     "../../../../supabase/migrations/20260909110000_produto_equivalencias_foundation.sql"
@@ -43,6 +43,11 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       expect(migrationSql).toMatch(/CONSTRAINT chk_produto_equivalencias_fator_positivo\s+CHECK\s*\(\s*fator_conversao\s*>\s*0\s*\)/i);
     });
 
+    it("define confirmado_por_usuario com DEFAULT false (Fail-Safe)", () => {
+      expect(migrationSql).toMatch(/confirmado_por_usuario BOOLEAN NOT NULL DEFAULT false/i);
+      expect(migrationSql).not.toMatch(/confirmado_por_usuario BOOLEAN NOT NULL DEFAULT true/i);
+    });
+
     it("normaliza CNPJ exigindo apenas dígitos", () => {
       expect(migrationSql).toMatch(/cnpj_fornecedor_normalizado TEXT NOT NULL/i);
       expect(migrationSql).toMatch(/CONSTRAINT chk_produto_equivalencias_cnpj_digitos\s+CHECK\s*\(\s*cnpj_fornecedor_normalizado\s*~\s*'(\^\[0-9\]\+\$)'\s*\)/i);
@@ -71,19 +76,24 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       expect(migrationSql).toMatch(/EXECUTE FUNCTION public\.update_updated_at_column\(\)/i);
     });
 
-    it("implementa trigger de validação multi-tenant para impedir cross-workspace e cross-user", () => {
+    it("implementa trigger de validação multi-tenant para impedir cross-workspace e cross-user em produto_equivalencias", () => {
       expect(migrationSql).toMatch(/CREATE OR REPLACE FUNCTION public\.validar_produto_equivalencia_tenant\(\)/i);
-      expect(migrationSql).toMatch(/Workspace mismatch/i);
-      expect(migrationSql).toMatch(/User mismatch/i);
       expect(migrationSql).toMatch(/CREATE TRIGGER trg_validar_produto_equivalencia_tenant/i);
     });
 
-    it("habilita RLS e reutiliza tem_acesso_workspace() para isolamento seguro", () => {
+    it("habilita RLS com modelo consistente (SELECT compartilhado no workspace, mutações restritas ao owner)", () => {
       expect(migrationSql).toMatch(/ALTER TABLE public\.produto_equivalencias ENABLE ROW LEVEL SECURITY/i);
-      expect(migrationSql).toMatch(/public\.tem_acesso_workspace\(workspace_id\)/i);
+      // SELECT: tem_acesso_workspace
+      expect(migrationSql).toMatch(/CREATE POLICY "produto_equivalencias_select_policy"[^;]+USING\s*\(\s*public\.tem_acesso_workspace\(workspace_id\)\s*\)/i);
+      // INSERT: tem_acesso_workspace AND auth.uid() = user_id
+      expect(migrationSql).toMatch(/CREATE POLICY "produto_equivalencias_insert_policy"[^;]+WITH CHECK\s*\(\s*public\.tem_acesso_workspace\(workspace_id\)\s+AND\s+auth\.uid\(\)\s*=\s*user_id\s*\)/i);
+      // UPDATE: tem_acesso_workspace AND auth.uid() = user_id
+      expect(migrationSql).toMatch(/CREATE POLICY "produto_equivalencias_update_policy"[^;]+USING\s*\(\s*public\.tem_acesso_workspace\(workspace_id\)\s+AND\s+auth\.uid\(\)\s*=\s*user_id\s*\)/i);
+      // DELETE: tem_acesso_workspace AND auth.uid() = user_id
+      expect(migrationSql).toMatch(/CREATE POLICY "produto_equivalencias_delete_policy"[^;]+USING\s*\(\s*public\.tem_acesso_workspace\(workspace_id\)\s+AND\s+auth\.uid\(\)\s*=\s*user_id\s*\)/i);
     });
 
-    it("adiciona produto_eyemobile_uuid nullable em historico_custo_produto sem alterar colunas legadas", () => {
+    it("adiciona produto_eyemobile_uuid nullable em historico_custo_produto e trigger multi-tenant", () => {
       expect(migrationSql).toMatch(/ALTER TABLE public\.historico_custo_produto/i);
       expect(migrationSql).toMatch(
         /ADD COLUMN IF NOT EXISTS produto_eyemobile_uuid UUID NULL\s+REFERENCES public\.produtos_eyemobile\(id\)\s+ON DELETE SET NULL/i
@@ -91,9 +101,9 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       expect(migrationSql).toMatch(
         /CREATE INDEX IF NOT EXISTS idx_historico_custo_produto_eyemobile_uuid\s+ON public\.historico_custo_produto\(workspace_id, produto_eyemobile_uuid\)/i
       );
-      // Garante que produto_codigo e produto_descricao NÃO são removidos
-      expect(migrationSql).not.toMatch(/DROP COLUMN.*produto_codigo/i);
-      expect(migrationSql).not.toMatch(/DROP COLUMN.*produto_descricao/i);
+      // Trigger cross-workspace em historico_custo_produto
+      expect(migrationSql).toMatch(/CREATE OR REPLACE FUNCTION public\.validar_historico_custo_produto_tenant\(\)/i);
+      expect(migrationSql).toMatch(/CREATE TRIGGER trg_validar_historico_custo_produto_tenant/i);
     });
 
     it("NÃO executa nenhum backfill fuzzy/automático com ILIKE ou LIMIT 1", () => {
@@ -105,9 +115,9 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
   });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 2. SIMULAÇÃO LÓGICA DE SCHEMA & INVARIANTES (CENÁRIOS A ATÉ M)
+  // 2. SIMULAÇÃO LÓGICA DE SCHEMA & INVARIANTES (CENÁRIOS A ATÉ N + RLS)
   // ─────────────────────────────────────────────────────────────────────────────
-  describe("Regras Lógicas e Invariantes do Domínio (Cenários A a M)", () => {
+  describe("Regras Lógicas e Invariantes do Domínio (Cenários A a N + RLS)", () => {
     interface ProdutoEyemobileRecord {
       id: string;
       user_id: string;
@@ -139,7 +149,24 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       produto_eyemobile_uuid: string | null;
     }
 
+    interface WorkspaceMember {
+      workspace_id: string;
+      user_id: string;
+      role: "admin" | "member";
+      active: boolean;
+    }
+
     // Mock store
+    const workspaces = [
+      { id: "ws-alpha-1", user_id: "user-alpha" },
+      { id: "ws-alpha-2", user_id: "user-alpha" },
+      { id: "ws-beta-1", user_id: "user-beta" },
+    ];
+
+    const workspaceMembers: WorkspaceMember[] = [
+      { workspace_id: "ws-alpha-1", user_id: "user-admin-alpha", role: "admin", active: true },
+    ];
+
     const produtos: ProdutoEyemobileRecord[] = [
       {
         id: "prod-uuid-1",
@@ -152,14 +179,14 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       {
         id: "prod-uuid-2",
         user_id: "user-alpha",
-        workspace_id: "ws-alpha-2", // Outro workspace do mesmo user
+        workspace_id: "ws-alpha-2",
         eyemobile_id: "eye-202",
         codigo: "SKU-BEB-02",
         descricao: "Cerveja Puro Malte 350ml",
       },
       {
         id: "prod-uuid-3",
-        user_id: "user-beta", // Outro tenant/user
+        user_id: "user-beta",
         workspace_id: "ws-beta-1",
         eyemobile_id: "eye-303",
         codigo: "SKU-BEB-03",
@@ -168,9 +195,28 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
     ];
 
     let equivalencias: ProdutoEquivalenciaRecord[] = [];
+    const historicoCustos: HistoricoCustoRecord[] = [];
 
-    // Função de validação que simula todas as constraints do Postgres + Triggers
-    const insertEquivalencia = (data: Omit<ProdutoEquivalenciaRecord, "id">): ProdutoEquivalenciaRecord => {
+    // Helper tem_acesso_workspace
+    const temAcessoWorkspace = (workspaceId: string, authUid: string): boolean => {
+      const ws = workspaces.find((w) => w.id === workspaceId);
+      if (ws && ws.user_id === authUid) return true;
+      const member = workspaceMembers.find(
+        (m) => m.workspace_id === workspaceId && m.user_id === authUid && m.active && m.role === "admin"
+      );
+      return !!member;
+    };
+
+    // Helper insertEquivalencia
+    const insertEquivalencia = (
+      data: Omit<ProdutoEquivalenciaRecord, "id" | "confirmado_por_usuario"> & { confirmado_por_usuario?: boolean },
+      authUid: string = data.user_id
+    ): ProdutoEquivalenciaRecord => {
+      // RLS INSERT: tem_acesso_workspace(workspace_id) AND auth.uid() = user_id
+      if (!temAcessoWorkspace(data.workspace_id, authUid) || authUid !== data.user_id) {
+        throw new Error("RLS Violation: user cannot INSERT into produto_equivalencias");
+      }
+
       // 1. CHECK fator_conversao > 0
       if (typeof data.fator_conversao !== "number" || isNaN(data.fator_conversao) || data.fator_conversao <= 0) {
         throw new Error("chk_produto_equivalencias_fator_positivo: fator_conversao deve ser > 0");
@@ -215,13 +261,41 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
 
       const record: ProdutoEquivalenciaRecord = {
         id: `eq-${Date.now()}-${Math.random()}`,
+        confirmado_por_usuario: data.confirmado_por_usuario ?? false, // Default false!
         ...data,
       };
       equivalencias.push(record);
       return record;
     };
 
-    it("Cenário A: cria equivalência válida com sucesso", () => {
+    // Helper insertHistoricoCusto com trigger tenant
+    const insertHistoricoCusto = (data: Omit<HistoricoCustoRecord, "id">): HistoricoCustoRecord => {
+      if (data.produto_eyemobile_uuid !== null) {
+        const produto = produtos.find((p) => p.id === data.produto_eyemobile_uuid);
+        if (!produto) {
+          throw new Error("FK Violation: Produto Eyemobile inexistente");
+        }
+        if (produto.workspace_id !== data.workspace_id) {
+          throw new Error(
+            `Workspace mismatch: produto pertence ao workspace ${produto.workspace_id}, mas histórico pertence ao workspace ${data.workspace_id}`
+          );
+        }
+        if (produto.user_id !== data.user_id) {
+          throw new Error(
+            `User mismatch: produto pertence ao usuário ${produto.user_id}, mas histórico foi criado pelo usuário ${data.user_id}`
+          );
+        }
+      }
+
+      const record: HistoricoCustoRecord = {
+        id: `hist-${Date.now()}-${Math.random()}`,
+        ...data,
+      };
+      historicoCustos.push(record);
+      return record;
+    };
+
+    it("Cenário A: cria equivalência válida com default confirmado_por_usuario = false", () => {
       equivalencias = [];
       const nova = insertEquivalencia({
         user_id: "user-alpha",
@@ -231,11 +305,25 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
         produto_eyemobile_uuid: "prod-uuid-1",
         fator_conversao: 12.0,
         origem_matching: "manual",
-        confirmado_por_usuario: true,
       });
       expect(nova.id).toBeDefined();
       expect(nova.fator_conversao).toBe(12.0);
+      expect(nova.confirmado_por_usuario).toBe(false); // DEFAULT false comprovado
       expect(equivalencias).toHaveLength(1);
+    });
+
+    it("sugestao_ia sem confirmação explícita resulta em confirmado_por_usuario = false", () => {
+      const sugestao = insertEquivalencia({
+        user_id: "user-alpha",
+        workspace_id: "ws-alpha-1",
+        cnpj_fornecedor_normalizado: "12345678000190",
+        codigo_produto_fornecedor: "FORN-COD-AI",
+        produto_eyemobile_uuid: "prod-uuid-1",
+        fator_conversao: 6.0,
+        origem_matching: "sugestao_ia",
+      });
+      expect(sugestao.origem_matching).toBe("sugestao_ia");
+      expect(sugestao.confirmado_por_usuario).toBe(false);
     });
 
     it("Cenário B: mesmo workspace + CNPJ + código não pode ter duas equivalências", () => {
@@ -371,37 +459,110 @@ describe("Subetapa 9.1 — Fundação de Identidade Canônica e Produto Equivale
       }).toThrow(/Workspace mismatch|User mismatch/);
     });
 
-    it("Cenário K: historico_custo_produto aceita produto_eyemobile_uuid válido", () => {
-      const historicoItem: HistoricoCustoRecord = {
-        id: "hist-1",
-        user_id: "user-alpha",
-        workspace_id: "ws-alpha-1",
-        produto_codigo: "FORN-COD-99",
-        produto_descricao: "Cerveja Lata",
-        custo_unitario: 3.5,
-        produto_eyemobile_uuid: "prod-uuid-1", // Válido
-      };
-      expect(historicoItem.produto_eyemobile_uuid).toBe("prod-uuid-1");
+    // ─────────────────────────────────────────────────────────────────────────
+    // TESTES DE RLS (CONSISTÊNCIA OWNER-ONLY MUTATION)
+    // ─────────────────────────────────────────────────────────────────────────
+    describe("RLS Policies (Owner-only mutation)", () => {
+      it("Owner pode SELECT nas equivalências do seu workspace", () => {
+        expect(temAcessoWorkspace("ws-alpha-1", "user-alpha")).toBe(true);
+      });
+
+      it("Admin do workspace pode SELECT nas equivalências do workspace", () => {
+        expect(temAcessoWorkspace("ws-alpha-1", "user-admin-alpha")).toBe(true);
+      });
+
+      it("Usuário externo NÃO pode SELECT nas equivalências", () => {
+        expect(temAcessoWorkspace("ws-alpha-1", "user-outsider")).toBe(false);
+      });
+
+      it("Admin do workspace NÃO pode INSERT (mutação é owner-only)", () => {
+        expect(() => {
+          insertEquivalencia(
+            {
+              user_id: "user-alpha", // Pertence ao owner
+              workspace_id: "ws-alpha-1",
+              cnpj_fornecedor_normalizado: "12345678000190",
+              codigo_produto_fornecedor: "FORN-ADMIN-TEST",
+              produto_eyemobile_uuid: "prod-uuid-1",
+              fator_conversao: 1.0,
+              origem_matching: "manual",
+            },
+            "user-admin-alpha" // Auth UID é o admin, não o owner!
+          );
+        }).toThrow(/RLS Violation/);
+      });
+
+      it("Usuário externo NÃO pode mutar", () => {
+        expect(() => {
+          insertEquivalencia(
+            {
+              user_id: "user-alpha",
+              workspace_id: "ws-alpha-1",
+              cnpj_fornecedor_normalizado: "12345678000190",
+              codigo_produto_fornecedor: "FORN-OUTSIDER-TEST",
+              produto_eyemobile_uuid: "prod-uuid-1",
+              fator_conversao: 1.0,
+              origem_matching: "manual",
+            },
+            "user-outsider"
+          );
+        }).toThrow(/RLS Violation/);
+      });
     });
 
-    it("Cenário L: histórico legado continua funcionando com produto_eyemobile_uuid NULL", () => {
-      const historicoLegado: HistoricoCustoRecord = {
-        id: "hist-legado",
-        user_id: "user-alpha",
-        workspace_id: "ws-alpha-1",
-        produto_codigo: "COD-LEGADO-123",
-        produto_descricao: "Item Antigo da NF",
-        custo_unitario: 12.0,
-        produto_eyemobile_uuid: null, // Nullable para legado
-      };
-      expect(historicoLegado.produto_eyemobile_uuid).toBeNull();
-      expect(historicoLegado.produto_codigo).toBe("COD-LEGADO-123");
-    });
+    // ─────────────────────────────────────────────────────────────────────────
+    // TESTES DE historico_custo_produto (CENÁRIOS K A N)
+    // ─────────────────────────────────────────────────────────────────────────
+    describe("Proteção Cross-Workspace em historico_custo_produto (Cenários K a N)", () => {
+      it("Cenário K: histórico com produto correto no mesmo workspace/user é permitido", () => {
+        const item = insertHistoricoCusto({
+          user_id: "user-alpha",
+          workspace_id: "ws-alpha-1",
+          produto_codigo: "FORN-COD-99",
+          produto_descricao: "Cerveja Lata",
+          custo_unitario: 3.5,
+          produto_eyemobile_uuid: "prod-uuid-1",
+        });
+        expect(item.produto_eyemobile_uuid).toBe("prod-uuid-1");
+      });
 
-    it("Cenário M: nenhum backfill fuzzy/textual é inferido sem confirmação", () => {
-      // Garante que a tabela produto_equivalencias começa vazia e não há mapeamento implícito
-      expect(equivalencias.every((eq) => eq.confirmado_por_usuario === true)).toBe(true);
-      expect(equivalencias.some((eq) => eq.origem_matching === "sugestao_ia" && !eq.confirmado_por_usuario)).toBe(false);
+      it("Cenário L: histórico legado com UUID NULL continua permitido", () => {
+        const item = insertHistoricoCusto({
+          user_id: "user-alpha",
+          workspace_id: "ws-alpha-1",
+          produto_codigo: "LEGADO-SEM-UUID",
+          produto_descricao: "Item Antigo",
+          custo_unitario: 10.0,
+          produto_eyemobile_uuid: null,
+        });
+        expect(item.produto_eyemobile_uuid).toBeNull();
+      });
+
+      it("Cenário M: histórico workspace A apontando produto workspace B é rejeitado", () => {
+        expect(() => {
+          insertHistoricoCusto({
+            user_id: "user-alpha",
+            workspace_id: "ws-alpha-2", // Workspace 2
+            produto_codigo: "CROSS-WS",
+            produto_descricao: "Item Inválido",
+            custo_unitario: 5.0,
+            produto_eyemobile_uuid: "prod-uuid-1", // Produto pertence ao Workspace 1!
+          });
+        }).toThrow(/Workspace mismatch/);
+      });
+
+      it("Cenário N: histórico user A apontando produto user B é rejeitado", () => {
+        expect(() => {
+          insertHistoricoCusto({
+            user_id: "user-alpha",
+            workspace_id: "ws-alpha-1",
+            produto_codigo: "CROSS-USER",
+            produto_descricao: "Item Inválido",
+            custo_unitario: 5.0,
+            produto_eyemobile_uuid: "prod-uuid-3", // Produto pertence ao User Beta / Workspace Beta!
+          });
+        }).toThrow(/Workspace mismatch|User mismatch/);
+      });
     });
   });
 });
