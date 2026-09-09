@@ -23,7 +23,7 @@ import {
 describe("Proteção Anti-SSRF em Requisições Externas", () => {
   it("Valida lista de domínios permitidos", () => {
     expect(ALLOWED_WEBHOOK_DOMAINS.length).toBeGreaterThan(0);
-    expect(ALLOWED_WEBHOOK_DOMAINS).toContain("api.openai.com");
+    expect(ALLOWED_WEBHOOK_DOMAINS).toContain("hooks.zapier.com");
   });
 
   it("Valida diretamente a função isPrivateOrRestrictedIp", () => {

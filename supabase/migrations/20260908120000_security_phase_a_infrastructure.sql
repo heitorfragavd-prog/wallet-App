@@ -1,4 +1,4 @@
-﻿-- =========================================================================
+-- =========================================================================
 -- Migration: 20260908120000_security_phase_a_infrastructure.sql
 -- FASE A: Criacao de Infraestrutura e RPCs compativeis
 -- LOCAL APENAS -- NAO APLICAR REMOTAMENTE SEM APROVACAO
@@ -368,6 +368,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
   v_now TIMESTAMPTZ := clock_timestamp();
   v_window_interval INTERVAL := interval '1 hour';
@@ -382,7 +383,7 @@ BEGIN
   END IF;
 
   -- Checagem de Idempotencia: se a reserva ja existe
-  SELECT * INTO v_existing_res FROM public.ai_token_reservations WHERE reservation_id = p_reservation_id;
+  SELECT * INTO v_existing_res FROM public.ai_token_reservations r WHERE r.reservation_id = p_reservation_id;
   IF FOUND THEN
     RETURN QUERY SELECT true, 0, v_existing_res.reserved_tokens, p_max_tokens_per_hour, p_reservation_id;
     RETURN;
@@ -453,6 +454,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
   v_res RECORD;
   v_rate RECORD;
@@ -461,8 +463,8 @@ DECLARE
 BEGIN
   -- 1. Lock e busca da reserva
   SELECT * INTO v_res
-  FROM public.ai_token_reservations
-  WHERE reservation_id = p_reservation_id
+  FROM public.ai_token_reservations r
+  WHERE r.reservation_id = p_reservation_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
@@ -510,7 +512,7 @@ BEGIN
       actual_tokens = v_effective_actual,
       outcome = p_outcome,
       reconciled_at = clock_timestamp()
-  WHERE reservation_id = p_reservation_id;
+  WHERE ai_token_reservations.reservation_id = p_reservation_id;
 
   RETURN QUERY SELECT 'reconciled'::TEXT, v_delta;
 END;
