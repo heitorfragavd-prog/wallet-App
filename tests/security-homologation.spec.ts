@@ -46,7 +46,13 @@ async function authCall(endpoint: string, body: unknown, token?: string) {
     headers: h,
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  const text = await res.text();
+  let data: unknown = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = text;
+  }
   if (!res.ok) {
     console.error(`[AUTH_FAIL] POST /auth/v1${endpoint} -> status ${res.status}:`, JSON.stringify(data));
   }
