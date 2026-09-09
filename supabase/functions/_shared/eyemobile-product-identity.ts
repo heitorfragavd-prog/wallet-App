@@ -41,7 +41,7 @@ export interface ValidatedRemoteProduct {
 export interface LocalProductMirror {
   id: string;
   user_id: string;
-  workspace_id: string;
+  workspace_id: string | null;
   eyemobile_id: string | null;
   codigo: string | null;
   descricao?: string | null;
@@ -154,6 +154,76 @@ export function calculateMargemReal(precoVenda: number, custoAtual: number): num
     if (margemReal < 0 || !Number.isFinite(margemReal)) margemReal = 30;
   }
   return Number(margemReal.toFixed(2));
+}
+
+export type PageValidationSuccess = {
+  ok: true;
+  items: unknown[];
+  hasMore: boolean;
+};
+
+export type PageValidationFailure = {
+  ok: false;
+  code: "invalid_remote_snapshot" | "incomplete_snapshot";
+  error: string;
+};
+
+export type PageValidationResult = PageValidationSuccess | PageValidationFailure;
+
+/**
+ * Valida o payload de uma página retornado pela API da Eyemobile.
+ * Contrato:
+ * - payload deve ser objeto JSON não-nulo e não-array;
+ * - payload.data deve ser estritamente um Array;
+ * - has_more deve ser booleano quando presente;
+ * - has_more === true + data.length === 0 -> incomplete_snapshot;
+ * - payload inválido -> invalid_remote_snapshot;
+ * - página válida -> retorna itens raw + hasMore.
+ */
+export function validateRemoteProductsPage(payload: unknown): PageValidationResult {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      ok: false,
+      code: "invalid_remote_snapshot",
+      error: "Resposta da Eyemobile não é um objeto JSON válido.",
+    };
+  }
+
+  const obj = payload as Record<string, unknown>;
+
+  if (!("data" in obj) || !Array.isArray(obj.data)) {
+    return {
+      ok: false,
+      code: "invalid_remote_snapshot",
+      error: "Resposta da Eyemobile não contém a propriedade 'data' como array.",
+    };
+  }
+
+  let hasMore = false;
+  if ("has_more" in obj && obj.has_more !== undefined && obj.has_more !== null) {
+    if (typeof obj.has_more !== "boolean") {
+      return {
+        ok: false,
+        code: "invalid_remote_snapshot",
+        error: "Propriedade 'has_more' da resposta da Eyemobile deve ser do tipo boolean.",
+      };
+    }
+    hasMore = obj.has_more;
+  }
+
+  if (hasMore && obj.data.length === 0) {
+    return {
+      ok: false,
+      code: "incomplete_snapshot",
+      error: "A API da Eyemobile retornou has_more: true com lista de produtos vazia. Snapshot incompleto.",
+    };
+  }
+
+  return {
+    ok: true,
+    items: obj.data,
+    hasMore,
+  };
 }
 
 /**
@@ -366,13 +436,14 @@ export function planProductSync(
     if (remote.codigo) {
       const crossWsMatch = otherWsByCodigo.get(remote.codigo);
       if (crossWsMatch) {
+        const wsDesc = crossWsMatch.workspace_id ? `workspace ${crossWsMatch.workspace_id}` : "workspace legado (NULL)";
         conflicts.push({
           type: "cross_workspace_code_collision",
           code: remote.codigo,
           eyemobileId: remote.eyemobileId,
           localId: crossWsMatch.id,
           workspaceId: crossWsMatch.workspace_id,
-          message: `Conflito de constraint legada: o código comercial "${remote.codigo}" do produto remoto ${remote.eyemobileId} já existe no workspace ${crossWsMatch.workspace_id} do mesmo usuário. A constraint UNIQUE(user_id, codigo) impede a inserção/atualização.`,
+          message: `Conflito de constraint legada: o código comercial "${remote.codigo}" do produto remoto ${remote.eyemobileId} já existe no ${wsDesc} do mesmo usuário. A constraint UNIQUE(user_id, codigo) impede a inserção/atualização.`,
         });
         continue;
       }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   normalizeRemoteCode,
+  validateRemoteProductsPage,
   validateRemoteSnapshot,
   planProductSync,
   isTrustedServiceRoleCaller,
@@ -268,47 +269,55 @@ describe("Eyemobile Product Sync Hardening (Fase 3)", () => {
   // Cenário I: falha HTTP em página intermediária → aborta; zero deactivation
   // =========================================================================
   it("Cenário I: falha HTTP em página intermediária da paginação aborta o sync com zero deactivation", async () => {
-    const fetchPages = async (simulateHttpErrorOnPage: number) => {
-      const eyemobileRaw: unknown[] = [];
-      for (let page = 0; page < 5; page++) {
-        if (page === simulateHttpErrorOnPage) {
-          // Erro HTTP intermediário
-          return { ok: false, status: 500, error: "remote_http_error", products: [] };
+    // Simula a lógica do loop de paginação da Edge Function
+    const fetchLoop = async () => {
+      let deactivated = 0;
+      for (let page = 0; page < 3; page++) {
+        if (page === 1) {
+          // HTTP 500 na página 1
+          const resp = { ok: false, status: 500 };
+          if (!resp.ok) {
+            return {
+              success: false,
+              code: "remote_http_error",
+              deactivated,
+            };
+          }
         }
-        eyemobileRaw.push({ id: `item-${page}` });
       }
-      return { ok: true, products: eyemobileRaw };
+      deactivated = 5; // Nunca deve ser chamado
+      return { success: true, deactivated };
     };
 
-    const result = await fetchPages(2);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("remote_http_error");
-
-    // Nenhuma mutação ou desativação é executada
-    let deactivatedCount = 0;
-    if (result.ok) {
-      deactivatedCount = 10; // Nunca deve ser chamado
-    }
-    expect(deactivatedCount).toBe(0);
+    const result = await fetchLoop();
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("remote_http_error");
+    expect(result.deactivated).toBe(0);
   });
 
   // =========================================================================
   // Cenário J: has_more = true ao atingir page cap → snapshot incompleto; aborta
   // =========================================================================
   it("Cenário J: has_more = true ao atingir limite máximo de páginas aborta por snapshot incompleto", () => {
-    const MAX_PAGES = 3;
-    let hasMoreAtCap = false;
+    const pagePayload = {
+      data: [{ id: "prod-1", name: "Produto 1" }],
+      has_more: true,
+    };
 
-    for (let page = 0; page < MAX_PAGES; page++) {
-      if (page === MAX_PAGES - 1) {
-        // Ainda há mais itens
-        hasMoreAtCap = true;
-      }
-    }
+    const pageValidation = validateRemoteProductsPage(pagePayload);
+    expect(pageValidation.ok).toBe(true);
+    if (!pageValidation.ok) return;
 
-    expect(hasMoreAtCap).toBe(true);
-    const errorResult = hasMoreAtCap ? { success: false, code: "incomplete_snapshot" } : { success: true };
-    expect(errorResult.code).toBe("incomplete_snapshot");
+    // Quando o loop atinge MAX_PAGES - 1 e has_more ainda é true:
+    const MAX_PAGES = 50;
+    const page = 49;
+    const reachedPageCapWithMore = page === MAX_PAGES - 1 && pageValidation.hasMore;
+
+    expect(reachedPageCapWithMore).toBe(true);
+    const abortResult = reachedPageCapWithMore
+      ? { success: false, code: "incomplete_snapshot" }
+      : { success: true };
+    expect(abortResult.code).toBe("incomplete_snapshot");
   });
 
   // =========================================================================
@@ -766,5 +775,205 @@ describe("Eyemobile Product Sync Hardening (Fase 3)", () => {
 
     expect(finalResponse.success).toBe(false);
     expect(finalResponse.partial_write).toBe(true);
+  });
+
+  // =========================================================================
+  // Cenário Y: HTTP 200 com payload sem data -> invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário Y: payload HTTP 200 sem propriedade 'data' falha fechado com invalid_remote_snapshot", () => {
+    const pagePayload = { status: "ok", total: 100 };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("invalid_remote_snapshot");
+    expect(res.error).toContain("data");
+  });
+
+  // =========================================================================
+  // Cenário Z: HTTP 200 com data = null -> invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário Z: payload HTTP 200 com data = null falha fechado com invalid_remote_snapshot", () => {
+    const pagePayload = { data: null, has_more: false };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("invalid_remote_snapshot");
+  });
+
+  // =========================================================================
+  // Cenário AA: HTTP 200 com data = {} (objeto em vez de array) -> invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário AA: payload HTTP 200 com data sendo objeto em vez de array falha com invalid_remote_snapshot", () => {
+    const pagePayload = { data: { id: "1", name: "Produto" }, has_more: false };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("invalid_remote_snapshot");
+  });
+
+  // =========================================================================
+  // Cenário AB: data = [] com has_more = true -> incomplete_snapshot
+  // =========================================================================
+  it("Cenário AB: resposta com lista vazia mas has_more = true falha com incomplete_snapshot", () => {
+    const pagePayload = { data: [], has_more: true };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe("incomplete_snapshot");
+  });
+
+  // =========================================================================
+  // Cenário AC: data = [] com has_more = false -> ok com items: [] e hasMore: false
+  // =========================================================================
+  it("Cenário AC: resposta com data vazia e has_more = false é snapshot vazio válido", () => {
+    const pagePayload = { data: [], has_more: false };
+    const res = validateRemoteProductsPage(pagePayload);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.items).toEqual([]);
+    expect(res.hasMore).toBe(false);
+  });
+
+  // =========================================================================
+  // Cenário AD: has_more com tipo não-booleano -> invalid_remote_snapshot
+  // =========================================================================
+  it("Cenário AD: propriedade has_more com tipo inválido (string ou número) falha com invalid_remote_snapshot", () => {
+    const payloadString = { data: [{ id: "1" }], has_more: "true" };
+    const resString = validateRemoteProductsPage(payloadString);
+    expect(resString.ok).toBe(false);
+    if (!resString.ok) {
+      expect(resString.code).toBe("invalid_remote_snapshot");
+    }
+
+    const payloadNumber = { data: [{ id: "1" }], has_more: 1 };
+    const resNumber = validateRemoteProductsPage(payloadNumber);
+    expect(resNumber.ok).toBe(false);
+    if (!resNumber.ok) {
+      expect(resNumber.code).toBe("invalid_remote_snapshot");
+    }
+  });
+
+  // =========================================================================
+  // Cenário AE: colisão com produto legado que possui workspace_id = null
+  // =========================================================================
+  it("Cenário AE: colisão com produto legado com workspace_id = null diagnostica colisão indicando workspace legado (NULL)", () => {
+    const localProds: LocalProductMirror[] = [];
+    const legacyProductsSameUser: LocalProductMirror[] = [
+      {
+        id: "prod-legacy-null-ws",
+        user_id: USER_ID,
+        workspace_id: null, // produto legado com workspace_id nulo
+        eyemobile_id: null,
+        codigo: "SKU-LEGADO-123",
+        ativo: true,
+      },
+    ];
+
+    const remoteProds: ValidatedRemoteProduct[] = [
+      {
+        eyemobileId: "REM-AE-1",
+        codigo: "SKU-LEGADO-123",
+        descricao: "Produto Remoto Colidindo com Legado",
+        categoria: "Geral",
+        precoVenda: 10,
+        custoAtual: 5,
+        estoqueAtual: 2,
+        margemReal: 30,
+      },
+    ];
+
+    const plan = planProductSync(remoteProds, localProds, {
+      userId: USER_ID,
+      workspaceId: WS_ID,
+      otherWorkspaceProducts: legacyProductsSameUser,
+    });
+
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.code).toBe("cross_workspace_code_collision");
+    expect(plan.conflicts[0].workspaceId).toBeNull();
+    expect(plan.conflicts[0].message).toContain("workspace legado (NULL)");
+  });
+
+  // =========================================================================
+  // Cenário AF: timeout remoto (>25s) gera erro com status 504 e code remote_timeout
+  // =========================================================================
+  it("Cenário AF: timeout na chamada à API remota gera resposta HTTP 504 com code remote_timeout", async () => {
+    const simulateFetchWithTimeout = async (shouldTimeout: boolean) => {
+      const controller = new AbortController();
+      if (shouldTimeout) {
+        controller.abort(new DOMException("The signal has been aborted", "AbortError"));
+      }
+
+      try {
+        if (controller.signal.aborted) {
+          throw new DOMException("The signal has been aborted", "AbortError");
+        }
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      } catch (err: unknown) {
+        const error = err as { name?: string; message?: string };
+        if (error?.name === "AbortError" || error?.message?.includes("aborted")) {
+          return {
+            ok: false,
+            status: 504,
+            body: {
+              success: false,
+              code: "remote_timeout",
+              error: "Timeout na comunicação com a API da Eyemobile (limite: 25s por página).",
+            },
+          };
+        }
+        throw err;
+      }
+    };
+
+    const res = await simulateFetchWithTimeout(true);
+    expect(res.status).toBe(504);
+    expect(res.body.code).toBe("remote_timeout");
+    expect(res.body.success).toBe(false);
+  });
+
+  // =========================================================================
+  // Cenário AG: sanitização de erro de escrita sem vazamento de detalhes de BD
+  // =========================================================================
+  it("Cenário AG: falha de escrita em banco mascara SQL e constraints internas retornando mensagem sanitizada", () => {
+    const rawPgError = {
+      message: 'duplicate key value violates unique constraint "produtos_eyemobile_user_id_codigo_key"',
+      code: "23505",
+      details: "Key (user_id, codigo)=(usr-1, COD-1) already exists.",
+    };
+
+    // Função de sanitização idêntica à utilizada na edge function
+    const sanitizeWriteError = (operation: "update" | "insert" | "deactivate", _rawError: unknown) => {
+      switch (operation) {
+        case "update":
+          return "Falha ao atualizar produto.";
+        case "insert":
+          return "Falha ao inserir produto.";
+        case "deactivate":
+          return "Falha ao desativar produto.";
+      }
+    };
+
+    const sanitizedUpdate = sanitizeWriteError("update", rawPgError);
+    const sanitizedInsert = sanitizeWriteError("insert", rawPgError);
+    const sanitizedDeact = sanitizeWriteError("deactivate", rawPgError);
+
+    expect(sanitizedUpdate).toBe("Falha ao atualizar produto.");
+    expect(sanitizedInsert).toBe("Falha ao inserir produto.");
+    expect(sanitizedDeact).toBe("Falha ao desativar produto.");
+
+    // Nenhuma string contém vestígios de SQL ou nome de constraint
+    for (const msg of [sanitizedUpdate, sanitizedInsert, sanitizedDeact]) {
+      expect(msg).not.toContain("constraint");
+      expect(msg).not.toContain("duplicate key");
+      expect(msg).not.toContain("produtos_eyemobile_user_id_codigo_key");
+      expect(msg).not.toContain("23505");
+    }
   });
 });

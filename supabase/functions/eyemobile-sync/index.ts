@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 import {
+  validateRemoteProductsPage,
   validateRemoteSnapshot,
   planProductSync,
   isTrustedServiceRoleCaller,
@@ -643,10 +644,28 @@ serve(async (req) => {
       let reachedPageCapWithMore = false;
 
       for (let page = 0; page < MAX_PAGES; page++) {
+        const controller = new AbortController();
+        const timeoutMs = 25000;
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
         let resp: Response;
         try {
-          resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, { headers: pHeaders });
-        } catch (fetchErr) {
+          resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, {
+            headers: pHeaders,
+            signal: controller.signal,
+          });
+        } catch (fetchErr: any) {
+          if (fetchErr?.name === "AbortError" || controller.signal.aborted) {
+            console.error(`[eyemobile-sync] Timeout ao buscar produtos na página ${page} (>25s)`);
+            return new Response(JSON.stringify({
+              success: false,
+              code: "remote_timeout",
+              error: `Tempo limite de 25s esgotado ao aguardar resposta da Eyemobile na página ${page}. Sincronização abortada por integridade.`
+            }), {
+              status: 504,
+              headers: { ...corsHeaders, "Content-Type": "application/json" }
+            });
+          }
           console.error(`[eyemobile-sync] Erro de rede ao buscar produtos na página ${page}:`, fetchErr);
           return new Response(JSON.stringify({
             success: false,
@@ -656,6 +675,8 @@ serve(async (req) => {
             status: 502,
             headers: { ...corsHeaders, "Content-Type": "application/json" }
           });
+        } finally {
+          clearTimeout(timer);
         }
 
         if (!resp.ok) {
@@ -670,7 +691,7 @@ serve(async (req) => {
           });
         }
 
-        let json: { data?: unknown[]; has_more?: boolean } | null = null;
+        let json: unknown;
         try {
           json = await resp.json();
         } catch (jsonErr) {
@@ -685,14 +706,26 @@ serve(async (req) => {
           });
         }
 
-        const list = Array.isArray(json?.data) ? json.data : [];
-        eyemobileRawProducts.push(...list);
+        const pageValidation = validateRemoteProductsPage(json);
+        if (!pageValidation.ok) {
+          console.error(`[eyemobile-sync] Validação da página ${page} falhou:`, pageValidation.error);
+          return new Response(JSON.stringify({
+            success: false,
+            code: pageValidation.code,
+            error: pageValidation.error
+          }), {
+            status: 502,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
 
-        if (json?.has_more !== true || list.length === 0) {
+        eyemobileRawProducts.push(...pageValidation.items);
+
+        if (!pageValidation.hasMore || pageValidation.items.length === 0) {
           break;
         }
 
-        if (page === MAX_PAGES - 1 && json?.has_more === true) {
+        if (page === MAX_PAGES - 1 && pageValidation.hasMore) {
           reachedPageCapWithMore = true;
         }
       }
@@ -743,16 +776,15 @@ serve(async (req) => {
         });
       }
 
-      // 5b. Diagnóstico da constraint legada UNIQUE(user_id, codigo) em outros workspaces do mesmo usuário
-      const { data: otherWsProds, error: otherWsErr } = await supabaseAdmin
+      // 5b. Diagnóstico da constraint legada UNIQUE(user_id, codigo) em outros workspaces do mesmo usuário (incluindo workspace_id NULL)
+      const { data: userProdsWithCode, error: userProdsWithCodeErr } = await supabaseAdmin
         .from("produtos_eyemobile")
         .select("id, user_id, workspace_id, eyemobile_id, codigo")
         .eq("user_id", targetUserId)
-        .neq("workspace_id", syncWorkspaceId)
         .not("codigo", "is", null);
 
-      if (otherWsErr) {
-        console.error("[eyemobile-sync] Erro ao buscar produtos de outros workspaces:", otherWsErr);
+      if (userProdsWithCodeErr) {
+        console.error("[eyemobile-sync] Erro ao buscar produtos para diagnóstico de constraints:", userProdsWithCodeErr);
         return new Response(JSON.stringify({
           success: false,
           code: "database_error",
@@ -763,11 +795,16 @@ serve(async (req) => {
         });
       }
 
+      // Filtrar em memória os que não pertencem ao workspace atual (inclui workspace_id !== syncWorkspaceId OU workspace_id IS NULL)
+      const otherWsProds = (userProdsWithCode || []).filter(
+        (p) => p.workspace_id !== syncWorkspaceId
+      );
+
       // 6. Preflight e planejamento de sincronização
       const plan = planProductSync(validatedRemoteProducts, existingProds || [], {
         userId: targetUserId,
         workspaceId: syncWorkspaceId,
-        otherWorkspaceProducts: otherWsProds || []
+        otherWorkspaceProducts: otherWsProds
       });
 
       if (!plan.ok) {
@@ -809,7 +846,7 @@ serve(async (req) => {
 
         if (updErr) {
           console.error(`[eyemobile-sync] Erro ao atualizar produto ${localProduct.id}:`, updErr);
-          writeErrors.push({ operation: "update", id: localProduct.id, error: updErr.message || "Falha na atualização do produto." });
+          writeErrors.push({ operation: "update", id: localProduct.id, error: "Falha ao atualizar produto." });
           break; // Fail-fast: interrompe imediatamente!
         } else {
           updated++;
@@ -838,7 +875,7 @@ serve(async (req) => {
 
           if (insErr) {
             console.error(`[eyemobile-sync] Erro ao inserir produto ${remoteProduct.eyemobileId}:`, insErr);
-            writeErrors.push({ operation: "insert", id: remoteProduct.eyemobileId, error: insErr.message || "Falha na inserção do produto." });
+            writeErrors.push({ operation: "insert", id: remoteProduct.eyemobileId, error: "Falha ao inserir produto." });
             break; // Fail-fast: interrompe imediatamente!
           } else {
             inserted++;
@@ -860,7 +897,7 @@ serve(async (req) => {
 
           if (deactErr) {
             console.error(`[eyemobile-sync] Erro ao desativar produto ${localProduct.id}:`, deactErr);
-            writeErrors.push({ operation: "deactivate", id: localProduct.id, error: deactErr.message || "Falha na desativação do produto." });
+            writeErrors.push({ operation: "deactivate", id: localProduct.id, error: "Falha ao desativar produto." });
             break; // Fail-fast: interrompe imediatamente!
           } else {
             deactivated++;
