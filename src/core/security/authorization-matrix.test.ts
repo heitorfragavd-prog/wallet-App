@@ -673,50 +673,76 @@ describe("Matriz de Autorização e Controle de Acesso Executando Módulos de Pr
     expect(resTph.reason).toMatch(/bloqueada por segurança|erro ao verificar cota/i);
   });
 
-  it("16. Reserva Prévia e Reconciliação de Tokens: delta positivo, negativo e erro a montante", async () => {
-    const rpcMock = vi.fn().mockResolvedValue({ error: null });
+  it("16. Reserva Prévia e Reconciliação de Tokens: reconciliação durável via reconcile_ai_tokens", async () => {
+    const rpcMock = vi.fn().mockResolvedValue({ data: [{ status: "reconciled", delta_applied: -800 }], error: null });
     const mockAdmin = { rpc: rpcMock };
 
-    // 16a. Consumo real menor que a reserva (delta negativo -> devolve cota)
+    // 16a. Consumo real menor que a reserva (outcome success)
     await reconcileAiTokens(mockAdmin, {
       userId: userA.id,
       workspaceId: "ws-100",
       action: "openai_proxy",
+      reservationId: "res-uuid-16a",
       reservedTokens: 2000,
       actualTokensConsumed: 1200,
+      outcome: "success",
     });
 
-    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
-      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
-      p_delta: -800,
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_ai_tokens", {
+      p_reservation_id: "res-uuid-16a",
+      p_actual_tokens: 1200,
+      p_outcome: "success",
     });
 
-    // 16b. Consumo real maior que a reserva (delta positivo -> debita excedente)
+    // 16b. Consumo real maior que a reserva
     await reconcileAiTokens(mockAdmin, {
       userId: userA.id,
       workspaceId: "ws-100",
       action: "openai_proxy",
+      reservationId: "res-uuid-16b",
       reservedTokens: 1000,
       actualTokensConsumed: 1500,
+      outcome: "success",
     });
 
-    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
-      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
-      p_delta: 500,
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_ai_tokens", {
+      p_reservation_id: "res-uuid-16b",
+      p_actual_tokens: 1500,
+      p_outcome: "success",
     });
 
-    // 16c. Erro a montante (consumo 0 -> estorno total da reserva)
+    // 16c. Erro a montante (outcome error)
     await reconcileAiTokens(mockAdmin, {
       userId: userA.id,
       workspaceId: "ws-100",
       action: "openai_proxy",
+      reservationId: "res-uuid-16c",
       reservedTokens: 2000,
       actualTokensConsumed: 0,
+      outcome: "error",
     });
 
-    expect(rpcMock).toHaveBeenCalledWith("reconcile_rate_limit", {
-      p_key: expect.stringContaining("ws:ws-100:user:user-uuid-1111:openai_proxy:tph"),
-      p_delta: -2000,
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_ai_tokens", {
+      p_reservation_id: "res-uuid-16c",
+      p_actual_tokens: 0,
+      p_outcome: "error",
+    });
+
+    // 16d. Timeout a montante (outcome timeout -> não estorna consumo desconhecido)
+    await reconcileAiTokens(mockAdmin, {
+      userId: userA.id,
+      workspaceId: "ws-100",
+      action: "openai_proxy",
+      reservationId: "res-uuid-16d",
+      reservedTokens: 2000,
+      actualTokensConsumed: undefined,
+      outcome: "timeout",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith("reconcile_ai_tokens", {
+      p_reservation_id: "res-uuid-16d",
+      p_actual_tokens: null,
+      p_outcome: "timeout",
     });
   });
 

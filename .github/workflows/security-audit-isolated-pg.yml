@@ -60,6 +60,12 @@ jobs:
         run: |
           psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-gating.sql
 
+      - name: Run Real Schema Compatibility Battery (Phase A -> Phase B -> Phase C -> 9 Scenarios)
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-real-schema-compat.sql
+
       - name: Run Real Concurrency Battery (Multiple Connections Pool)
         env:
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres

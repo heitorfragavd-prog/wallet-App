@@ -38,6 +38,67 @@ function sanitizeKeyComponent(val?: string, fallback = "default"): string {
   return val.replace(/[^a-zA-Z0-9_\-]/g, "").slice(0, 64) || fallback;
 }
 
+/**
+ * Validação server-side de autorização de workspace.
+ * Evita forja de workspaceId para consumo indevido de quotas ou acesso não autorizado.
+ */
+export async function validateUserWorkspace(
+  supabaseAdmin: any,
+  userId: string,
+  workspaceId?: string | null
+): Promise<{ valid: boolean; workspaceId?: string; error?: string }> {
+  // Se não foi fornecido workspaceId ou for o padrão "personal", escopo pessoal seguro
+  if (!workspaceId || workspaceId === "personal" || workspaceId === "null" || workspaceId === "undefined") {
+    return { valid: true, workspaceId: "personal" };
+  }
+
+  const cleanWs = String(workspaceId).trim();
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(cleanWs)) {
+    return { valid: false, error: "Identificador de workspace inválido" };
+  }
+
+  if (!supabaseAdmin) {
+    return { valid: false, error: "Cliente de banco de dados indisponível para validação de workspace" };
+  }
+
+  try {
+    // 1. Verifica se o usuário é o proprietário do workspace
+    const { data: ownerData, error: ownerError } = await supabaseAdmin
+      .from("workspaces")
+      .select("id")
+      .eq("id", cleanWs)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!ownerError && ownerData) {
+      return { valid: true, workspaceId: ownerData.id };
+    }
+
+    // 2. Verifica se o usuário é membro ativo na tabela workspace_members
+    try {
+      const { data: memberData, error: memberError } = await supabaseAdmin
+        .from("workspace_members")
+        .select("id")
+        .eq("workspace_id", cleanWs)
+        .eq("user_id", userId)
+        .eq("active", true)
+        .maybeSingle();
+
+      if (!memberError && memberData) {
+        return { valid: true, workspaceId: cleanWs };
+      }
+    } catch {
+      // Ignora erro se workspace_members não estiver configurada no schema atual
+    }
+
+    return { valid: false, error: "Acesso negado: workspace não pertence ao usuário autenticado" };
+  } catch (err: any) {
+    console.error("[ai-rate-limiter] Erro ao validar permissão no workspace:", err);
+    return { valid: false, error: "Erro interno ao validar workspace" };
+  }
+}
+
 export async function checkSharedRateLimit(
   supabaseAdmin: any,
   options: RateLimitOptions
@@ -123,46 +184,25 @@ export async function checkSharedRateLimit(
       });
 
       if (tokenError) {
-        // Fallback para check_rate_limit caso a tabela de reservas esteja em migração
-        const { data: fallbackResult, error: fallbackError } = await supabaseAdmin.rpc("check_rate_limit", {
-          p_key: tokenBucketKey,
-          p_max_requests: maxTokensPerHour,
-          p_window_seconds: 3600,
-          p_cost: reserveTokens,
-        });
+        console.error("[ai-rate-limiter] Erro crítico na RPC reserve_ai_tokens:", tokenError);
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          currentCount: maxTokensPerHour,
+          limit: maxTokensPerHour,
+          reason: "Erro ao verificar cota de processamento de IA. Requisição bloqueada por segurança.",
+        };
+      }
 
-        if (fallbackError) {
-          console.error("[ai-rate-limiter] Erro crítico na RPC ao verificar TPH:", fallbackError);
-          return {
-            allowed: false,
-            retryAfterSeconds: 60,
-            currentCount: maxTokensPerHour,
-            limit: maxTokensPerHour,
-            reason: "Erro ao verificar cota de processamento de IA. Requisição bloqueada por segurança.",
-          };
-        }
-
-        const fallbackRow = Array.isArray(fallbackResult) ? fallbackResult[0] : fallbackResult;
-        if (!fallbackRow || !fallbackRow.allowed) {
-          return {
-            allowed: false,
-            retryAfterSeconds: fallbackRow?.retry_after_seconds || 300,
-            currentCount: fallbackRow?.current_count ?? maxTokensPerHour,
-            limit: maxTokensPerHour,
-            reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
-          };
-        }
-      } else {
-        const tokenRow = Array.isArray(tokenResult) ? tokenResult[0] : tokenResult;
-        if (!tokenRow || !tokenRow.allowed) {
-          return {
-            allowed: false,
-            retryAfterSeconds: tokenRow?.retry_after_seconds || 300,
-            currentCount: tokenRow?.current_count ?? maxTokensPerHour,
-            limit: maxTokensPerHour,
-            reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
-          };
-        }
+      const tokenRow = Array.isArray(tokenResult) ? tokenResult[0] : tokenResult;
+      if (!tokenRow || !tokenRow.allowed) {
+        return {
+          allowed: false,
+          retryAfterSeconds: tokenRow?.retry_after_seconds || 300,
+          currentCount: tokenRow?.current_count ?? maxTokensPerHour,
+          limit: maxTokensPerHour,
+          reason: "Orçamento de processamento de IA por hora atingido para este workspace.",
+        };
       }
     } else if (directTokens > 0 && maxTokensPerHour > 0) {
       const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
@@ -238,7 +278,7 @@ export async function reconcileAiTokens(
 
   if (!userId || !supabaseAdmin) return { status: "skipped" };
 
-  // 1. Caminho primário: RPC reconcile_ai_tokens associada ao ID único e janela de origem
+  // 1. Caminho único e durável: RPC reconcile_ai_tokens com idempotência e proteção de janela
   if (reservationId) {
     try {
       const { data, error } = await supabaseAdmin.rpc("reconcile_ai_tokens", {
@@ -247,42 +287,28 @@ export async function reconcileAiTokens(
         p_outcome: outcome,
       });
 
-      if (!error && data) {
+      if (error) {
+        console.error("[ai-rate-limiter] Erro na RPC reconcile_ai_tokens:", error);
+        return { status: "error" };
+      }
+
+      if (data) {
         const row = Array.isArray(data) ? data[0] : data;
         return { status: row?.status || "reconciled", deltaApplied: row?.delta_applied };
       }
+      return { status: "reconciled" };
     } catch (rpcErr) {
-      console.warn("[ai-rate-limiter] Erro ao chamar reconcile_ai_tokens:", rpcErr);
+      console.error("[ai-rate-limiter] Exceção ao chamar reconcile_ai_tokens:", rpcErr);
+      return { status: "exception" };
     }
   }
 
-  // 2. Fallback de reconciliação de taxa:
-  // "Timeout ou usage ausente não comprovam consumo zero; não estorne integralmente sem evidência."
-  if (outcome === "timeout" || actualTokensConsumed == null) {
+  // Se não houver reservationId, retenção conservadora para evitar estornos indevidos
+  if (outcome === "timeout" || outcome === "missing_usage" || actualTokensConsumed == null) {
     return { status: "retained_conservative_estimate" };
   }
 
-  const delta = Math.round(actualTokensConsumed - reservedTokens);
-  if (delta === 0) return { status: "no_delta" };
-
-  const cleanUser = sanitizeKeyComponent(userId);
-  const cleanWs = sanitizeKeyComponent(workspaceId, "personal");
-  const cleanAction = sanitizeKeyComponent(action);
-  const tokenBucketKey = `ws:${cleanWs}:user:${cleanUser}:${cleanAction}:tph`;
-
-  try {
-    const { error } = await supabaseAdmin.rpc("reconcile_rate_limit", {
-      p_key: tokenBucketKey,
-      p_delta: delta,
-    });
-    if (error) {
-      console.warn("[ai-rate-limiter] Erro ao reconciliar tokens no banco:", error);
-    }
-    return { status: error ? "error" : "reconciled", deltaApplied: delta };
-  } catch (err) {
-    console.warn("[ai-rate-limiter] Exceção na reconciliação de tokens:", err);
-    return { status: "exception" };
-  }
+  return { status: "skipped_no_reservation" };
 }
 
 export function sanitizeAiInput(input: string, maxChars = 2000): string {

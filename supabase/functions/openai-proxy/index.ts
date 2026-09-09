@@ -8,7 +8,7 @@ import {
   createErrorResponse,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
-import { checkSharedRateLimit, checkAiRateLimit, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
+import { checkSharedRateLimit, validateUserWorkspace, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
@@ -1038,7 +1038,11 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
   }
 }
 
-Deno.serve(async (req: Request) => {
+export async function handleOpenAIProxy(
+  req: Request,
+  injectedSupabase?: any,
+  injectedFetch?: typeof fetch
+): Promise<Response> {
   const correlationId = getCorrelationId(req);
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -1067,8 +1071,8 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
+  const supabaseServiceKey = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") : process.env.SUPABASE_SERVICE_ROLE_KEY) || "";
   const jwt = authHeader.replace("Bearer ", "").trim();
 
   // ================================================================
@@ -1190,7 +1194,7 @@ Deno.serve(async (req: Request) => {
     // Chamada interna autorizada exclusivamente pela chave service-role
     userId = String(body.user_id);
   } else {
-    const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+    const supabaseAuth = injectedSupabase || createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
     if (authError || !user) {
       return createErrorResponse(req, {
@@ -1203,20 +1207,32 @@ Deno.serve(async (req: Request) => {
     userId = user.id;
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabase = injectedSupabase || createClient(supabaseUrl, supabaseServiceKey);
+
+  // Validação server-side estrita de workspace antes de formar a chave de quota
+  const wsValidation = await validateUserWorkspace(supabase, userId, body.workspace_id);
+  if (!wsValidation.valid) {
+    return createErrorResponse(req, {
+      status: 403,
+      message: wsValidation.error || "Acesso negado ao workspace informado.",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
+  }
+  const cleanWorkspaceId = wsValidation.workspaceId;
 
   // Estimativa segura para reserva prévia contra Denial of Wallet
   const estimatedTokens = Math.min(4000, Math.max(500, Number(body.max_tokens || 2000)));
 
-  // Rate limiting atômico compartilhado: RPM + Reserva prévia de Tokens por Hora
+  // Rate limiting atômico compartilhado: RPM + Reserva prévia de Tokens por Hora (Fail-Closed)
   const rateCheck = await checkSharedRateLimit(supabase, {
     userId,
-    workspaceId: body.workspace_id,
+    workspaceId: cleanWorkspaceId,
     action: "openai_proxy",
     maxRequestsPerMinute: 30,
     reserveTokens: estimatedTokens,
     maxTokensPerHour: 100000,
-  }).catch(() => checkAiRateLimit(userId, 30));
+  });
 
   if (!rateCheck.allowed) {
     return createErrorResponse(req, {
@@ -1266,9 +1282,11 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
 
   const toolsToUse = Array.isArray(body.tools) ? (body.tools.length > 0 ? body.tools : undefined) : (body.tools === null ? undefined : TOOLS);
 
+  const doFetch = injectedFetch || fetchWithTimeout;
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let modelToUse = body.model || "gpt-4o-mini";
-    let response = await fetchWithTimeout(OPENAI_API_URL, {
+    let response = await doFetch(OPENAI_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiKey}`,
@@ -1295,7 +1313,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
           metadata: { error: errStr.slice(0, 300) },
         });
         modelToUse = "gpt-4o";
-        response = await fetchWithTimeout(OPENAI_API_URL, {
+        response = await doFetch(OPENAI_API_URL, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${openaiKey}`,
@@ -1338,7 +1356,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
       const outcome = isTimeout ? "timeout" : "error";
       await reconcileAiTokens(supabase, {
         userId,
-        workspaceId: body.workspace_id,
+        workspaceId: cleanWorkspaceId,
         action: "openai_proxy",
         reservationId,
         reservedTokens: estimatedTokens,
@@ -1369,7 +1387,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
       
       supabase.from("wallet_ai_audit_events").insert({
         user_id: userId,
-        workspace_id: body.workspace_id || null,
+        workspace_id: cleanWorkspaceId !== "personal" ? cleanWorkspaceId : null,
         tool_name: toolsExecuted > 0 ? "consultar_vendas_eyemobile" : "chat_assistente",
         model: modelToUse,
         tokens_prompt: usage.prompt_tokens || 0,
@@ -1382,7 +1400,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
       // Reconciliação exata durável: ajusta a diferença entre a reserva prévia e o consumo real
       await reconcileAiTokens(supabase, {
         userId,
-        workspaceId: body.workspace_id,
+        workspaceId: cleanWorkspaceId,
         action: "openai_proxy",
         reservationId,
         reservedTokens: estimatedTokens,
@@ -1425,10 +1443,24 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
     );
   }
 
+  await reconcileAiTokens(supabase, {
+    userId,
+    workspaceId: cleanWorkspaceId,
+    action: "openai_proxy",
+    reservationId,
+    reservedTokens: estimatedTokens,
+    actualTokensConsumed: 0,
+    outcome: "error",
+  }).catch(() => {});
+
   return createErrorResponse(req, {
     status: 500,
     message: "Máximo de iterações atingido sem resposta conclusiva.",
     correlationId,
     corsHeaders: CORS_HEADERS,
   });
-});
+}
+
+if (typeof Deno !== "undefined" && typeof (Deno as any).serve === "function") {
+  (Deno as any).serve((req: Request) => handleOpenAIProxy(req));
+}
