@@ -184,5 +184,46 @@ CREATE TABLE IF NOT EXISTS public.investimentos (
 );
 ALTER TABLE public.investimentos ENABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS public.depositos_investimentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  valor NUMERIC(15, 2) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+ALTER TABLE public.depositos_investimentos ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS public.metas_investimento (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  meta_valor NUMERIC(15, 2) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+ALTER TABLE public.metas_investimento ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS public.historico_rendimentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  rendimento NUMERIC(15, 2) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+ALTER TABLE public.historico_rendimentos ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS public.proventos_esperados (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  valor NUMERIC(15, 2) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+ALTER TABLE public.proventos_esperados ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS public.configuracoes_investimentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  config JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+);
+ALTER TABLE public.configuracoes_investimentos ENABLE ROW LEVEL SECURITY;
+
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, authenticated, service_role;
+
