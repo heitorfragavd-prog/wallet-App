@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { Client } from 'pg';
+import { Client, QueryResult } from 'pg';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'http://localhost:54321';
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE2NDk5NjQ4MDAsImV4cCI6MTk2NTUzMjgwMH0.6pnT9q8_Z3M3s9a0Y7mPqQ0P2QjP0V9O7W4qM3a0Z5g';
@@ -7,7 +7,7 @@ const INBUCKET_URL = process.env.INBUCKET_URL || 'http://localhost:54324';
 const _MOCK_PROVIDER_URL = process.env.MOCK_PROVIDER_URL || 'http://localhost:18080';
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 
-async function executeSql(query: string, params: unknown[] = []): Promise<any> {
+async function executeSql(query: string, params: unknown[] = []): Promise<QueryResult> {
   const client = new Client({ connectionString: DATABASE_URL });
   await client.connect();
   try {

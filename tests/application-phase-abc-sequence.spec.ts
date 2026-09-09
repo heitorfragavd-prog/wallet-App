@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { Client } from 'pg';
+import { Client, QueryResult } from 'pg';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,7 +25,7 @@ function readSqlFile(relativePath: string): string {
   throw new Error(`Arquivo SQL não encontrado em ${primaryPath} ou ${altPath}`);
 }
 
-async function executeSql(query: string, params: unknown[] = []): Promise<any> {
+async function executeSql(query: string, params: unknown[] = []): Promise<QueryResult> {
   const client = new Client({ connectionString: DATABASE_URL });
   await client.connect();
   try {
@@ -79,11 +79,11 @@ async function authCall(endpoint: string, body: unknown, token?: string) {
     body: JSON.stringify(body),
   });
   const text = await res.text();
-  let data: any = {};
+  let data: Record<string, unknown> = {};
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
-    data = text;
+    data = text as unknown as Record<string, unknown>;
   }
   return { status: res.status, ok: res.ok, data };
 }
