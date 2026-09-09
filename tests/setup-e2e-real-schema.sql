@@ -72,6 +72,23 @@ CREATE TABLE IF NOT EXISTS public.workspace_members (
 );
 ALTER TABLE public.workspace_members ENABLE ROW LEVEL SECURITY;
 
+-- Helper SECURITY DEFINER para evitar recursão mútua de RLS entre workspaces e workspace_members
+CREATE OR REPLACE FUNCTION public.is_workspace_owner(p_workspace_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.workspaces
+    WHERE id = p_workspace_id AND user_id = p_user_id
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_workspace_owner(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_workspace_owner(UUID, UUID) TO authenticated, service_role;
+
 DROP POLICY IF EXISTS "workspaces_select" ON public.workspaces;
 CREATE POLICY "workspaces_select" ON public.workspaces
 FOR SELECT TO authenticated
@@ -85,28 +102,36 @@ USING (
   )
 );
 
-DROP POLICY IF EXISTS "workspaces_all" ON public.workspaces;
-CREATE POLICY "workspaces_all" ON public.workspaces
-FOR ALL TO authenticated
+DROP POLICY IF EXISTS "workspaces_insert" ON public.workspaces;
+CREATE POLICY "workspaces_insert" ON public.workspaces
+FOR INSERT TO authenticated
+WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "workspaces_update" ON public.workspaces;
+CREATE POLICY "workspaces_update" ON public.workspaces
+FOR UPDATE TO authenticated
 USING (auth.uid() = user_id)
 WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "workspaces_delete" ON public.workspaces;
+CREATE POLICY "workspaces_delete" ON public.workspaces
+FOR DELETE TO authenticated
+USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "workspaces_all" ON public.workspaces;
 
 DROP POLICY IF EXISTS "members_manage" ON public.workspace_members;
 CREATE POLICY "members_manage" ON public.workspace_members
 FOR ALL TO authenticated
-USING (
-  EXISTS (SELECT 1 FROM public.workspaces WHERE id = workspace_members.workspace_id AND user_id = auth.uid())
-)
-WITH CHECK (
-  EXISTS (SELECT 1 FROM public.workspaces WHERE id = workspace_members.workspace_id AND user_id = auth.uid())
-);
+USING (public.is_workspace_owner(workspace_id, auth.uid()))
+WITH CHECK (public.is_workspace_owner(workspace_id, auth.uid()));
 
 DROP POLICY IF EXISTS "members_view" ON public.workspace_members;
 CREATE POLICY "members_view" ON public.workspace_members
 FOR SELECT TO authenticated
 USING (
   user_id = auth.uid()
-  OR EXISTS (SELECT 1 FROM public.workspaces WHERE id = workspace_members.workspace_id AND user_id = auth.uid())
+  OR public.is_workspace_owner(workspace_id, auth.uid())
 );
 
 -- 3. Divipay e Eyemobile
