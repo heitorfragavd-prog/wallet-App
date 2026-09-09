@@ -305,40 +305,92 @@ SET wallet.deploy_phase_b_completed = 'true';
 \i supabase/migrations/20260908120001_security_phase_c_enforcement.sql
 
 -- -------------------------------------------------------------------------
--- 5. BATERIA COMPLETA DOS 9 CENARIOS RIGOROSOS EM AMBIENTE REAL
+-- 5. SETUP DE DADOS PARA TESTE (como superuser postgres)
 -- -------------------------------------------------------------------------
 DO $$
 DECLARE
   v_user_1 UUID := '11111111-1111-4111-8111-111111111111'::uuid;
   v_user_2 UUID := '22222222-2222-4222-8222-222222222222'::uuid;
   v_admin UUID := '99999999-9999-4999-8999-999999999999'::uuid;
-  v_profile RECORD;
-  v_caught_admin_escalation BOOLEAN := false;
-  v_unlocked BOOLEAN;
-  v_count INTEGER;
-  v_res RECORD;
   v_session_token TEXT := 'session-token-hash-123';
+  v_unlocked BOOLEAN;
 BEGIN
-  RAISE NOTICE '=======================================================';
-  RAISE NOTICE 'Iniciando verificacao dos 9 cenarios rigorosos...';
-  RAISE NOTICE '=======================================================';
-
   -- Setup de usuarios no auth
   DELETE FROM auth.users WHERE id IN (v_user_1, v_user_2, v_admin);
-  
-  -- CENARIO 1: Cadastro, Login e Edição de Perfil
-  -- Novo cadastro dispara trigger handle_new_user
+
+  -- Usuario 1
   INSERT INTO auth.users (id, email, raw_user_meta_data)
   VALUES (v_user_1, 'user1@test.com', '{"name": "Usuario Um", "telefone": "11999999999"}'::jsonb);
 
+  -- Usuario 2
+  INSERT INTO auth.users (id, email, raw_user_meta_data)
+  VALUES (v_user_2, 'user2@test.com', '{"name": "Usuario Dois"}'::jsonb);
+
+  -- Workspaces
+  INSERT INTO public.workspaces (id, user_id, nome, tipo, is_default)
+  VALUES 
+    ('a1111111-1111-4111-8111-111111111111'::uuid, v_user_1, 'Workspace U1', 'PF', true),
+    ('b2222222-2222-4222-8222-222222222222'::uuid, v_user_2, 'Workspace U2', 'PJ', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Senhas de investimentos
+  INSERT INTO public.senha_investimentos (user_id, senha_hash, tentativas_falhas)
+  VALUES (v_user_1, '$pbkdf2$100000$mock_hash', 0)
+  ON CONFLICT (user_id) DO UPDATE SET senha_hash = '$pbkdf2$100000$mock_hash', tentativas_falhas = 0, bloqueado_ate = null;
+
+  INSERT INTO public.senha_investimentos (user_id, senha_hash, tentativas_falhas)
+  VALUES (v_user_2, '$pbkdf2$100000$mock_hash_2', 0)
+  ON CONFLICT (user_id) DO UPDATE SET senha_hash = '$pbkdf2$100000$mock_hash_2', tentativas_falhas = 0, bloqueado_ate = null;
+
+  -- Desbloqueio da sessao do Usuario 1 (operacao de backend via service_role / postgres)
+  v_unlocked := public.desbloquear_sessao_investimentos(
+    v_user_1,
+    v_session_token,
+    '$pbkdf2$100000$mock_hash',
+    NULL,
+    clock_timestamp() + interval '30 minutes'
+  );
+  ASSERT v_unlocked IS TRUE, 'Setup: desbloquear_sessao_investimentos deve retornar true';
+
+  -- Investimentos para teste
+  INSERT INTO public.investimentos (user_id, ativo, valor) VALUES (v_user_1, 'PETR4', 1500.00);
+  INSERT INTO public.investimentos (user_id, ativo, valor) VALUES (v_user_2, 'VALE3', 3000.00);
+
+  -- Segredos de integracoes
+  INSERT INTO public.divipay_config (user_id, client_id, client_secret, access_token)
+  VALUES (v_user_1, 'client_id_u1', 'SECRET_DIVIPAY_TOP_SECRET', 'ACCESS_TOKEN_U1');
+
+  INSERT INTO public.eyemobile_config (user_id, access_key, secret_key)
+  VALUES (v_user_1, 'access_key_u1', 'SECRET_EYEMOBILE_TOP_SECRET');
+END $$;
+
+-- -------------------------------------------------------------------------
+-- 6. EXECUCAO DOS 9 CENARIOS RIGOROSOS COMO ROLE 'AUTHENTICATED'
+-- -------------------------------------------------------------------------
+SET ROLE authenticated;
+
+DO $$
+DECLARE
+  v_user_1 UUID := '11111111-1111-4111-8111-111111111111'::uuid;
+  v_user_2 UUID := '22222222-2222-4222-8222-222222222222'::uuid;
+  v_session_token TEXT := 'session-token-hash-123';
+  v_profile RECORD;
+  v_caught_admin_escalation BOOLEAN := false;
+  v_caught_secret BOOLEAN := false;
+  v_count INTEGER;
+  v_res RECORD;
+BEGIN
+  RAISE NOTICE '=======================================================';
+  RAISE NOTICE 'Iniciando verificacao dos 9 cenarios rigorosos (como role authenticated)...';
+  RAISE NOTICE '=======================================================';
+
+  -- CENARIO 1: Cadastro, Login e Edicao de Perfil
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
   SELECT * INTO v_profile FROM public.profiles WHERE user_id = v_user_1;
   ASSERT v_profile.name = 'Usuario Um', 'Cenario 1 falhou: nome do perfil nao foi populado pelo trigger';
   ASSERT v_profile.role = 'user', 'Cenario 1 falhou: papel padrao do usuario deve ser user';
 
-  -- Edicao de campos permitidos (name, telefone)
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
   UPDATE public.profiles SET name = 'Usuario Um Atualizado', telefone = '11888888888' WHERE user_id = v_user_1;
-  
   SELECT name, telefone INTO v_profile FROM public.profiles WHERE user_id = v_user_1;
   ASSERT v_profile.name = 'Usuario Um Atualizado', 'Cenario 1 falhou: edicao de nome deve ser permitida';
   RAISE NOTICE 'Cenario 1 APROVADO: Cadastro, login e edicao de perfil funcionando.';
@@ -347,117 +399,87 @@ BEGIN
   v_caught_admin_escalation := false;
   BEGIN
     UPDATE public.profiles SET role = 'admin' WHERE user_id = v_user_1;
-  EXCEPTION WHEN OTHERS THEN
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_admin_escalation := true;
+  WHEN OTHERS THEN
     v_caught_admin_escalation := true;
   END;
   ASSERT v_caught_admin_escalation IS TRUE, 'Cenario 2 falhou: usuario comum conseguiu alterar role para admin!';
-  
-  -- Garante que o papel permaneceu 'user'
   SELECT role INTO v_profile FROM public.profiles WHERE user_id = v_user_1;
   ASSERT v_profile.role = 'user', 'Cenario 2 falhou: role do usuario nao pode ser admin';
   RAISE NOTICE 'Cenario 2 APROVADO: Bloqueio de auto-promocao a admin estritamente garantido.';
 
   -- CENARIO 3: Ciclo da Senha de Investimentos
-  -- Cadastra senha de investimentos
-  INSERT INTO public.senha_investimentos (user_id, senha_hash, tentativas_falhas)
-  VALUES (v_user_1, '$pbkdf2$100000$mock_hash', 0)
-  ON CONFLICT (user_id) DO UPDATE SET senha_hash = '$pbkdf2$100000$mock_hash', tentativas_falhas = 0, bloqueado_ate = null;
+  -- Sem sessao vinculada no JWT: is_investimentos_unlocked deve ser FALSE
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
+  ASSERT public.is_investimentos_unlocked(v_user_1) IS FALSE, 'Cenario 3 falhou: investimentos devem estar bloqueados sem sessao no JWT';
 
-  -- Sem desbloquear sessao, is_investimentos_unlocked deve ser FALSE
-  ASSERT public.is_investimentos_unlocked(v_user_1) IS FALSE, 'Cenario 3 falhou: investimentos devem estar bloqueados sem sessao';
-
-  -- Desbloqueia sessao via RPC com hash esperado
-  v_unlocked := public.desbloquear_sessao_investimentos(
-    v_user_1,
-    v_session_token,
-    '$pbkdf2$100000$mock_hash',
-    NULL,
-    clock_timestamp() + interval '30 minutes'
-  );
-  ASSERT v_unlocked IS TRUE, 'Cenario 3 falhou: desbloquear_sessao_investimentos deve retornar true';
-
-  -- Contexto de sessao autenticada com session_id
+  -- Com sessao valida vinculada no JWT: is_investimentos_unlocked deve ser TRUE
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated', 'session_id', v_session_token)::text, true);
-  ASSERT public.is_investimentos_unlocked(v_user_1) IS TRUE, 'Cenario 3 falhou: investimentos devem estar desbloqueados apos sessao criada';
+  ASSERT public.is_investimentos_unlocked(v_user_1) IS TRUE, 'Cenario 3 falhou: investimentos devem estar desbloqueados com session_id ativo';
   RAISE NOTICE 'Cenario 3 APROVADO: Ciclo de vida da senha de investimentos validado.';
 
-  -- CENARIO 4: Isolamento Multi-Tenant entre Usuarios e entre Sessoes
-  INSERT INTO auth.users (id, email, raw_user_meta_data)
-  VALUES (v_user_2, 'user2@test.com', '{"name": "Usuario Dois"}'::jsonb);
-
-  -- Workspaces isolados
-  INSERT INTO public.workspaces (id, user_id, nome, tipo, is_default)
-  VALUES 
-    ('a1111111-1111-4111-8111-111111111111'::uuid, v_user_1, 'Workspace U1', 'PF', true),
-    ('b2222222-2222-4222-8222-222222222222'::uuid, v_user_2, 'Workspace U2', 'PJ', true)
-  ON CONFLICT (id) DO NOTHING;
-
-  -- Usuario 1 conectado: so enxerga seu workspace
+  -- CENARIO 4: Isolamento Multi-Tenant entre Usuarios
+  -- Usuario 1 conectado: enxerga apenas 1 workspace
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
   SELECT count(*) INTO v_count FROM public.workspaces;
   ASSERT v_count = 1, 'Cenario 4 falhou: usuario 1 so deve enxergar 1 workspace proprio';
 
-  -- Usuario 2 conectado: so enxerga seu workspace
+  -- Usuario 2 conectado: enxerga apenas 1 workspace
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_2::text, 'role', 'authenticated')::text, true);
   SELECT count(*) INTO v_count FROM public.workspaces;
   ASSERT v_count = 1, 'Cenario 4 falhou: usuario 2 so deve enxergar 1 workspace proprio';
   RAISE NOTICE 'Cenario 4 APROVADO: Isolamento multi-tenant garantido por RLS.';
 
   -- CENARIO 5: Leitura e Escrita de Investimentos sob RLS
-  -- Usuario 2 nao tem sessao de investimentos desbloqueada
-  INSERT INTO public.senha_investimentos (user_id, senha_hash)
-  VALUES (v_user_2, '$pbkdf2$100000$mock_hash_2')
-  ON CONFLICT (user_id) DO UPDATE SET senha_hash = '$pbkdf2$100000$mock_hash_2';
-
+  -- Usuario 2 sem sessao desbloqueada no JWT: 0 linhas
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_2::text, 'role', 'authenticated')::text, true);
-  -- Tentativa de ler investimentos sem sessao: retorna 0 linhas
   SELECT count(*) INTO v_count FROM public.investimentos;
   ASSERT v_count = 0, 'Cenario 5 falhou: leitura de investimentos sem sessao deve retornar 0 linhas';
 
-  -- Usuario 1 com sessao valida acessa seus investimentos
+  -- Usuario 1 com sessao ativa no JWT: enxerga apenas seus proprios investimentos (1 linha)
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated', 'session_id', v_session_token)::text, true);
-  INSERT INTO public.investimentos (user_id, ativo, valor) VALUES (v_user_1, 'PETR4', 1500.00);
   SELECT count(*) INTO v_count FROM public.investimentos;
-  ASSERT v_count >= 1, 'Cenario 5 falhou: usuario com sessao ativa deve conseguir ler investimentos';
+  ASSERT v_count = 1, 'Cenario 5 falhou: usuario 1 com sessao ativa deve enxergar apenas seu investimento';
   RAISE NOTICE 'Cenario 5 APROVADO: RLS estrito de investimentos com sessao server-side comprovado.';
 
   -- CENARIO 6: Segredos de Divipay e Eyemobile sem Exposicao
-  -- Insere registros com credenciais
-  INSERT INTO public.divipay_config (user_id, client_id, client_secret, access_token)
-  VALUES (v_user_1, 'client_id_u1', 'SECRET_DIVIPAY_TOP_SECRET', 'ACCESS_TOKEN_U1');
-
-  INSERT INTO public.eyemobile_config (user_id, access_key, secret_key)
-  VALUES (v_user_1, 'access_key_u1', 'SECRET_EYEMOBILE_TOP_SECRET');
-
-  -- Usuario autenticado consulta divipay_config
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
-  
-  -- Consulta sem as colunas secretas deve funcionar
   SELECT id, client_id, environment INTO v_res FROM public.divipay_config WHERE user_id = v_user_1 LIMIT 1;
   ASSERT v_res.client_id = 'client_id_u1', 'Cenario 6 falhou: leitura de colunas permitidas deve funcionar';
 
+  -- Tentativa de ler client_secret diretamente: bloqueada por column-level security
+  v_caught_secret := false;
+  BEGIN
+    EXECUTE 'SELECT client_secret FROM public.divipay_config LIMIT 1';
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_secret := true;
+  END;
+  ASSERT v_caught_secret IS TRUE, 'Cenario 6 falhou: authenticated nao pode ter acesso a client_secret';
   RAISE NOTICE 'Cenario 6 APROVADO: Segredos de integracoes protegidos contra exposicao.';
 
-  -- CENARIO 7: Sanitizacao de Recibos
-  -- Tabela de reservas de IA intacta
-  SELECT count(*) INTO v_count FROM public.ai_token_reservations;
-  ASSERT v_count >= 0, 'Cenario 7 aprovado: reservas persistidas com integridade';
-  RAISE NOTICE 'Cenario 7 APROVADO: Integridade de auditoria e reservas.';
+  -- CENARIO 7: Sanitizacao de Recibos e Isolamento de Reservas
+  -- Authenticated nao tem acesso a ai_token_reservations diretamente
+  v_caught_secret := false;
+  BEGIN
+    EXECUTE 'SELECT count(*) FROM public.ai_token_reservations';
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_secret := true;
+  END;
+  ASSERT v_caught_secret IS TRUE, 'Cenario 7 falhou: tabela ai_token_reservations deve ser inacessivel para authenticated';
+  RAISE NOTICE 'Cenario 7 APROVADO: Integridade de auditoria e reservas protegida.';
 
   -- CENARIO 8: Cron e Webhooks Protegidos
-  -- Usuario comum nao possui privilégios de service_role
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
   ASSERT auth.role() = 'authenticated', 'Cenario 8 falhou: role do usuario comum deve ser authenticated';
   RAISE NOTICE 'Cenario 8 APROVADO: Roles restritas e webhooks administrativos protegidos.';
 
   -- CENARIO 9: Confirmacao de que Policies Antigas NAO contornam restricoes
-  -- Nenhuma policy em public.profiles permite UPDATE na coluna role por authenticated
   ASSERT NOT EXISTS (
     SELECT 1 FROM information_schema.column_privileges
     WHERE table_name = 'profiles' AND column_name = 'role' AND grantee = 'authenticated' AND privilege_type = 'UPDATE'
   ), 'Cenario 9 falhou: authenticated ainda possui privilegio de UPDATE na coluna role!';
 
-  -- Nenhuma policy permite leitura de client_secret por authenticated
   ASSERT NOT EXISTS (
     SELECT 1 FROM information_schema.column_privileges
     WHERE table_name = 'divipay_config' AND column_name = 'client_secret' AND grantee = 'authenticated' AND privilege_type = 'SELECT'
@@ -468,5 +490,7 @@ BEGIN
   RAISE NOTICE 'TODOS OS 9 CENARIOS PASSARAM COM SUCESSO ABSOLUTO!';
   RAISE NOTICE '=======================================================';
 END $$;
+
+RESET ROLE;
 
 SELECT 'TESTE DE COMPATIBILIDADE COM O SCHEMA REAL A -> B -> C CONCLUIDO COM SUCESSO!' AS resultado;
