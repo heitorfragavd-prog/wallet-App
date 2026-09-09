@@ -1,6 +1,6 @@
 /**
  * WALLET APP — Correção de Integridade de Produtos — Fase 2
- * Módulo: Matcher Seguro e Determinístico de Produtos (Hardened)
+ * Módulo: Matcher Seguro e Determinístico de Produtos (Micro-Hardened)
  * Arquivo: src/domains/finance/services/productMatcher.ts
  *
  * Princípios e Invariantes Centrais:
@@ -12,33 +12,36 @@
  * 3. FAIL-CLOSED NO FATOR DE CONVERSÃO:
  *    NUNCA assumir fator = 1 se o valor no banco for nulo, indefinido, zero, negativo,
  *    não numérico ou corrompido. Falhas de fator produzem erro de integridade explícito.
- * 4. ERRO DE BANCO NÃO É NOT_FOUND:
- *    Qualquer falha técnica em queries (lookup de equivalência, produto canônico ou sugestões)
- *    produz status "error" (code: "database_error"), nunca mascarada como "not_found".
+ * 4. ERRO DE BANCO NUNCA É MASCARADO:
+ *    Qualquer falha técnica em queries (equivalência, produto canônico ou sugestões)
+ *    produz status "error" (code: "database_error"), nunca mascarada como "not_found" ou sugestão.
  * 5. IDENTIDADE REMOTA EYEMOBILE OBRIGATÓRIA PARA MATCHED:
  *    Se produtos_eyemobile.eyemobile_id for null ou vazio, o matcher recusa status "matched"
- *    e retorna erro explícito (code: "missing_remote_product_id").
- * 6. ERRO DE INTEGRIDADE NÃO VIRA SUGESTÃO:
+ *    e retorna erro explícito (code: "missing_remote_product_id"). Em sugestões, eyemobileId é nullable.
+ * 6. MENSAGENS PÚBLICAS DE ERRO TOTALMENTE SANITIZADAS:
+ *    Erros de banco retornam mensagens genéricas e limpas por estágio. Nenhum SQL, token ou detalhe
+ *    técnico do Postgres/PostgREST é exposto no ProductMatchResult.
+ * 7. ERRO DE INTEGRIDADE NÃO VIRA SUGESTÃO:
  *    Se existir equivalência confirmada inconsistente (produto inexistente, cross-tenant,
- *    fator inválido ou sem eyemobile_id), o matcher falha fechado imediatamente e
- *    NÃO mascara o problema caindo em busca fuzzy de sugestões.
- * 7. EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false):
+ *    fator inválido ou sem eyemobile_id), o matcher falha fechado imediatamente.
+ * 8. EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false):
  *    NUNCA produz status "matched". É tratada estritamente como sugestão prioritária.
- * 8. DESCRIÇÃO NUNCA PRODUZ MATCH:
+ * 9. DESCRIÇÃO NUNCA PRODUZ MATCH:
  *    Mesmo descrição 100% idêntica produz apenas status "suggestion", NUNCA "matched".
- * 9. CÓDIGO COINCIDENTE NÃO PRODUZ MATCH:
+ * 10. CÓDIGO COINCIDENTE NÃO PRODUZ MATCH:
  *    produtos_eyemobile.codigo === nf_item.codigo_produto NUNCA produz match automático
  *    sem equivalência confirmada, pois os códigos têm semânticas e origens distintas.
- * 10. TENANT ISOLATION:
+ * 11. TENANT ISOLATION:
  *    Todas as buscas são estritamente delimitadas por workspace_id e user_id (defense-in-depth).
- * 11. OPERAÇÃO PURA (READ-ONLY):
+ * 12. OPERAÇÃO PURA (READ-ONLY):
  *    Nenhuma mutação operacional é realizada (sem escrita em estoque, custo, preço ou equivalências).
- * 12. EAN / GTIN:
+ * 13. EAN / GTIN:
  *    Não está padronizado ou persistido bilateralmente no momento. O campo é aceito no input
  *    para compatibilidade futura, mas NÃO é utilizado para resolução nesta fase.
  */
 
 import { supabase as defaultSupabase } from "@/integrations/supabase/client";
+import { logger } from "@/core/logging/LoggerService";
 
 // ─── CONTRATO DE ENTRADA DO MATCHER ──────────────────────────────
 export interface ProductMatchInput {
@@ -57,10 +60,10 @@ export interface ProductMatchInput {
   eanGtin?: string | null;
 }
 
-// ─── CONTRATO DE SUGESTÃO ─────────────────────────────────────────
+// ─── CONTRATO DE SUGESTÃO (eyemobileId é nullable para legado) ───
 export interface ProductSuggestion {
   produtoEyemobileUuid: string;
-  eyemobileId: string;
+  eyemobileId: string | null;
   codigo: string | null;
   descricao: string;
   score?: number;
@@ -101,6 +104,14 @@ export type ProductMatchResult =
       reason: string;
     };
 
+// ─── MENSAGENS PÚBLICAS DE ERRO PADRONIZADAS (SANITIZADAS) ───────
+export const STAGE_ERROR_MESSAGES = {
+  equivalence_lookup: "Falha técnica ao consultar equivalência de produto.",
+  canonical_product_lookup: "Falha técnica ao consultar produto canônico.",
+  suggestion_lookup: "Falha técnica ao consultar sugestões de produtos.",
+  integrity_validation: "Falha de integridade nos dados de produto.",
+} as const;
+
 // ─── INTERFACES DE BANCO (DUCK-TYPED PARA TESTABILIDADE) ─────────
 export interface GenericDbResult<T = unknown> {
   data: T;
@@ -122,29 +133,18 @@ export interface SupabaseClientLike {
   from: (table: string) => QueryFilterBuilderLike;
 }
 
-// ─── SANITIZAÇÃO DE ERROS ────────────────────────────────────────
+// ─── HELPERS PUROS DE NORMALIZAÇÃO ───────────────────────────────
 
 /**
- * Sanitiza mensagens de erro de banco e bibliotecas externas.
- * Remove tokens, senhas ou informações sensíveis antes de retornar no contrato.
+ * Normaliza o identificador remoto do Eyemobile:
+ * - null, undefined ou strings compostas unicamente por espaços -> null
+ * - strings válidas -> trimmed string
  */
-export function sanitizeErrorMessage(err: unknown, fallback: string): string {
-  if (!err) return fallback;
-  if (typeof err === "string") {
-    return err.replace(/Bearer\s+[A-Za-z0-9_\-.]+/gi, "Bearer [REDACTED]").trim() || fallback;
-  }
-  if (
-    typeof err === "object" &&
-    "message" in err &&
-    typeof (err as { message?: unknown }).message === "string"
-  ) {
-    const msg = (err as { message: string }).message;
-    return msg.replace(/Bearer\s+[A-Za-z0-9_\-.]+/gi, "Bearer [REDACTED]").trim() || fallback;
-  }
-  return fallback;
+export function normalizeEyemobileId(value?: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
-
-// ─── HELPERS PUROS DE NORMALIZAÇÃO ───────────────────────────────
 
 /**
  * Normaliza o CNPJ do fornecedor:
@@ -313,12 +313,18 @@ export async function findProductSuggestions(
     .eq("user_id", userId);
 
   if (error) {
+    logger.error("productMatcher", STAGE_ERROR_MESSAGES.suggestion_lookup, {
+      stage: "suggestion_lookup",
+      workspaceId,
+      userId,
+    });
+
     return {
       ok: false,
       error: {
         code: "database_error",
         stage: "suggestion_lookup",
-        reason: sanitizeErrorMessage(error, "Falha técnica ao consultar candidatos para sugestão no banco de dados."),
+        reason: STAGE_ERROR_MESSAGES.suggestion_lookup,
       },
     };
   }
@@ -331,7 +337,7 @@ export async function findProductSuggestions(
   const seenUuids = new Set<string>();
 
   // 1. Se houver candidato de equivalência pendente (confirmado_por_usuario = false),
-  // ele é inserido como primeira sugestão com score de prioridade alta se possuir identidade básica válida.
+  // ele é inserido como primeira sugestão com score de prioridade alta.
   if (pendingCandidate) {
     if (
       pendingCandidate.workspace_id === workspaceId &&
@@ -339,7 +345,7 @@ export async function findProductSuggestions(
     ) {
       suggestions.push({
         produtoEyemobileUuid: pendingCandidate.id,
-        eyemobileId: pendingCandidate.eyemobile_id ? String(pendingCandidate.eyemobile_id).trim() : "",
+        eyemobileId: normalizeEyemobileId(pendingCandidate.eyemobile_id),
         codigo: pendingCandidate.codigo ?? null,
         descricao: pendingCandidate.descricao,
         score: 0.90, // Sugestão prioritária por existência de vínculo prévio não confirmado
@@ -363,7 +369,7 @@ export async function findProductSuggestions(
       if (score >= 0.15) {
         scoredCandidates.push({
           produtoEyemobileUuid: prod.id,
-          eyemobileId: prod.eyemobile_id ? String(prod.eyemobile_id).trim() : "",
+          eyemobileId: normalizeEyemobileId(prod.eyemobile_id),
           codigo: prod.codigo ?? null,
           descricao: prod.descricao,
           score,
@@ -407,7 +413,8 @@ export async function findProductSuggestions(
  *      e) Valida eyemobile_id do produto canônico: se nulo ou vazio, RETORNA ERRO missing_remote_product_id.
  *      f) Aprovado: retorna status "matched" com a identidade canônica e remota.
  *    - Se não confirmada (confirmado_por_usuario = false):
- *      NUNCA retorna "matched". Promove para o fluxo de sugestão como candidato prioritário.
+ *      a) Busca produto canônico correspondente (erro técnico retorna database_error, nunca ignora).
+ *      b) NUNCA retorna "matched". Promove para o fluxo de sugestão como candidato prioritário.
  * 4. Se não houver equivalência:
  *    - Busca sugestões baseadas na descrição do item ou equivalência pendente.
  *    - Se erro na busca: RETORNA database_error (nunca vira not_found).
@@ -418,6 +425,7 @@ export async function findProductSuggestions(
  * - NENHUMA mutação em banco é realizada.
  * - NENHUM match automático por código idêntico ou descrição similar.
  * - NENHUM fallback implícito para fator 1.
+ * - NENHUM erro de banco é mascarado ou exposto com dados sensíveis.
  */
 export async function matchProduct(
   input: ProductMatchInput,
@@ -460,13 +468,19 @@ export async function matchProduct(
       .eq("codigo_produto_fornecedor", codigoNormalizado)
       .maybeSingle();
 
-    // ERRO DE BANCO NÃO É NOT_FOUND: Propagar falha técnica imediatamente
+    // ERRO DE BANCO NÃO É NOT_FOUND: Propagar falha técnica imediatamente com mensagem segura
     if (equivError) {
+      logger.error("productMatcher", STAGE_ERROR_MESSAGES.equivalence_lookup, {
+        stage: "equivalence_lookup",
+        workspaceId,
+        userId,
+      });
+
       return {
         status: "error",
         code: "database_error",
         stage: "equivalence_lookup",
-        reason: sanitizeErrorMessage(equivError, "Falha técnica ao consultar equivalência no banco de dados."),
+        reason: STAGE_ERROR_MESSAGES.equivalence_lookup,
       };
     }
 
@@ -536,11 +550,17 @@ export async function matchProduct(
           .maybeSingle();
 
         if (prodError) {
+          logger.error("productMatcher", STAGE_ERROR_MESSAGES.canonical_product_lookup, {
+            stage: "canonical_product_lookup",
+            workspaceId,
+            userId,
+          });
+
           return {
             status: "error",
             code: "database_error",
             stage: "canonical_product_lookup",
-            reason: sanitizeErrorMessage(prodError, "Falha técnica ao consultar produto canônico no banco de dados."),
+            reason: STAGE_ERROR_MESSAGES.canonical_product_lookup,
           };
         }
 
@@ -567,11 +587,8 @@ export async function matchProduct(
         }
 
         // G. Validação obrigatória de eyemobile_id (identidade remota)
-        if (
-          !prodData.eyemobile_id ||
-          typeof prodData.eyemobile_id !== "string" ||
-          prodData.eyemobile_id.trim() === ""
-        ) {
+        const remoteId = normalizeEyemobileId(prodData.eyemobile_id);
+        if (!remoteId) {
           return {
             status: "error",
             code: "missing_remote_product_id",
@@ -585,21 +602,37 @@ export async function matchProduct(
           status: "matched",
           source: "confirmed_equivalence",
           produtoEyemobileUuid: prodData.id,
-          eyemobileId: prodData.eyemobile_id.trim(),
+          eyemobileId: remoteId,
           fatorConversao: fatorNum,
         };
       }
 
       // CENÁRIO: EQUIVALÊNCIA NÃO CONFIRMADA (confirmado_por_usuario = false)
-      // NUNCA produz "matched". Resolve o produto apenas para sugerir de forma prioritária.
+      // NUNCA produz "matched". Resolve o produto para sugerir de forma prioritária.
+      // IMPORTANTE: Se a busca do produto falhar tecnicamente, NÃO engolir o erro!
       if (equivData.produto_eyemobile_uuid) {
-        const { data: prodRow } = await client
+        const { data: prodRow, error: prodError } = await client
           .from("produtos_eyemobile")
           .select("id, eyemobile_id, codigo, descricao, user_id, workspace_id")
           .eq("id", equivData.produto_eyemobile_uuid)
           .eq("workspace_id", workspaceId)
           .eq("user_id", userId)
           .maybeSingle();
+
+        if (prodError) {
+          logger.error("productMatcher", STAGE_ERROR_MESSAGES.canonical_product_lookup, {
+            stage: "canonical_product_lookup",
+            workspaceId,
+            userId,
+          });
+
+          return {
+            status: "error",
+            code: "database_error",
+            stage: "canonical_product_lookup",
+            reason: STAGE_ERROR_MESSAGES.canonical_product_lookup,
+          };
+        }
 
         if (prodRow) {
           const prodCandidate = prodRow as CandidateProductRow;

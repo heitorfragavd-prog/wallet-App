@@ -1,22 +1,34 @@
 /**
  * WALLET APP — Correção de Integridade de Produtos — Fase 2
- * Testes Unitários: Matcher Seguro e Determinístico de Produtos (Hardened)
+ * Testes Unitários: Matcher Seguro e Determinístico de Produtos (Micro-Hardened)
  * Arquivo: src/domains/finance/services/productMatcher.test.ts
  *
  * Cobertura Completa de Cenários:
  * A-P: Cenários de Integridade Relacional e Normalização
  * Q-AD: Hardening Fail-Closed (Fator Inválido, Erros de Banco, IDs Remotos e Integridade de Tenant)
+ * AE-AJ: Micro-Hardening (Propagação de Erro em Pendente, eyemobileId Nullable em Sugestão e Mensagens Públicas Sanitizadas)
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// Mock logger para testes
+vi.mock("@/core/logging/LoggerService", () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
 import {
   matchProduct,
   normalizeCnpj,
   normalizeCodigoFornecedor,
   normalizeDescricao,
+  normalizeEyemobileId,
   calculateDescriptionSimilarity,
   extractProductTokens,
-  sanitizeErrorMessage,
+  STAGE_ERROR_MESSAGES,
   type ProductMatchInput,
   type SupabaseClientLike,
 } from "./productMatcher";
@@ -118,6 +130,15 @@ function createMockClient(db: MockDb): SupabaseClientLike {
 // ─── SUÍTE DE TESTES ─────────────────────────────────────────────
 
 describe("productMatcher — Normalização e Helpers Puros", () => {
+  it("normalizeEyemobileId: limpa whitespace e retorna null para strings vazias/nulas", () => {
+    expect(normalizeEyemobileId("eye-123")).toBe("eye-123");
+    expect(normalizeEyemobileId("  eye-456  ")).toBe("eye-456");
+    expect(normalizeEyemobileId("")).toBe(null);
+    expect(normalizeEyemobileId("   ")).toBe(null);
+    expect(normalizeEyemobileId(null)).toBe(null);
+    expect(normalizeEyemobileId(undefined)).toBe(null);
+  });
+
   it("normalizeCnpj: remove pontuação e caracteres não numéricos", () => {
     expect(normalizeCnpj("12.345.678/0001-90")).toBe("12345678000190");
     expect(normalizeCnpj("  12345678000190  ")).toBe("12345678000190");
@@ -166,12 +187,6 @@ describe("productMatcher — Normalização e Helpers Puros", () => {
 
     const scoreDiferente = calculateDescriptionSimilarity("Refrigerante Coca Cola 2L", "Cerveja Heineken 330ml");
     expect(scoreDiferente).toBeLessThan(0.15);
-  });
-
-  it("sanitizeErrorMessage: mascara tokens de autenticação", () => {
-    const sanitized = sanitizeErrorMessage("Authorization error: Bearer eyJhbGciOiJIUzI1NiIsInR...", "fallback");
-    expect(sanitized).toContain("Bearer [REDACTED]");
-    expect(sanitized).not.toContain("eyJhbGciOiJIUzI1NiIsInR");
   });
 });
 
@@ -766,6 +781,7 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
     if (result.status === "error") {
       expect(result.code).toBe("database_error");
       expect(result.stage).toBe("equivalence_lookup");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.equivalence_lookup);
     }
   });
 
@@ -803,6 +819,7 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
     if (result.status === "error") {
       expect(result.code).toBe("database_error");
       expect(result.stage).toBe("canonical_product_lookup");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.canonical_product_lookup);
     }
   });
 
@@ -828,6 +845,7 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
     if (result.status === "error") {
       expect(result.code).toBe("database_error");
       expect(result.stage).toBe("suggestion_lookup");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.suggestion_lookup);
     }
   });
 
@@ -944,7 +962,6 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
       createMockClient(db)
     );
 
-    // Deve falhar fechado com invalid_equivalence e NÃO cair em sugestão!
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.code).toBe("invalid_equivalence");
@@ -988,7 +1005,6 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
       createMockClient(db)
     );
 
-    // Falha fechado com erro de integridade de tenant
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.code).toBe("invalid_equivalence");
@@ -1106,5 +1122,216 @@ describe("productMatcher — Cenários de Hardening Q até AD (Fail-Closed)", ()
 
     expect(result.status).toBe("suggestion");
     expect(result.status).not.toBe("matched");
+  });
+});
+
+describe("productMatcher — Micro-Hardening AE até AJ", () => {
+  const USER_1 = "11111111-1111-1111-1111-111111111111";
+  const WORKSPACE_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const CNPJ_FORN = "12345678000190";
+
+  it("Cenário AE: equivalência não confirmada + erro ao buscar produto canônico -> database_error (canonical_product_lookup), nunca suggestion/not_found", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [
+        {
+          id: "eq-pending-err",
+          user_id: USER_1,
+          workspace_id: WORKSPACE_A,
+          cnpj_fornecedor_normalizado: CNPJ_FORN,
+          codigo_produto_fornecedor: "COD-PENDING-ERR",
+          produto_eyemobile_uuid: "prod-will-fail-lookup",
+          fator_conversao: 1,
+          confirmado_por_usuario: false, // PENDENTE!
+        },
+      ],
+      produtos_eyemobile: [],
+      simulateErrors: {
+        // Simula falha técnica ao buscar o produto da equivalência pendente
+        produtos_eyemobile_single: "connection reset by peer during pending product lookup",
+      },
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        fornecedorCnpj: CNPJ_FORN,
+        codigoFornecedor: "COD-PENDING-ERR",
+        descricao: "Descricao que tentaria ser usada como fallback",
+      },
+      createMockClient(db)
+    );
+
+    // DEVE RETORNAR ERRO TÉCNICO E NÃO MASCARAR COMO SUGESTÃO OU NOT_FOUND!
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.code).toBe("database_error");
+      expect(result.stage).toBe("canonical_product_lookup");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.canonical_product_lookup);
+    }
+  });
+
+  it("Cenário AF: suggestion de produto com eyemobile_id null -> eyemobileId === null", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [],
+      produtos_eyemobile: [
+        {
+          id: "prod-legacy-null",
+          eyemobile_id: null,
+          codigo: "COD-LEG-NULL",
+          descricao: "Cerveja Artesanal Sem Sync",
+          user_id: USER_1,
+          workspace_id: WORKSPACE_A,
+        },
+      ],
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        descricao: "Cerveja Artesanal Sem Sync",
+      },
+      createMockClient(db)
+    );
+
+    expect(result.status).toBe("suggestion");
+    if (result.status === "suggestion") {
+      expect(result.suggestions.length).toBe(1);
+      expect(result.suggestions[0].produtoEyemobileUuid).toBe("prod-legacy-null");
+      expect(result.suggestions[0].eyemobileId).toBeNull();
+    }
+  });
+
+  it("Cenário AG: suggestion de produto com eyemobile_id whitespace -> eyemobileId === null", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [],
+      produtos_eyemobile: [
+        {
+          id: "prod-legacy-ws",
+          eyemobile_id: "    ",
+          codigo: "COD-LEG-WS",
+          descricao: "Vinho Tinto Sem Sync",
+          user_id: USER_1,
+          workspace_id: WORKSPACE_A,
+        },
+      ],
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        descricao: "Vinho Tinto Sem Sync",
+      },
+      createMockClient(db)
+    );
+
+    expect(result.status).toBe("suggestion");
+    if (result.status === "suggestion") {
+      expect(result.suggestions.length).toBe(1);
+      expect(result.suggestions[0].produtoEyemobileUuid).toBe("prod-legacy-ws");
+      expect(result.suggestions[0].eyemobileId).toBeNull();
+    }
+  });
+
+  it("Cenário AH: matched com eyemobile_id null -> continua missing_remote_product_id", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [
+        {
+          id: "eq-null-remote",
+          user_id: USER_1,
+          workspace_id: WORKSPACE_A,
+          cnpj_fornecedor_normalizado: CNPJ_FORN,
+          codigo_produto_fornecedor: "COD-NULL-REMOTE",
+          produto_eyemobile_uuid: "prod-null-id",
+          fator_conversao: 1,
+          confirmado_por_usuario: true, // CONFIRMADA!
+        },
+      ],
+      produtos_eyemobile: [
+        {
+          id: "prod-null-id",
+          eyemobile_id: null,
+          codigo: "COD-NULL",
+          descricao: "Produto Confirmado Mas Sem ID Remoto",
+          user_id: USER_1,
+          workspace_id: WORKSPACE_A,
+        },
+      ],
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        fornecedorCnpj: CNPJ_FORN,
+        codigoFornecedor: "COD-NULL-REMOTE",
+      },
+      createMockClient(db)
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.code).toBe("missing_remote_product_id");
+      expect(result.stage).toBe("integrity_validation");
+    }
+  });
+
+  it("Cenário AI: database_error contendo 'Bearer abc123' -> reason público não contém 'abc123'", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [],
+      produtos_eyemobile: [],
+      simulateErrors: {
+        produto_equivalencias: "PostgREST Error: Invalid token Bearer abc123secretToken while querying",
+      },
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        fornecedorCnpj: CNPJ_FORN,
+        codigoFornecedor: "COD-ANY",
+      },
+      createMockClient(db)
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.code).toBe("database_error");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.equivalence_lookup);
+      expect(result.reason).not.toContain("abc123secretToken");
+      expect(result.reason).not.toContain("Bearer");
+    }
+  });
+
+  it("Cenário AJ: database_error contendo SQL bruto -> reason público é mensagem genérica e não contém SQL", async () => {
+    const db: MockDb = {
+      produto_equivalencias: [],
+      produtos_eyemobile: [],
+      simulateErrors: {
+        produto_equivalencias: "ERROR 42601: syntax error in SQL query SELECT * FROM produto_equivalencias WHERE secret = true",
+      },
+    };
+
+    const result = await matchProduct(
+      {
+        userId: USER_1,
+        workspaceId: WORKSPACE_A,
+        fornecedorCnpj: CNPJ_FORN,
+        codigoFornecedor: "COD-ANY",
+      },
+      createMockClient(db)
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.code).toBe("database_error");
+      expect(result.reason).toBe(STAGE_ERROR_MESSAGES.equivalence_lookup);
+      expect(result.reason).not.toContain("SELECT");
+      expect(result.reason).not.toContain("syntax error");
+      expect(result.reason).not.toContain("42601");
+    }
   });
 });
