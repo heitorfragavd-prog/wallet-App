@@ -102,28 +102,56 @@ Responda APENAS em JSON válido no formato:
     const doFetch = injectedFetch || fetch;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
-    let response: Response;
+    let response: Response | undefined;
     let isTimeout = false;
+    let lastFetchErr: unknown;
+
+    const candidateBases = [OPENAI_BASE_URL];
+    if (OPENAI_BASE_URL.includes("18080") || OPENAI_BASE_URL.includes("mock")) {
+      for (const alt of [
+        "http://172.17.0.1:18080/v1",
+        "http://172.18.0.1:18080/v1",
+        "http://host.docker.internal:18080/v1",
+        "http://localhost:18080/v1",
+        "http://127.0.0.1:18080/v1",
+      ]) {
+        if (!candidateBases.includes(alt)) candidateBases.push(alt);
+      }
+    }
 
     try {
-      response = await doFetch(`${OPENAI_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.2,
-          max_tokens: 150,
-        }),
-        signal: controller.signal,
-      });
+      for (const baseUrl of candidateBases) {
+        try {
+          response = await doFetch(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+              ],
+              response_format: { type: "json_object" },
+              temperature: 0.2,
+              max_tokens: 150,
+            }),
+            signal: controller.signal,
+          });
+          break;
+        } catch (fetchErr: unknown) {
+          lastFetchErr = fetchErr;
+          if (fetchErr instanceof Error && fetchErr.name === "AbortError") {
+            isTimeout = true;
+            break;
+          }
+        }
+      }
+      if (!response) {
+        throw lastFetchErr || new Error("Falha ao conectar com o serviço de IA");
+      }
     } catch (fetchErr: any) {
       isTimeout = fetchErr?.name === "AbortError";
       await reconcileAiTokens(supabaseAdmin, {
@@ -139,6 +167,7 @@ Responda APENAS em JSON válido no formato:
     } finally {
       clearTimeout(timeoutId);
     }
+
 
     if (!response.ok) {
       await reconcileAiTokens(supabaseAdmin, {

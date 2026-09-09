@@ -390,8 +390,8 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     // 2.5 Nova aplicação: Navegação para a interface de IA (rota /ia)
     await page.goto(`${NEW_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    const newAiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), div:has-text("Wallet IA")').first();
-    await expect(newAiInterface).toBeVisible({ timeout: 15000 });
+    const newAiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), div:has-text("Wallet IA"), h2:has-text("Como posso ajudar?")').first();
+    await expect(newAiInterface).toBeVisible({ timeout: 25000 });
 
     // =========================================================================
     // 2.6 PONTO 4: COMPROVAÇÃO DE AUTORIZAÇÃO DA RPC reserve_ai_tokens

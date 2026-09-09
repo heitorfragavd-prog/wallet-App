@@ -135,16 +135,22 @@ jobs:
           if [ -z "$SERVICE_KEY" ]; then
             SERVICE_KEY=$(supabase status -o env | grep 'SERVICE' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'")
           fi
+          DOCKER_GW=$(docker network inspect $(docker network ls --filter name=supabase_network -q | head -n 1) --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo "172.17.0.1")
+          if [ -z "$DOCKER_GW" ]; then
+            DOCKER_GW="172.17.0.1"
+          fi
+          echo "Docker gateway IP detectado para Edge Functions: $DOCKER_GW"
           cat << EOF > .env.functions.test
           SUPABASE_URL=http://localhost:54321
           SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
-          OPENAI_BASE_URL=http://localhost:18080/v1
+          OPENAI_BASE_URL=http://${DOCKER_GW}:18080/v1
           OPENAI_API_KEY=mock-openai-key-for-test
           EOF
 
           # Inicia Edge Functions no runtime compatível local
           supabase functions serve --env-file .env.functions.test --no-verify-jwt &
           sleep 5
+
 
           # Restaura o diretório de migrations original
           rm -f supabase/migrations/20240101000000_setup_e2e_real_schema.sql

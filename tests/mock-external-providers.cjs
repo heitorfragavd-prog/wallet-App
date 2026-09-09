@@ -138,6 +138,7 @@ const server = http.createServer((req, res) => {
 });
 
 const PORT = process.env.MOCK_PORT || 18080;
-server.listen(PORT, () => {
-  console.log(`[Mock External Providers] Rodando na porta ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[Mock External Providers] Rodando na porta ${PORT} em 0.0.0.0`);
 });
+
