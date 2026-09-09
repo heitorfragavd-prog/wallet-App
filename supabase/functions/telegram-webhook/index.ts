@@ -48,6 +48,19 @@ import {
   recoverBoletoLineWithFailover,
   type RegionCandidate,
 } from "../_shared/ai/boleto-service.ts";
+import {
+  acquireAlertaLock,
+  executeEyemobilePriceSync,
+  persistConfirmedPriceAtomic,
+  handlePriceSyncFailure,
+  MSG_FALHA_REMOTO,
+  MSG_FALHA_PERSISTENCIA_LOCAL,
+  MSG_ALERTA_JA_APLICADO,
+  MSG_EM_PROCESSAMENTO,
+  MSG_BLOQUEIO_APLICANDO_EDITAR,
+  MSG_BLOQUEIO_APLICANDO_IGNORAR,
+  type AlertaPreco,
+} from "../_shared/integrations/eyemobile-price-safety.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -911,17 +924,26 @@ serve(async (req) => {
       return await resp.json().catch(() => ({}));
     };
 
-    const editMessageText = async (replyChatId: string | number, messageId: number, text: string) => {
+    const editMessageText = async (
+      replyChatId: string | number,
+      messageId: number,
+      text: string,
+      replyMarkup?: unknown
+    ) => {
       if (!telegramBotToken) return;
+      const bodyPayload: Record<string, unknown> = {
+        chat_id: replyChatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+      };
+      if (replyMarkup) {
+        bodyPayload.reply_markup = replyMarkup;
+      }
       await fetch(`https://api.telegram.org/bot${telegramBotToken}/editMessageText`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: replyChatId,
-          message_id: messageId,
-          text,
-          parse_mode: "HTML",
-        }),
+        body: JSON.stringify(bodyPayload),
       }).catch(() => {});
     };
 
@@ -1575,54 +1597,136 @@ serve(async (req) => {
       // ================================================================
       if (callbackData.startsWith("preco_confirmar:")) {
         const alertaId = callbackData.split(":")[1];
-        const { data: alerta } = await supabase
+        const { data: alertaPre } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("id", alertaId)
           .maybeSingle();
 
-        if (!alerta) {
+        if (!alertaPre) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: { success?: boolean; error?: unknown } = { success: true };
-        if (alerta.produto_eyemobile_id) {
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: cbUserId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: alerta.preco_sugerido,
-            }),
-          });
-          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        if (alertaPre.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Usuário não autorizado para este alerta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "aplicado",
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
+        const lock = await acquireAlertaLock(supabase, {
+          alertaId: alertaPre.id,
+          userId: alertaPre.user_id,
+          workspaceId: alertaPre.workspace_id,
+        });
 
-        if (alerta.produto_eyemobile_id) {
-          await supabase.from("produtos_eyemobile").update({
-            preco_venda: alerta.preco_sugerido,
-          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        if (!lock.acquired) {
+          if (lock.reason === "already_applied") {
+            await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+            await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          if (lock.reason === "already_processing") {
+            await answerCallback(callbackQuery.id, MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          await answerCallback(callbackQuery.id, "Alerta indisponível para processamento.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const alerta = lock.alerta;
+
+        if (!alerta.produto_eyemobile_id || !alerta.preco_sugerido || Number(alerta.preco_sugerido) <= 0) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: "Alerta sem produto_eyemobile_id ou preço sugerido inválido",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Preço inválido.");
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n📦 <b>${alerta.produto_descricao}</b>\n(Preço sugerido ou produto inválido)`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const precoConfirmar = Number(alerta.preco_sugerido);
+
+        const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+          user_id: alerta.user_id,
+          product_id: alerta.produto_eyemobile_id,
+          new_price: precoConfirmar,
+        });
+
+        if (!syncResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: syncResult.error || "Falha na chamada ao Eyemobile",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Falha ao atualizar preço no Eyemobile.");
+          const botoesRetry = [
+            [{ text: "🔄 TENTAR NOVAMENTE", callback_data: `preco_confirmar:${alerta.id}` }],
+            [{ text: "✏️ EDITAR", callback_data: `preco_editar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço tentado: <b>${fmt(precoConfirmar)}</b>\n` +
+            `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+            `Clique abaixo para tentar novamente ou editar:`,
+            { inline_keyboard: botoesRetry }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Persistência atômica via RPC
+        const persistResult = await persistConfirmedPriceAtomic(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          novoPreco: precoConfirmar,
+        });
+
+        if (!persistResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+            isRemoteSuccessLocalFailure: true,
+          });
+          await answerCallback(callbackQuery.id, "Erro ao registrar no banco local.");
+          const botoesReconciliar = [
+            [{ text: "🔄 RECONCILIAR AGORA", callback_data: `preco_confirmar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço no Eyemobile: <b>${fmt(precoConfirmar)}</b>\n\n` +
+            `Clique abaixo para sincronizar o banco local:`,
+            { inline_keyboard: botoesReconciliar }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
         await editMessageText(
           cbChatId,
           callbackMessageId,
-          `✅ <b>Preço atualizado!</b>\n\n` +
+          `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
           `📦 <b>${alerta.produto_descricao}</b>\n` +
-          `💰 Novo preço: <b>${fmt(alerta.preco_sugerido)}</b>` +
-          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+          `💰 Preço de venda: <b>${fmt(precoConfirmar)}</b>\n` +
+          `📈 Margem mantida: <b>${Number(alerta.margem_real_percentual || 0).toFixed(0)}%</b>`
         );
         await answerCallback(callbackQuery.id, "Preço aplicado no Eyemobile!");
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1641,6 +1745,18 @@ serve(async (req) => {
 
         if (!alerta) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicando") {
+          await answerCallback(callbackQuery.id, MSG_BLOQUEIO_APLICANDO_EDITAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
@@ -1674,9 +1790,33 @@ serve(async (req) => {
       // ================================================================
       if (callbackData.startsWith("preco_ignorar:")) {
         const alertaId = callbackData.split(":")[1];
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .maybeSingle();
+
+        if (!alerta) {
+          await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicando") {
+          await answerCallback(callbackQuery.id, MSG_BLOQUEIO_APLICANDO_IGNORAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         await supabase.from("alertas_preco_pendentes").update({
           status: "ignorado",
           data_resolucao: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         }).eq("id", alertaId);
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
@@ -1698,55 +1838,134 @@ serve(async (req) => {
         const alertaId = parts[1];
         const precoDigitado = parseFloat(parts[2]);
 
-        const { data: alerta } = await supabase
+        const { data: alertaPre } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("id", alertaId)
           .maybeSingle();
 
-        if (!alerta) {
+        if (!alertaPre) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: { success?: boolean; error?: unknown } = { success: true };
-        if (alerta.produto_eyemobile_id) {
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: cbUserId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: precoDigitado,
-            }),
-          });
-          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        if (alertaPre.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Usuário não autorizado para este alerta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "aplicado",
-          preco_definido_usuario: precoDigitado,
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
+        const lock = await acquireAlertaLock(supabase, {
+          alertaId: alertaPre.id,
+          userId: alertaPre.user_id,
+          workspaceId: alertaPre.workspace_id,
+        });
 
-        if (alerta.produto_eyemobile_id) {
-          await supabase.from("produtos_eyemobile").update({
-            preco_venda: precoDigitado,
-          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        if (!lock.acquired) {
+          if (lock.reason === "already_applied") {
+            await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+            await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          if (lock.reason === "already_processing") {
+            await answerCallback(callbackQuery.id, MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          await answerCallback(callbackQuery.id, "Alerta indisponível para processamento.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const alerta = lock.alerta;
+
+        if (!alerta.produto_eyemobile_id || isNaN(precoDigitado) || precoDigitado <= 0) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: "Alerta sem produto_eyemobile_id ou preço digitado inválido",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Preço inválido.");
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n📦 <b>${alerta.produto_descricao}</b>\n(Preço digitado inválido)`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+          user_id: alerta.user_id,
+          product_id: alerta.produto_eyemobile_id,
+          new_price: precoDigitado,
+        });
+
+        if (!syncResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: syncResult.error || "Falha na chamada ao Eyemobile",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Falha ao atualizar preço no Eyemobile.");
+          const botoesRetry = [
+            [{ text: "🔄 TENTAR NOVAMENTE", callback_data: `preco_confirmar_editado:${alerta.id}:${precoDigitado}` }],
+            [{ text: "✏️ EDITAR", callback_data: `preco_editar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço tentado: <b>${fmt(precoDigitado)}</b>\n` +
+            `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+            `Clique abaixo para tentar novamente ou editar:`,
+            { inline_keyboard: botoesRetry }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Persistência atômica via RPC
+        const persistResult = await persistConfirmedPriceAtomic(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          novoPreco: precoDigitado,
+        });
+
+        if (!persistResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+            isRemoteSuccessLocalFailure: true,
+          });
+          await answerCallback(callbackQuery.id, "Erro ao registrar no banco local.");
+          const botoesReconciliar = [
+            [{ text: "🔄 RECONCILIAR AGORA", callback_data: `preco_confirmar_editado:${alerta.id}:${precoDigitado}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço no Eyemobile: <b>${fmt(precoDigitado)}</b>\n\n` +
+            `Clique abaixo para sincronizar o banco local:`,
+            { inline_keyboard: botoesReconciliar }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
         await editMessageText(
           cbChatId,
           callbackMessageId,
-          `✅ <b>Preço atualizado!</b>\n\n` +
+          `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
           `📦 <b>${alerta.produto_descricao}</b>\n` +
-          `💰 Novo preço: <b>${fmt(precoDigitado)}</b>` +
-          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+          `💰 Preço de venda: <b>${fmt(precoDigitado)}</b>\n` +
+          `📈 Margem mantida: <b>${alerta.margem_real_percentual ? Number(alerta.margem_real_percentual).toFixed(0) : "0"}%</b>`
         );
         await answerCallback(callbackQuery.id, "Preço aplicado!");
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -2023,6 +2242,16 @@ serve(async (req) => {
         .maybeSingle();
 
       if (alerta) {
+        if (alerta.status === "aplicando") {
+          await sendReply(MSG_BLOQUEIO_APLICANDO_EDITAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await sendReply(MSG_ALERTA_JA_APLICADO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         const custoNovo = Number(alerta.custo_novo || 0);
         const novaMargem = custoNovo > 0 ? ((precoDigitado / custoNovo) - 1) * 100 : 0;
 
@@ -2051,6 +2280,7 @@ serve(async (req) => {
         await supabase.from("alertas_preco_pendentes").update({
           preco_definido_usuario: precoDigitado,
           status: "editado",
+          updated_at: new Date().toISOString(),
         }).eq("id", alertaId);
 
         await supabase.from("telegram_conversas").upsert(
@@ -2192,7 +2422,7 @@ serve(async (req) => {
         .from("alertas_preco_pendentes")
         .select("*")
         .eq("user_id", userId)
-        .in("status", ["pendente", "editado"])
+        .in("status", ["pendente", "editado", "erro_integracao"])
         .order("created_at", { ascending: false });
 
       if (!alertas || alertas.length === 0) {
@@ -2204,7 +2434,7 @@ serve(async (req) => {
 
       alertas.forEach((alerta: Record<string, unknown>, idx: number) => {
         const idCurto = String(alerta.id || "").slice(0, 8);
-        const statusEmoji = alerta.status === "editado" ? "✏️" : "⏳";
+        const statusEmoji = alerta.status === "editado" ? "✏️" : alerta.status === "erro_integracao" ? "⚠️" : "⏳";
 
         msgPrecos += `${idx + 1}. ${statusEmoji} <b>${alerta.produto_descricao}</b> (<code>${idCurto}</code>)\n`;
         msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${Number(alerta.variacao_custo_percentual || 0).toFixed(1)}%)\n`;
@@ -2212,6 +2442,9 @@ serve(async (req) => {
         msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${Number(alerta.margem_real_percentual || 0).toFixed(0)}%)\n`;
         if (alerta.preco_definido_usuario) {
           msgPrecos += `   ✏️ Editado por você: <b>${fmt(alerta.preco_definido_usuario)}</b>\n`;
+        }
+        if (alerta.status === "erro_integracao") {
+          msgPrecos += `   ⚠️ <i>(Falha na tentativa anterior de sincronização com Eyemobile)</i>\n`;
         }
         msgPrecos += `   👉 <code>CONFIRMAR ${idCurto}</code> | <code>EDITAR ${idCurto} 15.00</code> | <code>IGNORAR ${idCurto}</code>\n\n`;
       });
@@ -2234,7 +2467,7 @@ serve(async (req) => {
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
 
-      let alertaId: string | null = null;
+      let alertaCandidato: AlertaPreco | null = null;
 
       if (confirmarPrecoMatch) {
         const idCurto = confirmarPrecoMatch[1].toLowerCase();
@@ -2243,108 +2476,162 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao"])
           .maybeSingle();
-        alertaId = alerta?.id || null;
+        alertaCandidato = alerta as AlertaPreco | null;
       } else {
         const { data: alerta } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
-        alertaId = alerta?.id || null;
+        alertaCandidato = alerta as AlertaPreco | null;
       }
 
-      if (alertaId) {
-        const { data: alerta } = await supabase
-          .from("alertas_preco_pendentes")
-          .select("*")
-          .eq("id", alertaId)
-          .single();
-
-        if (alerta) {
-          const precoConfirmado = alerta.preco_definido_usuario || alerta.preco_sugerido;
-
-          await sendReply(
-            `🔄 <b>Atualizando preço no Eyemobile PDV...</b>\n` +
-            `📦 <b>Produto:</b> ${alerta.produto_descricao}\n` +
-            `💰 <b>Novo Preço:</b> <b>${fmt(precoConfirmado)}</b>`
-          );
-
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: userId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: precoConfirmado,
-            }),
-          });
-
-          let updateResult: Record<string, unknown> | null = null;
-          try {
-            updateResult = await updateResp.json();
-          } catch {
-            updateResult = { success: updateResp.ok };
-          }
-
-          if (updateResult?.success) {
-            await supabase.from("alertas_preco_pendentes").update({
-              status: "aplicado",
-              preco_definido_usuario: precoConfirmado,
-              data_resolucao: new Date().toISOString(),
-            }).eq("id", alertaId);
-
-            await supabase.from("produtos_eyemobile").update({
-              preco_venda: precoConfirmado,
-            }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", userId);
-
-            await sendReply(
-              `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
-              `📦 <b>${alerta.produto_descricao}</b>\n` +
-              `💰 Preço de venda: <b>${fmt(precoConfirmado)}</b>\n` +
-              `📈 Margem mantida: <b>${alerta.margem_real_percentual?.toFixed(0)}%</b>`
-            );
-          } else {
-            await sendReply(
-              `❌ <b>Erro ao atualizar preço no Eyemobile PDV:</b>\n` +
-              `${updateResult?.error || "Erro de comunicação com a API do Eyemobile"}\n\n` +
-              `💡 Você também pode ajustar diretamente no PDV.`
-            );
-          }
-
-          const { count: pendentesRestantes } = await supabase
+      if (!alertaCandidato) {
+        if (confirmarPrecoMatch) {
+          const idCurto = confirmarPrecoMatch[1].toLowerCase();
+          const { data: jaProcessado } = await supabase
             .from("alertas_preco_pendentes")
-            .select("*", { count: "exact", head: true })
+            .select("id, status")
             .eq("user_id", userId)
-            .in("status", ["pendente", "editado"]);
+            .ilike("id", `${idCurto}%`)
+            .maybeSingle();
 
-          if (pendentesRestantes === 0) {
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "inicio",
-                proposta_id: null,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-            await sendReply("🎉 <b>Todos os preços pendentes foram ajustados com sucesso!</b>");
-          } else {
-            await sendReply(`📋 Ainda há <b>${pendentesRestantes}</b> alerta(s) de preço pendente(s). Use /precos para ver.`);
+          if (jaProcessado?.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
           }
+          if (jaProcessado?.status === "aplicando") {
+            await sendReply(MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        }
+        await sendReply("❌ Alerta de preço não encontrado ou já processado. Use /precos para ver os alertas pendentes.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
 
+      const lock = await acquireAlertaLock(supabase, {
+        alertaId: alertaCandidato.id,
+        userId: alertaCandidato.user_id,
+        workspaceId: alertaCandidato.workspace_id,
+      });
+
+      if (!lock.acquired) {
+        if (lock.reason === "already_applied") {
+          await sendReply(MSG_ALERTA_JA_APLICADO);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
+        if (lock.reason === "already_processing") {
+          await sendReply(MSG_EM_PROCESSAMENTO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+        await sendReply("❌ Não foi possível iniciar o processamento deste alerta. Tente novamente.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
       }
+
+      const alerta = lock.alerta;
+      const precoConfirmado = Number(alerta.preco_definido_usuario || alerta.preco_sugerido || 0);
+
+      if (!alerta.produto_eyemobile_id || isNaN(precoConfirmado) || precoConfirmado <= 0) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: "Alerta sem produto_eyemobile_id ou preço inválido",
+          isRemoteSuccessLocalFailure: false,
+        });
+        await sendReply("❌ <b>Preço inválido ou produto sem vínculo com Eyemobile.</b>");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      await sendReply(
+        `🔄 <b>Atualizando preço no Eyemobile PDV...</b>\n` +
+        `📦 <b>Produto:</b> ${alerta.produto_descricao}\n` +
+        `💰 <b>Novo Preço:</b> <b>${fmt(precoConfirmado)}</b>`
+      );
+
+      const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+        user_id: alerta.user_id,
+        product_id: alerta.produto_eyemobile_id,
+        new_price: precoConfirmado,
+      });
+
+      if (!syncResult.success) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: syncResult.error || "Falha na chamada ao Eyemobile",
+          isRemoteSuccessLocalFailure: false,
+        });
+        await sendReply(
+          `${MSG_FALHA_REMOTO}\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Preço tentado: <b>${fmt(precoConfirmado)}</b>\n` +
+          `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+          `💡 Você pode tentar novamente com: <code>CONFIRMAR ${alerta.id.slice(0, 8)}</code>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const persistResult = await persistConfirmedPriceAtomic(supabase, {
+        alertaId: alerta.id,
+        userId: alerta.user_id,
+        workspaceId: alerta.workspace_id,
+        novoPreco: precoConfirmado,
+      });
+
+      if (!persistResult.success) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+          isRemoteSuccessLocalFailure: true,
+        });
+        await sendReply(
+          `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Preço atualizado no Eyemobile: <b>${fmt(precoConfirmado)}</b>\n\n` +
+          `💡 Para reconciliar o banco local, envie: <code>CONFIRMAR ${alerta.id.slice(0, 8)}</code>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      await sendReply(
+        `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
+        `📦 <b>${alerta.produto_descricao}</b>\n` +
+        `💰 Preço de venda: <b>${fmt(precoConfirmado)}</b>\n` +
+        `📈 Margem mantida: <b>${alerta.margem_real_percentual ? Number(alerta.margem_real_percentual).toFixed(0) : "0"}%</b>`
+      );
+
+      const { count: pendentesRestantes } = await supabase
+        .from("alertas_preco_pendentes")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .in("status", ["pendente", "editado"]);
+
+      if (pendentesRestantes === 0) {
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: userId,
+            chat_id: chatId,
+            estado: "inicio",
+            proposta_id: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("🎉 <b>Todos os preços pendentes foram ajustados com sucesso!</b>");
+      } else {
+        await sendReply(`📋 Ainda há <b>${pendentesRestantes}</b> alerta(s) de preço pendente(s). Use /precos para ver.`);
+      }
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
     // ─── 0.2 HANDLER DE EDITAR PREÇO ───
@@ -2368,7 +2655,7 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .maybeSingle();
         alertaId = alerta?.id || null;
       } else {
@@ -2380,7 +2667,7 @@ serve(async (req) => {
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
@@ -2395,11 +2682,23 @@ serve(async (req) => {
           .single();
 
         if (alerta) {
-          const novaMargem = alerta.custo_novo > 0 ? ((precoEditado / Number(alerta.custo_novo)) - 1) * 100 : 0;
+          if (alerta.status === "aplicando") {
+            await sendReply(MSG_BLOQUEIO_APLICANDO_EDITAR);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          if (alerta.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          const custoNovo = Number(alerta.custo_novo || 0);
+          const novaMargem = custoNovo > 0 ? ((precoEditado / custoNovo) - 1) * 100 : 0;
 
           await supabase.from("alertas_preco_pendentes").update({
             preco_definido_usuario: precoEditado,
             status: "editado",
+            updated_at: new Date().toISOString(),
           }).eq("id", alertaId);
 
           await sendReply(
@@ -2429,7 +2728,7 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .maybeSingle();
         alertaId = alerta?.id || null;
       } else {
@@ -2437,7 +2736,7 @@ serve(async (req) => {
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
@@ -2445,37 +2744,56 @@ serve(async (req) => {
       }
 
       if (alertaId) {
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "ignorado",
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
-
-        await sendReply(
-          `🚫 <b>Alerta de preço ignorado.</b>\n` +
-          `O preço de venda no PDV não foi alterado.\n` +
-          `Você pode alterar manualmente quando desejar.`
-        );
-
-        const { count: pendentesRestantes } = await supabase
+        const { data: alerta } = await supabase
           .from("alertas_preco_pendentes")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", userId)
-          .in("status", ["pendente", "editado"]);
+          .select("*")
+          .eq("id", alertaId)
+          .single();
 
-        if (pendentesRestantes === 0) {
-          await supabase.from("telegram_conversas").upsert(
-            {
-              user_id: userId,
-              chat_id: chatId,
-              estado: "inicio",
-              proposta_id: null,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "chat_id" }
+        if (alerta) {
+          if (alerta.status === "aplicando") {
+            await sendReply(MSG_BLOQUEIO_APLICANDO_IGNORAR);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          if (alerta.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          await supabase.from("alertas_preco_pendentes").update({
+            status: "ignorado",
+            data_resolucao: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq("id", alertaId);
+
+          await sendReply(
+            `🚫 <b>Alerta de preço ignorado.</b>\n` +
+            `O preço de venda no PDV não foi alterado.\n` +
+            `Você pode alterar manualmente quando desejar.`
           );
-        }
 
-        return new Response("OK", { status: 200, headers: corsHeaders });
+          const { count: pendentesRestantes } = await supabase
+            .from("alertas_preco_pendentes")
+            .select("*", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .in("status", ["pendente", "editado"]);
+
+          if (pendentesRestantes === 0) {
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "inicio",
+                proposta_id: null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
+          }
+
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
       }
     }
 
