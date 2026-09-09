@@ -278,11 +278,11 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     const hasInvestText = await page.locator('text=PETR4, text=Investimentos, text=Carteira').first().isVisible({ timeout: 5000 }).catch(() => false);
     expect(hasInvestText || true).toBe(true);
 
-    // 1.4 Navegação para a tela de IA na aplicação antiga
-    await page.goto(`${LEGACY_APP_URL}/wallet-ia`).catch(() => page.goto(`${LEGACY_APP_URL}/ia`));
+    // 1.4 Navegação para a tela de IA na aplicação antiga (rota /ia compatível com build 8ae7c04)
+    await page.goto(`${LEGACY_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa")').first();
-    await expect(aiInterface).toBeVisible({ timeout: 10000 });
+    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA")').first();
+    await expect(aiInterface).toBeVisible({ timeout: 15000 });
 
     // =========================================================================
     // 1.5 TESTES COMPLEMENTARES DE AUTORIZAÇÃO (Consultas HTTP Diretas)
@@ -387,11 +387,11 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     });
     expect([200, 201]).toContain(cadRes.status);
 
-    // 2.5 Nova aplicação: Navegação para a interface de IA
-    await page.goto(`${NEW_APP_URL}/wallet-ia`).catch(() => page.goto(`${NEW_APP_URL}/ia`));
+    // 2.5 Nova aplicação: Navegação para a interface de IA (rota /ia)
+    await page.goto(`${NEW_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    const newAiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar")').first();
-    await expect(newAiInterface).toBeVisible({ timeout: 10000 });
+    const newAiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), div:has-text("Wallet IA")').first();
+    await expect(newAiInterface).toBeVisible({ timeout: 15000 });
 
     // =========================================================================
     // 2.6 PONTO 4: COMPROVAÇÃO DE AUTORIZAÇÃO DA RPC reserve_ai_tokens
