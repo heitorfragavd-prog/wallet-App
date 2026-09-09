@@ -366,9 +366,18 @@ BEGIN
   -- Sem desbloquear sessao, is_investimentos_unlocked deve ser FALSE
   ASSERT public.is_investimentos_unlocked(v_user_1) IS FALSE, 'Cenario 3 falhou: investimentos devem estar bloqueados sem sessao';
 
-  -- Desbloqueia sessao
-  v_unlocked := public.desbloquear_sessao_investimentos(v_user_1, v_session_token, 30);
+  -- Desbloqueia sessao via RPC com hash esperado
+  v_unlocked := public.desbloquear_sessao_investimentos(
+    v_user_1,
+    v_session_token,
+    '$pbkdf2$100000$mock_hash',
+    NULL,
+    clock_timestamp() + interval '30 minutes'
+  );
   ASSERT v_unlocked IS TRUE, 'Cenario 3 falhou: desbloquear_sessao_investimentos deve retornar true';
+
+  -- Contexto de sessao autenticada com session_id
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated', 'session_id', v_session_token)::text, true);
   ASSERT public.is_investimentos_unlocked(v_user_1) IS TRUE, 'Cenario 3 falhou: investimentos devem estar desbloqueados apos sessao criada';
   RAISE NOTICE 'Cenario 3 APROVADO: Ciclo de vida da senha de investimentos validado.';
 
@@ -406,7 +415,7 @@ BEGIN
   ASSERT v_count = 0, 'Cenario 5 falhou: leitura de investimentos sem sessao deve retornar 0 linhas';
 
   -- Usuario 1 com sessao valida acessa seus investimentos
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_user_1::text, 'role', 'authenticated', 'session_id', v_session_token)::text, true);
   INSERT INTO public.investimentos (user_id, ativo, valor) VALUES (v_user_1, 'PETR4', 1500.00);
   SELECT count(*) INTO v_count FROM public.investimentos;
   ASSERT v_count >= 1, 'Cenario 5 falhou: usuario com sessao ativa deve conseguir ler investimentos';
