@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
+import {
+  validateRemoteSnapshot,
+  planProductSync,
+  isTrustedServiceRoleCaller,
+} from "../_shared/eyemobile-product-identity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -478,12 +483,60 @@ serve(async (req) => {
     // MODO SYNC_PRODUCTS: Sincroniza produtos Eyemobile → produtos_eyemobile
     // ================================================================
     if (mode === "SYNC_PRODUCTS") {
-      let targetUserId = user_id;
-      if (!targetUserId) {
-        const { data: firstCfg } = await supabaseAdmin.from("eyemobile_config").select("user_id").limit(1).maybeSingle();
-        targetUserId = firstCfg?.user_id;
+      // 1. TRUSTED SERVICE ROLE — NÃO CONFIAR EM JWT DECODIFICADO
+      const trustedService = isTrustedServiceRoleCaller(token, supabaseServiceKey, cronSecret);
+      let targetUserId: string | null = null;
+
+      if (trustedService) {
+        targetUserId = typeof requestBody.user_id === "string" && requestBody.user_id.trim()
+          ? requestBody.user_id.trim()
+          : null;
+
+        if (!targetUserId) {
+          return new Response(JSON.stringify({
+            success: false,
+            code: "missing_user_id",
+            error: "ID de usuário obrigatório para sincronização de produtos via service_role."
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+      } else {
+        if (!token) {
+          return new Response(JSON.stringify({
+            success: false,
+            code: "unauthorized",
+            error: "Não autorizado: token ausente."
+          }), {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
+        const supabaseUserClient = createClient(
+          supabaseUrl,
+          Deno.env.get("SUPABASE_ANON_KEY") || "",
+          {
+            global: { headers: { Authorization: `Bearer ${token}` } },
+            auth: { persistSession: false, autoRefreshToken: false }
+          }
+        );
+
+        const { data: { user }, error: userError } = await supabaseUserClient.auth.getUser(token);
+        if (userError || !user) {
+          return new Response(JSON.stringify({
+            success: false,
+            code: "unauthorized",
+            error: "Não autorizado: token de usuário inválido."
+          }), {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
+        targetUserId = user.id;
       }
-      if (!targetUserId) throw new Error("ID de usuário não especificado para sincronização de produtos.");
 
       const { data: pConfig, error: pConfigErr } = await supabaseAdmin
         .from("eyemobile_config")
@@ -491,9 +544,24 @@ serve(async (req) => {
         .eq("user_id", targetUserId)
         .maybeSingle();
 
-      if (pConfigErr) throw pConfigErr;
+      if (pConfigErr) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: "database_error",
+          error: "Erro ao consultar credenciais Eyemobile do usuário."
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
       if (!pConfig?.access_key || !pConfig?.secret_key) {
-        return new Response(JSON.stringify({ success: false, error: "Credenciais Eyemobile não configuradas" }), {
+        return new Response(JSON.stringify({
+          success: false,
+          code: "unconfigured_credentials",
+          error: "Credenciais Eyemobile não configuradas"
+        }), {
+          status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
@@ -507,7 +575,7 @@ serve(async (req) => {
         "Content-Type": "application/json",
       };
 
-      // Buscar workspace PJ ou default
+      // 2. Resolução e validação estrita de workspace (sem permitir null)
       let syncWorkspaceId: string | null = null;
       try {
         const { data: wsPj } = await supabaseAdmin
@@ -520,114 +588,310 @@ serve(async (req) => {
           .maybeSingle();
         if (wsPj) syncWorkspaceId = wsPj.id;
       } catch (wsErr) {
-        console.error("Não foi possível resolver workspace PJ:", wsErr);
+        console.error("[eyemobile-sync] Não foi possível resolver workspace PJ:", wsErr);
       }
 
       if (!syncWorkspaceId) {
-        const { data: wsDefault } = await supabaseAdmin
-          .from("workspaces")
-          .select("id")
-          .eq("user_id", targetUserId)
-          .eq("is_default", true)
-          .limit(1)
-          .maybeSingle();
-        syncWorkspaceId = wsDefault?.id ?? null;
+        try {
+          const { data: wsDefault } = await supabaseAdmin
+            .from("workspaces")
+            .select("id")
+            .eq("user_id", targetUserId)
+            .eq("is_default", true)
+            .limit(1)
+            .maybeSingle();
+          syncWorkspaceId = wsDefault?.id ?? null;
+        } catch (wsDefErr) {
+          console.error("[eyemobile-sync] Não foi possível resolver workspace padrão:", wsDefErr);
+        }
       }
 
-      // Buscar TODOS os produtos do Eyemobile
-      const eyemobileProducts: any[] = [];
-      for (let page = 0; page < 20; page++) {
-        const resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, { headers: pHeaders });
-        if (!resp.ok) break;
-        const json = await resp.json();
+      if (!syncWorkspaceId) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: "missing_workspace",
+          error: "Nenhum workspace PJ ou padrão encontrado para o usuário especificado. Sincronização abortada."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // Validar se o workspace resolvido de fato pertence ao targetUserId
+      const { data: wsBelongs, error: wsBelongsErr } = await supabaseAdmin
+        .from("workspaces")
+        .select("id")
+        .eq("id", syncWorkspaceId)
+        .eq("user_id", targetUserId)
+        .maybeSingle();
+
+      if (wsBelongsErr || !wsBelongs) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: "invalid_workspace",
+          error: "Workspace resolvido não pertence ao usuário ou é inválido. Sincronização abortada."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // 3. Buscar snapshot remoto completo da Eyemobile com abort em qualquer falha
+      const eyemobileRawProducts: unknown[] = [];
+      const MAX_PAGES = 50;
+      let reachedPageCapWithMore = false;
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        let resp: Response;
+        try {
+          resp = await fetch(`${pBaseUrl}/products?limit=100&offset=${page * 100}`, { headers: pHeaders });
+        } catch (fetchErr) {
+          console.error(`[eyemobile-sync] Erro de rede ao buscar produtos na página ${page}:`, fetchErr);
+          return new Response(JSON.stringify({
+            success: false,
+            code: "remote_network_error",
+            error: `Erro de rede ao conectar à Eyemobile na página ${page}. Sincronização abortada.`
+          }), {
+            status: 502,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
+        if (!resp.ok) {
+          console.error(`[eyemobile-sync] Resposta HTTP de erro da Eyemobile (página ${page}): ${resp.status}`);
+          return new Response(JSON.stringify({
+            success: false,
+            code: "remote_http_error",
+            error: `A API da Eyemobile retornou status HTTP ${resp.status} na página ${page}. Sincronização abortada por integridade.`
+          }), {
+            status: 502,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
+        let json: { data?: unknown[]; has_more?: boolean } | null = null;
+        try {
+          json = await resp.json();
+        } catch (jsonErr) {
+          console.error(`[eyemobile-sync] Erro ao decodificar JSON da Eyemobile (página ${page}):`, jsonErr);
+          return new Response(JSON.stringify({
+            success: false,
+            code: "remote_parse_error",
+            error: `Resposta da Eyemobile na página ${page} não é um JSON válido. Sincronização abortada.`
+          }), {
+            status: 502,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+
         const list = Array.isArray(json?.data) ? json.data : [];
-        eyemobileProducts.push(...list);
-        if (json?.has_more !== true || list.length === 0) break;
+        eyemobileRawProducts.push(...list);
+
+        if (json?.has_more !== true || list.length === 0) {
+          break;
+        }
+
+        if (page === MAX_PAGES - 1 && json?.has_more === true) {
+          reachedPageCapWithMore = true;
+        }
       }
 
-      console.log(`[eyemobile-sync] SYNC_PRODUCTS: ${eyemobileProducts.length} produtos obtidos do Eyemobile.`);
+      if (reachedPageCapWithMore) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: "incomplete_snapshot",
+          error: `Limite de paginação atingido (${MAX_PAGES} páginas) com produtos pendentes. Sincronização abortada por segurança.`
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
 
-      // Buscar produtos existentes no Supabase
-      const { data: existingProds } = await supabaseAdmin
+      // 4. Validar integridade do snapshot remoto
+      const snapshotValidation = validateRemoteSnapshot(eyemobileRawProducts);
+      if (!snapshotValidation.ok) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: snapshotValidation.code,
+          error: snapshotValidation.error,
+          conflicts: snapshotValidation.conflicts
+        }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const validatedRemoteProducts = snapshotValidation.products;
+
+      // 5. Buscar produtos locais existentes estritamente no escopo do tenant (user_id E workspace_id)
+      const { data: existingProds, error: existingProdsErr } = await supabaseAdmin
         .from("produtos_eyemobile")
         .select("*")
-        .eq("user_id", targetUserId);
+        .eq("user_id", targetUserId)
+        .eq("workspace_id", syncWorkspaceId);
 
-      const existingMap = new Map();
-      for (const p of existingProds || []) {
-        if (p.eyemobile_id) existingMap.set(p.eyemobile_id, p);
-        if (p.codigo) existingMap.set(p.codigo, p);
+      if (existingProdsErr) {
+        console.error("[eyemobile-sync] Erro ao buscar produtos locais existentes:", existingProdsErr);
+        return new Response(JSON.stringify({
+          success: false,
+          code: "database_error",
+          error: "Erro ao consultar produtos locais existentes."
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // 5b. Diagnóstico da constraint legada UNIQUE(user_id, codigo) em outros workspaces do mesmo usuário
+      const { data: otherWsProds, error: otherWsErr } = await supabaseAdmin
+        .from("produtos_eyemobile")
+        .select("id, user_id, workspace_id, eyemobile_id, codigo")
+        .eq("user_id", targetUserId)
+        .neq("workspace_id", syncWorkspaceId)
+        .not("codigo", "is", null);
+
+      if (otherWsErr) {
+        console.error("[eyemobile-sync] Erro ao buscar produtos de outros workspaces:", otherWsErr);
+        return new Response(JSON.stringify({
+          success: false,
+          code: "database_error",
+          error: "Erro ao consultar produtos de outros workspaces para verificação de constraints."
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // 6. Preflight e planejamento de sincronização
+      const plan = planProductSync(validatedRemoteProducts, existingProds || [], {
+        userId: targetUserId,
+        workspaceId: syncWorkspaceId,
+        otherWorkspaceProducts: otherWsProds || []
+      });
+
+      if (!plan.ok) {
+        return new Response(JSON.stringify({
+          success: false,
+          code: plan.code,
+          error: plan.error,
+          conflicts: plan.conflicts
+        }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
       let inserted = 0;
       let updated = 0;
       let deactivated = 0;
-      const eyemobileIds = new Set();
+      const writeErrors: Array<{ operation: string; id?: string; error: string }> = [];
 
-      for (const prod of eyemobileProducts) {
-        const eyemobileId = String(prod.id);
-        const prodCodigo = prod.code || prod.sku || String(prod.id);
-        eyemobileIds.add(eyemobileId);
-
-        const precoVenda = Number(prod.price || prod.sale_price || 0);
-        const custoAtual = Number(prod.cost_price || prod.cost || 0) || (precoVenda > 0 ? precoVenda * 0.7 : 0);
-        const estoqueAtual = Number(prod.stock || prod.quantity || 0);
-
-        // Calcular margem real: ((precoVenda / custoAtual) - 1) * 100
-        let margemReal = 30; // fallback padrão
-        if (custoAtual > 0 && precoVenda > 0) {
-          margemReal = ((precoVenda / custoAtual) - 1) * 100;
-          if (margemReal < 0) margemReal = 30;
-        }
-
-        const existing = existingMap.get(eyemobileId) || existingMap.get(prodCodigo);
-
-        if (existing) {
-          await supabaseAdmin.from("produtos_eyemobile").update({
-            descricao: prod.name || existing.descricao,
-            codigo: prodCodigo,
-            preco_venda: precoVenda > 0 ? precoVenda : existing.preco_venda,
-            custo_atual: custoAtual > 0 ? custoAtual : existing.custo_atual,
-            estoque_atual: estoqueAtual,
-            categoria: prod.category || existing.categoria,
-            margem_real_percentual: margemReal,
+      // 7. Executar Updates com FAIL-FAST
+      for (const item of plan.toUpdate) {
+        const { localProduct, remoteProduct } = item;
+        const { error: updErr } = await supabaseAdmin
+          .from("produtos_eyemobile")
+          .update({
+            descricao: remoteProduct.descricao,
+            codigo: remoteProduct.codigo,
+            preco_venda: remoteProduct.precoVenda > 0 ? remoteProduct.precoVenda : localProduct.preco_venda,
+            custo_atual: remoteProduct.custoAtual > 0 ? remoteProduct.custoAtual : localProduct.custo_atual,
+            estoque_atual: remoteProduct.estoqueAtual,
+            categoria: remoteProduct.categoria,
+            margem_real_percentual: remoteProduct.margemReal,
             ativo: true,
             ultima_atualizacao_custo: new Date().toISOString(),
-          }).eq("id", existing.id);
-          updated++;
+          })
+          .eq("id", localProduct.id)
+          .eq("user_id", targetUserId)
+          .eq("workspace_id", syncWorkspaceId);
+
+        if (updErr) {
+          console.error(`[eyemobile-sync] Erro ao atualizar produto ${localProduct.id}:`, updErr);
+          writeErrors.push({ operation: "update", id: localProduct.id, error: updErr.message || "Falha na atualização do produto." });
+          break; // Fail-fast: interrompe imediatamente!
         } else {
-          await supabaseAdmin.from("produtos_eyemobile").insert({
-            user_id: targetUserId,
-            workspace_id: syncWorkspaceId,
-            eyemobile_id: eyemobileId,
-            codigo: prodCodigo,
-            descricao: prod.name || "Produto sem nome",
-            categoria: prod.category || "Geral",
-            preco_venda: precoVenda,
-            custo_atual: custoAtual,
-            estoque_atual: estoqueAtual,
-            margem_real_percentual: margemReal,
-            ativo: true,
-            ultima_atualizacao_custo: new Date().toISOString(),
-          });
-          inserted++;
+          updated++;
         }
       }
 
-      // Desativar produtos que não existem mais no Eyemobile
-      for (const existing of existingProds || []) {
-        if (existing.eyemobile_id && !eyemobileIds.has(existing.eyemobile_id) && existing.ativo !== false) {
-          await supabaseAdmin.from("produtos_eyemobile").update({
-            ativo: false
-          }).eq("id", existing.id);
-          deactivated++;
+      // 8. Executar Inserts com FAIL-FAST (somente se updates passaram sem erro)
+      if (writeErrors.length === 0) {
+        for (const remoteProduct of plan.toInsert) {
+          const { error: insErr } = await supabaseAdmin
+            .from("produtos_eyemobile")
+            .insert({
+              user_id: targetUserId,
+              workspace_id: syncWorkspaceId,
+              eyemobile_id: remoteProduct.eyemobileId,
+              codigo: remoteProduct.codigo,
+              descricao: remoteProduct.descricao,
+              categoria: remoteProduct.categoria,
+              preco_venda: remoteProduct.precoVenda,
+              custo_atual: remoteProduct.custoAtual,
+              estoque_atual: remoteProduct.estoqueAtual,
+              margem_real_percentual: remoteProduct.margemReal,
+              ativo: true,
+              ultima_atualizacao_custo: new Date().toISOString(),
+            });
+
+          if (insErr) {
+            console.error(`[eyemobile-sync] Erro ao inserir produto ${remoteProduct.eyemobileId}:`, insErr);
+            writeErrors.push({ operation: "insert", id: remoteProduct.eyemobileId, error: insErr.message || "Falha na inserção do produto." });
+            break; // Fail-fast: interrompe imediatamente!
+          } else {
+            inserted++;
+          }
         }
+      }
+
+      // 9. Executar Desativações com FAIL-FAST (somente se updates E inserts passaram sem erro)
+      if (writeErrors.length === 0) {
+        for (const localProduct of plan.toDeactivate) {
+          const { error: deactErr } = await supabaseAdmin
+            .from("produtos_eyemobile")
+            .update({
+              ativo: false
+            })
+            .eq("id", localProduct.id)
+            .eq("user_id", targetUserId)
+            .eq("workspace_id", syncWorkspaceId);
+
+          if (deactErr) {
+            console.error(`[eyemobile-sync] Erro ao desativar produto ${localProduct.id}:`, deactErr);
+            writeErrors.push({ operation: "deactivate", id: localProduct.id, error: deactErr.message || "Falha na desativação do produto." });
+            break; // Fail-fast: interrompe imediatamente!
+          } else {
+            deactivated++;
+          }
+        }
+      }
+
+      if (writeErrors.length > 0) {
+        const partialWrite = (inserted + updated + deactivated) > 0;
+        return new Response(JSON.stringify({
+          success: false,
+          partial_write: partialWrite,
+          code: "write_error",
+          error: `Operação interrompida por erro de persistência: ${writeErrors[0].error}`,
+          inserted,
+          updated,
+          deactivated,
+          total: validatedRemoteProducts.length,
+          errors: writeErrors
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
       return new Response(JSON.stringify({
         success: true,
         message: `Sincronização concluída: ${inserted} inseridos, ${updated} atualizados, ${deactivated} desativados.`,
-        inserted, updated, deactivated, total: eyemobileProducts.length
+        inserted,
+        updated,
+        deactivated,
+        total: validatedRemoteProducts.length
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
