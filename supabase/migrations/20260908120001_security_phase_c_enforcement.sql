@@ -1,4 +1,4 @@
-﻿-- =========================================================================
+-- =========================================================================
 -- Migration: 20260908120001_security_phase_c_enforcement.sql
 -- FASE C: Ativacao de Restricoes, Revogacao de Colunas e RLS Estrito
 -- LOCAL APENAS -- NAO APLICAR REMOTAMENTE SEM APROVACAO
@@ -88,6 +88,7 @@ GRANT UPDATE (
 
 -- 5.1 public.investimentos
 DROP POLICY IF EXISTS "Users manage own investimentos" ON public.investimentos;
+DROP POLICY IF EXISTS "investimentos_legacy" ON public.investimentos;
 CREATE POLICY "Users manage own investimentos" ON public.investimentos
 FOR ALL TO authenticated
 USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
@@ -95,6 +96,7 @@ WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()
 
 -- 5.2 public.depositos_investimentos
 DROP POLICY IF EXISTS "Users manage own depositos" ON public.depositos_investimentos;
+DROP POLICY IF EXISTS "depositos_legacy" ON public.depositos_investimentos;
 CREATE POLICY "Users manage own depositos" ON public.depositos_investimentos
 FOR ALL TO authenticated
 USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))

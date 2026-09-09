@@ -126,8 +126,9 @@ CREATE TABLE IF NOT EXISTS public.investimentos (
   created_at TIMESTAMPTZ DEFAULT clock_timestamp()
 );
 ALTER TABLE public.investimentos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own investimentos" ON public.investimentos;
 DROP POLICY IF EXISTS "investimentos_legacy" ON public.investimentos;
-CREATE POLICY "investimentos_legacy" ON public.investimentos FOR ALL TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Users manage own investimentos" ON public.investimentos FOR ALL TO authenticated USING (auth.uid() = user_id);
 
 -- Depositos Investimentos
 CREATE TABLE IF NOT EXISTS public.depositos_investimentos (
@@ -137,8 +138,9 @@ CREATE TABLE IF NOT EXISTS public.depositos_investimentos (
   created_at TIMESTAMPTZ DEFAULT clock_timestamp()
 );
 ALTER TABLE public.depositos_investimentos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own depositos" ON public.depositos_investimentos;
 DROP POLICY IF EXISTS "depositos_legacy" ON public.depositos_investimentos;
-CREATE POLICY "depositos_legacy" ON public.depositos_investimentos FOR ALL TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Users manage own depositos" ON public.depositos_investimentos FOR ALL TO authenticated USING (auth.uid() = user_id);
 
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, authenticated;
 
