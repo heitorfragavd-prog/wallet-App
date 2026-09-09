@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS auth.users (
 );
 
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
-  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb->>'sub', '')::uuid;
+  SELECT NULLIF(COALESCE(NULLIF(current_setting('request.jwt.claims', true), '')::jsonb, '{}'::jsonb)->>'sub', '')::uuid;
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$
-  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true)::jsonb->>'role', ''), 'anon');
+  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true), '')::jsonb->>'role', 'anon');
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION auth.jwt() RETURNS JSONB AS $$
@@ -317,6 +317,9 @@ DECLARE
   v_count INTEGER;
   v_caught_error BOOLEAN;
 BEGIN
+  -- Configura contexto JWT inicial do usuario 1
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_u1::text, 'role', 'authenticated')::text, true);
+
   -- 7.1 Rollback NÃO restaura leitura de client_secret em divipay_config
   v_caught_error := false;
   BEGIN
