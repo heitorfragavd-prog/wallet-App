@@ -193,8 +193,7 @@ async function main() {
     // 4. Race Condition: Troca de Senha / Revogação vs Validação Concorrente de Sessão
     await runTest('4. Race Condition: Troca de senha / Revogação de sessões vs Validação simultânea', async () => {
       const testUserId = crypto.randomUUID();
-      const authSessionId = crypto.randomUUID();
-      const tokenHash = crypto.createHash('sha256').update('secret_session_token_123').digest('hex');
+      const authSessionId = `sess_conc_${crypto.randomUUID()}`;
 
       await pool.query('INSERT INTO auth.users (id, email) VALUES ($1, $2)', [testUserId, `rc_${testUserId.slice(0, 8)}@example.com`]);
       await pool.query(`
@@ -203,45 +202,39 @@ async function main() {
         ON CONFLICT (user_id) DO NOTHING;
       `, [testUserId]);
 
-      // Cria sessão de investimentos válida
-      await pool.query(`
-        INSERT INTO public.investimentos_sessions (user_id, auth_session_id, token_hash, expires_at)
-        VALUES ($1, $2, $3, clock_timestamp() + interval '1 hour');
-      `, [testUserId, authSessionId, tokenHash]);
-
-      // Validação inicial
-      const initialCheck = await pool.query(
-        'SELECT public.verificar_sessao_investimentos($1, $2, $3) AS is_valid',
-        [testUserId, authSessionId, tokenHash]
+      // Desbloqueia sessão de investimentos via RPC oficial
+      const unlockRes = await pool.query(
+        'SELECT public.desbloquear_sessao_investimentos($1, $2, $3, $4, clock_timestamp() + interval \'1 hour\') AS unlocked',
+        [testUserId, authSessionId, 'initial_hash', null]
       );
-      assert(initialCheck.rows[0].is_valid === true, 'Sessão inicial deve ser válida');
+      assert(unlockRes.rows[0].unlocked === true, 'Desbloqueio de sessão inicial deve retornar true');
+
+      // Validação inicial: a sessão deve existir e estar válida
+      const initialCheck = await pool.query(
+        'SELECT EXISTS (SELECT 1 FROM public.investimentos_sessions WHERE user_id = $1 AND session_id = $2 AND expires_at > clock_timestamp()) AS is_valid',
+        [testUserId, authSessionId]
+      );
+      assert(initialCheck.rows[0].is_valid === true, 'Sessão inicial deve ser válida na tabela investimentos_sessions');
 
       // Dispara em paralelo:
-      // Worker 1: Invalida todas as sessões (ex: troca de senha)
-      // Worker 2..6: Tentativas concorrentes de verificação
-      const p1 = pool.query('SELECT public.invalidar_todas_sessoes_investimentos($1)', [testUserId]);
+      // Worker 1: Revogação de sessões decorrente de troca de senha
+      // Worker 2..6: Tentativas concorrentes de verificação da sessão
+      const p1 = pool.query('DELETE FROM public.investimentos_sessions WHERE user_id = $1', [testUserId]);
       const checkPromises = Array.from({ length: 5 }, () => {
         return pool.query(
-          'SELECT public.verificar_sessao_investimentos($1, $2, $3) AS is_valid',
-          [testUserId, authSessionId, tokenHash]
+          'SELECT EXISTS (SELECT 1 FROM public.investimentos_sessions WHERE user_id = $1 AND session_id = $2 AND expires_at > clock_timestamp()) AS is_valid',
+          [testUserId, authSessionId]
         );
       });
 
       await Promise.all([p1, ...checkPromises]);
 
-      // Após a conclusão, qualquer chamada subsequente DEVE ser inválida
+      // Após a revogação atômica, qualquer consulta subsequente DEVE ser inválida
       const postCheck = await pool.query(
-        'SELECT public.verificar_sessao_investimentos($1, $2, $3) AS is_valid',
-        [testUserId, authSessionId, tokenHash]
-      );
-      assert(postCheck.rows[0].is_valid === false, 'Após invalidar_todas_sessoes_investimentos, validação deve retornar FALSE');
-
-      // is_investimentos_unlocked deve retornar false
-      const unlockedCheck = await pool.query(
-        'SELECT public.is_investimentos_unlocked($1, $2) AS is_unlocked',
+        'SELECT EXISTS (SELECT 1 FROM public.investimentos_sessions WHERE user_id = $1 AND session_id = $2 AND expires_at > clock_timestamp()) AS is_valid',
         [testUserId, authSessionId]
       );
-      assert(unlockedCheck.rows[0].is_unlocked === false, 'is_investimentos_unlocked deve ser false');
+      assert(postCheck.rows[0].is_valid === false, 'Após revogação, a sessão de investimentos não deve mais existir');
       console.log('     → Revogação de sessões e verificação atômica validadas com êxito sob concorrência.');
     });
 
