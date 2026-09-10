@@ -375,6 +375,8 @@ export async function searchProductCandidates(
   for (const raw of rows) {
     // Defesa em profundidade: tenant isolation
     if (raw.workspace_id !== workspaceId || raw.user_id !== userId) continue;
+    // Exclui produtos sem ID remoto válido no PDV
+    if (!raw.eyemobile_id || String(raw.eyemobile_id).trim() === "") continue;
 
     const desc = String(raw.descricao || "");
     let score = 0.5;
@@ -387,7 +389,7 @@ export async function searchProductCandidates(
       id: raw.id,
       descricao: desc,
       codigo: raw.codigo ? String(raw.codigo).trim() : null,
-      eyemobileId: raw.eyemobile_id ? String(raw.eyemobile_id).trim() : null,
+      eyemobileId: String(raw.eyemobile_id).trim(),
       precoVenda: raw.preco_venda != null ? Number(raw.preco_venda) : null,
       score,
     });
@@ -411,8 +413,8 @@ export async function searchProductCandidates(
  * 1. Para embalagens (CX, FD, PACK, FARDO, CAIXA, CPJ):
  *    - Tenta extrair quantidade da descrição (ex: 'CX12' -> 12, 'FARDO 6' -> 6).
  *    - Se não encontrar, retorna null (nunca assume 1).
- * 2. Para unidades individuais (UN, LT, KG, PCT):
- *    - Retorna 1 como sugestão para confirmação explícita do usuário.
+ * 2. Para qualquer outra unidade (UN, KG, PCT, LT, etc.):
+ *    - Retorna 1 como sugestão (conversão direta suportada pelo estoque).
  * 3. O valor retornado é SOMENTE UMA SUGESTÃO. Nunca confirma automaticamente.
  */
 export function suggestConversionFactor(
@@ -422,7 +424,8 @@ export function suggestConversionFactor(
   const uNorm = (unidade || "").toUpperCase().trim();
   const dNorm = (descricao || "").toUpperCase().trim();
 
-  const ehEmbalagem = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"].includes(uNorm);
+  const PACKAGING_UNITS = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"];
+  const ehEmbalagem = PACKAGING_UNITS.includes(uNorm);
 
   if (ehEmbalagem) {
     // Procura padrões como CX12, CX 12, FARDO 6, PACK 24, CPJ 12
@@ -445,12 +448,8 @@ export function suggestConversionFactor(
     return null; // Não assume 1 para embalagens
   }
 
-  // Unidades simples sugerem fator 1 (que ainda exige confirmação do usuário)
-  if (["UN", "UND", "UNID", "LATA", "GFA", "GARRAFA", "PCT", "PACOTE"].includes(uNorm)) {
-    return 1;
-  }
-
-  return null;
+  // Para qualquer outra unidade (UN, KG, PCT, LT, etc.), conversão direta é 1
+  return 1;
 }
 
 /**
@@ -473,7 +472,11 @@ export async function salvarEquivalenciaConfirmada(
   }
 ): Promise<
   | { success: true; equivalenciaId: string; status: "saved" | "idempotent" }
-  | { success: false; code: "invalid_input" | "tenant_mismatch" | "already_confirmed_different" | "database_error"; error: string }
+  | {
+      success: false;
+      code: "invalid_input" | "tenant_mismatch" | "already_confirmed_different" | "missing_remote_product_id" | "database_error";
+      error: string;
+    }
 > {
   const {
     userId,
@@ -506,7 +509,27 @@ export async function salvarEquivalenciaConfirmada(
     return { success: false, code: "invalid_input", error: "Fator de conversão deve ser estritamente maior que zero." };
   }
 
-  // 1. Validar que o produto canônico existe e pertence ao mesmo tenant
+  // Alinhamento estrito com o contrato da Fase 4 (evaluateStockStatus):
+  // Apenas embalagens usam fator de conversão (> 1). Unidades simples suportam estritamente fator = 1.
+  const PACKAGING_UNITS = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"];
+  const uNorm = (unidadeFornecedor || "").toUpperCase().trim();
+  const ehEmbalagem = PACKAGING_UNITS.includes(uNorm);
+
+  if (ehEmbalagem) {
+    if (fator <= 1) {
+      return { success: false, code: "invalid_input", error: "Para embalagens, o fator de conversão deve ser estritamente maior que 1." };
+    }
+  } else {
+    if (Math.abs(fator - 1) > 1e-6) {
+      return {
+        success: false,
+        code: "invalid_input",
+        error: `Unidade '${unidadeFornecedor || "UN"}' não suporta fator de conversão diferente de 1 no controle de estoque atual.`,
+      };
+    }
+  }
+
+  // 1. Validar que o produto canônico existe, pertence ao mesmo tenant e possui eyemobile_id válido
   const { data: prod, error: prodErr } = await client
     .from("produtos_eyemobile")
     .select("id, workspace_id, user_id, eyemobile_id")
@@ -519,6 +542,10 @@ export async function salvarEquivalenciaConfirmada(
 
   if (prod.workspace_id !== workspaceId || prod.user_id !== userId) {
     return { success: false, code: "tenant_mismatch", error: "O produto selecionado não pertence a este usuário ou workspace." };
+  }
+
+  if (!prod.eyemobile_id || String(prod.eyemobile_id).trim() === "") {
+    return { success: false, code: "missing_remote_product_id", error: "Produto do PDV não possui cadastro remoto (eyemobile_id) válido." };
   }
 
   // 2. Verificar se já existe registro em produto_equivalencias
@@ -553,9 +580,8 @@ export async function salvarEquivalenciaConfirmada(
     };
   }
 
-  // 4. Caso exista vínculo pendente (não confirmado) ou não exista:
+  // 4. Caso exista vínculo pendente (não confirmado): CAS com proteção anti-race
   if (existing) {
-    // Atualiza o registro pendente para confirmado com os dados explicitamente escolhidos
     const { data: updated, error: updErr } = await client
       .from("produto_equivalencias")
       .update({
@@ -570,18 +596,47 @@ export async function salvarEquivalenciaConfirmada(
         updated_at: new Date().toISOString(),
       })
       .eq("id", existing.id)
+      .eq("workspace_id", workspaceId)
+      .eq("confirmado_por_usuario", false)
       .select("id")
-      .single();
+      .maybeSingle();
 
-    if (updErr || !updated) {
+    if (updErr) {
       console.error("[nf-product-equivalence] Erro ao atualizar equivalência pendente:", updErr);
       return { success: false, code: "database_error", error: "Falha ao gravar confirmação do vínculo." };
+    }
+
+    // Se zero linhas atualizadas, outra transação alterou concorrentemente confirmado_por_usuario
+    if (!updated) {
+      const { data: recheckCas, error: recheckErr } = await client
+        .from("produto_equivalencias")
+        .select("id, produto_eyemobile_uuid, fator_conversao, confirmado_por_usuario")
+        .eq("id", existing.id)
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+
+      if (!recheckErr && recheckCas && recheckCas.confirmado_por_usuario === true) {
+        const mesmoProduto = recheckCas.produto_eyemobile_uuid === produtoEyemobileUuid;
+        const mesmoFator = Math.abs(Number(recheckCas.fator_conversao) - fator) < 1e-6;
+
+        if (mesmoProduto && mesmoFator) {
+          return { success: true, equivalenciaId: recheckCas.id, status: "idempotent" };
+        }
+
+        return {
+          success: false,
+          code: "already_confirmed_different",
+          error: "Conflito de concorrência: a equivalência foi confirmada simultaneamente com outro produto ou fator.",
+        };
+      }
+
+      return { success: false, code: "database_error", error: "Falha de concorrência ao atualizar equivalência." };
     }
 
     return { success: true, equivalenciaId: updated.id, status: "saved" };
   }
 
-  // Caso não exista: insere nova equivalência confirmada
+  // 5. Caso não exista: insere nova equivalência confirmada
   const { data: inserted, error: insErr } = await client
     .from("produto_equivalencias")
     .insert({
@@ -601,7 +656,7 @@ export async function salvarEquivalenciaConfirmada(
     .single();
 
   if (insErr || !inserted) {
-    // Se colidiu com concorrência no insert (constraint única)
+    // Se colidiu com concorrência no insert (constraint única 23505)
     if (insErr?.code === "23505") {
       const { data: recheck } = await client
         .from("produto_equivalencias")
@@ -611,8 +666,19 @@ export async function salvarEquivalenciaConfirmada(
         .eq("codigo_produto_fornecedor", codNorm)
         .maybeSingle();
 
-      if (recheck && recheck.confirmado_por_usuario) {
-        return { success: true, equivalenciaId: recheck.id, status: "idempotent" };
+      if (recheck && recheck.confirmado_por_usuario === true) {
+        const mesmoProduto = recheck.produto_eyemobile_uuid === produtoEyemobileUuid;
+        const mesmoFator = Math.abs(Number(recheck.fator_conversao) - fator) < 1e-6;
+
+        if (mesmoProduto && mesmoFator) {
+          return { success: true, equivalenciaId: recheck.id, status: "idempotent" };
+        }
+
+        return {
+          success: false,
+          code: "already_confirmed_different",
+          error: "Conflito de concorrência: outro processo já confirmou este vínculo com produto ou fator divergente.",
+        };
       }
     }
 

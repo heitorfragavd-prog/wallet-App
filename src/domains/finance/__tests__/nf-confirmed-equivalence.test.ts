@@ -1254,7 +1254,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID },
+                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-1" },
                 error: null,
               }),
             };
@@ -1284,6 +1284,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p1",
         fatorConversao: fatorSugerido!,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(true);
@@ -1317,7 +1318,8 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       const content = fs.readFileSync(webhookPath, "utf-8");
 
       expect(content).toContain('if (callbackData.startsWith("vp_can:"))');
-      expect(content).toContain('.update({ status: "cancelada" }).eq("id", propId)');
+      expect(content).toContain('.update({ status: "cancelada" })');
+      expect(content).toContain('.eq("id", propId)');
     });
 
     // Cenário I: Produto cross-tenant é rejeitado
@@ -1329,7 +1331,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p-other", workspace_id: "ws-other-tenant", user_id: "usr-other" },
+                data: { id: "p-other", workspace_id: "ws-other-tenant", user_id: "usr-other", eyemobile_id: "eye-other" },
                 error: null,
               }),
             };
@@ -1345,6 +1347,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p-other",
         fatorConversao: 12,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(false);
@@ -1356,8 +1359,9 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
       const content = fs.readFileSync(webhookPath, "utf-8");
 
-      expect(content).toContain("if (propRow.user_id !== cbUserId)");
-      expect(content).toContain('"Usuário não autorizado."');
+      expect(content).toContain("propRow.user_id !== expected.userId");
+      expect(content).toContain('"Usuário não autorizado para esta proposta."');
+      expect(content).toContain('.eq("user_id", cbUserId)');
     });
 
     // Cenário K: Equivalência prévia não confirmada é atualizada para confirmada
@@ -1370,7 +1374,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p-novo", workspace_id: WORKSPACE_ID, user_id: USER_ID },
+                data: { id: "p-novo", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-new" },
                 error: null,
               }),
             };
@@ -1388,6 +1392,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
                 return {
                   eq: vi.fn().mockReturnThis(),
                   select: vi.fn().mockReturnThis(),
+                  maybeSingle: vi.fn().mockResolvedValue({ data: { id: "equiv-unconfirmed-1", ...row }, error: null }),
                   single: vi.fn().mockResolvedValue({ data: { id: "equiv-unconfirmed-1", ...row }, error: null }),
                 };
               }),
@@ -1404,6 +1409,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p-novo",
         fatorConversao: 24,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(true);
@@ -1422,7 +1428,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID },
+                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-1" },
                 error: null,
               }),
             };
@@ -1448,6 +1454,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p1",
         fatorConversao: 12,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(true);
@@ -1464,7 +1471,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p-outro", workspace_id: WORKSPACE_ID, user_id: USER_ID },
+                data: { id: "p-outro", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-outro" },
                 error: null,
               }),
             };
@@ -1490,6 +1497,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p-outro",
         fatorConversao: 12,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(false);
@@ -1497,13 +1505,14 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
     });
 
     // Cenário N: Concorrência de duplo clique é tratada por lock atômico da proposta
-    it("Cenário N: webhook faz lock atômico em telegram_propostas com status = 'em_processamento'", () => {
+    it("Cenário N: webhook faz lock atômico em telegram_propostas com status = 'em_processamento' e validação estrita de proprietário", () => {
       const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
       const content = fs.readFileSync(webhookPath, "utf-8");
 
       expect(content).toContain('.update({ status: "em_processamento" })');
+      expect(content).toContain('.eq("user_id", cbUserId)');
       expect(content).toContain('.eq("status", "pendente")');
-      expect(content).toContain('"Esta proposta já foi processada ou cancelada."');
+      expect(content).toContain('.gt("expires_at", nowIso)');
     });
 
     // Cenário O: Após salvar equivalência, reprocessa via executarConfirmacaoNfSegura da Fase 4
@@ -1513,7 +1522,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
 
       const vpOkSections = content.split('if (callbackData.startsWith("vp_ok:"))');
       expect(vpOkSections.length).toBeGreaterThan(1);
-      const vpOkBody = vpOkSections[1].slice(0, 4000);
+      const vpOkBody = vpOkSections[1].slice(0, 10000);
 
       expect(vpOkBody).toContain("await salvarEquivalenciaConfirmada(");
       expect(vpOkBody).toContain("await executarConfirmacaoNfSegura(");
@@ -1529,7 +1538,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
               select: vi.fn().mockReturnThis(),
               eq: vi.fn().mockReturnThis(),
               maybeSingle: vi.fn().mockResolvedValue({
-                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID },
+                data: { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-1" },
                 error: null,
               }),
             };
@@ -1559,6 +1568,7 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         codigoProdutoFornecedor: COD_PROD,
         produtoEyemobileUuid: "p1",
         fatorConversao: 12,
+        unidadeFornecedor: "CX",
       });
 
       expect(res.success).toBe(true);
@@ -1736,6 +1746,472 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       expect(content).toContain('if (callbackData.startsWith("vp_skip:"))');
       expect(content).toContain('conversaAtivaPre?.estado === "aguardando_busca_produto_nf"');
       expect(content).toContain('conversaAtivaPre?.estado === "aguardando_fator_conversao_nf"');
+    });
+  });
+
+  describe("Fase 5 Micro-Hardening: Concorrência, Autorização e Semântica de Fator", () => {
+    const CNPJ = "12.345.678/0001-90";
+    const COD_PROD = "FORN-SKU-999";
+
+    // ─── 1. RACE DO INSERT 23505 (RACE-A) ───
+    it("RACE-A1: insert com 23505 e recheck com produto diferente retorna already_confirmed_different", async () => {
+      const equivQuery = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn()
+          .mockResolvedValueOnce({ data: null, error: null }) // Initial select: not found
+          .mockResolvedValueOnce({ // Recheck after 23505: Request A already confirmed product A with factor 12
+            data: { id: "equiv-a", produto_eyemobile_uuid: "p-a", fator_conversao: 12, confirmado_por_usuario: true },
+            error: null,
+          }),
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: null, error: { code: "23505", message: "duplicate key" } }),
+        }),
+      };
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-b", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-b" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return equivQuery;
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-b",
+        fatorConversao: 24,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("already_confirmed_different");
+    });
+
+    it("RACE-A2: insert com 23505 e recheck com mesmo produto e mesmo fator retorna idempotent", async () => {
+      const equivQuery = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn()
+          .mockResolvedValueOnce({ data: null, error: null })
+          .mockResolvedValueOnce({
+            data: { id: "equiv-a", produto_eyemobile_uuid: "p-a", fator_conversao: 12, confirmado_por_usuario: true },
+            error: null,
+          }),
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: null, error: { code: "23505", message: "duplicate key" } }),
+        }),
+      };
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-a", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-a" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return equivQuery;
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-a",
+        fatorConversao: 12,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(true);
+      expect((res as any).status).toBe("idempotent");
+      expect((res as any).equivalenciaId).toBe("equiv-a");
+    });
+
+    // ─── 2. CAS NO UPDATE DE EQUIVALÊNCIA NÃO CONFIRMADA (RACE-B) ───
+    it("RACE-B1: duas confirmações simultâneas em equivalência pendente — a perdedora detecta conflito CAS", async () => {
+      const equivQuery = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn()
+          .mockResolvedValueOnce({ // Encontrou registro não confirmado inicialmente
+            data: { id: "equiv-pending", produto_eyemobile_uuid: "p-old", fator_conversao: 1, confirmado_por_usuario: false },
+            error: null,
+          })
+          .mockResolvedValueOnce({ // Recheck após falha no CAS: outro usuário confirmou produto A fator 12
+            data: { id: "equiv-pending", produto_eyemobile_uuid: "p-a", fator_conversao: 12, confirmado_por_usuario: true },
+            error: null,
+          }),
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnThis(),
+          select: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), // 0 linhas atualizadas pelo CAS
+        }),
+      };
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-b", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-b" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return equivQuery;
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-b",
+        fatorConversao: 24,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("already_confirmed_different");
+    });
+
+    it("RACE-B2: falha no CAS mas recheck encontra mesmo produto e mesmo fator retorna idempotent", async () => {
+      const equivQuery = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn()
+          .mockResolvedValueOnce({
+            data: { id: "equiv-pending", produto_eyemobile_uuid: "p-old", fator_conversao: 1, confirmado_por_usuario: false },
+            error: null,
+          })
+          .mockResolvedValueOnce({
+            data: { id: "equiv-pending", produto_eyemobile_uuid: "p-a", fator_conversao: 12, confirmado_por_usuario: true },
+            error: null,
+          }),
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnThis(),
+          select: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+        }),
+      };
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-a", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-a" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return equivQuery;
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-a",
+        fatorConversao: 12,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(true);
+      expect((res as any).status).toBe("idempotent");
+      expect((res as any).equivalenciaId).toBe("equiv-pending");
+    });
+
+    // ─── 3. AUTORIZAÇÃO E VALIDAÇÃO DE PROPOSTA (AUTH-A a AUTH-F) ───
+    it("AUTH-A a AUTH-F: validação fail-closed estrita de proposta contra usuário, chat, tipo, status e expiração", () => {
+      const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(webhookPath, "utf-8");
+
+      // validarPropostaFase5 helper
+      expect(content).toContain("function validarPropostaFase5(");
+      expect(content).toContain("if (propRow.user_id !== expected.userId)");
+      expect(content).toContain("if (String(propRow.chat_id) !== String(expected.chatId))");
+      expect(content).toContain('if (propRow.tipo !== "vincular_produto_nf")');
+      expect(content).toContain('if (propRow.status !== "pendente")');
+      expect(content).toContain("if (isNaN(expTime) || expTime <= Date.now())");
+
+      // Lock atômico estrito no vp_ok
+      expect(content).toContain('.eq("user_id", cbUserId)');
+      expect(content).toContain('.eq("chat_id", Number(cbChatId))');
+      expect(content).toContain('.eq("tipo", "vincular_produto_nf")');
+      expect(content).toContain('.gt("expires_at", nowIso)');
+
+      // Cancel e Skip protegidos
+      expect(content).toContain('.eq("user_id", cbUserId)');
+      expect(content).toContain('.eq("chat_id", Number(cbChatId))');
+      expect(content).toContain('.eq("tipo", "vincular_produto_nf")');
+    });
+
+    // ─── 4. REVALIDAÇÃO DA NF E DO ITEM NO vp_ok ───
+    it("REVAL-A: vp_ok revalida NF, nf_item e produto_canônico diretamente no banco com valores autoritativos", () => {
+      const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(webhookPath, "utf-8");
+
+      // Revalidação da NF
+      expect(content).toContain('.from("notas_fiscais_compra")');
+      expect(content).toContain('.eq("id", propDados.nf_id)');
+      expect(content).toContain('.eq("user_id", cbUserId)');
+
+      // Revalidação do item
+      expect(content).toContain('.from("nf_itens")');
+      expect(content).toContain('.eq("id", propDados.nf_item_id)');
+      expect(content).toContain('.eq("nf_id", nfRow.id)');
+
+      // Revalidação do produto canônico no tenant com checagem de eyemobile_id
+      expect(content).toContain('.from("produtos_eyemobile")');
+      expect(content).toContain('.eq("id", prodUuid)');
+      expect(content).toContain('.eq("workspace_id", wsId)');
+      expect(content).toContain('.eq("user_id", cbUserId)');
+      expect(content).toContain('!prodCanonical.eyemobile_id || String(prodCanonical.eyemobile_id).trim() === ""');
+
+      // Parâmetros autoritativos passados
+      expect(content).toContain("cnpjFornecedor: nfRow.cnpj_fornecedor");
+      expect(content).toContain("codigoProdutoFornecedor: itemRow.codigo_produto");
+      expect(content).toContain("descricaoFornecedor: itemRow.descricao");
+      expect(content).toContain("unidadeFornecedor: itemRow.unidade");
+    });
+
+    // ─── 5. PRODUTO SEM eyemobile_id (MISSING REMOTE PRODUCT ID) ───
+    it("REMOTE-ID-1: searchProductCandidates filtra produtos com eyemobile_id nulo ou vazio", async () => {
+      const mockClient = {
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          not: vi.fn().mockReturnThis(),
+          then: vi.fn().mockImplementation((resolve) =>
+            resolve({
+              data: [
+                { id: "p1", workspace_id: WORKSPACE_ID, user_id: USER_ID, descricao: "PROD VALIDO", eyemobile_id: "eye-123" },
+                { id: "p2", workspace_id: WORKSPACE_ID, user_id: USER_ID, descricao: "PROD SEM REMOTE", eyemobile_id: null },
+                { id: "p3", workspace_id: WORKSPACE_ID, user_id: USER_ID, descricao: "PROD VAZIO", eyemobile_id: "   " },
+              ],
+              error: null,
+            })
+          ),
+        })),
+      };
+
+      const res = await searchProductCandidates(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        descricaoQuery: "PROD",
+      });
+
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.candidates.length).toBe(1);
+        expect(res.candidates[0].id).toBe("p1");
+        expect(res.candidates[0].eyemobileId).toBe("eye-123");
+      }
+    });
+
+    it("REMOTE-ID-2: salvarEquivalenciaConfirmada rejeita produto canônico sem eyemobile_id válido com missing_remote_product_id", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-no-eye", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "" },
+                error: null,
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-no-eye",
+        fatorConversao: 1,
+        unidadeFornecedor: "UN",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("missing_remote_product_id");
+    });
+
+    // ─── 6. ALINHAMENTO DE FATOR COM evaluateStockStatus (FACTOR-A a FACTOR-E) ───
+    it("FACTOR-A: unidade UN com fator 1 é permitida", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-un", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-un" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              insert: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnThis(),
+                single: vi.fn().mockResolvedValue({ data: { id: "equiv-un-1" }, error: null }),
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-un",
+        fatorConversao: 1,
+        unidadeFornecedor: "UN",
+      });
+
+      expect(res.success).toBe(true);
+    });
+
+    it("FACTOR-B: unidade UN com fator 12 é rejeitada como invalid_input", async () => {
+      const mockClient = { from: vi.fn() };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-un",
+        fatorConversao: 12,
+        unidadeFornecedor: "UN",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("invalid_input");
+    });
+
+    it("FACTOR-C: unidade PCT com fator 10 é rejeitada enquanto Fase 4 não suportar conversão", async () => {
+      const mockClient = { from: vi.fn() };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-pct",
+        fatorConversao: 10,
+        unidadeFornecedor: "PCT",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("invalid_input");
+    });
+
+    it("FACTOR-D: unidade CX com fator 12 é permitida", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-cx", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-cx" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              insert: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnThis(),
+                single: vi.fn().mockResolvedValue({ data: { id: "equiv-cx-1" }, error: null }),
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-cx",
+        fatorConversao: 12,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(true);
+    });
+
+    it("FACTOR-E: unidade CX com fator 1 é rejeitada como invalid_input", async () => {
+      const mockClient = { from: vi.fn() };
+
+      const res = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-cx",
+        fatorConversao: 1,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(res.success).toBe(false);
+      expect((res as any).code).toBe("invalid_input");
     });
   });
 });
