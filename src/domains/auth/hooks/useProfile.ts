@@ -34,8 +34,16 @@ export const useProfile = () => {
 
       if (supabaseError) {
         logger.error('useProfile', 'Erro ao carregar perfil', { error: supabaseError.message });
-        if (supabaseError.message.includes('column') || supabaseError.message.includes('does not exist')) {
-          logger.warn('useProfile', 'Schema divergente detectado, usando perfil defensivo de fallback');
+        const isColumnSchemaMismatch = 
+          supabaseError.code === '42703' || 
+          supabaseError.code === 'PGRST204' || 
+          (typeof supabaseError.message === 'string' && (
+            (supabaseError.message.toLowerCase().includes('column') && supabaseError.message.toLowerCase().includes('does not exist')) ||
+            supabaseError.message.toLowerCase().includes('in the schema cache')
+          ));
+
+        if (isColumnSchemaMismatch) {
+          logger.warn('useProfile', 'Discrepância de coluna no schema detectada, usando perfil defensivo de fallback');
           setProfile({
             id: user.id,
             user_id: user.id,
