@@ -85,10 +85,42 @@ FOR ALL TO authenticated
 USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
 WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
 
+ALTER TABLE IF EXISTS public.metas_investimento ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own metas_investimento" ON public.metas_investimento;
+CREATE POLICY "Users manage own metas_investimento" ON public.metas_investimento
+FOR ALL TO authenticated
+USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
+WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
+
+ALTER TABLE IF EXISTS public.historico_rendimentos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own historico" ON public.historico_rendimentos;
+CREATE POLICY "Users manage own historico" ON public.historico_rendimentos
+FOR ALL TO authenticated
+USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
+WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
+
+ALTER TABLE IF EXISTS public.proventos_esperados ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own proventos" ON public.proventos_esperados;
+CREATE POLICY "Users manage own proventos" ON public.proventos_esperados
+FOR ALL TO authenticated
+USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
+WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
+
+ALTER TABLE IF EXISTS public.configuracoes_investimentos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own configuracoes_investimentos" ON public.configuracoes_investimentos;
+CREATE POLICY "Users manage own configuracoes_investimentos" ON public.configuracoes_investimentos
+FOR ALL TO authenticated
+USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
+WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
+
 -- 6. Garantir RLS ativo em todas as relacoes sensiveis
 ALTER TABLE IF EXISTS public.divipay_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.eyemobile_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.senha_investimentos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.metas_investimento ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.historico_rendimentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.proventos_esperados ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.configuracoes_investimentos ENABLE ROW LEVEL SECURITY;
 
 COMMIT;

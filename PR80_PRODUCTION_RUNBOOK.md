@@ -12,7 +12,7 @@
 * **Repositório:** `heitorfragavd-prog/wallet-App`
 * **Pull Request:** `#80` (Status: `OPEN`, `isDraft: true`, `mergeable: MERGEABLE`)
 * **Branch de Segurança:** `security/comprehensive-audit-hardening`
-* **HEAD SHA Atual:** `34a687c0e98d146c9b28c9f8c9e246fc4f91909a`
+* **HEAD SHA Atual:** `a063ffbb81758cebb8cf9e61186582795cfcd259`
 * **Base SHA Atual (`origin/develop`):** `0aa3825e63c3d652db99aef603d359e850ab8278`
 * **Base SHA Histórica:** `8ae7c048bd325898d86445f7bf210f4fbf73c6e9`
 * **Commit de Integração com develop:** `27d7375c4d3575fd88399366c95d175b36cd7a54` (Merge `--no-ff`, zero conflitos textuais)
@@ -116,126 +116,176 @@ O frontend foi completamente auditado e não depende mais de privilégios de lei
 
 ---
 
-## 6. Inventário Real de Secrets
+## 6. Modelo de Credenciais do Supabase e Estratégia de API Keys
+
+### 6.1 Distinções Arquiteturais Fundamentais no Supabase
+
+| Conceito | Tipo de Token / Chave | Onde é Enviada | Comportamento de Verificação | Impacto ao Rotacionar |
+| :--- | :--- | :--- | :--- | :--- |
+| **Legacy `anon` Key** | JWT assinado com JWT Secret legado (`role: 'anon'`) | Header `apikey` ou `Authorization: Bearer` | Validado via assinatura HMAC-SHA256 do JWT Secret | Muda a chave anônima do frontend (exige novo build). |
+| **Legacy `service_role` Key** | JWT assinado com JWT Secret legado (`role: 'service_role'`) | Header `apikey` ou `Authorization: Bearer` | Validado via assinatura do JWT Secret; bypassa RLS no PostgREST | Quebra todas as Edge Functions se a nova chave não for propagada antes. |
+| **Nova Secret API Key (`sb_secret_...`)** | Chave opaca de alta entropia | Header `apikey` (Gateway) | Validada no API Gateway do Supabase; **NÃO É JWT** | Não afeta sessões de usuários; permite múltiplas chaves ativas simultaneamente. |
+| **Nova Publishable API Key (`sb_publishable_...`)** | Chave opaca pública | Header `apikey` (Gateway) | Validada no API Gateway do Supabase; substitui o anon legado | Não afeta sessões de usuários; substituição suave. |
+| **Legacy JWT Signing Secret** | Segredo simétrico (HMAC-SHA256) | Interno do Supabase Auth (GoTrue) e PostgREST | Assina e valida **todos** os JWTs de usuários, refresh tokens, anon e service_role | **CRÍTICO:** Invalida instantaneamente **todas** as sessões ativas de usuários, todos os refresh tokens e regenera anon/service_role! |
+| **Novo Sistema de JWT Signing Keys** | Par de chaves assimétricas (ECDSA/EdDSA) | Supabase Auth com JWKS endpoint | Suporta rotação suave sem derrubar sessões ativas | Rotação sem impacto em sessões ativas. |
+
+### 6.2 Auditoria do Código Real: Consumo de `SUPABASE_SERVICE_ROLE_KEY` e Autenticação Entre Serviços
+
+A auditoria estrita do código-fonte comprovou que:
+1. **Zero Uso do Novo Modelo:** O repositório **NÃO possui nenhuma ocorrência** de `SUPABASE_SECRET_KEYS` ou `SUPABASE_PUBLISHABLE_KEYS`.
+2. **Cliente PostgREST Server-Side:** Todas as 13 Edge Functions instanciam o cliente administrativo através de:
+   ```typescript
+   createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!)
+   ```
+3. **Autenticação Inter-Serviços por Comparação Estrita de Chave:** Em 4 Edge Functions críticas, o código realiza verificação manual de igualdade de strings com a variável de ambiente:
+   * `supabase/functions/telegram-webhook/index.ts:766`: `const isServiceRole = Boolean(supabaseServiceKey && token === supabaseServiceKey);`
+   * `supabase/functions/openai-proxy/index.ts:1191`: `const isServiceRoleCall = Boolean(supabaseServiceKey && jwt === supabaseServiceKey && body.user_id);`
+   * `supabase/functions/divipay-api/index.ts:209`: `const isServiceRole = Boolean(serviceRoleKey && token === serviceRoleKey);`
+   * `supabase/functions/eyemobile-sync/index.ts:180`: `const isServiceRole = Boolean(serviceRoleKey && token === serviceRoleKey);`
+4. **Enforcement em Testes Unitários:** A suíte de testes `src/core/security/edge-functions-auth.test.ts` (linhas 26, 41, 51) valida expressamente a presença dessa comparação de igualdade estrita:
+   ```typescript
+   expect(content).toMatch(/serviceRoleKey\s*&&\s*token\s*===\s*serviceRoleKey/);
+   expect(content).toMatch(/supabaseServiceKey\s*&&\s*jwt\s*===\s*supabaseServiceKey/);
+   expect(content).toMatch(/token\s*===\s*supabaseServiceKey/);
+   ```
+
+> [!DANGER]
+> **INCOMPATIBILIDADE IMEDIATA COM `sb_secret_...`:**
+> Se um operador injetar uma nova Secret API Key (`sb_secret_...`) na variável `SUPABASE_SERVICE_ROLE_KEY`, ou tentar passá-la como `Authorization: Bearer <sb_secret>`, ocorrerão duas falhas graves imediatas:
+> 1. As Secret API Keys são chaves opacas e **não contêm claims JWT**; chamadas que dependem de inspeção de payload ou de validação JWT falharão.
+> 2. Chamadas inter-serviços que esperam o JWT de service_role padrão para a verificação `token === supabaseServiceKey` falharão caso o chamador envie formato diferente daquele esperado em runtime.
+> 3. Migrar toda a arquitetura para `SUPABASE_SECRET_KEYS` exige refatorar múltiplos consumidores, chamadores de cron, testes e adaptadores de autenticação.
+
+### 6.3 Auditoria no Histórico Git: Exposição de `service_role` e `JWT Secret`
+
+Foi realizada uma auditoria criptográfica completa em todo o histórico de commits do Git:
+* `git log -p -S "SUPABASE_SERVICE_ROLE_KEY"`: Todos os commits no histórico utilizam exclusivamente referências a variáveis de ambiente (`Deno.env.get` ou `process.env`). **Zero chaves reais atribuídas.**
+* `git log -p -G "eyJhbGci"`: Foram localizadas 16 ocorrências no histórico, todas categorizadas como:
+  * Mocks sintéticos de teste com assinaturas propositalmente falsas (`eyemobile-sync-product-identity.test.ts`), criados para validar que o sistema rejeita JWTs forjados.
+  * Chaves públicas de demo (`iss: supabase-demo`) em workflows de containers CI locais.
+  * Placeholders documentais (`your-anon-key-here`).
+* `git log -S "JWT_SECRET"`: **Zero ocorrências no histórico.**
+* `.env` / Arquivos de ambiente: Apenas `.env.example` com valores mock (`your_pluggy_client_secret_here`, etc.) foi commitado.
+
+**Classificação Oficial de Exposição:**
+> ### `SERVICE_ROLE_EXPOSURE_NOT_CONFIRMED`
+> Não há nenhuma evidência de que a `SUPABASE_SERVICE_ROLE_KEY` real de produção ou o `JWT Secret` tenham sido commitados ou expostos no repositório Git.
+
+### 6.4 Declarações Estratégicas Obrigatórias
+
+> [!IMPORTANT]
+> ### `JWT SIGNING KEY ROTATION OUT OF SCOPE FOR PR #80 DEPLOY`
+> A rotação do JWT Signing Secret legado do Supabase **NÃO DEVE SER EXECUTADA** nesta implantação. Rotacionar esse segredo derrubaria todas as sessões ativas de usuários em produção e invalidaria refresh tokens desnecessariamente, sem que haja nenhuma evidência de comprometimento dessa chave.
+
+> [!TIP]
+> ### `ESTRATÉGIA APROVADA: KEEP LEGACY SERVICE_ROLE FOR THIS DEPLOY`
+> Para a implantação do PR #80 em produção:
+> 1. **Manter a `SUPABASE_SERVICE_ROLE_KEY` legada ativa e inalterada**, assegurando 100% de compatibilidade com o código testado e as 13 Edge Functions.
+> 2. **Não alterar o JWT Secret no painel do Supabase.**
+> 3. **Planejamento Futuro:** A migração do projeto para o novo padrão de chaves (`sb_secret_...` e `SUPABASE_SECRET_KEYS`) será realizada em um PR dedicado e separado, após a consolidação segura do PR #80.
+
+---
+
+## 7. Inventário Real de Secrets
 
 > [!CAUTION]
 > Nenhum valor de secret é exibido neste runbook. Os nomes abaixo correspondem exatamente aos identificadores consumidos pelo código.
 
 | Nome do Secret | Serviço / Plataforma | Consumidores | Status de Rotação | Momento da Rotação |
 | :--- | :--- | :--- | :--- | :--- |
-| `DATABASE_URL` (Senha do Postgres) | Supabase Database | Conexões administrativas diretas, scripts de migração, poolers externos | **ROTATION REQUIRED** (Histórico) | **Passo 1** da Janela de Rotação |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Auth / API | Todas as Edge Functions (`validar-senha`, `eyemobile-sync`, `telegram-webhook`, etc.) | **ROTATION REQUIRED** (Auditoria) | **Passo 2** da Janela de Rotação |
-| `OPENAI_API_KEY` | OpenAI | `openai-proxy`, `telegram-webhook`, `wallet-ai-orchestrator`, `categorizar-ia`, `ia-deposito` | **ROTATION REQUIRED** (Histórico) | **Passo 3** da Janela de Rotação |
-| `GEMINI_API_KEY` / `GEMINI_API_KEY_BACKUP` | Google Cloud / AI Studio | `telegram-webhook` (OCR DANFE), `wallet-ai-orchestrator` | **ROTATION REQUIRED** (Auditoria) | **Passo 4** da Janela de Rotação |
-| `TELEGRAM_BOT_TOKEN` | Telegram BotFather | `telegram-webhook`, `sefaz-sync`, `wallet-public-api`, `telegram-notificador-cron` | **ROTATION REQUIRED** (Histórico) | **Passo 5** da Janela de Rotação |
-| `TELEGRAM_WEBHOOK_SECRET` | Telegram Webhook API | `telegram-webhook` (validação de cabeçalho) | **ROTATION REQUIRED** (Auditoria) | **Passo 5** da Janela de Rotação |
-| `CRON_SECRET` | Supabase Cron / Agendador | `sefaz-sync`, `cron-alertas-investimentos` | **ROTATION REQUIRED** (Auditoria) | **Passo 6** da Janela de Rotação |
-| `divipay_config.client_secret` | DiviPay (Por Workspace) | Armazenado em tabela Postgres, lido exclusivamente por `divipay-api` | **ROTATION REQUIRED** (Histórico) | **Passo 7** da Janela de Rotação (no banco/UI) |
-| `eyemobile_config.secret_key` | EyeMobile (Por Workspace) | Armazenado em tabela Postgres, lido exclusivamente por `eyemobile-sync` | **ROTATION REQUIRED** (Histórico) | **Passo 7** da Janela de Rotação (no banco/UI) |
-| `SUPABASE_ANON_KEY` | Supabase Platform | Frontend (`VITE_SUPABASE_ANON_KEY`), Edge Functions | Rotação Opcional / Apenas se JWT Secret mudar | Concomitante com JWT Secret (se aplicável) |
+| `DATABASE_URL` (Senha do Postgres) | Supabase Database | Conexões administrativas diretas, scripts de migração, poolers externos | **ROTATION REQUIRED** (Histórico de logs) | **Passo 1** da Janela de Rotação |
+| `OPENAI_API_KEY` | OpenAI | `openai-proxy`, `telegram-webhook`, `wallet-ai-orchestrator`, `categorizar-ia`, `ia-deposito` | **ROTATION REQUIRED** (Histórico) | **Passo 2** da Janela de Rotação |
+| `GEMINI_API_KEY` / `GEMINI_API_KEY_BACKUP` | Google Cloud / AI Studio | `telegram-webhook` (OCR DANFE), `wallet-ai-orchestrator` | **ROTATION REQUIRED** (Auditoria) | **Passo 3** da Janela de Rotação |
+| `TELEGRAM_BOT_TOKEN` | Telegram BotFather | `telegram-webhook`, `sefaz-sync`, `wallet-public-api`, `telegram-notificador-cron` | **ROTATION REQUIRED** (Histórico) | **Passo 4** da Janela de Rotação |
+| `TELEGRAM_WEBHOOK_SECRET` | Telegram Webhook API | `telegram-webhook` (validação de cabeçalho) | **ROTATION REQUIRED** (Auditoria) | **Passo 4** da Janela de Rotação |
+| `CRON_SECRET` | Supabase Cron / Agendador | `sefaz-sync`, `cron-alertas-investimentos` | **ROTATION REQUIRED** (Auditoria) | **Passo 5** da Janela de Rotação |
+| `divipay_config.client_secret` | DiviPay (Por Workspace) | Armazenado em tabela Postgres, lido exclusivamente por `divipay-api` | **ROTATION REQUIRED** (Histórico) | **Passo 6** da Janela de Rotação (no banco/UI) |
+| `eyemobile_config.secret_key` | EyeMobile (Por Workspace) | Armazenado em tabela Postgres, lido exclusivamente por `eyemobile-sync` | **ROTATION REQUIRED** (Histórico) | **Passo 6** da Janela de Rotação (no banco/UI) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Platform | Edge Functions | **PRESERVAR INTACTA** (Estratégia A - Sem exposição confirmada) | **NÃO ALTERAR NESTE DEPLOY** |
+| `JWT Signing Secret` | Supabase Auth (GoTrue) | Sessões de usuários e refresh tokens | **OUT OF SCOPE** (Preserva sessões ativas) | **NÃO ALTERAR NESTE DEPLOY** |
+| `SUPABASE_ANON_KEY` | Supabase Platform | Frontend (`VITE_SUPABASE_ANON_KEY`), Edge Functions | **PRESERVAR INTACTA** (Associada ao JWT Secret mantido) | **NÃO ALTERAR NESTE DEPLOY** |
 | `PAYMENT_WEBHOOK_SECRET` / `PEPPER_WEBHOOK_SECRET` | Gateways de Pagamento | `payment-webhook`, `pepper-webhook` | Verificar integridade | Conforme política de rotatividade |
 
 ---
 
-## 7. Dependências e Ordem Real de Rotação das Credenciais
-
-Para evitar indisponibilidade desnecessária (downtime) e garantir que nenhuma credencial nova seja logada ou exposta em código antigo, a rotação deve ocorrer em ordem estrita de dependência:
+## 8. Dependências e Ordem Real de Rotação das Credenciais (Com Análise de Zero Downtime)
 
 ```mermaid
 graph TD
-    A["1. Senha do Banco (Postgres)"] --> B["2. Service Role Key / JWT"]
-    B --> C["3. OpenAI API Key"]
-    C --> D["4. Gemini API Key"]
-    D --> E["5. Telegram Bot Token & Webhook Secret"]
-    E --> F["6. Cron Secret"]
-    F --> G["7. Credenciais de Parceiros (DiviPay & EyeMobile)"]
+    A["1. Senha do Banco (Postgres)"] --> B["2. OpenAI API Key"]
+    B --> C["3. Gemini API Key"]
+    C --> D["4. Telegram Bot Token & Webhook Secret"]
+    D --> E["5. Cron Secret"]
+    E --> F["6. Credenciais de Parceiros (DiviPay & EyeMobile)"]
 ```
 
-### Detalhamento por Credencial
+### Análise de Zero Downtime Real
 
-#### 1. Senha do Banco de Dados (`DATABASE_URL` / `postgres`)
-1. **O que rotacionar:** Senha master do usuário `postgres` no Supabase.
-2. **Onde configurar:** Painel do Supabase -> *Project Settings -> Database -> Database Password*.
-3. **Quem depende:** Scripts administrativos de migração (`psql`), conexões diretas de CI e ferramentas de administração externa. *(Nota: As Edge Functions acessam o PostgREST via HTTP e NÃO dependem diretamente da senha do Postgres)*.
-4. **O que pode parar se houver erro:** Execuções manuais de `psql` e migrações. O tráfego de usuários no frontend e Edge Functions continua ativo via PostgREST.
-5. **Como testar imediatamente:**
+| Credencial | É Possível Zero Downtime? | Evidência Técnica | Procedimento Operacional |
+| :--- | :--- | :--- | :--- |
+| **1. Senha do Postgres** | **SIM** para clientes web/mobile; **Janela controlada** para conexões diretas psql. | As Edge Functions e o Frontend usam PostgREST via HTTPS e não usam a porta 5432 nem connection string direta. | Alterar no painel do Supabase. Atualizar scripts administrativos e connection strings externas imediatamente após. |
+| **2. OpenAI API Key** | **SIM (100% Zero Downtime)** | A OpenAI permite múltiplas chaves ativas simultaneamente na organização. | 1. Criar nova chave.<br>2. `supabase secrets set OPENAI_API_KEY=...`<br>3. Testar `openai-proxy`.<br>4. Excluir chave antiga na OpenAI. |
+| **3. Gemini API Key** | **SIM (100% Zero Downtime)** | O Google AI Studio / GCP permite múltiplas chaves ativas simultaneamente. | 1. Criar nova chave.<br>2. `supabase secrets set GEMINI_API_KEY=...`<br>3. Testar extração.<br>4. Excluir chave antiga no Google. |
+| **4. Telegram Bot Token & Secret** | **Downtime Quase Zero (< 30 segundos, sem perda de dados)** | O comando `/revoke` no BotFather invalida o token antigo no ato. No entanto, o Telegram enfileira as mensagens pendentes e reenvia automaticamente assim que o webhook responder. | Deixar comandos `supabase secrets set` e `curl setWebhook` preparados no terminal. Executar em lote logo após receber o novo token no BotFather. |
+| **5. Cron Secret** | **SIM (100% Zero Downtime)** | Execução agendada periódica. | Configurar o novo secret no Supabase e no agendador durante o intervalo entre execuções agendadas. |
+| **6. DiviPay & EyeMobile** | **SIM (100% Zero Downtime)** | Portais parceiros permitem emitir novas credenciais antes de revogar as antigas. | Gerar credenciais novas nos portais parceiros -> Salvar no Wallet App -> Clicar em "Testar Conexão" -> Excluir credenciais antigas nos portais parceiros. |
+
+### Detalhamento Passo a Passo da Rotação
+
+#### Passo 1: Senha do Banco de Dados (`DATABASE_URL` / `postgres`)
+1. **Onde configurar:** Painel do Supabase -> *Project Settings -> Database -> Database Password*.
+2. **Quem depende:** Scripts administrativos manuais de migração (`psql`) e poolers externos.
+3. **Teste imediato:**
    ```bash
    psql -h <SUPABASE_HOST> -U postgres -d postgres -c "SELECT current_database(), now();"
    ```
-6. **Quando invalidar a antiga:** Imediatamente (a troca no painel do Supabase invalida a senha antiga atomicamente).
 
-#### 2. Supabase Service Role Key (`SUPABASE_SERVICE_ROLE_KEY`)
-1. **O que rotacionar:** `SUPABASE_SERVICE_ROLE_KEY` (associada ao JWT Secret da plataforma).
-2. **Onde configurar:** Painel do Supabase -> *Project Settings -> API -> Generate new Secret*. Atualizar imediatamente os secrets das Edge Functions via Supabase CLI (`supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...`) e variáveis no GitHub Actions.
-3. **Quem depende:** TODAS as Edge Functions (`validar-senha`, `eyemobile-sync`, `telegram-webhook`, `openai-proxy`, etc.).
-4. **O que pode parar se houver erro:** As Edge Functions perdem a capacidade de bypassar RLS e falham com `401 Unauthorized` ou `403 Forbidden`.
-5. **Como testar imediatamente:** Disparar um request autenticado para `validar-senha` ou `test-webhook` e verificar resposta HTTP `200` ou payload esperado.
-6. **Quando invalidar a antiga:** Configurar os novos secrets nas Edge Functions antes de desativar a chave legada.
-
-#### 3. OpenAI API Key (`OPENAI_API_KEY`)
-1. **O que rotacionar:** Chave da organização OpenAI da plataforma.
-2. **Onde configurar:** Painel da OpenAI -> *API Keys -> Create new secret key*. Injetar no Supabase via:
+#### Passo 2: OpenAI API Key (`OPENAI_API_KEY`)
+1. **Onde configurar:** Painel da OpenAI -> *API Keys -> Create new secret key*.
+2. **Injetar no Supabase:**
    ```bash
    supabase secrets set OPENAI_API_KEY="sk-proj-NOVA_CHAVE..."
    ```
-3. **Quem depende:** `openai-proxy`, `ia-deposito`, `categorizar-ia`, `telegram-webhook`, `wallet-ai-orchestrator`.
-4. **O que pode parar se houver erro:** Roteamento de IA, categorização automática e comandos inteligentes do Telegram.
-5. **Como testar imediatamente:** Invocar `openai-proxy` com payload de teste simples.
-6. **Quando invalidar a antiga:** Após o teste positivo da nova chave, revogar a chave antiga no painel da OpenAI.
+3. **Teste imediato:** Fazer chamada de teste na rota de categorização ou chat.
+4. **Invalidar antiga:** Deletar chave legada no painel da OpenAI após validação.
 
-#### 4. Google Gemini API Key (`GEMINI_API_KEY`)
-1. **O que rotacionar:** Chave do Google AI Studio / Google Cloud.
-2. **Onde configurar:** Google AI Studio -> *Get API Key -> Create API Key*. Injetar via:
+#### Passo 3: Google Gemini API Key (`GEMINI_API_KEY`)
+1. **Onde configurar:** Google AI Studio -> *Get API Key -> Create API Key*.
+2. **Injetar no Supabase:**
    ```bash
    supabase secrets set GEMINI_API_KEY="AIzaSyNOVA_CHAVE..."
    ```
-3. **Quem depende:** `telegram-webhook` (extração DANFE e boletos) e `wallet-ai-orchestrator`.
-4. **O que pode parar se houver erro:** Processamento de imagens de DANFE no bot do Telegram.
-5. **Como testar imediatamente:** Envio de payload sintético ou imagem de teste no chat do bot do Telegram.
-6. **Quando invalidar a antiga:** Após o teste positivo, deletar a chave antiga no Google Cloud Console.
+3. **Teste imediato:** Enviar imagem de teste para o bot do Telegram.
+4. **Invalidar antiga:** Deletar chave legada no Google Cloud Console após validação.
 
-#### 5. Telegram Bot Token & Webhook Secret
-1. **O que rotacionar:** `TELEGRAM_BOT_TOKEN` e `TELEGRAM_WEBHOOK_SECRET`.
-2. **Onde configurar:**
-   * Token: Conversar com `@BotFather` no Telegram -> `/revoke` -> Obter novo token.
-   * Webhook Secret: Gerar string aleatória de 32 caracteres hexadecimais:
+#### Passo 4: Telegram Bot Token & Webhook Secret
+1. **Onde configurar:**
+   * Gerar novo webhook secret:
      ```bash
      openssl rand -hex 32
      ```
-   * Injetar nas Edge Functions:
+   * No `@BotFather`, emitir `/revoke` para obter o novo token.
+   * Imediatamente executar:
      ```bash
      supabase secrets set TELEGRAM_BOT_TOKEN="NOVO_TOKEN" TELEGRAM_WEBHOOK_SECRET="NOVO_SECRET"
-     ```
-   * Atualizar o webhook junto à API do Telegram:
-     ```bash
      curl -F "url=https://<PROJECT>.supabase.co/functions/v1/telegram-webhook" \
           -F "secret_token=NOVO_SECRET" \
           https://api.telegram.org/botNOVO_TOKEN/setWebhook
      ```
-3. **Quem depende:** `telegram-webhook`, `sefaz-sync`, `wallet-public-api`.
-4. **O que pode parar se houver erro:** O bot do Telegram para de receber atualizações e eventos.
-5. **Como testar imediatamente:** Enviar `/start` para o bot no Telegram e verificar se a resposta de boas-vindas é recebida em < 2 segundos.
-6. **Quando invalidar a antiga:** O `/revoke` no BotFather invalida o token antigo no ato; o `setWebhook` substitui o endpoint e secret ativos instantaneamente.
+2. **Teste imediato:** Enviar `/start` para o bot e verificar resposta imediata.
 
-#### 6. Cron Secret (`CRON_SECRET`)
-1. **O que rotacionar:** Token de invocação dos jobs agendados.
-2. **Onde configurar:** Gerar token com `openssl rand -hex 32`. Injetar via `supabase secrets set CRON_SECRET=...` e atualizar no disparador agendado (pg_cron / GitHub Actions / agendador externo).
-3. **Quem depende:** `sefaz-sync`, `cron-alertas-investimentos`.
-4. **O que pode parar se houver erro:** Sincronização automática noturna e alertas agendados de proventos.
-5. **Como testar imediatamente:** Fazer uma chamada curl manual enviando o header `Authorization: Bearer NOVO_CRON_SECRET`.
-6. **Quando invalidar a antiga:** Imediatamente após atualizar o agendador.
+#### Passo 5: Cron Secret (`CRON_SECRET`)
+1. **Onde configurar:** Gerar token com `openssl rand -hex 32`. Injetar via `supabase secrets set CRON_SECRET=...` e atualizar no disparador agendado.
+2. **Teste imediato:** Executar chamada curl enviando o header `Authorization: Bearer <NOVO_CRON_SECRET>`.
 
-#### 7. Credenciais de Parceiros em Banco (`divipay_config` e `eyemobile_config`)
-1. **O que rotacionar:** `client_secret` da DiviPay e `secret_key` da EyeMobile por workspace.
-2. **Onde configurar:** No portal de desenvolvedor de cada parceiro, emitir novas credenciais. Atualizar via tela de Configurações no Wallet App (ou via comando SQL executado com `service_role` pelo administrador).
-3. **Quem depende:** `divipay-api`, `eyemobile-sync`.
-4. **O que pode parar se houver erro:** Emissão de Pix/cobranças DiviPay ou importação automática de estoque/vendas EyeMobile para o tenant.
-5. **Como testar imediatamente:** Clicar em "Testar Conexão" no formulário de cada integração no frontend (ou invocar as funções de teste).
-6. **Quando invalidar a antiga:** Somente após o teste da nova credencial retornar sucesso no Wallet App, revogar a credencial no portal do parceiro.
+#### Passo 6: Credenciais de Parceiros em Banco (`divipay_config` e `eyemobile_config`)
+1. **Onde configurar:** No portal de desenvolvedor de cada parceiro, emitir novas credenciais. Atualizar via tela de Configurações no Wallet App (ou via comando SQL administrativo com `service_role`).
+2. **Teste imediato:** Clicar em "Testar Conexão" no formulário de cada integração.
+3. **Invalidar antiga:** Somente após o teste positivo no Wallet App, revogar as credenciais no portal do parceiro.
 
 ---
 
-## 8. Backup e Snapshot Pré-Deploy
+## 9. Backup e Snapshot Pré-Deploy
 
 Antes de iniciar qualquer intervenção em produção, execute este roteiro para registrar e congelar o estado exato da infraestrutura.
 
@@ -301,7 +351,7 @@ supabase secrets list > "$SNAPSHOT_DIR/secrets_names_only.txt"
 
 ---
 
-## 9. Sequência de Rollout A → B → C
+## 10. Sequência de Rollout A → B → C
 
 A sequência de implantação deve obedecer com rigor cirúrgico a estratégia phased *Expand and Contract*:
 
@@ -318,7 +368,7 @@ A sequência de implantação deve obedecer com rigor cirúrgico a estratégia p
    [ VALIDAÇÃO B (SMOKE TESTS) ] ───────────► Falha? Aborta (Rollback B)
            │
            ▼
-[ ROTAÇÃO DE CREDENCIAIS (ORDEM SEGURA) ]
+[ ROTAÇÃO DE CREDENCIAIS (Passos 1 a 6) ]
            │
            ▼
    [ REVALIDAÇÃO DE INTEGRAÇÕES ] ──────────► Falha? Reverte credencial afetada
@@ -333,27 +383,20 @@ A sequência de implantação deve obedecer com rigor cirúrgico a estratégia p
 [ JANELA DE OBSERVAÇÃO MONITORADA ]
 ```
 
-### Confirmação e Justificativa Técnica da Ordem
-Esta sequência é **inquestionavelmente a única ordem segura**:
-1. **Fase A antes de B:** Cria tabelas (`rate_limits`, `investimentos_sessions`) e RPCs seguras sem quebrar o código antigo. Se a Fase B fosse implantada antes da A, as novas Edge Functions falhariam imediatamente buscando tabelas e RPCs inexistentes.
-2. **Fase B antes de C:** Adapta o Frontend e as Edge Functions para consumirem colunas seguras e RPCs. Se a Fase C (que executa `REVOKE SELECT` em `client_secret`, `secret_key` e `senha_hash`) fosse executada antes da B, a aplicação legada em produção sofreria indisponibilidade catastrófica imediata com erros `42501 (insufficient_privilege)`.
-3. **Rotação entre B e C:** Garante que as novas credenciais só circulem em código já blindado contra SSRF e vazamento de logs, antes que o banco passe a bloquear em definitivo as leituras legadas.
-4. **Fase C com Gating Transacional Único:** A Fase C só é aplicada após a Fase B ser testada e com a flag `wallet.deploy_phase_b_completed = 'true'` em transação atômica.
-
 ---
 
-## 10. Smoke Tests Operacionais Detalhados
+## 11. Smoke Tests Operacionais Detalhados
 
 Após cada etapa, os seguintes testes devem ser executados e validados:
 
-### 10.1 Autenticação e Perfil
+### 11.1 Autenticação e Perfil
 - [ ] **Login Correto:** Usuário existente realiza login com email/senha válidos; recebe JWT com `session_id`/`jti`.
 - [ ] **Login Inválido:** Credencial incorreta retorna 400 com mensagem amigável sem expor detalhes internos.
 - [ ] **Refresh de Sessão:** Token JWT é renovado sem perda de estado.
 - [ ] **Logout:** Encerra sessão e limpa credenciais locais.
 - [ ] **Proteção de Role:** Usuário comum tenta alterar `role` para `admin` via payload no perfil; trigger `protect_profiles_role` bloqueia e perfil permanece como `user`.
 
-### 10.2 Investimentos
+### 11.2 Investimentos
 - [ ] **Tela Bloqueada Inicialmente:** Ao acessar a rota de Investimentos, a interface exibe prompt de senha e nenhum dado patrimonial é retornado.
 - [ ] **Senha Correta:** Ao digitar a senha cadastrada, `validar-senha` retorna sucesso e a tabela de investimentos é exibida.
 - [ ] **Senha Incorreta:** Retorna erro de senha inválida e incrementa tentativas falhas.
@@ -361,32 +404,32 @@ Após cada etapa, os seguintes testes devem ser executados e validados:
 - [ ] **Acesso Direto por API Bloqueado:** Requisição direta via PostgREST `GET /rest/v1/investimentos` sem desbloqueio de sessão retorna array vazio ou erro de política RLS.
 - [ ] **Expiração de Sessão:** Após o tempo de expiração da sessão de investimentos (30 min), a tela volta a exigir senha e o RLS bloqueia novas consultas.
 
-### 10.3 EyeMobile
+### 11.3 EyeMobile
 - [ ] **Carregamento Seguro de Configuração:** Frontend carrega os dados operacionais (`access_key`, `environment`, `store_id`) com `has_secret: true`, sem receber a `secret_key`.
 - [ ] **Sincronização Manual / Teste:** Disparo de sincronização de vendas via `eyemobile-sync` processa os pedidos com sucesso.
 - [ ] **Busca de Produtos:** Resolução canônica de produtos por `produto_eyemobile_uuid` com preflight aprovado.
 - [ ] **Isolamento de Tenant:** Tentativa de sincronizar dados passando `workspace_id` de outro tenant é recusada com 403.
 
-### 10.4 DiviPay
+### 11.4 DiviPay
 - [ ] **Carregamento Seguro de Configuração:** Formulário DiviPay exibe dados operacionais com `client_secret` nulo no browser.
 - [ ] **Consulta de Saldo:** Chamada a `getBalance` através da Edge Function `divipay-api` retorna os saldos bancários com sucesso.
 - [ ] **Webhook DiviPay:** Webhook de notificação de pagamento recebe evento e processa transação.
 - [ ] **Token Inválido / Refresh:** Ao simular token expirado, a função executa refresh automático server-side sem expor o secret.
 
-### 10.5 Telegram
+### 11.5 Telegram
 - [ ] **Webhook Ativo e Válido:** Envio de mensagem de texto comum para o bot responde com menu interativo.
 - [ ] **Header Secret Inválido:** Requisição HTTP direta ao endpoint `telegram-webhook` sem o header `X-Telegram-Bot-Api-Secret-Token` correto é recusada com 401.
 - [ ] **Vinculação Anti-IDOR:** Ação de vinculação de conta valida permissão e workspace do usuário.
 - [ ] **Confirmação de NF no Bot:** Botões inline de confirmação de NF no Telegram processam os itens sem race condition.
 
-### 10.6 NF / Produtos (Integridade Fases 1 a 4)
+### 11.6 NF / Produtos (Integridade Fases 1 a 4)
 - [ ] **Equivalência Confirmada:** Item de NF com `confirmado_por_usuario = true` em `produto_equivalencias` é identificado e aplicado com sucesso.
 - [ ] **Item sem Equivalência:** Permanece pendente de confirmação; não gera atualização de estoque indevida.
 - [ ] **Fator de Conversão Inválido:** Equivalência com fator `0` ou `null` gera erro imediato (fail-closed), sem presumir fator 1.
 - [ ] **Ausência de Fuzzy Matching:** Descrições semelhantes não realizam match automático silencioso.
 - [ ] **Concorrência e Anti-TOCTOU:** Tentativas de confirmação simultânea da mesma NF são serializadas pelo lock `FOR NO KEY UPDATE` na RPC `aplicar_item_nf_estoque_custo`.
 
-### 10.7 Inteligência Artificial (OpenAI / Proxy)
+### 11.7 Inteligência Artificial (OpenAI / Proxy)
 - [ ] **Chamada Operacional Normal:** Pergunta enviada no chat da IA retorna análise financeira precisa.
 - [ ] **Zero Exposição de Chave:** Inspeção nas ferramentas de rede do navegador (DevTools) comprova que a chave OpenAI nunca transita para o browser.
 - [ ] **Rate Limit de Tokens:** Múltiplas requisições em alta frequência respeitam a janela durável de tokens e retornam 429 amigável caso o teto seja atingido.
@@ -394,7 +437,7 @@ Após cada etapa, os seguintes testes devem ser executados e validados:
 
 ---
 
-## 11. Critérios GO / NO-GO e Procedimento de Parada Imediata
+## 12. Critérios GO / NO-GO e Procedimento de Parada Imediata
 
 ### Critérios GO (Prosseguir para o próximo passo)
 Prosseguir com o rollout **somente se TODOS os critérios abaixo forem atendidos**:
@@ -402,7 +445,7 @@ Prosseguir com o rollout **somente se TODOS os critérios abaixo forem atendidos
 2. Todas as Edge Functions implantadas reportando status saudável no Supabase CLI.
 3. Build e deploy do Frontend concluídos sem erros de bundle.
 4. Todos os 7 blocos de Smoke Tests (Auth, Investimentos, EyeMobile, DiviPay, Telegram, NF, IA) aprovados com 100% de sucesso.
-5. Rotação de credenciais executada na ordem e com revalidação imediata de cada serviço.
+5. Rotação de credenciais (Passos 1 a 6) executada na ordem e com revalidação imediata de cada serviço.
 6. Procedimento da Fase C executado em transação única com registro no histórico de migrações e notificação do PostgREST.
 7. Nenhuma chamada do frontend gerando erro 401 ou 403 indevido no painel de logs.
 8. Taxa de erro 5xx mantida em 0% nos dashboards de observabilidade.
@@ -422,11 +465,11 @@ Interromper imediatamente a operação se **qualquer uma das condições abaixo 
 1. **Comunicação:** Declarar no canal de operações: `PARADA IMEDIATA DE DEPLOY - ACIONANDO PROTOCOLO DE CONTINGÊNCIA`.
 2. **Congelamento:** Bloquear qualquer nova alteração ou comando no ambiente.
 3. **Avaliação da Etapa:** Identificar se a interrupção ocorreu na Fase A, B, Rotação ou C.
-4. **Execução do Rollback Apropriado:** Seguir a Seção 12 deste runbook para a etapa correspondente.
+4. **Execução do Rollback Apropriado:** Seguir a Seção 13 deste runbook para a etapa correspondente.
 
 ---
 
-## 12. Estratégia de Rollback Real e o "SECURITY POINT OF NO RETURN"
+## 13. Estratégia de Rollback Real e o "SECURITY POINT OF NO RETURN"
 
 ```
                               ┌────────────────────────┐
@@ -449,7 +492,7 @@ Interromper imediatamente a operação se **qualquer uma das condições abaixo 
                                                  • Corrige policies sem reabrir vulnerabilidade
 ```
 
-### 12.1 Rollback da Fase A (Banco Permissivo)
+### 13.1 Rollback da Fase A (Banco Permissivo)
 * **Viabilidade:** Totalmente reversível sem impacto em dados existentes.
 * **Ação:** Como a Fase A apenas adicionou tabelas e funções novas sem revogar permissões legadas, basta remover os objetos adicionados se necessário:
   ```sql
@@ -473,7 +516,7 @@ Interromper imediatamente a operação se **qualquer uma das condições abaixo 
   COMMIT;
   ```
 
-### 12.2 Rollback da Fase B (Código: Frontend e Edge Functions)
+### 13.2 Rollback da Fase B (Código: Frontend e Edge Functions)
 * **Viabilidade:** Totalmente reversível através de redeploy.
 * **Ação:**
   1. Frontend: Reverter para o build do commit anterior no provedor de hosting (Vercel / Netlify / Cloudflare Pages).
@@ -483,13 +526,13 @@ Interromper imediatamente a operação se **qualquer uma das condições abaixo 
      supabase functions deploy
      ```
 
-### 12.3 Rollback de Credenciais
+### 13.3 Rollback de Credenciais
 * **Viabilidade:** Reversão controlada caso a nova credencial apresente falha de integração no parceiro.
 * **Ação:**
   1. Caso uma nova credencial (ex: `OPENAI_API_KEY` ou `TELEGRAM_BOT_TOKEN`) falhe durante a validação imediata, reinjetar a credencial anterior via `supabase secrets set`.
   2. Nunca deletar a credencial antiga no portal do parceiro antes de comprovar o funcionamento da nova credencial em produção.
 
-### 12.4 Rollback da Fase C — O `SECURITY POINT OF NO RETURN`
+### 13.4 Rollback da Fase C — O `SECURITY POINT OF NO RETURN`
 > [!CAUTION]
 > **ANÁLISE DE SEGURANÇA CRÍTICA:**
 > A Fase C revoga o acesso da role `authenticated` às colunas de segredos (`client_secret`, `secret_key`, `senha_hash`) e ativa a proteção RLS estrita de investimentos.
@@ -506,19 +549,19 @@ Interromper imediatamente a operação se **qualquer uma das condições abaixo 
 
 * **O que o script de contingência segura faz:**
   1. Garante que `client_secret`, `secret_key` e `senha_hash` **permaneçam revogados** para usuários comuns.
-  2. Mantém a dupla proteção de investimentos (isolamento de usuário E sessão ativa via `is_investimentos_unlocked`).
+  2. Mantém a dupla proteção em todas as 6 tabelas de investimentos (isolamento de usuário E sessão ativa via `is_investimentos_unlocked` para `investimentos`, `depositos_investimentos`, `metas_investimento`, `historico_rendimentos`, `proventos_esperados` e `configuracoes_investimentos`).
   3. Restaura e estabiliza permissões de colunas operacionais públicas para destravar fluxos de tela.
   4. Preserva a integridade do banco sem expor credenciais em nenhum momento.
 
 ---
 
-## 13. Matriz de Observabilidade e Monitoramento
+## 14. Matriz de Observabilidade e Monitoramento
 
 Durante o rollout e pelas 48 horas subsequentes, a equipe de sustentação deve acompanhar a seguinte matriz de sinais vitais:
 
 | Métrica / Sinal | Comportamento Normal | Limiar de Alerta | Ação Operacional |
 | :--- | :--- | :--- | :--- |
-| **Erros 401 (Auth / Tokens)** | < 1% das requisições (sessões naturalmente expiradas) | > 5% das requisições | Verificar se a `SUPABASE_SERVICE_ROLE_KEY` ou JWT Secret foi propagado para todas as Edge Functions. |
+| **Erros 401 (Auth / Tokens)** | < 1% das requisições (sessões naturalmente expiradas) | > 5% das requisições | Verificar se a `SUPABASE_SERVICE_ROLE_KEY` foi preservada ou se há expiração de tokens de refresh. |
 | **Erros 403 (Forbidden / RLS)** | Zero em fluxos normais de usuário | Qualquer ocorrência em massa no frontend | Inspecionar logs do PostgREST. Avaliar se o usuário possui sessão de investimentos desbloqueada ou se há descompasso de tenant. |
 | **Erros 429 (Rate Limit)** | Ocorrências isoladas em abusos pontuais | > 2% das requisições de IA ou senha | Checar se a tabela `rate_limits` está sofrendo concorrência desproporcional ou se o teto de tokens de IA foi configurado abaixo da demanda real. |
 | **Erros 5xx nas Edge Functions** | 0% | > 0.5% das invocações | Analisar logs via `supabase functions logs --tail`. Identificar exceções não tratadas nas funções de sync ou proxy. |
@@ -531,14 +574,15 @@ Durante o rollout e pelas 48 horas subsequentes, a equipe de sustentação deve 
 
 ---
 
-## 14. Checklist Operacional Passo a Passo
+## 15. Checklist Operacional Passo a Passo
 
 Preencha este checklist durante a janela de implantação:
 
 ### Pré-Janela
 - [ ] Equipe técnica reunida e papéis definidos (Operador de Banco, Operador de Deploy, Observador).
 - [ ] Janela de manutenção comunicada (se aplicável).
-- [ ] Snapshots pré-deploy gerados e validados na pasta segura (Seção 8).
+- [ ] Snapshots pré-deploy gerados e validados na pasta segura (Seção 9).
+- [ ] Confirmada a preservação da `SUPABASE_SERVICE_ROLE_KEY` legada e do `JWT Secret` (Estratégia A).
 
 ### Execução da Fase A
 - [ ] Aplicar migration da Fase A:
@@ -555,17 +599,16 @@ Preencha este checklist durante a janela de implantação:
   supabase functions deploy
   ```
 - [ ] Build e deploy do Frontend seguro (aplicar release na plataforma de hospedagem).
-- [ ] Executar bateria de Smoke Tests da Fase B (Seção 10).
+- [ ] Executar bateria de Smoke Tests da Fase B (Seção 11).
 - [ ] Confirmar que nenhuma chamada do frontend tenta ler colunas de segredos.
 
-### Execução da Rotação de Credenciais
-- [ ] Passo 1: Rotacionar senha do banco de dados no Supabase.
-- [ ] Passo 2: Rotacionar Service Role Key (se aplicável) e propagar nas Edge Functions.
-- [ ] Passo 3: Rotacionar chave OpenAI da plataforma nas secrets do Supabase.
-- [ ] Passo 4: Rotacionar chave Gemini da plataforma nas secrets do Supabase.
-- [ ] Passo 5: Rotacionar Telegram Bot Token e Webhook Secret no BotFather e na API do Telegram.
-- [ ] Passo 6: Rotacionar Cron Secret.
-- [ ] Passo 7: Orientar/executar a rotação das credenciais DiviPay e EyeMobile no banco/painel.
+### Execução da Rotação de Credenciais Seguras
+- [ ] Passo 1: Rotacionar senha master do banco de dados no Supabase.
+- [ ] Passo 2: Rotacionar chave OpenAI da plataforma nas secrets do Supabase.
+- [ ] Passo 3: Rotacionar chave Gemini da plataforma nas secrets do Supabase.
+- [ ] Passo 4: Rotacionar Telegram Bot Token e Webhook Secret no BotFather e na API do Telegram.
+- [ ] Passo 5: Rotacionar Cron Secret.
+- [ ] Passo 6: Orientar/executar a rotação das credenciais DiviPay e EyeMobile no banco/painel.
 - [ ] Revalidar integrações externas (EyeMobile, DiviPay, Telegram, OpenAI).
 
 ### Execução da Fase C (Enforcement)
@@ -578,7 +621,7 @@ Preencha este checklist durante a janela de implantação:
 - [ ] Confirmar que `has_column_privilege('authenticated', 'public.divipay_config', 'client_secret', 'SELECT') = false`.
 - [ ] Confirmar que `has_column_privilege('authenticated', 'public.eyemobile_config', 'secret_key', 'SELECT') = false`.
 - [ ] Confirmar que a tabela `senha_investimentos` não permite SELECT direto para `authenticated`.
-- [ ] Executar Smoke Tests finais pós-enforcement (Seção 10).
+- [ ] Executar Smoke Tests finais pós-enforcement (Seção 11).
 
 ### Pós-Implantação e Encerramento
 - [ ] Monitorar dashboard de observabilidade por 60 minutos sem alarmes.
@@ -587,10 +630,10 @@ Preencha este checklist durante a janela de implantação:
 
 ---
 
-## 15. Aprovação Final e Assinatura
+## 16. Aprovação Final e Assinatura
 
 | Papel | Responsável | Data | Parecer | Assinatura |
 | :--- | :--- | :--- | :--- | :--- |
 | **Líder de Segurança / Auditoria** | Heitor Fraga | ____/____/2026 | [ ] APROVADO [ ] REJEITADO | ___________________________ |
-| **Líder Técnico de Desenvolvimento** | Antigravity AI | 10/09/2026 | [X] APROVADO COM AÇÕES DO PROPRIETÁRIO | *Antigravity Agentic Pair* |
+| **Líder Técnico de Desenvolvimento** | Antigravity AI | 10/09/2026 | [X] APROVADO COM AÇÕES DO PROPRIETÁRIO (ESTRATÉGIA A) | *Antigravity Agentic Pair* |
 | **Proprietário da Infraestrutura / Owner** | Heitor Fraga | ____/____/2026 | [ ] APROVADO [ ] REJEITADO | ___________________________ |
