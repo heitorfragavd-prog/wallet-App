@@ -162,13 +162,23 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
     body: JSON.stringify({ mode: 'success' }),
   }).catch(() => {});
 
+  page.on('console', (msg) => console.log(`[BROWSER CONSOLE ${msg.type()}]:`, msg.text()));
+  page.on('pageerror', (err) => console.log(`[BROWSER ERROR]:`, err.message));
+
   // 3.2 Navega para a tela real de IA
   await page.goto(`${appUrl}/ia`);
   await page.waitForLoadState('domcontentloaded');
 
   // 3.3 Localiza campo de entrada da aplicação (textarea ou input) e aguarda habilitação
   const chatInput = page.locator('textarea, input[placeholder*="Pergunte"]').first();
-  await expect(chatInput).toBeVisible({ timeout: 35000 });
+  try {
+    await expect(chatInput).toBeVisible({ timeout: 35000 });
+  } catch (err) {
+    const currentUrl = page.url();
+    const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch(() => '');
+    console.log(`[CHAT INPUT NOT VISIBLE] URL: ${currentUrl} | Text: ${bodyText}`);
+    throw err;
+  }
   await expect(chatInput).toBeEnabled({ timeout: 35000 });
 
   // 3.4 Preenche mensagem analítica complexa (ativa Agent V2 / orchestrator)
@@ -210,7 +220,7 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 }
 
 test.describe('Homologação da Aplicação na Sequência A → B → C (Stack Real e Builds Isolados)', () => {
-  test.describe.configure({ mode: 'serial' });
+  test.describe.configure({ mode: 'serial', retries: 0 });
   test.setTimeout(120000);
 
   test.beforeEach(async () => {
@@ -329,7 +339,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     expect(madeDiviRequest || true).toBe(true);
 
     // 1.3 Navegação para a tela de investimentos na aplicação antiga
-    await page.goto(`${LEGACY_APP_URL}/contas-cartoes`);
+    await page.goto(`${LEGACY_APP_URL}/contas`);
     await page.waitForLoadState('domcontentloaded');
 
     // Clica na aba de investimentos se houver
@@ -434,7 +444,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     expect(secretInDb.rows[0].client_secret).toBe('synthetic_divipay_secret_999');
 
     // 2.4 Nova aplicação: Tela de investimentos com indicador de bloqueio e cadastro de senha
-    await page.goto(`${NEW_APP_URL}/contas-cartoes`);
+    await page.goto(`${NEW_APP_URL}/contas`);
     await page.waitForLoadState('domcontentloaded');
 
     // Cadastra a senha de investimentos via Edge Function autorizada (caminho seguro da nova aplicação)
@@ -594,7 +604,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
 
     // 5.6 Contexto B (Sessão B NÃO DESBLOQUEADA do mesmo usuário):
     // Navega na UI pelo navegador: investimentos permanecem protegidos
-    await pageB.goto(`${NEW_APP_URL}/contas-cartoes`);
+    await pageB.goto(`${NEW_APP_URL}/contas`);
     await pageB.waitForLoadState('domcontentloaded');
 
     // Consulta direta usando a própria sessão de B -> DEVE RETORNAR ESTREITAMENTE 0 LINHAS
