@@ -346,7 +346,7 @@ async function main() {
       assert(hist.rows.length === 1, 'Versão 20260908120001 deveria estar registrada no histórico!');
 
       // Privilégios de colunas sensíveis agora ESTÃO REVOGADOS (Enforcement da Fase C comprovado)
-      const priv = await checkClient.query(`
+      const privRes = await checkClient.query(`
         SELECT has_column_privilege('authenticated', 'public.divipay_config', 'client_secret', 'SELECT') as can_select_secret
       `);
       assert(privRes.rows[0].can_select_secret === false, 'Fase C falhou: authenticated ainda consegue fazer SELECT em client_secret!');
