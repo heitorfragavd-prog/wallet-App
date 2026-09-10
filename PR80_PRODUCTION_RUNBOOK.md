@@ -13,15 +13,15 @@
 * **Pull Request:** `#80` (Status: `OPEN`, `isDraft: true`, `mergeable: MERGEABLE`)
 * **Branch de Segurança:** `security/comprehensive-audit-hardening`
 * **HEAD SHA Atual:** `a8db3e857ad23450c3e9451ecd007d4e6f933eef`
-* **Base SHA Atual (`origin/develop`):** `2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b` (integrando PR #85 / Fase 5 `815b317` e PR #86 / Fase 6 `2fa6f20`)
+* **Base SHA Atual (`origin/develop`):** `f5293aa6638d5d838a981487afef09054d05aa3c` (integrando Fases 1 a 7, incluindo PR #87 / Fase 7 `f5293aa`)
 * **Base SHA Histórica:** `8ae7c048bd325898d86445f7bf210f4fbf73c6e9`
-* **Commit de Integração com develop:** `f7098f4` (Merge `--no-ff` de `origin/develop`, zero conflitos textuais)
+* **Commit de Integração com develop:** `4a7e621` (Merge `--no-ff` de `origin/develop`, zero conflitos textuais)
 
 ---
 
 ## 2. Escopo da Implantação
 
-A implantação do PR #80 resolve um conjunto crítico de vulnerabilidades identificadas na auditoria de segurança da Wallet App, sem quebrar a operação nem regredir as entregas funcionais de produtos (Fases 1 a 6):
+A implantação do PR #80 resolve um conjunto crítico de vulnerabilidades identificadas na auditoria de segurança da Wallet App, sem quebrar a operação nem regredir as entregas funcionais de produtos (Fases 1 a 7):
 
 1. **Investimentos:** Eliminação do bypass de senha via API direta através de RLS de banco atômico vinculado a sessão ativa (`is_investimentos_unlocked(auth.uid())`).
 2. **Rate Limit e Força Bruta:** Rate limit atômico compartilhado via Postgres (`rate_limits` e RPC `check_rate_limit`) em transação única com bloqueio de linha.

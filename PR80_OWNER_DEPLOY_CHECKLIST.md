@@ -42,7 +42,7 @@
     git rev-parse HEAD
     git rev-parse origin/develop
     ```
-  * *Verificação:* O SHA da base deve corresponder a `origin/develop` (`2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b`), com integração completa das Fases 1 a 6.
+  * *Verificação:* O SHA da base deve corresponder a `origin/develop` (`f5293aa6638d5d838a981487afef09054d05aa3c`), com integração completa das Fases 1 a 7.
 
 - [ ] **1.4 Confirmar Secrets Existentes no Supabase (Apenas Nomes, Sem Valores):**
   ```bash
