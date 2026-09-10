@@ -28,12 +28,29 @@ export const useProfile = () => {
       
       const { data, error: supabaseError } = await supabase
         .from("profiles")
-        .select("id, user_id, name, telefone, endereco, avatar_url, organization_name, role, created_at, updated_at")
+        .select("id, user_id, name, email, telefone, endereco, avatar_url, organization_name, role, created_at, updated_at")
         .eq("user_id", user.id)
         .maybeSingle();
 
       if (supabaseError) {
         logger.error('useProfile', 'Erro ao carregar perfil', { error: supabaseError.message });
+        if (supabaseError.message.includes('column') || supabaseError.message.includes('does not exist')) {
+          logger.warn('useProfile', 'Schema divergente detectado, usando perfil defensivo de fallback');
+          setProfile({
+            id: user.id,
+            user_id: user.id,
+            name: user.email?.split('@')[0] || 'Usuário',
+            email: user.email || '',
+            role: 'user',
+            organization_name: null,
+            telefone: null,
+            endereco: null,
+            avatar_url: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } as unknown as Profile);
+          return;
+        }
         setError(new Error(supabaseError.message));
         toast({
           title: "Erro",
@@ -54,6 +71,7 @@ export const useProfile = () => {
         await createProfile({
           user_id: user.id,
           name: user.email?.split('@')[0] || 'Usuário',
+          email: user.email || '',
           role: 'user',
           organization_name: null,
           telefone: null,
@@ -64,7 +82,7 @@ export const useProfile = () => {
       }
 
       logger.info('useProfile', 'Perfil carregado com sucesso');
-      setProfile(data ? ({ ...data, email: user.email } as unknown as Profile) : null);
+      setProfile(data ? ({ ...data, email: (data as { email?: string }).email || user.email || '' } as unknown as Profile) : null);
     } catch (err) {
       logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");

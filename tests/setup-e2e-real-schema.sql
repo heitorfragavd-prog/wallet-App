@@ -8,8 +8,10 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
   name TEXT NOT NULL DEFAULT '',
+  email TEXT DEFAULT '',
   organization_name TEXT DEFAULT '',
   telefone TEXT DEFAULT '',
+  endereco TEXT DEFAULT '',
   avatar_url TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
   created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
@@ -30,12 +32,15 @@ CREATE POLICY "Users can insert their own profile" ON public.profiles FOR INSERT
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (user_id, name, organization_name, telefone, role)
+  INSERT INTO public.profiles (user_id, name, email, organization_name, telefone, endereco, avatar_url, role)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'name', ''),
+    COALESCE(NEW.email, ''),
     COALESCE(NEW.raw_user_meta_data->>'organization_name', ''),
     COALESCE(NEW.raw_user_meta_data->>'telefone', ''),
+    COALESCE(NEW.raw_user_meta_data->>'endereco', ''),
+    COALESCE(NEW.raw_user_meta_data->>'avatar_url', ''),
     'user'
   )
   ON CONFLICT (user_id) DO NOTHING;
