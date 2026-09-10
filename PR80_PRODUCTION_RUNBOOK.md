@@ -12,20 +12,16 @@
 * **Repositório:** `heitorfragavd-prog/wallet-App`
 * **Pull Request:** `#80` (Status: `OPEN`, `isDraft: true`, `mergeable: MERGEABLE`)
 * **Branch de Segurança:** `security/comprehensive-audit-hardening`
-* **HEAD SHA Atual:** `9cfc0070b96ba39788d5fffca88526d807e85842`
-* **Base SHA Atual (`origin/develop`):** `0aa3825e63c3d652db99aef603d359e850ab8278`
+* **HEAD SHA Atual:** `Re-homologado após merge das Fases 5 e 6`
+* **Base SHA Atual (`origin/develop`):** `2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b` (integrando PR #85 / Fase 5 `815b317` e PR #86 / Fase 6 `2fa6f20`)
 * **Base SHA Histórica:** `8ae7c048bd325898d86445f7bf210f4fbf73c6e9`
-* **Commit de Integração com develop:** `27d7375c4d3575fd88399366c95d175b36cd7a54` (Merge `--no-ff`, zero conflitos textuais)
-* **Workflows no GitHub Actions (Commit `9cfc007`):**
-  * `CI Quality Gates`: [Run #34497944628](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497944628) — **SUCCESS** (1m 35s)
-  * `Security Audit Isolated PostgreSQL Tests & E2E (PR)`: [Run #34497944929](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497944929) — **SUCCESS** (7m 03s)
-  * `Security Audit Push Workflow`: [Run #34497937541](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497937541) — **SUCCESS** (5m 16s)
+* **Commit de Integração com develop:** `f7098f4` (Merge `--no-ff` de `origin/develop`, zero conflitos textuais)
 
 ---
 
 ## 2. Escopo da Implantação
 
-A implantação do PR #80 resolve um conjunto crítico de vulnerabilidades identificadas na auditoria de segurança da Wallet App, sem quebrar a operação nem regredir as entregas funcionais de produtos (Fases 1 a 4):
+A implantação do PR #80 resolve um conjunto crítico de vulnerabilidades identificadas na auditoria de segurança da Wallet App, sem quebrar a operação nem regredir as entregas funcionais de produtos (Fases 1 a 6):
 
 1. **Investimentos:** Eliminação do bypass de senha via API direta através de RLS de banco atômico vinculado a sessão ativa (`is_investimentos_unlocked(auth.uid())`).
 2. **Rate Limit e Força Bruta:** Rate limit atômico compartilhado via Postgres (`rate_limits` e RPC `check_rate_limit`) em transação única com bloqueio de linha.
@@ -440,11 +436,14 @@ Após cada etapa, os seguintes testes devem ser executados e validados:
 - [ ] **Vinculação Anti-IDOR:** Ação de vinculação de conta valida permissão e workspace do usuário.
 - [ ] **Confirmação de NF no Bot:** Botões inline de confirmação de NF no Telegram processam os itens sem race condition.
 
-### 11.6 NF / Produtos (Integridade Fases 1 a 4)
-- [ ] **Equivalência Confirmada:** Item de NF com `confirmado_por_usuario = true` em `produto_equivalencias` é identificado e aplicado com sucesso.
-- [ ] **Item sem Equivalência:** Permanece pendente de confirmação; não gera atualização de estoque indevida.
-- [ ] **Fator de Conversão Inválido:** Equivalência com fator `0` ou `null` gera erro imediato (fail-closed), sem presumir fator 1.
+### 11.6 NF / Produtos (Integridade Fases 1 a 6)
+- [ ] **Equivalência Confirmada e Aprendizado (Fases 1 a 5):** Item de NF com `confirmado_por_usuario = true` em `produto_equivalencias` é identificado e aplicado com sucesso.
+- [ ] **Item sem Equivalência e Fluxo de Aprendizado:** Dispara fluxo de proposta no Telegram (`vincular_produto_nf`) com busca PDV e fator explícito; não gera atualização de estoque indevida até aprovação final.
+- [ ] **Validação do Ator Telegram (Fase 5):** Apenas o usuário Telegram vinculado ao dono da proposta consegue interagir com os botões inline; tentativas por atores não vinculados são rejeitadas imediatamente sem corromper a proposta.
+- [ ] **CAS e Transição de Estados (Fase 5):** Proposta transiciona atomicamente `pendente -> em_processamento -> executada`, com mecanismo de recovery para `pendente` em falha técnica e idempotência em retentativa.
+- [ ] **Fator de Conversão Inválido:** Equivalência com fator `0`, `null` ou `<= 1` para embalagens (`CX`, `FD`, `FARDO`) gera erro imediato (fail-closed).
 - [ ] **Ausência de Fuzzy Matching:** Descrições semelhantes não realizam match automático silencioso.
+- [ ] **Catálogo Canônico e Cache PDV (Fase 6):** Zero acessos a `eyemobile_produtos` no frontend; cache local isolado estritamente por usuário (`pdv_produtos_cache_${uid}`); limpeza imediata no logout; zero tolerância a dados stale de outros usuários.
 - [ ] **Concorrência e Anti-TOCTOU:** Tentativas de confirmação simultânea da mesma NF são serializadas pelo lock `FOR NO KEY UPDATE` na RPC `aplicar_item_nf_estoque_custo`.
 
 ### 11.7 Inteligência Artificial (OpenAI / Proxy)
@@ -457,14 +456,20 @@ Após cada etapa, os seguintes testes devem ser executados e validados:
 
 ## 12. Critérios GO / NO-GO e Procedimento de Parada Imediata
 
+### Requisito Mandatório Prévio para a Fase B (Frontend):
+> [!IMPORTANT]
+> **VERCEL PRODUCTION IDENTITY MUST BE VERIFIED BEFORE PHASE B**
+> Como a CLI local estava desautenticada no pré-voo inicial, os identificadores de projeto e deployment da Vercel foram inferidos.
+> É OBRIGATÓRIO validar autoritativamente com o proprietário no Dashboard da Vercel (ou CLI autenticada) o Projeto (`wallet-cortexx` ou equivalente), a Production Branch (`master`), o Deployment ativo e o commit SHA antes de disparar o deploy da Fase B.
+
 ### Critérios GO (Prosseguir para o próximo passo)
 Prosseguir com o rollout **somente se TODOS os critérios abaixo forem atendidos**:
 1. Migração da Fase A concluída com código de saída 0 e sem mensagens de erro no Postgres.
 2. Todas as Edge Functions implantadas reportando status saudável no Supabase CLI.
-3. Build e deploy do Frontend concluídos sem erros de bundle.
+3. Identidade de produção da Vercel autoritativamente confirmada e deploy do Frontend concluído sem erros de bundle.
 4. Todos os 7 blocos de Smoke Tests (Auth, Investimentos, EyeMobile, DiviPay, Telegram, NF, IA) aprovados com 100% de sucesso.
 5. Rotação de credenciais (Passos 1 a 6) executada na ordem e com revalidação imediata de cada serviço.
-6. Procedimento da Fase C executado em transação única com registro no histórico de migrações e notificação do PostgREST.
+6. Procedimento da Fase C executado via psql (`scripts/apply-phase-c-enforcement.sql`) em transação única com registro no histórico de migrações e notificação do PostgREST.
 7. Nenhuma chamada do frontend gerando erro 401 ou 403 indevido no painel de logs.
 8. Taxa de erro 5xx mantida em 0% nos dashboards de observabilidade.
 

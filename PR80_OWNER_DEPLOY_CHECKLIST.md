@@ -40,8 +40,9 @@
     git fetch origin --prune
     git checkout security/comprehensive-audit-hardening
     git rev-parse HEAD
+    git rev-parse origin/develop
     ```
-  * *Verificação:* O SHA deve corresponder exatamente ao HEAD auditado e aprovado.
+  * *Verificação:* O SHA da base deve corresponder a `origin/develop` (`2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b`), com integração completa das Fases 1 a 6.
 
 - [ ] **1.4 Confirmar Secrets Existentes no Supabase (Apenas Nomes, Sem Valores):**
   ```bash
@@ -57,6 +58,13 @@
     * Google AI Studio (Gemini API Key)
     * Telegram BotFather (`/mybots`)
     * Dashboards de Parceiros (DiviPay e Eyemobile)
+
+- [ ] **1.5.1 Verificação da Identidade de Produção da Vercel (OBRIGATÓRIO ANTES DA FASE B):**
+  * [ ] **VERCEL PRODUCTION IDENTITY MUST BE VERIFIED BEFORE PHASE B**
+  * [ ] Validar no Dashboard da Vercel (ou CLI autenticada) o Project Name exato (`wallet-cortexx` ou equivalente).
+  * [ ] Validar a Production Branch configurada na Vercel (deve ser `master`).
+  * [ ] Validar o Deployment ativo e o commit SHA atualmente servido.
+  * [ ] Confirmar que o domínio público de produção aponta para esse deployment.
 
 - [ ] **1.6 Smoke Tests Baseline Pré-Deploy (Confirmar que a Produção Atual está Sadia):**
   * [ ] Login de usuário existente funciona normalmente.

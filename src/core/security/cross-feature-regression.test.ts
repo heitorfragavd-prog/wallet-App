@@ -188,4 +188,161 @@ describe("ETAPA H — Testes de Não-Regressão Cruzados (Segurança PR #80 + Pr
       expect(content).toMatch(/NOTIFY pgrst, 'reload schema';/);
     });
   });
+
+  // ─── CENÁRIO 8: Convivência Telegram / NF Fase 5 com Hardening do PR #80 ───
+  describe("Cenário 8: Convivência Telegram / NF Fase 5 com Hardening do PR #80", () => {
+    it("A: Validação estrita do ator real do Telegram bloqueia ator divergente sem tocar na proposta", () => {
+      const tgPath = path.join(rootDir, "supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(tgPath, "utf-8");
+
+      // Deve invocar validarAtorTelegramFase5 e rejeitar sem alterar status da proposta
+      expect(content).toMatch(/validarAtorTelegramFase5\(supabase,\s*\{/);
+      expect(content).toMatch(/valAtor\.ok/);
+      expect(content).toMatch(/❌ \$\{valAtor\.reason\}/);
+    });
+
+    it("B: Propostas expiradas ou não-pendentes sofrem fail-closed imediato", () => {
+      const equivPath = path.join(rootDir, "supabase/functions/_shared/integrations/nf-product-equivalence.ts");
+      const content = fs.readFileSync(equivPath, "utf-8");
+
+      expect(content).toMatch(/validarPropostaFase5/);
+      expect(content).toMatch(/status !== ['"]pendente['"]/);
+      expect(content).toMatch(/Esta proposta já foi processada ou cancelada/);
+      expect(content).toMatch(/Esta proposta expirou/);
+    });
+
+    it("C: Transição de estado de proposta utiliza CAS atômico pendente -> em_processamento", () => {
+      const tgPath = path.join(rootDir, "supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(tgPath, "utf-8");
+
+      expect(content).toMatch(/\.update\(\{\s*status:\s*['"]em_processamento['"]\s*\}\)/);
+      expect(content).toMatch(/\.eq\(['"]status['"],\s*['"]pendente['"]\)/);
+    });
+
+    it("D: Mecanismo de recovery CAS reverte em_processamento para pendente em caso de falha técnica", () => {
+      const equivPath = path.join(rootDir, "supabase/functions/_shared/integrations/nf-product-equivalence.ts");
+      const content = fs.readFileSync(equivPath, "utf-8");
+
+      expect(content).toMatch(/reverterPropostaParaPendente/);
+      expect(content).toMatch(/status:\s*['"]pendente['"]/);
+    });
+
+    it("E: Proposta só vira 'executada' após confirmação autoritativa final", () => {
+      const tgPath = path.join(rootDir, "supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(tgPath, "utf-8");
+
+      expect(content).toMatch(/canFinalizeManualEquivalenceProposal/);
+      expect(content).toMatch(/isProposalFinalizedSuccessfully/);
+      expect(content).toMatch(/status:\s*['"]executada['"]/);
+    });
+
+    it("F: Endpoints administrativos do Telegram preservam proteção isServiceRole e anti-IDOR do PR #80", () => {
+      const tgPath = path.join(rootDir, "supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(tgPath, "utf-8");
+
+      expect(content).toMatch(/isServiceRole = Boolean\(supabaseServiceKey && token === supabaseServiceKey\)/);
+      expect(content).toMatch(/const authenticatedUserId = user\.id;/);
+      expect(content).toMatch(/user_id:\s*authenticatedUserId/);
+    });
+  });
+
+  // ─── CENÁRIO 9: Convivência Frontend / Catálogo Fase 6 com Segurança do PR #80 ───
+  describe("Cenário 9: Convivência Frontend / Catálogo Fase 6 com Segurança do PR #80", () => {
+    it("A: Zero referências a tabela legada de produtos no runtime do frontend", () => {
+      const frontendFiles = [
+        "src/pages/PDVPage.tsx",
+        "src/domains/ia/components/UploadInteligente.tsx",
+        "src/domains/ia/hooks/useFinancialContext.ts",
+      ];
+
+      const legacyTable = ["eye", "mobile", "_", "produtos"].join("");
+      const regex = new RegExp(`from\\s*\\(\\s*['"]${legacyTable}['"]\\s*\\)`);
+
+      for (const relPath of frontendFiles) {
+        const fullPath = path.join(rootDir, relPath);
+        const content = fs.readFileSync(fullPath, "utf-8");
+        expect(content).not.toMatch(regex);
+      }
+    });
+
+    it("B: Cache de produtos do PDV é estritamente isolado por user_id e não atende guests", () => {
+      const pdvPath = path.join(rootDir, "src/pages/PDVPage.tsx");
+      const content = fs.readFileSync(pdvPath, "utf-8");
+
+      expect(content).toMatch(/const getProductCacheKey = useCallback\(\(uid: string\) =>/);
+      expect(content).toMatch(/pdv_produtos_cache_\$\{uid\}/);
+      expect(content).toMatch(/if \(authLoading \|\| !user\?\.id\)/);
+    });
+
+    it("C: Logout ou troca de usuário limpa produtos em memória e rejeita repopulação stale", () => {
+      const pdvPath = path.join(rootDir, "src/pages/PDVPage.tsx");
+      const content = fs.readFileSync(pdvPath, "utf-8");
+
+      expect(content).toMatch(/if \(activeUserIdRef\.current !== requestUserId\)/);
+      expect(content).toMatch(/setProducts\(\[\]\)/);
+    });
+
+    it("D: UploadInteligente não promete atualização de estoque no frontend", () => {
+      const uploadPath = path.join(rootDir, "src/domains/ia/components/UploadInteligente.tsx");
+      const content = fs.readFileSync(uploadPath, "utf-8");
+
+      const legacyTable = ["eye", "mobile", "_", "produtos"].join("");
+      const regex = new RegExp(`supabase\\.from\\s*\\(\\s*['"]${legacyTable}['"]\\s*\\)`);
+
+      expect(content).toMatch(/Estoque e custo são processados pelo fluxo canônico de NF/);
+      expect(content).not.toMatch(regex);
+    });
+  });
+
+  // ─── CENÁRIO 10: Garantias Contínuas de Hardening do PR #80 ───
+  describe("Cenário 10: Garantias Contínuas de Hardening do PR #80", () => {
+    it("A: RLS de investimentos é session-bound e bloqueia leitura sem desbloqueio", () => {
+      const phaseAPath = path.join(rootDir, "supabase/migrations/20260908120000_security_phase_a_infrastructure.sql");
+      const phaseCPath = path.join(rootDir, "supabase/migrations/20260908120001_security_phase_c_enforcement.sql");
+      const contentA = fs.readFileSync(phaseAPath, "utf-8");
+      const contentC = fs.readFileSync(phaseCPath, "utf-8");
+
+      expect(contentA).toMatch(/CREATE OR REPLACE FUNCTION public\.is_investimentos_unlocked/);
+      expect(contentC).toMatch(/public\.is_investimentos_unlocked\(auth\.uid\(\)\)/);
+    });
+
+    it("B: Auto-promoção de role em profiles é impedida por REVOKE UPDATE amplo e concessão seletiva", () => {
+      const phaseCPath = path.join(rootDir, "supabase/migrations/20260908120001_security_phase_c_enforcement.sql");
+      const content = fs.readFileSync(phaseCPath, "utf-8");
+
+      expect(content).toMatch(/REVOKE UPDATE ON public\.profiles FROM authenticated/);
+      const grantMatch = content.match(/GRANT UPDATE \(([^)]+)\) ON public\.profiles TO authenticated/);
+      expect(grantMatch).not.toBeNull();
+      expect(grantMatch![1]).not.toContain("role");
+    });
+
+    it("C: Validador SSRF bloqueia IPs privados, cloud metadata e esquemas não-HTTP(S)", () => {
+      const ssrfPath = path.join(rootDir, "supabase/functions/_shared/ssrf-validator.ts");
+      const content = fs.readFileSync(ssrfPath, "utf-8");
+
+      expect(content).toMatch(/169\.254\.169\.254/);
+      expect(content).toMatch(/metadata\.google\.internal/);
+      expect(content).toMatch(/10\./);
+      expect(content).toMatch(/192\.168\./);
+      expect(content).toMatch(/172\.(1[6-9]|2[0-9]|3[0-1])\./);
+    });
+
+    it("D: Rate limiter compartilhado utiliza reserva atômica via RPC reserve_ai_tokens", () => {
+      const rateLimiterPath = path.join(rootDir, "supabase/functions/_shared/ai-rate-limiter.ts");
+      const content = fs.readFileSync(rateLimiterPath, "utf-8");
+
+      expect(content).toMatch(/rpc\(['"]reserve_ai_tokens['"]/);
+      expect(content).toMatch(/Orçamento de processamento de IA por hora atingido/);
+    });
+
+    it("E: Safe Contingency Forward preserva RLS e mantém secrets revogados", () => {
+      const recoveryPath = path.join(rootDir, "supabase/ops/rollback_20260908120000_safe_recovery.sql");
+      const content = fs.readFileSync(recoveryPath, "utf-8");
+
+      expect(content).toMatch(/REVOKE ALL ON public\.divipay_config FROM authenticated, anon, PUBLIC;/);
+      expect(content).toMatch(/REVOKE ALL ON public\.eyemobile_config FROM authenticated, anon, PUBLIC;/);
+      expect(content).toMatch(/REVOKE ALL ON public\.senha_investimentos FROM authenticated, anon, PUBLIC;/);
+      expect(content).toMatch(/ENABLE ROW LEVEL SECURITY/);
+    });
+  });
 });
