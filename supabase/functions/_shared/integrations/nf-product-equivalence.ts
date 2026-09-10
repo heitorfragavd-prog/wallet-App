@@ -688,3 +688,87 @@ export async function salvarEquivalenciaConfirmada(
 
   return { success: true, equivalenciaId: inserted.id, status: "saved" };
 }
+
+/**
+ * Validação fail-closed estrita de propostas da Fase 5 (vincular_produto_nf).
+ * Exige autorização de usuário e chat, integridade de tipo, status pendente e não expiração estrita.
+ */
+export function validarPropostaFase5(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  propRow: any,
+  expected: { userId: string; chatId: string | number }
+): { ok: true } | { ok: false; reason: string } {
+  if (!propRow) {
+    return { ok: false, reason: "Proposta não encontrada." };
+  }
+  if (propRow.user_id !== expected.userId) {
+    return { ok: false, reason: "Usuário não autorizado para esta proposta." };
+  }
+  if (String(propRow.chat_id) !== String(expected.chatId)) {
+    return { ok: false, reason: "Chat não autorizado para esta proposta." };
+  }
+  if (propRow.tipo !== "vincular_produto_nf") {
+    return { ok: false, reason: "Tipo de proposta inválido." };
+  }
+  if (propRow.status !== "pendente") {
+    return { ok: false, reason: "Esta proposta já foi processada ou cancelada." };
+  }
+  if (!propRow.expires_at || String(propRow.expires_at).trim() === "") {
+    return { ok: false, reason: "Proposta sem validade ou expiração ausente." };
+  }
+  const expTime = new Date(propRow.expires_at).getTime();
+  if (!Number.isFinite(expTime) || expTime <= Date.now()) {
+    return { ok: false, reason: "Esta proposta expirou. Inicie a operação novamente." };
+  }
+  return { ok: true };
+}
+
+/**
+ * Validação do ator real do Telegram para callbacks da Fase 5 (vp_*).
+ * Exige vínculo explícito em usuarios_telegram e correspondência estrita com o dono da proposta.
+ * Proíbe estritamente fallbacks de grupo/workspace owner.
+ */
+export async function validarAtorTelegramFase5(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  params: {
+    telegramUserId?: string | number | null;
+    propostaUserId: string;
+  }
+): Promise<{ ok: true; userId: string } | { ok: false; reason: string }> {
+  if (!params.telegramUserId) {
+    return { ok: false, reason: "Usuário do Telegram não identificado." };
+  }
+
+  const { data: atorRow, error } = await client
+    .from("usuarios_telegram")
+    .select("user_id, ativo")
+    .eq("telegram_chat_id", String(params.telegramUserId))
+    .eq("ativo", true)
+    .maybeSingle();
+
+  if (error || !atorRow?.user_id) {
+    return { ok: false, reason: "Apenas o usuário vinculado pode interagir com este botão." };
+  }
+
+  if (atorRow.user_id !== params.propostaUserId) {
+    return { ok: false, reason: "Usuário do Telegram não autorizado para esta proposta." };
+  }
+
+  return { ok: true, userId: atorRow.user_id };
+}
+
+/**
+ * Resolução do identificador do item da NF a partir dos dados da proposta.
+ * Garante compatibilidade entre o novo padrão (nf_item_id) e propostas legadas (item_id).
+ */
+export function extrairNfItemIdDaProposta(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dados: any
+): string | null {
+  const rawId = dados?.nf_item_id ?? dados?.item_id;
+  if (!rawId || typeof rawId !== "string" || rawId.trim() === "") {
+    return null;
+  }
+  return rawId.trim();
+}

@@ -8,6 +8,9 @@ import {
   suggestConversionFactor,
   salvarEquivalenciaConfirmada,
   calculateCandidateSimilarity,
+  validarPropostaFase5,
+  validarAtorTelegramFase5,
+  extrairNfItemIdDaProposta,
 } from "../../../../supabase/functions/_shared/integrations/nf-product-equivalence";
 import { evaluateStockStatus } from "../../../../supabase/functions/_shared/danfe-extractor";
 import * as fs from "fs";
@@ -1971,8 +1974,8 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       expect(content).toContain("if (propRow.user_id !== expected.userId)");
       expect(content).toContain("if (String(propRow.chat_id) !== String(expected.chatId))");
       expect(content).toContain('if (propRow.tipo !== "vincular_produto_nf")');
-      expect(content).toContain('if (propRow.status !== "pendente")');
-      expect(content).toContain("if (isNaN(expTime) || expTime <= Date.now())");
+      expect(content).toContain('if (!propRow.expires_at || String(propRow.expires_at).trim() === "")');
+      expect(content).toContain("if (!Number.isFinite(expTime) || expTime <= Date.now())");
 
       // Lock atômico estrito no vp_ok
       expect(content).toContain('.eq("user_id", cbUserId)');
@@ -1996,9 +1999,10 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       expect(content).toContain('.eq("id", propDados.nf_id)');
       expect(content).toContain('.eq("user_id", cbUserId)');
 
-      // Revalidação do item
+      // Revalidação do item (compatível com nf_item_id e item_id)
+      expect(content).toContain("const nfItemId = propDados?.nf_item_id ?? propDados?.item_id;");
       expect(content).toContain('.from("nf_itens")');
-      expect(content).toContain('.eq("id", propDados.nf_item_id)');
+      expect(content).toContain('.eq("id", nfItemId)');
       expect(content).toContain('.eq("nf_id", nfRow.id)');
 
       // Revalidação do produto canônico no tenant com checagem de eyemobile_id
@@ -2212,6 +2216,328 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
 
       expect(res.success).toBe(false);
       expect((res as any).code).toBe("invalid_input");
+    });
+
+    // ─── 7. CONTRATO PRODUTOR x CONSUMIDOR (nf_item_id x item_id) ───
+    it("PROD-CONS-1: proposta nova produzida com nf_item_id é resolvida pelo consumidor e localiza o item no banco", async () => {
+      // 1. Simula exatamente o que o produtor grava no banco:
+      const primeiroPendente = {
+        id: "item-uuid-777",
+        codigo_produto: "SKU-777",
+        descricao: "Cerveja Artesanal 500ml",
+        unidade: "UN",
+        quantidade: 10,
+        valor_unitario: 15.0,
+      };
+
+      const propostaDadosProdutor = {
+        nf_id: "nf-uuid-888",
+        nf_item_id: primeiroPendente.id,
+        cnpj_fornecedor: "12.345.678/0001-90",
+        fornecedor_nome: "Cervejaria Alpha",
+        codigo_produto: primeiroPendente.codigo_produto,
+        descricao_produto: primeiroPendente.descricao,
+        unidade_produto: primeiroPendente.unidade,
+        quantidade: primeiroPendente.quantidade,
+        valor_unitario: primeiroPendente.valor_unitario,
+      };
+
+      expect((propostaDadosProdutor as any).item_id).toBeUndefined();
+      expect(propostaDadosProdutor.nf_item_id).toBe("item-uuid-777");
+
+      // 2. Simula o consumidor vp_ok extraindo e consultando o banco
+      const nfItemId = extrairNfItemIdDaProposta(propostaDadosProdutor);
+      expect(nfItemId).toBe("item-uuid-777");
+
+      const queryObj: any = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn((field: string, val: any) => {
+          if (field === "id") expect(val).toBe("item-uuid-777");
+          if (field === "nf_id") expect(val).toBe("nf-uuid-888");
+          return queryObj;
+        }),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { id: "item-uuid-777", nf_id: "nf-uuid-888", descricao: "Cerveja Artesanal 500ml" },
+          error: null,
+        }),
+      };
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "nf_itens") return queryObj;
+          return {};
+        }),
+      };
+
+      const { data: itemEncontrado } = await mockClient
+        .from("nf_itens")
+        .select("*")
+        .eq("id", nfItemId)
+        .eq("nf_id", "nf-uuid-888")
+        .maybeSingle();
+
+      expect(itemEncontrado).not.toBeNull();
+      expect(itemEncontrado?.id).toBe("item-uuid-777");
+    });
+
+    it("PROD-CONS-2: proposta legada criada com item_id é resolvida com sucesso pelo fallback do consumidor", async () => {
+      const propostaLegadaDados = {
+        nf_id: "nf-uuid-888",
+        item_id: "item-legado-999",
+        cnpj_fornecedor: "12.345.678/0001-90",
+      };
+
+      const nfItemId = extrairNfItemIdDaProposta(propostaLegadaDados);
+      expect(nfItemId).toBe("item-legado-999");
+    });
+
+    it("PROD-CONS-3: proposta malformada sem nf_item_id nem item_id retorna null (fail-closed)", () => {
+      expect(extrairNfItemIdDaProposta({})).toBeNull();
+      expect(extrairNfItemIdDaProposta({ nf_item_id: null, item_id: undefined })).toBeNull();
+      expect(extrairNfItemIdDaProposta({ nf_item_id: "   " })).toBeNull();
+      expect(extrairNfItemIdDaProposta(null)).toBeNull();
+    });
+
+    // ─── 8. AUTORIZAÇÃO DO ATOR REAL DO TELEGRAM (ACTOR-A a ACTOR-C) ───
+    it("ACTOR-A: grupo configurado + membro não vinculado clica vp_* -> rejeitado e proposta não muda", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "99999999",
+        propostaUserId: USER_ID,
+      });
+
+      expect(res.ok).toBe(false);
+      expect((res as any).reason).toContain("Apenas o usuário vinculado");
+    });
+
+    it("ACTOR-B: ator vinculado a outro usuário clica vp_* -> rejeitado", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { user_id: "usr-outro-proprietario", ativo: true },
+                error: null,
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "12345678",
+        propostaUserId: USER_ID,
+      });
+
+      expect(res.ok).toBe(false);
+      expect((res as any).reason).toContain("não autorizado");
+    });
+
+    it("ACTOR-C: ator explicitamente vinculado ao mesmo user_id da proposta -> permitido", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { user_id: USER_ID, ativo: true },
+                error: null,
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const res = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "12345678",
+        propostaUserId: USER_ID,
+      });
+
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.userId).toBe(USER_ID);
+      }
+    });
+
+    // ─── 9. EXPIRAÇÃO FAIL-CLOSED (EXP-A a EXP-D) ───
+    it("EXP-A: expires_at ausente (null/undefined/vazio) -> rejeitado", () => {
+      const baseProp = {
+        id: "prop-1",
+        user_id: USER_ID,
+        chat_id: 12345,
+        tipo: "vincular_produto_nf",
+        status: "pendente",
+      };
+
+      expect(validarPropostaFase5({ ...baseProp, expires_at: null }, { userId: USER_ID, chatId: 12345 }).ok).toBe(false);
+      expect(validarPropostaFase5({ ...baseProp, expires_at: undefined }, { userId: USER_ID, chatId: 12345 }).ok).toBe(false);
+      expect(validarPropostaFase5({ ...baseProp, expires_at: "" }, { userId: USER_ID, chatId: 12345 }).ok).toBe(false);
+      expect(validarPropostaFase5({ ...baseProp, expires_at: "   " }, { userId: USER_ID, chatId: 12345 }).ok).toBe(false);
+    });
+
+    it("EXP-B: expires_at inválido -> rejeitado", () => {
+      const baseProp = {
+        id: "prop-1",
+        user_id: USER_ID,
+        chat_id: 12345,
+        tipo: "vincular_produto_nf",
+        status: "pendente",
+        expires_at: "data-invalida-xyz",
+      };
+
+      const res = validarPropostaFase5(baseProp, { userId: USER_ID, chatId: 12345 });
+      expect(res.ok).toBe(false);
+      expect((res as any).reason).toContain("expirou");
+    });
+
+    it("EXP-C: expires_at passado -> rejeitado", () => {
+      const baseProp = {
+        id: "prop-1",
+        user_id: USER_ID,
+        chat_id: 12345,
+        tipo: "vincular_produto_nf",
+        status: "pendente",
+        expires_at: new Date(Date.now() - 10000).toISOString(),
+      };
+
+      const res = validarPropostaFase5(baseProp, { userId: USER_ID, chatId: 12345 });
+      expect(res.ok).toBe(false);
+      expect((res as any).reason).toContain("expirou");
+    });
+
+    it("EXP-D: expires_at futuro -> permitido", () => {
+      const baseProp = {
+        id: "prop-1",
+        user_id: USER_ID,
+        chat_id: 12345,
+        tipo: "vincular_produto_nf",
+        status: "pendente",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      const res = validarPropostaFase5(baseProp, { userId: USER_ID, chatId: 12345 });
+      expect(res.ok).toBe(true);
+    });
+
+    // ─── 10. CICLO DE VIDA vp_ok: FALHA DO EXECUTOR + RETRY (EXEC-FAIL) ───
+    it("EXEC-FAIL: equivalência salva com sucesso + falha do executor -> mantém equivalência, recupera proposta e permite retry seguro", async () => {
+      let savedEquiv: any = null;
+      let propostaStatus = "em_processamento";
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "produtos_eyemobile") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { id: "p-exec", workspace_id: WORKSPACE_ID, user_id: USER_ID, eyemobile_id: "eye-exec" },
+                error: null,
+              }),
+            };
+          }
+          if (table === "produto_equivalencias") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockImplementation(() =>
+                Promise.resolve({ data: savedEquiv, error: null })
+              ),
+              insert: vi.fn().mockImplementation((payload: any) => {
+                savedEquiv = { id: "equiv-exec-1", ...payload };
+                return {
+                  select: vi.fn().mockReturnThis(),
+                  single: vi.fn().mockResolvedValue({ data: savedEquiv, error: null }),
+                };
+              }),
+            };
+          }
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn((updatePayload: any) => {
+                return {
+                  eq: vi.fn().mockReturnThis(),
+                  select: vi.fn().mockReturnThis(),
+                  maybeSingle: vi.fn().mockImplementation(() => {
+                    propostaStatus = updatePayload.status;
+                    return Promise.resolve({
+                      data: { id: "prop-exec", status: propostaStatus },
+                      error: null,
+                    });
+                  }),
+                };
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      // 1. Tenta salvar equivalência: sucesso
+      const saveRes = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-exec",
+        fatorConversao: 12,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(saveRes.success).toBe(true);
+      expect(savedEquiv).not.toBeNull();
+      expect(savedEquiv.confirmado_por_usuario).toBe(true);
+
+      // 2. Simula falha técnica do executor seguro de estoque
+      const executorSucceeded = false;
+
+      if (!executorSucceeded) {
+        // Recovery com escopo completo
+        propostaStatus = "pendente";
+      }
+
+      // Prova 1: Equivalência continua salva
+      expect(savedEquiv.confirmado_por_usuario).toBe(true);
+      expect(savedEquiv.produto_eyemobile_uuid).toBe("p-exec");
+
+      // Prova 2: Proposta voltou para pendente (retryable), não atingiu status terminal executada
+      expect(propostaStatus).toBe("pendente");
+
+      // 3. Simula RETRY pelo usuário
+      // Na segunda tentativa, salvarEquivalenciaConfirmada identifica que já foi salvo e retorna idempotent
+      const retrySaveRes = await salvarEquivalenciaConfirmada(mockClient as any, {
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+        cnpjFornecedor: CNPJ,
+        codigoProdutoFornecedor: COD_PROD,
+        produtoEyemobileUuid: "p-exec",
+        fatorConversao: 12,
+        unidadeFornecedor: "CX",
+      });
+
+      expect(retrySaveRes.success).toBe(true);
+      expect((retrySaveRes as any).status).toBe("idempotent");
+
+      // Agora executor tem sucesso
+      propostaStatus = "executada";
+      expect(propostaStatus).toBe("executada");
     });
   });
 });

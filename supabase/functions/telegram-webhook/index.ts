@@ -767,11 +767,12 @@ function validarPropostaFase5(
   if (propRow.status !== "pendente") {
     return { ok: false, reason: "Esta proposta já foi processada ou cancelada." };
   }
-  if (propRow.expires_at) {
-    const expTime = new Date(propRow.expires_at).getTime();
-    if (isNaN(expTime) || expTime <= Date.now()) {
-      return { ok: false, reason: "Esta proposta expirou. Inicie a operação novamente." };
-    }
+  if (!propRow.expires_at || String(propRow.expires_at).trim() === "") {
+    return { ok: false, reason: "Proposta sem validade ou expiração ausente." };
+  }
+  const expTime = new Date(propRow.expires_at).getTime();
+  if (!Number.isFinite(expTime) || expTime <= Date.now()) {
+    return { ok: false, reason: "Esta proposta expirou. Inicie a operação novamente." };
   }
   return { ok: true };
 }
@@ -1504,7 +1505,7 @@ serve(async (req) => {
               tipo: "vincular_produto_nf",
               dados: {
                 nf_id: nf.id,
-                item_id: primeiroPendente.id,
+                nf_item_id: primeiroPendente.id,
                 cnpj_fornecedor: nf.cnpj_fornecedor,
                 fornecedor_nome: nf.fornecedor,
                 codigo_produto: primeiroPendente.codigo_produto,
@@ -1653,61 +1654,82 @@ serve(async (req) => {
       let cbUserId: string = "";
       const cbChatId = callbackChatId;
 
-      // 1. Busca pelo Telegram User ID de quem clicou no botão
-      if (callbackUserId) {
-        const { data: uData } = await supabase
-          .from("usuarios_telegram")
-          .select("user_id")
-          .eq("telegram_chat_id", String(callbackUserId))
-          .eq("ativo", true)
-          .maybeSingle();
-        if (uData?.user_id) cbUserId = uData.user_id;
-      }
-
-      // 2. Se for chat privado, busca pelo Chat ID
-      if (!cbUserId && callbackChatId) {
-        const { data: cData } = await supabase
-          .from("usuarios_telegram")
-          .select("user_id")
-          .eq("telegram_chat_id", String(callbackChatId))
-          .eq("ativo", true)
-          .maybeSingle();
-        if (cData?.user_id) cbUserId = cData.user_id;
-      }
-
-      // 3. Se for grupo, busca pelo grupo em telegram_grupos_config
-      if (!cbUserId && callbackChatId) {
-        const { data: gc } = await supabase
-          .from("telegram_grupos_config")
-          .select("workspace_id")
-          .eq("chat_id", String(callbackChatId))
-          .maybeSingle();
-
-        if (gc?.workspace_id) {
-          const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", gc.workspace_id).maybeSingle();
-          if (ws?.user_id) cbUserId = ws.user_id;
+      // 1. Autorização estrita para callbacks da Fase 5 (vp_*):
+      // Exige estritamente o Telegram User ID real (from.id) vinculado em usuarios_telegram.
+      // Proíbe terminantemente fallback de grupo/workspace owner.
+      if (callbackData.startsWith("vp_")) {
+        if (callbackUserId) {
+          const { data: uData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackUserId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (uData?.user_id) cbUserId = uData.user_id;
         }
-      }
 
-      // 4. Se a ação for confirmação de NF existente, busca o user_id da própria NF
-      if (!cbUserId && callbackData.startsWith("nf_")) {
-        const nfId = callbackData.split(":")[1];
-        const { data: nfRow } = await supabase.from("notas_fiscais_compra").select("user_id").eq("id", nfId).maybeSingle();
-        if (nfRow?.user_id) cbUserId = nfRow.user_id;
-      }
+        if (!cbUserId) {
+          await answerCallback(callbackQuery.id as string | number, "Apenas o usuário vinculado pode interagir com este botão.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } else {
+        // Comportamento genérico preservado para outras funcionalidades:
+        // 1. Busca pelo Telegram User ID de quem clicou no botão
+        if (callbackUserId) {
+          const { data: uData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackUserId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (uData?.user_id) cbUserId = uData.user_id;
+        }
 
-      // 5. Se a ação for alerta de preço, busca o user_id do alerta
-      if (!cbUserId && callbackData.startsWith("preco_")) {
-        const parts = callbackData.split(":");
-        const alertaId = parts[1];
-        const { data: alertaRow } = await supabase.from("alertas_preco_pendentes").select("user_id").eq("id", alertaId).maybeSingle();
-        if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
-      }
+        // 2. Se for chat privado, busca pelo Chat ID
+        if (!cbUserId && callbackChatId) {
+          const { data: cData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackChatId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (cData?.user_id) cbUserId = cData.user_id;
+        }
 
-      // 6. Fail-closed: se o usuário não foi autenticado, encerra sem executar
-      if (!cbUserId) {
-        await answerCallback(callbackQuery.id as string | number, "Usuário não autorizado.");
-        return new Response("OK", { status: 200, headers: corsHeaders });
+        // 3. Se for grupo, busca pelo grupo em telegram_grupos_config
+        if (!cbUserId && callbackChatId) {
+          const { data: gc } = await supabase
+            .from("telegram_grupos_config")
+            .select("workspace_id")
+            .eq("chat_id", String(callbackChatId))
+            .maybeSingle();
+
+          if (gc?.workspace_id) {
+            const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", gc.workspace_id).maybeSingle();
+            if (ws?.user_id) cbUserId = ws.user_id;
+          }
+        }
+
+        // 4. Se a ação for confirmação de NF existente, busca o user_id da própria NF
+        if (!cbUserId && callbackData.startsWith("nf_")) {
+          const nfId = callbackData.split(":")[1];
+          const { data: nfRow } = await supabase.from("notas_fiscais_compra").select("user_id").eq("id", nfId).maybeSingle();
+          if (nfRow?.user_id) cbUserId = nfRow.user_id;
+        }
+
+        // 5. Se a ação for alerta de preço, busca o user_id do alerta
+        if (!cbUserId && callbackData.startsWith("preco_")) {
+          const parts = callbackData.split(":");
+          const alertaId = parts[1];
+          const { data: alertaRow } = await supabase.from("alertas_preco_pendentes").select("user_id").eq("id", alertaId).maybeSingle();
+          if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
+        }
+
+        // 6. Fail-closed: se o usuário não foi autenticado, encerra sem executar
+        if (!cbUserId) {
+          await answerCallback(callbackQuery.id as string | number, "Usuário não autorizado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
       }
 
       const fmt = (v: unknown) =>
@@ -2615,6 +2637,21 @@ serve(async (req) => {
 
         const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
 
+        // Resolução de compatibilidade entre nf_item_id (novo) e item_id (legado)
+        const nfItemId = propDados?.nf_item_id ?? propDados?.item_id;
+        if (!nfItemId) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Identificador do item não encontrado na proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         // Revalidação autoritativa da NF no banco
         const { data: nfRow, error: nfErr } = await supabase
           .from("notas_fiscais_compra")
@@ -2624,7 +2661,14 @@ serve(async (req) => {
           .maybeSingle();
 
         if (nfErr || !nfRow) {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           await replyCallbackFn("❌ Nota fiscal não encontrada ou não autorizada para este usuário.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -2635,12 +2679,19 @@ serve(async (req) => {
         const { data: itemRow, error: itemErr } = await supabase
           .from("nf_itens")
           .select("id, nf_id, codigo_produto, descricao, unidade")
-          .eq("id", propDados.nf_item_id)
+          .eq("id", nfItemId)
           .eq("nf_id", nfRow.id)
           .maybeSingle();
 
         if (itemErr || !itemRow) {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           await replyCallbackFn("❌ Item da nota fiscal não encontrado ou desvinculado.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -2648,7 +2699,14 @@ serve(async (req) => {
         // Revalidação autoritativa do produto canônico no banco (não confia em campos cacheados na proposta)
         const prodUuid = propDados.produto_selecionado?.id;
         if (!prodUuid) {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           await replyCallbackFn("❌ Produto selecionado não identificado na proposta.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -2662,13 +2720,27 @@ serve(async (req) => {
           .maybeSingle();
 
         if (prodErr || !prodCanonical) {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           await replyCallbackFn("❌ Produto selecionado não encontrado no seu catálogo de produtos.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         if (!prodCanonical.eyemobile_id || String(prodCanonical.eyemobile_id).trim() === "") {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           await replyCallbackFn("❌ O produto selecionado não possui ID remoto válido no PDV (eyemobile_id).");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
@@ -2686,12 +2758,66 @@ serve(async (req) => {
         });
 
         if (!saveRes.success) {
-          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
           if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
           await replyCallbackFn(`⚠️ <b>Não foi possível salvar o vínculo:</b> ${saveRes.error}`);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let execRes: any;
+        try {
+          execRes = await executarConfirmacaoNfSegura({
+            targetUserId: cbUserId,
+            targetChatId: cbChatId,
+            nfId: propDados.nf_id,
+            replyFn: replyCallbackFn,
+            callbackQueryId: callbackQuery.id,
+          });
+        } catch (execErr: unknown) {
+          console.error("[telegram-webhook] Erro ao executar confirmação segura de NF:", execErr);
+          execRes = { success: false, reason: "exception", error: String(execErr) };
+        }
+
+        if (!execRes || execRes.success !== true) {
+          // A equivalência foi salva com sucesso, mas o processamento de estoque falhou.
+          // Devolve a proposta para pendente de forma escopada para permitir retry seguro.
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+
+          if (callbackMessageId) {
+            await editMessageText(
+              cbChatId,
+              callbackMessageId,
+              `⚠️ <b>Vínculo salvo, mas houve erro ao atualizar o estoque</b>\n\n` +
+              `O vínculo de <b>${prodCanonical.descricao}</b> foi salvo com sucesso, mas o estoque não pôde ser atualizado.\n` +
+              `Você pode tentar processar novamente clicando abaixo.`,
+              {
+                inline_keyboard: [
+                  [{ text: "🔄 Tentar processar novamente", callback_data: `vp_ok:${propRow.id}` }],
+                  [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+                ],
+              }
+            );
+          }
+          await replyCallbackFn("⚠️ Houve uma instabilidade técnica ao processar o estoque desta NF. O vínculo foi preservado e você pode tentar novamente.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Executor teve sucesso: agora sim marca a proposta como executada e limpa a conversa!
         await supabase
           .from("telegram_propostas")
           .update({ status: "executada", executed_at: new Date().toISOString() })
@@ -2708,18 +2834,9 @@ serve(async (req) => {
             callbackMessageId,
             `✅ <b>Vínculo confirmado com sucesso!</b>\n` +
             `📦 Produto: <b>${prodCanonical.descricao}</b> (Conversão: 1 = ${propDados.fator_escolhido})\n\n` +
-            `🔄 <i>Atualizando estoque e custos da Nota Fiscal via transação segura...</i>`
+            `Estoque e custos processados com sucesso.`
           );
         }
-
-        // Reexecuta o executor seguro da Fase 4 para a NF
-        await executarConfirmacaoNfSegura({
-          targetUserId: cbUserId,
-          targetChatId: cbChatId,
-          nfId: propDados.nf_id,
-          replyFn: replyCallbackFn,
-          callbackQueryId: callbackQuery.id,
-        });
 
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
