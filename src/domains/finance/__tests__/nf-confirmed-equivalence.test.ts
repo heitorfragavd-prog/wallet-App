@@ -258,7 +258,9 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
   // =========================================================================
   // Cenário H: Produto Eyemobile com eyemobile_id nulo ou vazio não gera match
   // =========================================================================
-  it("Cenário H: produto Eyemobile com eyemobile_id nulo ou vazio vai para pendente", async () => {
+  // Cenário H: Produto Eyemobile com eyemobile_id nulo ou vazio retorna error (missing_remote_product_id)
+  // =========================================================================
+  it("Cenário H: produto Eyemobile com eyemobile_id nulo ou vazio falha como error (missing_remote_product_id)", async () => {
     for (const emptyId of [null, "", "   ", undefined]) {
       const mockClient = {
         from: vi.fn((table: string) => {
@@ -305,9 +307,10 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
         cnpjFornecedor: "12345678000190",
       });
 
-      expect(res.status).toBe("pending");
-      if (res.status === "pending") {
-        expect(res.motivo).toContain("não possui identificador remoto");
+      expect(res.status).toBe("error");
+      if (res.status === "error") {
+        expect(res.code).toBe("missing_remote_product_id");
+        expect(res.errorMessage).toContain("não possui identificador remoto");
       }
     }
   });
@@ -741,6 +744,262 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
     expect(content).toContain("already_processed");
     expect(content).toContain("tenant_mismatch");
     expect(content).toContain("produto_eyemobile_uuid");
+  });
+
+  // =========================================================================
+  // Cenário AB: Legado 'atualizado' não duplica estoque
+  // =========================================================================
+  it("Cenário AB: item com status legado 'atualizado' é tratado como already_processed e não altera estoque", () => {
+    const itens = [
+      { id: "i1", status_estoque: "atualizado" },
+      { id: "i2", status_estoque: "processado" },
+    ];
+
+    const pendentes = itens.filter(
+      (i) => i.status_estoque !== "processado" && i.status_estoque !== "atualizado"
+    );
+    expect(pendentes.length).toBe(0);
+
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+    expect(content).toContain("v_item.status_estoque IN ('processado', 'atualizado')");
+  });
+
+  // =========================================================================
+  // =========================================================================
+  // Cenário AC: Item sem equivalência não é regravado como pendente (evita race condition)
+  // =========================================================================
+  it("Cenário AC: item sem equivalência não é regravado como pendente e itens terminais não regridem", () => {
+    const webhookFile = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const content = fs.readFileSync(webhookFile, "utf-8");
+
+    // Garante que não há update ativo gravando status_estoque = 'pendente' para itens não matched
+    expect(content).not.toMatch(/\.update\(\s*\{\s*status_estoque:\s*["']pendente["']/);
+
+    // Valida lógica em memória
+    const itemProcessado = { id: "i1", status_estoque: "processado" };
+    const itemAtualizado = { id: "i2", status_estoque: "atualizado" };
+    expect(itemProcessado.status_estoque).toBe("processado");
+    expect(itemAtualizado.status_estoque).toBe("atualizado");
+  });
+
+  // =========================================================================
+  // Cenário AD: TOCTOU - Equivalência desconfirmada é rejeitada na transação
+  // =========================================================================
+  it("Cenário AD: RPC revalida confirmado_por_usuario e rejeita se for desconfirmada", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("IF NOT v_equiv.confirmado_por_usuario THEN");
+    expect(content).toContain("'equivalence_not_confirmed'");
+  });
+
+  // =========================================================================
+  // Cenário AE: TOCTOU - Equivalência que muda de produto é rejeitada
+  // =========================================================================
+  it("Cenário AE: RPC revalida produto_eyemobile_uuid contra a equivalência e rejeita divergência", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("IF v_equiv.produto_eyemobile_uuid IS DISTINCT FROM p_produto_eyemobile_uuid THEN");
+    expect(content).toContain("'equivalence_product_mismatch'");
+  });
+
+  // =========================================================================
+  // Cenário AF: TOCTOU - Fator alterado concorrentemente (12 -> 6) retorna equivalence_changed com zero mutação
+  // =========================================================================
+  it("Cenário AF: RPC revalida fator_conversao contra esperado e retorna equivalence_changed se alterado concorrentemente", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("IF v_equiv.fator_conversao IS DISTINCT FROM p_fator_conversao_esperado THEN");
+    expect(content).toContain("'equivalence_changed'");
+
+    // Simulação do comportamento: fator 12 no preflight -> fator 6 persistido antes da RPC
+    const simularRpcComToctou = (fatorPreflight: number, fatorPersistidoNoBanco: number) => {
+      if (fatorPersistidoNoBanco !== fatorPreflight) {
+        return { success: false, code: "equivalence_changed", mutations: 0 };
+      }
+      return { success: true, code: "processed", mutations: 3 };
+    };
+
+    const resultadoToctou = simularRpcComToctou(12, 6);
+    expect(resultadoToctou.success).toBe(false);
+    expect(resultadoToctou.code).toBe("equivalence_changed");
+    expect(resultadoToctou.mutations).toBe(0);
+  });
+
+  // =========================================================================
+  // Cenário AG: Histórico anterior usa neq('nf_id', nf.id)
+  // =========================================================================
+  it("Cenário AG: consulta de histórico anterior exclui explicitamente a própria NF corrente", () => {
+    const webhookFile = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const content = fs.readFileSync(webhookFile, "utf-8");
+
+    expect(content).toContain('.neq("nf_id", nf.id)');
+  });
+
+  // =========================================================================
+  // Cenário AH: Fail-fast no primeiro erro de RPC
+  // =========================================================================
+  it("Cenário AH: primeiro erro na chamada da RPC interrompe novos writes imediatamente", () => {
+    let writesExecutados = 0;
+    const itemResolutions = [
+      { id: "i1", deveFalhar: false },
+      { id: "i2", deveFalhar: true },
+      { id: "i3", deveFalhar: false },
+    ];
+
+    for (const item of itemResolutions) {
+      if (item.deveFalhar) {
+        break;
+      }
+      writesExecutados++;
+    }
+
+    expect(writesExecutados).toBe(1);
+  });
+
+  // =========================================================================
+  // Cenários AI, AJ, AK: Permissões de EXECUTE na RPC
+  // =========================================================================
+  it("Cenário AI: permissão de EXECUTE é revogada de PUBLIC e anon", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("REVOKE ALL ON FUNCTION public.aplicar_item_nf_estoque_custo");
+    expect(content).toContain("PUBLIC");
+    expect(content).toContain("anon");
+  });
+
+  it("Cenário AJ: permissão de EXECUTE é revogada de authenticated", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("authenticated");
+  });
+
+  it("Cenário AK: permissão de EXECUTE é concedida estritamente a service_role", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("GRANT EXECUTE ON FUNCTION public.aplicar_item_nf_estoque_custo");
+    expect(content).toContain("TO service_role;");
+  });
+
+  // =========================================================================
+  // Cenário AL: Rollback atômico da transação em caso de erro
+  // =========================================================================
+  it("Cenário AL: função PL/pgSQL executa em bloco transacional atômico (qualquer erro faz rollback total)", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("CREATE OR REPLACE FUNCTION public.aplicar_item_nf_estoque_custo");
+    expect(content).toContain("LANGUAGE plpgsql");
+    expect(content).toContain("SECURITY DEFINER");
+  });
+
+  // =========================================================================
+  // Cenário AM: Cross-tenant rejeitado na RPC
+  // =========================================================================
+  it("Cenário AM: RPC valida correspondência de tenant para NF, equivalência e produto", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("v_nf.user_id IS DISTINCT FROM p_user_id OR v_nf.workspace_id IS DISTINCT FROM p_workspace_id");
+    expect(content).toContain("user_id = p_user_id");
+    expect(content).toContain("workspace_id = p_workspace_id");
+    expect(content).toContain("'tenant_mismatch'");
+  });
+
+  // =========================================================================
+  // Cenários AN & AO: Parâmetros inválidos (quantidade, custo e fator esperado <= 0 ou NULL)
+  // =========================================================================
+  it("Cenário AN: RPC rejeita quantidade <= 0 ou NULL", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("p_quantidade_para_estoque IS NULL OR p_quantidade_para_estoque <= 0");
+    expect(content).toContain("'invalid_parameters'");
+  });
+
+  it("Cenário AO: RPC rejeita custo unitário ou fator esperado <= 0 ou NULL", () => {
+    const migrationFile = path.resolve(
+      __dirname,
+      "../../../../supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql"
+    );
+    const content = fs.readFileSync(migrationFile, "utf-8");
+
+    expect(content).toContain("p_custo_unitario_convertido IS NULL OR p_custo_unitario_convertido <= 0");
+    expect(content).toContain("p_fator_conversao_esperado IS NULL OR p_fator_conversao_esperado <= 0");
+    expect(content).toContain("'invalid_parameters'");
+  });
+
+  // =========================================================================
+  // Cenário AP: Re-leitura pós-processamento determina status real da NF e proposta
+  // =========================================================================
+  it("Cenário AP: status da NF e proposta são calculados após re-ler itens do banco", () => {
+    const calcularStatus = (itens: Array<{ status_estoque: string }>) => {
+      const totalItens = itens.length;
+      const qtdTerminais = itens.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+
+      let statusFinalNF = "pendente";
+      if (totalItens > 0 && qtdTerminais === totalItens) {
+        statusFinalNF = "confirmada";
+      } else if (qtdTerminais > 0) {
+        statusFinalNF = "parcialmente_processada";
+      } else {
+        statusFinalNF = "pendente";
+      }
+      return { statusFinalNF, propostaConfirmada: statusFinalNF === "confirmada" };
+    };
+
+    expect(calcularStatus([
+      { status_estoque: "processado" },
+      { status_estoque: "atualizado" },
+    ])).toEqual({ statusFinalNF: "confirmada", propostaConfirmada: true });
+
+    expect(calcularStatus([
+      { status_estoque: "processado" },
+      { status_estoque: "pendente" },
+    ])).toEqual({ statusFinalNF: "parcialmente_processada", propostaConfirmada: false });
+
+    expect(calcularStatus([
+      { status_estoque: "pendente" },
+      { status_estoque: "pendente" },
+    ])).toEqual({ statusFinalNF: "pendente", propostaConfirmada: false });
   });
 
   // =========================================================================

@@ -1210,7 +1210,8 @@ serve(async (req) => {
       }> = [];
 
       for (const item of itens) {
-        if (item.status_estoque === "processado") {
+        // Trata tanto 'processado' quanto legado 'atualizado' como terminal
+        if (item.status_estoque === "processado" || item.status_estoque === "atualizado") {
           continue;
         }
 
@@ -1247,8 +1248,10 @@ serve(async (req) => {
         });
       }
 
-      // 7. Mutação atômica via RPC por item
-      let itensJaProcessados = itens.filter((i) => i.status_estoque === "processado").length;
+      // 7. Mutação atômica via RPC por item com fail-fast
+      let itensJaProcessados = itens.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
       let itensRecemProcessados = 0;
       let itensPendentes = 0;
       const alertasCriados: Array<Record<string, unknown>> = [];
@@ -1269,16 +1272,19 @@ serve(async (req) => {
               p_item_id: item.id,
               p_user_id: nf.user_id || targetUserId,
               p_workspace_id: nf.workspace_id,
+              p_equivalencia_id: resolution.equivalenciaId,
               p_produto_eyemobile_uuid: resolution.produto.id,
               p_quantidade_para_estoque: avaliacaoEstoque.quantidadeParaEstoque,
               p_custo_unitario_convertido: custoConvertido,
+              p_fator_conversao_esperado: resolution.fatorConversao,
             }
           );
 
           if (rpcError) {
             console.error(`[telegram-webhook] [RPC_ERROR] aplicar_item_nf_estoque_custo falhou para item ${item.id}:`, rpcError);
             itensPendentes++;
-            continue;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
           }
 
           const rpcData = rpcResult as { success?: boolean; code?: string } | null;
@@ -1290,7 +1296,8 @@ serve(async (req) => {
           if (!rpcData?.success) {
             console.error(`[telegram-webhook] [RPC_FAIL] aplicar_item_nf_estoque_custo retornou insucesso para item ${item.id}:`, rpcData);
             itensPendentes++;
-            continue;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
           }
 
           itensRecemProcessados++;
@@ -1305,6 +1312,7 @@ serve(async (req) => {
               .select("custo_unitario, created_at")
               .eq("user_id", nf.user_id || targetUserId)
               .eq("produto_eyemobile_uuid", resolution.produto.id)
+              .neq("nf_id", nf.id) // Exclui explicitamente a própria NF
               .lt("created_at", nf.created_at || new Date().toISOString())
               .gte("created_at", dozeMesesAtras.toISOString())
               .order("created_at", { ascending: false })
@@ -1335,7 +1343,7 @@ serve(async (req) => {
                 }
 
                 const { data: novoAlerta } = await supabase
-                  .from("alertas_preco_pendentes")
+                  .from("alertas_alteracao_custo_nf")
                   .insert({
                     user_id: nf.user_id || targetUserId,
                     workspace_id: nf.workspace_id,
@@ -1363,19 +1371,28 @@ serve(async (req) => {
             console.error(`[telegram-webhook] Erro ao calcular/gerar alerta de preço para item ${item.id}:`, errAlerta);
           }
         } else {
-          // Pendente: não matchou ou fator indefinido
-          await supabase.from("nf_itens").update({
-            status_estoque: "pendente",
-          }).eq("id", item.id);
+          // Item não matchou ou fator indefinido:
+          // NÃO regrava status_estoque para 'pendente' (mantém o estado intacto no banco para evitar race conditions)
           itensPendentes++;
         }
       }
 
-      // 8. Atualiza status da NF
+      // 8. Reler nf_itens do banco para cálculo real do status final
+      const { data: itensAtualizados } = await supabase
+        .from("nf_itens")
+        .select("status_estoque")
+        .eq("nf_id", nf.id);
+
+      const listaFinal = itensAtualizados || [];
+      const totalItens = listaFinal.length;
+      const qtdTerminais = listaFinal.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+
       let statusFinalNF = "pendente";
-      if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
+      if (totalItens > 0 && qtdTerminais === totalItens) {
         statusFinalNF = "confirmada";
-      } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
+      } else if (qtdTerminais > 0) {
         statusFinalNF = "parcialmente_processada";
       } else {
         statusFinalNF = "pendente";
@@ -1383,6 +1400,7 @@ serve(async (req) => {
 
       await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nf.id);
 
+      // Proposta só é marcada como confirmada quando 100% dos itens forem terminais
       if (statusFinalNF === "confirmada") {
         if (propostaId) {
           await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", propostaId);

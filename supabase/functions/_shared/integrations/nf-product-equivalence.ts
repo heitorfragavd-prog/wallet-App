@@ -36,6 +36,7 @@ export interface ProdutoEyemobileRow {
 export type NfProductResolution =
   | {
       status: "matched";
+      equivalenciaId: string;
       produtoEyemobileUuid: string;
       eyemobileId: string;
       fatorConversao: number;
@@ -229,14 +230,16 @@ export async function resolveNfProductEquivalence(
   if (!remoteId) {
     console.error(`[nf-product-equivalence] Produto canônico ${prod.id} não possui eyemobile_id válido.`);
     return {
-      status: "pending",
-      reason: "missing_remote_product_id",
-      motivo: "Produto canônico não possui identificador remoto eyemobile_id válido.",
+      status: "error",
+      code: "missing_remote_product_id",
+      reason: NF_RESOLVER_ERROR_MESSAGES.missing_remote_product_id,
+      errorMessage: NF_RESOLVER_ERROR_MESSAGES.missing_remote_product_id,
     };
   }
 
   return {
     status: "matched",
+    equivalenciaId: equiv.id,
     produtoEyemobileUuid: prod.id,
     eyemobileId: remoteId,
     fatorConversao: fator,
