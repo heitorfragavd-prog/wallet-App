@@ -772,3 +772,17 @@ export function extrairNfItemIdDaProposta(
   }
   return rawId.trim();
 }
+
+/**
+ * Decisão pura se uma proposta de equivalência manual pode ser finalizada como executada.
+ * Exige que o executor de estoque tenha tido sucesso E que o nf_item esteja terminal ('processado' ou 'atualizado').
+ */
+export function canFinalizeManualEquivalenceProposal(params: {
+  executorSuccess: boolean;
+  itemStatus?: string | null;
+}): boolean {
+  if (!params.executorSuccess) {
+    return false;
+  }
+  return params.itemStatus === "processado" || params.itemStatus === "atualizado";
+}

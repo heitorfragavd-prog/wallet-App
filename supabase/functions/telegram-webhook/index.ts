@@ -66,6 +66,10 @@ import {
   searchProductCandidates,
   suggestConversionFactor,
   salvarEquivalenciaConfirmada,
+  validarPropostaFase5,
+  validarAtorTelegramFase5,
+  extrairNfItemIdDaProposta,
+  canFinalizeManualEquivalenceProposal,
   type ProductCandidate,
 } from "../_shared/integrations/nf-product-equivalence.ts";
 
@@ -743,40 +747,6 @@ function parseNFeXml(xmlText: string) {
   };
 }
 
-/**
- * Validação fail-closed estrita de propostas da Fase 5 (vincular_produto_nf).
- * Exige autorização de usuário e chat, integridade de tipo, status pendente e não expiração.
- */
-function validarPropostaFase5(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  propRow: any,
-  expected: { userId: string; chatId: string | number }
-): { ok: true } | { ok: false; reason: string } {
-  if (!propRow) {
-    return { ok: false, reason: "Proposta não encontrada." };
-  }
-  if (propRow.user_id !== expected.userId) {
-    return { ok: false, reason: "Usuário não autorizado para esta proposta." };
-  }
-  if (String(propRow.chat_id) !== String(expected.chatId)) {
-    return { ok: false, reason: "Chat não autorizado para esta proposta." };
-  }
-  if (propRow.tipo !== "vincular_produto_nf") {
-    return { ok: false, reason: "Tipo de proposta inválido." };
-  }
-  if (propRow.status !== "pendente") {
-    return { ok: false, reason: "Esta proposta já foi processada ou cancelada." };
-  }
-  if (!propRow.expires_at || String(propRow.expires_at).trim() === "") {
-    return { ok: false, reason: "Proposta sem validade ou expiração ausente." };
-  }
-  const expTime = new Date(propRow.expires_at).getTime();
-  if (!Number.isFinite(expTime) || expTime <= Date.now()) {
-    return { ok: false, reason: "Esta proposta expirou. Inicie a operação novamente." };
-  }
-  return { ok: true };
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -1156,6 +1126,7 @@ serve(async (req) => {
       replyFn,
       messageIdToEdit,
       callbackQueryId,
+      manualLinkItemInProgressId,
     }: {
       targetUserId: string;
       targetChatId: string | number;
@@ -1164,6 +1135,7 @@ serve(async (req) => {
       replyFn: (text: string) => Promise<unknown>;
       messageIdToEdit?: number;
       callbackQueryId?: string | number;
+      manualLinkItemInProgressId?: string | null;
     }) => {
       const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
@@ -1292,6 +1264,7 @@ serve(async (req) => {
       ).length;
       let itensRecemProcessados = 0;
       let itensPendentes = 0;
+      let processingFailure: { reason: string; itemId: string; error?: string } | null = null;
       const alertasCriados: Array<Record<string, unknown>> = [];
 
       for (const entry of itemResolutions) {
@@ -1320,12 +1293,17 @@ serve(async (req) => {
 
           if (rpcError) {
             console.error(`[telegram-webhook] [RPC_ERROR] aplicar_item_nf_estoque_custo falhou para item ${item.id}:`, rpcError);
+            processingFailure = {
+              reason: "rpc_error",
+              itemId: item.id,
+              error: rpcError.message || String(rpcError),
+            };
             itensPendentes++;
             // Fail-fast no primeiro erro de RPC: parar novos writes
             break;
           }
 
-          const rpcData = rpcResult as { success?: boolean; code?: string } | null;
+          const rpcData = rpcResult as { success?: boolean; code?: string; error?: string } | null;
           if (rpcData?.code === "already_processed") {
             itensJaProcessados++;
             continue;
@@ -1333,6 +1311,11 @@ serve(async (req) => {
 
           if (!rpcData?.success) {
             console.error(`[telegram-webhook] [RPC_FAIL] aplicar_item_nf_estoque_custo retornou insucesso para item ${item.id}:`, rpcData);
+            processingFailure = {
+              reason: "rpc_unsuccessful",
+              itemId: item.id,
+              error: rpcData?.error || rpcData?.code || "rpc_returned_false",
+            };
             itensPendentes++;
             // Fail-fast no primeiro erro de RPC: parar novos writes
             break;
@@ -1486,6 +1469,7 @@ serve(async (req) => {
       }
 
       // Se houver itens pendentes, oferece fluxo de vinculação manual para o primeiro item
+      // Não cria proposta duplicada se o item pendente for o mesmo que já está em fluxo manual ativo (ex: retry no vp_ok)
       if (itensPendentes > 0) {
         const { data: pendentes } = await supabase
           .from("nf_itens")
@@ -1496,7 +1480,7 @@ serve(async (req) => {
           .limit(1);
 
         const primeiroPendente = pendentes?.[0];
-        if (primeiroPendente) {
+        if (primeiroPendente && primeiroPendente.id !== manualLinkItemInProgressId) {
           const { data: propVinculo } = await supabase
             .from("telegram_propostas")
             .insert({
@@ -1561,6 +1545,20 @@ serve(async (req) => {
 
           await replyFn(msgAlerta);
         }
+      }
+
+      if (processingFailure) {
+        return {
+          success: false,
+          reason: processingFailure.reason,
+          failedItemId: processingFailure.itemId,
+          error: processingFailure.error,
+          statusFinalNF,
+          itensRecemProcessados,
+          itensJaProcessados,
+          itensPendentes,
+          alertasCriadosCount: alertasCriados.length,
+        };
       }
 
       return {
@@ -2638,7 +2636,7 @@ serve(async (req) => {
         const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
 
         // Resolução de compatibilidade entre nf_item_id (novo) e item_id (legado)
-        const nfItemId = propDados?.nf_item_id ?? propDados?.item_id;
+        const nfItemId = extrairNfItemIdDaProposta(propDados);
         if (!nfItemId) {
           await supabase
             .from("telegram_propostas")
@@ -2780,14 +2778,29 @@ serve(async (req) => {
             nfId: propDados.nf_id,
             replyFn: replyCallbackFn,
             callbackQueryId: callbackQuery.id,
+            manualLinkItemInProgressId: nfItemId,
           });
         } catch (execErr: unknown) {
           console.error("[telegram-webhook] Erro ao executar confirmação segura de NF:", execErr);
           execRes = { success: false, reason: "exception", error: String(execErr) };
         }
 
-        if (!execRes || execRes.success !== true) {
-          // A equivalência foi salva com sucesso, mas o processamento de estoque falhou.
+        // Reler o status_estoque real do item após o executor
+        const { data: itemPosExec } = await supabase
+          .from("nf_itens")
+          .select("status_estoque")
+          .eq("id", nfItemId)
+          .eq("nf_id", nfRow.id)
+          .maybeSingle();
+
+        const itemEstoqueFinal = itemPosExec?.status_estoque;
+        const podeFinalizar = canFinalizeManualEquivalenceProposal({
+          executorSuccess: execRes?.success === true,
+          itemStatus: itemEstoqueFinal,
+        });
+
+        if (!podeFinalizar) {
+          // A equivalência foi salva com sucesso, mas o processamento de estoque falhou ou o item não é terminal.
           // Devolve a proposta para pendente de forma escopada para permitir retry seguro.
           await supabase
             .from("telegram_propostas")
@@ -2817,11 +2830,15 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        // Executor teve sucesso: agora sim marca a proposta como executada e limpa a conversa!
+        // Executor e item confirmados com sucesso: marca a proposta como executada usando CAS e limpa a conversa!
         await supabase
           .from("telegram_propostas")
           .update({ status: "executada", executed_at: new Date().toISOString() })
-          .eq("id", propRow.id);
+          .eq("id", propRow.id)
+          .eq("user_id", propRow.user_id)
+          .eq("chat_id", propRow.chat_id)
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "em_processamento");
 
         await supabase.from("telegram_conversas").upsert(
           { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
@@ -3212,10 +3229,37 @@ serve(async (req) => {
         .eq("id", conversaAtivaPre.proposta_id)
         .maybeSingle();
 
-      const valProp = validarPropostaFase5(propRow, { userId, chatId });
-      if (!valProp.ok) {
+      if (!propRow) {
         await supabase.from("telegram_conversas").upsert(
           { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Validação estrita do ator real do Telegram (message.from.id)
+      const msgFromId = (message as Record<string, unknown> | undefined)?.from
+        ? ((message as Record<string, unknown>).from as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+
+      const valAtor = await validarAtorTelegramFase5(supabase, {
+        telegramUserId: msgFromId,
+        propostaUserId: propRow.user_id,
+      });
+
+      if (!valAtor.ok) {
+        // Bloqueador 2: Rejeição imediata sem modificar/cancelar a proposta
+        await sendReply(`❌ ${valAtor.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const atorUserId = valAtor.userId;
+
+      const valProp = validarPropostaFase5(propRow, { userId: atorUserId, chatId });
+      if (!valProp.ok) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }
         );
         await sendReply(`❌ ${valProp.reason}`);
@@ -3227,13 +3271,13 @@ serve(async (req) => {
           .from("telegram_propostas")
           .update({ status: "cancelada" })
           .eq("id", propRow.id)
-          .eq("user_id", userId)
+          .eq("user_id", atorUserId)
           .eq("chat_id", Number(chatId))
           .eq("tipo", "vincular_produto_nf")
           .eq("status", "pendente");
 
         await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }
         );
         await sendReply("❌ Busca cancelada. O item permaneceu pendente.");
@@ -3245,12 +3289,12 @@ serve(async (req) => {
         .from("notas_fiscais_compra")
         .select("workspace_id")
         .eq("id", propDados.nf_id)
-        .eq("user_id", userId)
+        .eq("user_id", atorUserId)
         .maybeSingle();
 
       const wsId = nfRow?.workspace_id || propDados.workspace_id || workspaceId;
       const searchRes = await searchProductCandidates(supabase, {
-        userId,
+        userId: atorUserId,
         workspaceId: wsId,
         descricaoQuery: text,
         codigoQuery: text,
@@ -3272,13 +3316,13 @@ serve(async (req) => {
         .from("telegram_propostas")
         .update({ dados: propDados })
         .eq("id", propRow.id)
-        .eq("user_id", userId)
+        .eq("user_id", atorUserId)
         .eq("chat_id", Number(chatId))
         .eq("tipo", "vincular_produto_nf")
         .eq("status", "pendente");
 
       await supabase.from("telegram_conversas").upsert(
-        { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
         { onConflict: "chat_id" }
       );
 
@@ -3310,10 +3354,37 @@ serve(async (req) => {
         .eq("id", conversaAtivaPre.proposta_id)
         .maybeSingle();
 
-      const valProp = validarPropostaFase5(propRow, { userId, chatId });
-      if (!valProp.ok) {
+      if (!propRow) {
         await supabase.from("telegram_conversas").upsert(
           { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Validação estrita do ator real do Telegram (message.from.id)
+      const msgFromId = (message as Record<string, unknown> | undefined)?.from
+        ? ((message as Record<string, unknown>).from as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+
+      const valAtor = await validarAtorTelegramFase5(supabase, {
+        telegramUserId: msgFromId,
+        propostaUserId: propRow.user_id,
+      });
+
+      if (!valAtor.ok) {
+        // Bloqueador 2: Rejeição imediata sem modificar/cancelar a proposta
+        await sendReply(`❌ ${valAtor.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const atorUserId = valAtor.userId;
+
+      const valProp = validarPropostaFase5(propRow, { userId: atorUserId, chatId });
+      if (!valProp.ok) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }
         );
         await sendReply(`❌ ${valProp.reason}`);
@@ -3325,13 +3396,13 @@ serve(async (req) => {
           .from("telegram_propostas")
           .update({ status: "cancelada" })
           .eq("id", propRow.id)
-          .eq("user_id", userId)
+          .eq("user_id", atorUserId)
           .eq("chat_id", Number(chatId))
           .eq("tipo", "vincular_produto_nf")
           .eq("status", "pendente");
 
         await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }
         );
         await sendReply("❌ Definição de fator cancelada.");
@@ -3374,13 +3445,13 @@ serve(async (req) => {
         .from("telegram_propostas")
         .update({ dados: propDados })
         .eq("id", propRow.id)
-        .eq("user_id", userId)
+        .eq("user_id", atorUserId)
         .eq("chat_id", Number(chatId))
         .eq("tipo", "vincular_produto_nf")
         .eq("status", "pendente");
 
       await supabase.from("telegram_conversas").upsert(
-        { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
         { onConflict: "chat_id" }
       );
 

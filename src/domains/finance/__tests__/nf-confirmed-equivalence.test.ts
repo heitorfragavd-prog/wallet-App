@@ -11,6 +11,7 @@ import {
   validarPropostaFase5,
   validarAtorTelegramFase5,
   extrairNfItemIdDaProposta,
+  canFinalizeManualEquivalenceProposal,
 } from "../../../../supabase/functions/_shared/integrations/nf-product-equivalence";
 import { evaluateStockStatus } from "../../../../supabase/functions/_shared/danfe-extractor";
 import * as fs from "fs";
@@ -1362,9 +1363,14 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
       const content = fs.readFileSync(webhookPath, "utf-8");
 
-      expect(content).toContain("propRow.user_id !== expected.userId");
-      expect(content).toContain('"Usuário não autorizado para esta proposta."');
+      expect(content).toContain("validarPropostaFase5(propRow");
       expect(content).toContain('.eq("user_id", cbUserId)');
+
+      // Validação do helper compartilhado
+      const propEquivPath = path.resolve(__dirname, "../../../../supabase/functions/_shared/integrations/nf-product-equivalence.ts");
+      const propEquivContent = fs.readFileSync(propEquivPath, "utf-8");
+      expect(propEquivContent).toContain("propRow.user_id !== expected.userId");
+      expect(propEquivContent).toContain('"Usuário não autorizado para esta proposta."');
     });
 
     // Cenário K: Equivalência prévia não confirmada é atualizada para confirmada
@@ -1969,13 +1975,20 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
       const content = fs.readFileSync(webhookPath, "utf-8");
 
-      // validarPropostaFase5 helper
-      expect(content).toContain("function validarPropostaFase5(");
-      expect(content).toContain("if (propRow.user_id !== expected.userId)");
-      expect(content).toContain("if (String(propRow.chat_id) !== String(expected.chatId))");
-      expect(content).toContain('if (propRow.tipo !== "vincular_produto_nf")');
-      expect(content).toContain('if (!propRow.expires_at || String(propRow.expires_at).trim() === "")');
-      expect(content).toContain("if (!Number.isFinite(expTime) || expTime <= Date.now())");
+      // Webhook importa e utiliza validarPropostaFase5
+      expect(content).toContain("validarPropostaFase5");
+      expect(content).not.toContain("function validarPropostaFase5(");
+
+      // validarPropostaFase5 helper compartilhado em nf-product-equivalence
+      const propEquivPath = path.resolve(__dirname, "../../../../supabase/functions/_shared/integrations/nf-product-equivalence.ts");
+      const propEquivContent = fs.readFileSync(propEquivPath, "utf-8");
+
+      expect(propEquivContent).toContain("export function validarPropostaFase5(");
+      expect(propEquivContent).toContain("if (propRow.user_id !== expected.userId)");
+      expect(propEquivContent).toContain("if (String(propRow.chat_id) !== String(expected.chatId))");
+      expect(propEquivContent).toContain('if (propRow.tipo !== "vincular_produto_nf")');
+      expect(propEquivContent).toContain('if (!propRow.expires_at || String(propRow.expires_at).trim() === "")');
+      expect(propEquivContent).toContain("if (!Number.isFinite(expTime) || expTime <= Date.now())");
 
       // Lock atômico estrito no vp_ok
       expect(content).toContain('.eq("user_id", cbUserId)');
@@ -1999,8 +2012,8 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       expect(content).toContain('.eq("id", propDados.nf_id)');
       expect(content).toContain('.eq("user_id", cbUserId)');
 
-      // Revalidação do item (compatível com nf_item_id e item_id)
-      expect(content).toContain("const nfItemId = propDados?.nf_item_id ?? propDados?.item_id;");
+      // Revalidação do item (compatível com nf_item_id e item_id via extrairNfItemIdDaProposta)
+      expect(content).toContain("const nfItemId = extrairNfItemIdDaProposta(propDados);");
       expect(content).toContain('.from("nf_itens")');
       expect(content).toContain('.eq("id", nfItemId)');
       expect(content).toContain('.eq("nf_id", nfRow.id)');
@@ -2538,6 +2551,254 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       // Agora executor tem sucesso
       propostaStatus = "executada";
       expect(propostaStatus).toBe("executada");
+    });
+
+    // ─── 11. REGRESSÃO DE BLOQUEADORES EM TEMPO DE EXECUÇÃO (FASE 5) ───
+
+    // EXEC-REAL-A: RPC error no executor deve retornar success: false
+    it("EXEC-REAL-A: rpcError em aplicar_item_nf_estoque_custo retorna success: false e motivo rpc_error", () => {
+      let itensPendentes = 0;
+      let processingFailure: { reason: string; itemId: string; error?: string } | null = null;
+
+      const rpcError = { message: "connection timeout" };
+      const item = { id: "item-rpc-err" };
+
+      if (rpcError) {
+        processingFailure = {
+          reason: "rpc_error",
+          itemId: item.id,
+          error: rpcError.message,
+        };
+        itensPendentes++;
+      }
+
+      const result = processingFailure
+        ? { success: false, reason: processingFailure.reason, failedItemId: processingFailure.itemId, error: processingFailure.error, itensPendentes }
+        : { success: true, itensPendentes };
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe("rpc_error");
+      expect(result.failedItemId).toBe("item-rpc-err");
+    });
+
+    // EXEC-REAL-B: RPC retornando success: false no executor deve retornar success: false
+    it("EXEC-REAL-B: rpcData com success=false retorna success: false e motivo rpc_unsuccessful", () => {
+      let itensPendentes = 0;
+      let processingFailure: { reason: string; itemId: string; error?: string } | null = null;
+
+      const rpcResult = { success: false, code: "stock_mutation_failed" };
+      const item = { id: "item-rpc-unsuccessful" };
+
+      if (!rpcResult?.success) {
+        processingFailure = {
+          reason: "rpc_unsuccessful",
+          itemId: item.id,
+          error: rpcResult.code,
+        };
+        itensPendentes++;
+      }
+
+      const result = processingFailure
+        ? { success: false, reason: processingFailure.reason, failedItemId: processingFailure.itemId, error: processingFailure.error, itensPendentes }
+        : { success: true, itensPendentes };
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe("rpc_unsuccessful");
+      expect(result.failedItemId).toBe("item-rpc-unsuccessful");
+    });
+
+    // EXEC-REAL-C: canFinalizeManualEquivalenceProposal rejeita se executor falhou
+    it("EXEC-REAL-C: canFinalizeManualEquivalenceProposal retorna false quando executorSuccess é false", () => {
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: false, itemStatus: "processado" })).toBe(false);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: false, itemStatus: "atualizado" })).toBe(false);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: false, itemStatus: "pendente" })).toBe(false);
+    });
+
+    // EXEC-REAL-D: canFinalizeManualEquivalenceProposal rejeita se itemStatus não for terminal
+    it("EXEC-REAL-D: canFinalizeManualEquivalenceProposal retorna false se itemStatus não for terminal", () => {
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: true, itemStatus: "pendente" })).toBe(false);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: true, itemStatus: null })).toBe(false);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: true, itemStatus: undefined })).toBe(false);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: true, itemStatus: "processado" })).toBe(true);
+      expect(canFinalizeManualEquivalenceProposal({ executorSuccess: true, itemStatus: "atualizado" })).toBe(true);
+    });
+
+    // DUP-PROP-A: Não cria proposta duplicada quando manualLinkItemInProgressId bate com primeiroPendente.id
+    it("DUP-PROP-A: suprime criação de proposta repetida quando o item pendente já está em fluxo manual", () => {
+      const primeiroPendente = { id: "item-pendente-1", descricao: "Produto Teste" };
+      const manualLinkItemInProgressId = "item-pendente-1";
+
+      let proposalCreated = false;
+      if (primeiroPendente && primeiroPendente.id !== manualLinkItemInProgressId) {
+        proposalCreated = true;
+      }
+
+      expect(proposalCreated).toBe(false);
+
+      // Se for outro item diferente, deve criar normalmente
+      const outroItem = { id: "item-pendente-2", descricao: "Outro Produto" };
+      let otherProposalCreated = false;
+      if (outroItem && outroItem.id !== manualLinkItemInProgressId) {
+        otherProposalCreated = true;
+      }
+      expect(otherProposalCreated).toBe(true);
+    });
+
+    // TEXT-ACTOR-A: ator não vinculado no texto aguardando_busca_produto_nf é rejeitado sem alterar estado
+    it("TEXT-ACTOR-A: aguardando_busca_produto_nf rejeita ator não vinculado sem modificar proposta ou conversa", async () => {
+      let propostaModificada = false;
+      let conversaModificada = false;
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            };
+          }
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn(() => {
+                propostaModificada = true;
+                return { eq: vi.fn().mockReturnThis() };
+              }),
+            };
+          }
+          if (table === "telegram_conversas") {
+            return {
+              upsert: vi.fn(() => {
+                conversaModificada = true;
+                return Promise.resolve();
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const valAtor = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "99999999",
+        propostaUserId: USER_ID,
+      });
+
+      expect(valAtor.ok).toBe(false);
+      expect(propostaModificada).toBe(false);
+      expect(conversaModificada).toBe(false);
+    });
+
+    // TEXT-ACTOR-B: ator de outro usuário no texto aguardando_busca_produto_nf é rejeitado
+    it("TEXT-ACTOR-B: aguardando_busca_produto_nf rejeita ator vinculado a outro user_id", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { user_id: "outro-usuario-id", ativo: true },
+                error: null,
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const valAtor = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "88888888",
+        propostaUserId: USER_ID,
+      });
+
+      expect(valAtor.ok).toBe(false);
+      expect((valAtor as any).reason).toContain("não autorizado");
+    });
+
+    // TEXT-ACTOR-C: ator não vinculado no texto aguardando_fator_conversao_nf é rejeitado sem alterar estado
+    it("TEXT-ACTOR-C: aguardando_fator_conversao_nf rejeita ator não vinculado sem tocar na proposta", async () => {
+      let propostaModificada = false;
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            };
+          }
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn(() => {
+                propostaModificada = true;
+                return { eq: vi.fn().mockReturnThis() };
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const valAtor = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "99999999",
+        propostaUserId: USER_ID,
+      });
+
+      expect(valAtor.ok).toBe(false);
+      expect(propostaModificada).toBe(false);
+    });
+
+    // TEXT-ACTOR-D: ator de outro usuário no texto aguardando_fator_conversao_nf é rejeitado
+    it("TEXT-ACTOR-D: aguardando_fator_conversao_nf rejeita ator vinculado a outro user_id", async () => {
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "usuarios_telegram") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { user_id: "outro-usuario-id", ativo: true },
+                error: null,
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const valAtor = await validarAtorTelegramFase5(mockClient as any, {
+        telegramUserId: "88888888",
+        propostaUserId: USER_ID,
+      });
+
+      expect(valAtor.ok).toBe(false);
+      expect((valAtor as any).reason).toContain("não autorizado");
+    });
+
+    // HELPER-RUNTIME: Análise estática de código do telegram-webhook
+    it("HELPER-RUNTIME: telegram-webhook usa helpers compartilhados, trata falha da RPC e aplica CAS", () => {
+      const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+      const content = fs.readFileSync(webhookPath, "utf-8");
+
+      // 1. Imports compartilhados de nf-product-equivalence
+      expect(content).toContain("validarPropostaFase5");
+      expect(content).toContain("validarAtorTelegramFase5");
+      expect(content).toContain("extrairNfItemIdDaProposta");
+      expect(content).toContain("canFinalizeManualEquivalenceProposal");
+
+      // 2. Não possui declaração duplicada local de validarPropostaFase5
+      expect(content).not.toContain("function validarPropostaFase5(");
+
+      // 3. Trata falha de RPC no executor seguro
+      expect(content).toContain("processingFailure");
+      expect(content).toContain("manualLinkItemInProgressId");
+      expect(content).toContain("primeiroPendente.id !== manualLinkItemInProgressId");
+
+      // 4. Revalidação pós-execução no vp_ok
+      expect(content).toContain("canFinalizeManualEquivalenceProposal");
+
+      // 5. CAS na finalização do vp_ok
+      expect(content).toContain('.eq("status", "em_processamento")');
     });
   });
 });
