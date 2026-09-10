@@ -1,24 +1,20 @@
-let pg;
-try {
-  pg = require("pg");
-} catch (e) {
-  try {
-    pg = require("C:/Users/Heitor/.gemini/antigravity/brain/bd92fb06-475d-473f-a47a-2048252d461a/scratch/node_modules/pg");
-  } catch (e2) {
-    pg = require("./node_modules/pg");
-  }
-}
-const { Client } = pg;
+const { Client } = require("pg");
 
 const DB_CONFIG = {
-  host: "localhost",
-  port: 54329,
-  user: "postgres",
-  password: "postgres",
-  database: "postgres",
+  host: process.env.PGHOST || "localhost",
+  port: Number(process.env.PGPORT || 54329),
+  user: process.env.PGUSER || "postgres",
+  password: process.env.PGPASSWORD || "postgres",
+  database: process.env.PGDATABASE || "postgres",
 };
 
 async function runTests() {
+  if (process.env.WALLET_ALLOW_DESTRUCTIVE_PG_TESTS !== "1") {
+    console.error(
+      "ERRO DE SEGURANÇA: Este harness executa operações destrutivas (DELETE). Defina WALLET_ALLOW_DESTRUCTIVE_PG_TESTS=1 para prosseguir."
+    );
+    process.exit(1);
+  }
   console.log("=== INICIANDO BATERIA DE TESTES EM POSTGRESQL 17 REAL ===");
   const adminClient = new Client(DB_CONFIG);
   await adminClient.connect();
