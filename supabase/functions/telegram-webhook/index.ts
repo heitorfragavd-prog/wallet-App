@@ -770,50 +770,82 @@ serve(async (req) => {
     } catch { /* fallback intencional */ }
 
     // ─── AÇÕES ADMINISTRATIVAS (Info / Configuração do Webhook) ───
-    if (body?.action === "get_webhook_info" || req.method === "GET") {
-      if (!telegramBotToken) {
-        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      const [whResp, meResp] = await Promise.all([
-        fetch(`https://api.telegram.org/bot${telegramBotToken}/getWebhookInfo`).then(r => r.json()),
-        fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json()),
-      ]);
-      return new Response(JSON.stringify({ webhook_info: whResp, bot_info: meResp, expected_url: `${supabaseUrl}/functions/v1/telegram-webhook` }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (body?.action === "get_webhook_info" || body?.action === "setup_webhook" || req.method === "GET") {
+      const authHeader = req.headers.get("Authorization");
+      const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+      const isServiceRole = Boolean(supabaseServiceKey && token === supabaseServiceKey);
 
-    if (body?.action === "setup_webhook") {
-      if (!telegramBotToken) {
-        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (!isServiceRole) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
-      const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
-      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
-      let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`;
-      if (telegramWebhookSecret) {
-        setWebhookUrl += `&secret_token=${encodeURIComponent(telegramWebhookSecret)}`;
+
+      if (body?.action === "get_webhook_info" || req.method === "GET") {
+        if (!telegramBotToken) {
+          return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const [whResp, meResp] = await Promise.all([
+          fetch(`https://api.telegram.org/bot${telegramBotToken}/getWebhookInfo`).then(r => r.json()),
+          fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json()),
+        ]);
+        return new Response(JSON.stringify({ webhook_info: whResp, bot_info: meResp, expected_url: `${supabaseUrl}/functions/v1/telegram-webhook` }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
-      const setResp = await fetch(setWebhookUrl).then(r => r.json());
-      const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
-      return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+
+      if (body?.action === "setup_webhook") {
+        if (!telegramBotToken) {
+          return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
+        const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+        let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`;
+        if (telegramWebhookSecret) {
+          setWebhookUrl += `&secret_token=${encodeURIComponent(telegramWebhookSecret)}`;
+        }
+        const setResp = await fetch(setWebhookUrl).then(r => r.json());
+        const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
+        return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // ─── CASO 1: Chamada da Web App para vincular a conta via Token ───
     if (body?.action === "vincular") {
-      const { token, user_id } = body;
-      if (!token || !user_id) {
-        return new Response(JSON.stringify({ error: "Token e user_id são obrigatórios" }), {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const userJwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { token } = body;
+      if (!token) {
+        return new Response(JSON.stringify({ error: "Token é obrigatório" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
+      const authenticatedUserId = user.id;
+
       const { data: linkToken, error: tokenErr } = await supabase
         .from("telegram_link_tokens")
         .select("*")
-        .eq("token", token.toUpperCase().trim())
+        .eq("token", String(token).toUpperCase().trim())
         .eq("usado", false)
         .maybeSingle();
 
@@ -824,10 +856,10 @@ serve(async (req) => {
         );
       }
 
-      // Upsert no usuários_telegram
+      // Upsert no usuários_telegram usando authenticatedUserId garantido
       const { error: upsertErr } = await supabase.from("usuarios_telegram").upsert(
         {
-          user_id,
+          user_id: authenticatedUserId,
           telegram_chat_id: linkToken.telegram_chat_id,
           telegram_username: linkToken.telegram_username,
           ativo: true,

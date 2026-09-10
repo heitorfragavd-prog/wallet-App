@@ -7,7 +7,8 @@ export interface EyemobileConfig {
   id?: string;
   user_id?: string;
   access_key: string;
-  secret_key: string;
+  secret_key?: string;
+  has_secret?: boolean;
   environment: "production" | "staging";
   store_id: string | null;
   default_conta_id: string | null;
@@ -26,7 +27,7 @@ export interface EyemobileSyncLog {
   type: "SALES" | "STOCK" | "WEBHOOK" | "TEST";
   status: "SUCCESS" | "ERROR" | "WARNING";
   items_processed: number;
-  payload: any;
+  payload: unknown;
   error_message: string | null;
   created_at: string;
 }
@@ -66,20 +67,31 @@ export const useEyemobileConfig = () => {
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch Config
+      // 1. Fetch Config com colunas seguras (secret_key e revocada no banco para authenticated)
       const { data: configData, error: configError } = await supabase
         .from("eyemobile_config")
-        .select("*")
+        .select("id, user_id, access_key, environment, store_id, default_conta_id, default_categoria_receita_id, default_categoria_taxa_id, auto_sync_sales, auto_sync_stock, last_synced_offset, created_at, updated_at")
         .maybeSingle();
 
       if (configError) throw configError;
+
+      let hasSecret = false;
+      try {
+        const { data: statusData } = await supabase.rpc("get_eyemobile_config_status").maybeSingle();
+        if (statusData) {
+          hasSecret = Boolean((statusData as { has_secret?: boolean }).has_secret);
+        }
+      } catch {
+        // RPC fallback
+      }
 
       if (configData) {
         setConfig({
           id: configData.id,
           user_id: configData.user_id,
           access_key: configData.access_key,
-          secret_key: configData.secret_key,
+          secret_key: "",
+          has_secret: hasSecret,
           environment: configData.environment as "production" | "staging",
           store_id: configData.store_id,
           default_conta_id: configData.default_conta_id,
@@ -100,16 +112,17 @@ export const useEyemobileConfig = () => {
         .from("eyemobile_sync_logs")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(10);
+        .limit(20);
 
       if (logsError) throw logsError;
-      setLogs((logsData || []) as EyemobileSyncLog[]);
+      setLogs((logsData as unknown as EyemobileSyncLog[]) || []);
 
-    } catch (error: any) {
-      logger.error("useEyemobileConfig", "Erro ao carregar configurações do Eyemobile", { error: error.message });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("useEyemobileConfig", "Erro ao carregar configurações do Eyemobile", { error: msg });
       toast({
-        title: "Erro ao carregar configurações",
-        description: error.message || "Erro desconhecido",
+        title: "Erro ao carregar",
+        description: "Não foi possível carregar as configurações do Eyemobile.",
         variant: "destructive",
       });
     } finally {
@@ -124,11 +137,19 @@ export const useEyemobileConfig = () => {
       const userId = userRes.data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado.");
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...newConfig,
         user_id: userId,
         updated_at: new Date().toISOString(),
       };
+
+      // Se a secret_key estiver vazia ou não informada, preserva a existente no banco
+      if (!payload.secret_key || String(payload.secret_key).trim() === "") {
+        delete payload.secret_key;
+      }
+      delete payload.has_secret;
+
+      const safeColumns = "id, user_id, access_key, environment, store_id, default_conta_id, default_categoria_receita_id, default_categoria_taxa_id, auto_sync_sales, auto_sync_stock, last_synced_offset, created_at, updated_at";
 
       let result;
       if (config?.id) {
@@ -136,13 +157,13 @@ export const useEyemobileConfig = () => {
           .from("eyemobile_config")
           .update(payload)
           .eq("id", config.id)
-          .select()
+          .select(safeColumns)
           .single();
       } else {
         result = await supabase
           .from("eyemobile_config")
           .insert([payload])
-          .select()
+          .select(safeColumns)
           .single();
       }
 
@@ -156,14 +177,15 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true };
 
-    } catch (error: any) {
-      logger.error("useEyemobileConfig", "Erro ao salvar configurações do Eyemobile", { error: error.message });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("useEyemobileConfig", "Erro ao salvar configurações do Eyemobile", { error: msg });
       toast({
         title: "Erro ao salvar",
-        description: error.message || "Erro desconhecido",
+        description: msg || "Erro desconhecido",
         variant: "destructive",
       });
-      return { success: false, error: error.message };
+      return { success: false, error: msg };
     } finally {
       setSaving(false);
     }
@@ -183,7 +205,7 @@ export const useEyemobileConfig = () => {
 
       if (error) {
         console.error("FunctionsHttpError full details:", error);
-        const errWithDetails = error as any;
+        const errWithDetails = error as { context?: { text: () => Promise<string> } };
         if (errWithDetails.context) {
           try {
             const bodyText = await errWithDetails.context.text();
@@ -194,8 +216,9 @@ export const useEyemobileConfig = () => {
                 throw new Error(bodyJson.error);
               }
             }
-          } catch (e: any) {
-            console.error("failed to extract body text from context:", e.message);
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error("failed to extract body text from context:", msg);
           }
         }
         throw error;
@@ -209,14 +232,15 @@ export const useEyemobileConfig = () => {
 
       return { success: true };
 
-    } catch (error: any) {
-      logger.error("useEyemobileConfig", "Erro ao testar conexão", { error: error.message });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("useEyemobileConfig", "Erro ao testar conexão", { error: msg });
       toast({
         title: "Falha na conexão",
-        description: error.message || "Não foi possível conectar ao Eyemobile.",
+        description: msg || "Não foi possível conectar ao Eyemobile.",
         variant: "destructive",
       });
-      return { success: false, error: error.message };
+      return { success: false, error: msg };
     } finally {
       setTesting(false);
     }
@@ -251,14 +275,15 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true, ...data };
 
-    } catch (error: any) {
-      logger.error("useEyemobileConfig", "Erro ao sincronizar dados", { error: error.message });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("useEyemobileConfig", "Erro ao sincronizar dados", { error: msg });
       toast({
         title: syncMode === "HISTORY" ? "Erro na sincronização histórica" : "Erro na sincronização",
-        description: error.message || "Erro durante o processamento do sync.",
+        description: msg || "Erro durante o processamento do sync.",
         variant: "destructive",
       });
-      return { success: false, error: error.message };
+      return { success: false, error: msg };
     } finally {
       setSyncing(false);
     }
@@ -404,11 +429,12 @@ export const useEyemobileConfig = () => {
       await fetchConfig();
       return { success: true, salesCount: totalSales, stockAlerts: totalStock, errors: allErrors };
  
-    } catch (error: any) {
-      logger.error("useEyemobileConfig", "Erro na sincronização histórica completa", { error: error.message });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("useEyemobileConfig", "Erro na sincronização histórica completa", { error: msg });
       toast({
         title: "Erro na sincronização histórica",
-        description: error.message || "Erro durante o processamento do sync histórico.",
+        description: msg || "Erro durante o processamento do sync histórico.",
         variant: "destructive",
       });
  
@@ -421,10 +447,10 @@ export const useEyemobileConfig = () => {
         totalProcessed: 0,
         percentComplete: 0,
         status: "error",
-        errorMessage: error.message,
+        errorMessage: msg,
       });
  
-      return { success: false, error: error.message };
+      return { success: false, error: msg };
     } finally {
       setSyncing(false);
     }
@@ -450,10 +476,11 @@ export const useEyemobileConfig = () => {
 
       await fetchConfig();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       toast({
         title: "Erro ao resetar progresso",
-        description: err.message,
+        description: msg,
         variant: "destructive",
       });
       return false;

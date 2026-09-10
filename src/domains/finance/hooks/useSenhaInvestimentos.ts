@@ -33,14 +33,16 @@ export function useSenhaInvestimentos() {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) return;
 
-      const { data, error } = await supabase
-        .from("senha_investimentos")
-        .select("id")
-        .eq("user_id", userData.user.id)
-        .maybeSingle();
+      // SEGURO: Usar RPC SECURITY DEFINER para verificar se o usuario possui senha cadastrada.
+      // A tabela senha_investimentos tem REVOKE total para authenticated/anon, impedindo acesso direto.
+      const { data, error } = await supabase.rpc("has_senha_investimentos");
 
-      if (error) throw error;
-      setHasPassword(!!data);
+      if (error) {
+        logger.warn("useSenhaInvestimentos", "has_senha_investimentos RPC falhou ou indisponivel", { error: (error as Error).message });
+        setHasPassword(false);
+      } else {
+        setHasPassword(Boolean(data));
+      }
     } catch (err: unknown) {
       logger.error("useSenhaInvestimentos", "Erro ao verificar existência de senha", { error: err.message });
     } finally {

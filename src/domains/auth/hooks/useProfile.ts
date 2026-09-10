@@ -34,6 +34,31 @@ export const useProfile = () => {
 
       if (supabaseError) {
         logger.error('useProfile', 'Erro ao carregar perfil', { error: supabaseError.message });
+        const isColumnSchemaMismatch = 
+          supabaseError.code === '42703' || 
+          supabaseError.code === 'PGRST204' || 
+          (typeof supabaseError.message === 'string' && (
+            (supabaseError.message.toLowerCase().includes('column') && supabaseError.message.toLowerCase().includes('does not exist')) ||
+            supabaseError.message.toLowerCase().includes('in the schema cache')
+          ));
+
+        if (isColumnSchemaMismatch) {
+          logger.warn('useProfile', 'Discrepância de coluna no schema detectada, usando perfil defensivo de fallback');
+          setProfile({
+            id: user.id,
+            user_id: user.id,
+            name: user.email?.split('@')[0] || 'Usuário',
+            email: user.email || '',
+            role: 'user',
+            organization_name: null,
+            telefone: null,
+            endereco: null,
+            avatar_url: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } as unknown as Profile);
+          return;
+        }
         setError(new Error(supabaseError.message));
         toast({
           title: "Erro",
@@ -60,12 +85,12 @@ export const useProfile = () => {
           telefone: null,
           endereco: null,
           avatar_url: null,
-        });
+        } as unknown as Omit<Profile, "id" | "created_at" | "updated_at">);
         return;
       }
 
       logger.info('useProfile', 'Perfil carregado com sucesso');
-      setProfile(data);
+      setProfile(data ? ({ ...data, email: (data as { email?: string }).email || user.email || '' } as unknown as Profile) : null);
     } catch (err) {
       logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");
