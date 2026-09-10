@@ -155,6 +155,14 @@ async function main() {
           statements TEXT[],
           name TEXT
         );
+
+        -- Limpa histórico da Fase C e restaura permissões anteriores para garantia de idempotência
+        DELETE FROM supabase_migrations.schema_migrations WHERE version = '20260908120001';
+        GRANT ALL ON public.divipay_config TO authenticated;
+        GRANT ALL ON public.eyemobile_config TO authenticated;
+        GRANT ALL ON public.senha_investimentos TO authenticated;
+        DROP POLICY IF EXISTS "Users manage own investimentos" ON public.investimentos;
+        CREATE POLICY "Users manage own investimentos" ON public.investimentos FOR ALL TO authenticated USING (auth.uid() = user_id);
       `);
 
       // Aplica a migração real da Fase A

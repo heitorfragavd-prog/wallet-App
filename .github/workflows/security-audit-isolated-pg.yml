@@ -58,7 +58,14 @@ jobs:
         env:
           PGPASSWORD: postgrespassword
         run: |
-          # 1. Garante que a infraestrutura da Fase A esta presente
+          # 1. Garante que a infraestrutura da Fase A esta presente e baseline pre-Fase C restaurado
+          psql -h localhost -U postgres -d postgres -c "
+            CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+            CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text NOT NULL PRIMARY KEY, statements text[], name text);
+            DELETE FROM supabase_migrations.schema_migrations WHERE version = '20260908120001';
+            GRANT ALL ON public.divipay_config TO authenticated;
+            GRANT ALL ON public.eyemobile_config TO authenticated;
+          "
           psql -h localhost -U postgres -d postgres -f supabase/migrations/20260908120000_security_phase_a_infrastructure.sql
 
           # 2. Teste negativo real: executa a migration de producao da Fase C sem confirmacao da Fase B

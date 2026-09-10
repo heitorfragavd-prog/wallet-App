@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # =============================================================================
@@ -11,6 +11,13 @@ DB_URL="${DATABASE_URL:-postgresql://postgres:postgrespassword@localhost:5432/po
 echo "================================================================"
 echo "1. PREPARANDO SCHEMA E APLICANDO FASE A"
 echo "================================================================"
+psql "$DB_URL" -c "
+  CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+  CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text NOT NULL PRIMARY KEY, statements text[], name text);
+  DELETE FROM supabase_migrations.schema_migrations WHERE version = '20260908120001';
+  GRANT ALL ON public.divipay_config TO authenticated;
+  GRANT ALL ON public.eyemobile_config TO authenticated;
+"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260908120000_security_phase_a_infrastructure.sql
 
 echo "================================================================"
