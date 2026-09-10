@@ -28,7 +28,7 @@ export const useProfile = () => {
       
       const { data, error: supabaseError } = await supabase
         .from("profiles")
-        .select("id, user_id, name, email, telefone, endereco, avatar_url, organization_name, role, created_at, updated_at")
+        .select("id, user_id, name, telefone, endereco, avatar_url, organization_name, role, created_at, updated_at")
         .eq("user_id", user.id)
         .maybeSingle();
 
@@ -54,18 +54,17 @@ export const useProfile = () => {
         await createProfile({
           user_id: user.id,
           name: user.email?.split('@')[0] || 'Usuário',
-          email: user.email || '',
           role: 'user',
           organization_name: null,
           telefone: null,
           endereco: null,
           avatar_url: null,
-        });
+        } as any);
         return;
       }
 
       logger.info('useProfile', 'Perfil carregado com sucesso');
-      setProfile(data);
+      setProfile(data ? ({ ...data, email: user.email } as any) : null);
     } catch (err) {
       logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");
