@@ -58,6 +58,27 @@ jobs:
         env:
           PGPASSWORD: postgrespassword
         run: |
+          # 1. Garante que a infraestrutura da Fase A esta presente
+          psql -h localhost -U postgres -d postgres -f supabase/migrations/20260908120000_security_phase_a_infrastructure.sql
+
+          # 2. Teste negativo real: executa a migration de producao da Fase C sem confirmacao da Fase B
+          set +e
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260908120001_security_phase_c_enforcement.sql 2> /tmp/phase_c_negative.log
+          CLI_EXIT=$?
+          set -e
+          echo "Codigo de saida psql da migration real C sem flag: $CLI_EXIT"
+          if [ $CLI_EXIT -eq 0 ]; then
+            echo "ERRO CRITICO: A migration real C deveria ter abortado por gating!"
+            exit 1
+          fi
+          cat /tmp/phase_c_negative.log
+          if ! grep -q "OPERACAO BLOQUEADA" /tmp/phase_c_negative.log; then
+            echo "ERRO CRITICO: Mensagem 'OPERACAO BLOQUEADA' ausente na saida!"
+            exit 1
+          fi
+          echo "Sucesso: Bloqueio confiavel comprovado via CLI (exit code != 0 e OPERACAO BLOQUEADA)."
+
+          # 3. Executa procedimento oficial atomico na mesma sessao e verifica integridade e isolamento da flag
           psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-gating.sql
 
       - name: Run Real Schema Compatibility Battery (Phase A -> Phase B -> Phase C -> 9 Scenarios)
@@ -77,6 +98,12 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
         run: |
           node scripts/test-real-concurrency.cjs
+
+      - name: Run Phase C Atomic Gating & Rollback Verification Battery
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
+        run: |
+          node scripts/test-phase-c-atomic-rollback.cjs
 
   edge-functions-validation:
     name: Edge Functions Runtime Validation (Deno)

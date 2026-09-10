@@ -9,8 +9,6 @@
 -- 3. Variavel de sessao operacional: SET wallet.deploy_phase_b_completed = 'true';
 -- =========================================================================
 
-BEGIN;
-
 -- =========================================================================
 -- 0. Gating Operacional Pre-requisito (Impede execucao conjunta automatica com Fase A)
 -- =========================================================================
@@ -129,5 +127,3 @@ CREATE POLICY "Users manage own configuracoes_investimentos" ON public.configura
 FOR ALL TO authenticated
 USING (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()))
 WITH CHECK (auth.uid() = user_id AND public.is_investimentos_unlocked(auth.uid()));
-
-COMMIT;
