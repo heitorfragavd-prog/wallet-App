@@ -59,12 +59,12 @@ export const useProfile = () => {
           telefone: null,
           endereco: null,
           avatar_url: null,
-        } as any);
+        } as unknown as Omit<Profile, "id" | "created_at" | "updated_at">);
         return;
       }
 
       logger.info('useProfile', 'Perfil carregado com sucesso');
-      setProfile(data ? ({ ...data, email: user.email } as any) : null);
+      setProfile(data ? ({ ...data, email: user.email } as unknown as Profile) : null);
     } catch (err) {
       logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");
