@@ -1,6 +1,48 @@
-// @vitest-environment node
+import React from "react";
+import { render, screen, act, waitFor, cleanup } from "@testing-library/react";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { MemoryRouter } from "react-router-dom";
+import PDVPage from "@/pages/PDVPage";
+
+const renderPDV = () => render(
+  React.createElement(MemoryRouter, null, React.createElement(PDVPage))
+);
+
+const { mockAuthState, mockInvoke } = vi.hoisted(() => ({
+  mockAuthState: {
+    user: null as { id: string } | null,
+    loading: false,
+  },
+  mockInvoke: vi.fn(),
+}));
+
+vi.mock("@/domains/auth/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: mockAuthState.user,
+    loading: mockAuthState.loading,
+    session: null,
+  }),
+}));
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    functions: {
+      invoke: (...args: unknown[]) => mockInvoke(...args),
+    },
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: null } }),
+    },
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      ilike: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    }),
+  },
+}));
 
 function getAllSourceFiles(dir: string): string[] {
   const entries = readdirSync(dir);
@@ -23,6 +65,19 @@ function getAllSourceFiles(dir: string): string[] {
 
 describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
   const srcDir = resolve("src");
+
+  beforeEach(() => {
+    cleanup();
+    localStorage.clear();
+    mockInvoke.mockReset();
+    mockAuthState.user = null;
+    mockAuthState.loading = false;
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
 
   it("Teste A: Hard Gate — nenhuma menção à tabela legada 'eyemobile_produtos' em src/", () => {
     const allFiles = getAllSourceFiles(srcDir);
@@ -139,11 +194,11 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     // Não deve conter qualquer chamada à tabela legada
     expect(uploadSource).not.toContain("eyemobile_produtos");
 
-    // Deve exibir aviso preciso quando estoque foi desativado
-    expect(uploadSource).toContain("Despesa lançada; estoque não atualizado");
-    expect(uploadSource).toContain("Estoque e custo não atualizados");
+    // Deve exibir aviso factual e preciso de acordo com os Casos A e B
+    expect(uploadSource).toContain("Despesa lançada com sucesso!");
+    expect(uploadSource).toContain("Documento revisado");
     expect(uploadSource).toContain(
-      "A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
+      "Estoque e custo são processados pelo fluxo canônico de NF."
     );
   });
 
@@ -153,5 +208,185 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     expect(matcherSource).toContain("produtos_eyemobile");
     expect(matcherSource).toContain("produto_equivalencias");
     expect(matcherSource).not.toContain("eyemobile_produtos");
+  });
+
+  it("Teste K: LOGOUT — usuário A possui produtos -> logout (user=null) -> produtos em memória esvaziados", async () => {
+    localStorage.setItem("pdv_is_caixa_aberto", "true");
+    mockAuthState.user = { id: "user-alpha" };
+    const alphaProducts = [
+      { id: "alpha-1", name: "Produto Alpha 1", price: 10, category: "outros" }
+    ];
+    localStorage.setItem("pdv_produtos_cache_user-alpha", JSON.stringify(alphaProducts));
+
+    const { rerender } = renderPDV();
+    expect(screen.getByText("Produto Alpha 1")).toBeDefined();
+
+    // Simula logout: user vira null
+    await act(async () => {
+      mockAuthState.user = null;
+    });
+    rerender(React.createElement(MemoryRouter, null, React.createElement(PDVPage)));
+
+    // Catálogo em memória deve estar vazio
+    expect(screen.queryByText("Produto Alpha 1")).toBeNull();
+    expect(screen.getByText("Nenhum produto encontrado")).toBeDefined();
+  });
+
+  it("Teste L: USER SWITCH — troca de A para B limpa produtos de A imediatamente e carrega B", async () => {
+    localStorage.setItem("pdv_is_caixa_aberto", "true");
+    mockAuthState.user = { id: "user-alpha" };
+    const alphaProducts = [
+      { id: "alpha-1", name: "Produto Alpha 1", price: 10, category: "outros" }
+    ];
+    const betaProducts = [
+      { id: "beta-1", name: "Produto Beta 1", price: 20, category: "outros" }
+    ];
+    localStorage.setItem("pdv_produtos_cache_user-alpha", JSON.stringify(alphaProducts));
+    localStorage.setItem("pdv_produtos_cache_user-beta", JSON.stringify(betaProducts));
+
+    const { rerender } = renderPDV();
+    expect(screen.getByText("Produto Alpha 1")).toBeDefined();
+    expect(screen.queryByText("Produto Beta 1")).toBeNull();
+
+    // Troca para o usuário B
+    await act(async () => {
+      mockAuthState.user = { id: "user-beta" };
+    });
+    rerender(React.createElement(MemoryRouter, null, React.createElement(PDVPage)));
+
+    // Nenhum produto de A permanece visível, e produto de B está em tela
+    expect(screen.queryByText("Produto Alpha 1")).toBeNull();
+    expect(screen.getByText("Produto Beta 1")).toBeDefined();
+  });
+
+  it("Teste M: STALE RESPONSE — resposta atrasada de fetch do usuário A não sobrescreve catálogo do usuário B", async () => {
+    localStorage.setItem("pdv_is_caixa_aberto", "true");
+    mockAuthState.user = { id: "user-alpha" };
+
+    let resolveAlphaFetch!: (val: unknown) => void;
+    let resolveBetaFetch!: (val: unknown) => void;
+
+    mockInvoke.mockImplementation((_fnName: string, options?: { body?: { mode?: string } }) => {
+      if (options?.body?.mode === "PRODUCTS") {
+        if (mockAuthState.user?.id === "user-alpha") {
+          return new Promise((res) => {
+            resolveAlphaFetch = res;
+          });
+        } else if (mockAuthState.user?.id === "user-beta") {
+          return new Promise((res) => {
+            resolveBetaFetch = res;
+          });
+        }
+      }
+      return Promise.resolve({ data: { products: [] } });
+    });
+
+    const { rerender } = renderPDV();
+
+    // Garante que o fetch de A foi iniciado e capturado
+    await waitFor(() => {
+      expect(typeof resolveAlphaFetch).toBe("function");
+    });
+
+    // A requisição do usuário A está em andamento. Agora troca para o usuário B:
+    await act(async () => {
+      mockAuthState.user = { id: "user-beta" };
+    });
+    rerender(React.createElement(MemoryRouter, null, React.createElement(PDVPage)));
+
+    // Garante que o fetch de B foi iniciado e capturado
+    await waitFor(() => {
+      expect(typeof resolveBetaFetch).toBe("function");
+    });
+
+    // A resposta do usuário B chega primeiro:
+    await act(async () => {
+      resolveBetaFetch({
+        data: {
+          products: [
+            { id: "beta-10", name: "Cerveja Beta Gelada", default_price: 15 }
+          ]
+        }
+      });
+    });
+
+    expect(screen.getByText("Cerveja Beta Gelada")).toBeDefined();
+    expect(screen.queryByText("Refrigerante Alpha Antigo")).toBeNull();
+
+    // Agora a resposta antiga/atrasada do usuário A conclui por último:
+    await act(async () => {
+      resolveAlphaFetch({
+        data: {
+          products: [
+            { id: "alpha-10", name: "Refrigerante Alpha Antigo", default_price: 8 }
+          ]
+        }
+      });
+    });
+
+    // A resposta atrasada deve ser descartada: catálogo continua sendo o de B
+    expect(screen.getByText("Cerveja Beta Gelada")).toBeDefined();
+    expect(screen.queryByText("Refrigerante Alpha Antigo")).toBeNull();
+
+    // O cache de B não deve ter sido contaminado pelos produtos de A
+    const betaCache = localStorage.getItem("pdv_produtos_cache_user-beta");
+    expect(betaCache).toContain("Cerveja Beta Gelada");
+    expect(betaCache).not.toContain("Refrigerante Alpha Antigo");
+  });
+
+  it("Teste N: CACHE CORROMPIDO — cache JSON válido mas não Array é expurgado e não quebra catálogo", async () => {
+    localStorage.setItem("pdv_is_caixa_aberto", "true");
+    mockAuthState.user = { id: "user-corrupted" };
+    // Salva JSON válido mas objeto e não Array
+    localStorage.setItem(
+      "pdv_produtos_cache_user-corrupted",
+      JSON.stringify({ status: "error", message: "invalid catalog structure" })
+    );
+
+    mockInvoke.mockResolvedValueOnce({
+      data: {
+        products: [
+          { id: "rec-1", name: "Produto Recuperado Pos-Corrupcao", default_price: 30 }
+        ]
+      }
+    });
+
+    renderPDV();
+
+    // 1. Chave corrompida deve ter sido expurgada do localStorage
+    expect(localStorage.getItem("pdv_produtos_cache_user-corrupted")).toBeNull();
+
+    // 2. Não quebrou a aplicação e recuperou produtos via sincronização canônica
+    await waitFor(() => {
+      expect(screen.getByText("Produto Recuperado Pos-Corrupcao")).toBeDefined();
+    });
+  });
+
+  it("Teste O: UPLOAD UX — UploadInteligente não possui controles ativos prometendo alteração de custo/estoque", () => {
+    const uploadSource = readFileSync(resolve("src/domains/ia/components/UploadInteligente.tsx"), "utf8");
+
+    // Checkboxes clicáveis 'Custo' e 'Estoque' foram removidos da interface
+    expect(uploadSource).not.toContain("<span>Custo</span>");
+    expect(uploadSource).not.toContain("<span>Estoque</span>");
+
+    // Não inicializa itens com flags ativas de mutação
+    expect(uploadSource).not.toContain("updateCusto: true");
+    expect(uploadSource).not.toContain("addEstoque: true");
+
+    // Informação visual neutra orientando para o fluxo canônico
+    expect(uploadSource).toContain("Estoque e custo são atualizados pelo fluxo canônico de NF.");
+  });
+
+  it("Teste P: NO-OP SUCCESS — com nfLancarDespesa=false, a interface não afirma falso sucesso de dados salvos", () => {
+    const uploadSource = readFileSync(resolve("src/domains/ia/components/UploadInteligente.tsx"), "utf8");
+
+    // Na confirmação de NF sem lançamento de despesa, mensagem é factual de revisão
+    expect(uploadSource).toContain('nfLancarDespesa ? "Despesa lançada com sucesso!" : "Documento revisado"');
+    expect(uploadSource).toContain(
+      'Nenhuma alteração financeira foi realizada. Estoque e custo devem ser processados pelo fluxo canônico de NF.'
+    );
+    expect(uploadSource).toContain(
+      'nfLancarDespesa ? "Confirmar e Lançar Despesa" : "Concluir Revisão"'
+    );
   });
 });

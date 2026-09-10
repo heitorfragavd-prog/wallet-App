@@ -13,6 +13,11 @@ import { usePDVHotkeys } from "@/domains/pdv/hooks/usePDVHotkeys";
 import { useToast } from "@/shared/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
+import { Button } from "@/shared/components/ui/button";
+import { Input } from "@/shared/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/components/ui/dialog";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Lock, AlertTriangle, Store, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 
 interface EyemobileRawProduct {
   id?: string | number;
@@ -59,6 +64,7 @@ function getProductCategory(name: string): string {
 
 const PDVPage: React.FC = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -157,8 +163,11 @@ const PDVPage: React.FC = () => {
     setTimeout(focusSearch, 50);
   }, [addItem, focusSearch, isCaixaAberto]);
 
+  const activeUserIdRef = useRef<string | null>(null);
+
   const fetchProducts = useCallback(async (showToast = false) => {
     if (!user?.id) return;
+    const requestUserId = user.id;
     setIsLoadingProducts(true);
     try {
       const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -179,9 +188,20 @@ const PDVPage: React.FC = () => {
               : undefined,
           };
         });
+
+        // Guarda contra race condition: o usuário ativo ainda é quem disparou a chamada?
+        if (activeUserIdRef.current !== requestUserId) {
+          return;
+        }
+
         setProducts(mapped);
-        const cacheKey = getProductCacheKey(user.id);
-        localStorage.setItem(cacheKey, JSON.stringify(mapped));
+        const cacheKey = getProductCacheKey(requestUserId);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(mapped));
+        } catch {
+          // Ignora indisponibilidade de localStorage
+        }
+
         if (showToast) {
           toast({ title: "Sincronizado!", description: `${mapped.length} produtos carregados do Eyemobile.` });
         }
@@ -189,21 +209,44 @@ const PDVPage: React.FC = () => {
         throw new Error("Resposta de produtos inválida");
       }
     } catch (err: unknown) {
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
+
       console.error("Erro ao sincronizar produtos:", err);
-      const cacheKey = getProductCacheKey(user.id);
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          setProducts(JSON.parse(cached));
-          if (showToast) {
-            toast({
-              title: "Erro de Sincronização",
-              description: "Não foi possível conectar ao Eyemobile. Usando dados do cache local.",
-              variant: "destructive"
-            });
+      const cacheKey = getProductCacheKey(requestUserId);
+      let validCache: PDVProduct[] | null = null;
+
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            validCache = parsed;
+          } else {
+            localStorage.removeItem(cacheKey);
           }
+        }
+      } catch {
+        try {
+          localStorage.removeItem(cacheKey);
         } catch {
-          setProducts([]);
+          // Ignora erro de localStorage
+        }
+      }
+
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
+
+      if (validCache) {
+        setProducts(validCache);
+        if (showToast) {
+          toast({
+            title: "Erro de Sincronização",
+            description: "Não foi possível conectar ao Eyemobile. Usando dados do cache local.",
+            variant: "destructive"
+          });
         }
       } else {
         setProducts([]);
@@ -214,22 +257,48 @@ const PDVPage: React.FC = () => {
         });
       }
     } finally {
-      setIsLoadingProducts(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setIsLoadingProducts(false);
+      }
     }
   }, [toast, user?.id, getProductCacheKey]);
 
   useEffect(() => {
+    if (authLoading || !user?.id) {
+      activeUserIdRef.current = null;
+      setProducts([]);
+    }
     if (authLoading || !user?.id) return;
 
-    const cacheKey = getProductCacheKey(user.id);
-    const cached = localStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        setProducts(JSON.parse(cached));
-      } catch {
-        fetchProducts(false);
+    const currentUserId = user.id;
+    activeUserIdRef.current = currentUserId;
+    setProducts([]);
+
+    const cacheKey = getProductCacheKey(currentUserId);
+    let loadedFromCache = false;
+
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          if (activeUserIdRef.current === currentUserId) {
+            setProducts(parsed);
+            loadedFromCache = true;
+          }
+        } else {
+          localStorage.removeItem(cacheKey);
+        }
       }
-    } else {
+    } catch {
+      try {
+        localStorage.removeItem(cacheKey);
+      } catch {
+        // Ignora erro de localStorage
+      }
+    }
+
+    if (!loadedFromCache) {
       fetchProducts(false);
     }
   }, [authLoading, user?.id, fetchProducts, getProductCacheKey]);
