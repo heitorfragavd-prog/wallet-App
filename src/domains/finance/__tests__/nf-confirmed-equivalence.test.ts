@@ -12,6 +12,8 @@ import {
   validarAtorTelegramFase5,
   extrairNfItemIdDaProposta,
   canFinalizeManualEquivalenceProposal,
+  isProposalFinalizedSuccessfully,
+  reverterPropostaParaPendente,
 } from "../../../../supabase/functions/_shared/integrations/nf-product-equivalence";
 import { evaluateStockStatus } from "../../../../supabase/functions/_shared/danfe-extractor";
 import * as fs from "fs";
@@ -2797,8 +2799,182 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       // 4. Revalidação pós-execução no vp_ok
       expect(content).toContain("canFinalizeManualEquivalenceProposal");
 
-      // 5. CAS na finalização do vp_ok
+      // 5. CAS na finalização do vp_ok e validação de transição
       expect(content).toContain('.eq("status", "em_processamento")');
+      expect(content).toContain("isProposalFinalizedSuccessfully");
+      expect(content).toContain("reverterPropostaParaPendente");
+    });
+
+    // ─── 12. FECHAMENTO DE CONSISTÊNCIA DO LIFECYCLE DE PROPOSTAS (FINAL-CAS e RECOVERY-CAS) ───
+
+    // FINAL-CAS-A: update executada retorna linha correta -> sucesso permitido, conversa limpa
+    it("FINAL-CAS-A: update executada com status=executada confirma finalização com sucesso e limpa conversa", () => {
+      let conversaLimpa = false;
+      let mensagemSucesso = false;
+
+      const finalizedProposal = { id: "prop-cas-1", status: "executada" };
+      const finalizeError = null;
+
+      const finalizeSuccess = isProposalFinalizedSuccessfully(finalizedProposal, finalizeError);
+      expect(finalizeSuccess).toBe(true);
+
+      if (finalizeSuccess) {
+        conversaLimpa = true;
+        mensagemSucesso = true;
+      }
+
+      expect(conversaLimpa).toBe(true);
+      expect(mensagemSucesso).toBe(true);
+    });
+
+    // FINAL-CAS-B: update executada retorna zero linhas (conflito de concorrência) -> não limpa conversa, não afirma sucesso
+    it("FINAL-CAS-B: update executada com zero linhas (null) rejeita finalização, não limpa conversa e não afirma sucesso", () => {
+      let conversaLimpa = false;
+      let mensagemSucesso = false;
+      let failClosedAcionado = false;
+
+      const finalizedProposal = null; // Zero rows updated
+      const finalizeError = null;
+
+      const finalizeSuccess = isProposalFinalizedSuccessfully(finalizedProposal, finalizeError);
+      expect(finalizeSuccess).toBe(false);
+
+      if (finalizeSuccess) {
+        conversaLimpa = true;
+        mensagemSucesso = true;
+      } else {
+        failClosedAcionado = true;
+      }
+
+      expect(conversaLimpa).toBe(false);
+      expect(mensagemSucesso).toBe(false);
+      expect(failClosedAcionado).toBe(true);
+    });
+
+    // FINAL-CAS-C: update executada retorna database error -> não limpa conversa, não afirma sucesso
+    it("FINAL-CAS-C: update executada com database error rejeita finalização sem afirmar sucesso", () => {
+      let conversaLimpa = false;
+      let mensagemSucesso = false;
+      let failClosedAcionado = false;
+
+      const finalizedProposal = null;
+      const finalizeError = { message: "database timeout or connection error" };
+
+      const finalizeSuccess = isProposalFinalizedSuccessfully(finalizedProposal, finalizeError);
+      expect(finalizeSuccess).toBe(false);
+
+      if (finalizeSuccess) {
+        conversaLimpa = true;
+        mensagemSucesso = true;
+      } else {
+        failClosedAcionado = true;
+      }
+
+      expect(conversaLimpa).toBe(false);
+      expect(mensagemSucesso).toBe(false);
+      expect(failClosedAcionado).toBe(true);
+    });
+
+    // RECOVERY-CAS-A: em_processamento -> pendente confirmado -> retry permitido
+    it("RECOVERY-CAS-A: em_processamento -> pendente confirmado via reverterPropostaParaPendente permite retry", async () => {
+      let retryDisponibilizado = false;
+
+      const mockClient = {
+        from: vi.fn((table: string) => {
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn((payload: any) => {
+                return {
+                  eq: vi.fn().mockReturnThis(),
+                  select: vi.fn().mockReturnThis(),
+                  maybeSingle: vi.fn().mockResolvedValue({
+                    data: { id: "prop-rec-1", status: payload.status },
+                    error: null,
+                  }),
+                };
+              }),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const { ok: recoverySuccess } = await reverterPropostaParaPendente(mockClient as any, {
+        propostaId: "prop-rec-1",
+        userId: USER_ID,
+        chatId: 12345,
+      });
+
+      expect(recoverySuccess).toBe(true);
+
+      if (recoverySuccess) {
+        retryDisponibilizado = true;
+      }
+
+      expect(retryDisponibilizado).toBe(true);
+    });
+
+    // RECOVERY-CAS-B: recovery retorna zero linhas ou erro -> não afirma que retry está disponível
+    it("RECOVERY-CAS-B: recovery com zero linhas ou erro não disponibiliza retry", async () => {
+      let retryDisponibilizado = false;
+      let erroNotificado = false;
+
+      // Caso 1: Zero linhas atualizadas (null)
+      const mockClientZeroRows = {
+        from: vi.fn((table: string) => {
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn(() => ({
+                eq: vi.fn().mockReturnThis(),
+                select: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              })),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const resZero = await reverterPropostaParaPendente(mockClientZeroRows as any, {
+        propostaId: "prop-rec-zero",
+        userId: USER_ID,
+        chatId: 12345,
+      });
+
+      expect(resZero.ok).toBe(false);
+
+      if (resZero.ok) {
+        retryDisponibilizado = true;
+      } else {
+        erroNotificado = true;
+      }
+
+      expect(retryDisponibilizado).toBe(false);
+      expect(erroNotificado).toBe(true);
+
+      // Caso 2: Database error
+      const mockClientDbError = {
+        from: vi.fn((table: string) => {
+          if (table === "telegram_propostas") {
+            return {
+              update: vi.fn(() => ({
+                eq: vi.fn().mockReturnThis(),
+                select: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "lock timeout" } }),
+              })),
+            };
+          }
+          return {};
+        }),
+      };
+
+      const resErr = await reverterPropostaParaPendente(mockClientDbError as any, {
+        propostaId: "prop-rec-err",
+        userId: USER_ID,
+        chatId: 12345,
+      });
+
+      expect(resErr.ok).toBe(false);
     });
   });
 });

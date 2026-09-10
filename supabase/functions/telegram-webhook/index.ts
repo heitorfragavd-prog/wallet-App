@@ -70,6 +70,8 @@ import {
   validarAtorTelegramFase5,
   extrairNfItemIdDaProposta,
   canFinalizeManualEquivalenceProposal,
+  isProposalFinalizedSuccessfully,
+  reverterPropostaParaPendente,
   type ProductCandidate,
 } from "../_shared/integrations/nf-product-equivalence.ts";
 
@@ -2801,45 +2803,74 @@ serve(async (req) => {
 
         if (!podeFinalizar) {
           // A equivalência foi salva com sucesso, mas o processamento de estoque falhou ou o item não é terminal.
-          // Devolve a proposta para pendente de forma escopada para permitir retry seguro.
-          await supabase
-            .from("telegram_propostas")
-            .update({ status: "pendente" })
-            .eq("id", propRow.id)
-            .eq("user_id", propRow.user_id)
-            .eq("chat_id", propRow.chat_id)
-            .eq("tipo", "vincular_produto_nf")
-            .eq("status", "em_processamento");
+          // Devolve a proposta para pendente de forma escopada e valida o recovery CAS.
+          const { ok: recoverySuccess } = await reverterPropostaParaPendente(supabase, {
+            propostaId: propRow.id,
+            userId: propRow.user_id,
+            chatId: propRow.chat_id,
+          });
 
-          if (callbackMessageId) {
-            await editMessageText(
-              cbChatId,
-              callbackMessageId,
-              `⚠️ <b>Vínculo salvo, mas houve erro ao atualizar o estoque</b>\n\n` +
-              `O vínculo de <b>${prodCanonical.descricao}</b> foi salvo com sucesso, mas o estoque não pôde ser atualizado.\n` +
-              `Você pode tentar processar novamente clicando abaixo.`,
-              {
-                inline_keyboard: [
-                  [{ text: "🔄 Tentar processar novamente", callback_data: `vp_ok:${propRow.id}` }],
-                  [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
-                ],
-              }
-            );
+          if (recoverySuccess) {
+            if (callbackMessageId) {
+              await editMessageText(
+                cbChatId,
+                callbackMessageId,
+                `⚠️ <b>Vínculo salvo, mas houve erro ao atualizar o estoque</b>\n\n` +
+                `O vínculo de <b>${prodCanonical.descricao}</b> foi salvo com sucesso, mas o estoque não pôde ser atualizado.\n` +
+                `Você pode tentar processar novamente clicando abaixo.`,
+                {
+                  inline_keyboard: [
+                    [{ text: "🔄 Tentar processar novamente", callback_data: `vp_ok:${propRow.id}` }],
+                    [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+                  ],
+                }
+              );
+            }
+            await replyCallbackFn("⚠️ Houve uma instabilidade técnica ao processar o estoque desta NF. O vínculo foi preservado e você pode tentar novamente.");
+          } else {
+            // Recovery falhou ou retornou zero linhas (conflito de concorrência ou falha no banco)
+            if (callbackMessageId) {
+              await editMessageText(
+                cbChatId,
+                callbackMessageId,
+                `⚠️ <b>Falha na recuperação da proposta</b>\n\n` +
+                `O vínculo foi salvo com sucesso, mas ocorreu uma instabilidade ao restaurar o estado da proposta.`
+              );
+            }
+            await replyCallbackFn("⚠️ O vínculo foi preservado, mas ocorreu uma instabilidade técnica ao restaurar a proposta. Tente reiniciar a operação.");
           }
-          await replyCallbackFn("⚠️ Houve uma instabilidade técnica ao processar o estoque desta NF. O vínculo foi preservado e você pode tentar novamente.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        // Executor e item confirmados com sucesso: marca a proposta como executada usando CAS e limpa a conversa!
-        await supabase
+        // Executor e item confirmados com sucesso: marca a proposta como executada usando CAS e valida o resultado do UPDATE!
+        const { data: finalizedProposal, error: finalizeError } = await supabase
           .from("telegram_propostas")
           .update({ status: "executada", executed_at: new Date().toISOString() })
           .eq("id", propRow.id)
           .eq("user_id", propRow.user_id)
           .eq("chat_id", propRow.chat_id)
           .eq("tipo", "vincular_produto_nf")
-          .eq("status", "em_processamento");
+          .eq("status", "em_processamento")
+          .select("id, status")
+          .maybeSingle();
 
+        const finalizeSuccess = isProposalFinalizedSuccessfully(finalizedProposal, finalizeError);
+
+        if (!finalizeSuccess) {
+          console.error("[telegram-webhook] Falha no CAS de finalização da proposta:", finalizeError, finalizedProposal);
+          if (callbackMessageId) {
+            await editMessageText(
+              cbChatId,
+              callbackMessageId,
+              `⚠️ <b>Processamento concluído com pendência de registro</b>\n\n` +
+              `O estoque e o vínculo de <b>${prodCanonical.descricao}</b> foram processados com sucesso, mas a proposta não pôde ser marcada como finalizada no momento.`
+            );
+          }
+          await replyCallbackFn("⚠️ O processamento ocorreu, mas a finalização da operação precisa ser recuperada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Somente se finalizeSuccess for true limpa a conversa e envia mensagem de sucesso!
         await supabase.from("telegram_conversas").upsert(
           { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
           { onConflict: "chat_id" }

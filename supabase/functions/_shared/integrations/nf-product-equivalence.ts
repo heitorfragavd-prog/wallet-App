@@ -786,3 +786,47 @@ export function canFinalizeManualEquivalenceProposal(params: {
   }
   return params.itemStatus === "processado" || params.itemStatus === "atualizado";
 }
+
+/**
+ * Validação se o CAS de finalização da proposta para status 'executada' teve sucesso.
+ */
+export function isProposalFinalizedSuccessfully(
+  finalizedProposal: { status?: string } | null | undefined,
+  finalizeError: unknown
+): boolean {
+  return !finalizeError && finalizedProposal?.status === "executada";
+}
+
+/**
+ * Reverte uma proposta de 'em_processamento' para 'pendente' com validação CAS completa.
+ * Retorna true somente se o update no banco teve sucesso e confirmou status = 'pendente'.
+ */
+export async function reverterPropostaParaPendente(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  params: {
+    propostaId: string;
+    userId: string;
+    chatId: string | number;
+  }
+): Promise<{ ok: boolean; error?: unknown }> {
+  try {
+    const { data: recoveredProp, error: recoverErr } = await client
+      .from("telegram_propostas")
+      .update({ status: "pendente" })
+      .eq("id", params.propostaId)
+      .eq("user_id", params.userId)
+      .eq("chat_id", Number(params.chatId) || params.chatId)
+      .eq("tipo", "vincular_produto_nf")
+      .eq("status", "em_processamento")
+      .select("id, status")
+      .maybeSingle();
+
+    if (recoverErr || recoveredProp?.status !== "pendente") {
+      return { ok: false, error: recoverErr || "recovery_zero_rows" };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err };
+  }
+}
