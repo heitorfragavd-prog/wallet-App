@@ -373,6 +373,9 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     expect(uploadSource).not.toContain("updateCusto: true");
     expect(uploadSource).not.toContain("addEstoque: true");
 
+    // Não contém promessa legada de atualização de estoque e custo na descrição
+    expect(uploadSource).not.toContain("atualizar seu estoque, custos e despesas instantaneamente");
+
     // Informação visual neutra orientando para o fluxo canônico
     expect(uploadSource).toContain("Estoque e custo são atualizados pelo fluxo canônico de NF.");
   });

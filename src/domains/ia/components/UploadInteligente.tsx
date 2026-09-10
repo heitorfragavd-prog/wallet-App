@@ -365,7 +365,7 @@ export const UploadInteligente = () => {
             Scanner de Documentos Inteligente
           </CardTitle>
           <CardDescription>
-            Tire uma foto ou arraste comprovantes, notas fiscais ou boletos para atualizar seu estoque, custos e despesas instantaneamente.
+            Tire uma foto ou arraste comprovantes, notas fiscais ou boletos para analisar e organizar seus documentos financeiros. Notas fiscais que envolvem estoque e custo são processadas pelo fluxo canônico de NF.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
