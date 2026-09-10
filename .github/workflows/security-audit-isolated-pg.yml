@@ -194,6 +194,7 @@ jobs:
           export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
           export LEGACY_APP_URL=http://localhost:4173
           export NEW_APP_URL=http://localhost:4174
+          export MOCK_PROVIDER_URL=http://127.0.0.1:18080
           npx playwright test tests/application-phase-abc-sequence.spec.ts
 
       - name: Run Playwright E2E Security Homologation Suite

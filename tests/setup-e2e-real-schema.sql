@@ -294,3 +294,50 @@ $$;
 REVOKE ALL ON FUNCTION public.get_ia_config_status() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_ia_config_status() TO authenticated;
 
+-- Tabelas de Chat IA e Auditoria da Wallet IA
+CREATE TABLE IF NOT EXISTS public.chat_conversas (
+  id                 uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id            uuid         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  titulo             text         NOT NULL DEFAULT 'Nova Conversa',
+  openai_thread_id   text,
+  ultima_mensagem_em timestamptz,
+  created_at         timestamptz  NOT NULL DEFAULT now(),
+  updated_at         timestamptz  NOT NULL DEFAULT now()
+);
+ALTER TABLE public.chat_conversas ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users can manage own conversations" ON public.chat_conversas;
+CREATE POLICY "Users can manage own conversations" ON public.chat_conversas FOR ALL USING (auth.uid() = user_id);
+GRANT ALL ON public.chat_conversas TO authenticated, service_role;
+
+CREATE TABLE IF NOT EXISTS public.chat_mensagens (
+  id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversa_id   uuid        NOT NULL REFERENCES public.chat_conversas(id) ON DELETE CASCADE,
+  user_id       uuid        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role          text        NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+  conteudo      text        NOT NULL DEFAULT '',
+  imagem_base64 text,
+  metadata      jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.chat_mensagens ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users can manage own messages" ON public.chat_mensagens;
+CREATE POLICY "Users can manage own messages" ON public.chat_mensagens FOR ALL USING (auth.uid() = user_id);
+GRANT ALL ON public.chat_mensagens TO authenticated, service_role;
+
+CREATE TABLE IF NOT EXISTS public.wallet_ai_audit_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
+  workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE RESTRICT,
+  tool_name TEXT NOT NULL,
+  execution_status TEXT NOT NULL CHECK (execution_status IN ('success', 'error')),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+  record_count INTEGER NOT NULL DEFAULT 0 CHECK (record_count >= 0),
+  error_code TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.wallet_ai_audit_events ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_audit_events TO service_role;
+
+

@@ -623,6 +623,109 @@ test.describe('Homologação de Segurança e Auditoria End-to-End (Real Supabase
       })
     });
     expect([401, 403]).toContain(spoofedRes.status);
+
+    // =========================================================================
+    // 8.5 Cenário 5: Esgotamento de Orçamento de Tokens (reserve_ai_tokens / TPH)
+    // =========================================================================
+    // Garante que o bucket de RPM esteja limpo e 100% com saldo disponível (não mascarar o teste)
+    await executeSql(`DELETE FROM public.rate_limits WHERE bucket_key = $1;`, [rpmBucketKey]);
+
+    // Reseta estatísticas do mock externo e garante modo 'success'
+    await fetch(mockResetUrl, { method: 'POST' });
+    await fetch(mockModeUrl, { method: 'POST', body: JSON.stringify({ mode: 'success' }) });
+
+    // Injeta um consumo de tokens próximo do limite (49.900 de 50.000 tokens/hora, restando 100)
+    const tphBucketKey = `ws:${user1WorkspaceId}:user:${user1Id}:categorizar_ia:tph`;
+    await executeSql(
+      `INSERT INTO public.rate_limits (bucket_key, request_count, window_start, last_request)
+       VALUES ($1, 49900, now(), now())
+       ON CONFLICT (bucket_key) DO UPDATE SET request_count = 49900, window_start = now();`,
+      [tphBucketKey]
+    );
+
+    // Registra contagem de reservas pendentes antes da tentativa
+    const initialReservedCount = await executeSql(
+      `SELECT count(*)::int as cnt FROM public.ai_token_reservations 
+       WHERE user_id = $1 AND bucket_key = $2 AND status = 'reserved';`,
+      [user1Id, tphBucketKey]
+    );
+
+    // Chama a Edge Function autenticada com requisição válida que solicita 300 tokens (ultrapassa os 100 restantes)
+    const tphExhaustedRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        descricao: 'Compra solicitando tokens além do orçamento disponível',
+        valor: 89.90,
+        workspace_id: user1WorkspaceId,
+      })
+    });
+
+    // 1. Exige recusa específica com status 429 e mensagem de orçamento/cota por hora
+    expect(tphExhaustedRes.status).toBe(429);
+    const tphExhaustedData = await tphExhaustedRes.json();
+    expect(tphExhaustedData.error).toMatch(/orçamento|cota de processamento/i);
+
+    // 2. Comprova que o provedor externo NÃO recebeu chamada (bloqueio atômico prévio)
+    const statsAfterTph = await (await fetch(mockStatsUrl)).json();
+    expect(statsAfterTph.openaiCalls).toBe(0);
+
+    // 3. Confere o estado persistido no banco de dados:
+    // O contador de tokens não deve ter sido incrementado além dos 49.900 permitidos
+    const dbLimitState = await executeSql(
+      `SELECT request_count FROM public.rate_limits WHERE bucket_key = $1;`,
+      [tphBucketKey]
+    );
+    expect(Number(dbLimitState.rows[0].request_count)).toBe(49900);
+
+    // Nenhuma reserva indevida pendente ('reserved') deve ter sido criada
+    const postReservedCount = await executeSql(
+      `SELECT count(*)::int as cnt FROM public.ai_token_reservations 
+       WHERE user_id = $1 AND bucket_key = $2 AND status = 'reserved';`,
+      [user1Id, tphBucketKey]
+    );
+    expect(postReservedCount.rows[0].cnt).toBe(initialReservedCount.rows[0].cnt);
+
+    // 4. Controle Positivo: com saldo suficiente restaurado, a operação é autorizada e reconciliada
+    await executeSql(`DELETE FROM public.rate_limits WHERE bucket_key = $1;`, [tphBucketKey]);
+    await fetch(mockResetUrl, { method: 'POST' });
+
+    const positiveControlRes = await fetch(`${SUPABASE_URL}/functions/v1/categorizar-ia`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${user1Token}`,
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        descricao: 'Compra sob controle positivo com saldo restabelecido',
+        valor: 45.00,
+        workspace_id: user1WorkspaceId,
+      })
+    });
+
+    expect(positiveControlRes.status).toBe(200);
+    const positiveData = await positiveControlRes.json();
+    expect(positiveData.categoria).toBe('alimentacao');
+
+    const statsPositive = await (await fetch(mockStatsUrl)).json();
+    expect(statsPositive.openaiCalls).toBe(1);
+
+    const dbPositiveReservation = await executeSql(
+      `SELECT status, actual_tokens, outcome 
+       FROM public.ai_token_reservations 
+       WHERE user_id = $1 AND action = 'categorizar_ia' 
+       ORDER BY created_at DESC LIMIT 1;`,
+      [user1Id]
+    );
+    expect(dbPositiveReservation.rows.length).toBe(1);
+    expect(dbPositiveReservation.rows[0].status).toBe('reconciled');
+    expect(dbPositiveReservation.rows[0].outcome).toBe('success');
+    expect(Number(dbPositiveReservation.rows[0].actual_tokens)).toBe(50);
   });
 
   test('9. Preview e Impressão de Recibos: Sanitização estrita contra XSS e HTML injection', async ({ page }) => {

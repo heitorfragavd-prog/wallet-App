@@ -79,11 +79,14 @@ const server = http.createServer((req, res) => {
         }));
       }
 
-      const mockAiContent = JSON.stringify({
-        categoria: 'alimentacao',
-        confianca: 0.95,
-        justificativa: 'Compra de suprimentos alimenticios'
-      });
+      let mockAiContent = "Análise financeira concluída com sucesso: fluxo de caixa equilibrado.";
+      if (body.includes("categorizador financeiro") || body.includes("<transacao>") || body.includes("categoria")) {
+        mockAiContent = JSON.stringify({
+          categoria: 'alimentacao',
+          confianca: 0.95,
+          justificativa: 'Compra de suprimentos alimenticios'
+        });
+      }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({

@@ -9,6 +9,7 @@ const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres
 
 const LEGACY_APP_URL = process.env.LEGACY_APP_URL || 'http://localhost:4173';
 const NEW_APP_URL = process.env.NEW_APP_URL || 'http://localhost:4174';
+const _MOCK_PROVIDER_URL = process.env.MOCK_PROVIDER_URL || 'http://127.0.0.1:18080';
 
 const LEGACY_SHA = '8ae7c04';
 const HARDENED_LABEL = 'Hardened (Head)';
@@ -149,6 +150,63 @@ async function extractSessionClaims(page: Page): Promise<{ token: string; sub: s
     }
     return null;
   });
+}
+
+// 3. Helper para comprovar o fluxo de IA completo e determinístico pela interface do navegador
+async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: string) {
+  // 3.1 Assegura mock externo configurado e zera contadores
+  await fetch(`${_MOCK_PROVIDER_URL}/reset`, { method: 'POST' }).catch(() => {});
+  await fetch(`${_MOCK_PROVIDER_URL}/mock/openai/mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'success' }),
+  }).catch(() => {});
+
+  // 3.2 Navega para a tela real de IA
+  await page.goto(`${appUrl}/ia`);
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(1000);
+
+  // 3.3 Localiza textarea da aplicação
+  const textarea = page.locator('textarea').first();
+  await expect(textarea).toBeVisible({ timeout: 25000 });
+  await expect(textarea).toBeEnabled({ timeout: 15000 });
+
+  // 3.4 Preenche mensagem analítica complexa (ativa Agent V2 / orchestrator)
+  const messageText = `Faça uma análise financeira detalhada das despesas sob ${phaseName}.`;
+  await textarea.fill(messageText);
+
+  // 3.5 Prepara interceptação da requisição HTTP originada pelo frontend para a Edge Function local
+  const requestPromise = page.waitForRequest(
+    (req) => req.url().includes('/functions/v1/wallet-ai-orchestrator') && req.method() === 'POST',
+    { timeout: 35000 }
+  );
+
+  // 3.6 Envia mensagem pelo botão de envio da aplicação (ou Enter como fallback)
+  const sendBtn = page.locator('button:has(svg.lucide-send), button:has(svg)').last();
+  if (await sendBtn.isVisible()) {
+    await sendBtn.click();
+  } else {
+    await textarea.press('Enter');
+  }
+
+  // 3.7 Confirma captura da requisição originada pelo frontend para a Edge Function correta
+  const interceptedReq = await requestPromise;
+  expect(interceptedReq.url()).toContain('/functions/v1/wallet-ai-orchestrator');
+
+  // 3.8 Confirma que a resposta determinística do provedor simulado aparece no chat visível
+  const assistantResponse = page.locator('text=Análise financeira concluída com sucesso').last();
+  await expect(assistantResponse).toBeVisible({ timeout: 35000 });
+
+  // 3.9 Confirma que o loading/processamento terminou
+  const loadingIndicator = page.locator('.animate-spin');
+  await expect(loadingIndicator).toHaveCount(0, { timeout: 20000 });
+  await expect(textarea).toBeEnabled({ timeout: 15000 });
+
+  // 3.10 Confirma que o mock externo do provedor de IA recebeu a chamada
+  const statsRes = await fetch(`${_MOCK_PROVIDER_URL}/stats`);
+  const stats = await statsRes.json();
+  expect(stats.openaiCalls).toBeGreaterThanOrEqual(1);
 }
 
 test.describe('Homologação da Aplicação na Sequência A → B → C (Stack Real e Builds Isolados)', () => {
@@ -387,11 +445,8 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     });
     expect([200, 201]).toContain(cadRes.status);
 
-    // 2.5 Nova aplicação: Navegação para a interface de IA (rota /ia)
-    await page.goto(`${NEW_APP_URL}/ia`);
-    await page.waitForLoadState('domcontentloaded');
-    const newAiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), div:has-text("Wallet IA"), h2:has-text("Como posso ajudar?")').first();
-    await expect(newAiInterface).toBeVisible({ timeout: 25000 });
+    // 2.5 Nova aplicação: Comprovação do fluxo de IA completo pela interface do navegador sob a Fase B
+    await performBrowserAiChatFlow(page, NEW_APP_URL, 'Fase B');
 
     // =========================================================================
     // 2.6 PONTO 4: COMPROVAÇÃO DE AUTORIZAÇÃO DA RPC reserve_ai_tokens
@@ -542,6 +597,9 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     expect(readInvestB.ok).toBe(true);
     expect(readInvestB.data.length).toBe(0);
 
+    // 5.6b Nova aplicação: Comprovação do fluxo de IA completo pela interface do navegador sob a Fase C (Contexto A)
+    await performBrowserAiChatFlow(pageA, NEW_APP_URL, 'Fase C');
+
     await contextA.close();
     await contextB.close();
 
@@ -630,6 +688,9 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     await performMandatoryBrowserLogin(page, NEW_APP_URL, testEmail, testPassword);
     await page.goto(`${NEW_APP_URL}/divipay`);
     await expect(page.locator('h1, h2, h3, div:has-text("Divipay")').first()).toBeVisible({ timeout: 10000 });
+
+    // 6.5 Nova aplicação: Comprovação do fluxo de IA completo pela interface do navegador após o Rollback Seguro
+    await performBrowserAiChatFlow(page, NEW_APP_URL, 'Rollback Seguro');
     await page.close();
   });
 
