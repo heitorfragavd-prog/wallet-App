@@ -300,52 +300,20 @@ export const UploadInteligente = () => {
         if (despErr) throw despErr;
       }
 
-      // 2. Atualizar estoque/custos de produtos
-      for (const iData of nfItens) {
-        if (!iData.updateCusto && !iData.addEstoque) continue;
-
-        // Buscar se produto existe
-        let foundProd: any = null;
-        if (iData.item.codigo) {
-          const { data } = await supabase.from("eyemobile_produtos")
-            .select("*")
-            .eq("user_id", user.id)
-            .eq("codigo_barras", iData.item.codigo)
-            .maybeSingle();
-          if (data) foundProd = data;
-        }
-        if (!foundProd) {
-          const { data } = await supabase.from("eyemobile_produtos")
-            .select("*")
-            .eq("user_id", user.id)
-            .ilike("nome", iData.item.nome)
-            .maybeSingle();
-          if (data) foundProd = data;
-        }
-
-        if (foundProd) {
-          // Atualizar
-          const updates: any = {};
-          if (iData.updateCusto) updates.custo = iData.item.valor_unitario;
-          if (iData.addEstoque) updates.estoque = Number(foundProd.estoque || 0) + Number(iData.item.quantidade || 0);
-
-          await supabase.from("eyemobile_produtos")
-            .update(updates)
-            .eq("id", foundProd.id);
-        } else {
-          // Inserir como novo se não achar
-          await supabase.from("eyemobile_produtos").insert({
-            user_id: user.id,
-            nome: iData.item.nome,
-            codigo_barras: iData.item.codigo || null,
-            custo: iData.updateCusto ? iData.item.valor_unitario : 0,
-            estoque: iData.addEstoque ? iData.item.quantidade : 0
-          });
-        }
-      }
-
+      // 2. Legado de produtos desativado com segurança
+      // O fluxo canônico de conciliação de produtos de NF utiliza produtos_eyemobile + produto_equivalencias via backend transacional.
       setIsConfirmed(true);
-      toast({ title: "Nota Fiscal Processada!", description: "Dados adicionados com sucesso." });
+      const hadStockRequest = nfItens.some(i => i.updateCusto || i.addEstoque);
+      if (hadStockRequest) {
+        toast({
+          title: "Nota Fiscal Processada",
+          description: nfLancarDespesa
+            ? "Despesa lançada com sucesso. A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
+            : "A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
+        });
+      } else {
+        toast({ title: "Nota Fiscal Processada!", description: "Dados adicionados com sucesso." });
+      }
     } catch (err) {
       toast({ title: "Erro ao confirmar", description: String(err), variant: "destructive" });
     } finally {

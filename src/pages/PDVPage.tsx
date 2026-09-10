@@ -17,6 +17,7 @@ import { Input } from "@/shared/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/components/ui/dialog";
 import { ArrowLeft, Store, RefreshCw, Smartphone, CheckCircle2, Lock, AlertTriangle, Coins, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/domains/auth/hooks/useAuth";
 
 interface Movimentacao {
   tipo: "abertura" | "venda" | "sangria" | "reforco";
@@ -70,7 +71,21 @@ function getProductCategory(name: string): string {
 const PDVPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const getProductCacheKey = useCallback((uid?: string) => {
+    return uid ? `pdv_produtos_cache_${uid}` : "pdv_produtos_cache_guest";
+  }, []);
+
+  // Limpeza preventiva da chave de cache legada global
+  useEffect(() => {
+    try {
+      localStorage.removeItem("pdv_produtos_cache");
+    } catch {
+      // Ignora indisponibilidade de localStorage
+    }
+  }, []);
 
   // Estados principais com persistência no LocalStorage
   const [isCaixaAberto, setIsCaixaAberto] = useState<boolean>(() => {
@@ -175,7 +190,8 @@ const PDVPage: React.FC = () => {
           };
         });
         setProducts(mapped);
-        localStorage.setItem("pdv_produtos_cache", JSON.stringify(mapped));
+        const cacheKey = getProductCacheKey(user?.id);
+        localStorage.setItem(cacheKey, JSON.stringify(mapped));
         if (showToast) {
           toast({ title: "Sincronizado!", description: `${mapped.length} produtos carregados do Eyemobile.` });
         }
@@ -191,7 +207,8 @@ const PDVPage: React.FC = () => {
           variant: "destructive"
         });
       }
-      const cached = localStorage.getItem("pdv_produtos_cache");
+      const cacheKey = getProductCacheKey(user?.id);
+      const cached = localStorage.getItem(cacheKey);
       if (cached) {
         setProducts(JSON.parse(cached));
       } else {
@@ -200,16 +217,21 @@ const PDVPage: React.FC = () => {
     } finally {
       setIsLoadingProducts(false);
     }
-  }, [toast]);
+  }, [toast, user?.id, getProductCacheKey]);
 
   useEffect(() => {
-    const cached = localStorage.getItem("pdv_produtos_cache");
+    const cacheKey = getProductCacheKey(user?.id);
+    const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      setProducts(JSON.parse(cached));
+      try {
+        setProducts(JSON.parse(cached));
+      } catch {
+        fetchProducts(false);
+      }
     } else {
       fetchProducts(false);
     }
-  }, [fetchProducts]);
+  }, [user?.id, fetchProducts, getProductCacheKey]);
 
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
