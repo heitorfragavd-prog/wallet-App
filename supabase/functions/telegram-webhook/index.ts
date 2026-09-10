@@ -63,6 +63,10 @@ import {
 } from "../_shared/integrations/eyemobile-price-safety.ts";
 import {
   resolveNfProductEquivalence,
+  searchProductCandidates,
+  suggestConversionFactor,
+  salvarEquivalenciaConfirmada,
+  type ProductCandidate,
 } from "../_shared/integrations/nf-product-equivalence.ts";
 
 const corsHeaders = {
@@ -1447,6 +1451,62 @@ serve(async (req) => {
         await replyFn(msgConf);
       }
 
+      // Se houver itens pendentes, oferece fluxo de vinculação manual para o primeiro item
+      if (itensPendentes > 0) {
+        const { data: pendentes } = await supabase
+          .from("nf_itens")
+          .select("*")
+          .eq("nf_id", nf.id)
+          .eq("status_estoque", "pendente")
+          .order("id", { ascending: true })
+          .limit(1);
+
+        const primeiroPendente = pendentes?.[0];
+        if (primeiroPendente) {
+          const { data: propVinculo } = await supabase
+            .from("telegram_propostas")
+            .insert({
+              user_id: nf.user_id || targetUserId,
+              chat_id: Number(targetChatId) || null,
+              tipo: "vincular_produto_nf",
+              dados: {
+                nf_id: nf.id,
+                item_id: primeiroPendente.id,
+                cnpj_fornecedor: nf.cnpj_fornecedor,
+                fornecedor_nome: nf.fornecedor,
+                codigo_produto: primeiroPendente.codigo_produto,
+                descricao_produto: primeiroPendente.descricao,
+                unidade_produto: primeiroPendente.unidade,
+                quantidade: primeiroPendente.quantidade,
+                valor_unitario: primeiroPendente.valor_unitario,
+              },
+              resumo: `Vincular: ${primeiroPendente.descricao || "Item"} (NF ${nf.numero_nf || ""})`,
+              status: "pendente",
+              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            })
+            .select("id")
+            .single();
+
+          if (propVinculo?.id) {
+            let msgPend = `⚠️ <b>Item Pendente de Identificação</b>\n\n`;
+            msgPend += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+            msgPend += `📄 <b>Item na NF:</b> ${primeiroPendente.descricao || "N/A"}\n`;
+            msgPend += `🔢 <b>Código:</b> ${primeiroPendente.codigo_produto || "N/A"} | <b>Unidade:</b> ${primeiroPendente.unidade || "UN"}\n`;
+            msgPend += `💰 <b>Qtd:</b> ${primeiroPendente.quantidade} × ${fmt(primeiroPendente.valor_unitario)}\n\n`;
+            msgPend += `<i>Este item não possui equivalência confirmada no seu PDV. Deseja vinculá-lo agora?</i>`;
+
+            const botoesPend = [
+              [
+                { text: "🔗 Vincular ao PDV", callback_data: `vp_in:${propVinculo.id}` },
+                { text: "⏭️ Pular Item", callback_data: `vp_skip:${propVinculo.id}` },
+              ],
+            ];
+
+            await sendReplyWithButtons(targetChatId, msgPend, botoesPend);
+          }
+        }
+      }
+
       if (alertasCriados.length > 0) {
         for (const alerta of alertasCriados) {
           let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
@@ -2163,6 +2223,412 @@ serve(async (req) => {
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
+      // ================================================================
+      // FASE 5: BOTÕES DE VINCULAÇÃO MANUAL DE PRODUTO DA NF (vp_*)
+      // ================================================================
+
+      // ─── BOTÃO: vp_in (Iniciar/reabrir seleção de produto) ───
+      if (callbackData.startsWith("vp_in:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Buscando candidatos...");
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        if (!propRow || propRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Proposta não encontrada ou não autorizada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+        const { data: nfRow } = await supabase
+          .from("notas_fiscais_compra")
+          .select("workspace_id")
+          .eq("id", propDados.nf_id)
+          .maybeSingle();
+
+        const wsId = nfRow?.workspace_id || propDados.workspace_id;
+        const searchRes = await searchProductCandidates(supabase, {
+          userId: cbUserId,
+          workspaceId: wsId,
+          descricaoQuery: propDados.descricao_produto,
+          limit: 3,
+        });
+
+        const candidates = searchRes.ok ? searchRes.candidates : [];
+
+        if (candidates.length === 0) {
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: cbUserId,
+              chat_id: cbChatId,
+              estado: "aguardando_busca_produto_nf",
+              proposta_id: propRow.id,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+
+          await replyCallbackFn(
+            `🔍 <b>Nenhum candidato encontrado automaticamente</b>\n\n` +
+            `Item na NF: <b>${propDados.descricao_produto}</b>\n\n` +
+            `Por favor, digite o <b>nome ou código</b> do produto cadastrado no seu PDV:\n` +
+            `<i>(Ou envie CANCELAR para voltar).</i>`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        propDados.candidatos = candidates;
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id);
+
+        let msgSel = `🔍 <b>Vincular Produto ao PDV</b>\n\n`;
+        msgSel += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+        msgSel += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+        msgSel += `🔢 <b>Código:</b> ${propDados.codigo_produto} | <b>Unidade:</b> ${propDados.unidade_produto || "UN"}\n\n`;
+        msgSel += `Selecione o produto correspondente no seu catálogo:\n\n`;
+        candidates.forEach((c: ProductCandidate, idx: number) => {
+          msgSel += `${idx + 1}️⃣ <b>${c.descricao}</b>${c.codigo ? ` (Cód: ${c.codigo})` : ""}\n`;
+        });
+
+        const botoesSel = candidates.map((c: ProductCandidate, idx: number) => [
+          { text: `${idx + 1}️⃣ ${c.descricao.slice(0, 28)}`, callback_data: `vp_c:${propRow.id}:${idx + 1}` },
+        ]);
+        botoesSel.push([
+          { text: "🔎 Buscar outro produto", callback_data: `vp_bus:${propRow.id}` },
+        ]);
+        botoesSel.push([
+          { text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` },
+        ]);
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgSel, { inline_keyboard: botoesSel });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgSel, botoesSel);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_c (Seleção do candidato) ───
+      if (callbackData.startsWith("vp_c:")) {
+        const parts = callbackData.split(":");
+        const propId = parts[1];
+        const idx = parseInt(parts[2], 10);
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        if (!propRow || propRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Proposta não encontrada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+        const candidatos = propDados.candidatos as ProductCandidate[] | undefined;
+        const candidato = candidatos?.[idx - 1];
+
+        if (!candidato) {
+          await answerCallback(callbackQuery.id, "Candidato inválido.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Produto selecionado!");
+        propDados.produto_selecionado = candidato;
+
+        const fatorSug = suggestConversionFactor(propDados.unidade_produto, propDados.descricao_produto);
+        propDados.fator_sugerido = fatorSug;
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id);
+
+        const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+        const ehEmbalagem = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"].includes(uNorm);
+
+        let msgFat = `📦 <b>Fator de Conversão de Estoque</b>\n\n`;
+        msgFat += `📄 <b>Item na NF:</b> ${propDados.descricao_produto} (Un: <b>${propDados.unidade_produto || "UN"}</b>)\n`;
+        msgFat += `🎯 <b>Produto no PDV:</b> ${candidato.descricao}\n\n`;
+
+        let botoesFat: Array<Array<{ text: string; callback_data: string }>> = [];
+
+        if (ehEmbalagem) {
+          if (fatorSug && fatorSug > 1) {
+            msgFat += `Quantas unidades individuais existem em <b>1 ${propDados.unidade_produto}</b>?\n`;
+            msgFat += `💡 Sugestão identificada na descrição: <b>${fatorSug}</b>`;
+            botoesFat = [
+              [{ text: `✅ Confirmar ${fatorSug} unidades`, callback_data: `vp_f:${propRow.id}:sug` }],
+              [{ text: "✏️ Digitar outro número", callback_data: `vp_f:${propRow.id}:dig` }],
+              [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+            ];
+          } else {
+            msgFat += `A unidade de compra é <b>${propDados.unidade_produto}</b> (embalagem múltipla).\n`;
+            msgFat += `Informe a quantidade de unidades individuais em cada ${propDados.unidade_produto}:`;
+            botoesFat = [
+              [{ text: "✏️ Informar fator (ex: 6, 12, 24)", callback_data: `vp_f:${propRow.id}:dig` }],
+              [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+            ];
+          }
+        } else {
+          msgFat += `A conversão é direta (1 ${propDados.unidade_produto || "UN"} = 1 unidade no estoque)?`;
+          botoesFat = [
+            [{ text: `✅ Confirmar 1 ${propDados.unidade_produto || "UN"} = 1 UN`, callback_data: `vp_f:${propRow.id}:1` }],
+            [{ text: "✏️ Digitar outro número", callback_data: `vp_f:${propRow.id}:dig` }],
+            [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+          ];
+        }
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgFat, { inline_keyboard: botoesFat });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgFat, botoesFat);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_f (Confirmação do fator ou solicitação de digitação) ───
+      if (callbackData.startsWith("vp_f:")) {
+        const parts = callbackData.split(":");
+        const propId = parts[1];
+        const opt = parts[2];
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        if (!propRow || propRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Proposta não encontrada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+
+        if (opt === "dig") {
+          await answerCallback(callbackQuery.id, "Aguardando digitação do fator.");
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: cbUserId,
+              chat_id: cbChatId,
+              estado: "aguardando_fator_conversao_nf",
+              proposta_id: propRow.id,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+
+          await replyCallbackFn(
+            `✏️ <b>Digite o número de unidades por embalagem</b> (ex: 6, 12, 24):\n` +
+            `<i>(Apenas números > 0. Ou responda CANCELAR para voltar).</i>`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        let fatorNum = 1;
+        if (opt === "sug") {
+          fatorNum = Number(propDados.fator_sugerido || 1);
+        } else if (opt === "1") {
+          fatorNum = 1;
+        } else {
+          fatorNum = Number(opt);
+        }
+
+        if (isNaN(fatorNum) || !isFinite(fatorNum) || fatorNum <= 0) {
+          await answerCallback(callbackQuery.id, "Fator inválido.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+        const ehEmbalagem = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"].includes(uNorm);
+        if (ehEmbalagem && fatorNum <= 1) {
+          await answerCallback(callbackQuery.id, "Para embalagens, o fator deve ser > 1.");
+          await replyCallbackFn("⚠️ Para embalagens (caixas/fardos), o fator deve ser maior que 1. Clique em 'Digitar outro número' para informar o valor correto.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Fator definido!");
+        propDados.fator_escolhido = fatorNum;
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id);
+
+        // Tela 4: Resumo Final de Confirmação Obrigatório
+        let msgResumo = `📋 <b>CONFIRMAR VÍNCULO DE PRODUTO?</b>\n\n`;
+        msgResumo += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+        msgResumo += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+        msgResumo += `🔢 <b>Código Fornecedor:</b> ${propDados.codigo_produto}\n\n`;
+        msgResumo += `🎯 <b>Produto no PDV:</b> ${propDados.produto_selecionado?.descricao}\n`;
+        msgResumo += `⚖️ <b>Conversão:</b> 1 ${propDados.unidade_produto || "UN"} = <b>${fatorNum} unidade(s)</b>\n\n`;
+        msgResumo += `⚠️ <i>Este vínculo será salvo e reutilizado automaticamente em todas as próximas notas fiscais deste fornecedor.</i>`;
+
+        const botoesResumo = [
+          [{ text: "✅ Confirmar vínculo e atualizar estoque", callback_data: `vp_ok:${propRow.id}` }],
+          [{ text: "🔄 Alterar seleção", callback_data: `vp_in:${propRow.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+        ];
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgResumo, { inline_keyboard: botoesResumo });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgResumo, botoesResumo);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_bus (Ativar busca textual manual) ───
+      if (callbackData.startsWith("vp_bus:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Digite o termo de busca.");
+
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: cbUserId,
+            chat_id: cbChatId,
+            estado: "aguardando_busca_produto_nf",
+            proposta_id: propId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+
+        await replyCallbackFn(
+          `🔎 <b>Buscar Produto no PDV</b>\n\n` +
+          `Digite o nome ou código do produto cadastrado no seu sistema:\n` +
+          `<i>(Ou envie CANCELAR para voltar).</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_ok (Confirmação final explícita do vínculo) ───
+      if (callbackData.startsWith("vp_ok:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Salvando vínculo e processando estoque...");
+
+        // Lock atômico da proposta
+        const { data: propRow, error: lockErr } = await supabase
+          .from("telegram_propostas")
+          .update({ status: "em_processamento" })
+          .eq("id", propId)
+          .eq("status", "pendente")
+          .select("*")
+          .maybeSingle();
+
+        if (lockErr || !propRow) {
+          await answerCallback(callbackQuery.id, "Esta proposta já foi processada ou cancelada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (propRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Usuário não autorizado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+
+        const { data: nfRow } = await supabase
+          .from("notas_fiscais_compra")
+          .select("workspace_id, fornecedor, cnpj_fornecedor")
+          .eq("id", propDados.nf_id)
+          .maybeSingle();
+
+        const wsId = nfRow?.workspace_id || propDados.workspace_id;
+
+        const saveRes = await salvarEquivalenciaConfirmada(supabase, {
+          userId: cbUserId,
+          workspaceId: wsId,
+          cnpjFornecedor: nfRow?.cnpj_fornecedor || propDados.cnpj_fornecedor,
+          codigoProdutoFornecedor: propDados.codigo_produto,
+          produtoEyemobileUuid: propDados.produto_selecionado.id,
+          fatorConversao: propDados.fator_escolhido,
+          fornecedorNome: nfRow?.fornecedor || propDados.fornecedor_nome,
+          descricaoFornecedor: propDados.descricao_produto,
+          unidadeFornecedor: propDados.unidade_produto,
+        });
+
+        if (!saveRes.success) {
+          await supabase.from("telegram_propostas").update({ status: "pendente" }).eq("id", propRow.id);
+          if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await replyCallbackFn(`⚠️ <b>Não foi possível salvar o vínculo:</b> ${saveRes.error}`);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ status: "executada", executed_at: new Date().toISOString() })
+          .eq("id", propRow.id);
+
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `✅ <b>Vínculo confirmado com sucesso!</b>\n` +
+            `📦 Produto: <b>${propDados.produto_selecionado.descricao}</b> (Conversão: 1 = ${propDados.fator_escolhido})\n\n` +
+            `🔄 <i>Atualizando estoque e custos da Nota Fiscal via transação segura...</i>`
+          );
+        }
+
+        // Reexecuta o executor seguro da Fase 4 para a NF
+        await executarConfirmacaoNfSegura({
+          targetUserId: cbUserId,
+          targetChatId: cbChatId,
+          nfId: propDados.nf_id,
+          replyFn: replyCallbackFn,
+          callbackQueryId: callbackQuery.id,
+        });
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_can (Cancelar vinculação) ───
+      if (callbackData.startsWith("vp_can:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Vinculação cancelada.");
+
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", propId);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, "❌ <b>Vinculação cancelada.</b> Nenhuma alteração foi realizada no catálogo ou estoque.");
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_skip (Pular item pendente) ───
+      if (callbackData.startsWith("vp_skip:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Item mantido como pendente.");
+
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", propId);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, "⏭️ <b>Item mantido como pendente.</b> O estoque deste item não foi alterado e poderá ser vinculado posteriormente.");
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
       // Fallback para callbacks não reconhecidos
       await answerCallback(callbackQuery.id, "Ação realizada.");
       return new Response("OK", { status: 200, headers: corsHeaders });
@@ -2449,6 +2915,159 @@ serve(async (req) => {
       .select("estado, proposta_id, updated_at")
       .eq("chat_id", chatId)
       .maybeSingle();
+
+    // ─── HANDLERS DE ESTADOS DA FASE 5 (BUSCA E FATOR DE VINCULAÇÃO) ───
+    if (conversaAtivaPre?.estado === "aguardando_busca_produto_nf" && conversaAtivaPre.proposta_id) {
+      if (respLower === "cancelar") {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", conversaAtivaPre.proposta_id);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Busca cancelada. O item permaneceu pendente.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const { data: propRow } = await supabase
+        .from("telegram_propostas")
+        .select("*")
+        .eq("id", conversaAtivaPre.proposta_id)
+        .maybeSingle();
+
+      if (!propRow) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada ou expirada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+      const { data: nfRow } = await supabase
+        .from("notas_fiscais_compra")
+        .select("workspace_id")
+        .eq("id", propDados.nf_id)
+        .maybeSingle();
+
+      const wsId = nfRow?.workspace_id || propDados.workspace_id || workspaceId;
+      const searchRes = await searchProductCandidates(supabase, {
+        userId,
+        workspaceId: wsId,
+        descricaoQuery: text,
+        codigoQuery: text,
+        limit: 3,
+      });
+
+      const candidates = searchRes.ok ? searchRes.candidates : [];
+
+      if (candidates.length === 0) {
+        await sendReply(
+          `❌ Nenhum produto encontrado com o termo "<b>${text}</b>" no seu catálogo do PDV.\n\n` +
+          `Tente outro termo ou envie <b>CANCELAR</b> para voltar.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      propDados.candidatos = candidates;
+      await supabase.from("telegram_propostas").update({ dados: propDados }).eq("id", propRow.id);
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      let msgSel = `🔍 <b>Resultados da Busca para Vincular</b>\n\n`;
+      msgSel += `Item NF: <b>${propDados.descricao_produto}</b>\n\n`;
+      msgSel += `Selecione o produto correspondente:\n\n`;
+      candidates.forEach((c: ProductCandidate, idx: number) => {
+        msgSel += `${idx + 1}️⃣ <b>${c.descricao}</b>${c.codigo ? ` (Cód: ${c.codigo})` : ""}\n`;
+      });
+
+      const botoesSel = candidates.map((c: ProductCandidate, idx: number) => [
+        { text: `${idx + 1}️⃣ ${c.descricao.slice(0, 28)}`, callback_data: `vp_c:${propRow.id}:${idx + 1}` },
+      ]);
+      botoesSel.push([
+        { text: "🔎 Buscar outro produto", callback_data: `vp_bus:${propRow.id}` },
+      ]);
+      botoesSel.push([
+        { text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` },
+      ]);
+
+      await sendReplyWithButtons(chatId, msgSel, botoesSel);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    if (conversaAtivaPre?.estado === "aguardando_fator_conversao_nf" && conversaAtivaPre.proposta_id) {
+      if (respLower === "cancelar") {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", conversaAtivaPre.proposta_id);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Definição de fator cancelada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const fatorDigitado = Number(text.replace(",", "."));
+      if (isNaN(fatorDigitado) || !isFinite(fatorDigitado) || fatorDigitado <= 0) {
+        await sendReply(
+          `❌ Valor inválido. Digite um número positivo para o fator de conversão (ex: 6, 12, 24) ou envie <b>CANCELAR</b>:`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const { data: propRow } = await supabase
+        .from("telegram_propostas")
+        .select("*")
+        .eq("id", conversaAtivaPre.proposta_id)
+        .maybeSingle();
+
+      if (!propRow) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada ou expirada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+      const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+      const ehEmbalagem = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"].includes(uNorm);
+
+      if (ehEmbalagem && fatorDigitado <= 1) {
+        await sendReply(
+          `⚠️ Para embalagens (${propDados.unidade_produto}), o fator de conversão deve ser estritamente maior que 1.\n` +
+          `Digite o número correto de unidades por caixa ou envie <b>CANCELAR</b>:`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      propDados.fator_escolhido = fatorDigitado;
+      await supabase.from("telegram_propostas").update({ dados: propDados }).eq("id", propRow.id);
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      // Tela 4: Resumo Final
+      let msgResumo = `📋 <b>CONFIRMAR VÍNCULO DE PRODUTO?</b>\n\n`;
+      msgResumo += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+      msgResumo += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+      msgResumo += `🔢 <b>Código Fornecedor:</b> ${propDados.codigo_produto}\n\n`;
+      msgResumo += `🎯 <b>Produto no PDV:</b> ${propDados.produto_selecionado?.descricao}\n`;
+      msgResumo += `⚖️ <b>Conversão:</b> 1 ${propDados.unidade_produto || "UN"} = <b>${fatorDigitado} unidade(s)</b>\n\n`;
+      msgResumo += `⚠️ <i>Este vínculo será salvo e reutilizado automaticamente em todas as próximas notas fiscais deste fornecedor.</i>`;
+
+      const botoesResumo = [
+        [{ text: "✅ Confirmar vínculo e atualizar estoque", callback_data: `vp_ok:${propRow.id}` }],
+        [{ text: "🔄 Alterar seleção", callback_data: `vp_in:${propRow.id}` }],
+        [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+      ];
+
+      await sendReplyWithButtons(chatId, msgResumo, botoesResumo);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
 
     if (respLower === "prosseguir" && conversaAtivaPre?.estado === "aguardando_correcao_nf") {
       const { data: nfParcial } = await supabase

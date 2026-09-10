@@ -247,3 +247,378 @@ export async function resolveNfProductEquivalence(
     produto: prod as ProdutoEyemobileRow,
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// FASE 5: CANDIDATOS, SUGESTÕES E APRENDIZADO DE EQUIVALÊNCIAS
+// ═══════════════════════════════════════════════════════════════════
+
+export interface ProductCandidate {
+  id: string;
+  descricao: string;
+  codigo: string | null;
+  eyemobileId: string | null;
+  precoVenda: number | null;
+  score: number;
+}
+
+/**
+ * Remove acentos e caracteres especiais para comparação textual uniforme.
+ */
+export function normalizeText(text?: string | null): string {
+  if (!text) return "";
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Extrai tokens relevantes (palavras >= 2 caracteres alfanuméricos).
+ */
+export function extractSearchTokens(text?: string | null): string[] {
+  const norm = normalizeText(text);
+  if (!norm) return [];
+  return norm
+    .split(/[\s,./\-_+*()\[\]]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+}
+
+/**
+ * Calcula score de similaridade heurística (0.0 a 1.0) entre duas descrições.
+ * Usado ESTRITAMENTE para ordenação/sugestão de candidatos ao usuário.
+ * NUNCA confirma automaticamente.
+ */
+export function calculateCandidateSimilarity(textA: string, textB: string): number {
+  const normA = normalizeText(textA);
+  const normB = normalizeText(textB);
+
+  if (!normA || !normB) return 0;
+  if (normA === normB) return 1.0;
+
+  const tokensA = new Set(extractSearchTokens(textA));
+  const tokensB = new Set(extractSearchTokens(textB));
+
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+
+  let commonCount = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) commonCount++;
+  }
+
+  const unionSize = new Set([...tokensA, ...tokensB]).size;
+  const jaccard = unionSize > 0 ? commonCount / unionSize : 0;
+  const minSize = Math.min(tokensA.size, tokensB.size);
+  const overlap = minSize > 0 ? commonCount / minSize : 0;
+
+  let substringBonus = 0;
+  if (normA.includes(normB) || normB.includes(normA)) {
+    substringBonus = 0.2;
+  }
+
+  const rawScore = (jaccard * 0.5) + (overlap * 0.5) + substringBonus;
+  return Math.round(Math.min(0.95, rawScore) * 100) / 100;
+}
+
+/**
+ * Busca candidatos no catálogo de produtos Eyemobile delimitados por workspace/user.
+ * Suporta ordenação por similaridade com a descrição do item da NF.
+ * Retorna até `limit` candidatos ordenados (padrão 5).
+ */
+export async function searchProductCandidates(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  params: {
+    userId: string;
+    workspaceId: string;
+    descricaoQuery?: string | null;
+    codigoQuery?: string | null;
+    limit?: number;
+  }
+): Promise<{ ok: true; candidates: ProductCandidate[] } | { ok: false; error: string }> {
+  const { userId, workspaceId, descricaoQuery, codigoQuery, limit = 5 } = params;
+
+  if (!userId || !workspaceId) {
+    return { ok: false, error: "Identificadores de tenant (userId/workspaceId) obrigatórios." };
+  }
+
+  let query = client
+    .from("produtos_eyemobile")
+    .select("id, descricao, codigo, eyemobile_id, preco_venda, workspace_id, user_id")
+    .eq("workspace_id", workspaceId)
+    .eq("user_id", userId);
+
+  // Se houver busca por código exato, prioriza busca direta
+  const codNorm = codigoQuery ? String(codigoQuery).trim() : null;
+  if (codNorm) {
+    query = query.ilike("codigo", `%${codNorm}%`);
+  }
+
+  const { data: rows, error } = await query;
+
+  if (error) {
+    console.error("[nf-product-equivalence] Erro ao buscar candidatos de produtos:", error);
+    return { ok: false, error: "Falha de banco ao buscar candidatos de produtos." };
+  }
+
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    // Se não encontrou por código e havia filtro de código, tenta carregar geral para ranking por descrição
+    if (codNorm && descricaoQuery) {
+      return searchProductCandidates(client, { userId, workspaceId, descricaoQuery, limit });
+    }
+    return { ok: true, candidates: [] };
+  }
+
+  const candidates: ProductCandidate[] = [];
+
+  for (const raw of rows) {
+    // Defesa em profundidade: tenant isolation
+    if (raw.workspace_id !== workspaceId || raw.user_id !== userId) continue;
+
+    const desc = String(raw.descricao || "");
+    let score = 0.5;
+
+    if (descricaoQuery && descricaoQuery.trim().length > 0) {
+      score = calculateCandidateSimilarity(descricaoQuery, desc);
+    }
+
+    candidates.push({
+      id: raw.id,
+      descricao: desc,
+      codigo: raw.codigo ? String(raw.codigo).trim() : null,
+      eyemobileId: raw.eyemobile_id ? String(raw.eyemobile_id).trim() : null,
+      precoVenda: raw.preco_venda != null ? Number(raw.preco_venda) : null,
+      score,
+    });
+  }
+
+  // Ordenar determinística: maior score primeiro, depois ordem alfabética da descrição
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.descricao.localeCompare(b.descricao);
+  });
+
+  return {
+    ok: true,
+    candidates: candidates.slice(0, Math.max(1, limit)),
+  };
+}
+
+/**
+ * Sugere um fator de conversão com base na unidade e na descrição do item da NF.
+ * REGRAS:
+ * 1. Para embalagens (CX, FD, PACK, FARDO, CAIXA, CPJ):
+ *    - Tenta extrair quantidade da descrição (ex: 'CX12' -> 12, 'FARDO 6' -> 6).
+ *    - Se não encontrar, retorna null (nunca assume 1).
+ * 2. Para unidades individuais (UN, LT, KG, PCT):
+ *    - Retorna 1 como sugestão para confirmação explícita do usuário.
+ * 3. O valor retornado é SOMENTE UMA SUGESTÃO. Nunca confirma automaticamente.
+ */
+export function suggestConversionFactor(
+  unidade?: string | null,
+  descricao?: string | null
+): number | null {
+  const uNorm = (unidade || "").toUpperCase().trim();
+  const dNorm = (descricao || "").toUpperCase().trim();
+
+  const ehEmbalagem = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"].includes(uNorm);
+
+  if (ehEmbalagem) {
+    // Procura padrões como CX12, CX 12, FARDO 6, PACK 24, CPJ 12
+    const patterns = [
+      /(?:CX|CAIXA|FD|FARDO|PACK|CPJ)\s*(\d+)/i,
+      /\bC\/?X\s*(\d+)\b/i,
+      /\bC\/?X(\d+)\b/i,
+      /\b(\d+)\s*(?:UN|UNIDADES|LATAS|GTS|GRF)\b/i,
+      /\bX\s*(\d+)\b/i,
+    ];
+
+    for (const pat of patterns) {
+      const match = dNorm.match(pat);
+      if (match && match[1]) {
+        const parsed = parseInt(match[1], 10);
+        if (parsed > 1) return parsed;
+      }
+    }
+
+    return null; // Não assume 1 para embalagens
+  }
+
+  // Unidades simples sugerem fator 1 (que ainda exige confirmação do usuário)
+  if (["UN", "UND", "UNID", "LATA", "GFA", "GARRAFA", "PCT", "PACOTE"].includes(uNorm)) {
+    return 1;
+  }
+
+  return null;
+}
+
+/**
+ * Salva ou atualiza uma equivalência confirmada explicitamente pelo usuário em produto_equivalencias.
+ * Garante idempotência, proteção contra sobrescrita de vínculo divergente e integridade multi-tenant.
+ */
+export async function salvarEquivalenciaConfirmada(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  params: {
+    userId: string;
+    workspaceId: string;
+    cnpjFornecedor: string;
+    codigoProdutoFornecedor: string;
+    produtoEyemobileUuid: string;
+    fatorConversao: number;
+    fornecedorNome?: string | null;
+    descricaoFornecedor?: string | null;
+    unidadeFornecedor?: string | null;
+  }
+): Promise<
+  | { success: true; equivalenciaId: string; status: "saved" | "idempotent" }
+  | { success: false; code: "invalid_input" | "tenant_mismatch" | "already_confirmed_different" | "database_error"; error: string }
+> {
+  const {
+    userId,
+    workspaceId,
+    cnpjFornecedor,
+    codigoProdutoFornecedor,
+    produtoEyemobileUuid,
+    fatorConversao,
+    fornecedorNome,
+    descricaoFornecedor,
+    unidadeFornecedor,
+  } = params;
+
+  if (!userId || !workspaceId || !produtoEyemobileUuid) {
+    return { success: false, code: "invalid_input", error: "Identificadores de usuário, workspace e produto são obrigatórios." };
+  }
+
+  const cnpjNorm = normalizeSupplierCnpj(cnpjFornecedor);
+  if (!cnpjNorm) {
+    return { success: false, code: "invalid_input", error: "CNPJ do fornecedor inválido ou ausente." };
+  }
+
+  const codNorm = normalizeSupplierCode(codigoProdutoFornecedor);
+  if (!codNorm) {
+    return { success: false, code: "invalid_input", error: "Código do produto do fornecedor inválido ou ausente." };
+  }
+
+  const fator = Number(fatorConversao);
+  if (isNaN(fator) || !isFinite(fator) || fator <= 0) {
+    return { success: false, code: "invalid_input", error: "Fator de conversão deve ser estritamente maior que zero." };
+  }
+
+  // 1. Validar que o produto canônico existe e pertence ao mesmo tenant
+  const { data: prod, error: prodErr } = await client
+    .from("produtos_eyemobile")
+    .select("id, workspace_id, user_id, eyemobile_id")
+    .eq("id", produtoEyemobileUuid)
+    .maybeSingle();
+
+  if (prodErr || !prod) {
+    return { success: false, code: "tenant_mismatch", error: "Produto do PDV não encontrado no cadastro." };
+  }
+
+  if (prod.workspace_id !== workspaceId || prod.user_id !== userId) {
+    return { success: false, code: "tenant_mismatch", error: "O produto selecionado não pertence a este usuário ou workspace." };
+  }
+
+  // 2. Verificar se já existe registro em produto_equivalencias
+  const { data: existing, error: existErr } = await client
+    .from("produto_equivalencias")
+    .select("id, produto_eyemobile_uuid, fator_conversao, confirmado_por_usuario")
+    .eq("workspace_id", workspaceId)
+    .eq("cnpj_fornecedor_normalizado", cnpjNorm)
+    .eq("codigo_produto_fornecedor", codNorm)
+    .maybeSingle();
+
+  if (existErr) {
+    console.error("[nf-product-equivalence] Erro ao consultar equivalência existente:", existErr);
+    return { success: false, code: "database_error", error: "Falha técnica ao verificar vínculo existente no banco." };
+  }
+
+  // 3. Caso já exista vínculo confirmado:
+  if (existing && existing.confirmado_por_usuario === true) {
+    const mesmoProduto = existing.produto_eyemobile_uuid === produtoEyemobileUuid;
+    const mesmoFator = Math.abs(Number(existing.fator_conversao) - fator) < 1e-6;
+
+    if (mesmoProduto && mesmoFator) {
+      // Idempotência perfeita: mesmo vínculo confirmado
+      return { success: true, equivalenciaId: existing.id, status: "idempotent" };
+    }
+
+    // Bloqueio seguro: não sobrescreve vínculo confirmado divergente silenciosamente
+    return {
+      success: false,
+      code: "already_confirmed_different",
+      error: "Já existe um vínculo confirmado para este produto do fornecedor (apontando para outro item ou outro fator).",
+    };
+  }
+
+  // 4. Caso exista vínculo pendente (não confirmado) ou não exista:
+  if (existing) {
+    // Atualiza o registro pendente para confirmado com os dados explicitamente escolhidos
+    const { data: updated, error: updErr } = await client
+      .from("produto_equivalencias")
+      .update({
+        user_id: userId,
+        produto_eyemobile_uuid: produtoEyemobileUuid,
+        fator_conversao: fator,
+        fornecedor_nome: fornecedorNome || null,
+        descricao_fornecedor: descricaoFornecedor || null,
+        unidade_fornecedor: unidadeFornecedor || null,
+        origem_matching: "manual",
+        confirmado_por_usuario: true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id)
+      .select("id")
+      .single();
+
+    if (updErr || !updated) {
+      console.error("[nf-product-equivalence] Erro ao atualizar equivalência pendente:", updErr);
+      return { success: false, code: "database_error", error: "Falha ao gravar confirmação do vínculo." };
+    }
+
+    return { success: true, equivalenciaId: updated.id, status: "saved" };
+  }
+
+  // Caso não exista: insere nova equivalência confirmada
+  const { data: inserted, error: insErr } = await client
+    .from("produto_equivalencias")
+    .insert({
+      user_id: userId,
+      workspace_id: workspaceId,
+      cnpj_fornecedor_normalizado: cnpjNorm,
+      codigo_produto_fornecedor: codNorm,
+      fornecedor_nome: fornecedorNome || null,
+      descricao_fornecedor: descricaoFornecedor || null,
+      unidade_fornecedor: unidadeFornecedor || null,
+      produto_eyemobile_uuid: produtoEyemobileUuid,
+      fator_conversao: fator,
+      origem_matching: "manual",
+      confirmado_por_usuario: true,
+    })
+    .select("id")
+    .single();
+
+  if (insErr || !inserted) {
+    // Se colidiu com concorrência no insert (constraint única)
+    if (insErr?.code === "23505") {
+      const { data: recheck } = await client
+        .from("produto_equivalencias")
+        .select("id, produto_eyemobile_uuid, fator_conversao, confirmado_por_usuario")
+        .eq("workspace_id", workspaceId)
+        .eq("cnpj_fornecedor_normalizado", cnpjNorm)
+        .eq("codigo_produto_fornecedor", codNorm)
+        .maybeSingle();
+
+      if (recheck && recheck.confirmado_por_usuario) {
+        return { success: true, equivalenciaId: recheck.id, status: "idempotent" };
+      }
+    }
+
+    console.error("[nf-product-equivalence] Erro ao inserir nova equivalência:", insErr);
+    return { success: false, code: "database_error", error: "Falha ao inserir novo vínculo de produto." };
+  }
+
+  return { success: true, equivalenciaId: inserted.id, status: "saved" };
+}
