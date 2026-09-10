@@ -188,11 +188,15 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   await chatInput.click();
   await chatInput.fill(messageText);
 
-  // 3.5 Prepara interceptação da requisição HTTP originada pelo frontend para a Edge Function local
+  // 3.5 Prepara interceptação da requisição HTTP e resposta da Edge Function local
   const requestPromise = page.waitForRequest(
     (req) => req.url().includes('/functions/v1/wallet-ai-orchestrator') && req.method() === 'POST',
     { timeout: 45000 }
   );
+  const responsePromise = page.waitForResponse(
+    (res) => res.url().includes('/functions/v1/wallet-ai-orchestrator') && res.request().method() === 'POST',
+    { timeout: 45000 }
+  ).catch(() => null);
 
   // 3.6 Envia mensagem pelo botão de envio da aplicação (ou Enter como fallback)
   const sendBtn = page.locator('button:has(svg.lucide-send), button:has-text("Enviar")').first();
@@ -207,9 +211,26 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   const interceptedReq = await requestPromise;
   expect(interceptedReq.url()).toContain('/functions/v1/wallet-ai-orchestrator');
 
+  const interceptedRes = await responsePromise;
+  if (interceptedRes) {
+    console.log(`[ORCHESTRATOR HTTP ${interceptedRes.status()}]`);
+    if (!interceptedRes.ok()) {
+      const errText = await interceptedRes.text().catch(() => '');
+      console.log(`[ORCHESTRATOR HTTP ERROR BODY]:`, errText);
+    }
+  } else {
+    console.log('[ORCHESTRATOR TIMEOUT] Sem resposta HTTP da Edge Function em 45s');
+  }
+
   // 3.8 Confirma que a resposta determinística do provedor simulado aparece no chat visível
   const assistantResponse = page.locator('text=Análise financeira concluída com sucesso').last();
-  await expect(assistantResponse).toBeVisible({ timeout: 45000 });
+  try {
+    await expect(assistantResponse).toBeVisible({ timeout: 45000 });
+  } catch (err) {
+    const pageText = await page.evaluate(() => document.body.innerText.slice(0, 1000)).catch(() => '');
+    console.log(`[ASSISTANT MSG NOT VISIBLE] Conteúdo atual da página:\n${pageText}`);
+    throw err;
+  }
 
   // 3.9 Confirma que o loading/processamento terminou
   const loadingIndicator = page.locator('.animate-spin');

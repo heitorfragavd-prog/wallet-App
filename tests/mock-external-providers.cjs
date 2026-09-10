@@ -80,7 +80,7 @@ const server = http.createServer((req, res) => {
       }
 
       let mockAiContent = "Análise financeira concluída com sucesso: fluxo de caixa equilibrado.";
-      if (body.includes("categorizador financeiro") || body.includes("<transacao>") || body.includes("categoria")) {
+      if (body.includes("categorizador financeiro") || body.includes("<transacao>")) {
         mockAiContent = JSON.stringify({
           categoria: 'alimentacao',
           confianca: 0.95,
