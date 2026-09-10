@@ -61,6 +61,9 @@ import {
   MSG_BLOQUEIO_APLICANDO_IGNORAR,
   type AlertaPreco,
 } from "../_shared/integrations/eyemobile-price-safety.ts";
+import {
+  resolveNfProductEquivalence,
+} from "../_shared/integrations/nf-product-equivalence.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1107,6 +1110,375 @@ serve(async (req) => {
       return { success: true, canceled: true };
     };
 
+    const executarConfirmacaoNfSegura = async ({
+      targetUserId,
+      targetChatId,
+      nfId,
+      propostaId,
+      replyFn,
+      messageIdToEdit,
+      callbackQueryId,
+    }: {
+      targetUserId: string;
+      targetChatId: string | number;
+      nfId: string;
+      propostaId?: string | null;
+      replyFn: (text: string) => Promise<unknown>;
+      messageIdToEdit?: number;
+      callbackQueryId?: string | number;
+    }) => {
+      const fmt = (v: unknown) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      // 1. Resolução do ID real da NF (caso receba o ID da proposta)
+      let resolvedNfId = nfId;
+      const { data: maybeNf } = await supabase
+        .from("notas_fiscais_compra")
+        .select("id")
+        .eq("id", resolvedNfId)
+        .maybeSingle();
+
+      if (!maybeNf && resolvedNfId) {
+        const { data: maybeProp } = await supabase
+          .from("telegram_propostas")
+          .select("dados")
+          .eq("id", resolvedNfId)
+          .maybeSingle();
+        const propDados = typeof maybeProp?.dados === "string" ? JSON.parse(maybeProp.dados) : maybeProp?.dados;
+        if (propDados?.nf_id) {
+          resolvedNfId = propDados.nf_id;
+        }
+      }
+
+      // 2. Busca da NF com fail-closed
+      const { data: nf, error: nfErr } = await supabase
+        .from("notas_fiscais_compra")
+        .select("*")
+        .eq("id", resolvedNfId)
+        .maybeSingle();
+
+      if (nfErr || !nf) {
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "Nota fiscal não encontrada.");
+        await replyFn("❌ Nota fiscal não encontrada.");
+        return { success: false, reason: "nf_not_found" };
+      }
+
+      // 3. Validação de isolamento do usuário / tenant
+      if (nf.user_id && targetUserId && nf.user_id !== targetUserId) {
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "Você não tem permissão para esta nota fiscal.");
+        await replyFn("❌ Você não tem permissão para esta nota fiscal.");
+        return { success: false, reason: "forbidden" };
+      }
+
+      // 4. Verificação de status anterior (idempotência a nível de NF)
+      if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
+        if (messageIdToEdit) {
+          await editMessageText(targetChatId, messageIdToEdit, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
+        }
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "NF já confirmada!");
+        await replyFn("✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
+        return { success: true, already_confirmed: true };
+      }
+
+      if (nf.status === "requer_revisao") {
+        if (messageIdToEdit) {
+          await editMessageText(targetChatId, messageIdToEdit, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+        }
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "NF requer revisão e não pode ser confirmada automaticamente.");
+        await replyFn("⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+        return { success: false, reason: "requer_revisao" };
+      }
+
+      // 5. Busca dos itens da NF
+      const { data: itens, error: itensErr } = await supabase
+        .from("nf_itens")
+        .select("*")
+        .eq("nf_id", nf.id);
+
+      if (itensErr || !itens || itens.length === 0) {
+        await replyFn("❌ NF não encontrada ou sem itens para atualização.");
+        return { success: false, reason: "no_items" };
+      }
+
+      // 6. Preflight determinístico: resolver equivalências com fail-closed
+      const itemResolutions: Array<{
+        item: typeof itens[0];
+        resolution: Awaited<ReturnType<typeof resolveNfProductEquivalence>>;
+        avaliacaoEstoque: ReturnType<typeof evaluateStockStatus>;
+      }> = [];
+
+      for (const item of itens) {
+        // Trata tanto 'processado' quanto legado 'atualizado' como terminal
+        if (item.status_estoque === "processado" || item.status_estoque === "atualizado") {
+          continue;
+        }
+
+        const res = await resolveNfProductEquivalence(supabase, {
+          userId: nf.user_id || targetUserId,
+          workspaceId: nf.workspace_id,
+          itemCodigo: item.codigo_produto,
+          itemDescricao: item.descricao,
+          cnpjFornecedor: nf.cnpj_fornecedor,
+        });
+
+        if (res.status === "error") {
+          console.error(`[telegram-webhook] [NF_CONFIRM_ERROR] Erro ao resolver equivalência do item ${item.id}:`, res.errorMessage);
+          if (callbackQueryId) await answerCallback(String(callbackQueryId), "Erro técnico ao verificar produtos da NF.");
+          await replyFn("⚠️ <b>Erro técnico ao verificar os produtos da NF.</b> Nenhuma alteração foi realizada. Tente novamente mais tarde.");
+          return { success: false, reason: "database_error", error: res.errorMessage };
+        }
+
+        let avaliacao: ReturnType<typeof evaluateStockStatus>;
+        if (res.status === "matched") {
+          avaliacao = evaluateStockStatus(item, {
+            id: res.produto.id,
+            estoque_atual: res.produto.estoque_atual,
+            fator_conversao: res.fatorConversao,
+          });
+        } else {
+          avaliacao = evaluateStockStatus(item, null);
+        }
+
+        itemResolutions.push({
+          item,
+          resolution: res,
+          avaliacaoEstoque: avaliacao,
+        });
+      }
+
+      // 7. Mutação atômica via RPC por item com fail-fast
+      let itensJaProcessados = itens.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+      let itensRecemProcessados = 0;
+      let itensPendentes = 0;
+      const alertasCriados: Array<Record<string, unknown>> = [];
+
+      for (const entry of itemResolutions) {
+        const { item, resolution, avaliacaoEstoque } = entry;
+
+        if (
+          resolution.status === "matched" &&
+          avaliacaoEstoque.status_estoque === "processado" &&
+          avaliacaoEstoque.podeGravarHistoricoCusto
+        ) {
+          const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
+
+          const { data: rpcResult, error: rpcError } = await supabase.rpc(
+            "aplicar_item_nf_estoque_custo",
+            {
+              p_item_id: item.id,
+              p_user_id: nf.user_id || targetUserId,
+              p_workspace_id: nf.workspace_id,
+              p_equivalencia_id: resolution.equivalenciaId,
+              p_produto_eyemobile_uuid: resolution.produto.id,
+              p_quantidade_para_estoque: avaliacaoEstoque.quantidadeParaEstoque,
+              p_custo_unitario_convertido: custoConvertido,
+              p_fator_conversao_esperado: resolution.fatorConversao,
+            }
+          );
+
+          if (rpcError) {
+            console.error(`[telegram-webhook] [RPC_ERROR] aplicar_item_nf_estoque_custo falhou para item ${item.id}:`, rpcError);
+            itensPendentes++;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
+          }
+
+          const rpcData = rpcResult as { success?: boolean; code?: string } | null;
+          if (rpcData?.code === "already_processed") {
+            itensJaProcessados++;
+            continue;
+          }
+
+          if (!rpcData?.success) {
+            console.error(`[telegram-webhook] [RPC_FAIL] aplicar_item_nf_estoque_custo retornou insucesso para item ${item.id}:`, rpcData);
+            itensPendentes++;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
+          }
+
+          itensRecemProcessados++;
+
+          // Alerta de aumento de custo > 10% determinístico por produto_eyemobile_uuid
+          try {
+            const dozeMesesAtras = new Date();
+            dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
+
+            let histQuery = supabase
+              .from("historico_custo_produto")
+              .select("custo_unitario, created_at")
+              .eq("user_id", nf.user_id || targetUserId)
+              .eq("produto_eyemobile_uuid", resolution.produto.id)
+              .neq("nf_id", nf.id) // Exclui explicitamente a própria NF
+              .lt("created_at", nf.created_at || new Date().toISOString())
+              .gte("created_at", dozeMesesAtras.toISOString())
+              .order("created_at", { ascending: false })
+              .limit(1);
+
+            if (nf.workspace_id) {
+              histQuery = histQuery.eq("workspace_id", nf.workspace_id);
+            }
+
+            const { data: histAnterior } = await histQuery.maybeSingle();
+
+            const custoAnt = Number(histAnterior?.custo_unitario || resolution.produto.custo_atual || 0);
+            const custoNovo = Number(custoConvertido);
+
+            if (custoAnt > 0 && custoNovo > 0) {
+              const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
+
+              if (variacao > 10) {
+                const precoVendaAtual = Number(resolution.produto.preco_venda || 0);
+                let margemReal = Number(resolution.produto.margem_real_percentual || 0);
+                let precoSugerido = 0;
+
+                if (precoVendaAtual > 0 && custoAnt > 0) {
+                  margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
+                  precoSugerido = custoNovo * (1 + margemReal / 100);
+                } else {
+                  precoSugerido = custoNovo * 1.3;
+                }
+
+                const { data: novoAlerta, error: alertaError } = await supabase
+                  .from("alertas_preco_pendentes")
+                  .insert({
+                    user_id: nf.user_id || targetUserId,
+                    workspace_id: nf.workspace_id,
+                    nf_id: nf.id,
+                    produto_eyemobile_id: resolution.produto.eyemobile_id,
+                    produto_codigo: item.codigo_produto,
+                    produto_descricao: item.descricao,
+                    custo_anterior: custoAnt,
+                    custo_novo: custoNovo,
+                    variacao_custo_percentual: variacao,
+                    preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
+                    margem_real_percentual: margemReal > 0 ? margemReal : null,
+                    preco_sugerido: precoSugerido,
+                    status: "pendente",
+                  })
+                  .select("*")
+                  .single();
+
+                if (alertaError) {
+                  console.error(`[telegram-webhook] [ALERTA_INSERT_ERROR] Erro ao gravar alerta_preco_pendente para item ${item.id}:`, alertaError);
+                } else if (novoAlerta) {
+                  alertasCriados.push(novoAlerta);
+                }
+              }
+            }
+          } catch (errAlerta) {
+            console.error(`[telegram-webhook] Erro ao calcular/gerar alerta de preço para item ${item.id}:`, errAlerta);
+          }
+        } else {
+          // Item não matchou ou fator indefinido:
+          // NÃO regrava status_estoque para 'pendente' (mantém o estado intacto no banco para evitar race conditions)
+          itensPendentes++;
+        }
+      }
+
+      // 8. Reler nf_itens do banco para cálculo real do status final
+      const { data: itensAtualizados } = await supabase
+        .from("nf_itens")
+        .select("status_estoque")
+        .eq("nf_id", nf.id);
+
+      const listaFinal = itensAtualizados || [];
+      const totalItens = listaFinal.length;
+      const qtdTerminais = listaFinal.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+
+      let statusFinalNF = "pendente";
+      if (totalItens > 0 && qtdTerminais === totalItens) {
+        statusFinalNF = "confirmada";
+      } else if (qtdTerminais > 0) {
+        statusFinalNF = "parcialmente_processada";
+      } else {
+        statusFinalNF = "pendente";
+      }
+
+      await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nf.id);
+
+      // Proposta só é marcada como confirmada quando 100% dos itens forem terminais
+      if (statusFinalNF === "confirmada") {
+        if (propostaId) {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", propostaId);
+        } else {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nf.id);
+        }
+      }
+
+      await supabase.from("telegram_conversas").upsert(
+        {
+          user_id: nf.user_id || targetUserId,
+          chat_id: targetChatId,
+          estado: alertasCriados.length > 0 ? "aguardando_ajuste_precos" : "livre",
+          proposta_id: alertasCriados.length > 0 ? nf.id : null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "chat_id" }
+      );
+
+      // 9. Mensagem de resposta estruturada
+      let msgConf = statusFinalNF === "confirmada"
+        ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
+        : (itensRecemProcessados > 0 || itensJaProcessados > 0)
+        ? `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`
+        : `⚠️ <b>Nota Fiscal Não Processada (Nenhum produto com vínculo confirmado)</b>\n\n`;
+
+      msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+      msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
+      msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
+      msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
+      if (itensJaProcessados > 0) {
+        msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
+      }
+      if (itensPendentes > 0) {
+        msgConf += `⚠️ <b>Itens pendentes (sem equivalência confirmada ou sem fator CX):</b> ${itensPendentes}\n`;
+        msgConf += `<i>(Esses itens poderão ser processados assim que a equivalência ou o fator forem confirmados).</i>\n`;
+      }
+
+      if (messageIdToEdit) {
+        await editMessageText(targetChatId, messageIdToEdit, msgConf);
+      } else {
+        await replyFn(msgConf);
+      }
+
+      if (alertasCriados.length > 0) {
+        for (const alerta of alertasCriados) {
+          let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
+          msgAlerta += `📦 <b>Produto:</b> ${alerta.produto_descricao}\n`;
+          msgAlerta += `📉 <b>Custo anterior:</b> ${fmt(alerta.custo_anterior)}\n`;
+          msgAlerta += `📈 <b>Novo custo:</b> ${fmt(alerta.custo_novo)}\n`;
+          msgAlerta += `🔺 <b>Variação:</b> +${Number(alerta.variacao_custo_percentual).toFixed(1)}%\n\n`;
+
+          if (alerta.preco_venda_atual) {
+            msgAlerta += `🏷️ <b>Preço de venda atual:</b> ${fmt(alerta.preco_venda_atual)}\n`;
+            msgAlerta += `💡 <b>Preço sugerido:</b> ${fmt(alerta.preco_sugerido)} (para manter margem)\n\n`;
+            const idAlertaCurto = String(alerta.id || "").slice(0, 8);
+            msgAlerta += `Para ajustar o preço no PDV:\n`;
+            msgAlerta += `• Responda <code>CONFIRMAR ${idAlertaCurto}</code> para aplicar o sugerido\n`;
+            msgAlerta += `• Responda <code>EDITAR ${idAlertaCurto} 15.00</code> para definir outro valor\n`;
+            msgAlerta += `• Responda <code>IGNORAR ${idAlertaCurto}</code> para manter o atual`;
+          }
+
+          await replyFn(msgAlerta);
+        }
+      }
+
+      return {
+        success: true,
+        statusFinalNF,
+        itensRecemProcessados,
+        itensJaProcessados,
+        itensPendentes,
+        alertasCriadosCount: alertasCriados.length,
+      };
+    };
+
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
@@ -1250,6 +1622,16 @@ serve(async (req) => {
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
 
+      const replyCallbackFn = async (text: string) => {
+        if (telegramBotToken && cbChatId) {
+          await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: cbChatId, text, parse_mode: "HTML" }),
+          }).catch(() => {});
+        }
+      };
+
       // ================================================================
       // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta, cancelar_proposta & revisar_proposta
       // ================================================================
@@ -1288,16 +1670,6 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const replyCallbackFn = async (text: string) => {
-          if (telegramBotToken) {
-            await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ chat_id: cbChatId, text, parse_mode: "HTML" }),
-            }).catch(() => {});
-          }
-        };
-
         if (isConfirm) {
           await executarConfirmacaoPropostaBoleto(
             cbUserId || propostaRow.user_id,
@@ -1335,215 +1707,20 @@ serve(async (req) => {
       // ================================================================
       if (callbackData.startsWith("nf_confirmar:")) {
         const nfId = callbackData.split(":")[1];
-        await removeInlineKeyboard(cbChatId, callbackMessageId);
-
-        const { data: nf } = await supabase
-          .from("notas_fiscais_compra")
-          .select("*")
-          .eq("id", nfId)
-          .single();
-
-        if (!nf) {
-          await answerCallback(callbackQuery.id, "Nota fiscal não encontrada.");
-          return new Response("OK", { status: 200, headers: corsHeaders });
+        await answerCallback(callbackQuery.id, "Processando confirmação da NF...");
+        if (callbackMessageId && cbChatId) {
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
         }
 
-        if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
-          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
-          await answerCallback(callbackQuery.id, "NF já confirmada!");
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
+        await executarConfirmacaoNfSegura({
+          targetUserId: cbUserId,
+          targetChatId: cbChatId || "",
+          nfId,
+          replyFn: replyCallbackFn,
+          messageIdToEdit: callbackMessageId,
+          callbackQueryId: callbackQuery.id,
+        });
 
-        if (nf.status === "requer_revisao") {
-          await editMessageText(cbChatId, callbackMessageId, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
-          await answerCallback(callbackQuery.id, "NF requer revisão e não pode ser confirmada automaticamente.");
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        const { data: itens } = await supabase
-          .from("nf_itens")
-          .select("*")
-          .eq("nf_id", nfId);
-
-        let itensJaProcessados = 0;
-        let itensRecemProcessados = 0;
-        let itensPendentes = 0;
-
-        const alertasCriados: Array<Record<string, unknown>> = [];
-        if (itens && itens.length > 0) {
-          for (const item of itens) {
-            // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
-            if (item.status_estoque === "processado") {
-              itensJaProcessados++;
-              continue;
-            }
-
-            const { data: prodEye } = await supabase
-              .from("produtos_eyemobile")
-              .select("*")
-              .eq("user_id", cbUserId)
-              .ilike("descricao", `%${item.descricao.trim()}%`)
-              .limit(1)
-              .maybeSingle();
-
-            const avaliacaoEstoque = evaluateStockStatus(item, prodEye);
-
-            await supabase.from("nf_itens").update({
-              status_estoque: avaliacaoEstoque.status_estoque,
-            }).eq("id", item.id);
-
-            if (avaliacaoEstoque.status_estoque === "processado" && avaliacaoEstoque.podeGravarHistoricoCusto && prodEye) {
-              itensRecemProcessados++;
-              const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
-
-              await supabase.from("produtos_eyemobile").update({
-                custo_atual: custoConvertido,
-                estoque_atual: (Number(prodEye.estoque_atual) || 0) + avaliacaoEstoque.quantidadeParaEstoque,
-                ultima_atualizacao_custo: new Date().toISOString(),
-              }).eq("id", prodEye.id);
-
-              await supabase.from("historico_custo_produto").insert({
-                user_id: cbUserId,
-                workspace_id: nf.workspace_id,
-                produto_descricao: item.descricao,
-                codigo_produto: item.codigo_produto,
-                fornecedor: nf.fornecedor,
-                cnpj_fornecedor: nf.cnpj_fornecedor,
-                custo_unitario_bruto: item.valor_unitario,
-                custo_unitario_liquido: custoConvertido,
-                data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
-                nf_id: nfId,
-              });
-
-              const dozeMesesAtras = new Date();
-              dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
-
-              const { data: histAnterior } = await supabase
-                .from("historico_custo_produto")
-                .select("custo_unitario_liquido, created_at")
-                .eq("user_id", cbUserId)
-                .ilike("produto_descricao", `%${item.descricao.trim()}%`)
-                .lt("created_at", nf.created_at || new Date().toISOString())
-                .gte("created_at", dozeMesesAtras.toISOString())
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
-                const custoAnt = Number(histAnterior.custo_unitario_liquido);
-                const custoNovo = Number(custoConvertido);
-                const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
-
-                if (variacao > 10) {
-                  const precoVendaAtual = Number(prodEye?.preco_venda || 0);
-                  let margemReal = Number(prodEye?.margem_real_percentual || 0);
-                  let precoSugerido = 0;
-
-                  if (precoVendaAtual > 0 && custoAnt > 0) {
-                    margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
-                    precoSugerido = custoNovo * (1 + margemReal / 100);
-                  } else {
-                    precoSugerido = custoNovo * 1.3;
-                  }
-
-                  const { data: novoAlerta } = await supabase
-                    .from("alertas_preco_pendentes")
-                    .insert({
-                      user_id: cbUserId,
-                      workspace_id: nf.workspace_id,
-                      nf_id: nfId,
-                      produto_eyemobile_id: prodEye?.eyemobile_id || null,
-                      produto_codigo: item.codigo_produto,
-                      produto_descricao: item.descricao,
-                      custo_anterior: custoAnt,
-                      custo_novo: custoNovo,
-                      variacao_custo_percentual: variacao,
-                      preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
-                      margem_real_percentual: margemReal > 0 ? margemReal : null,
-                      preco_sugerido: precoSugerido,
-                      status: "pendente",
-                    })
-                    .select("*")
-                    .single();
-
-                  if (novoAlerta) {
-                    alertasCriados.push(novoAlerta);
-                  }
-                }
-              }
-            } else {
-              itensPendentes++;
-            }
-          }
-        }
-
-        // Determina status final da NF baseado no resultado real do processamento
-        let statusFinalNF = "pendente";
-        if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
-          statusFinalNF = "confirmada";
-        } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
-          statusFinalNF = "parcialmente_processada";
-        } else {
-          statusFinalNF = "pendente";
-        }
-
-        await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nfId);
-        if (statusFinalNF === "confirmada") {
-          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
-        }
-
-        let msgConf = statusFinalNF === "confirmada"
-          ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
-          : `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`;
-
-        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
-        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
-        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
-        msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
-        if (itensJaProcessados > 0) {
-          msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
-        }
-        if (itensPendentes > 0) {
-          msgConf += `⚠️ <b>Itens pendentes (sem produto ou sem fator CX):</b> ${itensPendentes}\n`;
-          msgConf += `<i>(Esses itens poderão ser processados assim que o cadastro/fator for ajustado no PDV).</i>\n`;
-        }
-
-        await editMessageText(cbChatId, callbackMessageId, msgConf);
-
-        if (alertasCriados.length > 0) {
-          for (const alerta of alertasCriados) {
-            let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
-            msgAlerta += `📦 <b>${alerta.produto_descricao}</b>\n\n`;
-            msgAlerta += `💰 Custo anterior: ${fmt(alerta.custo_anterior)}\n`;
-            msgAlerta += `💰 Custo novo: ${fmt(alerta.custo_novo)}\n`;
-            msgAlerta += `📈 Aumento: <b>+${alerta.variacao_custo_percentual?.toFixed(1)}%</b>\n\n`;
-            if (alerta.preco_venda_atual) msgAlerta += `💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
-            msgAlerta += `💡 <b>PREÇO SUGERIDO: ${fmt(alerta.preco_sugerido)}</b>\n`;
-            if (alerta.margem_real_percentual) msgAlerta += `<i>(margem real ${alerta.margem_real_percentual.toFixed(0)}%)</i>`;
-
-            const botoesPreco = [
-              [{ text: `✅ CONFIRMAR ${fmt(alerta.preco_sugerido)}`, callback_data: `preco_confirmar:${alerta.id}` }],
-              [
-                { text: "✏️ EDITAR PREÇO", callback_data: `preco_editar:${alerta.id}` },
-                { text: "🚫 IGNORAR", callback_data: `preco_ignorar:${alerta.id}` },
-              ],
-            ];
-
-            await sendReplyWithButtons(cbChatId, msgAlerta, botoesPreco);
-          }
-
-          await supabase.from("telegram_conversas").upsert(
-            {
-              user_id: cbUserId,
-              chat_id: Number(cbChatId),
-              estado: "aguardando_ajuste_precos",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "chat_id" }
-          );
-        }
-
-        await answerCallback(callbackQuery.id, "NF confirmada com sucesso!");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
@@ -3818,210 +3995,19 @@ serve(async (req) => {
         if (proposta.tipo === "atualizar_estoque_nf" || conversaAtiva?.estado === "aguardando_confirmacao_nf") {
           const nfId = dados?.nf_id || conversaAtiva?.proposta_id;
 
-          const { data: nf } = await supabase
-            .from("notas_fiscais_compra")
-            .select("*")
-            .eq("id", nfId)
-            .single();
-
-          const { data: itens } = await supabase
-            .from("nf_itens")
-            .select("*")
-            .eq("nf_id", nfId);
-
-          if (!nf || !itens || itens.length === 0) {
-            await sendReply("❌ NF não encontrada ou sem itens para atualização.");
+          if (!nfId) {
+            await sendReply("❌ Identificador da NF não encontrado na proposta.");
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          let msg = `✅ <b>Nota Fiscal de Compra Confirmada!</b>\n\nAtualizando estoque e custos...\n\n`;
-          const alertasAumento: string[] = [];
-          const produtosAtualizados: string[] = [];
+          await executarConfirmacaoNfSegura({
+            targetUserId: userId,
+            targetChatId: chatId,
+            nfId,
+            propostaId: proposta.id,
+            replyFn: sendReply,
+          });
 
-          const fmt = (v: unknown) =>
-            v != null && !isNaN(Number(v))
-              ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-              : "R$ 0,00";
-
-          for (const item of itens) {
-            const { data: produtoExistente } = await supabase
-              .from("produtos_eyemobile")
-              .select("*")
-              .eq("user_id", userId)
-              .eq("codigo", item.codigo_produto)
-              .maybeSingle();
-
-            let variacaoPct = 0;
-            if (produtoExistente?.custo_atual && item.custo_unitario_liquido) {
-              variacaoPct = ((item.custo_unitario_liquido - produtoExistente.custo_atual) / produtoExistente.custo_atual) * 100;
-            }
-
-            await supabase.from("historico_custo_produto").insert({
-              user_id: userId,
-              workspace_id: nf.workspace_id,
-              produto_codigo: item.codigo_produto,
-              produto_descricao: item.descricao,
-              fornecedor: nf.fornecedor,
-              custo_unitario: item.custo_unitario_liquido,
-              quantidade: item.quantidade,
-              nf_id: nf.id,
-              data_compra: nf.data_entrada || hojeStr,
-              variacao_percentual: variacaoPct,
-            });
-
-            const dataLimite = new Date();
-            dataLimite.setMonth(dataLimite.getMonth() - 12);
-
-            const { data: historico12m } = await supabase
-              .from("historico_custo_produto")
-              .select("custo_unitario, data_compra")
-              .eq("user_id", userId)
-              .eq("produto_codigo", item.codigo_produto)
-              .gte("data_compra", dataLimite.toISOString().split("T")[0])
-              .order("data_compra", { ascending: true })
-              .limit(1);
-
-            const custoInicial12m = historico12m?.[0]?.custo_unitario || produtoExistente?.custo_atual || item.custo_unitario_liquido;
-            const variacao12m = custoInicial12m > 0
-              ? ((item.custo_unitario_liquido - custoInicial12m) / custoInicial12m) * 100
-              : 0;
-
-            // Usar margem real do produto ((preco_venda / custo_atual) - 1) * 100
-            let margemReal = Number(produtoExistente?.margem_real_percentual) || 0;
-            if (margemReal <= 0 && produtoExistente?.preco_venda && produtoExistente?.custo_atual) {
-              margemReal = ((Number(produtoExistente.preco_venda) / Number(produtoExistente.custo_atual)) - 1) * 100;
-            }
-            if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
-
-            if (variacao12m > 10) {
-              const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
-
-              const { data: alertaCriado } = await supabase.from("alertas_preco_pendentes").insert({
-                user_id: userId,
-                workspace_id: nf.workspace_id,
-                produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
-                produto_codigo: item.codigo_produto,
-                produto_descricao: item.descricao,
-                custo_anterior: custoInicial12m,
-                custo_novo: item.custo_unitario_liquido,
-                preco_venda_atual: produtoExistente?.preco_venda || 0,
-                preco_sugerido: sugestaoPreco,
-                margem_real_percentual: margemReal,
-                variacao_custo_percentual: variacao12m,
-                nf_id: nf.id,
-                status: "pendente",
-              }).select("id").single();
-
-              const idCurto = alertaCriado?.id ? alertaCriado.id.slice(0, 8) : "N/A";
-
-              alertasAumento.push(
-                `🔴 <b>${item.descricao}</b> (Alerta <code>#${idCurto}</code>)\n` +
-                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
-                `   Custo novo: <b>${fmt(item.custo_unitario_liquido)}</b>\n` +
-                `   📈 Aumento: <b>+${variacao12m.toFixed(1)}%</b> em 12 meses\n` +
-                `   💰 Preço venda atual: ${fmt(produtoExistente?.preco_venda)}\n` +
-                `   💡 PREÇO SUGERIDO: <b>${fmt(sugestaoPreco)}</b> (margem ${margemReal.toFixed(0)}%)`
-              );
-
-              await supabase.from("historico_custo_produto")
-                .update({ alerta_enviado: true, sugestao_preco_venda: sugestaoPreco, markup_aplicado: margemReal })
-                .eq("nf_id", nf.id)
-                .eq("produto_codigo", item.codigo_produto);
-            } else if (variacao12m > 0) {
-              alertasAumento.push(
-                `🟡 <b>${item.descricao}</b>\n` +
-                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
-                `   Custo novo: ${fmt(item.custo_unitario_liquido)}\n` +
-                `   📈 Aumento: +${variacao12m.toFixed(1)}% em 12 meses (dentro da margem)`
-              );
-            }
-
-            if (produtoExistente) {
-              await supabase.from("produtos_eyemobile").update({
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: (Number(produtoExistente.estoque_atual) || 0) + (Number(item.quantidade) || 0),
-                ultima_atualizacao_custo: new Date().toISOString(),
-                alerta_aumento_10pct: variacao12m > 10,
-              }).eq("id", produtoExistente.id);
-            } else {
-              await supabase.from("produtos_eyemobile").insert({
-                user_id: userId,
-                workspace_id: nf.workspace_id,
-                codigo: item.codigo_produto,
-                descricao: item.descricao,
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: Number(item.quantidade) || 0,
-                ultima_atualizacao_custo: new Date().toISOString(),
-              });
-            }
-
-            await supabase.from("nf_itens").update({
-              status_estoque: "atualizado",
-              produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
-            }).eq("id", item.id);
-
-            produtosAtualizados.push(item.descricao);
-          }
-
-          await supabase.from("notas_fiscais_compra").update({ status: "custo_atualizado" }).eq("id", nfId);
-          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-
-          msg += `<b>📦 Estoque atualizado:</b> ${produtosAtualizados.length} produtos\n`;
-          msg += `<b>💰 Custos atualizados:</b> ${produtosAtualizados.length} produtos\n\n`;
-
-          if (alertasAumento.length > 0) {
-            msg += `📊 <b>RESUMO DE VARIAÇÕES DE CUSTO:</b>\n\n`;
-            alertasAumento.forEach(a => msg += a + "\n\n");
-          }
-
-          const { data: alertasPendentes } = await supabase
-            .from("alertas_preco_pendentes")
-            .select("*")
-            .eq("nf_id", nfId)
-            .eq("status", "pendente");
-
-          if (alertasPendentes && alertasPendentes.length > 0) {
-            msg += `\n🚨 <b>PREÇOS DE VENDA PRECISAM SER AJUSTADOS:</b>\n\n`;
-            alertasPendentes.forEach((alerta: Record<string, unknown>, idx: number) => {
-              const idCurto = String(alerta.id || "").slice(0, 8);
-              msg += `${idx + 1}. <b>${alerta.produto_descricao}</b>\n`;
-              msg += `   💰 Preço atual: ${fmt(alerta.preco_venda_atual)}\n`;
-              msg += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b>\n`;
-              msg += `   ✅ Para confirmar: <code>CONFIRMAR ${idCurto}</code>\n`;
-              msg += `   ✏️ Para editar: <code>EDITAR ${idCurto} 15.00</code>\n`;
-              msg += `   🚫 Para ignorar: <code>IGNORAR ${idCurto}</code>\n\n`;
-            });
-
-            msg += `<i>💡 Ao responder CONFIRMAR, o preço sobe automaticamente para o Eyemobile PDV.</i>\n`;
-            msg += `<i>Alertas não resolvidos serão lembrados 1x por semana.</i>`;
-
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "aguardando_ajuste_precos",
-                proposta_id: nfId,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-          } else {
-            msg += `✅ <b>Nenhum aumento crítico de custo detectado (>10%).</b>\n`;
-            msg += `💡 Preços de venda estão dentro da margem esperada.`;
-
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "inicio",
-                proposta_id: null,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-          }
-
-          await sendReply(msg);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
