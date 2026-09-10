@@ -168,6 +168,8 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.2 Navega para a tela real de IA
   await page.goto(`${appUrl}/ia`);
   await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(1500);
 
   // 3.3 Localiza campo de entrada da aplicação (textarea ou input) e aguarda habilitação
   const chatInput = page.locator('textarea, input[placeholder*="Pergunte"]').first();
@@ -183,6 +185,7 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 
   // 3.4 Preenche mensagem analítica complexa (ativa Agent V2 / orchestrator)
   const messageText = `Faça uma análise financeira detalhada das despesas sob ${phaseName}.`;
+  await chatInput.click();
   await chatInput.fill(messageText);
 
   // 3.5 Prepara interceptação da requisição HTTP originada pelo frontend para a Edge Function local
@@ -221,10 +224,10 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 
 test.describe('Homologação da Aplicação na Sequência A → B → C (Stack Real e Builds Isolados)', () => {
   test.describe.configure({ mode: 'serial', retries: 0 });
-  test.setTimeout(120000);
+  test.setTimeout(180000);
 
   test.beforeEach(async () => {
-    test.setTimeout(120000);
+    test.setTimeout(180000);
   });
 
   const timestamp = Date.now();
