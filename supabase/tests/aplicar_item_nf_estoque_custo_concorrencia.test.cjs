@@ -1,20 +1,32 @@
 const { Client } = require("pg");
 const { execSync } = require("child_process");
 
-function resolvePgHost() {
-  if (process.env.PGHOST) return process.env.PGHOST;
+const REQUIRED_TEST_DB = "wallet_product_identity_test";
+const FORBIDDEN_DATABASES = new Set(["postgres", "template0", "template1"]);
+
+function getDetectedWslIp() {
   try {
     const wslIp = execSync("wsl -d Ubuntu -e hostname -I", { encoding: "utf8" }).trim().split(" ")[0];
-    if (wslIp) return wslIp;
+    if (wslIp && /^(\d{1,3}\.){3}\d{1,3}$/.test(wslIp)) {
+      return wslIp;
+    }
   } catch (_e) {}
+  return null;
+}
+
+function resolvePgHost() {
+  if (process.env.PGHOST) return process.env.PGHOST.trim();
+  const wslIp = getDetectedWslIp();
+  if (wslIp) return wslIp;
   return "127.0.0.1";
 }
 
-function isLocalOrLoopback(host) {
+function isPermittedHost(host) {
   if (!host) return false;
   const h = host.toLowerCase().trim();
   if (h === "localhost" || h === "127.0.0.1" || h === "::1") return true;
-  if (/^127\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  const detectedWslIp = getDetectedWslIp();
+  if (detectedWslIp && h === detectedWslIp.toLowerCase().trim()) return true;
   return false;
 }
 
@@ -23,10 +35,11 @@ const DB_CONFIG = {
   port: Number(process.env.PGPORT || 54329),
   user: process.env.PGUSER || "postgres",
   password: process.env.PGPASSWORD || "postgres",
-  database: process.env.PGDATABASE || "postgres",
+  database: process.env.PGDATABASE || REQUIRED_TEST_DB,
 };
 
 async function runTests() {
+  // 1. Validação de Flags Obrigatórias
   if (process.env.WALLET_ALLOW_DESTRUCTIVE_PG_TESTS !== "1" || process.env.WALLET_TEST_DB_CONFIRMED !== "1") {
     console.error(
       "ERRO DE SEGURANÇA: Este harness executa operações destrutivas (DELETE). Defina WALLET_ALLOW_DESTRUCTIVE_PG_TESTS=1 E WALLET_TEST_DB_CONFIRMED=1 para prosseguir."
@@ -34,8 +47,19 @@ async function runTests() {
     process.exit(1);
   }
 
-  if (!isLocalOrLoopback(DB_CONFIG.host)) {
-    console.error(`ERRO DE SEGURANÇA: Host '${DB_CONFIG.host}' não é loopback/local isolado. Abortando.`);
+  // 2. Validação Estrita de Host (Loopback ou IP detectado dinamicamente do WSL)
+  if (!isPermittedHost(DB_CONFIG.host)) {
+    console.error(
+      `ERRO DE SEGURANÇA: Host '${DB_CONFIG.host}' não é permitido. Apenas loopback (localhost, 127.0.0.1, ::1) ou o IP WSL detectado localmente são autorizados. IPs privados genéricos são rejeitados.`
+    );
+    process.exit(1);
+  }
+
+  // 3. Validação do Database Configurado
+  if (DB_CONFIG.database !== REQUIRED_TEST_DB || FORBIDDEN_DATABASES.has(DB_CONFIG.database)) {
+    console.error(
+      `ERRO DE SEGURANÇA: Database configurado '${DB_CONFIG.database}' não é o database de teste dedicado. Exigido estritamente: '${REQUIRED_TEST_DB}'. Fallbacks genéricos como 'postgres' são proibidos.`
+    );
     process.exit(1);
   }
 
@@ -43,7 +67,18 @@ async function runTests() {
   const adminClient = new Client(DB_CONFIG);
   await adminClient.connect();
 
+  // 4. Validação FÍSICA de current_database() antes de QUALQUER operação destrutiva
   const serverInfo = (await adminClient.query("SELECT current_database(), version();")).rows[0];
+  const currentDb = serverInfo.current_database;
+
+  if (currentDb !== REQUIRED_TEST_DB || FORBIDDEN_DATABASES.has(currentDb)) {
+    console.error(
+      `ERRO FATAL DE SEGURANÇA: current_database() retornou '${currentDb}'. O banco DEVE ser estritamente '${REQUIRED_TEST_DB}'. Rejeitando explicitamente bancos padrão ('postgres', 'template0', 'template1'). Abortando imediatamente antes de qualquer DROP/DELETE.`
+    );
+    await adminClient.end();
+    process.exit(1);
+  }
+
   console.log(`Conectado com sucesso em ${DB_CONFIG.host}:${DB_CONFIG.port}`);
   console.log(`Database: ${serverInfo.current_database}`);
   console.log(`Versão: ${serverInfo.version}`);

@@ -1043,32 +1043,25 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     });
     expect(rpc1.data.success).toBe(true);
 
-    // 1. Prova física no banco de dados dos estados dos itens:
+    // A. Estado dos itens após processar o primeiro item via RPC:
     const item1Row = state.nf_itens.find((i) => i.id === item1)!;
     const item2Row = state.nf_itens.find((i) => i.id === item2)!;
     expect(item1Row.status_estoque).toBe("processado");
     expect(item2Row.status_estoque).toBe("pendente");
 
-    // 2. Contrato de runtime: telegram-webhook lê nf_itens para cálculo real do status final da NF
-    const computeNfStatus = (itens: { status_estoque: string }[]) => {
-      const totalItens = itens.length;
-      const qtdTerminais = itens.filter(
-        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
-      ).length;
-      if (totalItens > 0 && qtdTerminais === totalItens) {
-        return "confirmada";
-      } else if (qtdTerminais > 0) {
-        return "parcialmente_processada";
-      }
-      return "pendente";
-    };
+    // B. Contrato do runtime REAL no telegram-webhook/index.ts:
+    // Comprova no código-fonte real como a contagem de terminais e status da NF é calculada:
+    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const webhookCode = fs.readFileSync(webhookPath, "utf8");
 
-    const statusAposItem1 = computeNfStatus([item1Row, item2Row]);
-    expect(statusAposItem1).toBe("parcialmente_processada");
-
-    await supabase.from("notas_fiscais_compra").update({ status: statusAposItem1 }).eq("id", nfId);
-    const nfRowAposItem1 = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
-    expect(nfRowAposItem1.status).toBe("parcialmente_processada");
+    expect(webhookCode).toContain("const totalItens = listaFinal.length;");
+    expect(webhookCode).toContain('i.status_estoque === "processado" || i.status_estoque === "atualizado"');
+    expect(webhookCode).toContain("totalItens > 0 && qtdTerminais === totalItens");
+    expect(webhookCode).toContain('statusFinalNF = "confirmada";');
+    expect(webhookCode).toContain("qtdTerminais > 0");
+    expect(webhookCode).toContain('statusFinalNF = "parcialmente_processada";');
+    expect(webhookCode).toContain('statusFinalNF = "pendente";');
+    expect(webhookCode).toContain('await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nf.id);');
 
     // Agora resolve e aplica o Item 2
     state.produtos_eyemobile.push({
@@ -1108,21 +1101,9 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     });
     expect(rpc2.data.success).toBe(true);
 
+    // C. Estado dos itens após processar o segundo item via RPC: ambos terminais
+    expect(item1Row.status_estoque).toBe("processado");
     expect(item2Row.status_estoque).toBe("processado");
-
-    const statusAposItem2 = computeNfStatus([item1Row, item2Row]);
-    expect(statusAposItem2).toBe("confirmada");
-
-    await supabase.from("notas_fiscais_compra").update({ status: statusAposItem2 }).eq("id", nfId);
-    const nfRowAposItem2 = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
-    expect(nfRowAposItem2.status).toBe("confirmada");
-
-    // 3. Verificação de fidelidade do contrato no arquivo de produção do webhook:
-    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
-    const webhookCode = fs.readFileSync(webhookPath, "utf8");
-    expect(webhookCode).toContain('statusFinalNF = "parcialmente_processada"');
-    expect(webhookCode).toContain('statusFinalNF = "confirmada"');
-    expect(webhookCode).toContain("qtdTerminais === totalItens");
   });
 
   // ---------------------------------------------------------------------------
@@ -1343,15 +1324,21 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     expect(atorNulo.ok).toBe(false);
     expect(atorNulo.reason).toBe("Usuário do Telegram não identificado.");
 
-    // Verificação de contrato no telegram-webhook/index.ts:
-    // Callbacks vp_* e estados conversacionais aguardando_busca_produto_nf / aguardando_fator_conversao_nf
-    // usam estritamente o from.id e não usam fallback de grupo/workspace
+    // Verificação de contrato no código real de telegram-webhook/index.ts:
+    // 1. Callback vp_* obtém ator estritamente de callbackQuery.from.id e valida em usuarios_telegram
     const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
     const webhookCode = fs.readFileSync(webhookPath, "utf8");
     expect(webhookCode).toContain('callbackData.startsWith("vp_")');
-    expect(webhookCode).toContain("Proíbe terminantemente fallback de grupo/workspace owner");
+    expect(webhookCode).toContain("const callbackUserId = (callbackQuery.from as Record<string, unknown> | undefined)?.id;");
+    expect(webhookCode).toContain('.eq("telegram_chat_id", String(callbackUserId))');
+
+    // 2. Estados aguardando_busca_produto_nf e aguardando_fator_conversao_nf obtêm ator de message.from.id
     expect(webhookCode).toContain('conversaAtivaPre?.estado === "aguardando_busca_produto_nf"');
     expect(webhookCode).toContain('conversaAtivaPre?.estado === "aguardando_fator_conversao_nf"');
+    expect(webhookCode).toContain("const msgFromId = (message as Record<string, unknown> | undefined)?.from");
+
+    // 3. Ambos passam o ID real para validarAtorTelegramFase5 sem fallback de grupo ou workspace owner
+    expect(webhookCode).toContain("telegramUserId: msgFromId");
   });
 
   // ---------------------------------------------------------------------------
