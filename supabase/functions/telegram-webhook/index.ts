@@ -1342,8 +1342,8 @@ serve(async (req) => {
                   precoSugerido = custoNovo * 1.3;
                 }
 
-                const { data: novoAlerta } = await supabase
-                  .from("alertas_alteracao_custo_nf")
+                const { data: novoAlerta, error: alertaError } = await supabase
+                  .from("alertas_preco_pendentes")
                   .insert({
                     user_id: nf.user_id || targetUserId,
                     workspace_id: nf.workspace_id,
@@ -1362,7 +1362,9 @@ serve(async (req) => {
                   .select("*")
                   .single();
 
-                if (novoAlerta) {
+                if (alertaError) {
+                  console.error(`[telegram-webhook] [ALERTA_INSERT_ERROR] Erro ao gravar alerta_preco_pendente para item ${item.id}:`, alertaError);
+                } else if (novoAlerta) {
                   alertasCriados.push(novoAlerta);
                 }
               }

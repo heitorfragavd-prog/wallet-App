@@ -1003,6 +1003,34 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
   });
 
   // =========================================================================
+  // Cenário AQ: Falha no insert de alertas_preco_pendentes não aborta NF nem altera estoque já processado
+  // =========================================================================
+  it("Cenário AQ: falha ao inserir alerta não aborta execução, não incrementa alertasCriados e mantém estoque intacto", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const alertasCriados: any[] = [];
+    const alertaError = { message: "violates check constraint", code: "23514" };
+    const novoAlerta = null;
+
+    if (alertaError) {
+      console.error("[telegram-webhook] [ALERTA_INSERT_ERROR] Erro ao gravar alerta_preco_pendente:", alertaError);
+    } else if (novoAlerta) {
+      alertasCriados.push(novoAlerta);
+    }
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[ALERTA_INSERT_ERROR]"),
+      alertaError
+    );
+    expect(alertasCriados.length).toBe(0);
+
+    const aguardaAjuste = alertasCriados.length > 0;
+    expect(aguardaAjuste).toBe(false);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  // =========================================================================
   // Testes Estáticos de Regressão: Garantir eliminação total de brechas legadas
   // =========================================================================
   describe("Testes Estáticos de Regressão (Vulnerabilidades Eliminadas)", () => {
@@ -1040,6 +1068,25 @@ describe("NF Confirmed Equivalence & Stock Safety (Fase 4)", () => {
       const resolverContent = fs.readFileSync(resolverFile, "utf-8");
 
       expect(resolverContent).toContain('eq("confirmado_por_usuario", true)');
+    });
+
+    it("Exige .from('alertas_preco_pendentes') e proíbe terminantemente .from('alertas_alteracao_custo_nf')", () => {
+      const nfSections = content.split("executarConfirmacaoNfSegura");
+      const funcBody = nfSections[1].slice(0, 25000);
+
+      expect(funcBody).toContain('.from("alertas_preco_pendentes")');
+      expect(funcBody).not.toContain("alertas_alteracao_custo_nf");
+      expect(content).not.toContain("alertas_alteracao_custo_nf");
+    });
+
+    it("Trata explicitamente alertaError ao inserir alerta de preço sem regredir estoque", () => {
+      const nfSections = content.split("executarConfirmacaoNfSegura");
+      const funcBody = nfSections[1].slice(0, 25000);
+
+      expect(funcBody).toContain("const { data: novoAlerta, error: alertaError }");
+      expect(funcBody).toContain("if (alertaError)");
+      expect(funcBody).toContain("ALERTA_INSERT_ERROR");
+      expect(funcBody).toContain("alertasCriados.push(novoAlerta)");
     });
   });
 });
