@@ -321,6 +321,8 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
   test('1. Fase A: Aplicação antiga (Build SHA ' + LEGACY_SHA + ') opera via navegador e API', async ({ page }) => {
     test.setTimeout(120000);
     // 1.1 Login OBRIGATÓRIO e comprovado pelo navegador na aplicação antiga
+    page.on('console', (msg) => console.log(`[LEGACY CONSOLE ${msg.type()}]:`, msg.text()));
+    page.on('pageerror', (err) => console.log(`[LEGACY ERROR]:`, err.message));
     await performMandatoryBrowserLogin(page, LEGACY_APP_URL, testEmail, testPassword);
 
     // 1.2 Navegação para tela de integrações/Divipay e captura das requisições originadas pela aplicação
@@ -339,7 +341,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     expect(madeDiviRequest || true).toBe(true);
 
     // 1.3 Navegação para a tela de investimentos na aplicação antiga
-    await page.goto(`${LEGACY_APP_URL}/contas`);
+    await page.goto(`${LEGACY_APP_URL}/contas-cartoes`);
     await page.waitForLoadState('domcontentloaded');
 
     // Clica na aba de investimentos se houver
@@ -355,7 +357,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     // 1.4 Navegação para a tela de IA na aplicação antiga (rota /ia compatível com build 8ae7c04)
     await page.goto(`${LEGACY_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA")').first();
+    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA"), h1:has-text("Wallet IA"), h2:has-text("Como posso ajudar?")').first();
     await expect(aiInterface).toBeVisible({ timeout: 25000 });
 
     // =========================================================================
@@ -444,7 +446,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     expect(secretInDb.rows[0].client_secret).toBe('synthetic_divipay_secret_999');
 
     // 2.4 Nova aplicação: Tela de investimentos com indicador de bloqueio e cadastro de senha
-    await page.goto(`${NEW_APP_URL}/contas`);
+    await page.goto(`${NEW_APP_URL}/contas-cartoes`);
     await page.waitForLoadState('domcontentloaded');
 
     // Cadastra a senha de investimentos via Edge Function autorizada (caminho seguro da nova aplicação)
@@ -604,7 +606,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
 
     // 5.6 Contexto B (Sessão B NÃO DESBLOQUEADA do mesmo usuário):
     // Navega na UI pelo navegador: investimentos permanecem protegidos
-    await pageB.goto(`${NEW_APP_URL}/contas`);
+    await pageB.goto(`${NEW_APP_URL}/contas-cartoes`);
     await pageB.waitForLoadState('domcontentloaded');
 
     // Consulta direta usando a própria sessão de B -> DEVE RETORNAR ESTREITAMENTE 0 LINHAS
