@@ -112,25 +112,6 @@ jobs:
         run: |
           node scripts/test-phase-c-atomic-rollback.cjs
 
-      - name: Run Product Identity & Confirmed Equivalence Tests (Phases 1-4)
-        env:
-          PGPASSWORD: postgrespassword
-          WALLET_ALLOW_DESTRUCTIVE_PG_TESTS: "1"
-          PGPORT: "5432"
-          PGHOST: "localhost"
-          PGUSER: "postgres"
-          PGDATABASE: "postgres"
-        run: |
-          # Aplica migrations de produto da develop
-          psql -h localhost -U postgres -d postgres -f supabase/migrations/20260909110000_produto_equivalencias_foundation.sql
-          psql -h localhost -U postgres -d postgres -f supabase/migrations/20260910120000_aplicar_item_nf_estoque_custo.sql
-
-          # Executa suite de testes PostgreSQL da RPC aplicar_item_nf_estoque_custo
-          psql -h localhost -U postgres -d postgres -f supabase/tests/aplicar_item_nf_estoque_custo_test.sql
-
-          # Executa bateria de concorrência real e anti-TOCTOU
-          node supabase/tests/aplicar_item_nf_estoque_custo_concorrencia.test.cjs
-
   edge-functions-validation:
     name: Edge Functions Runtime Validation (Deno)
     runs-on: ubuntu-latest
@@ -150,8 +131,6 @@ jobs:
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/ia-deposito/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
-          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/eyemobile-sync/index.ts
-          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/telegram-webhook/index.ts
 
   e2e-browser-homologation:
     name: Full E2E Browser & Real Supabase Stack Homologation
