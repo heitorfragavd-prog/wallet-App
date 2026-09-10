@@ -29,7 +29,6 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     const violations: { file: string; match: string }[] = [];
 
     for (const file of allFiles) {
-      // Ignorar o próprio arquivo de teste
       if (file.includes("product-frontend-identity.test.ts")) continue;
 
       const content = readFileSync(file, "utf8");
@@ -61,20 +60,67 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     expect(mercadoHookContent).toContain("itens_mercado");
   });
 
-  it("Teste C: PDVPage isola cache de produtos por usuário e limpa chave legada global", () => {
+  it("Teste C: PDVPage isola cache estritamente por user.id real e respeita authLoading", () => {
     const pdvSource = readFileSync(resolve("src/pages/PDVPage.tsx"), "utf8");
 
-    // Deve limpar o cache global legado
-    expect(pdvSource).toContain('localStorage.removeItem("pdv_produtos_cache")');
+    // Deve checar authLoading e !user?.id antes de ler/gravar ou sincronizar
+    expect(pdvSource).toContain("if (authLoading || !user?.id) return;");
+    expect(pdvSource).toContain("if (!user?.id) return;");
 
-    // Não deve gravar diretamente na chave fixa sem escopo
-    expect(pdvSource).not.toContain('localStorage.setItem("pdv_produtos_cache",');
-
-    // Deve utilizar cache namespaced por usuário
-    expect(pdvSource).toContain("pdv_produtos_cache_");
+    // A função de chave deve requerer id do usuário
+    expect(pdvSource).toContain("const getProductCacheKey = useCallback((uid: string) => {");
+    expect(pdvSource).toContain("return `pdv_produtos_cache_${uid}`;");
   });
 
-  it("Teste D: useFinancialContext desacopla itens de mercado de vendas do Eyemobile", () => {
+  it("Teste D: Zero ocorrências de 'pdv_produtos_cache_guest' em todo o repositório", () => {
+    const allFiles = getAllSourceFiles(srcDir);
+    const violations: string[] = [];
+
+    for (const file of allFiles) {
+      if (file.includes("product-frontend-identity.test.ts")) continue;
+      const content = readFileSync(file, "utf8");
+      if (content.includes("pdv_produtos_cache_guest")) {
+        violations.push(file);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("Teste E: Chave global antiga 'pdv_produtos_cache' é removida preventivamente", () => {
+    const pdvSource = readFileSync(resolve("src/pages/PDVPage.tsx"), "utf8");
+
+    expect(pdvSource).toContain('localStorage.removeItem("pdv_produtos_cache")');
+    expect(pdvSource).not.toContain('localStorage.setItem("pdv_produtos_cache",');
+    expect(pdvSource).not.toContain('localStorage.getItem("pdv_produtos_cache")');
+  });
+
+  it("Teste F: Nenhuma lista DEFAULT_PRODUCTS usada como catálogo no runtime", () => {
+    const allFiles = getAllSourceFiles(srcDir);
+    const defaultProductUsages: string[] = [];
+
+    for (const file of allFiles) {
+      if (file.includes("product-frontend-identity.test.ts")) continue;
+      const content = readFileSync(file, "utf8");
+      if (content.includes("DEFAULT_PRODUCTS")) {
+        defaultProductUsages.push(file);
+      }
+    }
+
+    expect(defaultProductUsages).toEqual([]);
+  });
+
+  it("Teste G: Falha sem cache resulta em catálogo vazio, sem produtos fictícios", () => {
+    const pdvSource = readFileSync(resolve("src/pages/PDVPage.tsx"), "utf8");
+
+    // Em caso de falha sem cache, setProducts deve receber []
+    expect(pdvSource).toContain("setProducts([]);");
+    expect(pdvSource).not.toContain("Salgado Assado");
+    expect(pdvSource).not.toContain("Pão de Queijo");
+    expect(pdvSource).not.toContain("Café Expresso");
+  });
+
+  it("Teste H: useFinancialContext desacopla itens de mercado de vendas do Eyemobile", () => {
     const finContextSource = readFileSync(resolve("src/domains/ia/hooks/useFinancialContext.ts"), "utf8");
 
     // Interface e agregação não devem misturar itens_mercado no nó eyemobile
@@ -87,19 +133,21 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     expect(finContextSource).toContain("baixo estoque na despensa");
   });
 
-  it("Teste E: UploadInteligente não executa mutação direta de produtos", () => {
+  it("Teste I: UploadInteligente não faz write de produto e possui feedback preciso", () => {
     const uploadSource = readFileSync(resolve("src/domains/ia/components/UploadInteligente.tsx"), "utf8");
 
     // Não deve conter qualquer chamada à tabela legada
-    expect(uploadSource).not.toContain('eyemobile_produtos');
+    expect(uploadSource).not.toContain("eyemobile_produtos");
 
-    // Deve exibir aviso neutro orientado ao fluxo canônico
+    // Deve exibir aviso preciso quando estoque foi desativado
+    expect(uploadSource).toContain("Despesa lançada; estoque não atualizado");
+    expect(uploadSource).toContain("Estoque e custo não atualizados");
     expect(uploadSource).toContain(
       "A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
     );
   });
 
-  it("Teste F: productMatcher consome estritamente as fontes canônicas de produtos e equivalências", () => {
+  it("Teste J: productMatcher consome estritamente as fontes canônicas de produtos e equivalências", () => {
     const matcherSource = readFileSync(resolve("src/domains/finance/services/productMatcher.ts"), "utf8");
 
     expect(matcherSource).toContain("produtos_eyemobile");

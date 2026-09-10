@@ -1,5 +1,4 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { PDVHeader } from "@/domains/pdv/components/PDVHeader";
 import { PDVSearchInput } from "@/domains/pdv/components/PDVSearchInput";
 import { PDVProductGrid, type PDVProduct } from "@/domains/pdv/components/PDVProductGrid";
@@ -12,12 +11,17 @@ import { TERMINALS, DEFAULT_TERMINAL_SERIAL } from "@/domains/pdv/services/pdvAc
 import { usePDVCart } from "@/domains/pdv/hooks/usePDVCart";
 import { usePDVHotkeys } from "@/domains/pdv/hooks/usePDVHotkeys";
 import { useToast } from "@/shared/hooks/use-toast";
-import { Button } from "@/shared/components/ui/button";
-import { Input } from "@/shared/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/components/ui/dialog";
-import { ArrowLeft, Store, RefreshCw, Smartphone, CheckCircle2, Lock, AlertTriangle, Coins, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
+
+interface EyemobileRawProduct {
+  id?: string | number;
+  sku?: string | number;
+  name?: string;
+  default_price?: number;
+  price?: number;
+  image?: string;
+}
 
 interface Movimentacao {
   tipo: "abertura" | "venda" | "sangria" | "reforco";
@@ -33,21 +37,6 @@ interface Venda {
   itens: number;
   metodo: string;
 }
-
-const DEFAULT_PRODUCTS: PDVProduct[] = [
-  { id: "1", name: "Salgado Assado", price: 8.0, category: "salgados" },
-  { id: "2", name: "Pão de Queijo", price: 6.0, category: "salgados" },
-  { id: "3", name: "Café Expresso", price: 5.0, category: "café" },
-  { id: "4", name: "Refrigerante Lata", price: 7.0, category: "bebidas" },
-  { id: "5", name: "Bolo de Cenoura", price: 9.0, category: "doces" },
-  { id: "6", name: "Café com Leite", price: 6.5, category: "café" },
-  { id: "7", name: "Suco Natural", price: 8.5, category: "bebidas" },
-  { id: "8", name: "Combo Café + Salgado", price: 12.0, category: "combos" },
-  { id: "9", name: "Coxinha", price: 7.5, category: "salgados" },
-  { id: "10", name: "Pudim", price: 8.0, category: "doces" },
-  { id: "11", name: "Água Mineral", price: 4.0, category: "bebidas" },
-  { id: "12", name: "Combo Refri + Salgado", price: 13.5, category: "combos" },
-];
 
 function getProductCategory(name: string): string {
   const n = name.toLowerCase();
@@ -69,13 +58,12 @@ function getProductCategory(name: string): string {
 }
 
 const PDVPage: React.FC = () => {
-  const navigate = useNavigate();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const getProductCacheKey = useCallback((uid?: string) => {
-    return uid ? `pdv_produtos_cache_${uid}` : "pdv_produtos_cache_guest";
+  const getProductCacheKey = useCallback((uid: string) => {
+    return `pdv_produtos_cache_${uid}`;
   }, []);
 
   // Limpeza preventiva da chave de cache legada global
@@ -170,6 +158,7 @@ const PDVPage: React.FC = () => {
   }, [addItem, focusSearch, isCaixaAberto]);
 
   const fetchProducts = useCallback(async (showToast = false) => {
+    if (!user?.id) return;
     setIsLoadingProducts(true);
     try {
       const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -177,8 +166,9 @@ const PDVPage: React.FC = () => {
       });
       if (error) throw error;
       if (data?.products && Array.isArray(data.products)) {
-        const mapped: PDVProduct[] = data.products.map((p: any) => {
-          const cat = getProductCategory(p.name);
+        const rawProducts = data.products as EyemobileRawProduct[];
+        const mapped: PDVProduct[] = rawProducts.map((p) => {
+          const cat = getProductCategory(String(p.name ?? ""));
           return {
             id: String(p.id ?? p.sku ?? ""),
             name: String(p.name ?? "Produto sem nome").trim(),
@@ -190,7 +180,7 @@ const PDVPage: React.FC = () => {
           };
         });
         setProducts(mapped);
-        const cacheKey = getProductCacheKey(user?.id);
+        const cacheKey = getProductCacheKey(user.id);
         localStorage.setItem(cacheKey, JSON.stringify(mapped));
         if (showToast) {
           toast({ title: "Sincronizado!", description: `${mapped.length} produtos carregados do Eyemobile.` });
@@ -198,21 +188,30 @@ const PDVPage: React.FC = () => {
       } else {
         throw new Error("Resposta de produtos inválida");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro ao sincronizar produtos:", err);
-      if (showToast) {
-        toast({
-          title: "Erro de Sincronização",
-          description: "Não foi possível conectar ao Eyemobile. Usando dados locais.",
-          variant: "destructive"
-        });
-      }
-      const cacheKey = getProductCacheKey(user?.id);
+      const cacheKey = getProductCacheKey(user.id);
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
-        setProducts(JSON.parse(cached));
+        try {
+          setProducts(JSON.parse(cached));
+          if (showToast) {
+            toast({
+              title: "Erro de Sincronização",
+              description: "Não foi possível conectar ao Eyemobile. Usando dados do cache local.",
+              variant: "destructive"
+            });
+          }
+        } catch {
+          setProducts([]);
+        }
       } else {
-        setProducts(DEFAULT_PRODUCTS);
+        setProducts([]);
+        toast({
+          title: "Catálogo Indisponível",
+          description: "Não foi possível conectar ao Eyemobile e não há cache local disponível.",
+          variant: "destructive"
+        });
       }
     } finally {
       setIsLoadingProducts(false);
@@ -220,7 +219,9 @@ const PDVPage: React.FC = () => {
   }, [toast, user?.id, getProductCacheKey]);
 
   useEffect(() => {
-    const cacheKey = getProductCacheKey(user?.id);
+    if (authLoading || !user?.id) return;
+
+    const cacheKey = getProductCacheKey(user.id);
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
@@ -231,7 +232,7 @@ const PDVPage: React.FC = () => {
     } else {
       fetchProducts(false);
     }
-  }, [user?.id, fetchProducts, getProductCacheKey]);
+  }, [authLoading, user?.id, fetchProducts, getProductCacheKey]);
 
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();

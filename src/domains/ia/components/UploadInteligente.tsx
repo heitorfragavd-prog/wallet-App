@@ -10,7 +10,7 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Badge } from "@/shared/components/ui/badge";
 import { Separator } from "@/shared/components/ui/separator";
 import { Skeleton } from "@/shared/components/ui/skeleton";
-import { Upload, Camera, FileText, Check, AlertCircle, X, Trash2, Loader2, Sparkles } from "lucide-react";
+import { Upload, Camera, FileText, Check, Trash2, Loader2, Sparkles } from "lucide-react";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { logger } from "@/core/logging/LoggerService";
 
@@ -306,13 +306,16 @@ export const UploadInteligente = () => {
       const hadStockRequest = nfItens.some(i => i.updateCusto || i.addEstoque);
       if (hadStockRequest) {
         toast({
-          title: "Nota Fiscal Processada",
-          description: nfLancarDespesa
-            ? "Despesa lançada com sucesso. A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
-            : "A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
+          title: nfLancarDespesa
+            ? "Despesa lançada; estoque não atualizado"
+            : "Estoque e custo não atualizados",
+          description: "A atualização de estoque e custo foi desativada nesta tela legada. Utilize o fluxo canônico de processamento de NF."
         });
       } else {
-        toast({ title: "Nota Fiscal Processada!", description: "Dados adicionados com sucesso." });
+        toast({
+          title: nfLancarDespesa ? "Despesa lançada com sucesso!" : "Nota Fiscal Processada!",
+          description: "Dados adicionados com sucesso."
+        });
       }
     } catch (err) {
       toast({ title: "Erro ao confirmar", description: String(err), variant: "destructive" });
@@ -622,7 +625,7 @@ export const UploadInteligente = () => {
               <div>
                 <h3 className="text-lg font-bold text-foreground">Documento Processado com Sucesso!</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto mt-1">
-                  Os dados foram salvos no sistema e suas finanças e estoque foram atualizados.
+                  Os dados foram salvos no sistema. A conciliação de estoque de NF é realizada pelo fluxo canônico.
                 </p>
               </div>
               <Button onClick={clearFile} variant="outline" className="mt-2">
