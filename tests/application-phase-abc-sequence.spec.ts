@@ -165,10 +165,9 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.2 Navega para a tela real de IA
   await page.goto(`${appUrl}/ia`);
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForLoadState('networkidle').catch(() => {});
 
   // 3.3 Localiza campo de entrada da aplicação (textarea ou input) e aguarda habilitação
-  const chatInput = page.locator('textarea, input[placeholder*="Pergunte"], input[type="text"]').first();
+  const chatInput = page.locator('textarea, input[placeholder*="Pergunte"]').first();
   await expect(chatInput).toBeVisible({ timeout: 35000 });
   await expect(chatInput).toBeEnabled({ timeout: 35000 });
 
@@ -346,9 +345,8 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     // 1.4 Navegação para a tela de IA na aplicação antiga (rota /ia compatível com build 8ae7c04)
     await page.goto(`${LEGACY_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForLoadState('networkidle').catch(() => {});
-    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), button[role="tab"]:has-text("Chat"), div:has-text("Wallet IA"), div:has-text("Assistente Financeiro"), h1:has-text("Inteligência Artificial"), div:has-text("IA")').first();
-    await expect(aiInterface).toBeVisible({ timeout: 35000 });
+    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA")').first();
+    await expect(aiInterface).toBeVisible({ timeout: 25000 });
 
     // =========================================================================
     // 1.5 TESTES COMPLEMENTARES DE AUTORIZAÇÃO (Consultas HTTP Diretas)
