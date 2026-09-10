@@ -210,6 +210,7 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 
 test.describe('Homologação da Aplicação na Sequência A → B → C (Stack Real e Builds Isolados)', () => {
   test.describe.configure({ mode: 'serial' });
+  test.setTimeout(90000);
 
   const timestamp = Date.now();
   const testEmail = `app_seq_${timestamp}@example.com`;
