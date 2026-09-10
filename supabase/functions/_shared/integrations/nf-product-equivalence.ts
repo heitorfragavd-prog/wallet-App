@@ -280,7 +280,7 @@ export function extractSearchTokens(text?: string | null): string[] {
   const norm = normalizeText(text);
   if (!norm) return [];
   return norm
-    .split(/[\s,./\-_+*()\[\]]+/)
+    .split(/[\s,./\-_+*()[\]]+/)
     .map((t) => t.trim())
     .filter((t) => t.length >= 2);
 }
