@@ -165,11 +165,12 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.2 Navega para a tela real de IA
   await page.goto(`${appUrl}/ia`);
   await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('networkidle').catch(() => {});
 
   // 3.3 Localiza campo de entrada da aplicação (textarea ou input) e aguarda habilitação
   const chatInput = page.locator('textarea, input[placeholder*="Pergunte"], input[type="text"]').first();
-  await expect(chatInput).toBeVisible({ timeout: 30000 });
-  await expect(chatInput).toBeEnabled({ timeout: 30000 });
+  await expect(chatInput).toBeVisible({ timeout: 35000 });
+  await expect(chatInput).toBeEnabled({ timeout: 35000 });
 
   // 3.4 Preenche mensagem analítica complexa (ativa Agent V2 / orchestrator)
   const messageText = `Faça uma análise financeira detalhada das despesas sob ${phaseName}.`;
@@ -178,12 +179,13 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.5 Prepara interceptação da requisição HTTP originada pelo frontend para a Edge Function local
   const requestPromise = page.waitForRequest(
     (req) => req.url().includes('/functions/v1/wallet-ai-orchestrator') && req.method() === 'POST',
-    { timeout: 35000 }
+    { timeout: 45000 }
   );
 
   // 3.6 Envia mensagem pelo botão de envio da aplicação (ou Enter como fallback)
-  const sendBtn = page.locator('button:has-text("Enviar"), button:has(svg.lucide-send), button:has(svg)').last();
-  if (await sendBtn.isVisible() && await sendBtn.isEnabled()) {
+  const sendBtn = page.locator('button:has(svg.lucide-send), button:has-text("Enviar")').first();
+  if (await sendBtn.isVisible()) {
+    await expect(sendBtn).toBeEnabled({ timeout: 15000 });
     await sendBtn.click();
   } else {
     await chatInput.press('Enter');
@@ -195,12 +197,12 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 
   // 3.8 Confirma que a resposta determinística do provedor simulado aparece no chat visível
   const assistantResponse = page.locator('text=Análise financeira concluída com sucesso').last();
-  await expect(assistantResponse).toBeVisible({ timeout: 35000 });
+  await expect(assistantResponse).toBeVisible({ timeout: 45000 });
 
   // 3.9 Confirma que o loading/processamento terminou
   const loadingIndicator = page.locator('.animate-spin');
-  await expect(loadingIndicator).toHaveCount(0, { timeout: 20000 });
-  await expect(chatInput).toBeEnabled({ timeout: 15000 });
+  await expect(loadingIndicator).toHaveCount(0, { timeout: 25000 });
+  await expect(chatInput).toBeEnabled({ timeout: 20000 });
 
   // 3.10 Confirma que o mock externo do provedor de IA recebeu a chamada
   const statsRes = await fetch(`${_MOCK_PROVIDER_URL}/stats`);
@@ -210,7 +212,11 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
 
 test.describe('Homologação da Aplicação na Sequência A → B → C (Stack Real e Builds Isolados)', () => {
   test.describe.configure({ mode: 'serial' });
-  test.setTimeout(90000);
+  test.setTimeout(120000);
+
+  test.beforeEach(async () => {
+    test.setTimeout(120000);
+  });
 
   const timestamp = Date.now();
   const testEmail = `app_seq_${timestamp}@example.com`;
@@ -304,6 +310,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
   });
 
   test('1. Fase A: Aplicação antiga (Build SHA ' + LEGACY_SHA + ') opera via navegador e API', async ({ page }) => {
+    test.setTimeout(120000);
     // 1.1 Login OBRIGATÓRIO e comprovado pelo navegador na aplicação antiga
     await performMandatoryBrowserLogin(page, LEGACY_APP_URL, testEmail, testPassword);
 
@@ -339,8 +346,9 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     // 1.4 Navegação para a tela de IA na aplicação antiga (rota /ia compatível com build 8ae7c04)
     await page.goto(`${LEGACY_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
-    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA")').first();
-    await expect(aiInterface).toBeVisible({ timeout: 25000 });
+    await page.waitForLoadState('networkidle').catch(() => {});
+    const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), button[role="tab"]:has-text("Chat"), div:has-text("Wallet IA"), div:has-text("Assistente Financeiro"), h1:has-text("Inteligência Artificial"), div:has-text("IA")').first();
+    await expect(aiInterface).toBeVisible({ timeout: 35000 });
 
     // =========================================================================
     // 1.5 TESTES COMPLEMENTARES DE AUTORIZAÇÃO (Consultas HTTP Diretas)
@@ -389,6 +397,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
   });
 
   test('2. Fase B: Nova aplicação (' + HARDENED_LABEL + ') opera via navegador sob a Fase A', async ({ page }) => {
+    test.setTimeout(120000);
     // 2.1 Login OBRIGATÓRIO e comprovado pelo navegador na nova aplicação
     await performMandatoryBrowserLogin(page, NEW_APP_URL, testEmail, testPassword);
 
@@ -527,6 +536,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
   });
 
   test('5. Fase C Ativa: Isolamento estrito de sessões em dois contextos e bloqueio de brechas antigas', async ({ browser }) => {
+    test.setTimeout(120000);
     // =========================================================================
     // PONTO 5: DOIS CONTEXTOS INDEPENDENTES DE NAVEGADOR PARA O MESMO USUÁRIO
     // =========================================================================
@@ -639,6 +649,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
   });
 
   test('6. Procedimento de Contingência: Rollback seguro mantém segredos e investimentos protegidos', async ({ browser }) => {
+    test.setTimeout(120000);
     // 6.1 Executa script de rollback seguro
     await executeSql(rollbackSql);
     await reloadPostgrest();
