@@ -230,20 +230,32 @@ pg_dump "$DATABASE_URL" \
 
 ---
 
-## 11. Decisão GO / NO-GO e Classificação Final
+## 11. Decisão GO / NO-GO e Classificação Final (Preflight 2)
 
-$$\mathbf{PREDEPLOY\ PREFLIGHT:\ FAIL}$$
+$$\mathbf{PREDEPLOY\ PREFLIGHT:\ READY\ WITH\ OWNER\ ACTION}$$
 
-**Motivo do Bloqueio Inicial:**  
-A branch `origin/develop` havia avançado para `2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b` com os merges dos PRs #85 (Fase 5) e #86 (Fase 6). A regra mandatória de pré-voo exigiu parada imediata para integração e re-homologação contra a nova ponta de `develop`.
+### Síntese de Auditoria do Pré-Voo 2:
 
-**Status de Re-Homologação do Release Candidate:**  
-O merge `--no-ff` de `origin/develop` (`2fa6f201...`) foi concluído na branch `security/comprehensive-audit-hardening`, com 100% de aprovação nos 1.432 testes locais (incluindo testes específicos das Fases 5 e 6 e suíte expandida de regressão cruzada com 32 cenários).
+1. **Develop Drift (Resolvido):**
+   * A ponta de `origin/develop` (`2fa6f2017f9dfbf18eb82a980bf7ea549c0e8d0b` — Fases 5 e 6) foi integrada com sucesso ao PR #80 no HEAD `96dfd16efeabbae72b7ea9f29383eb52dae49a09`.
+   * Testes locais (1.433 testes em 131 arquivos) e remotos (CI Quality Gates, Postgres Isolado, Deno e Full E2E Supabase Stack) estão **100% verdes**.
+   * PR #80 permanece **OPEN**, **DRAFT** (`isDraft: true`), **MERGEABLE**.
 
-**Bloqueador Registrado para o Próximo Preflight:**  
-> [!IMPORTANT]
-> **VERCEL PRODUCTION IDENTITY MUST BE VERIFIED BEFORE PHASE B**  
-> O preflight inicial marcou o projeto e deployment Vercel como inferidos devido à CLI local estar desautenticada. Antes de autorizar a execução da Fase B de deploy do frontend, a identidade autoritativa da Vercel (Project Name, Production Branch, Deployment ativo e commit SHA) deve ser comprovada.
+2. **Banco de Dados de Produção (Intacto e Limpo):**
+   * Instância Supabase `hdeguzxkdvebdrrutbnx` (`sa-east-1`, PostgreSQL 17.6) em status `ACTIVE_HEALTHY`.
+   * Schema migrations em produção: 7 migrações legadas registradas.
+   * Migrações de segurança do PR #80: Fase A (`20260908120000`) e Fase C (`20260908120001`) permanecem **`NOT APPLIED`**.
+   * Drift check dos 17 objetos da Fase A: **0 presentes / 17 verificados (100% ABSENT)**. Zero drift de produção.
+
+3. **Edge Functions e Secrets (Preservados):**
+   * 18 Edge Functions ativas em produção.
+   * 16 secrets mapeados e presentes (nomes auditados, valores omitidos).
+   * Smokes não-destrutivos: GoTrue Auth v2.196.0 HTTP 200 `PASS`, Telegram Webhook HTTP 200 `PASS`, OpenAI Proxy OPTIONS HTTP 204 `PASS`.
+
+4. **Identificação da Vercel (Requisito Pré-Fase B):**
+   * A CLI local da Vercel permanece desautenticada (`Logged out`) e o GitHub Deployments API não possui registros diretos.
+   * O repositório documenta pipeline Docker Hub (`heitor84/wallet`) com host `wallet.cortexx.online` (DNS externo atualmente não apontado).
+   * **Ação Mandatória do Proprietário antes da Fase B:** Confirmar no Dashboard da Vercel (ou via `vercel login` no terminal local) o nome exato do projeto, a production branch (`master`), o deployment ativo e o commit SHA antes de autorizar o deploy do frontend.
 
 ---
 
