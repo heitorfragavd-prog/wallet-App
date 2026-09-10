@@ -1,7 +1,25 @@
 const { Client } = require("pg");
+const { execSync } = require("child_process");
+
+function resolvePgHost() {
+  if (process.env.PGHOST) return process.env.PGHOST;
+  try {
+    const wslIp = execSync("wsl -d Ubuntu -e hostname -I", { encoding: "utf8" }).trim().split(" ")[0];
+    if (wslIp) return wslIp;
+  } catch (_e) {}
+  return "127.0.0.1";
+}
+
+function isLocalOrLoopback(host) {
+  if (!host) return false;
+  const h = host.toLowerCase().trim();
+  if (h === "localhost" || h === "127.0.0.1" || h === "::1") return true;
+  if (/^127\./.test(h) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  return false;
+}
 
 const DB_CONFIG = {
-  host: process.env.PGHOST || "localhost",
+  host: resolvePgHost(),
   port: Number(process.env.PGPORT || 54329),
   user: process.env.PGUSER || "postgres",
   password: process.env.PGPASSWORD || "postgres",
@@ -9,15 +27,26 @@ const DB_CONFIG = {
 };
 
 async function runTests() {
-  if (process.env.WALLET_ALLOW_DESTRUCTIVE_PG_TESTS !== "1") {
+  if (process.env.WALLET_ALLOW_DESTRUCTIVE_PG_TESTS !== "1" || process.env.WALLET_TEST_DB_CONFIRMED !== "1") {
     console.error(
-      "ERRO DE SEGURANÇA: Este harness executa operações destrutivas (DELETE). Defina WALLET_ALLOW_DESTRUCTIVE_PG_TESTS=1 para prosseguir."
+      "ERRO DE SEGURANÇA: Este harness executa operações destrutivas (DELETE). Defina WALLET_ALLOW_DESTRUCTIVE_PG_TESTS=1 E WALLET_TEST_DB_CONFIRMED=1 para prosseguir."
     );
     process.exit(1);
   }
-  console.log("=== INICIANDO BATERIA DE TESTES EM POSTGRESQL 17 REAL ===");
+
+  if (!isLocalOrLoopback(DB_CONFIG.host)) {
+    console.error(`ERRO DE SEGURANÇA: Host '${DB_CONFIG.host}' não é loopback/local isolado. Abortando.`);
+    process.exit(1);
+  }
+
+  console.log("=== INICIANDO BATERIA DE TESTES EM POSTGRESQL REAL (FASE 4 CONCORRÊNCIA & ROLLBACK) ===");
   const adminClient = new Client(DB_CONFIG);
   await adminClient.connect();
+
+  const serverInfo = (await adminClient.query("SELECT current_database(), version();")).rows[0];
+  console.log(`Conectado com sucesso em ${DB_CONFIG.host}:${DB_CONFIG.port}`);
+  console.log(`Database: ${serverInfo.current_database}`);
+  console.log(`Versão: ${serverInfo.version}`);
 
   const userId = "00000000-0000-0000-0000-000000000001";
   const wsId = "00000000-0000-0000-0000-000000000002";
@@ -31,9 +60,19 @@ async function runTests() {
     DELETE FROM public.produtos_eyemobile;
     DELETE FROM public.workspaces;
 
+    CREATE SCHEMA IF NOT EXISTS auth;
+    CREATE TABLE IF NOT EXISTS auth.users (
+      id UUID PRIMARY KEY,
+      email TEXT
+    );
+
+    INSERT INTO auth.users (id, email)
+    VALUES ('${userId}', 'test@wallet.local')
+    ON CONFLICT (id) DO NOTHING;
+
     INSERT INTO public.workspaces (id, user_id, nome)
     VALUES ('${wsId}', '${userId}', 'Workspace Teste')
-    ON CONFLICT DO NOTHING;
+    ON CONFLICT (id) DO NOTHING;
   `);
 
   let testsPassed = 0;

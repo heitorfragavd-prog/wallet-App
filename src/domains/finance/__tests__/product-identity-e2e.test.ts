@@ -17,6 +17,8 @@ import {
   validarPropostaFase5,
   validarAtorTelegramFase5,
   extrairNfItemIdDaProposta,
+  normalizeSupplierCode,
+  normalizeSupplierCnpj,
   ProdutoEyemobileRow,
 } from "../../../../supabase/functions/_shared/integrations/nf-product-equivalence";
 import { evaluateStockStatus } from "../../../../supabase/functions/_shared/danfe-extractor";
@@ -396,7 +398,7 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
   // ---------------------------------------------------------------------------
   // E2E-02: CONFIRMAÇÃO MANUAL
   // ---------------------------------------------------------------------------
-  it("E2E-02: Confirmação manual -> salva equivalência com campos canônicos estritos e confirmado_por_usuario=true", async () => {
+  it("E2E-02: Confirmação manual -> salva equivalência com campos canônicos estritos e confirmado_por_usuario=true (código preserva case e pontuação, aplicando apenas trim)", async () => {
     const { state, createSupabaseMock } = createInMemoryDatabase();
     const supabase = createSupabaseMock();
 
@@ -413,11 +415,16 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       margem_real_percentual: null,
     });
 
+    // Código bruto com espaços nas pontas, maiúsculas/minúsculas e pontuação: " SKU-AbC.001 "
+    const rawCode = " SKU-AbC.001 ";
+    expect(normalizeSupplierCode(rawCode)).toBe("SKU-AbC.001");
+    expect(normalizeSupplierCnpj("98.765.432/0001-10")).toBe("98765432000110");
+
     const saveRes = await salvarEquivalenciaConfirmada(supabase, {
       userId: USER_A,
       workspaceId: WS_A,
       cnpjFornecedor: "98.765.432/0001-10",
-      codigoProdutoFornecedor: "FORN-AGUA-CX",
+      codigoProdutoFornecedor: rawCode,
       produtoEyemobileUuid: "prod-can-2",
       fatorConversao: 12,
       fornecedorNome: "Fonte Cristalina",
@@ -428,13 +435,30 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     expect(saveRes.success).toBe(true);
 
     // Prova em banco:
-    const saved = state.produto_equivalencias.find((e) => e.workspace_id === WS_A && e.codigo_produto_fornecedor === "FORN-AGUA-CX");
+    const saved = state.produto_equivalencias.find(
+      (e) => e.workspace_id === WS_A && e.codigo_produto_fornecedor === "SKU-AbC.001"
+    );
     expect(saved).toBeDefined();
     expect(saved.cnpj_fornecedor_normalizado).toBe("98765432000110");
+    // Prova: código foi trimado, mas pontuação (. e -) e caixa (AbC) foram estritamente preservadas
+    expect(saved.codigo_produto_fornecedor).toBe("SKU-AbC.001");
     expect(saved.produto_eyemobile_uuid).toBe("prod-can-2");
     expect(saved.fator_conversao).toBe(12);
     expect(saved.confirmado_por_usuario).toBe(true);
     expect(saved.origem_matching).toBe("manual");
+
+    // Prova de resolução automática com código com whitespace:
+    const res = await resolveNfProductEquivalence(supabase, {
+      userId: USER_A,
+      workspaceId: WS_A,
+      cnpjFornecedor: "98.765.432/0001-10",
+      codigoProdutoFornecedor: "  SKU-AbC.001  ",
+    });
+    expect(res.status).toBe("matched");
+    if (res.status === "matched") {
+      expect(res.produtoEyemobileUuid).toBe("prod-can-2");
+      expect(res.fatorConversao).toBe(12);
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -493,7 +517,7 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       origem_matching: "manual",
     });
 
-    // 1. evaluateStockStatus
+    // 1. evaluateStockStatus para primeira embalagem (CX c/ 12)
     const stockStatus = evaluateStockStatus(
       {
         codigo: "COCA-CX12",
@@ -513,7 +537,30 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     expect(stockStatus.quantidadeParaEstoque).toBe(24); // 2 * 12 = 24
     expect(stockStatus.custoUnitarioConvertido).toBe(3.0); // 36.00 / 12 = 3.00
 
-    // 2. Aplicação atômica via RPC
+    // 2. evaluateStockStatus para segunda embalagem (FD / FARDO / PACK: 2 FD * fator 6 = 12 unidades, custo 30 / 6 = 5.0)
+    const stockStatusFD = evaluateStockStatus(
+      {
+        codigo: "SUCO-FD6",
+        descricao: "Suco Uva 1L Fardo 6",
+        unidade: "FD",
+        quantidade: 2,
+        valor_unitario: 30.0,
+      } as any,
+      {
+        id: "prod-suco-fd",
+        estoque_atual: 10,
+        fator_conversao: 6,
+      }
+    );
+    expect(stockStatusFD.status_estoque).toBe("processado");
+    expect(stockStatusFD.quantidadeParaEstoque).toBe(12); // 2 * 6 = 12 unidades
+    expect(stockStatusFD.custoUnitarioConvertido).toBe(5.0); // 30.00 / 6 = 5.00
+
+    // Sugestão de fator para FD extrai 6 da descrição
+    const suggestionFD = suggestConversionFactor("FD", "Suco Uva 1L FD 6");
+    expect(suggestionFD).toBe(6);
+
+    // 3. Aplicação atômica via RPC da primeira embalagem
     const { data: rpcRes } = await supabase.rpc("aplicar_item_nf_estoque_custo", {
       p_item_id: itemId,
       p_user_id: USER_A,
@@ -983,8 +1030,8 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       origem_matching: "manual",
     });
 
-    // Aplica Item 1
-    await supabase.rpc("aplicar_item_nf_estoque_custo", {
+    // Aplica Item 1 via RPC
+    const rpc1 = await supabase.rpc("aplicar_item_nf_estoque_custo", {
       p_item_id: item1,
       p_user_id: USER_A,
       p_workspace_id: WS_A,
@@ -994,18 +1041,34 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       p_custo_unitario_convertido: 10.0,
       p_fator_conversao_esperado: 1,
     });
+    expect(rpc1.data.success).toBe(true);
 
-    // Simula cálculo de status da NF
-    const itensNF = state.nf_itens.filter((i) => i.nf_id === nfId);
-    const todosProcessados = itensNF.every((i) => i.status_estoque === "processado");
-    const algumProcessado = itensNF.some((i) => i.status_estoque === "processado");
+    // 1. Prova física no banco de dados dos estados dos itens:
+    const item1Row = state.nf_itens.find((i) => i.id === item1)!;
+    const item2Row = state.nf_itens.find((i) => i.id === item2)!;
+    expect(item1Row.status_estoque).toBe("processado");
+    expect(item2Row.status_estoque).toBe("pendente");
 
-    expect(todosProcessados).toBe(false);
-    expect(algumProcessado).toBe(true);
+    // 2. Contrato de runtime: telegram-webhook lê nf_itens para cálculo real do status final da NF
+    const computeNfStatus = (itens: { status_estoque: string }[]) => {
+      const totalItens = itens.length;
+      const qtdTerminais = itens.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+      if (totalItens > 0 && qtdTerminais === totalItens) {
+        return "confirmada";
+      } else if (qtdTerminais > 0) {
+        return "parcialmente_processada";
+      }
+      return "pendente";
+    };
 
-    const nfRow = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
-    nfRow.status = "parcialmente_processada";
-    expect(nfRow.status).toBe("parcialmente_processada");
+    const statusAposItem1 = computeNfStatus([item1Row, item2Row]);
+    expect(statusAposItem1).toBe("parcialmente_processada");
+
+    await supabase.from("notas_fiscais_compra").update({ status: statusAposItem1 }).eq("id", nfId);
+    const nfRowAposItem1 = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
+    expect(nfRowAposItem1.status).toBe("parcialmente_processada");
 
     // Agora resolve e aplica o Item 2
     state.produtos_eyemobile.push({
@@ -1033,7 +1096,7 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       origem_matching: "manual",
     });
 
-    await supabase.rpc("aplicar_item_nf_estoque_custo", {
+    const rpc2 = await supabase.rpc("aplicar_item_nf_estoque_custo", {
       p_item_id: item2,
       p_user_id: USER_A,
       p_workspace_id: WS_A,
@@ -1043,11 +1106,23 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       p_custo_unitario_convertido: 25.0,
       p_fator_conversao_esperado: 2,
     });
+    expect(rpc2.data.success).toBe(true);
 
-    const todosAposB = state.nf_itens.filter((i) => i.nf_id === nfId).every((i) => i.status_estoque === "processado");
-    expect(todosAposB).toBe(true);
-    nfRow.status = "confirmada";
-    expect(nfRow.status).toBe("confirmada");
+    expect(item2Row.status_estoque).toBe("processado");
+
+    const statusAposItem2 = computeNfStatus([item1Row, item2Row]);
+    expect(statusAposItem2).toBe("confirmada");
+
+    await supabase.from("notas_fiscais_compra").update({ status: statusAposItem2 }).eq("id", nfId);
+    const nfRowAposItem2 = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
+    expect(nfRowAposItem2.status).toBe("confirmada");
+
+    // 3. Verificação de fidelidade do contrato no arquivo de produção do webhook:
+    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const webhookCode = fs.readFileSync(webhookPath, "utf8");
+    expect(webhookCode).toContain('statusFinalNF = "parcialmente_processada"');
+    expect(webhookCode).toContain('statusFinalNF = "confirmada"');
+    expect(webhookCode).toContain("qtdTerminais === totalItens");
   });
 
   // ---------------------------------------------------------------------------
@@ -1217,7 +1292,7 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
   // ---------------------------------------------------------------------------
   // E2E-15: TELEGRAM ATOR REAL
   // ---------------------------------------------------------------------------
-  it("E2E-15: Telegram Ator Real -> usuário estranho em grupo é bloqueado, usuário vinculado ao dono é autorizado", async () => {
+  it("E2E-15: Telegram Ator Real -> usuário estranho em grupo é bloqueado, usuário vinculado ao dono é autorizado, sem fallback de workspace owner", async () => {
     const { state, createSupabaseMock } = createInMemoryDatabase();
     const supabase = createSupabaseMock();
 
@@ -1228,7 +1303,13 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       ativo: true,
     });
 
-    // Caso A: Usuário estranho (from.id = 999999999) clica ou digita
+    state.usuarios_telegram.push({
+      telegram_chat_id: "888888888",
+      user_id: USER_B,
+      ativo: true,
+    });
+
+    // Caso A: Usuário estranho não cadastrado (from.id = 999999999) clica ou digita
     const atorInvalido = await validarAtorTelegramFase5(supabase, {
       telegramUserId: 999999999,
       propostaUserId: USER_A,
@@ -1236,7 +1317,15 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     expect(atorInvalido.ok).toBe(false);
     expect(atorInvalido.reason).toBe("Apenas o usuário vinculado pode interagir com este botão.");
 
-    // Caso B: Usuário legítimo (from.id = 123456789)
+    // Caso B: Usuário legítimo de outro tenant (from.id = 888888888, User B) tenta interagir com proposta do User A
+    const atorCrossTenant = await validarAtorTelegramFase5(supabase, {
+      telegramUserId: 888888888,
+      propostaUserId: USER_A,
+    });
+    expect(atorCrossTenant.ok).toBe(false);
+    expect(atorCrossTenant.reason).toBe("Usuário do Telegram não autorizado para esta proposta.");
+
+    // Caso C: Usuário legítimo dono da proposta (from.id = 123456789, User A)
     const atorValido = await validarAtorTelegramFase5(supabase, {
       telegramUserId: 123456789,
       propostaUserId: USER_A,
@@ -1245,6 +1334,24 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
     if (atorValido.ok) {
       expect(atorValido.userId).toBe(USER_A);
     }
+
+    // Caso D: telegramUserId nulo / ausente
+    const atorNulo = await validarAtorTelegramFase5(supabase, {
+      telegramUserId: null,
+      propostaUserId: USER_A,
+    });
+    expect(atorNulo.ok).toBe(false);
+    expect(atorNulo.reason).toBe("Usuário do Telegram não identificado.");
+
+    // Verificação de contrato no telegram-webhook/index.ts:
+    // Callbacks vp_* e estados conversacionais aguardando_busca_produto_nf / aguardando_fator_conversao_nf
+    // usam estritamente o from.id e não usam fallback de grupo/workspace
+    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const webhookCode = fs.readFileSync(webhookPath, "utf8");
+    expect(webhookCode).toContain('callbackData.startsWith("vp_")');
+    expect(webhookCode).toContain("Proíbe terminantemente fallback de grupo/workspace owner");
+    expect(webhookCode).toContain('conversaAtivaPre?.estado === "aguardando_busca_produto_nf"');
+    expect(webhookCode).toContain('conversaAtivaPre?.estado === "aguardando_fator_conversao_nf"');
   });
 
   // ---------------------------------------------------------------------------
@@ -1282,11 +1389,14 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
   // ---------------------------------------------------------------------------
   // E2E-17: HISTORY CANÔNICO
   // ---------------------------------------------------------------------------
-  it("E2E-17: History Canônico -> consultas de histórico de custo filtram por produto_eyemobile_uuid canônico e tenant", async () => {
+  it("E2E-17: History Canônico -> consultas de histórico de custo filtram por produto_eyemobile_uuid canônico e tenant; contrato do webhook respeita janela de 12 meses e exclui a própria NF", async () => {
     const { state, createSupabaseMock } = createInMemoryDatabase();
     const supabase = createSupabaseMock();
 
     const prodUuid = "prod-history-17";
+    const nfCurrentId = "nf-current-17";
+    const nfOldId = "nf-old-17";
+
     state.historico_custo_produto.push(
       {
         id: "h1",
@@ -1294,51 +1404,87 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
         workspace_id: WS_A,
         produto_eyemobile_uuid: prodUuid,
         produto_codigo: "PROD-17",
-        produto_descricao: "Café Especial 250g",
+        produto_descricao: "Café Especial 250g (Descrição Antiga)",
         custo_unitario: 18.5,
         quantidade: 10,
-        data_compra: "2026-09-01",
+        nf_id: nfOldId,
+        created_at: "2026-08-01T10:00:00Z",
+        data_compra: "2026-08-01",
       },
       {
         id: "h2",
         user_id: USER_A,
         workspace_id: WS_A,
         produto_eyemobile_uuid: prodUuid,
-        produto_codigo: "PROD-17",
-        produto_descricao: "Café Especial 250g Lote 2",
+        produto_codigo: "PROD-17-DIFF",
+        produto_descricao: "Café Especial Lote Divergente (Descrição Diferente)",
         custo_unitario: 19.0,
         quantidade: 20,
+        nf_id: "nf-prior-17",
+        created_at: "2026-08-15T10:00:00Z",
+        data_compra: "2026-08-15",
+      },
+      {
+        id: "h-same-nf",
+        user_id: USER_A,
+        workspace_id: WS_A,
+        produto_eyemobile_uuid: prodUuid,
+        produto_codigo: "PROD-17",
+        produto_descricao: "Café Desta Mesma NF",
+        custo_unitario: 25.0,
+        quantidade: 5,
+        nf_id: nfCurrentId, // MESMA NF
+        created_at: "2026-09-10T10:00:00Z",
         data_compra: "2026-09-10",
       },
       {
         id: "h3",
-        user_id: USER_B,
+        user_id: USER_B, // OUTRO TENANT
         workspace_id: WS_B,
         produto_eyemobile_uuid: "prod-other",
         produto_codigo: "PROD-17",
         produto_descricao: "Café de Outro Tenant",
         custo_unitario: 12.0,
         quantidade: 5,
+        created_at: "2026-09-05T10:00:00Z",
         data_compra: "2026-09-05",
       }
     );
 
+    // Consulta canônica em banco: filtra estritamente por produto_eyemobile_uuid e workspace_id,
+    // excluindo a própria NF e ordenando por created_at desc
     const { data: rows } = await supabase
       .from("historico_custo_produto")
       .select("*")
       .eq("produto_eyemobile_uuid", prodUuid)
       .eq("workspace_id", WS_A)
-      .order("data_compra", { ascending: false });
+      .neq("nf_id", nfCurrentId)
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
+    expect(rows![0].id).toBe("h2");
     expect(rows![0].custo_unitario).toBe(19.0);
-    expect(rows![1].custo_unitario).toBe(18.5);
+    // Prova: descrição diverge ("Café Especial Lote Divergente..."), mas a identidade é o UUID canônico
+    expect(rows![0].produto_eyemobile_uuid).toBe(prodUuid);
+
+    // Verificação estrita do contrato da query em telegram-webhook/index.ts
+    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const webhookCode = fs.readFileSync(webhookPath, "utf8");
+    expect(webhookCode).toContain('.from("historico_custo_produto")');
+    expect(webhookCode).toContain('.eq("user_id", nf.user_id || targetUserId)');
+    expect(webhookCode).toContain('.eq("produto_eyemobile_uuid", resolution.produto.id)');
+    expect(webhookCode).toContain('.neq("nf_id", nf.id)');
+    expect(webhookCode).toContain('.gte("created_at", dozeMesesAtras.toISOString())');
+    expect(webhookCode).toContain('.order("created_at", { ascending: false })');
+    expect(webhookCode).toContain('.limit(1)');
+    expect(webhookCode).toContain('histQuery = histQuery.eq("workspace_id", nf.workspace_id)');
   });
 
   // ---------------------------------------------------------------------------
   // E2E-18: IDEMPOTÊNCIA DE NF COMPLETA
   // ---------------------------------------------------------------------------
-  it("E2E-18: Idempotência de NF Completa -> reexecução de NF 100% confirmada não duplica estoque nem histórico", async () => {
+  it("E2E-18: Idempotência de NF Completa -> reexecução de NF 100% confirmada invoca RPC real que retorna already_processed com zero mutação de estoque e zero duplicação de histórico", async () => {
     const { state, createSupabaseMock } = createInMemoryDatabase();
     const supabase = createSupabaseMock();
 
@@ -1375,35 +1521,56 @@ describe("Product Identity Fase 7 — Homologação E2E Final (E2E-01 a E2E-18)"
       unidade: "CX",
       quantidade: 1,
       valor_unitario: 48.0,
-      status_estoque: "processado", // já processado
+      status_estoque: "processado", // JÁ TERMINAL
       produto_eyemobile_id: "EM-FULL-18",
     });
 
-    // Simular tentativa de reexecução de confirmação da NF inteira
-    const itensNF = state.nf_itens.filter((i) => i.nf_id === nfId);
-    for (const item of itensNF) {
-      if (item.status_estoque === "processado" || item.status_estoque === "atualizado") {
-        // Já terminal, idempotente
-        continue;
-      }
-      // Se não fosse terminal, chamaria RPC
-      await supabase.rpc("aplicar_item_nf_estoque_custo", {
-        p_item_id: item.id,
-        p_user_id: USER_A,
-        p_workspace_id: WS_A,
-        p_equivalencia_id: "any",
-        p_produto_eyemobile_uuid: prodId,
-        p_quantidade_para_estoque: 24,
-        p_custo_unitario_convertido: 2.0,
-        p_fator_conversao_esperado: 24,
-      });
-    }
+    const equivId = "equiv-full-18";
+    state.produto_equivalencias.push({
+      id: equivId,
+      user_id: USER_A,
+      workspace_id: WS_A,
+      cnpj_fornecedor_normalizado: "55444333000122",
+      codigo_produto_fornecedor: "AGUA-GAS-CX24",
+      produto_eyemobile_uuid: prodId,
+      fator_conversao: 24,
+      confirmado_por_usuario: true,
+      origem_matching: "manual",
+    });
 
-    // Prova: estoque continua exatamente 24
+    // Reexecução: invoca explicitamente a RPC no item já terminal sem 'continue' de skip
+    const { data: rpcRes } = await supabase.rpc("aplicar_item_nf_estoque_custo", {
+      p_item_id: itemId,
+      p_user_id: USER_A,
+      p_workspace_id: WS_A,
+      p_equivalencia_id: equivId,
+      p_produto_eyemobile_uuid: prodId,
+      p_quantidade_para_estoque: 24,
+      p_custo_unitario_convertido: 2.0,
+      p_fator_conversao_esperado: 24,
+    });
+
+    // RPC retorna already_processed com sucesso
+    expect(rpcRes.success).toBe(true);
+    expect(rpcRes.code).toBe("already_processed");
+    expect(rpcRes.item_id).toBe(itemId);
+
+    // Prova: estoque continua exatamente 24 (zero mutação extra)
     const prod = state.produtos_eyemobile.find((p) => p.id === prodId)!;
     expect(prod.estoque_atual).toBe(24);
-    expect(state.historico_custo_produto).toHaveLength(0); // nenhum novo inserido
+
+    // Prova: zero novos registros de histórico
+    expect(state.historico_custo_produto).toHaveLength(0);
+
+    // Prova: status da NF permanece confirmado
     const nf = state.notas_fiscais_compra.find((n) => n.id === nfId)!;
     expect(nf.status).toBe("confirmada");
+
+    // Prova contrato de runtime no telegram-webhook:
+    // Verifica que se a NF já estiver em status confirmada, o webhook faz short-circuit seguro
+    const webhookPath = path.resolve(__dirname, "../../../../supabase/functions/telegram-webhook/index.ts");
+    const webhookCode = fs.readFileSync(webhookPath, "utf8");
+    expect(webhookCode).toContain('if (nf.status === "confirmada" || nf.status === "custo_atualizado")');
+    expect(webhookCode).toContain("Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
   });
 });
