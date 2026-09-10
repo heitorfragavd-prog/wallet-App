@@ -12,14 +12,14 @@
 * **Repositório:** `heitorfragavd-prog/wallet-App`
 * **Pull Request:** `#80` (Status: `OPEN`, `isDraft: true`, `mergeable: MERGEABLE`)
 * **Branch de Segurança:** `security/comprehensive-audit-hardening`
-* **HEAD SHA Atual:** `a063ffbb81758cebb8cf9e61186582795cfcd259`
+* **HEAD SHA Atual:** `9cfc0070b96ba39788d5fffca88526d807e85842`
 * **Base SHA Atual (`origin/develop`):** `0aa3825e63c3d652db99aef603d359e850ab8278`
 * **Base SHA Histórica:** `8ae7c048bd325898d86445f7bf210f4fbf73c6e9`
 * **Commit de Integração com develop:** `27d7375c4d3575fd88399366c95d175b36cd7a54` (Merge `--no-ff`, zero conflitos textuais)
-* **Workflows no GitHub Actions:**
-  * `CI Quality Gates`: [Run #34466871640](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34466871640) — **SUCCESS** (1m 43s)
-  * `Security Audit Isolated PostgreSQL Tests & E2E`: [Run #34466871600](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34466871600) — **SUCCESS** (5m 23s)
-  * `Security Audit Push Workflow`: [Run #34466867412](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34466867412) — **SUCCESS** (4m 42s)
+* **Workflows no GitHub Actions (Commit `9cfc007`):**
+  * `CI Quality Gates`: [Run #34497944628](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497944628) — **SUCCESS** (1m 35s)
+  * `Security Audit Isolated PostgreSQL Tests & E2E (PR)`: [Run #34497944929](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497944929) — **SUCCESS** (7m 03s)
+  * `Security Audit Push Workflow`: [Run #34497937541](https://github.com/heitorfragavd-prog/wallet-App/actions/runs/34497937541) — **SUCCESS** (5m 16s)
 
 ---
 
@@ -40,10 +40,10 @@ A implantação do PR #80 resolve um conjunto crítico de vulnerabilidades ident
 ## 3. Inventário Real do Banco de Dados
 
 ### 3.1 Arquivos de Migração e Scripts do PR #80
-* `supabase/migrations/20260908120000_security_phase_a_infrastructure.sql` (Fase A: Infraestrutura e RPCs seguras, permissivo)
-* `supabase/migrations/20260908120001_security_phase_c_enforcement.sql` (Fase C: Revogação de colunas e ativação do RLS estrito)
-* `scripts/apply-phase-c-enforcement.sql` (Procedimento oficial transacional da Fase C com gating e registro em histórico)
-* `supabase/ops/rollback_20260908120000_safe_recovery.sql` (Procedimento oficial de contingência segura para a Fase C)
+* `supabase/migrations/20260908120000_security_phase_a_infrastructure.sql` (Fase A: Infraestrutura e RPCs seguras, permissivo — executável via psql ou SQL Editor)
+* `supabase/migrations/20260908120001_security_phase_c_enforcement.sql` (Fase C: Revogação de colunas e ativação do RLS estrito — chamada internamente pelo script orquestrador)
+* `scripts/apply-phase-c-enforcement.sql` (Procedimento oficial transacional da Fase C com gating e registro em histórico — **OBRIGATORIAMENTE EXECUTADO VIA PSQL**, não suportado no SQL Editor do navegador)
+* `supabase/ops/rollback_20260908120000_safe_recovery.sql` (Procedimento oficial de contingência segura para a Fase C — via psql)
 
 ### 3.2 Tabela de Inventário de Objetos do Banco
 
@@ -355,6 +355,11 @@ supabase secrets list > "$SNAPSHOT_DIR/secrets_names_only.txt"
 
 A sequência de implantação deve obedecer com rigor cirúrgico a estratégia phased *Expand and Contract*:
 
+$$\text{\textbf{Fase A (DB)}} \longrightarrow \text{\textbf{Fase B (Deploy de código)}} \longrightarrow \text{\textbf{Validação B}} \longrightarrow \text{\textbf{Rotação controlada de credenciais}} \longrightarrow \text{\textbf{Fase C (DB enforcement)}}$$
+
+> [!NOTE]
+> A Fase B **NÃO é uma migração de banco de dados**. Ela corresponde exclusivamente ao deploy do frontend na Vercel, deploy das Edge Functions no Supabase e validação do código seguro em runtime. As migrations de banco ocorrem estritamente na Fase A (permissiva) e na Fase C (enforcement restritivo via script transacional atômico).
+
 ```
 [ FASE A: BANCO EXPANDIDO ] 
            │
@@ -382,6 +387,19 @@ A sequência de implantação deve obedecer com rigor cirúrgico a estratégia p
            ▼
 [ JANELA DE OBSERVAÇÃO MONITORADA ]
 ```
+
+> [!CAUTION]
+> **A FASE C É OBRIGATORIAMENTE EXECUTADA VIA CLIENTE PSQL.**
+>
+> **NÃO COPIAR `scripts/apply-phase-c-enforcement.sql` PARA O SQL EDITOR DO SUPABASE.**
+>
+> **Motivos:**
+> * `\set` e `\i` são meta-comandos exclusivos do cliente `psql`. O SQL Editor web falha ao interpretá-los.
+> * É obrigatório manter a mesma conexão e sessão para que a variável transacional `SET LOCAL wallet.deploy_phase_b_completed = 'true'` opere dentro da transação atômica da migration C, satisfazendo o gating de segurança.
+> * O comando oficial deve ser executado exclusivamente a partir da raiz do repositório via cliente `psql`:
+>   ```bash
+>   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/apply-phase-c-enforcement.sql
+>   ```
 
 ---
 
@@ -602,19 +620,37 @@ Preencha este checklist durante a janela de implantação:
 - [ ] Executar bateria de Smoke Tests da Fase B (Seção 11).
 - [ ] Confirmar que nenhuma chamada do frontend tenta ler colunas de segredos.
 
-### Execução da Rotação de Credenciais Seguras
-- [ ] Passo 1: Rotacionar senha master do banco de dados no Supabase.
-- [ ] Passo 2: Rotacionar chave OpenAI da plataforma nas secrets do Supabase.
-- [ ] Passo 3: Rotacionar chave Gemini da plataforma nas secrets do Supabase.
-- [ ] Passo 4: Rotacionar Telegram Bot Token e Webhook Secret no BotFather e na API do Telegram.
-- [ ] Passo 5: Rotacionar Cron Secret.
-- [ ] Passo 6: Orientar/executar a rotação das credenciais DiviPay e EyeMobile no banco/painel.
+### Execução das 6 Etapas de Rotação/Atualização de Credenciais
+
+> [!IMPORTANT]
+> **REGRAS DE SEGURANÇA MANDATÓRIAS:**
+> * **NÃO** rotacionar `SUPABASE_SERVICE_ROLE_KEY`;
+> * **NÃO** rotacionar o `JWT Signing Secret`;
+> * **NÃO** alterar as chaves `anon` ou Publishable Keys.
+
+- [ ] Etapa 1: Rotacionar senha master do banco de dados no Supabase.
+- [ ] Etapa 2: Rotacionar chave OpenAI da plataforma nas secrets do Supabase.
+- [ ] Etapa 3: Rotacionar chave Gemini da plataforma nas secrets do Supabase.
+- [ ] Etapa 4: Rotacionar Telegram Bot Token e Webhook Secret no BotFather e na API do Telegram.
+- [ ] Etapa 5: Rotacionar Cron Shared Secret.
+- [ ] Etapa 6: Orientar/executar a rotação das credenciais DiviPay e EyeMobile no banco/painel.
 - [ ] Revalidar integrações externas (EyeMobile, DiviPay, Telegram, OpenAI).
 
-### Execução da Fase C (Enforcement)
-- [ ] Executar o procedimento oficial transacional atômico da Fase C:
+### Execução da Fase C (Enforcement — OBRIGATORIAMENTE PSQL)
+
+> [!CAUTION]
+> **NÃO COPIAR `scripts/apply-phase-c-enforcement.sql` PARA O SQL EDITOR DO SUPABASE.**
+> O script utiliza meta-comandos específicos do `psql` (`\set`, `\i`) e requer a mesma conexão e sessão para garantir a atomicidade transacional e o gating de segurança.
+
+- [ ] Executar o pré-check do `psql` e teste de conexão a partir da raiz do repositório:
   ```bash
-  psql "$DATABASE_URL" -f scripts/apply-phase-c-enforcement.sql
+  psql --version
+  psql "$DATABASE_URL" -c "SELECT current_database(), current_user, now();"
+  ls supabase/migrations/20260908120001_security_phase_c_enforcement.sql
+  ```
+- [ ] Executar o procedimento oficial transacional atômico da Fase C via CLI `psql`:
+  ```bash
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/apply-phase-c-enforcement.sql
   ```
 - [ ] Verificar código de saída (deve ser 0) e confirmação do `COMMIT;`.
 - [ ] Verificar se a migração `20260908120001` foi registrada em `supabase_migrations.schema_migrations`.
