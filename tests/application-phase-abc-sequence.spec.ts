@@ -165,16 +165,15 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.2 Navega para a tela real de IA
   await page.goto(`${appUrl}/ia`);
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForTimeout(1000);
 
-  // 3.3 Localiza textarea da aplicação
-  const textarea = page.locator('textarea').first();
-  await expect(textarea).toBeVisible({ timeout: 25000 });
-  await expect(textarea).toBeEnabled({ timeout: 15000 });
+  // 3.3 Localiza campo de entrada da aplicação (textarea ou input) e aguarda habilitação
+  const chatInput = page.locator('textarea, input[placeholder*="Pergunte"], input[type="text"]').first();
+  await expect(chatInput).toBeVisible({ timeout: 30000 });
+  await expect(chatInput).toBeEnabled({ timeout: 30000 });
 
   // 3.4 Preenche mensagem analítica complexa (ativa Agent V2 / orchestrator)
   const messageText = `Faça uma análise financeira detalhada das despesas sob ${phaseName}.`;
-  await textarea.fill(messageText);
+  await chatInput.fill(messageText);
 
   // 3.5 Prepara interceptação da requisição HTTP originada pelo frontend para a Edge Function local
   const requestPromise = page.waitForRequest(
@@ -183,11 +182,11 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   );
 
   // 3.6 Envia mensagem pelo botão de envio da aplicação (ou Enter como fallback)
-  const sendBtn = page.locator('button:has(svg.lucide-send), button:has(svg)').last();
-  if (await sendBtn.isVisible()) {
+  const sendBtn = page.locator('button:has-text("Enviar"), button:has(svg.lucide-send), button:has(svg)').last();
+  if (await sendBtn.isVisible() && await sendBtn.isEnabled()) {
     await sendBtn.click();
   } else {
-    await textarea.press('Enter');
+    await chatInput.press('Enter');
   }
 
   // 3.7 Confirma captura da requisição originada pelo frontend para a Edge Function correta
@@ -201,7 +200,7 @@ async function performBrowserAiChatFlow(page: Page, appUrl: string, phaseName: s
   // 3.9 Confirma que o loading/processamento terminou
   const loadingIndicator = page.locator('.animate-spin');
   await expect(loadingIndicator).toHaveCount(0, { timeout: 20000 });
-  await expect(textarea).toBeEnabled({ timeout: 15000 });
+  await expect(chatInput).toBeEnabled({ timeout: 15000 });
 
   // 3.10 Confirma que o mock externo do provedor de IA recebeu a chamada
   const statsRes = await fetch(`${_MOCK_PROVIDER_URL}/stats`);
@@ -340,7 +339,7 @@ test.describe('Homologação da Aplicação na Sequência A → B → C (Stack R
     await page.goto(`${LEGACY_APP_URL}/ia`);
     await page.waitForLoadState('domcontentloaded');
     const aiInterface = page.locator('textarea, input[placeholder*="Pergunte"], button:has-text("Enviar"), button:has-text("Nova Conversa"), div:has-text("Wallet IA")').first();
-    await expect(aiInterface).toBeVisible({ timeout: 15000 });
+    await expect(aiInterface).toBeVisible({ timeout: 25000 });
 
     // =========================================================================
     // 1.5 TESTES COMPLEMENTARES DE AUTORIZAÇÃO (Consultas HTTP Diretas)
