@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { formatarDataParaSaoPaulo, getHojeSaoPaulo } from "../utils/dateHelpers";
 
 export function useMediaMensalDespesas() {
   const { activeWorkspace } = useWorkspace();
@@ -10,10 +11,14 @@ export function useMediaMensalDespesas() {
     queryFn: async () => {
       if (!activeWorkspace?.id) return 0;
 
-      // Pegar a data exata de 6 meses atrás
-      const hoje = new Date();
-      const seisMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 6, hoje.getDate());
-      const dataFormatada = seisMesesAtras.toISOString().split('T')[0];
+      // Coexistência de tabelas:
+      // O sistema possui histórico legado e registros na tabela 'transacoes' (tipo 'despesa')
+      // e registros estruturados na tabela 'despesas'. Ambos são consultados e consolidados
+      // para calcular a média mensal dos últimos 6 meses.
+      const hojeSP = getHojeSaoPaulo();
+      const [ano, mes, dia] = hojeSP.split("-").map(Number);
+      const seisMesesAtras = new Date(ano, mes - 1 - 6, dia);
+      const dataFormatada = formatarDataParaSaoPaulo(seisMesesAtras);
 
       // Busca despesas dos últimos 6 meses
       const despesasQuery = supabase

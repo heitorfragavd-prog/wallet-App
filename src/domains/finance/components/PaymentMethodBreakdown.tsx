@@ -14,7 +14,7 @@ import { PaymentMethod } from "../types";
 
 interface Transaction {
   valor: number;
-  metodo_pagamento?: PaymentMethod | null;
+  metodo_pagamento?: PaymentMethod | 'outros' | null;
 }
 
 interface PaymentMethodBreakdownProps {
@@ -24,9 +24,9 @@ interface PaymentMethodBreakdownProps {
 }
 
 interface PaymentMethodStat {
-  method: PaymentMethod | 'nao_informado';
+  method: PaymentMethod | 'outros' | 'nao_informado';
   label: string;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
   total: number;
   count: number;
   percentage: number;
@@ -41,6 +41,7 @@ const paymentMethodConfig = {
   dinheiro: { label: 'Dinheiro', icon: Wallet, color: 'bg-yellow-500' },
   transferencia: { label: 'Transferência', icon: ArrowRightLeft, color: 'bg-indigo-500' },
   voucher: { label: 'Voucher', icon: Ticket, color: 'bg-teal-500' },
+  outros: { label: 'Outros', icon: Wallet, color: 'bg-slate-500' },
   nao_informado: { label: 'Não Informado', icon: TrendingDown, color: 'bg-gray-500' },
 };
 
@@ -51,7 +52,7 @@ export function PaymentMethodBreakdown({
 }: PaymentMethodBreakdownProps) {
   const stats = useMemo(() => {
     // Calculate totals by payment method
-    const methodTotals = new Map<PaymentMethod | 'nao_informado', { total: number; count: number }>();
+    const methodTotals = new Map<PaymentMethod | 'outros' | 'nao_informado', { total: number; count: number }>();
     let grandTotal = 0;
 
     transactions.forEach(transaction => {
