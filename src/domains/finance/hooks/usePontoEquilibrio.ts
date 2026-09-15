@@ -3,7 +3,26 @@ import { useReceitas } from "./useReceitas";
 import { useDespesas } from "./useDespesas";
 import { useDividas } from "./useDividas";
 import { useRecurringTransactions } from "./useRecurringTransactions";
+import { useColaboradores, type Colaborador } from "./useColaboradores";
 import { getHojeSaoPaulo } from "../utils/dateHelpers";
+
+export type NaturezaEconomica =
+  | "custo_fixo"
+  | "custo_variavel"
+  | "cmv"
+  | "despesa_financeira"
+  | "investimento"
+  | "retirada_socio"
+  | "outros";
+
+export interface DespesaItemParaClassificacao {
+  id?: string | null;
+  descricao?: string | null;
+  tipo?: string | null;
+  categorias?: { nome?: string | null } | null;
+}
+
+export type ColaboradorClassificacao = Pick<Colaborador, "nome" | "tipo">;
 
 function normalizeText(text?: string | null): string {
   if (!text) return "";
@@ -14,29 +33,171 @@ function normalizeText(text?: string | null): string {
     .trim();
 }
 
-// Termos e categorias que identificam custos fixos reais (incluindo categorias reais do banco como "Moradia", "Salário", etc.)
-const TERMOS_CUSTOS_FIXOS = [
-  "aluguel",
-  "moradia",
-  "salario",
-  "salarios",
-  "folha",
-  "folguista",
-  "adicional noturno",
-  "vale alimentacao",
-  "internet",
-  "luz",
-  "energia",
-  "agua",
-  "telefone",
-  "condominio",
-  "iptu",
-  "seguro",
-  "contador",
-  "contabilidade",
-  "marketing",
-  "limpeza",
-];
+function matchPalavraChave(texto: string, padroes: string[]): boolean {
+  if (!texto) return false;
+  return padroes.some(p => {
+    const reg = new RegExp(`(^|\\b|\\s)${p}(\\b|\\s|$)`, "i");
+    return reg.test(texto);
+  });
+}
+
+/**
+ * Classifica a natureza econômica de uma despesa, desacoplando a origem/meio financeiro (Divipay, banco, caixa)
+ * de sua real função contábil e operacional (Custo Fixo, Custo Variável, CMV, Retirada de Sócio, etc.).
+ */
+export function classificarNaturezaEconomica(
+  despesa: DespesaItemParaClassificacao,
+  colaboradores?: ColaboradorClassificacao[] | null
+): NaturezaEconomica {
+  const descNorm = normalizeText(despesa.descricao);
+  const catNorm = normalizeText(despesa.categorias?.nome);
+  const textoCompleto = `${catNorm} ${descNorm}`.trim();
+
+  // 1. CMV / Mercadorias para Revenda (Alimentos, Bebidas, Tabacaria e Fornecedores de Estoque)
+  const termosCmv = [
+    "salgado",
+    "salgados",
+    "ambev",
+    "coca",
+    "coca-cola",
+    "cigarro",
+    "bebida",
+    "bebidas",
+    "biscoito",
+    "bananinha",
+    "kek bananinha",
+    "sorvete",
+    "cerveja",
+    "gelo",
+    "bomboniere",
+    "seu osvaldo",
+    "gerson salgados",
+    "doces",
+    "refrigerante",
+    "fornecedor",
+  ];
+  if (termosCmv.some(termo => catNorm.includes(termo) || descNorm.includes(termo))) {
+    return "cmv";
+  }
+
+  // 2. Custos Variáveis Operacionais (Folguistas, Diárias sob Demanda, Metas, Comissões, Passagens)
+  const termosVariaveis = [
+    "folguista",
+    "diaria",
+    "diarias",
+    "meta",
+    "metas",
+    "passagem",
+    "passagens",
+    "comissao",
+    "comissoes",
+    "bonificacao",
+    "adicional noturno",
+    "vale alimentacao",
+    "vale transporte",
+  ];
+  if (termosVariaveis.some(termo => catNorm.includes(termo) || descNorm.includes(termo))) {
+    return "custo_variavel";
+  }
+
+  // 3. Retiradas de Sócios e Gastos Pessoais (Não compõem custo operacional fixo da loja)
+  const termosSocios = [
+    "pro-labore",
+    "pro labore",
+    "retirada",
+    "distribuicao de lucros",
+  ];
+  if (termosSocios.some(termo => catNorm.includes(termo) || descNorm.includes(termo))) {
+    return "retirada_socio";
+  }
+
+  // 4. Verificação Estrutural de Colaboradores (Cadastrados no banco de dados)
+  if (colaboradores && colaboradores.length > 0) {
+    for (const c of colaboradores) {
+      const cNomeNorm = normalizeText(c.nome);
+      const cPrimeiroNome = cNomeNorm.split(" ")[0];
+      const matchColab = (cNomeNorm && descNorm.includes(cNomeNorm)) ||
+                         (cPrimeiroNome && cPrimeiroNome.length > 2 && descNorm.includes(cPrimeiroNome));
+      if (matchColab) {
+        if (c.tipo === "folguista") return "custo_variavel";
+        if (c.tipo === "socio") return "retirada_socio";
+        if (c.tipo === "funcionario") return "custo_fixo";
+      }
+    }
+  }
+
+  // Fallbacks de identificação de colaboradores conhecidos da loja
+  const sociosConhecidos = ["viviane", "heitor"];
+  if (sociosConhecidos.some(s => descNorm.includes(s))) {
+    return "retirada_socio";
+  }
+
+  const folguistasConhecidos = ["victor", "kenia", "luiz"];
+  if (folguistasConhecidos.some(f => descNorm.includes(f))) {
+    return "custo_variavel";
+  }
+
+  // 5. Custos Fixos de Infraestrutura e Utilidades Essenciais
+  const termosFixosInfra = [
+    "aluguel",
+    "moradia",
+    "internet",
+    "luz",
+    "energia",
+    "agua",
+    "concessionaria",
+    "telefone",
+    "condominio",
+    "iptu",
+    "seguro",
+    "seguros",
+    "contador",
+    "contabilidade",
+    "limpeza",
+    "sistema",
+    "software",
+  ];
+  if (matchPalavraChave(textoCompleto, termosFixosInfra)) {
+    return "custo_fixo";
+  }
+
+  // 6. Folha de Pagamento Regular (Salário de funcionários fixos)
+  const termosFolhaFixa = [
+    "salario",
+    "salarios",
+    "folha",
+    "adiantamento salarial",
+    "suellen",
+    "shuellen",
+  ];
+  if (termosFolhaFixa.some(termo => catNorm.includes(termo) || descNorm.includes(termo))) {
+    return "custo_fixo";
+  }
+
+  // 7. Despesas Financeiras
+  const termosFinanceiros = [
+    "juros",
+    "tarifa bancaria",
+    "taxa maq",
+    "taxa maquineta",
+    "anuidade",
+  ];
+  if (termosFinanceiros.some(termo => catNorm.includes(termo) || descNorm.includes(termo))) {
+    return "despesa_financeira";
+  }
+
+  // 8. Boletos genéricos sem discriminação
+  if (descNorm.includes("pagamento de boleto") || descNorm === "boleto" || descNorm.includes("saque divipay")) {
+    return "outros";
+  }
+
+  // 9. Tipo estrutural da despesa (se marcado explicitamente como fixo no cadastro)
+  if (despesa.tipo === "fixo") {
+    return "custo_fixo";
+  }
+
+  return "outros";
+}
 
 export function usePontoEquilibrio() {
   const hojeStr = getHojeSaoPaulo();
@@ -50,30 +211,21 @@ export function usePontoEquilibrio() {
   const { despesas: despesasMes } = useDespesas({ startDate: inicioMes, endDate: fimMes });
   const { dividas } = useDividas();
   const { recorrentes } = useRecurringTransactions();
+  const { data: colaboradores } = useColaboradores();
 
   return useMemo(() => {
     // Vendas consolidadas do dia de hoje
     const vendasHoje = receitasHoje.reduce((s, r) => s + Number(r.valor || 0), 0);
 
-    // 1. Despesas fixas do mês (apenas categorias e descrições estritamente fixas, NUNCA saques da Divipay)
+    // 1. Despesas fixas do mês por classificação econômica (independente da origem/meio financeiro Divipay ou local)
     const fixasDespesas = despesasMes
       .filter(d => {
-        // Exclui saques dinâmicos da Divipay (são despesas variáveis operacionais)
-        if (d.id?.startsWith("divipay-")) return false;
         if (d.status && d.status !== "pago") return false;
-
-        const nomeCatNorm = normalizeText(d.categorias?.nome);
-        const descNorm = normalizeText(d.descricao);
-
-        if (nomeCatNorm.includes("divipay") || nomeCatNorm.includes("transferencia")) return false;
-
-        return TERMOS_CUSTOS_FIXOS.some(termo =>
-          nomeCatNorm === termo || nomeCatNorm.includes(termo) || descNorm.includes(termo)
-        );
+        return classificarNaturezaEconomica(d, colaboradores) === "custo_fixo";
       })
       .reduce((s, d) => s + Number(d.valor || 0), 0);
 
-    // 2. Recorrentes fixas do mês (usar como proxy se não houver lançamentos)
+    // 2. Recorrentes fixas do mês (usar como proxy/piso se não houver lançamentos)
     const fixasRecorrentes = recorrentes
       .filter(r => r.ativo && r.tipo_transacao === "despesa")
       .reduce((s, r) => s + Number(r.valor), 0);
@@ -109,5 +261,5 @@ export function usePontoEquilibrio() {
       : 0;
 
     return { pontoEquilibrio, vendasHoje, percentual, custoFixoDiario };
-  }, [receitasHoje, despesasMes, dividas, recorrentes, inicioMes, fimMes]);
+  }, [receitasHoje, despesasMes, dividas, recorrentes, colaboradores, inicioMes, fimMes]);
 }
