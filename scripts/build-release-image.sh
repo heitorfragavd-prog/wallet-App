@@ -3,17 +3,17 @@ set -euo pipefail
 
 # ==============================================================================
 # scripts/build-release-image.sh
-# 
+#
 # Strict, auditable script to build the frontend release candidate Docker image.
 # Does NOT push unless explicit --push flag is provided.
 # Validates exact git commit SHA, working tree cleanliness, and frontend build args.
+# Working tree cleanliness check is NON-BYPASSABLE.
 # ==============================================================================
 
 EXPECTED_SHA=""
 MODE="dry-run"
 DOCKER_USER="${DOCKER_USER:-heitor84}"
 REPO_NAME="wallet"
-SKIP_DIRTY_CHECK=0
 
 # Disallowed backend secret variables
 FORBIDDEN_VARS=(
@@ -27,6 +27,8 @@ FORBIDDEN_VARS=(
   "TELEGRAM_WEBHOOK_SECRET"
   "CRON_SECRET"
   "DIVIPAY_WEBHOOK_SECRET"
+  "JWT_SECRET"
+  "SUPABASE_JWT_SECRET"
 )
 
 usage() {
@@ -37,7 +39,6 @@ Options:
   --expected-sha <SHA>    Mandatory 40-character commit SHA that must match HEAD
   --dry-run               Validate prerequisites, git state, and build-args without building/pushing (Default)
   --push                  Perform multi-arch build and push to Docker Hub
-  --skip-dirty-check      (Internal/Test only) Skip working tree cleanliness check
   -h, --help              Show this help message
 EOF
   exit 1
@@ -60,10 +61,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --push)
       MODE="push"
-      shift
-      ;;
-    --skip-dirty-check)
-      SKIP_DIRTY_CHECK=1
       shift
       ;;
     -h|--help)
@@ -98,17 +95,15 @@ if [[ "$CURRENT_HEAD" != "$EXPECTED_SHA" ]]; then
   exit 1
 fi
 
-# 2. Validate clean working tree
-if [[ $SKIP_DIRTY_CHECK -eq 0 ]]; then
-  DIRTY_FILES=$(git status --porcelain 2>/dev/null || true)
-  if [[ -n "$DIRTY_FILES" ]]; then
-    echo "ERROR: Working tree is not clean. Commit or stash all changes before building." >&2
-    git status --short >&2
-    exit 1
-  fi
+# 2. Validate clean working tree (NON-BYPASSABLE)
+DIRTY_FILES=$(git status --porcelain 2>/dev/null || true)
+if [[ -n "$DIRTY_FILES" ]]; then
+  echo "ERROR: Working tree is not clean. Commit or stash all changes before building." >&2
+  git status --short >&2
+  exit 1
 fi
 
-# 3. Reject forbidden backend secrets in environment
+# 3. Reject forbidden backend secrets in environment (names only, values never printed)
 for var_name in "${FORBIDDEN_VARS[@]}"; do
   if [[ -n "${!var_name:-}" ]]; then
     echo "ERROR: Forbidden backend secret '$var_name' is set in environment! Refusing to build." >&2
@@ -138,11 +133,11 @@ fi
 echo "=================================================================="
 echo " RELEASE IMAGE BUILD PLAN"
 echo "=================================================================="
-echo "Mode:             $MODE"
-echo "Target Image Tag: $TAG"
-echo "Verified HEAD:    $CURRENT_HEAD"
-echo "Short SHA:        $SHORT_SHA"
-echo "Platforms:        linux/amd64,linux/arm64"
+echo "Mode:                  $MODE"
+echo "Target Image Tag:      $TAG"
+echo "Verified HEAD:         $CURRENT_HEAD"
+echo "Short SHA:             $SHORT_SHA"
+echo "Platforms:             linux/amd64,linux/arm64"
 echo "Build Args Configured:"
 echo "  - VITE_SUPABASE_URL:         $VITE_SUPABASE_URL"
 echo "  - VITE_SUPABASE_ANON_KEY:    [CONFIGURED: ${#VITE_SUPABASE_ANON_KEY} chars]"
@@ -153,7 +148,7 @@ echo "  - VITE_ENABLE_ANALYTICS:     $VITE_ENABLE_ANALYTICS"
 echo "  - VITE_ENABLE_DEBUG_LOGS:    $VITE_ENABLE_DEBUG_LOGS"
 echo "  - VITE_VAPID_PUBLIC_KEY:     [CONFIGURED: ${#VITE_VAPID_PUBLIC_KEY} chars]"
 echo "Backend Secrets Check:         PASSED (0 forbidden secrets found)"
-echo "Working Tree Check:            PASSED ($(if [[ $SKIP_DIRTY_CHECK -eq 1 ]]; then echo 'Bypassed for test harness'; else echo 'Clean'; fi))"
+echo "Working Tree Check:            PASSED (Clean - Non-bypassable)"
 echo "=================================================================="
 
 if [[ "$MODE" == "dry-run" ]]; then
