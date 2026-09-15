@@ -30,6 +30,7 @@ const paymentMethods = [
   { value: 'dinheiro' as const, label: 'Dinheiro', icon: Wallet },
   { value: 'transferencia' as const, label: 'Transferência', icon: ArrowRightLeft },
   { value: 'voucher' as const, label: 'Voucher', icon: Ticket },
+  { value: 'outros' as const, label: 'Outros', icon: Wallet },
 ];
 
 export function PaymentMethodSelector({
