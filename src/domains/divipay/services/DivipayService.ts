@@ -4,7 +4,6 @@ import type {
   DivipayBalance,
   DivipayConfig,
   DivipayConfigInsert,
-  DivipayConfigUpdate,
   DivipayMovement,
   DivipaySaque,
   DivipayTransacao,
@@ -197,9 +196,10 @@ export class DivipayService {
 
   async getConfig(): Promise<DivipayConfig | null> {
     const userId = await this.requireUser();
+    const safeColumns = "id, user_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
     const { data, error } = await supabase
       .from("divipay_config")
-      .select("*")
+      .select(safeColumns)
       .eq("user_id", userId)
       .maybeSingle();
 
@@ -208,12 +208,20 @@ export class DivipayService {
       throw error;
     }
 
-    return data;
+    if (!data) return null;
+
+    return {
+      ...(data as unknown as DivipayConfig),
+      client_secret: null,
+      access_token: null,
+    };
   }
 
   async saveConfig(config: Partial<DivipayConfigInsert> & Pick<DivipayConfigInsert, "client_id" | "client_secret" | "environment">): Promise<DivipayConfig> {
     const userId = await this.requireUser();
     const existing = await this.getConfig();
+
+    const safeColumns = "id, user_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
 
     const payload: DivipayConfigInsert = {
       user_id: userId,
@@ -227,20 +235,24 @@ export class DivipayService {
     };
 
     if (existing) {
-      const updatePayload: DivipayConfigUpdate = {
+      const updatePayload: Record<string, unknown> = {
         client_id: config.client_id,
-        client_secret: config.client_secret,
         environment: config.environment,
         is_active: config.is_active ?? existing.is_active,
         webhook_url: config.webhook_url ?? existing.webhook_url,
         updated_at: new Date().toISOString(),
       };
 
+      // Só atualiza o client_secret se um novo valor não vazio for fornecido
+      if (config.client_secret && config.client_secret.trim() !== "") {
+        updatePayload.client_secret = config.client_secret;
+      }
+
       const { data, error } = await supabase
         .from("divipay_config")
         .update(updatePayload)
         .eq("id", existing.id)
-        .select()
+        .select(safeColumns)
         .single();
 
       if (error) {
@@ -248,13 +260,17 @@ export class DivipayService {
         throw error;
       }
 
-      return data;
+      return {
+        ...(data as unknown as DivipayConfig),
+        client_secret: null,
+        access_token: null,
+      };
     }
 
     const { data, error } = await supabase
       .from("divipay_config")
       .insert(payload)
-      .select()
+      .select(safeColumns)
       .single();
 
     if (error) {
@@ -262,7 +278,11 @@ export class DivipayService {
       throw error;
     }
 
-    return data;
+    return {
+      ...(data as unknown as DivipayConfig),
+      client_secret: null,
+      access_token: null,
+    };
   }
 
   async getTransacoes(filters?: { type?: string; startDate?: string; endDate?: string }): Promise<DivipayTransacao[]> {

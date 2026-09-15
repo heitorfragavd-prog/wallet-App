@@ -33,6 +33,9 @@ echo "Computing diff against: ${DIFF_TARGET}"
 files=()
 while IFS= read -r -d '' file; do
   case "$file" in
+    supabase/*)
+      # Supabase Deno Edge Functions are verified via Deno runtime, skip browser/React ESLint
+      ;;
     *.ts|*.tsx|*.js|*.jsx)
       if [ -f "$file" ]; then
         files+=("$file")

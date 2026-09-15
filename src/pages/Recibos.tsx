@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -52,14 +52,30 @@ const Recibos = () => {
     }
   };
 
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
   const handleImprimir = () => {
     if (!reciboHtml) return;
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(reciboHtml);
-    win.document.close();
-    win.focus();
-    win.print();
+    try {
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.focus();
+        iframeRef.current.contentWindow.print();
+        return;
+      }
+    } catch {
+      // Fallback seguro caso o navegador restrinja acesso ao contentWindow sandboxed
+    }
+
+    const blob = new Blob([reciboHtml], { type: "text/html;charset=utf-8" });
+    const blobUrl = URL.createObjectURL(blob);
+    const printWin = window.open(blobUrl, "_blank", "noopener,noreferrer");
+    if (printWin) {
+      printWin.onload = () => {
+        printWin.focus();
+        printWin.print();
+        URL.revokeObjectURL(blobUrl);
+      };
+    }
   };
 
   return (
@@ -121,7 +137,9 @@ const Recibos = () => {
               </div>
               {reciboHtml ? (
                 <iframe
+                  ref={iframeRef}
                   title="Preview do recibo"
+                  sandbox="allow-modals allow-same-origin"
                   srcDoc={reciboHtml}
                   className="w-full h-[500px] rounded-lg border border-border bg-white"
                 />

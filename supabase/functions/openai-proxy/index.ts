@@ -8,6 +8,7 @@ import {
   createErrorResponse,
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
+import { checkSharedRateLimit, validateUserWorkspace, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
@@ -1037,7 +1038,11 @@ async function executeTool(name: string, args: Record<string, unknown>, supabase
   }
 }
 
-Deno.serve(async (req: Request) => {
+export async function handleOpenAIProxy(
+  req: Request,
+  injectedSupabase?: any,
+  injectedFetch?: typeof fetch
+): Promise<Response> {
   const correlationId = getCorrelationId(req);
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -1066,8 +1071,8 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
+  const supabaseServiceKey = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") : process.env.SUPABASE_SERVICE_ROLE_KEY) || "";
   const jwt = authHeader.replace("Bearer ", "").trim();
 
   // ================================================================
@@ -1182,25 +1187,14 @@ Deno.serve(async (req: Request) => {
 
   let userId: string;
 
-  // Validação segura do JWT / Service Role para chamadas internas e de usuários
-  let isServiceRoleCall = Boolean(jwt === supabaseServiceKey && body.user_id);
-  if (!isServiceRoleCall && jwt.startsWith("eyJ")) {
-    try {
-      const payloadBase64 = jwt.split(".")[1];
-      const decoded = JSON.parse(atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/")));
-      if (decoded.role === "service_role" || decoded.iss === "supabase") {
-        isServiceRoleCall = true;
-      }
-    } catch (_) {
-      // Ignora payload malformado para prosseguir com autenticação padrão
-    }
-  }
+  // Validação segura: service-role SOMENTE por correspondência exata com o secret do backend
+  const isServiceRoleCall = Boolean(supabaseServiceKey && jwt === supabaseServiceKey && body.user_id);
 
-  if (isServiceRoleCall && body.user_id) {
-    // Chamada interna autorizada por service-role (ex: telegram-webhook)
-    userId = body.user_id;
+  if (isServiceRoleCall) {
+    // Chamada interna autorizada exclusivamente pela chave service-role
+    userId = String(body.user_id);
   } else {
-    const supabaseAuth = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+    const supabaseAuth = injectedSupabase || createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(jwt);
     if (authError || !user) {
       return createErrorResponse(req, {
@@ -1213,7 +1207,43 @@ Deno.serve(async (req: Request) => {
     userId = user.id;
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabase = injectedSupabase || createClient(supabaseUrl, supabaseServiceKey);
+
+  // Validação server-side estrita de workspace antes de formar a chave de quota
+  const wsValidation = await validateUserWorkspace(supabase, userId, body.workspace_id);
+  if (!wsValidation.valid) {
+    return createErrorResponse(req, {
+      status: 403,
+      message: wsValidation.error || "Acesso negado ao workspace informado.",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
+  }
+  const cleanWorkspaceId = wsValidation.workspaceId;
+
+  // Estimativa segura para reserva prévia contra Denial of Wallet
+  const estimatedTokens = Math.min(4000, Math.max(500, Number(body.max_tokens || 2000)));
+
+  // Rate limiting atômico compartilhado: RPM + Reserva prévia de Tokens por Hora (Fail-Closed)
+  const rateCheck = await checkSharedRateLimit(supabase, {
+    userId,
+    workspaceId: cleanWorkspaceId,
+    action: "openai_proxy",
+    maxRequestsPerMinute: 30,
+    reserveTokens: estimatedTokens,
+    maxTokensPerHour: 100000,
+  });
+
+  if (!rateCheck.allowed) {
+    return createErrorResponse(req, {
+      status: 429,
+      message: (rateCheck as any).reason || "Limite de requisições ou orçamento de IA atingido.",
+      correlationId,
+      corsHeaders: CORS_HEADERS,
+    });
+  }
+
+  const reservationId = (rateCheck as any).reservationId;
   const { data: config } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
   const openaiKey = config?.api_key || Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) {
@@ -1252,9 +1282,11 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
 
   const toolsToUse = Array.isArray(body.tools) ? (body.tools.length > 0 ? body.tools : undefined) : (body.tools === null ? undefined : TOOLS);
 
+  const doFetch = injectedFetch || fetchWithTimeout;
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let modelToUse = body.model || "gpt-4o-mini";
-    let response = await fetchWithTimeout(OPENAI_API_URL, {
+    let response = await doFetch(OPENAI_API_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiKey}`,
@@ -1281,7 +1313,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
           metadata: { error: errStr.slice(0, 300) },
         });
         modelToUse = "gpt-4o";
-        response = await fetchWithTimeout(OPENAI_API_URL, {
+        response = await doFetch(OPENAI_API_URL, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${openaiKey}`,
@@ -1319,6 +1351,19 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         errorCode,
         metadata: { status: response.status, error: JSON.stringify(data).slice(0, 300) },
       });
+
+      // Libera a reserva prévia em caso de erro no upstream (ou retém estimativa se for timeout)
+      const outcome = isTimeout ? "timeout" : "error";
+      await reconcileAiTokens(supabase, {
+        userId,
+        workspaceId: cleanWorkspaceId,
+        action: "openai_proxy",
+        reservationId,
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: outcome === "timeout" ? undefined : 0,
+        outcome,
+      }).catch(() => {});
+
       return createErrorResponse(req, {
         status: isRateLimit ? 429 : isTimeout ? 504 : response.status >= 500 ? 502 : response.status,
         code: errorCode,
@@ -1342,7 +1387,7 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
       
       supabase.from("wallet_ai_audit_events").insert({
         user_id: userId,
-        workspace_id: body.workspace_id || null,
+        workspace_id: cleanWorkspaceId !== "personal" ? cleanWorkspaceId : null,
         tool_name: toolsExecuted > 0 ? "consultar_vendas_eyemobile" : "chat_assistente",
         model: modelToUse,
         tokens_prompt: usage.prompt_tokens || 0,
@@ -1351,6 +1396,17 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
         duration_ms: Math.max(50, durationMs),
         execution_status: "success",
       }).then(() => {});
+
+      // Reconciliação exata durável: ajusta a diferença entre a reserva prévia e o consumo real
+      await reconcileAiTokens(supabase, {
+        userId,
+        workspaceId: cleanWorkspaceId,
+        action: "openai_proxy",
+        reservationId,
+        reservedTokens: estimatedTokens,
+        actualTokensConsumed: usage.total_tokens || 0,
+        outcome: "success",
+      }).catch((err) => logger.warn("Falha ao reconciliar tokens consumidos", { error: String(err) }));
 
       return new Response(JSON.stringify({ ...data, correlation_id: correlationId }), {
         status: 200,
@@ -1387,10 +1443,24 @@ Ao detalhar as vendas, apresente o valor total, quantidade de vendas, ticket mé
     );
   }
 
+  await reconcileAiTokens(supabase, {
+    userId,
+    workspaceId: cleanWorkspaceId,
+    action: "openai_proxy",
+    reservationId,
+    reservedTokens: estimatedTokens,
+    actualTokensConsumed: 0,
+    outcome: "error",
+  }).catch(() => {});
+
   return createErrorResponse(req, {
     status: 500,
     message: "Máximo de iterações atingido sem resposta conclusiva.",
     correlationId,
     corsHeaders: CORS_HEADERS,
   });
-});
+}
+
+if (typeof Deno !== "undefined" && typeof (Deno as any).serve === "function") {
+  (Deno as any).serve((req: Request) => handleOpenAIProxy(req));
+}

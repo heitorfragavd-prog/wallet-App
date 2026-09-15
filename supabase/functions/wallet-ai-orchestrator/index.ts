@@ -23,6 +23,7 @@ import {
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+const openAiBaseUrl = Deno.env.get("OPENAI_BASE_URL");
 const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 
@@ -49,6 +50,7 @@ const runnerFactory = (model?: string) => {
   const primaryRunner = new OpenAiLlmRunner({
     apiKey: openAiApiKey,
     model,
+    baseUrl: openAiBaseUrl ? `${openAiBaseUrl.replace(/\/$/, "")}/chat/completions` : undefined,
   });
 
   const fallbackRunner = geminiApiKey
