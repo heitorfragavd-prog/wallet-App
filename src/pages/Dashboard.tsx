@@ -45,6 +45,7 @@ import { useTiposManutencao } from "@/domains/vehicles/hooks/useTiposManutencao"
 import { useManutencoesPendentes } from "@/domains/vehicles/hooks/useManutencoesPendentes";
 import { useRecurringTransactions } from "@/domains/finance/hooks/useRecurringTransactions";
 import { useReceitas } from "@/domains/finance/hooks/useReceitas";
+import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { usePontoEquilibrio } from "@/domains/finance/hooks/usePontoEquilibrio";
 import { useBurnRate } from "@/domains/finance/hooks/useBurnRate";
 import { usePrivacy } from "@/contexts/PrivacyContext";
@@ -72,13 +73,13 @@ const formatarDataRelativa = (dataString: string) => {
 };
 
 // Função para obter o primeiro dia do mês
-const getPrimeiroDiaMes = () => {
+const _getPrimeiroDiaMes = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 };
 
 // Função para formatar o nome do mês
-const formatarMes = (data: Date) => {
+const _formatarMes = (data: Date) => {
   const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
   return `${meses[data.getMonth()]} de ${data.getFullYear()}`;
 };
@@ -109,10 +110,19 @@ const Dashboard = () => {
   // dinheiro do PDV (Eyemobile) + entradas liquidadas da Divipay (valor líquido,
   // puxado ao vivo da API) + receitas manuais/Pluggy. Sem isso o card ficava
   // zerado porque as entradas digitais não estão persistidas no banco.
-  const { receitas: receitasConsolidadas } = useReceitas({
+  const { receitas: receitasConsolidadas, loading: loadingReceitas } = useReceitas({
     startDate: dateRange.startDate,
     endDate: dateRange.endDate,
   });
+
+  // Despesas consolidadas — MESMA regra da tela Despesas:
+  // despesas manuais/Pluggy do banco + saques liquidados da Divipay
+  // puxados ao vivo da API com timezone SP, regras estritas de meios de pagamento e anti-duplicação.
+  const { despesas: despesasConsolidadas, loading: loadingDespesas } = useDespesas({
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+  });
+
   const { itensMercado } = useItensMercado();
   const { dividas, loading: loadingDividas } = useDividas();
   const { veiculos, loading: loadingVeiculos } = useVeiculos();
@@ -122,64 +132,124 @@ const Dashboard = () => {
   const { manutencoesPendentes, loading: loadingManutencoes } = useManutencoesPendentes(veiculos, tiposManutencao);
   const { recorrentes } = useRecurringTransactions();
 
-  // Processar dados com useMemo para performance
-  const processedData = useMemo(() => {
-    if (loadingTransacoes || !transacoes.length) {
-      return {
-        transacoesFiltradas: [],
-        totalDespesas: 0,
-      };
-    }
-
-    const dataInicio = dateRange.startDate;
-    const dataFim = dateRange.endDate;
-
-    const transacoesFiltradas = transacoes.filter((transacao) => {
-      const dataTransacao = transacao.data.split("T")[0];
-      if (dataInicio && dataFim) {
-        return dataTransacao >= dataInicio && dataTransacao <= dataFim;
-      }
-      if (dataInicio) {
-        return dataTransacao >= dataInicio;
-      }
-      if (dataFim) {
-        return dataTransacao <= dataFim;
-      }
-      return true;
-    });
-
-    const totalDespesas = transacoesFiltradas
-      .filter((t) => t.tipo === "despesa")
-      .reduce((total, t) => total + Number(t.valor), 0);
-
-    return {
-      transacoesFiltradas: transacoesFiltradas.sort((a, b) => {
-        const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
-        if (dateDiff !== 0) return dateDiff;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      }),
-      totalDespesas,
-    };
-  }, [transacoes, dateRange, loadingTransacoes]);
-
-  const { transacoesFiltradas, totalDespesas } = processedData;
-
   // Total de receitas consolidado (dinheiro PDV + Divipay líquido + manuais)
   const totalReceitas = useMemo(
     () => receitasConsolidadas.reduce((soma, r) => soma + Number(r.valor || 0), 0),
     [receitasConsolidadas],
   );
+
+  // Total de despesas consolidado (FONTE PRINCIPAL EXCLUSIVA: useDespesas — saques Divipay + banco)
+  // Não soma useTransacoes diretamente para evitar duplicações.
+  const totalDespesas = useMemo(
+    () => despesasConsolidadas
+      .filter((d) => d.status === "pago")
+      .reduce((soma, d) => soma + Number(d.valor || 0), 0),
+    [despesasConsolidadas],
+  );
+
   const saldoPeriodo = totalReceitas - totalDespesas;
   const percentualDespesas = totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0;
 
-  // Top categorias de despesas no período
+  // Transações combinadas para o widget de "Últimas Transações" com deduplicação por IDs seguros
+  const transacoesFiltradas = useMemo(() => {
+    const dataInicio = dateRange.startDate;
+    const dataFim = dateRange.endDate;
+
+    const seenIds = new Set<string>();
+    const seenExternalIds = new Set<string>();
+
+    const itens: Array<{
+      id: string;
+      descricao: string;
+      valor: number;
+      data: string;
+      created_at: string;
+      tipo: "receita" | "despesa";
+      categorias?: { nome: string; cor?: string; icone?: string };
+    }> = [];
+
+    // 1. Receitas consolidadas (Eyemobile PDV + Divipay líquido + manuais)
+    receitasConsolidadas.forEach((r) => {
+      if (!r.id || seenIds.has(r.id)) return;
+      seenIds.add(r.id);
+      if (r.id.startsWith("divipay-")) {
+        seenExternalIds.add(r.id.replace("divipay-", ""));
+      }
+      itens.push({
+        id: r.id,
+        descricao: r.descricao,
+        valor: Number(r.valor || 0),
+        data: r.data,
+        created_at: r.created_at || r.data,
+        tipo: "receita",
+        categorias: r.categorias,
+      });
+    });
+
+    // 2. Despesas consolidadas (saques Divipay + despesas locais)
+    despesasConsolidadas
+      .filter((d) => d.status === "pago")
+      .forEach((d) => {
+        if (!d.id || seenIds.has(d.id)) return;
+        seenIds.add(d.id);
+        if (d.id.startsWith("divipay-")) {
+          seenExternalIds.add(d.id.replace("divipay-", ""));
+        }
+        itens.push({
+          id: d.id,
+          descricao: d.descricao,
+          valor: Number(d.valor || 0),
+          data: d.data,
+          created_at: d.created_at || d.data,
+          tipo: "despesa",
+          categorias: d.categorias,
+        });
+      });
+
+    // 3. Registros de useTransacoes apenas para o que não constar na consolidação
+    (transacoes || []).forEach((t) => {
+      if (!t.id || seenIds.has(t.id)) return;
+
+      // Deduplicação por IDs seguros e vínculo explícito de saque/transação Divipay
+      if (seenExternalIds.size > 0) {
+        const obs = String((t as { observacoes?: string | null }).observacoes || "");
+        const matchedExternal = Array.from(seenExternalIds).some(
+          (extId) => obs.includes(extId) || t.id.includes(extId)
+        );
+        if (matchedExternal) return;
+      }
+
+      const dataTransacao = (t.data || "").split("T")[0];
+      if (dataInicio && dataTransacao < dataInicio) return;
+      if (dataFim && dataTransacao > dataFim) return;
+
+      seenIds.add(t.id);
+      itens.push({
+        id: t.id,
+        descricao: t.descricao,
+        valor: Number(t.valor || 0),
+        data: t.data,
+        created_at: t.created_at || t.data,
+        tipo: t.tipo,
+        categorias: t.categorias,
+      });
+    });
+
+    return itens.sort((a, b) => {
+      const dateDiff = new Date(b.data).getTime() - new Date(a.data).getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+  }, [receitasConsolidadas, despesasConsolidadas, transacoes, dateRange]);
+
+  // Top categorias de despesas no período (calculadas sobre as despesas consolidadas reais)
   const topCategorias = useMemo(() => {
     const categoriaMap: Record<string, number> = {};
-    transacoesFiltradas
-      .filter((t) => t.tipo === "despesa")
-      .forEach((t) => {
-        const cat = t.categorias?.nome || "Sem categoria";
-        categoriaMap[cat] = (categoriaMap[cat] || 0) + Number(t.valor);
+    despesasConsolidadas
+      .filter((d) => d.status === "pago")
+      .forEach((d) => {
+        const cat = d.categorias?.nome || "Sem categoria";
+        categoriaMap[cat] = (categoriaMap[cat] || 0) + Number(d.valor || 0);
       });
     return Object.entries(categoriaMap)
       .sort(([, a], [, b]) => b - a)
@@ -189,7 +259,7 @@ const Dashboard = () => {
         valor,
         percentual: totalDespesas > 0 ? (valor / totalDespesas) * 100 : 0,
       }));
-  }, [transacoesFiltradas, totalDespesas]);
+  }, [despesasConsolidadas, totalDespesas]);
 
   // Dívidas próximas ao vencimento (pendente, filtradas pelo período selecionado)
   const dividasPendentesProximas = useMemo(() => {
@@ -416,7 +486,7 @@ const Dashboard = () => {
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">Receitas</p>
-                  {loadingTransacoes ? (
+                  {loadingTransacoes || loadingReceitas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
@@ -437,7 +507,7 @@ const Dashboard = () => {
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">Despesas</p>
-                  {loadingTransacoes ? (
+                  {loadingTransacoes || loadingDespesas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className="text-2xl font-bold text-foreground">
@@ -458,7 +528,7 @@ const Dashboard = () => {
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">Saldo</p>
-                  {loadingTransacoes ? (
+                  {loadingTransacoes || loadingReceitas || loadingDespesas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
                     <p className={`text-2xl font-bold ${saldoPeriodo >= 0 ? "text-foreground" : "text-red-500"}`}>
@@ -503,8 +573,8 @@ const Dashboard = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-muted-foreground">Ponto de Equilíbrio Hoje</p>
-                <div className={`text-lg font-bold ${percentualPontoEquilibrio >= 100 ? "text-emerald-400" : "text-amber-400"}`}>
-                  {percentualPontoEquilibrio.toFixed(0)}%
+                <div className={`text-lg font-bold ${pontoEquilibrio > 0 && percentualPontoEquilibrio >= 100 ? "text-emerald-400" : "text-amber-400"}`}>
+                  {pontoEquilibrio > 0 ? `${Math.min(percentualPontoEquilibrio, 100).toFixed(0)}%` : "0%"}
                 </div>
               </div>
               <p className="text-2xl font-bold text-foreground">
@@ -514,13 +584,15 @@ const Dashboard = () => {
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
-                    width: `${Math.min(percentualPontoEquilibrio, 100)}%`,
+                    width: `${pontoEquilibrio > 0 ? Math.min(percentualPontoEquilibrio, 100) : 0}%`,
                     backgroundColor: percentualPontoEquilibrio >= 100 ? "#22c55e" : "#f59e0b",
                   }}
                 />
               </div>
               <p className="text-xs mt-2 text-muted-foreground">
-                {percentualPontoEquilibrio >= 100
+                {pontoEquilibrio === 0
+                  ? "Nenhum custo fixo cadastrado neste mês (Aluguel, Folha, Luz, etc.)."
+                  : percentualPontoEquilibrio >= 100
                   ? "✅ Já pagou as contas de hoje!"
                   : `Faltam ${formatCurrency(Math.max(0, pontoEquilibrio - vendasHoje))} para lucrar.`}
               </p>

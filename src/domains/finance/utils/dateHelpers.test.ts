@@ -2,12 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   formatarDataParaSaoPaulo,
   getHojeSaoPaulo,
+  calcularTotalDespesasDoDia,
   calcularTotalReceitasDoDia,
   formatarData,
   TIMEZONE_SP,
 } from "./dateHelpers";
 
-describe("dateHelpers — timezone America/Sao_Paulo e cálculo de receitas", () => {
+describe("dateHelpers — timezone America/Sao_Paulo e cálculo consolidado", () => {
   describe("TIMEZONE_SP", () => {
     it("utiliza America/Sao_Paulo como timezone oficial", () => {
       expect(TIMEZONE_SP).toBe("America/Sao_Paulo");
@@ -45,6 +46,35 @@ describe("dateHelpers — timezone America/Sao_Paulo e cálculo de receitas", ()
     it("retorna string no formato YYYY-MM-DD", () => {
       const hoje = getHojeSaoPaulo();
       expect(hoje).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+  });
+
+  describe("calcularTotalDespesasDoDia", () => {
+    it("calcula soma de despesas do dia ignorando despesas de outros dias", () => {
+      const despesas = [
+        { data: "2026-09-04", valor: 100.5 },
+        { data: "2026-09-04T15:00:00.000Z", valor: 200 },
+        { data: "2026-09-04T02:30:00.000Z", valor: 50 }, // em SP é 2026-09-03!
+        { data: "2026-09-03", valor: 300 },
+      ];
+
+      // Para referência "2026-09-04": soma 100.5 + 200 = 300.50 (ignora 50 que é 03/09 e 300 que é 03/09)
+      const total = calcularTotalDespesasDoDia(despesas, "2026-09-04");
+      expect(total).toBe(300.5);
+    });
+
+    it("retorna 0 para lista vazia ou nula", () => {
+      expect(calcularTotalDespesasDoDia([])).toBe(0);
+      expect(calcularTotalDespesasDoDia(null as unknown as [])).toBe(0);
+    });
+
+    it("trata valores indefinidos ou nulos sem quebrar", () => {
+      const despesas = [
+        { data: "2026-09-04", valor: null },
+        { data: "2026-09-04", valor: undefined },
+        { data: "2026-09-04", valor: 150 },
+      ];
+      expect(calcularTotalDespesasDoDia(despesas, "2026-09-04")).toBe(150);
     });
   });
 

@@ -71,6 +71,32 @@ export const calcularTotalReceitasDoDia = (
   return Math.round(total * 100) / 100;
 };
 
+/**
+ * Função pura unificada para cálculo de despesas de uma data de referência (padrão: hoje em SP).
+ * Normaliza todas as datas via formatarDataParaSaoPaulo e soma os valores.
+ */
+export const calcularTotalDespesasDoDia = (
+  despesas: Array<{ data?: string | null; valor?: number | null; status?: string | null }>,
+  dataReferencia?: string
+): number => {
+  if (!Array.isArray(despesas) || despesas.length === 0) return 0;
+  const targetDate = dataReferencia ? formatarDataParaSaoPaulo(dataReferencia) : getHojeSaoPaulo();
+  if (!targetDate) return 0;
+
+  const total = despesas.reduce((sum, d) => {
+    if (!d || d.valor == null || isNaN(Number(d.valor))) return sum;
+    // Se tiver status definido e for diferente de 'pago', ignora
+    if (d.status && d.status !== "pago") return sum;
+    const itemDate = formatarDataParaSaoPaulo(d.data);
+    if (itemDate === targetDate) {
+      return sum + Number(d.valor);
+    }
+    return sum;
+  }, 0);
+
+  return Math.round(total * 100) / 100;
+};
+
 /** Formata data para dd/mm/aaaa respeitando o fuso America/Sao_Paulo */
 export const formatarData = (dataString: string): string => {
   if (!dataString) return "";
@@ -88,25 +114,38 @@ export const getPrimeiroDiaSemana = (): string => {
   return `${primeiro.getFullYear()}-${String(primeiro.getMonth() + 1).padStart(2, "0")}-${String(primeiro.getDate()).padStart(2, "0")}`;
 };
 
-/** Retorna o primeiro dia do mês atual */
+/** Retorna o primeiro dia do mês atual (YYYY-MM-01) */
 export const getPrimeiroDiaMes = (): string => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const hoje = getHojeSaoPaulo();
+  const [ano, mes] = hoje.split("-");
+  return `${ano}-${mes}-01`;
 };
 
 /** Retorna o primeiro dia do trimestre atual */
 export const getPrimeiroDiaTrimestre = (): string => {
-  const now = new Date();
-  const mes = Math.floor(now.getMonth() / 3) * 3 + 1;
-  return `${now.getFullYear()}-${String(mes).padStart(2, "0")}-01`;
+  const hoje = getHojeSaoPaulo();
+  const [anoStr, mesStr] = hoje.split("-");
+  const mesNum = parseInt(mesStr, 10);
+  const inicioTrimestre = Math.floor((mesNum - 1) / 3) * 3 + 1;
+  return `${anoStr}-${String(inicioTrimestre).padStart(2, "0")}-01`;
 };
 
 /** Retorna o primeiro dia do ano atual */
-export const getPrimeiroDiaAno = (): string => `${new Date().getFullYear()}-01-01`;
+export const getPrimeiroDiaAno = (): string => {
+  const hoje = getHojeSaoPaulo();
+  const ano = hoje.split("-")[0];
+  return `${ano}-01-01`;
+};
 
 /** Retorna o primeiro dia do mês anterior */
 export const getMesAnterior = (): string => {
-  const now = new Date();
-  now.setMonth(now.getMonth() - 1);
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const hoje = getHojeSaoPaulo();
+  const [anoStr, mesStr] = hoje.split("-");
+  let ano = parseInt(anoStr, 10);
+  let mes = parseInt(mesStr, 10) - 1;
+  if (mes === 0) {
+    mes = 12;
+    ano -= 1;
+  }
+  return `${ano}-${String(mes).padStart(2, "0")}-01`;
 };

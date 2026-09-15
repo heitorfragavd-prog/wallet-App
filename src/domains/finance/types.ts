@@ -102,7 +102,7 @@ export interface Despesa {
   valor: number;
   data: string;
   categoria_id?: string;
-  metodo_pagamento?: PaymentMethod;
+  metodo_pagamento?: PaymentMethod | 'outros';
   conta_id?: string;
   observacoes?: string;
   recorrencia_id?: string;
