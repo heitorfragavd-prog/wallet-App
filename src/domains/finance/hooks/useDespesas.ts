@@ -54,7 +54,7 @@ export function classificarMetodoPagamentoDivipay(saque?: {
   description?: string | null;
   paymentMethod?: string | null;
   metodo_pagamento?: string | null;
-}): PaymentMethod {
+}): PaymentMethod | "outros" {
   const rawType = String(saque?.type || "").trim().toUpperCase();
   const explicitMethod = String(saque?.paymentMethod || saque?.metodo_pagamento || "").trim().toLowerCase();
 

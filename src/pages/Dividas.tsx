@@ -115,7 +115,6 @@ const paymentMethodIcons: Record<PaymentMethod, typeof Smartphone> = {
   dinheiro: Wallet,
   transferencia: ArrowRightLeft,
   voucher: Ticket,
-  outros: Wallet,
 };
 
 const paymentMethodLabels: Record<PaymentMethod, string> = {
@@ -126,7 +125,6 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
   dinheiro: 'Dinheiro',
   transferencia: 'Transferência',
   voucher: 'Voucher',
-  outros: 'Outros',
 };
 
 const Dividas = () => {
@@ -294,7 +292,7 @@ const Dividas = () => {
       credor: novoCredor,
       documento_favorecido: novoDocumentoFavorecido.trim() || null,
       valor_taxa: isTaxaAtiva && novoValorTaxa ? parseFloat(novoValorTaxa) : 0,
-      metodo_pagamento_esperado: novoMetodoPagamento as PaymentMethod,
+      metodo_pagamento_esperado: novoMetodoPagamento as any,
       chave_pix: novoMetodoPagamento === "pix" ? novaChavePix : null,
       pix_copia_cola: novoMetodoPagamento === "pix" ? novoPixCopiaCola : null,
       codigo_barras: novoMetodoPagamento === "boleto" ? novoCodigoBarras : null,
@@ -348,7 +346,7 @@ const Dividas = () => {
       setEditPixCopiaCola(divida.pix_copia_cola || "");
       setEditCodigoBarras(divida.codigo_barras || "");
       setEditLinhaDigitavel(divida.linha_digitavel || "");
-      const cb = divida.conta_bancaria as { banco?: string; agencia?: string; conta?: string; titular?: string; tipo?: "corrente" | "poupanca" } | null;
+      const cb = divida.conta_bancaria as any;
       if (cb) {
         setEditBanco(cb.banco || "");
         setEditAgencia(cb.agencia || "");
@@ -410,7 +408,7 @@ const Dividas = () => {
       categoria_id: categoria?.id,
       credor: editCredor,
       documento_favorecido: editDocumentoFavorecido.trim() || null,
-      metodo_pagamento_esperado: editMetodoPagamento as PaymentMethod,
+      metodo_pagamento_esperado: editMetodoPagamento as any,
       chave_pix: editMetodoPagamento === "pix" ? editChavePix : null,
       pix_copia_cola: editMetodoPagamento === "pix" ? editPixCopiaCola : null,
       codigo_barras: editMetodoPagamento === "boleto" ? editCodigoBarras : null,
@@ -1094,7 +1092,7 @@ const Dividas = () => {
                                         <select
                                           id="edit-tipo-conta-mobile"
                                           value={editTipoConta}
-                                          onChange={(e) => setEditTipoConta(e.target.value as "corrente" | "poupanca")}
+                                          onChange={(e) => setEditTipoConta(e.target.value as any)}
                                           className="w-full h-9 px-3 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
                                         >
                                           <option value="corrente">Corrente</option>
@@ -1410,7 +1408,7 @@ const Dividas = () => {
                               <select
                                 id="tipo-conta"
                                 value={novoTipoConta}
-                                onChange={(e) => setNovoTipoConta(e.target.value as "corrente" | "poupanca")}
+                                onChange={(e) => setNovoTipoConta(e.target.value as any)}
                                 className="w-full h-10 px-3 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500"
                               >
                                 <option value="corrente">Conta Corrente</option>

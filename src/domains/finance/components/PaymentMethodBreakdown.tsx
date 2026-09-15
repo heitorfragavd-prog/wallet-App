@@ -14,7 +14,7 @@ import { PaymentMethod } from "../types";
 
 interface Transaction {
   valor: number;
-  metodo_pagamento?: PaymentMethod | null;
+  metodo_pagamento?: PaymentMethod | 'outros' | null;
 }
 
 interface PaymentMethodBreakdownProps {
@@ -24,7 +24,7 @@ interface PaymentMethodBreakdownProps {
 }
 
 interface PaymentMethodStat {
-  method: PaymentMethod | 'nao_informado';
+  method: PaymentMethod | 'outros' | 'nao_informado';
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   total: number;
@@ -52,7 +52,7 @@ export function PaymentMethodBreakdown({
 }: PaymentMethodBreakdownProps) {
   const stats = useMemo(() => {
     // Calculate totals by payment method
-    const methodTotals = new Map<PaymentMethod | 'nao_informado', { total: number; count: number }>();
+    const methodTotals = new Map<PaymentMethod | 'outros' | 'nao_informado', { total: number; count: number }>();
     let grandTotal = 0;
 
     transactions.forEach(transaction => {

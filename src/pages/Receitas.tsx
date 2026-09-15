@@ -99,7 +99,6 @@ const PAYMENT_METHOD_INFO: Record<string, { label: string; icon: typeof Smartpho
   dinheiro: { label: "Dinheiro", icon: Wallet },
   transferencia: { label: "Transferência", icon: ArrowRightLeft },
   voucher: { label: "Voucher", icon: Ticket },
-  outros: { label: "Outros", icon: Wallet },
 };
 
 const getPaymentMethodInfo = (method: string | null | undefined) => {

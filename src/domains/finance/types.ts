@@ -4,7 +4,7 @@
  * Type definitions for financial operations
  */
 
-export type PaymentMethod = 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | 'transferencia' | 'voucher' | 'outros';
+export type PaymentMethod = 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | 'transferencia' | 'voucher';
 
 export type AccountType = 'conta_corrente' | 'poupanca' | 'carteira' | 'cartao_credito' | 'outro';
 
@@ -102,7 +102,7 @@ export interface Despesa {
   valor: number;
   data: string;
   categoria_id?: string;
-  metodo_pagamento?: PaymentMethod;
+  metodo_pagamento?: PaymentMethod | 'outros';
   conta_id?: string;
   observacoes?: string;
   recorrencia_id?: string;
