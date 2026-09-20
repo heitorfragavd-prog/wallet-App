@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 252.
+- Arquivos de teste: 253.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -256,6 +256,7 @@
 | tests\audit\quality_audit.test.ts |
 | tests\audit\security_audit.test.ts |
 | tests\reconciliation\git_reconciliation.test.ts |
+| tests\release\production_release.test.ts |
 | tests\security-fixes\dockerignore_security.test.ts |
 | tests\security-fixes\openai_proxy_security.test.ts |
 | tests\security-fixes\test_webhook_security.test.ts |
