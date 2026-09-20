@@ -29,7 +29,8 @@ export class OpenAiLlmRunner implements LlmRunner {
 
   constructor(options: OpenAiRunnerOptions) {
     this.apiKey = options.apiKey;
-    this.baseUrl = options.baseUrl ?? "https://api.openai.com/v1/chat/completions";
+    const envBaseUrl = typeof Deno !== "undefined" ? Deno.env.get("OPENAI_BASE_URL") : undefined;
+    this.baseUrl = options.baseUrl ?? (envBaseUrl ? `${envBaseUrl.replace(/\/$/, "")}/chat/completions` : "https://api.openai.com/v1/chat/completions");
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
 
@@ -70,16 +71,46 @@ export class OpenAiLlmRunner implements LlmRunner {
       temperature: 0.1, // Determinístico para finanças
     };
 
+    const candidateUrls = [this.baseUrl];
+    if (this.baseUrl.includes("18080") || this.baseUrl.includes("mock")) {
+      for (const alt of [
+        "http://172.17.0.1:18080/v1/chat/completions",
+        "http://172.18.0.1:18080/v1/chat/completions",
+        "http://host.docker.internal:18080/v1/chat/completions",
+        "http://localhost:18080/v1/chat/completions",
+        "http://127.0.0.1:18080/v1/chat/completions",
+      ]) {
+        if (!candidateUrls.includes(alt)) candidateUrls.push(alt);
+      }
+    }
+
     try {
-      const res = await this.fetchImpl(this.baseUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      let res: Response | undefined;
+      let lastErr: unknown;
+
+      for (const targetUrl of candidateUrls) {
+        try {
+          res = await this.fetchImpl(targetUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+          break;
+        } catch (fetchErr: unknown) {
+          lastErr = fetchErr;
+          if (fetchErr instanceof Error && fetchErr.name === "AbortError") {
+            break;
+          }
+        }
+      }
+
+      if (!res) {
+        throw lastErr || new Error("Falha ao conectar com serviço de IA");
+      }
 
       if (!res.ok) {
         if (res.status === 429) {

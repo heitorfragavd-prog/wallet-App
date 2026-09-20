@@ -177,18 +177,10 @@ serve(async (req) => {
 
     // Check if the caller has service role authorization (e.g. Cron ou chamada interna).
     const cronSecret = Deno.env.get("CRON_SECRET") || "";
-    let isServiceRole =
-      token === supabaseServiceKey || (cronSecret.length > 0 && token === cronSecret);
-
-    if (!isServiceRole && token.startsWith("eyJ")) {
-      try {
-        const payloadBase64 = token.split(".")[1];
-        const decoded = JSON.parse(atob(payloadBase64.replace(/-/g, "+").replace(/_/g, "/")));
-        if (decoded.role === "service_role" || decoded.iss === "supabase") {
-          isServiceRole = true;
-        }
-      } catch (_) {}
-    }
+    const isServiceRole = Boolean(
+      (supabaseServiceKey && token === supabaseServiceKey) ||
+      (cronSecret.length > 0 && token === cronSecret)
+    );
 
     let user_id: string | null = null;
 

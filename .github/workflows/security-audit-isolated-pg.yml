@@ -1,0 +1,243 @@
+name: Security Audit Isolated PostgreSQL Tests
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - master
+  push:
+    branches:
+      - security/comprehensive-audit-hardening
+  workflow_dispatch:
+
+concurrency:
+  group: sec-pg-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pg-isolated-tests:
+    name: Real PostgreSQL Security, Concurrency & Permissions Battery
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pg client for concurrency tests
+        run: npm install --no-save pg
+
+      - name: Run PostgreSQL Security Battery (Phase A, Phase C, RLS, Concurrency & Column Security)
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-isolated-pg-security.sql
+
+      - name: Run Phase A/B/C Operational Gating Verification
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          # 1. Garante que a infraestrutura da Fase A esta presente e baseline pre-Fase C restaurado
+          psql -h localhost -U postgres -d postgres -c "
+            CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+            CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text NOT NULL PRIMARY KEY, statements text[], name text);
+            DELETE FROM supabase_migrations.schema_migrations WHERE version = '20260908120001';
+            GRANT ALL ON public.divipay_config TO authenticated;
+            GRANT ALL ON public.eyemobile_config TO authenticated;
+          "
+          psql -h localhost -U postgres -d postgres -f supabase/migrations/20260908120000_security_phase_a_infrastructure.sql
+
+          # 2. Teste negativo real: executa a migration de producao da Fase C sem confirmacao da Fase B
+          set +e
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260908120001_security_phase_c_enforcement.sql 2> /tmp/phase_c_negative.log
+          CLI_EXIT=$?
+          set -e
+          echo "Codigo de saida psql da migration real C sem flag: $CLI_EXIT"
+          if [ $CLI_EXIT -eq 0 ]; then
+            echo "ERRO CRITICO: A migration real C deveria ter abortado por gating!"
+            exit 1
+          fi
+          cat /tmp/phase_c_negative.log
+          if ! grep -q "OPERACAO BLOQUEADA" /tmp/phase_c_negative.log; then
+            echo "ERRO CRITICO: Mensagem 'OPERACAO BLOQUEADA' ausente na saida!"
+            exit 1
+          fi
+          echo "Sucesso: Bloqueio confiavel comprovado via CLI (exit code != 0 e OPERACAO BLOQUEADA)."
+
+          # 3. Executa procedimento oficial atomico na mesma sessao e verifica integridade e isolamento da flag
+          psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-gating.sql
+
+      - name: Run Real Schema Compatibility Battery (Phase A -> Phase B -> Phase C -> 9 Scenarios)
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-real-schema-compat.sql
+
+      - name: Run Phase A -> Phase B -> Phase C Sequential Rehearsal & Safe Contingency
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-phase-abc-rehearsal.sql
+
+      - name: Run Real Concurrency Battery (Multiple Connections Pool)
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
+        run: |
+          node scripts/test-real-concurrency.cjs
+
+      - name: Run Phase C Atomic Gating & Rollback Verification Battery
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
+        run: |
+          node scripts/test-phase-c-atomic-rollback.cjs
+
+  edge-functions-validation:
+    name: Edge Functions Runtime Validation (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate Edge Functions on Deno Runtime
+        run: |
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/openai-proxy/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/categorizar-ia/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/ia-deposito/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
+
+  e2e-browser-homologation:
+    name: Full E2E Browser & Real Supabase Stack Homologation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Real Supabase Stack (PostgreSQL, Auth, PostgREST, Inbucket)
+        run: |
+          # Isola migrations legadas do repositório para inicialização com schema real consolidado
+          mkdir -p supabase/all_migrations
+          mv supabase/migrations/* supabase/all_migrations/
+
+          # Copia o baseline real e a Fase A para o start
+          cp tests/setup-e2e-real-schema.sql supabase/migrations/20240101000000_setup_e2e_real_schema.sql
+          cp supabase/all_migrations/20260908120000_security_phase_a_infrastructure.sql supabase/migrations/
+
+          # Inicia a stack completa do Supabase com a Fase A ativa (Retrocompatibilidade)
+          supabase start
+
+          # Gera variaveis seguras simuladas para as Edge Functions locais
+          SERVICE_KEY=$(supabase status -o env | grep -E 'SERVICE_ROLE_KEY|sb_secret' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          if [ -z "$SERVICE_KEY" ]; then
+            SERVICE_KEY=$(supabase status -o env | grep 'SERVICE' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+          fi
+          DOCKER_GW=$(docker network inspect $(docker network ls --filter name=supabase_network -q | head -n 1) --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || echo "172.17.0.1")
+          if [ -z "$DOCKER_GW" ]; then
+            DOCKER_GW="172.17.0.1"
+          fi
+          echo "Docker gateway IP detectado para Edge Functions: $DOCKER_GW"
+          cat << EOF > .env.functions.test
+          SUPABASE_URL=http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
+          OPENAI_BASE_URL=http://${DOCKER_GW}:18080/v1
+          OPENAI_API_KEY=mock-openai-key-for-test
+          EOF
+
+          # Inicia Edge Functions no runtime compatível local
+          supabase functions serve --env-file .env.functions.test --no-verify-jwt &
+          sleep 5
+
+
+          # Restaura o diretório de migrations original
+          rm -f supabase/migrations/20240101000000_setup_e2e_real_schema.sql
+          mv supabase/all_migrations/* supabase/migrations/
+          rm -rf supabase/all_migrations
+
+      - name: Install Playwright and Dependencies
+        run: |
+          npm install --no-save @playwright/test pg
+          npx playwright install --with-deps chromium
+
+      - name: Start Mock External Providers (OpenAI, Divipay, Eyemobile)
+        run: |
+          node tests/mock-external-providers.cjs &
+          sleep 2
+
+      - name: Build Legacy Application (SHA 8ae7c04) and New Application (Hardened)
+        run: |
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          ROOT_DIR="$(pwd)"
+          
+          # 1. Build da aplicação legada (SHA 8ae7c04)
+          git worktree add ../legacy-8ae7c04 8ae7c04
+          ln -s "$ROOT_DIR/node_modules" ../legacy-8ae7c04/node_modules
+          (cd ../legacy-8ae7c04 && VITE_SUPABASE_URL=http://127.0.0.1:54321 VITE_SUPABASE_ANON_KEY=$ANON_KEY npx vite build --outDir "$ROOT_DIR/dist-legacy")
+          git worktree remove ../legacy-8ae7c04 --force
+
+          # 2. Build da nova aplicação (Hardened)
+          VITE_SUPABASE_URL=http://127.0.0.1:54321 VITE_SUPABASE_ANON_KEY=$ANON_KEY npm run build
+
+      - name: Start Dual Static Servers (Legacy 4173 & New 4174)
+        run: |
+          node scripts/serve-dual-builds.cjs &
+          sleep 3
+
+      - name: Run Application Phase A -> B -> C Sequence Homologation Suite
+        run: |
+          export VITE_SUPABASE_URL=http://127.0.0.1:54321
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          export VITE_SUPABASE_ANON_KEY=$ANON_KEY
+          export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          export LEGACY_APP_URL=http://localhost:4173
+          export NEW_APP_URL=http://localhost:4174
+          export MOCK_PROVIDER_URL=http://127.0.0.1:18080
+          npx playwright test tests/application-phase-abc-sequence.spec.ts
+
+      - name: Run Playwright E2E Security Homologation Suite
+        run: |
+          supabase status
+          supabase status -o env
+          export VITE_SUPABASE_URL=http://127.0.0.1:54321
+          ANON_KEY=$(supabase status -o env | grep -E 'ANON_KEY|PUBLISHABLE|sb_publishable' | head -n 1 | cut -d '=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          export VITE_SUPABASE_ANON_KEY=$ANON_KEY
+          export INBUCKET_URL=http://127.0.0.1:54324
+          export MOCK_PROVIDER_URL=http://127.0.0.1:18080
+          npx playwright test tests/security-homologation.spec.ts
