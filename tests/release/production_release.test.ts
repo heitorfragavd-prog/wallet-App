@@ -125,6 +125,10 @@ describe('SPEC-0004: Prontidão de Release e Deploy em Produção na Hostinger',
     const distPath = path.join(ROOT_DIR, 'dist');
     const indexPath = path.join(distPath, 'index.html');
 
+    if (!fs.existsSync(indexPath)) {
+      execSync('npm run build', { cwd: ROOT_DIR, encoding: 'utf8' });
+    }
+
     expect(fs.existsSync(distPath)).toBe(true);
     expect(fs.existsSync(indexPath)).toBe(true);
 
