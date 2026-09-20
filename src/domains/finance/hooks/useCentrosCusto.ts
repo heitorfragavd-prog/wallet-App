@@ -21,7 +21,7 @@ export const CENTROS_CUSTO_QUERY_KEY = ["centros-custo"] as const;
 async function fetchCentrosCusto(workspaceId: string | null): Promise<CentroCusto[]> {
   if (!workspaceId) return [];
 
-  let query = supabase
+  const query = supabase
     .from("centros_custo")
     .select("*")
     .eq("workspace_id", workspaceId)

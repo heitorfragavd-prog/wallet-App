@@ -60,7 +60,9 @@ export interface FinancialContext {
   eyemobile: {
     vendasHoje: number;
     vendasMes: number;
-    produtosBaixoEstoque: StockItemContext[];
+  };
+  mercado: {
+    itensBaixoEstoque: StockItemContext[];
   };
   divipay: {
     saldoDisponivel: number;
@@ -223,7 +225,9 @@ export const useFinancialContext = () => {
       const vendasMes = receitasList
         .filter(r => r.data >= inicioMes && r.data <= hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String(r.origem || "").toLowerCase().includes("eyemobile")))
         .reduce((sum, r) => sum + Number(r.valor || 0), 0);
-      const produtosBaixoEstoque = ((resItensMercado || []) as unknown as StockItemContext[])
+
+      // ─── MERCADO & DESPENSA ───
+      const itensMercadoBaixoEstoque = ((resItensMercado || []) as unknown as StockItemContext[])
         .filter((item) => Number(item.quantidade_estoque || 0) <= Number(item.quantidade_ideal || 0) || item.status === "baixo");
 
       // ─── DIVIPAY ───
@@ -255,7 +259,8 @@ export const useFinancialContext = () => {
         receitas: { totalMes: totalReceitasMes, totalHoje: totalReceitasHoje, porCategoria: receitasPorCategoria },
         despesas: { totalMes: totalDespesasMes, totalHoje: totalDespesasHoje, porCategoria: despesasPorCategoria },
         contas: { saldoTotal, contas: contasMapped },
-        eyemobile: { vendasHoje, vendasMes, produtosBaixoEstoque },
+        eyemobile: { vendasHoje, vendasMes },
+        mercado: { itensBaixoEstoque: itensMercadoBaixoEstoque },
         divipay: { saldoDisponivel, saquesPendentes },
         metas: { ativas: metasAtivas, progresso: progressoMedio },
         veiculos: { totalManutencaoPendente, veiculos: veiculosList },
@@ -313,9 +318,13 @@ export const useFinancialContext = () => {
 
       text += `## 🏪 Eyemobile PDV & Vendas\n`;
       text += `- **Vendas PDV Hoje:** ${fmt(vendasHoje)}\n`;
-      text += `- **Vendas PDV no Mês:** ${fmt(vendasMes)}\n`;
-      if (produtosBaixoEstoque.length > 0) {
-        text += `- **Produtos Críticos (baixo estoque):** ${produtosBaixoEstoque.length} itens\n`;
+      text += `- **Vendas PDV no Mês:** ${fmt(vendasMes)}\n\n`;
+
+      text += `## 🛒 Mercado & Despensa\n`;
+      if (itensMercadoBaixoEstoque.length > 0) {
+        text += `- **Itens Críticos (baixo estoque na despensa):** ${itensMercadoBaixoEstoque.length} itens\n`;
+      } else {
+        text += `- **Estoque da Despensa:** Regularizado\n`;
       }
       text += `\n`;
 

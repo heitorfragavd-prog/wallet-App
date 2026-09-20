@@ -16,8 +16,7 @@ import {
   Wrench, 
   Trash2, 
   CheckCircle, 
-  Bell, 
-  BellOff,
+  Bell,
   Edit,
   Tag,
   Sparkles,
@@ -124,7 +123,7 @@ export const ListaManutencoes = ({ veiculoId, quilometragemAtual = 0 }: ListaMan
           description: `"${confirmDialog.nome}" foi removida.`,
         });
       }
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: "Erro ao Remover",
         description: "Não foi possível remover a manutenção. Tente novamente.",
@@ -168,11 +167,11 @@ export const ListaManutencoes = ({ veiculoId, quilometragemAtual = 0 }: ListaMan
     });
   };
 
-  const handleSaveEditar = async (data: any) => {
+  const handleSaveEditar = async (data: Partial<PlanoManutencaoVeiculo & ManutencaoCustomizada>) => {
     if (editarModal.tipo === 'plano') {
-      await atualizarPlano(data);
+      await atualizarPlano(data as Partial<PlanoManutencaoVeiculo>);
     } else {
-      await atualizarCustomizada(data);
+      await atualizarCustomizada(data as Partial<ManutencaoCustomizada>);
     }
   };
 

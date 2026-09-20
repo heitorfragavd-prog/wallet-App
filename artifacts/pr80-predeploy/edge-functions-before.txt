@@ -1,0 +1,52 @@
+﻿================================================================================
+SNAPSHOT DE EDGE FUNCTIONS PRE-DEPLOY (PR #80) - PRODUCAO
+Data/Hora: 2026-09-10 15:22:13 UTC
+Project Ref: hdeguzxkdvebdrrutbnx
+Total Deployed: 18
+================================================================================
+
+--- LISTA DE FUNCOES IMPLANTADAS EM PRODUCAO ---
+
+Name                       Slug                       Status Version UpdatedAt              
+----                       ----                       ------ ------- ---------              
+eyemobile-sync             eyemobile-sync             ACTIVE      88 2026-08-19 20:28:45 UTC
+divipay-api                divipay-api                ACTIVE      19 2026-08-18 13:47:38 UTC
+divipay-webhook            divipay-webhook            ACTIVE      16 2026-07-31 18:08:36 UTC
+gerar-recibo               gerar-recibo               ACTIVE      11 2026-08-02 22:50:54 UTC
+validar-senha              validar-senha              ACTIVE      12 2026-08-06 14:10:56 UTC
+ia-deposito                ia-deposito                ACTIVE      11 2026-08-06 14:03:16 UTC
+atualizar-cotacoes         atualizar-cotacoes         ACTIVE      11 2026-08-06 14:03:31 UTC
+cron-alertas-investimentos cron-alertas-investimentos ACTIVE      11 2026-08-06 14:03:51 UTC
+openai-proxy               openai-proxy               ACTIVE      36 2026-08-19 19:31:51 UTC
+wallet-public-api          wallet-public-api          ACTIVE      27 2026-08-12 18:28:21 UTC
+telegram-webhook           telegram-webhook           ACTIVE     128 2026-09-09 13:53:38 UTC
+notificar-lembretes        notificar-lembretes        ACTIVE      10 2026-08-18 16:13:43 UTC
+wallet-ai-orchestrator     wallet-ai-orchestrator     ACTIVE      30 2026-09-08 19:23:42 UTC
+wallet-ai-query            wallet-ai-query            ACTIVE      12 2026-08-19 10:22:53 UTC
+telegram-notificador-cron  telegram-notificador-cron  ACTIVE       9 2026-08-19 13:34:03 UTC
+lembrete-precos            lembrete-precos            ACTIVE       9 2026-08-19 20:28:49 UTC
+sefaz-sync                 sefaz-sync                 ACTIVE       9 2026-08-20 00:46:11 UTC
+pluggy-api                 pluggy-api                 ACTIVE       9 2026-08-25 14:15:37 UTC
+
+
+
+--- COMPARATIVO COM AS 13 FUNCOES ENDURECIDAS DO PR #80 ---
+
+Function_PR80               Deployed_In_Prod      
+-------------               ----------------      
+openai-proxy                YES                   
+categorizar-ia              NO (New in PR80/Local)
+ia-deposito                 YES                   
+divipay-webhook             YES                   
+divipay-api                 YES                   
+eyemobile-sync              YES                   
+eyemobile-webhook           NO (New in PR80/Local)
+telegram-webhook            YES                   
+validar-senha               YES                   
+emitir-recibo               NO (New in PR80/Local)
+consultar-cnpj              NO (New in PR80/Local)
+processar-notificacoes-push NO (New in PR80/Local)
+execute-webhook-maintenance NO (New in PR80/Local)
+
+
+

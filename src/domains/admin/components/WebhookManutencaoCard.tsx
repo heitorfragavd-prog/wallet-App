@@ -55,7 +55,7 @@ export default function WebhookManutencaoCard({ webhook, onUpdate }: WebhookManu
       });
       setShowDeleteDialog(false);
       onUpdate?.();
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: "Erro",
         description: "Erro ao excluir webhook",

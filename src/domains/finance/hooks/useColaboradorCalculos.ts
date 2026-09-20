@@ -3,10 +3,11 @@ import { useMemo } from 'react';
 import {
   calcularCustoColaborador,
   centavosParaDecimal,
+  dataCivilSaoPaulo,
   decimalParaCentavos,
-  EstadoContrato,
-  RegimeEncargos,
   resolverEstadoContrato,
+  type EstadoContrato,
+  type RegimeEncargos,
 } from '../services/equipeCalculations';
 import { Colaborador } from './useColaboradores';
 import { ColaboradorCusto } from './useColaboradorCustos';
@@ -36,8 +37,8 @@ export interface CalculosColaborador {
   diasFaltas: number;
   diasAtrasos: number;
   percentualFaltas: number;
+  estadoContrato: EstadoContrato | null;
   diasParaFimExperiencia: number | null;
-  estadoContrato: EstadoContrato;
 }
 
 const EMPTY_CALCULATIONS: CalculosColaborador = {
@@ -64,8 +65,8 @@ const EMPTY_CALCULATIONS: CalculosColaborador = {
   diasFaltas: 0,
   diasAtrasos: 0,
   percentualFaltas: 0,
+  estadoContrato: null,
   diasParaFimExperiencia: null,
-  estadoContrato: { estado: 'inativo', diasRestantes: null, dataFim: null },
 };
 
 const TRANSPORT_COST_TYPES = new Set([
@@ -183,14 +184,17 @@ export function useColaboradorCalculos(
     const diasAtrasos = presencas.filter((presenca) => presenca.atraso_minutos > 0).length;
     const percentualFaltas = presencas.length > 0 ? (diasFaltas / presencas.length) * 100 : 0;
 
-    const estadoContrato = resolverEstadoContrato({
-      statusPersistido: colaborador.status,
-      dataAdmissao: colaborador.data_admissao,
-      diasExperiencia: colaborador.dias_experiencia,
-      dataDemissao: colaborador.data_demissao,
-    });
-
-    const diasParaFimExperiencia = estadoContrato.estado === 'experiencia'
+    const estadoContrato = isFuncionario
+      ? resolverEstadoContrato({
+        statusPersistido: colaborador.status,
+        dataAdmissao: colaborador.data_admissao,
+        diasExperiencia: colaborador.dias_experiencia || 90,
+        dataReferencia: dataCivilSaoPaulo(new Date()),
+        dataDemissao: colaborador.data_demissao,
+      })
+      : null;
+    const diasParaFimExperiencia = estadoContrato?.estado === 'experiencia'
+      || estadoContrato?.estado === 'decisao'
       ? estadoContrato.diasRestantes
       : null;
 
@@ -218,8 +222,8 @@ export function useColaboradorCalculos(
       diasFaltas,
       diasAtrasos,
       percentualFaltas,
-      diasParaFimExperiencia,
       estadoContrato,
+      diasParaFimExperiencia,
     };
   }, [colaborador, custos, presencas, mesRef, regimeEncargos]);
 }

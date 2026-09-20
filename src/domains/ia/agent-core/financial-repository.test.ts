@@ -84,4 +84,42 @@ describe("financial repository", () => {
 
     await expect(repository.listRevenues(context, period)).rejects.toThrow("repository_scope_mismatch");
   });
+
+  it("does NOT request deduplication_key column (column does not exist in DB tables)", async () => {
+    // REGRESSION: financial-repository was requesting deduplication_key in SELECT,
+    // which caused PostgREST to return an error ("column does not exist"),
+    // which cascaded into financial_query_failed → Agent V2 loop on "quanto vendi hoje".
+    const capturedColumns: string[] = [];
+    const repository = createFinancialRepository(async (query) => {
+      capturedColumns.push(query.columns);
+      return [];
+    });
+
+    await Promise.all([
+      repository.listRevenues(context, period),
+      repository.listExpenses(context, period),
+      repository.listTransactions(context, period),
+    ]);
+
+    for (const cols of capturedColumns) {
+      expect(cols).not.toContain("deduplication_key");
+    }
+  });
+
+  it("does NOT request saldo column in contas_usuario (only saldo_atual exists)", async () => {
+    let capturedColumns = "";
+    const repository = createFinancialRepository(async (query) => {
+      if (query.table === "contas_usuario") {
+        capturedColumns = query.columns;
+      }
+      return [];
+    });
+
+    await repository.listBalances(context);
+
+    expect(capturedColumns).toContain("saldo_atual");
+    // Column 'saldo' does not exist in contas_usuario and causes PostgREST error
+    const cols = capturedColumns.split(",");
+    expect(cols).not.toContain("saldo");
+  });
 });

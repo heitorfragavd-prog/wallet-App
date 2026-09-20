@@ -1,26 +1,28 @@
 import { useMemo } from "react";
-import { useTransacoes } from "./useTransacoes";
+import { useDespesas } from "./useDespesas";
 import { useDividas } from "./useDividas";
 import { useRecurringTransactions } from "./useRecurringTransactions";
 import { useContasUsuario } from "./useContasUsuario";
+import { getHojeSaoPaulo } from "../utils/dateHelpers";
 
 export function useBurnRate() {
-  const hoje = new Date();
-  const ano = hoje.getFullYear();
-  const mes = String(hoje.getMonth() + 1).padStart(2, "0");
+  const hojeStr = getHojeSaoPaulo();
+  const [ano, mes] = hojeStr.split("-");
   const inicioMes = `${ano}-${mes}-01`;
-  const fimMes = new Date(ano, hoje.getMonth() + 1, 0).toISOString().split("T")[0];
-  const diasNoMes = new Date(ano, hoje.getMonth() + 1, 0).getDate();
+  const fimMes = new Date(Number(ano), Number(mes), 0).toISOString().split("T")[0];
+  const diasNoMes = new Date(Number(ano), Number(mes), 0).getDate();
 
-  // CORRECAO: passar filtro de data para useTransacoes — so busca do mes atual
-  const { transacoes } = useTransacoes({ startDate: inicioMes, endDate: fimMes });
+  // Despesas consolidadas do mês atual (saques Divipay + despesas locais pagas)
+  const { despesas: despesasMes } = useDespesas({ startDate: inicioMes, endDate: fimMes });
   const { dividas } = useDividas();
   const { recorrentes } = useRecurringTransactions();
   const { contas } = useContasUsuario();
 
   return useMemo(() => {
-    // Despesas do mes atual (JA filtradas pelo useTransacoes)
-    const despesas = transacoes.filter(t => t.tipo === "despesa").reduce((s, t) => s + Number(t.valor), 0);
+    // Despesas do mês atual consolidadas
+    const despesas = despesasMes
+      .filter(d => d.status === "pago")
+      .reduce((s, d) => s + Number(d.valor || 0), 0);
 
     // Parcelas de dívidas a vencer no mes
     const parcelas = dividas
@@ -44,5 +46,5 @@ export function useBurnRate() {
     const runway = burnRate > 0 ? saldoAtual / burnRate : 999;
 
     return { burnRate, runway, saldoAtual };
-  }, [transacoes, dividas, recorrentes, contas, inicioMes, fimMes, diasNoMes]);
+  }, [despesasMes, dividas, recorrentes, contas, diasNoMes, inicioMes, fimMes]);
 }

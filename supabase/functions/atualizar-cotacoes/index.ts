@@ -115,7 +115,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, updatedCount }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return new Response(JSON.stringify({ error: err.message, success: false }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" }

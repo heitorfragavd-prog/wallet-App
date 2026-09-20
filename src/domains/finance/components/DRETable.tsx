@@ -3,7 +3,7 @@ import { useDREData } from "@/domains/finance/components/useDREData";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table";
 import { Badge } from "@/shared/components/ui/badge";
-import { FileText, TrendingUp, TrendingDown, DollarSign, Building2, Store, Landmark } from "lucide-react";
+import { FileText, TrendingUp, TrendingDown, DollarSign, Building2 } from "lucide-react";
 
 export const DRETable: React.FC = () => {
   const { dre, loading, activeWorkspace } = useDREData();

@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/components/ui/dialog";
-import { Target, Plus, AlertCircle, CheckCircle2, TrendingUp, Edit2, Trash2 } from "lucide-react";
+import { Target, Plus, Trash2 } from "lucide-react";
 import { useOrcamentosCategorias } from "@/domains/finance/hooks/useOrcamentosCategorias";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";

@@ -96,7 +96,7 @@ export const NovaReceitaModal: React.FC<NovaReceitaModalProps> = ({
       setValorStr("0,00");
       setObservacoes("");
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Erro ao criar receita",
         description: err.message || "Tente novamente.",

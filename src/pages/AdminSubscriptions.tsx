@@ -74,7 +74,7 @@ export default function AdminSubscriptions() {
 
             if (error) throw error;
             setSubscriptions(data || []);
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao carregar assinaturas");
             logger.error('AdminSubscriptions', 'Erro ao carregar assinaturas', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -113,7 +113,7 @@ export default function AdminSubscriptions() {
             setRenewDialogOpen(false);
             setSelectedSub(null);
             fetchSubscriptions();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao renovar assinatura");
             logger.error('AdminSubscriptions', 'Erro ao renovar assinatura', { id: selectedSub?.id, error: error instanceof Error ? error.message : String(error) });
         }
@@ -132,7 +132,7 @@ export default function AdminSubscriptions() {
 
             toast.success("Assinatura cancelada!");
             fetchSubscriptions();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao cancelar assinatura");
         }
     };
@@ -148,7 +148,7 @@ export default function AdminSubscriptions() {
 
             toast.success("Assinatura reativada!");
             fetchSubscriptions();
-        } catch (error) {
+        } catch (_error) {
             toast.error("Erro ao reativar assinatura");
         }
     };

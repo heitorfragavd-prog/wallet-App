@@ -1,5 +1,4 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { PDVHeader } from "@/domains/pdv/components/PDVHeader";
 import { PDVSearchInput } from "@/domains/pdv/components/PDVSearchInput";
 import { PDVProductGrid, type PDVProduct } from "@/domains/pdv/components/PDVProductGrid";
@@ -12,11 +11,22 @@ import { TERMINALS, DEFAULT_TERMINAL_SERIAL } from "@/domains/pdv/services/pdvAc
 import { usePDVCart } from "@/domains/pdv/hooks/usePDVCart";
 import { usePDVHotkeys } from "@/domains/pdv/hooks/usePDVHotkeys";
 import { useToast } from "@/shared/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/domains/auth/hooks/useAuth";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/shared/components/ui/dialog";
-import { ArrowLeft, Store, RefreshCw, Smartphone, CheckCircle2, Lock, AlertTriangle, Coins, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Lock, AlertTriangle, Store, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
+
+interface EyemobileRawProduct {
+  id?: string | number;
+  sku?: string | number;
+  name?: string;
+  default_price?: number;
+  price?: number;
+  image?: string;
+}
 
 interface Movimentacao {
   tipo: "abertura" | "venda" | "sangria" | "reforco";
@@ -32,21 +42,6 @@ interface Venda {
   itens: number;
   metodo: string;
 }
-
-const DEFAULT_PRODUCTS: PDVProduct[] = [
-  { id: "1", name: "Salgado Assado", price: 8.0, category: "salgados" },
-  { id: "2", name: "Pão de Queijo", price: 6.0, category: "salgados" },
-  { id: "3", name: "Café Expresso", price: 5.0, category: "café" },
-  { id: "4", name: "Refrigerante Lata", price: 7.0, category: "bebidas" },
-  { id: "5", name: "Bolo de Cenoura", price: 9.0, category: "doces" },
-  { id: "6", name: "Café com Leite", price: 6.5, category: "café" },
-  { id: "7", name: "Suco Natural", price: 8.5, category: "bebidas" },
-  { id: "8", name: "Combo Café + Salgado", price: 12.0, category: "combos" },
-  { id: "9", name: "Coxinha", price: 7.5, category: "salgados" },
-  { id: "10", name: "Pudim", price: 8.0, category: "doces" },
-  { id: "11", name: "Água Mineral", price: 4.0, category: "bebidas" },
-  { id: "12", name: "Combo Refri + Salgado", price: 13.5, category: "combos" },
-];
 
 function getProductCategory(name: string): string {
   const n = name.toLowerCase();
@@ -68,9 +63,23 @@ function getProductCategory(name: string): string {
 }
 
 const PDVPage: React.FC = () => {
-  const navigate = useNavigate();
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const getProductCacheKey = useCallback((uid: string) => {
+    return `pdv_produtos_cache_${uid}`;
+  }, []);
+
+  // Limpeza preventiva da chave de cache legada global
+  useEffect(() => {
+    try {
+      localStorage.removeItem("pdv_produtos_cache");
+    } catch {
+      // Ignora indisponibilidade de localStorage
+    }
+  }, []);
 
   // Estados principais com persistência no LocalStorage
   const [isCaixaAberto, setIsCaixaAberto] = useState<boolean>(() => {
@@ -154,7 +163,11 @@ const PDVPage: React.FC = () => {
     setTimeout(focusSearch, 50);
   }, [addItem, focusSearch, isCaixaAberto]);
 
+  const activeUserIdRef = useRef<string | null>(null);
+
   const fetchProducts = useCallback(async (showToast = false) => {
+    if (!user?.id) return;
+    const requestUserId = user.id;
     setIsLoadingProducts(true);
     try {
       const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -162,8 +175,9 @@ const PDVPage: React.FC = () => {
       });
       if (error) throw error;
       if (data?.products && Array.isArray(data.products)) {
-        const mapped: PDVProduct[] = data.products.map((p: any) => {
-          const cat = getProductCategory(p.name);
+        const rawProducts = data.products as EyemobileRawProduct[];
+        const mapped: PDVProduct[] = rawProducts.map((p) => {
+          const cat = getProductCategory(String(p.name ?? ""));
           return {
             id: String(p.id ?? p.sku ?? ""),
             name: String(p.name ?? "Produto sem nome").trim(),
@@ -174,42 +188,120 @@ const PDVPage: React.FC = () => {
               : undefined,
           };
         });
+
+        // Guarda contra race condition: o usuário ativo ainda é quem disparou a chamada?
+        if (activeUserIdRef.current !== requestUserId) {
+          return;
+        }
+
         setProducts(mapped);
-        localStorage.setItem("pdv_produtos_cache", JSON.stringify(mapped));
+        const cacheKey = getProductCacheKey(requestUserId);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(mapped));
+        } catch {
+          // Ignora indisponibilidade de localStorage
+        }
+
         if (showToast) {
           toast({ title: "Sincronizado!", description: `${mapped.length} produtos carregados do Eyemobile.` });
         }
       } else {
         throw new Error("Resposta de produtos inválida");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
+
       console.error("Erro ao sincronizar produtos:", err);
-      if (showToast) {
+      const cacheKey = getProductCacheKey(requestUserId);
+      let validCache: PDVProduct[] | null = null;
+
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            validCache = parsed;
+          } else {
+            localStorage.removeItem(cacheKey);
+          }
+        }
+      } catch {
+        try {
+          localStorage.removeItem(cacheKey);
+        } catch {
+          // Ignora erro de localStorage
+        }
+      }
+
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
+
+      if (validCache) {
+        setProducts(validCache);
+        if (showToast) {
+          toast({
+            title: "Erro de Sincronização",
+            description: "Não foi possível conectar ao Eyemobile. Usando dados do cache local.",
+            variant: "destructive"
+          });
+        }
+      } else {
+        setProducts([]);
         toast({
-          title: "Erro de Sincronização",
-          description: "Não foi possível conectar ao Eyemobile. Usando dados locais.",
+          title: "Catálogo Indisponível",
+          description: "Não foi possível conectar ao Eyemobile e não há cache local disponível.",
           variant: "destructive"
         });
       }
-      const cached = localStorage.getItem("pdv_produtos_cache");
-      if (cached) {
-        setProducts(JSON.parse(cached));
-      } else {
-        setProducts(DEFAULT_PRODUCTS);
-      }
     } finally {
-      setIsLoadingProducts(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setIsLoadingProducts(false);
+      }
     }
-  }, [toast]);
+  }, [toast, user?.id, getProductCacheKey]);
 
   useEffect(() => {
-    const cached = localStorage.getItem("pdv_produtos_cache");
-    if (cached) {
-      setProducts(JSON.parse(cached));
-    } else {
+    if (authLoading || !user?.id) {
+      activeUserIdRef.current = null;
+      setProducts([]);
+    }
+    if (authLoading || !user?.id) return;
+
+    const currentUserId = user.id;
+    activeUserIdRef.current = currentUserId;
+    setProducts([]);
+
+    const cacheKey = getProductCacheKey(currentUserId);
+    let loadedFromCache = false;
+
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          if (activeUserIdRef.current === currentUserId) {
+            setProducts(parsed);
+            loadedFromCache = true;
+          }
+        } else {
+          localStorage.removeItem(cacheKey);
+        }
+      }
+    } catch {
+      try {
+        localStorage.removeItem(cacheKey);
+      } catch {
+        // Ignora erro de localStorage
+      }
+    }
+
+    if (!loadedFromCache) {
       fetchProducts(false);
     }
-  }, [fetchProducts]);
+  }, [authLoading, user?.id, fetchProducts, getProductCacheKey]);
 
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();

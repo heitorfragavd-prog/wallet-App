@@ -93,7 +93,7 @@ export const pdvActionService = {
         message: data?.error || "Erro ao processar criação do pedido no Eyemobile", 
         timestamp: new Date().toISOString() 
       };
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("[Eyemobile] Falha na rede:", e);
       return { 
         success: false, 

@@ -99,7 +99,7 @@ export function useMetasInvestimento() {
         description: "Meta de investimento criada com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useMetasInvestimento", "Erro ao criar meta", { error: err.message });
       toast({
         variant: "destructive",
@@ -129,7 +129,7 @@ export function useMetasInvestimento() {
         description: "Meta de investimento atualizada com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useMetasInvestimento", "Erro ao atualizar meta", { error: err.message });
       toast({
         variant: "destructive",
@@ -155,7 +155,7 @@ export function useMetasInvestimento() {
         description: "Meta de investimento excluída com sucesso!",
       });
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       logger.error("useMetasInvestimento", "Erro ao excluir meta", { error: err.message });
       toast({
         variant: "destructive",

@@ -1,6 +1,7 @@
 import { logger } from "@/core/logging/LoggerService";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { PostgrestError } from "@supabase/supabase-js";
 import { useToast } from "@/shared/hooks/use-toast";
 import { AnexoTransacao } from "../types";
 
@@ -36,7 +37,7 @@ export const useAttachments = () => {
     file: File,
     transacaoTipo: 'receita' | 'despesa' | 'divida',
     transacaoId: string
-  ): Promise<{ data: AnexoTransacao | null; error: any }> => {
+  ): Promise<{ data: AnexoTransacao | null; error: Error | PostgrestError | null }> => {
     try {
       setUploading(true);
 
@@ -152,7 +153,7 @@ export const useAttachments = () => {
     }
   };
 
-  const deleteAttachment = async (anexoId: string, storagePath: string): Promise<{ error: any }> => {
+  const deleteAttachment = async (anexoId: string, storagePath: string): Promise<{ error: Error | PostgrestError | null }> => {
     try {
       // Delete from storage
       const { error: storageError } = await supabase.storage

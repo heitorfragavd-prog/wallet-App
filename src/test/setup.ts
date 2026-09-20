@@ -1,4 +1,8 @@
 import '@testing-library/jest-dom';
+import { configure } from '@testing-library/dom';
+
+// Increase default async timeout for waitFor to 3000ms under heavy v8 coverage runs
+configure({ asyncUtilTimeout: 3000 });
 
 // Mock IntersectionObserver
 class MockIntersectionObserver implements IntersectionObserver {
@@ -22,19 +26,21 @@ class MockIntersectionObserver implements IntersectionObserver {
 global.IntersectionObserver = MockIntersectionObserver;
 
 // Mock matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
-  }),
-});
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
 
 // Mock ResizeObserver
 class MockResizeObserver {

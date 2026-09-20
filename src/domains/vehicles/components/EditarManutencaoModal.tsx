@@ -28,7 +28,7 @@ interface EditarManutencaoModalProps {
   tipo: 'plano' | 'customizada';
   plano?: PlanoManutencaoVeiculo;
   customizada?: ManutencaoCustomizada;
-  onSave: (data: any) => Promise<void>;
+  onSave: (data: Partial<PlanoManutencaoVeiculo & ManutencaoCustomizada>) => Promise<void>;
 }
 
 const SISTEMAS = [
@@ -140,7 +140,7 @@ export const EditarManutencaoModal = ({
         description: "Manutenção atualizada com sucesso.",
       });
       onOpenChange(false);
-    } catch (error) {
+    } catch (_error) {
       toast({
         title: "Erro ao Salvar",
         description: "Não foi possível atualizar a manutenção. Tente novamente.",

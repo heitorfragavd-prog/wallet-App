@@ -111,7 +111,7 @@ serve(async (req) => {
       JSON.stringify({ success: true, message: "Mensagem enviada com sucesso via Telegram" }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

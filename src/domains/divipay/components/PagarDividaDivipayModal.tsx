@@ -182,7 +182,7 @@ export function PagarDividaDivipayModal({ divida, open, onOpenChange, onSuccess 
           </p>
         </div>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "pix" | "cartao")} className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="pix">🔑 Pix</TabsTrigger>
             <TabsTrigger value="boleto">📄 Boleto</TabsTrigger>

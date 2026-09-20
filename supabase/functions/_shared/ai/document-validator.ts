@@ -10,7 +10,7 @@ export function validateCpfCnpj(raw: string): boolean {
       sum += parseInt(digits.charAt(i), 10) * (10 - i);
     }
     let rest = 11 - (sum % 11);
-    let digit1 = rest === 10 || rest === 11 ? 0 : rest;
+    const digit1 = rest === 10 || rest === 11 ? 0 : rest;
     if (digit1 !== parseInt(digits.charAt(9), 10)) return false;
 
     sum = 0;
@@ -18,7 +18,7 @@ export function validateCpfCnpj(raw: string): boolean {
       sum += parseInt(digits.charAt(i), 10) * (11 - i);
     }
     rest = 11 - (sum % 11);
-    let digit2 = rest === 10 || rest === 11 ? 0 : rest;
+    const digit2 = rest === 10 || rest === 11 ? 0 : rest;
     return digit2 === parseInt(digits.charAt(10), 10);
   }
 

@@ -6,6 +6,9 @@ import type {
   FinancialPeriodContext,
   FinancialSourceReference,
 } from "./financial-types.ts";
+import type { OperationsAgent } from "./operations-agent.ts";
+import type { PaymentMethod } from "./operations-types.ts";
+import type { EyemobileLiveClient } from "../../wallet-ai-query/supabase-adapter.ts";
 
 export interface DatePeriod {
   start: string;
@@ -27,7 +30,15 @@ export interface FinancialQueryRepository {
   listTransactions(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
   listBalances(context: AiExecutionContext): Promise<CanonicalBalance[]>;
   listDebts(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalDebt[]>;
+  /**
+   * Vendas brutas do PDV Eyemobile.
+   * Fonte: tabela `transacoes` WHERE descricao LIKE 'Venda Eyemobile %'.
+   * Retorna o valor BRUTO do que foi vendido no caixa — diferente de receitas
+   * (que incluem Pix/Cartão líquidos, manuais etc.).
+   */
+  listSalesPDV(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
 }
+
 
 export interface QueryToolResult<T = unknown> {
   tool: string;
@@ -104,12 +115,103 @@ function sourceReferences(records: CanonicalFinancialRecord[]): FinancialSourceR
   return [...grouped.entries()].map(([type, ids]) => ({ type, ids }));
 }
 
-export function createQueryToolCatalog(repository: FinancialQueryRepository): QueryToolCatalog {
-  return {
+export interface QueryToolCatalogOptions {
+  extended?: boolean;
+  operationsAgent?: OperationsAgent;
+  eyemobileClient?: EyemobileLiveClient;
+}
+
+export function createQueryToolCatalog(
+  repository: FinancialQueryRepository,
+  optionsOrEyemobileClient: QueryToolCatalogOptions | EyemobileLiveClient = {},
+): QueryToolCatalog {
+  const options: QueryToolCatalogOptions =
+    optionsOrEyemobileClient && "fetchSales" in optionsOrEyemobileClient
+      ? { eyemobileClient: optionsOrEyemobileClient }
+      : (optionsOrEyemobileClient as QueryToolCatalogOptions) ?? {};
+
+  const eyemobileClient = options.eyemobileClient;
+  const catalog: QueryToolCatalog = {
     buscar_receitas: async (args, context) => {
       const period = validatePeriod(args);
       const records = await repository.listRevenues(context, period);
-      return baseResult("buscar_receitas", context, period, records, sourceReferences(records));
+      return baseResult(
+        "buscar_receitas",
+        context,
+        period,
+        records,
+        sourceReferences(records),
+        {},
+        ["ATENÇÃO: esta tool retorna RECEITAS FINANCEIRAS registradas na Wallet (Pix/Cartão líquidos + dinheiro PDV + manuais). Para VENDAS BRUTAS do PDV Eyemobile, use buscar_vendas_pdv."],
+      );
+    },
+    buscar_vendas_pdv: async (args, context) => {
+      // Etapa 1.4b: usa Eyemobile ao vivo (eyemobile-sync DASHBOARD) se disponível.
+      // workspace/userId vêm do AiExecutionContext server-side — nunca do LLM.
+      const period = validatePeriod(args);
+
+      if (eyemobileClient) {
+        try {
+          const result = await eyemobileClient.fetchSales(
+            context.userId,
+            context.workspaceId,
+            period.start,
+            period.end,
+          );
+          const warnings: string[] = [];
+          if (result.stale && result.warning) warnings.push(result.warning);
+          return baseResult(
+            "buscar_vendas_pdv",
+            context,
+            period,
+            { total: result.total, source: result.source, stale: result.stale },
+            [],
+            { totalBruto: "faturamento bruto do PDV Eyemobile no período", source: result.source },
+            warnings,
+          );
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eyemobile_not_configured → informar usuário explicitamente
+          if (msg === "eyemobile_not_configured") {
+            return baseResult(
+              "buscar_vendas_pdv",
+              context,
+              period,
+              { total: null, source: "eyemobile_not_configured", stale: true },
+              [],
+              {},
+              ["Eyemobile não está configurado para este workspace. Não é possível consultar vendas do PDV."],
+            );
+          }
+          // eyemobile_vendas_unavailable → ambas as fontes falharam
+          if (msg === "eyemobile_vendas_unavailable") {
+            return baseResult(
+              "buscar_vendas_pdv",
+              context,
+              period,
+              { total: null, source: "unavailable", stale: true },
+              [],
+              {},
+              ["Não foi possível consultar as vendas do PDV Eyemobile no momento. Tente novamente em instantes."],
+            );
+          }
+          // Erro inesperado — propaga para o orchestrator
+          throw err;
+        }
+      }
+
+      // Fallback sem eyemobileClient: lê tabela sincronizada
+      const records = await repository.listSalesPDV(context, period);
+      const totalBruto = records.reduce((sum, r) => sum + r.amount, 0);
+      return baseResult(
+        "buscar_vendas_pdv",
+        context,
+        period,
+        { total: totalBruto, source: "eyemobile_sync_cache", stale: true },
+        sourceReferences(records),
+        { totalBruto: "soma dos valores brutos das vendas PDV Eyemobile sincronizadas" },
+        ["Usando dados sincronizados (eyemobile-sync DASHBOARD indisponível). Vendas recentes podem não aparecer."],
+      );
     },
     buscar_despesas: async (args, context) => {
       const period = validatePeriod(args);
@@ -173,6 +275,99 @@ export function createQueryToolCatalog(repository: FinancialQueryRepository): Qu
       );
     },
   };
+
+  if (options.extended) {
+    catalog.consultar_fluxo_caixa = async (args, context) => {
+      const period = validatePeriod(args);
+      const [revenues, expenses] = await Promise.all([
+        repository.listRevenues(context, period),
+        repository.listExpenses(context, period),
+      ]);
+      const totalEntradas = revenues.reduce((acc, r) => acc + r.amount, 0);
+      const totalSaidas = expenses.reduce((acc, r) => acc + r.amount, 0);
+      const resultado = totalEntradas - totalSaidas;
+
+      return baseResult(
+        "consultar_fluxo_caixa",
+        context,
+        period,
+        {
+          totalEntradas,
+          totalSaidas,
+          fluxoLiquido: resultado,
+          quantidadeReceitas: revenues.length,
+          quantidadeDespesas: expenses.length,
+        },
+        [...sourceReferences(revenues), ...sourceReferences(expenses)],
+        { fluxoLiquido: "totalEntradas - totalSaidas" },
+      );
+    };
+    catalog.consultar_contas = catalog.consultar_saldos;
+    catalog.consultar_receitas = catalog.buscar_receitas;
+    catalog.consultar_despesas = catalog.buscar_despesas;
+    catalog.consultar_transacoes = catalog.buscar_transacoes;
+  }
+
+  if (options.operationsAgent) {
+    const opAgent = options.operationsAgent;
+
+    catalog.validar_fechamento_caixa = async (args, context) => {
+      const date = String(args.data || args.turno_data || "");
+      const shift = args.turno ? String(args.turno) : undefined;
+      const reportedTotal = args.valor_relatado != null ? Number(args.valor_relatado) : undefined;
+      const reportedByMethod = args.valores_por_meio as Partial<Record<PaymentMethod, number>> | undefined;
+
+      const closingResult = await opAgent.validarFechamentoCaixa(
+        {
+          workspaceId: context.workspaceId,
+          userId: context.userId,
+          date,
+          shift,
+          reportedTotal,
+          reportedByMethod,
+          correlationId: context.correlationId,
+        },
+        context,
+      );
+
+      return baseResult(
+        "validar_fechamento_caixa",
+        context,
+        { start: date, end: date },
+        closingResult,
+        [],
+        { diferenca: "totalInformado - totalEsperado" },
+        closingResult.warnings,
+      );
+    };
+
+    catalog.consultar_vendas_eyemobile = async (args, context) => {
+      const startDate = String(args.data_inicio || args.data || "");
+      const endDate = args.data_fim ? String(args.data_fim) : startDate;
+
+      const salesResult = await opAgent.consultarVendasOperacionais(
+        {
+          workspaceId: context.workspaceId,
+          startDate,
+          endDate,
+          correlationId: context.correlationId,
+        },
+        context,
+      );
+
+      return baseResult(
+        "consultar_vendas_eyemobile",
+        context,
+        salesResult.period,
+        salesResult,
+        [],
+        { totalSales: "soma das vendas operacionais no período" },
+        salesResult.warnings,
+      );
+    };
+  }
+
+  return catalog;
 }
 
 export async function executeQueryTool(

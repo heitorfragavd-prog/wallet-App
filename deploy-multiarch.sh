@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 
 # Script de Deploy Multi-arquitetura para Docker Hub
 # Suporta: linux/amd64, linux/arm64
@@ -11,9 +11,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# ConfiguraÃ§Ãµes
+# Configuracoes
 IMAGE_NAME="heitor84/wallet"
-VERSION="1.0.21"
+
+# Extrai dinamicamente a versao do package.json, com suporte a override via argumento $1 ou variavel de ambiente VERSION
+PACKAGE_VERSION=$(node -p "try { require('./package.json').version } catch(e) { '' }" 2>/dev/null || grep '"version"' package.json | head -1 | awk -F: '{ print $2 }' | sed 's/[", ]//g')
+VERSION="${1:-${VERSION:-${PACKAGE_VERSION:-1.0.49}}}"
 PLATFORMS="linux/amd64,linux/arm64"
 
 echo -e "${GREEN}========================================${NC}"
@@ -21,25 +24,25 @@ echo -e "${GREEN}  Wallet - Deploy Multi-arch${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo -e "${YELLOW}Imagem:${NC} $IMAGE_NAME"
-echo -e "${YELLOW}VersÃ£o:${NC} $VERSION"
+echo -e "${YELLOW}Versao:${NC} $VERSION"
 echo -e "${YELLOW}Plataformas:${NC} $PLATFORMS"
 echo ""
 
-# Verificar se Docker estÃ¡ rodando
+# Verificar se Docker esta rodando
 if ! docker info > /dev/null 2>&1; then
-    echo -e "${RED}âŒ Docker nÃ£o estÃ¡ rodando!${NC}"
+    echo -e "${RED}Erro: Docker nao esta rodando!${NC}"
     exit 1
 fi
 
-# Verificar se estÃ¡ logado no Docker Hub
+# Verificar se esta logado no Docker Hub
 if ! docker info | grep -q "Username"; then
-    echo -e "${YELLOW}âš ï¸  VocÃª nÃ£o estÃ¡ logado no Docker Hub${NC}"
+    echo -e "${YELLOW}Aviso: Voce nao esta logado no Docker Hub${NC}"
     echo -e "${YELLOW}Fazendo login...${NC}"
     docker login
 fi
 
-# Criar builder se nÃ£o existir
-echo -e "${YELLOW}ðŸ”§ Configurando builder multi-arquitetura...${NC}"
+# Criar builder se nao existir
+echo -e "${YELLOW}Configurando builder multi-arquitetura...${NC}"
 if ! docker buildx ls | grep -q "multiarch-builder"; then
     docker buildx create --name multiarch-builder --use
 else
@@ -49,29 +52,29 @@ fi
 # Inicializar builder
 docker buildx inspect --bootstrap
 
-# Build da aplicaÃ§Ã£o
-echo -e "${YELLOW}ðŸ“¦ Fazendo build da aplicaÃ§Ã£o...${NC}"
+# Build da aplicacao
+echo -e "${YELLOW}Fazendo build da aplicacao...${NC}"
 npm run build
 
 # Build e push da imagem multi-arquitetura
-echo -e "${YELLOW}ðŸ³ Fazendo build e push da imagem Docker...${NC}"
+echo -e "${YELLOW}Fazendo build e push da imagem Docker...${NC}"
 
-# Carregar variÃ¡veis do .env se existir
+# Carregar variaveis do .env se existir
 if [ -f .env ]; then
-  echo -e "${YELLOW}ðŸ“ Carregando variÃ¡veis do .env...${NC}"
+  echo -e "${YELLOW}Carregando variaveis do .env...${NC}"
   set -a
   source .env
   set +a
 fi
 
-# Verificar se as variÃ¡veis obrigatÃ³rias estÃ£o definidas
+# Verificar se as variaveis obrigatorias estao definidas
 if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-  echo -e "${RED}âŒ Erro: VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY sÃ£o obrigatÃ³rias!${NC}"
+  echo -e "${RED}Erro: VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY sao obrigatorias!${NC}"
   echo -e "${YELLOW}Por favor, configure o arquivo .env${NC}"
   exit 1
 fi
 
-echo -e "${GREEN}âœ“ VariÃ¡veis de ambiente carregadas${NC}"
+echo -e "${GREEN}Variaveis de ambiente carregadas com sucesso${NC}"
 
 docker buildx build \
   --platform $PLATFORMS \
@@ -89,14 +92,13 @@ docker buildx build \
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}âœ… Deploy concluÃ­do com sucesso!${NC}"
+echo -e "${GREEN}Deploy concluido com sucesso!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo -e "${GREEN}Imagens publicadas:${NC}"
-echo -e "  â€¢ $IMAGE_NAME:$VERSION"
-echo -e "  â€¢ $IMAGE_NAME:latest"
+echo -e "  - $IMAGE_NAME:$VERSION"
+echo -e "  - $IMAGE_NAME:latest"
 echo ""
 echo -e "${YELLOW}Para atualizar no servidor:${NC}"
 echo -e "  docker service update --image $IMAGE_NAME:$VERSION wallet-app"
 echo ""
-

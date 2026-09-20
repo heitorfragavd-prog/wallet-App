@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, no-useless-catch */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Supabase Edge Function: pluggy-api
 // Proxy seguro, autenticado e endurecido para a API da Pluggy (Open Finance).
 // 
@@ -183,25 +183,20 @@ async function getPluggyApiKey(forceRefresh = false, correlationId?: string): Pr
         throw err;
       }
 
-      let resp: Response;
-      try {
-        resp = await fetchWithTimeout(
-          "https://api.pluggy.ai/auth",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ clientId, clientSecret }),
-            timeout: 15000,
-          },
-          {
-            operation: "auth",
-            correlationId,
-            maskedTarget: "https://api.pluggy.ai/auth",
-          }
-        );
-      } catch (err: unknown) {
-        throw err;
-      }
+      const resp = await fetchWithTimeout(
+        "https://api.pluggy.ai/auth",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId, clientSecret }),
+          timeout: 15000,
+        },
+        {
+          operation: "auth",
+          correlationId,
+          maskedTarget: "https://api.pluggy.ai/auth",
+        }
+      );
 
       if (resp.status === 401 || resp.status === 403) {
         const err = new Error("Credenciais da Pluggy inválidas ou rejeitadas pelo provedor.");

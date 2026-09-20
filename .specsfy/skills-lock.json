@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "skills": {},
+  "framework": {
+    "source": "base",
+    "spec_sha256": "1f6935f848d86e3225513940a1965ca997995cd656106d0e2a98e1cbf68827c4",
+    "template_sha256": "52d3fec28b1211f0da8703affcadf3e85557da691dfd0af72452407f358b0ed6",
+    "templates_sha256": {
+      "Inbox.md": "6dabcd3a931275187d77af0ff53e08449e1fbf8dd32410eb4fc7f79ed52a7757",
+      "Backlog.md": "444bca33b2fc604ce46f01c223b9735019a203e7bac665a0029dabfb65c3a4b9",
+      "Spec.md": "52d3fec28b1211f0da8703affcadf3e85557da691dfd0af72452407f358b0ed6",
+      "Tasks.md": "6dd74a7d192b873e70e51ced5923f2150635eaeb8f854990870c7b100e2f6e7c",
+      "Project.md": "f8c44685086d42244566e958b446cb0fccdb339d1077a88fb1a8dc00dd668317",
+      "Stack.md": "fefb0e2ce4b13fec11e065c1e603face7a08f312131c461217b513bc0b82b09b",
+      "Rules.md": "c5564ba5084c9870d8c0bea803cdb700d684d2a62a25821171ddd386584bd57d",
+      "Database.md": "302f07299e98f32c82cf258376a6bd15b04c50ae2d36f360c1f20f839b3d855c",
+      "UserProfile.md": "72686e616e48df4525605983a94ba5a025aaac269cef993aae2f71bc3d3ec8b1",
+      "Interface.md": "06487937046bd7fd5d753f953414aa835e650f0254afc2536bdd0d33d76f4964",
+      "DESIGNSYSTEM.MD": "8e1209afa35cc976f36168224403bcf671963b70fc58b13fde61d91858d62f93"
+    },
+    "example_sha256": "bc159ce6e6094ffc9e72d8022fd1de886b4578b5059ea0effb471476c6fbbf20",
+    "agents_sha256": "849be3a8b8af7ee78fa33b39507d2a1d4bd99161b98c5c9af83f7188c7e4600a",
+    "claude_sha256": "ddd02f4166dbe49fce5e0444bd0ab9fac8dabbf47fd9d38c1539a56efc8bec28"
+  }
+}

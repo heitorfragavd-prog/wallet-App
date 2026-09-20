@@ -33,6 +33,7 @@ const Mercado             = lazyWithRetry(() => import("./pages/Mercado"));
 const Veiculos            = lazyWithRetry(() => import("./pages/Veiculos"));
 const Perfil              = lazyWithRetry(() => import("./pages/Perfil"));
 const IAPage              = lazyWithRetry(() => import("./pages/IAPage"));
+const WalletIAPage        = lazyWithRetry(() => import("./pages/WalletIAPage"));
 const Lembretes           = lazyWithRetry(() => import("./pages/Lembretes"));
 const ContasCartoes       = lazyWithRetry(() => import("./pages/ContasCartoes"));
 const InvestimentoDetalhe = lazyWithRetry(() => import("./pages/InvestimentoDetalhe"));
@@ -109,7 +110,10 @@ function App() {
                   <Route path="/mercado"    element={<ProtectedRoute><Mercado /></ProtectedRoute>} />
                   <Route path="/veiculos"   element={<ProtectedRoute><Veiculos /></ProtectedRoute>} />
                   <Route path="/perfil"     element={<ProtectedRoute><Perfil /></ProtectedRoute>} />
-                  <Route path="/ia"         element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
+                  <Route path="/ia"         element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} /> {/* Wallet IA Unificada */}
+                  <Route path="/ia-v2"      element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} />
+                  <Route path="/ia-chat"    element={<ProtectedRoute><WalletIAPage /></ProtectedRoute>} />
+                  <Route path="/ia-legacy"  element={<ProtectedRoute><IAPage /></ProtectedRoute>} />       {/* IAPage legada — mantida para rollback */}
                   <Route path="/lembretes"  element={<ProtectedRoute><Lembretes /></ProtectedRoute>} />
                   <Route path="/eyemobile-pdv" element={<ProtectedRoute><EyemobilePDV /></ProtectedRoute>} />
                   <Route path="/divipay"       element={<ProtectedRoute><Divipay /></ProtectedRoute>} />
@@ -124,9 +128,9 @@ function App() {
                   <Route path="/validades"     element={<ProtectedRoute><Validades /></ProtectedRoute>} />
                   <Route path="/comparativo"   element={<ProtectedRoute><Comparativo /></ProtectedRoute>} />
                   <Route path="/patrimonio"    element={<ProtectedRoute><Patrimonio /></ProtectedRoute>} />
-                  <Route path="/ia-chat"       element={<ProtectedRoute><IAPage /></ProtectedRoute>} />
                   <Route path="/transferencias" element={<ProtectedRoute><Transferencias /></ProtectedRoute>} />
                   <Route path="/agenda"        element={<ProtectedRoute><Agenda /></ProtectedRoute>} />
+
                   <Route path="/subcategorias" element={<ProtectedRoute><Subcategorias /></ProtectedRoute>} />
                   <Route path="/centros-custo" element={<ProtectedRoute><CentrosCusto /></ProtectedRoute>} />
                   <Route path="/fornecedores"  element={<ProtectedRoute><Fornecedores /></ProtectedRoute>} />

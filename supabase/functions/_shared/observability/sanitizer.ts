@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Edge Functions Backend Sanitizer (Deno & TypeScript compatible)
  * 
@@ -31,7 +30,7 @@ const CARD_REGEX = /\b(?:\d{4}[ -]?){3}\d{4}\b|\b\d{13,19}\b/;
 const CPF_REGEX = /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/;
 const CNPJ_REGEX = /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/;
 const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
-const PHONE_REGEX = /\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4}|\d{4})[-.\s]?\d{4}\b/;
+export const PHONE_REGEX = /\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4}|\d{4})[-.\s]?\d{4}\b/;
 
 export function maskString(value: string): string {
   if (!value || typeof value !== 'string') return value;
@@ -63,7 +62,7 @@ export function maskString(value: string): string {
     return value.replace(CNPJ_REGEX, (cnpj) => {
       const digits = cnpj.replace(/\D/g, '');
       if (digits.length === 14) {
-        return `**.${digits.slice(2, 5)}.***\/****-**`;
+        return `**.${digits.slice(2, 5)}.***/****-**`;
       }
       return cnpj;
     });

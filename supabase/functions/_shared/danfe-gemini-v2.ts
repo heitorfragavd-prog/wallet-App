@@ -55,7 +55,7 @@ export interface DanfeExtractionResultV2 {
     valor_frete?: number;
   };
   itens: DanfeItemV2[];
-  itensRejeitados: Array<{ index: number; raw: any; motivo: string }>;
+  itensRejeitados: Array<{ index: number; raw: unknown; motivo: string }>;
   validacao: DanfeValidationResultV2;
   metadados: {
     modelo_utilizado: string;
@@ -90,8 +90,8 @@ export function sanitizeProductDescription(descricaoBruta: string): { descricaoL
 
   const fciPatterns = [
     /Resolu[çc][ãa]o\s+do\s+Senado\s+Federal\s+n[ºo°]?\s*13\/12[^\n]*/gi,
-    /N[úu]mero\s+da\s+FCI:?\s*([A-F0-9\-]{36}|[A-F0-9\-]+)/gi,
-    /FCI:?\s*([A-F0-9\-]{36})/gi,
+    /N[úu]mero\s+da\s+FCI:?\s*([A-F0-9-]{36}|[A-F0-9-]+)/gi,
+    /FCI:?\s*([A-F0-9-]{36})/gi,
     /vBCFCPST[^\n]*/gi,
     /vFCPST[^\n]*/gi,
   ];
@@ -121,7 +121,7 @@ export function sanitizeProductDescription(descricaoBruta: string): { descricaoL
 
 // ─── 2. PARSER DE NÚMEROS BRASILEIROS ───
 
-export function parseFiscalNumber(val: any): number {
+export function parseFiscalNumber(val: unknown): number {
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
   if (!val) return 0;
   const str = String(val).trim();
@@ -137,12 +137,13 @@ export function parseFiscalNumber(val: any): number {
 
 // ─── 3. VALIDAÇÃO ESTRUTURAL DETERMINÍSTICA ESTREITA ───
 
-export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: DanfeItemV2; motivo?: string } {
+export function validateProductRowV2(rawItem: unknown): { isValid: boolean; item?: DanfeItemV2; motivo?: string } {
   if (!rawItem || typeof rawItem !== 'object') {
     return { isValid: false, motivo: 'Objeto nulo ou inválido' };
   }
+  const item = rawItem as Record<string, unknown>;
 
-  const rawDesc = String(rawItem.descricao || '').trim();
+  const rawDesc = String(item.descricao || '').trim();
   if (rawDesc.length < 2) {
     return { isValid: false, motivo: 'Descrição vazia ou muito curta (<2 caracteres)' };
   }
@@ -170,14 +171,14 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
   }
 
   // 3. Validação de Quantidade
-  const qtd = parseFiscalNumber(rawItem.quantidade);
+  const qtd = parseFiscalNumber(item.quantidade);
   if (qtd <= 0) {
-    return { isValid: false, motivo: `Quantidade inválida (${rawItem.quantidade})` };
+    return { isValid: false, motivo: `Quantidade inválida (${item.quantidade})` };
   }
 
   // 4. Validação de Valores Monetários com preservação de origem (lido vs inferido)
-  const vUnitLidoNum = rawItem.valor_unitario != null && String(rawItem.valor_unitario).trim() !== '' ? parseFiscalNumber(rawItem.valor_unitario) : null;
-  const vTotLidoNum = rawItem.valor_total != null && String(rawItem.valor_total).trim() !== '' ? parseFiscalNumber(rawItem.valor_total) : null;
+  const vUnitLidoNum = item.valor_unitario != null && String(item.valor_unitario).trim() !== '' ? parseFiscalNumber(item.valor_unitario) : null;
+  const vTotLidoNum = item.valor_total != null && String(item.valor_total).trim() !== '' ? parseFiscalNumber(item.valor_total) : null;
 
   const temUnitLido = vUnitLidoNum !== null && vUnitLidoNum > 0;
   const temTotLido = vTotLidoNum !== null && vTotLidoNum > 0;
@@ -186,11 +187,11 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
     return { isValid: false, motivo: 'Nenhum valor monetário lido (unitário e total zerados ou nulos)' };
   }
 
-  let valorUnitarioLido: number | null = temUnitLido ? vUnitLidoNum : null;
+  const valorUnitarioLido: number | null = temUnitLido ? vUnitLidoNum : null;
   let valorUnitarioCalculado: number | null = null;
   let valorUnitarioInferido = false;
 
-  let valorTotalLido: number | null = temTotLido ? vTotLidoNum : null;
+  const valorTotalLido: number | null = temTotLido ? vTotLidoNum : null;
   let valorTotalCalculado: number | null = null;
   let valorTotalInferido = false;
 
@@ -208,11 +209,11 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
   const valorUnitarioConsolidado = temUnitLido ? vUnitLidoNum! : valorUnitarioCalculado!;
 
   // 5. Forte Sinal Fiscal Obrigatório (Código >=2 chars OU EAN >=7 chars OU NCM >=4 dígitos OU CFOP 4 dígitos)
-  const codStr = rawItem.codigo ? String(rawItem.codigo).trim() : null;
-  const eanStr = rawItem.ean ? String(rawItem.ean).trim() : null;
-  const ncmStr = rawItem.ncm ? String(rawItem.ncm).trim().replace(/[^0-9]/g, '') : null;
-  const cfopStr = rawItem.cfop ? String(rawItem.cfop).trim().replace(/[^0-9]/g, '') : null;
-  const cstStr = rawItem.cst ? String(rawItem.cst).trim() : null;
+  const codStr = item.codigo ? String(item.codigo).trim() : null;
+  const eanStr = item.ean ? String(item.ean).trim() : null;
+  const ncmStr = item.ncm ? String(item.ncm).trim().replace(/[^0-9]/g, '') : null;
+  const cfopStr = item.cfop ? String(item.cfop).trim().replace(/[^0-9]/g, '') : null;
+  const cstStr = item.cst ? String(item.cst).trim() : null;
 
   const temSinalCodigo = Boolean(codStr && codStr.length >= 2 && codStr !== 'null');
   const temSinalEan = Boolean(eanStr && eanStr.length >= 7 && eanStr !== 'SEM GTIN');
@@ -226,8 +227,8 @@ export function validateProductRowV2(rawItem: any): { isValid: boolean; item?: D
 
   // 6. Tratamento de Unidade (NUNCA INVENTAR "UN")
   let unidadeFinal: string | null = null;
-  if (rawItem.unidade) {
-    const uUpper = String(rawItem.unidade).trim().toUpperCase();
+  if (item.unidade) {
+    const uUpper = String(item.unidade).trim().toUpperCase();
     if (UNIDADES_FISCAIS_VALIDAS.has(uUpper)) {
       unidadeFinal = uUpper;
     } else if (uUpper.length >= 1 && uUpper.length <= 4) {
@@ -348,19 +349,318 @@ export function validateDanfeMathV2(itens: DanfeItemV2[], valorProdutosDeclarado
   };
 }
 
+// ─── 4. FORMATAÇÃO E EXTRAÇÃO DETERMINÍSTICA DO NÚMERO DA NF-E ─────────────
+
+/**
+ * Formata um número de NF-e (nNF) para a máscara padrão 000.000.000 sem jamais mover ou trocar dígitos.
+ */
+export function formatNFeNumber(nNF: string | number | null | undefined): string | null {
+  if (nNF === null || nNF === undefined) return null;
+  const digits = String(nNF).replace(/\D/g, "");
+  if (!digits) return null;
+
+  // REGRA ESTRITA: nNF tem exatamente 9 dígitos (padStart se menor, rejeitar se maior).
+  // CNPJ tem 14 dígitos e NUNCA pode ser aceito como número de NF.
+  if (digits.length > 9) {
+    // Número de dígitos inválido para nNF — rejeitar silenciosamente.
+    return null;
+  }
+
+  const padded = digits.padStart(9, "0");
+  return padded.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1.$2.$3");
+}
+
+
+export interface AccessKeyNFeInfo {
+  cUF: string;
+  AAMM: string;
+  CNPJ: string;
+  modelo: string;
+  serie: string;
+  nNF: string; // 9 dígitos
+  nNFFormatado: string; // 000.000.000
+  tpEmis: string;
+  cNF: string;
+  cDV: string;
+}
+
+/**
+ * Calcula o dígito verificador (cDV) de uma chave NF-e de 44 dígitos usando módulo 11 SEFAZ.
+ * Retorna true se o DV calculado coincidir com o DV do último dígito da chave.
+ */
+function validateNFeAccessKeyDV(digits44: string): boolean {
+  if (digits44.length !== 44) return false;
+  const keyDigits = digits44.substring(0, 43);
+  const expectedDV = parseInt(digits44[43], 10);
+
+  let sum = 0;
+  let weight = 2;
+  for (let i = keyDigits.length - 1; i >= 0; i--) {
+    sum += parseInt(keyDigits[i], 10) * weight;
+    weight = weight === 9 ? 2 : weight + 1;
+  }
+  const remainder = sum % 11;
+  const calculatedDV = remainder < 2 ? 0 : 11 - remainder;
+  return calculatedDV === expectedDV;
+}
+
+/**
+ * Valida minimamente se uma sequência de 44 dígitos é uma chave NF-e plausível.
+ * Critérios: exatamente 44 dígitos, modelo = "55" (NF-e) ou "65" (NFC-e), DV válido.
+ */
+function isPlausibleNFeAccessKey(digits44: string): boolean {
+  if (digits44.length !== 44) return false;
+  const modelo = digits44.substring(20, 22);
+  if (modelo !== "55" && modelo !== "65") return false;
+  return validateNFeAccessKeyDV(digits44);
+}
+
+/**
+ * Busca uma chave de acesso válida de 44 dígitos em campos específicos do payload.
+ * NÃO serializa o JSON inteiro nem usa regex de blocos que possa concatenar CNPJ + NF.
+ * Cada candidato é avaliado individualmente. Deve ter exatamente 44 dígitos após limpeza.
+ */
+export function findAccessKeyInPayload(payload: unknown, rawText?: string): string | null {
+  if (!payload && !rawText) return null;
+
+  const payloadRecord = payload as Record<string, unknown> | null | undefined;
+  const cabecalhoRecord = payloadRecord?.cabecalho as Record<string, unknown> | null | undefined;
+
+  // Lista explícita de campos onde a chave de acesso pode estar — nunca o payload inteiro
+  const candidateValues: unknown[] = [
+    payloadRecord?.chave_acesso,
+    payloadRecord?.chave,
+    payloadRecord?.chave_de_acesso,
+    payloadRecord?.nfe_chave,
+    payloadRecord?.access_key,
+    cabecalhoRecord?.chave_acesso,
+    cabecalhoRecord?.chave,
+    cabecalhoRecord?.chave_de_acesso,
+    cabecalhoRecord?.nfe_chave,
+    cabecalhoRecord?.access_key,
+  ];
+
+  for (const cand of candidateValues) {
+    if (cand == null) continue;
+    const raw = String(cand);
+    const clean = raw.replace(/\D/g, "");
+    // Só aceitar se EXATAMENTE 44 dígitos, modelo = 55/65 e DV válido
+    if (clean.length === 44 && isPlausibleNFeAccessKey(clean)) {
+      return clean;
+    }
+  }
+
+  // Busca no rawText fornecido explicitamente (ex: resposta bruta do OCR) —
+  // NUNCA usa JSON.stringify do payload completo, para não concatenar campos separados.
+  if (rawText) {
+    // Sequência contínua de exatamente 44 dígitos (não 43, não 45)
+    const matches = rawText.match(/\b\d{44}\b/g) || [];
+    for (const m of matches) {
+      if (isPlausibleNFeAccessKey(m)) return m;
+    }
+  }
+
+  return null;
+}
+
+
+/**
+ * Extrai deterministicamente as partes estruturais e o número da NF-e (nNF)
+ * a partir de uma chave de acesso oficial de 44 dígitos da SEFAZ.
+ * 
+ * Estrutura:
+ * cUF(2) + AAMM(4) + CNPJ(14) + mod(2) + serie(3) + nNF(9) + tpEmis(1) + cNF(8) + cDV(1) = 44 dígitos
+ */
+export function extractNFeNumberFromAccessKey(chaveAcesso: string | null | undefined): AccessKeyNFeInfo | null {
+  if (!chaveAcesso) return null;
+  const digits = String(chaveAcesso).replace(/\D/g, "");
+  if (digits.length !== 44) return null;
+
+  const cUF = digits.substring(0, 2);
+  const AAMM = digits.substring(2, 6);
+  const CNPJ = digits.substring(6, 20);
+  const modelo = digits.substring(20, 22);
+  const serie = digits.substring(22, 25);
+  const nNF = digits.substring(25, 34); // 9 dígitos da posição 25 a 33 (índice 25 a 34)
+  const tpEmis = digits.substring(34, 35);
+  const cNF = digits.substring(35, 43);
+  const cDV = digits.substring(43, 44);
+
+  return {
+    cUF,
+    AAMM,
+    CNPJ,
+    modelo,
+    serie,
+    nNF,
+    nNFFormatado: formatNFeNumber(nNF) || nNF,
+    tpEmis,
+    cNF,
+    cDV,
+  };
+}
+
+export interface ReconciledNFeNumber {
+  numero_nf: string | null;
+  numero_nf_formatado: string | null;
+  serie_nf: string | null;
+  source_selected: "access_key" | "visual" | "none";
+  match: boolean;
+}
+
+/**
+ * Realiza a conciliação determinística entre o número visual lido pelo modelo e a chave de acesso da SEFAZ.
+ * Se houver divergência entre o número visual e uma chave de acesso válida de 44 dígitos,
+ * a chave de acesso PREVALECE como fonte canônica fiscal.
+ */
+export function reconcileNFeNumber(
+  visualNumber: string | null | undefined,
+  visualSerie: string | null | undefined,
+  accessKey: string | null | undefined,
+  correlationId = "anon",
+  channel: "telegram" | "wallet" = "wallet",
+): ReconciledNFeNumber {
+  const keyInfo = extractNFeNumberFromAccessKey(accessKey);
+  const visualClean = visualNumber ? String(visualNumber).replace(/\D/g, "") : null;
+
+  // REGRA ESTRITA: numero_nf deve ter no máximo 9 dígitos.
+  // CNPJ tem 14 dígitos — se chegou aqui com 14 dígitos, o modelo confundiu CNPJ com NF.
+  const visualIsValid = visualClean && visualClean.length <= 9;
+  const visualNormalized = visualIsValid ? visualClean.padStart(9, "0") : null;
+
+  const digitsOnly = accessKey ? String(accessKey).replace(/\D/g, "") : "";
+  const maskedKey = digitsOnly.length >= 10
+    ? `${digitsOnly.substring(0, 4)}...${digitsOnly.substring(digitsOnly.length - 6)}`
+    : (digitsOnly ? "invalid_len" : "none");
+
+  // Log DANFE_REAL_HEADER_TRACE — payload estrutural sem dados sensíveis
+  console.log(JSON.stringify({
+    log: "DANFE_REAL_HEADER_TRACE",
+    correlation_id: correlationId,
+    channel,
+    numero_nf_raw: visualNumber ?? null,
+    numero_nf_digits_count: visualClean?.length ?? 0,
+    numero_nf_valid_length: visualIsValid,
+    access_key_field_present: !!accessKey,
+    access_key_candidate_digits_count: digitsOnly.length,
+    access_key_candidate_masked: maskedKey,
+    access_key_candidate_valid: !!keyInfo,
+    access_key_modelo: keyInfo?.modelo ?? null,
+    access_key_dv_valid: !!keyInfo,
+  }));
+
+  if (keyInfo) {
+    const keyNum = keyInfo.nNF;
+    const match = visualNormalized === keyNum;
+    const source_selected: "access_key" | "visual" = match ? "visual" : "access_key";
+    const serie_final = visualSerie ? String(visualSerie).trim() : String(Number(keyInfo.serie));
+
+    // Log DANFE_NF_RECONCILIATION_TRACE
+    console.log(JSON.stringify({
+      log: "DANFE_NF_RECONCILIATION_TRACE",
+      correlation_id: correlationId,
+      channel,
+      numero_nf_model: visualNumber ?? null,
+      numero_nf_model_valid: visualIsValid,
+      access_key_found: true,
+      access_key_digits_count: digitsOnly.length,
+      access_key_source: "field",
+      access_key_masked: maskedKey,
+      access_key_modelo: keyInfo.modelo,
+      numero_nf_from_access_key: keyNum,
+      numero_nf_reconciled: keyInfo.nNFFormatado,
+      source_selected,
+      numero_nf_before_formatter: keyNum,
+      numero_nf_after_formatter: keyInfo.nNFFormatado,
+      match,
+    }));
+
+    return {
+      numero_nf: keyNum,
+      numero_nf_formatado: keyInfo.nNFFormatado,
+      serie_nf: serie_final,
+      source_selected,
+      match,
+    };
+  }
+
+  if (visualNormalized) {
+    const formatted = formatNFeNumber(visualNormalized);
+
+    // Log DANFE_NF_RECONCILIATION_TRACE — sem chave
+    console.log(JSON.stringify({
+      log: "DANFE_NF_RECONCILIATION_TRACE",
+      correlation_id: correlationId,
+      channel,
+      numero_nf_model: visualNumber ?? null,
+      numero_nf_model_valid: visualIsValid,
+      access_key_found: false,
+      access_key_digits_count: digitsOnly.length,
+      access_key_source: "none",
+      access_key_masked: maskedKey,
+      access_key_modelo: null,
+      numero_nf_from_access_key: null,
+      numero_nf_reconciled: formatted,
+      source_selected: "visual",
+      numero_nf_before_formatter: visualNormalized,
+      numero_nf_after_formatter: formatted,
+      match: false,
+    }));
+
+    return {
+      numero_nf: visualNormalized,
+      numero_nf_formatado: formatted,
+      serie_nf: visualSerie ? String(visualSerie).trim() : null,
+      source_selected: "visual",
+      match: false,
+    };
+  }
+
+  // Sem chave e sem número visual válido — nenhum dado confiável
+  console.log(JSON.stringify({
+    log: "DANFE_NF_RECONCILIATION_TRACE",
+    correlation_id: correlationId,
+    channel,
+    numero_nf_model: visualNumber ?? null,
+    numero_nf_model_valid: false,
+    access_key_found: false,
+    access_key_digits_count: digitsOnly.length,
+    access_key_source: "none",
+    access_key_masked: maskedKey,
+    access_key_modelo: null,
+    numero_nf_from_access_key: null,
+    numero_nf_reconciled: null,
+    source_selected: "none",
+    numero_nf_before_formatter: null,
+    numero_nf_after_formatter: null,
+    match: false,
+    invalid_nf_number_length: visualClean ? visualClean.length : 0,
+  }));
+
+  return {
+    numero_nf: null,
+    numero_nf_formatado: null,
+    serie_nf: visualSerie ? String(visualSerie).trim() : null,
+    source_selected: "none",
+    match: false,
+  };
+}
+
+
 export const GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS = `Você é um extrator fiscal especializado em DANFE brasileira.
-Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
+
+Analise esta imagem da DANFE e extraia com máxima precisão o cabeçalho fiscal, a CHAVE DE ACESSO (44 dígitos numéricos localizada no quadro superior direito abaixo do código de barras), a paginação (FOLHA X / Y) e o quadro CÁLCULO DO IMPOSTO (Totais).
 
 Retorne APENAS um JSON no seguinte formato:
 {
   "cabecalho": {
     "fornecedor": "razão social do emitente/fornecedor ou null",
     "cnpj_fornecedor": "CNPJ do emitente ou null",
-    "numero_nf": "número da NF formatado (ex: 013.790.902) ou null",
-    "serie_nf": "série da NF (ex: 26) ou null",
+    "numero_nf": "número da NF impresso no campo Nº (ex: 000.083.208) ou null",
+    "serie_nf": "série da NF (ex: 1) ou null",
     "data_emissao": "data de emissão YYYY-MM-DD ou null",
     "data_entrada": "data de entrada/saída YYYY-MM-DD ou null",
-    "chave_acesso": "chave de acesso de 44 dígitos ou null",
+    "chave_acesso": "transcrição dos 44 dígitos da CHAVE DE ACESSO abaixo do código de barras ou null",
     "pagina_atual": 1,
     "total_paginas": 1
   },
@@ -379,11 +679,14 @@ Retorne APENAS um JSON no seguinte formato:
 }
 
 REGRAS CRÍTICAS:
-1. "pagina_atual" e "total_paginas": identifique no cabeçalho/topo da DANFE o campo de folha (ex: "FOLHA 1/2" -> pagina_atual: 1, total_paginas: 2; "FOLHA 2/2" -> pagina_atual: 2, total_paginas: 2). Se for folha única ("FOLHA 1/1" ou sem indicação de múltiplas folhas), use pagina_atual: 1 e total_paginas: 1.
-2. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
-3. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
-4. Não invente dados. Se não estiver legível na folha, retorne null.
-5. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
+1. "chave_acesso": no quadro superior direito, abaixo do código de barras da DANFE, transcreva a sequência completa de 44 dígitos da CHAVE DE ACESSO. Remova espaços ou transcreva os dígitos.
+2. "numero_nf": leia com atenção o campo "Nº" no cabeçalho da DANFE.
+3. "pagina_atual" e "total_paginas": identifique no cabeçalho/topo da DANFE o campo de folha (ex: "FOLHA 1/2" -> pagina_atual: 1, total_paginas: 2; "FOLHA 2/2" -> pagina_atual: 2, total_paginas: 2). Se for folha única ("FOLHA 1/1" ou sem indicação de múltiplas folhas), use pagina_atual: 1 e total_paginas: 1.
+4. "valor_produtos": extraia o valor numérico exato do campo "VALOR TOTAL DOS PRODUTOS" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou some itens. Campo ilegível = null.
+5. "valor_total_nf": extraia o valor numérico exato do campo "VALOR TOTAL DA NOTA" do quadro CÁLCULO DO IMPOSTO. NUNCA calcule ou invente. Campo ilegível = null.
+6. Não invente dados. Se não estiver legível na folha, retorne null.
+7. "regiao_tabela_produtos": porcentagem vertical (0.0 a 1.0) onde a seção DADOS DO PRODUTO / SERVIÇO começa e termina.`;
+
 
 export const GEMINI_V2_PROMPT_TABELA = `Você é um extrator fiscal especializado em DANFE brasileira.
 

@@ -1,17 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
+
 import {
   calculateRotationNeeded,
   calculateTableCropTiles,
-  analyzeTileCoverage,
-  subdivideCropTile,
   expandCropTileWithMargin,
   classifyVisionResponse,
-  validateProductRow,
   consolidateDanfeItems,
-  deduplicateAndConsolidateItems,
   validateDanfeMath,
   evaluateStockStatus,
   type DanfeItemRaw,
@@ -20,14 +17,63 @@ import {
 import {
   validateProductRowV2,
   validateDanfeMathV2,
-  reconcileAndDeduplicateV2,
-  sanitizeProductDescription,
   GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS,
   GEMINI_V2_PROMPT_TABELA,
-  parseFiscalNumber,
+  findAccessKeyInPayload,
+  reconcileNFeNumber,
   type DanfeItemV2,
-  type DanfeValidationResultV2,
 } from "../_shared/danfe-gemini-v2.ts";
+import {
+  processTelegramUpdate,
+  type TelegramAdapterDependencies,
+} from "../_shared/ai/telegram-channel-adapter.ts";
+import { SupabaseActionProposalRepository } from "../_shared/ai/action-repository.ts";
+import { SupabaseActionDatabaseMutator } from "../_shared/ai/action-executor-registry.ts";
+import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
+import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
+import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
+import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
+import { validateTelegramWebhookSecret } from "../_shared/ai/telegram-webhook-auth.ts";
+import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
+import {
+  cleanDigits,
+  reconcileBoleto,
+  validateLinhaDigitavel,
+  parseBoletoAmount,
+  parseNum,
+  parseDate,
+} from "../_shared/ai/boleto-validator.ts";
+import {
+  extractFocusedBeneficiary,
+  recoverBoletoLineWithFailover,
+  type RegionCandidate,
+} from "../_shared/ai/boleto-service.ts";
+import {
+  acquireAlertaLock,
+  executeEyemobilePriceSync,
+  persistConfirmedPriceAtomic,
+  handlePriceSyncFailure,
+  MSG_FALHA_REMOTO,
+  MSG_FALHA_PERSISTENCIA_LOCAL,
+  MSG_ALERTA_JA_APLICADO,
+  MSG_EM_PROCESSAMENTO,
+  MSG_BLOQUEIO_APLICANDO_EDITAR,
+  MSG_BLOQUEIO_APLICANDO_IGNORAR,
+  type AlertaPreco,
+} from "../_shared/integrations/eyemobile-price-safety.ts";
+import {
+  resolveNfProductEquivalence,
+  searchProductCandidates,
+  suggestConversionFactor,
+  salvarEquivalenciaConfirmada,
+  validarPropostaFase5,
+  validarAtorTelegramFase5,
+  extrairNfItemIdDaProposta,
+  canFinalizeManualEquivalenceProposal,
+  isProposalFinalizedSuccessfully,
+  reverterPropostaParaPendente,
+  type ProductCandidate,
+} from "../_shared/integrations/nf-product-equivalence.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,8 +89,15 @@ function generateToken(): string {
   return token;
 }
 
+interface CategoriaRow {
+  id: string;
+  nome: string;
+  tipo?: string;
+  aliases?: string | null;
+}
+
 async function resolveCategoriaByCredor(
-  supabase: any,
+  supabase: SupabaseClient,
   userId: string,
   credorOrDesc: string,
   supabaseUrl?: string,
@@ -73,16 +126,17 @@ async function resolveCategoriaByCredor(
         .then(() => {});
       return { id: cacheHit.categorias.id, nome: cacheHit.categorias.nome };
     }
-  } catch (err: any) {
-    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err.message);
+  } catch (err: unknown) {
+    console.warn("[telegram-webhook] Aviso ao consultar categoria_credor_cache:", err instanceof Error ? err.message : String(err));
   }
 
-  const { data: categorias } = await supabase
+  const { data: categoriasData } = await supabase
     .from("categorias")
     .select("id,nome,tipo,aliases")
     .eq("user_id", userId);
 
-  if (!categorias || categorias.length === 0) return null;
+  const categorias = (categoriasData as CategoriaRow[] | null) || [];
+  if (categorias.length === 0) return null;
 
   // ─── 2. ALIASES: Sinônimos e marcas cadastrados ───
   for (const cat of categorias) {
@@ -97,10 +151,10 @@ async function resolveCategoriaByCredor(
   }
 
   // ─── 3. MATCH EXATO E POR INCLUSÃO COMPLETA ───
-  const exact = categorias.find((c: any) => normalize(c.nome) === credorNorm);
+  const exact = categorias.find((c) => normalize(c.nome) === credorNorm);
   if (exact) return { id: exact.id, nome: exact.nome };
 
-  const fullInc = categorias.find((c: any) => {
+  const fullInc = categorias.find((c) => {
     const catNorm = normalize(c.nome);
     return catNorm.length >= 3 && (credorNorm.includes(catNorm) || catNorm.includes(credorNorm));
   });
@@ -115,7 +169,7 @@ async function resolveCategoriaByCredor(
   const inputTokens = credorNorm.split(/\s+/).filter((t: string) => t.length >= 3 && !ignoreWords.has(t));
 
   for (const token of inputTokens) {
-    const match = categorias.find((c: any) => {
+    const match = categorias.find((c) => {
       const catNorm = normalize(c.nome);
       return catNorm === token || catNorm.includes(token) || token.includes(catNorm);
     });
@@ -126,7 +180,7 @@ async function resolveCategoriaByCredor(
   if (supabaseUrl && serviceKey && categorias.length > 0) {
     try {
       console.log(`[telegram-webhook] Tentando categorização por LLM para "${credorOrDesc}"...`);
-      const catListStr = categorias.map((c: any, i: number) => `${i + 1}. ${c.nome}`).join("\n");
+      const catListStr = categorias.map((c, i: number) => `${i + 1}. ${c.nome}`).join("\n");
       const prompt = `Você é um classificador financeiro inteligente.
 Dado o nome do beneficiário/fornecedor "${credorOrDesc}", escolha a categoria mais provável entre as seguintes:
 ${catListStr}
@@ -161,15 +215,15 @@ Responda APENAS com o número correspondente (ex: 1, 2, etc). Se nenhuma categor
           return { id: chosenCat.id, nome: chosenCat.nome };
         }
       }
-    } catch (llmCatErr: any) {
-      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr.message);
+    } catch (llmCatErr: unknown) {
+      console.warn("[telegram-webhook] Erro no LLM fallback de categoria:", llmCatErr instanceof Error ? llmCatErr.message : String(llmCatErr));
     }
   }
 
   return null;
 }
 
-async function salvarCacheCategoria(supabase: any, userId: string, credor: string, categoriaId: string) {
+async function salvarCacheCategoria(supabase: SupabaseClient, userId: string, credor: string, categoriaId: string) {
   if (!credor || !categoriaId) return;
   const normalize = (s: string) =>
     s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
@@ -187,8 +241,8 @@ async function salvarCacheCategoria(supabase: any, userId: string, credor: strin
       { onConflict: "user_id,credor_normalizado" }
     );
     console.log(`[telegram-webhook] Cache de categoria salvo: "${credorNorm}" -> ${categoriaId}`);
-  } catch (err: any) {
-    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err.message);
+  } catch (err: unknown) {
+    console.warn("[telegram-webhook] Erro ao salvar cache de categoria:", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -254,14 +308,15 @@ async function transcribeAudio(fileId: string, telegramBotToken: string, supabas
 
     const result = await transcribeResp.json();
     return result.transcription || null;
-  } catch (err: any) {
-    console.error("[transcribeAudio] exception:", err.message);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[transcribeAudio] exception:", errMsg);
     return null;
   }
 }
 
 // ─── PREVISÃO DE CAIXA INTELIGENTE ───
-async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?: string | null): Promise<string> {
+async function calcularPrevisaoCaixa(supabase: SupabaseClient, userId: string, workspaceId?: string | null): Promise<string> {
   const hoje = new Date();
   
   // 1. Saldo atual nas contas
@@ -275,7 +330,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   }
   const { data: contas } = await qContas;
   
-  const saldoAtual = (contas || []).reduce((a: number, c: any) => a + (Number(c.saldo) || 0), 0);
+  const saldoAtual = (contas || []).reduce((a: number, c: { saldo?: unknown }) => a + (Number(c?.saldo) || 0), 0);
   
   // 2. Receitas médias dos últimos 30 dias
   const dataInicio30 = new Date(hoje);
@@ -311,7 +366,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDespFixas = qDespFixas.eq("workspace_id", workspaceId);
   const { data: despesas30d } = await qDespFixas;
   
-  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: any) => a + Number(d.valor || 0), 0);
+  const totalDespesas30d = (despesas30d || []).reduce((a: number, d: { valor?: unknown }) => a + Number(d.valor || 0), 0);
   const despesaDiaria = totalDespesas30d > 0 ? totalDespesas30d / 30 : 0;
   
   // 4. Dívidas a vencer nos próximos 90 dias
@@ -329,7 +384,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
   if (workspaceId) qDividas = qDividas.eq("workspace_id", workspaceId);
   const { data: dividasFuturas } = await qDividas;
   
-  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: any) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
+  const totalDividasProximas = (dividasFuturas || []).reduce((a: number, d: { valor_restante?: unknown; valor_total?: unknown }) => a + (Number(d.valor_restante || d.valor_total) || 0), 0);
   
   // 5. Calcular fluxo diário
   const fluxoDiario = mediaDiariaVendas - despesaDiaria;
@@ -366,7 +421,7 @@ async function calcularPrevisaoCaixa(supabase: any, userId: string, workspaceId?
     msg += `   (<i>${dividasFuturas.length} compromissos</i>)\n\n`;
     
     msg += `<b>Próximos vencimentos:</b>\n`;
-    dividasFuturas.slice(0, 5).forEach((d: any) => {
+    dividasFuturas.slice(0, 5).forEach((d: { data_vencimento?: string; valor_restante?: unknown; valor_total?: unknown; credor?: string; descricao?: string }) => {
       const venc = new Date(d.data_vencimento + "T12:00:00Z");
       const dias = Math.max(0, Math.ceil((venc.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)));
       const emoji = dias <= 3 ? "🔴" : dias <= 7 ? "🟡" : "🟢";
@@ -423,15 +478,16 @@ REGRAS OBRIGATÓRIAS PARA CORREÇÃO:
       const json = await resp.json();
       const raw = json.choices?.[0]?.message?.content?.trim() || "";
       const cleaned = raw.replace(/```json\s*/i, "").replace(/```/g, "").trim();
-      let parsed: any = null;
-      try { parsed = JSON.parse(cleaned); } catch {}
-      const nomeCorrigido = parsed?.beneficiario || parsed?.nome || null;
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = JSON.parse(cleaned); } catch { /* fallback intencional */ }
+      const nomeCorrigido = typeof parsed?.beneficiario === "string" ? parsed.beneficiario : typeof parsed?.nome === "string" ? parsed.nome : null;
       if (nomeCorrigido && nomeCorrigido.length >= 3 && !isNomeDeBanco(nomeCorrigido)) {
         return nomeCorrigido.trim();
       }
     }
-  } catch (e: any) {
-    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", e.message);
+  } catch (e: unknown) {
+    const errMessage = e instanceof Error ? e.message : String(e);
+    console.error("[telegram-webhook] Erro ao reextrair beneficiário:", errMessage);
   }
   return null;
 }
@@ -456,6 +512,66 @@ function parseLinhaDigitavelFebraban(linha: string): { valor: number | null; ven
     vencimento = vencDate.toISOString().split("T")[0];
   }
   return { valor, vencimento };
+}
+
+// ─── VALIDAÇÃO DE DV MÓDULO 10 (campos 1, 2, 3 da linha digitável bancária) ───
+function dvModulo10(digits: string): number {
+  let sum = 0;
+  let factor = 2;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    const prod = parseInt(digits[i], 10) * factor;
+    sum += prod > 9 ? Math.floor(prod / 10) + (prod % 10) : prod;
+    factor = factor === 2 ? 1 : 2;
+  }
+  return (10 - (sum % 10)) % 10;
+}
+
+// Valida os DVs dos campos 1, 2 e 3 de uma linha digitável bancária de 47 dígitos.
+// NÃO inventa nem corrige dígitos — apenas verifica.
+function _validarDVsLinhaDigitavel47(d: string): boolean {
+  if (d.length !== 47) return false;
+  if (dvModulo10(d.slice(0, 9)) !== parseInt(d[9], 10)) return false;
+  if (dvModulo10(d.slice(10, 20)) !== parseInt(d[20], 10)) return false;
+  if (dvModulo10(d.slice(21, 31)) !== parseInt(d[31], 10)) return false;
+  return true;
+}
+
+// Procura subsequência CONTÍNUA de 47 ou 48 dígitos no texto OCR bruto.
+// NUNCA inventa, reordena ou substitui dígitos.
+// Para 47 dígitos: exige DV de todos os 3 campos + FEBRABAN com valor > 0.
+// Para 48 dígitos (guia de arrecadação): aceita estruturalmente se for o único bloco.
+function _buscarLinhaDigitavelNoTexto(textoOCR: string): string | null {
+  if (!textoOCR || textoOCR.length < 20) return null;
+
+  // Primeiro: busca em blocos que parecem linha digitável (sequências longas com pontos/espaços)
+  const blocos = textoOCR.match(/\d[\d.\s]{20,}\d/g) || [];
+  for (const bloco of blocos) {
+    const digits = bloco.replace(/\D/g, "");
+    for (const len of [47, 48]) {
+      for (let start = 0; start <= digits.length - len; start++) {
+        const cand = digits.slice(start, start + len);
+        if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
+          const febraban = parseLinhaDigitavelFebraban(cand);
+          if (febraban.valor && febraban.valor > 0) return cand;
+        }
+        if (len === 48 && digits.length === 48) return cand;
+      }
+    }
+  }
+
+  // Fallback: janela deslizante no total de dígitos do texto
+  const allDigits = textoOCR.replace(/\D/g, "");
+  for (const len of [47, 48]) {
+    for (let start = 0; start <= allDigits.length - len; start++) {
+      const cand = allDigits.slice(start, start + len);
+      if (len === 47 && _validarDVsLinhaDigitavel47(cand)) {
+        const febraban = parseLinhaDigitavelFebraban(cand);
+        if (febraban.valor && febraban.valor > 0) return cand;
+      }
+      if (len === 48 && allDigits.length >= 48 && allDigits.length <= 52) return cand;
+    }
+  }
+  return null;
 }
 
 // ─── VALIDAÇÃO DETERMINÍSTICA ANTI-ALUCINAÇÃO DE BOLETOS ───
@@ -513,12 +629,8 @@ function validarExtracaoBoleto(data: {
     return { valido: false, motivo: "Data de vencimento fora do intervalo esperado" };
   }
 
-  // 5. Linha digitável (se fornecida, deve ter 47 ou 48 dígitos)
-  const linha = String(data.linha_digitavel || "").replace(/\D/g, "");
-  if (linha.length > 0 && linha.length !== 47 && linha.length !== 48) {
-    return { valido: false, motivo: "Linha digitável incompleta ou com dígitos faltantes" };
-  }
-
+  // 5. Linha digitável: se for incompleta/inválida, não aborta o documento;
+  // a conciliação canônica rebaixa o status para 'requer_revisao' de forma segura.
   return { valido: true };
 }
 
@@ -652,51 +764,88 @@ serve(async (req) => {
   });
 
   try {
-    let body: any = {};
+    let body: Record<string, unknown> = {};
     try {
       body = await req.json();
-    } catch (_) {}
+    } catch { /* fallback intencional */ }
 
     // ─── AÇÕES ADMINISTRATIVAS (Info / Configuração do Webhook) ───
-    if (body?.action === "get_webhook_info" || req.method === "GET") {
-      if (!telegramBotToken) {
-        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      const [whResp, meResp] = await Promise.all([
-        fetch(`https://api.telegram.org/bot${telegramBotToken}/getWebhookInfo`).then(r => r.json()),
-        fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json()),
-      ]);
-      return new Response(JSON.stringify({ webhook_info: whResp, bot_info: meResp, expected_url: `${supabaseUrl}/functions/v1/telegram-webhook` }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (body?.action === "get_webhook_info" || body?.action === "setup_webhook" || req.method === "GET") {
+      const authHeader = req.headers.get("Authorization");
+      const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+      const isServiceRole = Boolean(supabaseServiceKey && token === supabaseServiceKey);
 
-    if (body?.action === "setup_webhook") {
-      if (!telegramBotToken) {
-        return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (!isServiceRole) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
-      const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
-      const setResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`).then(r => r.json());
-      const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
-      return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+
+      if (body?.action === "get_webhook_info" || req.method === "GET") {
+        if (!telegramBotToken) {
+          return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const [whResp, meResp] = await Promise.all([
+          fetch(`https://api.telegram.org/bot${telegramBotToken}/getWebhookInfo`).then(r => r.json()),
+          fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json()),
+        ]);
+        return new Response(JSON.stringify({ webhook_info: whResp, bot_info: meResp, expected_url: `${supabaseUrl}/functions/v1/telegram-webhook` }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (body?.action === "setup_webhook") {
+        if (!telegramBotToken) {
+          return new Response(JSON.stringify({ error: "TELEGRAM_BOT_TOKEN não configurado" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
+        const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+        let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`;
+        if (telegramWebhookSecret) {
+          setWebhookUrl += `&secret_token=${encodeURIComponent(telegramWebhookSecret)}`;
+        }
+        const setResp = await fetch(setWebhookUrl).then(r => r.json());
+        const meResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getMe`).then(r => r.json());
+        return new Response(JSON.stringify({ success: true, targetUrl, telegram_response: setResp, bot: meResp }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // ─── CASO 1: Chamada da Web App para vincular a conta via Token ───
     if (body?.action === "vincular") {
-      const { token, user_id } = body;
-      if (!token || !user_id) {
-        return new Response(JSON.stringify({ error: "Token e user_id são obrigatórios" }), {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const userJwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { token } = body;
+      if (!token) {
+        return new Response(JSON.stringify({ error: "Token é obrigatório" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
+      const authenticatedUserId = user.id;
+
       const { data: linkToken, error: tokenErr } = await supabase
         .from("telegram_link_tokens")
         .select("*")
-        .eq("token", token.toUpperCase().trim())
+        .eq("token", String(token).toUpperCase().trim())
         .eq("usado", false)
         .maybeSingle();
 
@@ -707,10 +856,10 @@ serve(async (req) => {
         );
       }
 
-      // Upsert no usuários_telegram
+      // Upsert no usuários_telegram usando authenticatedUserId garantido
       const { error: upsertErr } = await supabase.from("usuarios_telegram").upsert(
         {
-          user_id,
+          user_id: authenticatedUserId,
           telegram_chat_id: linkToken.telegram_chat_id,
           telegram_username: linkToken.telegram_username,
           ativo: true,
@@ -749,6 +898,30 @@ serve(async (req) => {
       });
     }
 
+    // ─── SEGURANÇA (FASE 10.3): Validação Fail-Closed do Webhook Secret do Telegram ───
+    const isTelegramWebhookUpdate = Boolean(
+      body?.update_id !== undefined ||
+      body?.message ||
+      body?.callback_query ||
+      body?.channel_post ||
+      body?.edited_message
+    );
+
+    if (isTelegramWebhookUpdate) {
+      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+      const authResult = validateTelegramWebhookSecret(req.headers, telegramWebhookSecret, {
+        isProduction: Deno.env.get("ENVIRONMENT") === "production" || !Deno.env.get("DENO_DEPLOYMENT_ID"),
+      });
+
+      if (!authResult.authorized) {
+        console.warn(`[telegram-webhook] Webhook não autorizado: ${authResult.reason}`);
+        return new Response(
+          JSON.stringify({ error: "Unauthorized Telegram webhook", code: authResult.reason }),
+          { status: authResult.statusCode || 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
+
     const sendReplyWithButtons = async (replyChatId: string | number, replyText: string, buttons: Array<Array<{ text: string; callback_data: string }>>) => {
       if (!telegramBotToken) return null;
       const resp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
@@ -764,17 +937,26 @@ serve(async (req) => {
       return await resp.json().catch(() => ({}));
     };
 
-    const editMessageText = async (replyChatId: string | number, messageId: number, text: string) => {
+    const editMessageText = async (
+      replyChatId: string | number,
+      messageId: number,
+      text: string,
+      replyMarkup?: unknown
+    ) => {
       if (!telegramBotToken) return;
+      const bodyPayload: Record<string, unknown> = {
+        chat_id: replyChatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+      };
+      if (replyMarkup) {
+        bodyPayload.reply_markup = replyMarkup;
+      }
       await fetch(`https://api.telegram.org/bot${telegramBotToken}/editMessageText`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: replyChatId,
-          message_id: messageId,
-          text,
-          parse_mode: "HTML",
-        }),
+        body: JSON.stringify(bodyPayload),
       }).catch(() => {});
     };
 
@@ -800,300 +982,892 @@ serve(async (req) => {
       }).catch(() => {});
     };
 
+    const executarConfirmacaoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
+      messageIdToEdit?: number
+    ) => {
+      const dados = (proposta.dados || {}) as Record<string, unknown>;
+
+      // 1. Proteção contra duplicação (Idempotência sequencial)
+      if (proposta.status === "confirmada" || dados?.divida_id_gerada) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(
+          `ℹ️ <b>Este boleto já foi confirmado e cadastrado anteriormente.</b>\n` +
+          `Nenhuma dívida duplicada foi gerada.`
+        );
+        return { success: true, already_confirmed: true };
+      }
+
+      // 2. Verificação de expiração
+      if (proposta.status === "expirada" || (proposta.expires_at && new Date(String(proposta.expires_at)) < new Date())) {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await replyFn(`⏰ <b>Esta proposta expirou.</b> Envie o boleto novamente para cadastrar.`);
+        return { success: false, expired: true };
+      }
+
+      // 3. Verificação de cancelamento prévio
+      if (proposta.status === "cancelada") {
+        if (messageIdToEdit) await removeInlineKeyboard(targetChatId, messageIdToEdit);
+        await replyFn(`❌ <b>Esta proposta foi cancelada anteriormente.</b>`);
+        return { success: false, canceled: true };
+      }
+
+      const valorNum = parseNum(dados.valor_total || dados.valor);
+      const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
+      const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
+      const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
+
+      // Busca workspace do usuário para associar a dívida
+      const { data: wsMember } = await supabase
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", targetUserId)
+        .limit(1)
+        .maybeSingle();
+
+      const insertPayload: Record<string, unknown> = {
+        user_id: targetUserId,
+        descricao: desc,
+        valor_total: valorNum,
+        valor_restante: valorNum,
+        valor_pago: 0,
+        data_vencimento: vencIso,
+        credor: credorNome,
+        status: "pendente",
+        parcelas: 1,
+        parcelas_pagas: 0,
+        documento_favorecido: dados.cnpj_cpf_beneficiario || null,
+      };
+
+      if (dados.categoria_id) {
+        insertPayload.categoria_id = dados.categoria_id;
+      }
+
+      if (wsMember?.workspace_id) {
+        insertPayload.workspace_id = wsMember.workspace_id;
+      }
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} action=insert_divida credor="${credorNome}" valor=${valorNum} vencimento=${vencIso}`);
+
+      const { data: dividaInserida, error: errDivida } = await supabase
+        .from("dividas")
+        .insert(insertPayload)
+        .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
+        .single();
+
+      if (errDivida) {
+        console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
+        await replyFn(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
+        return { success: false, error: errDivida.message };
+      }
+
+      if (dividaInserida?.categoria_id && credorNome) {
+        salvarCacheCategoria(supabase, targetUserId, credorNome, dividaInserida.categoria_id).catch(() => {});
+      }
+
+      // Atualização de status e rastreamento de confirmação humana
+      const finalValidationStatus = dados.validation_status === "requer_revisao"
+        ? "manual_confirmed"
+        : (dados.validation_status || "validado");
+
+      const updatedDados = {
+        ...dados,
+        divida_id_gerada: dividaInserida.id,
+        validation_status: finalValidationStatus,
+        confirmed_manually: dados.validation_status === "requer_revisao",
+        confirmed_at: new Date().toISOString(),
+      };
+
+      await supabase
+        .from("telegram_propostas")
+        .update({
+          status: "confirmada",
+          executed_at: new Date().toISOString(),
+          dados: updatedDados,
+        })
+        .eq("id", proposta.id);
+
+      console.log(`[telegram-webhook] [BOLETO_TRACE] correlation_id=${dados?.correlation_id} proposal_id=${proposta.id} validation_status=${finalValidationStatus} divida_id_gerada=${dividaInserida.id} action=confirmed_ok`);
+
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+
+      const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
+
+      const avisoRevisao = dados.validation_status === "requer_revisao"
+        ? `\n✍️ <i>Cadastro confirmado manualmente pelo usuário.</i>\n`
+        : "";
+
+      await replyFn(
+        `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
+        `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
+        (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
+        `💰 Valor: <b>${valFmt}</b>\n` +
+        `🗓️ Vencimento: <b>${vencFmt}</b>\n` +
+        avisoRevisao +
+        `\n🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
+        `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
+      );
+
+      return { success: true, divida: dividaInserida };
+    };
+
+    const executarCancelamentoPropostaBoleto = async (
+      targetUserId: string,
+      targetChatId: string | number,
+      proposta: Record<string, unknown>,
+      replyFn: (text: string) => Promise<unknown>,
+      messageIdToEdit?: number
+    ) => {
+      if (messageIdToEdit) {
+        await removeInlineKeyboard(targetChatId, messageIdToEdit);
+      }
+      if (proposta?.id) {
+        await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
+      }
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: targetUserId, chat_id: targetChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+      await replyFn("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+      return { success: true, canceled: true };
+    };
+
+    const executarConfirmacaoNfSegura = async ({
+      targetUserId,
+      targetChatId,
+      nfId,
+      propostaId,
+      replyFn,
+      messageIdToEdit,
+      callbackQueryId,
+      manualLinkItemInProgressId,
+    }: {
+      targetUserId: string;
+      targetChatId: string | number;
+      nfId: string;
+      propostaId?: string | null;
+      replyFn: (text: string) => Promise<unknown>;
+      messageIdToEdit?: number;
+      callbackQueryId?: string | number;
+      manualLinkItemInProgressId?: string | null;
+    }) => {
+      const fmt = (v: unknown) =>
+        v != null && !isNaN(Number(v))
+          ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "R$ 0,00";
+
+      // 1. Resolução do ID real da NF (caso receba o ID da proposta)
+      let resolvedNfId = nfId;
+      const { data: maybeNf } = await supabase
+        .from("notas_fiscais_compra")
+        .select("id")
+        .eq("id", resolvedNfId)
+        .maybeSingle();
+
+      if (!maybeNf && resolvedNfId) {
+        const { data: maybeProp } = await supabase
+          .from("telegram_propostas")
+          .select("dados")
+          .eq("id", resolvedNfId)
+          .maybeSingle();
+        const propDados = typeof maybeProp?.dados === "string" ? JSON.parse(maybeProp.dados) : maybeProp?.dados;
+        if (propDados?.nf_id) {
+          resolvedNfId = propDados.nf_id;
+        }
+      }
+
+      // 2. Busca da NF com fail-closed
+      const { data: nf, error: nfErr } = await supabase
+        .from("notas_fiscais_compra")
+        .select("*")
+        .eq("id", resolvedNfId)
+        .maybeSingle();
+
+      if (nfErr || !nf) {
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "Nota fiscal não encontrada.");
+        await replyFn("❌ Nota fiscal não encontrada.");
+        return { success: false, reason: "nf_not_found" };
+      }
+
+      // 3. Validação de isolamento do usuário / tenant
+      if (nf.user_id && targetUserId && nf.user_id !== targetUserId) {
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "Você não tem permissão para esta nota fiscal.");
+        await replyFn("❌ Você não tem permissão para esta nota fiscal.");
+        return { success: false, reason: "forbidden" };
+      }
+
+      // 4. Verificação de status anterior (idempotência a nível de NF)
+      if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
+        if (messageIdToEdit) {
+          await editMessageText(targetChatId, messageIdToEdit, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
+        }
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "NF já confirmada!");
+        await replyFn("✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
+        return { success: true, already_confirmed: true };
+      }
+
+      if (nf.status === "requer_revisao") {
+        if (messageIdToEdit) {
+          await editMessageText(targetChatId, messageIdToEdit, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+        }
+        if (callbackQueryId) await answerCallback(String(callbackQueryId), "NF requer revisão e não pode ser confirmada automaticamente.");
+        await replyFn("⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
+        return { success: false, reason: "requer_revisao" };
+      }
+
+      // 5. Busca dos itens da NF
+      const { data: itens, error: itensErr } = await supabase
+        .from("nf_itens")
+        .select("*")
+        .eq("nf_id", nf.id);
+
+      if (itensErr || !itens || itens.length === 0) {
+        await replyFn("❌ NF não encontrada ou sem itens para atualização.");
+        return { success: false, reason: "no_items" };
+      }
+
+      // 6. Preflight determinístico: resolver equivalências com fail-closed
+      const itemResolutions: Array<{
+        item: typeof itens[0];
+        resolution: Awaited<ReturnType<typeof resolveNfProductEquivalence>>;
+        avaliacaoEstoque: ReturnType<typeof evaluateStockStatus>;
+      }> = [];
+
+      for (const item of itens) {
+        // Trata tanto 'processado' quanto legado 'atualizado' como terminal
+        if (item.status_estoque === "processado" || item.status_estoque === "atualizado") {
+          continue;
+        }
+
+        const res = await resolveNfProductEquivalence(supabase, {
+          userId: nf.user_id || targetUserId,
+          workspaceId: nf.workspace_id,
+          itemCodigo: item.codigo_produto,
+          itemDescricao: item.descricao,
+          cnpjFornecedor: nf.cnpj_fornecedor,
+        });
+
+        if (res.status === "error") {
+          console.error(`[telegram-webhook] [NF_CONFIRM_ERROR] Erro ao resolver equivalência do item ${item.id}:`, res.errorMessage);
+          if (callbackQueryId) await answerCallback(String(callbackQueryId), "Erro técnico ao verificar produtos da NF.");
+          await replyFn("⚠️ <b>Erro técnico ao verificar os produtos da NF.</b> Nenhuma alteração foi realizada. Tente novamente mais tarde.");
+          return { success: false, reason: "database_error", error: res.errorMessage };
+        }
+
+        let avaliacao: ReturnType<typeof evaluateStockStatus>;
+        if (res.status === "matched") {
+          avaliacao = evaluateStockStatus(item, {
+            id: res.produto.id,
+            estoque_atual: res.produto.estoque_atual,
+            fator_conversao: res.fatorConversao,
+          });
+        } else {
+          avaliacao = evaluateStockStatus(item, null);
+        }
+
+        itemResolutions.push({
+          item,
+          resolution: res,
+          avaliacaoEstoque: avaliacao,
+        });
+      }
+
+      // 7. Mutação atômica via RPC por item com fail-fast
+      let itensJaProcessados = itens.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+      let itensRecemProcessados = 0;
+      let itensPendentes = 0;
+      let processingFailure: { reason: string; itemId: string; error?: string } | null = null;
+      const alertasCriados: Array<Record<string, unknown>> = [];
+
+      for (const entry of itemResolutions) {
+        const { item, resolution, avaliacaoEstoque } = entry;
+
+        if (
+          resolution.status === "matched" &&
+          avaliacaoEstoque.status_estoque === "processado" &&
+          avaliacaoEstoque.podeGravarHistoricoCusto
+        ) {
+          const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
+
+          const { data: rpcResult, error: rpcError } = await supabase.rpc(
+            "aplicar_item_nf_estoque_custo",
+            {
+              p_item_id: item.id,
+              p_user_id: nf.user_id || targetUserId,
+              p_workspace_id: nf.workspace_id,
+              p_equivalencia_id: resolution.equivalenciaId,
+              p_produto_eyemobile_uuid: resolution.produto.id,
+              p_quantidade_para_estoque: avaliacaoEstoque.quantidadeParaEstoque,
+              p_custo_unitario_convertido: custoConvertido,
+              p_fator_conversao_esperado: resolution.fatorConversao,
+            }
+          );
+
+          if (rpcError) {
+            console.error(`[telegram-webhook] [RPC_ERROR] aplicar_item_nf_estoque_custo falhou para item ${item.id}:`, rpcError);
+            processingFailure = {
+              reason: "rpc_error",
+              itemId: item.id,
+              error: rpcError.message || String(rpcError),
+            };
+            itensPendentes++;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
+          }
+
+          const rpcData = rpcResult as { success?: boolean; code?: string; error?: string } | null;
+          if (rpcData?.code === "already_processed") {
+            itensJaProcessados++;
+            continue;
+          }
+
+          if (!rpcData?.success) {
+            console.error(`[telegram-webhook] [RPC_FAIL] aplicar_item_nf_estoque_custo retornou insucesso para item ${item.id}:`, rpcData);
+            processingFailure = {
+              reason: "rpc_unsuccessful",
+              itemId: item.id,
+              error: rpcData?.error || rpcData?.code || "rpc_returned_false",
+            };
+            itensPendentes++;
+            // Fail-fast no primeiro erro de RPC: parar novos writes
+            break;
+          }
+
+          itensRecemProcessados++;
+
+          // Alerta de aumento de custo > 10% determinístico por produto_eyemobile_uuid
+          try {
+            const dozeMesesAtras = new Date();
+            dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
+
+            let histQuery = supabase
+              .from("historico_custo_produto")
+              .select("custo_unitario, created_at")
+              .eq("user_id", nf.user_id || targetUserId)
+              .eq("produto_eyemobile_uuid", resolution.produto.id)
+              .neq("nf_id", nf.id) // Exclui explicitamente a própria NF
+              .lt("created_at", nf.created_at || new Date().toISOString())
+              .gte("created_at", dozeMesesAtras.toISOString())
+              .order("created_at", { ascending: false })
+              .limit(1);
+
+            if (nf.workspace_id) {
+              histQuery = histQuery.eq("workspace_id", nf.workspace_id);
+            }
+
+            const { data: histAnterior } = await histQuery.maybeSingle();
+
+            const custoAnt = Number(histAnterior?.custo_unitario || resolution.produto.custo_atual || 0);
+            const custoNovo = Number(custoConvertido);
+
+            if (custoAnt > 0 && custoNovo > 0) {
+              const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
+
+              if (variacao > 10) {
+                const precoVendaAtual = Number(resolution.produto.preco_venda || 0);
+                let margemReal = Number(resolution.produto.margem_real_percentual || 0);
+                let precoSugerido = 0;
+
+                if (precoVendaAtual > 0 && custoAnt > 0) {
+                  margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
+                  precoSugerido = custoNovo * (1 + margemReal / 100);
+                } else {
+                  precoSugerido = custoNovo * 1.3;
+                }
+
+                const { data: novoAlerta, error: alertaError } = await supabase
+                  .from("alertas_preco_pendentes")
+                  .insert({
+                    user_id: nf.user_id || targetUserId,
+                    workspace_id: nf.workspace_id,
+                    nf_id: nf.id,
+                    produto_eyemobile_id: resolution.produto.eyemobile_id,
+                    produto_codigo: item.codigo_produto,
+                    produto_descricao: item.descricao,
+                    custo_anterior: custoAnt,
+                    custo_novo: custoNovo,
+                    variacao_custo_percentual: variacao,
+                    preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
+                    margem_real_percentual: margemReal > 0 ? margemReal : null,
+                    preco_sugerido: precoSugerido,
+                    status: "pendente",
+                  })
+                  .select("*")
+                  .single();
+
+                if (alertaError) {
+                  console.error(`[telegram-webhook] [ALERTA_INSERT_ERROR] Erro ao gravar alerta_preco_pendente para item ${item.id}:`, alertaError);
+                } else if (novoAlerta) {
+                  alertasCriados.push(novoAlerta);
+                }
+              }
+            }
+          } catch (errAlerta) {
+            console.error(`[telegram-webhook] Erro ao calcular/gerar alerta de preço para item ${item.id}:`, errAlerta);
+          }
+        } else {
+          // Item não matchou ou fator indefinido:
+          // NÃO regrava status_estoque para 'pendente' (mantém o estado intacto no banco para evitar race conditions)
+          itensPendentes++;
+        }
+      }
+
+      // 8. Reler nf_itens do banco para cálculo real do status final
+      const { data: itensAtualizados } = await supabase
+        .from("nf_itens")
+        .select("status_estoque")
+        .eq("nf_id", nf.id);
+
+      const listaFinal = itensAtualizados || [];
+      const totalItens = listaFinal.length;
+      const qtdTerminais = listaFinal.filter(
+        (i) => i.status_estoque === "processado" || i.status_estoque === "atualizado"
+      ).length;
+
+      let statusFinalNF = "pendente";
+      if (totalItens > 0 && qtdTerminais === totalItens) {
+        statusFinalNF = "confirmada";
+      } else if (qtdTerminais > 0) {
+        statusFinalNF = "parcialmente_processada";
+      } else {
+        statusFinalNF = "pendente";
+      }
+
+      await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nf.id);
+
+      // Proposta só é marcada como confirmada quando 100% dos itens forem terminais
+      if (statusFinalNF === "confirmada") {
+        if (propostaId) {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", propostaId);
+        } else {
+          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nf.id);
+        }
+      }
+
+      await supabase.from("telegram_conversas").upsert(
+        {
+          user_id: nf.user_id || targetUserId,
+          chat_id: targetChatId,
+          estado: alertasCriados.length > 0 ? "aguardando_ajuste_precos" : "livre",
+          proposta_id: alertasCriados.length > 0 ? nf.id : null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "chat_id" }
+      );
+
+      // 9. Mensagem de resposta estruturada
+      let msgConf = statusFinalNF === "confirmada"
+        ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
+        : (itensRecemProcessados > 0 || itensJaProcessados > 0)
+        ? `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`
+        : `⚠️ <b>Nota Fiscal Não Processada (Nenhum produto com vínculo confirmado)</b>\n\n`;
+
+      msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+      msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
+      msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
+      msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
+      if (itensJaProcessados > 0) {
+        msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
+      }
+      if (itensPendentes > 0) {
+        msgConf += `⚠️ <b>Itens pendentes (sem equivalência confirmada ou sem fator CX):</b> ${itensPendentes}\n`;
+        msgConf += `<i>(Esses itens poderão ser processados assim que a equivalência ou o fator forem confirmados).</i>\n`;
+      }
+
+      if (messageIdToEdit) {
+        await editMessageText(targetChatId, messageIdToEdit, msgConf);
+      } else {
+        await replyFn(msgConf);
+      }
+
+      // Se houver itens pendentes, oferece fluxo de vinculação manual para o primeiro item
+      // Não cria proposta duplicada se o item pendente for o mesmo que já está em fluxo manual ativo (ex: retry no vp_ok)
+      if (itensPendentes > 0) {
+        const { data: pendentes } = await supabase
+          .from("nf_itens")
+          .select("*")
+          .eq("nf_id", nf.id)
+          .eq("status_estoque", "pendente")
+          .order("id", { ascending: true })
+          .limit(1);
+
+        const primeiroPendente = pendentes?.[0];
+        if (primeiroPendente && primeiroPendente.id !== manualLinkItemInProgressId) {
+          const { data: propVinculo } = await supabase
+            .from("telegram_propostas")
+            .insert({
+              user_id: nf.user_id || targetUserId,
+              chat_id: Number(targetChatId) || null,
+              tipo: "vincular_produto_nf",
+              dados: {
+                nf_id: nf.id,
+                nf_item_id: primeiroPendente.id,
+                cnpj_fornecedor: nf.cnpj_fornecedor,
+                fornecedor_nome: nf.fornecedor,
+                codigo_produto: primeiroPendente.codigo_produto,
+                descricao_produto: primeiroPendente.descricao,
+                unidade_produto: primeiroPendente.unidade,
+                quantidade: primeiroPendente.quantidade,
+                valor_unitario: primeiroPendente.valor_unitario,
+              },
+              resumo: `Vincular: ${primeiroPendente.descricao || "Item"} (NF ${nf.numero_nf || ""})`,
+              status: "pendente",
+              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            })
+            .select("id")
+            .single();
+
+          if (propVinculo?.id) {
+            let msgPend = `⚠️ <b>Item Pendente de Identificação</b>\n\n`;
+            msgPend += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
+            msgPend += `📄 <b>Item na NF:</b> ${primeiroPendente.descricao || "N/A"}\n`;
+            msgPend += `🔢 <b>Código:</b> ${primeiroPendente.codigo_produto || "N/A"} | <b>Unidade:</b> ${primeiroPendente.unidade || "UN"}\n`;
+            msgPend += `💰 <b>Qtd:</b> ${primeiroPendente.quantidade} × ${fmt(primeiroPendente.valor_unitario)}\n\n`;
+            msgPend += `<i>Este item não possui equivalência confirmada no seu PDV. Deseja vinculá-lo agora?</i>`;
+
+            const botoesPend = [
+              [
+                { text: "🔗 Vincular ao PDV", callback_data: `vp_in:${propVinculo.id}` },
+                { text: "⏭️ Pular Item", callback_data: `vp_skip:${propVinculo.id}` },
+              ],
+            ];
+
+            await sendReplyWithButtons(targetChatId, msgPend, botoesPend);
+          }
+        }
+      }
+
+      if (alertasCriados.length > 0) {
+        for (const alerta of alertasCriados) {
+          let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
+          msgAlerta += `📦 <b>Produto:</b> ${alerta.produto_descricao}\n`;
+          msgAlerta += `📉 <b>Custo anterior:</b> ${fmt(alerta.custo_anterior)}\n`;
+          msgAlerta += `📈 <b>Novo custo:</b> ${fmt(alerta.custo_novo)}\n`;
+          msgAlerta += `🔺 <b>Variação:</b> +${Number(alerta.variacao_custo_percentual).toFixed(1)}%\n\n`;
+
+          if (alerta.preco_venda_atual) {
+            msgAlerta += `🏷️ <b>Preço de venda atual:</b> ${fmt(alerta.preco_venda_atual)}\n`;
+            msgAlerta += `💡 <b>Preço sugerido:</b> ${fmt(alerta.preco_sugerido)} (para manter margem)\n\n`;
+            const idAlertaCurto = String(alerta.id || "").slice(0, 8);
+            msgAlerta += `Para ajustar o preço no PDV:\n`;
+            msgAlerta += `• Responda <code>CONFIRMAR ${idAlertaCurto}</code> para aplicar o sugerido\n`;
+            msgAlerta += `• Responda <code>EDITAR ${idAlertaCurto} 15.00</code> para definir outro valor\n`;
+            msgAlerta += `• Responda <code>IGNORAR ${idAlertaCurto}</code> para manter o atual`;
+          }
+
+          await replyFn(msgAlerta);
+        }
+      }
+
+      if (processingFailure) {
+        return {
+          success: false,
+          reason: processingFailure.reason,
+          failedItemId: processingFailure.itemId,
+          error: processingFailure.error,
+          statusFinalNF,
+          itensRecemProcessados,
+          itensJaProcessados,
+          itensPendentes,
+          alertasCriadosCount: alertasCriados.length,
+        };
+      }
+
+      return {
+        success: true,
+        statusFinalNF,
+        itensRecemProcessados,
+        itensJaProcessados,
+        itensPendentes,
+        alertasCriadosCount: alertasCriados.length,
+      };
+    };
+
     // ─── CASO 2: Webhook enviado diretamente pelo Telegram ───
-    const message = body?.message;
-    const callbackQuery = body?.callback_query;
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
+    const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proposalRepo = new SupabaseActionProposalRepository(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mutator = new SupabaseActionDatabaseMutator(supabase as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conversationRepo = new SupabaseConversationRepository(supabase as any);
+
+    const adapterDeps: TelegramAdapterDependencies = {
+      supabase,
+      telegramBotToken: telegramBotToken || "",
+      runnerFactory: (model) => new OpenAiLlmRunner({ apiKey: openaiApiKey, model }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      repoFactory: () => createFinancialRepository((query) => executeSupabaseFinancialQuery(supabase as any, query)),
+      proposalRepo,
+      mutator,
+      conversationRepo,
+      documentPipelineRunner: processDocumentPipeline,
+      openaiApiKey,
+      geminiApiKey,
+      geminiApiKeyBackup,
+      findDuplicateFn: async (_ctx, params) => {
+        try {
+          if (params.chaveAcesso) {
+            const { data } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .contains("payload", { chave_acesso: params.chaveAcesso })
+              .limit(1);
+            if (data && data.length > 0) {
+              return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+            }
+          }
+          if (params.linhaDigitavel) {
+            const { data } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .contains("payload", { linha_digitavel: params.linhaDigitavel })
+              .limit(1);
+            if (data && data.length > 0) {
+              return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
+            }
+          }
+        } catch {
+          // Fail-safe
+        }
+        return { isDuplicate: false };
+      },
+    };
+
+    if (body?.message || body?.callback_query) {
+      try {
+        const updateResult = await processTelegramUpdate(body, adapterDeps);
+        if (updateResult.handled) {
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } catch (err: unknown) {
+        console.error("[telegram-webhook] Erro no processTelegramUpdate:", err);
+      }
+    }
+
+    const message = body?.message as Record<string, unknown> | undefined;
+    const callbackQuery = body?.callback_query as Record<string, unknown> | undefined;
 
     if (callbackQuery) {
-      const callbackChatId = callbackQuery.message?.chat?.id;
-      const callbackMessageId = callbackQuery.message?.message_id;
-      const callbackData = callbackQuery.data || "";
-      const callbackUserId = callbackQuery.from?.id;
+      const callbackChatId = (callbackQuery.message as Record<string, unknown> | undefined)?.chat
+        ? ((callbackQuery.message as Record<string, unknown>).chat as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+      const callbackMessageId = (callbackQuery.message as Record<string, unknown> | undefined)?.message_id as number | undefined;
+      const callbackData = (callbackQuery.data as string) || "";
+      const callbackUserId = (callbackQuery.from as Record<string, unknown> | undefined)?.id;
 
       let cbUserId: string = "";
       const cbChatId = callbackChatId;
 
-      // 1. Busca pelo Telegram User ID de quem clicou no botão
-      if (callbackUserId) {
-        const { data: uData } = await supabase
-          .from("usuarios_telegram")
-          .select("user_id")
-          .eq("telegram_chat_id", String(callbackUserId))
-          .eq("ativo", true)
-          .maybeSingle();
-        if (uData?.user_id) cbUserId = uData.user_id;
-      }
+      // 1. Autorização estrita para callbacks da Fase 5 (vp_*):
+      // Exige estritamente o Telegram User ID real (from.id) vinculado em usuarios_telegram.
+      // Proíbe terminantemente fallback de grupo/workspace owner.
+      if (callbackData.startsWith("vp_")) {
+        if (callbackUserId) {
+          const { data: uData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackUserId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (uData?.user_id) cbUserId = uData.user_id;
+        }
 
-      // 2. Se for chat privado, busca pelo Chat ID
-      if (!cbUserId && callbackChatId) {
-        const { data: cData } = await supabase
-          .from("usuarios_telegram")
-          .select("user_id")
-          .eq("telegram_chat_id", String(callbackChatId))
-          .eq("ativo", true)
-          .maybeSingle();
-        if (cData?.user_id) cbUserId = cData.user_id;
-      }
+        if (!cbUserId) {
+          await answerCallback(callbackQuery.id as string | number, "Apenas o usuário vinculado pode interagir com este botão.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } else {
+        // Comportamento genérico preservado para outras funcionalidades:
+        // 1. Busca pelo Telegram User ID de quem clicou no botão
+        if (callbackUserId) {
+          const { data: uData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackUserId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (uData?.user_id) cbUserId = uData.user_id;
+        }
 
-      // 3. Se for grupo, busca pelo grupo em telegram_grupos_config
-      if (!cbUserId && callbackChatId) {
-        const { data: gc } = await supabase
-          .from("telegram_grupos_config")
-          .select("workspace_id")
-          .eq("chat_id", String(callbackChatId))
-          .maybeSingle();
+        // 2. Se for chat privado, busca pelo Chat ID
+        if (!cbUserId && callbackChatId) {
+          const { data: cData } = await supabase
+            .from("usuarios_telegram")
+            .select("user_id")
+            .eq("telegram_chat_id", String(callbackChatId))
+            .eq("ativo", true)
+            .maybeSingle();
+          if (cData?.user_id) cbUserId = cData.user_id;
+        }
 
-        if (gc?.workspace_id) {
-          const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", gc.workspace_id).maybeSingle();
-          if (ws?.user_id) cbUserId = ws.user_id;
+        // 3. Se for grupo, busca pelo grupo em telegram_grupos_config
+        if (!cbUserId && callbackChatId) {
+          const { data: gc } = await supabase
+            .from("telegram_grupos_config")
+            .select("workspace_id")
+            .eq("chat_id", String(callbackChatId))
+            .maybeSingle();
+
+          if (gc?.workspace_id) {
+            const { data: ws } = await supabase.from("workspaces").select("user_id").eq("id", gc.workspace_id).maybeSingle();
+            if (ws?.user_id) cbUserId = ws.user_id;
+          }
+        }
+
+        // 4. Se a ação for confirmação de NF existente, busca o user_id da própria NF
+        if (!cbUserId && callbackData.startsWith("nf_")) {
+          const nfId = callbackData.split(":")[1];
+          const { data: nfRow } = await supabase.from("notas_fiscais_compra").select("user_id").eq("id", nfId).maybeSingle();
+          if (nfRow?.user_id) cbUserId = nfRow.user_id;
+        }
+
+        // 5. Se a ação for alerta de preço, busca o user_id do alerta
+        if (!cbUserId && callbackData.startsWith("preco_")) {
+          const parts = callbackData.split(":");
+          const alertaId = parts[1];
+          const { data: alertaRow } = await supabase.from("alertas_preco_pendentes").select("user_id").eq("id", alertaId).maybeSingle();
+          if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
+        }
+
+        // 6. Fail-closed: se o usuário não foi autenticado, encerra sem executar
+        if (!cbUserId) {
+          await answerCallback(callbackQuery.id as string | number, "Usuário não autorizado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
       }
 
-      // 4. Se a ação for confirmação de NF existente, busca o user_id da própria NF
-      if (!cbUserId && callbackData.startsWith("nf_")) {
-        const nfId = callbackData.split(":")[1];
-        const { data: nfRow } = await supabase.from("notas_fiscais_compra").select("user_id").eq("id", nfId).maybeSingle();
-        if (nfRow?.user_id) cbUserId = nfRow.user_id;
-      }
-
-      // 5. Se a ação for alerta de preço, busca o user_id do alerta
-      if (!cbUserId && callbackData.startsWith("preco_")) {
-        const parts = callbackData.split(":");
-        const alertaId = parts[1];
-        const { data: alertaRow } = await supabase.from("alertas_preco_pendentes").select("user_id").eq("id", alertaId).maybeSingle();
-        if (alertaRow?.user_id) cbUserId = alertaRow.user_id;
-      }
-
-      // 6. Fallback para qualquer usuário ativo no sistema
-      if (!cbUserId) {
-        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
-        cbUserId = anyUser?.user_id || "";
-      }
-
-      if (!cbUserId) {
-        await answerCallback(callbackQuery.id, "Usuário não encontrado.");
-        return new Response("OK", { status: 200, headers: corsHeaders });
-      }
-
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
+
+      const replyCallbackFn = async (text: string) => {
+        if (telegramBotToken && cbChatId) {
+          await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: cbChatId, text, parse_mode: "HTML" }),
+          }).catch(() => {});
+        }
+      };
+
+      // ================================================================
+      // BOTÕES DE PROPOSTA DE BOLETO: confirmar_proposta, cancelar_proposta & revisar_proposta
+      // ================================================================
+      if (
+        callbackData.startsWith("confirmar_proposta:") ||
+        callbackData.startsWith("cancelar_proposta:") ||
+        callbackData.startsWith("revisar_proposta:")
+      ) {
+        const isConfirm = callbackData.startsWith("confirmar_proposta:");
+        const isReview = callbackData.startsWith("revisar_proposta:");
+        const propostaId = callbackData.split(":")[1];
+
+        const feedbackMsg = isConfirm
+          ? "Confirmando cadastro..."
+          : isReview
+          ? "Abrindo orientações de revisão..."
+          : "Cancelando proposta...";
+
+        await answerCallback(callbackQuery.id, feedbackMsg);
+
+        const { data: propostaRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propostaId)
+          .maybeSingle();
+
+        if (!propostaRow) {
+          await sendReplyWithButtons(cbChatId, "❌ <b>Proposta não encontrada ou já expirada.</b>", []);
+          if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Validação de segurança: apenas o usuário/workspace proprietário pode confirmar
+        if (propostaRow.user_id && cbUserId && propostaRow.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Você não tem permissão para esta proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (isConfirm) {
+          await executarConfirmacaoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        } else if (isReview) {
+          if (callbackMessageId) {
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+          }
+          await replyCallbackFn(
+            `📸 <b>Revisão de Boleto Requerida</b>\n\n` +
+            `Para garantir a exatidão financeira do cadastro:\n\n` +
+            `1️⃣ Envie uma <b>foto aproximada</b> focando na <b>Ficha de Compensação</b> (rodapé com linha digitável e código de barras);\n` +
+            `2️⃣ Ou envie o boleto original como <b>📎 Arquivo/Documento</b> (para evitar perda de nitidez por compressão).\n\n` +
+            `<i>A IA validará matematicamente os 47 dígitos e o valor exato antes de cadastrar.</i>`
+          );
+        } else {
+          await executarCancelamentoPropostaBoleto(
+            cbUserId || propostaRow.user_id,
+            cbChatId,
+            propostaRow,
+            replyCallbackFn,
+            callbackMessageId
+          );
+        }
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
 
       // ================================================================
       // BOTÃO: nf_confirmar
       // ================================================================
       if (callbackData.startsWith("nf_confirmar:")) {
         const nfId = callbackData.split(":")[1];
-        await removeInlineKeyboard(cbChatId, callbackMessageId);
-
-        const { data: nf } = await supabase
-          .from("notas_fiscais_compra")
-          .select("*")
-          .eq("id", nfId)
-          .single();
-
-        if (!nf) {
-          await answerCallback(callbackQuery.id, "Nota fiscal não encontrada.");
-          return new Response("OK", { status: 200, headers: corsHeaders });
+        await answerCallback(callbackQuery.id, "Processando confirmação da NF...");
+        if (callbackMessageId && cbChatId) {
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
         }
 
-        if (nf.status === "confirmada" || nf.status === "custo_atualizado") {
-          await editMessageText(cbChatId, callbackMessageId, "✅ Esta Nota Fiscal já foi totalmente confirmada anteriormente.");
-          await answerCallback(callbackQuery.id, "NF já confirmada!");
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
+        await executarConfirmacaoNfSegura({
+          targetUserId: cbUserId,
+          targetChatId: cbChatId || "",
+          nfId,
+          replyFn: replyCallbackFn,
+          messageIdToEdit: callbackMessageId,
+          callbackQueryId: callbackQuery.id,
+        });
 
-        if (nf.status === "requer_revisao") {
-          await editMessageText(cbChatId, callbackMessageId, "⚠️ <b>Confirmação bloqueada:</b> Esta Nota Fiscal possui divergências na leitura e requer revisão manual ou envio do XML.");
-          await answerCallback(callbackQuery.id, "NF requer revisão e não pode ser confirmada automaticamente.");
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        const { data: itens } = await supabase
-          .from("nf_itens")
-          .select("*")
-          .eq("nf_id", nfId);
-
-        let itensJaProcessados = 0;
-        let itensRecemProcessados = 0;
-        let itensPendentes = 0;
-
-        const alertasCriados: any[] = [];
-        if (itens && itens.length > 0) {
-          for (const item of itens) {
-            // Se o item já foi processado em uma tentativa anterior, não duplica estoque/custo
-            if (item.status_estoque === "processado") {
-              itensJaProcessados++;
-              continue;
-            }
-
-            const { data: prodEye } = await supabase
-              .from("produtos_eyemobile")
-              .select("*")
-              .eq("user_id", cbUserId)
-              .ilike("descricao", `%${item.descricao.trim()}%`)
-              .limit(1)
-              .maybeSingle();
-
-            const avaliacaoEstoque = evaluateStockStatus(item, prodEye);
-
-            await supabase.from("nf_itens").update({
-              status_estoque: avaliacaoEstoque.status_estoque,
-            }).eq("id", item.id);
-
-            if (avaliacaoEstoque.status_estoque === "processado" && avaliacaoEstoque.podeGravarHistoricoCusto && prodEye) {
-              itensRecemProcessados++;
-              const custoConvertido = avaliacaoEstoque.custoUnitarioConvertido || item.custo_unitario_liquido || item.valor_unitario;
-
-              await supabase.from("produtos_eyemobile").update({
-                custo_atual: custoConvertido,
-                estoque_atual: (Number(prodEye.estoque_atual) || 0) + avaliacaoEstoque.quantidadeParaEstoque,
-                ultima_atualizacao_custo: new Date().toISOString(),
-              }).eq("id", prodEye.id);
-
-              await supabase.from("historico_custo_produto").insert({
-                user_id: cbUserId,
-                workspace_id: nf.workspace_id,
-                produto_descricao: item.descricao,
-                codigo_produto: item.codigo_produto,
-                fornecedor: nf.fornecedor,
-                cnpj_fornecedor: nf.cnpj_fornecedor,
-                custo_unitario_bruto: item.valor_unitario,
-                custo_unitario_liquido: custoConvertido,
-                data_compra: nf.data_emissao || new Date().toISOString().split("T")[0],
-                nf_id: nfId,
-              });
-
-              const dozeMesesAtras = new Date();
-              dozeMesesAtras.setMonth(dozeMesesAtras.getMonth() - 12);
-
-              const { data: histAnterior } = await supabase
-                .from("historico_custo_produto")
-                .select("custo_unitario_liquido, created_at")
-                .eq("user_id", cbUserId)
-                .ilike("produto_descricao", `%${item.descricao.trim()}%`)
-                .lt("created_at", nf.created_at || new Date().toISOString())
-                .gte("created_at", dozeMesesAtras.toISOString())
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (histAnterior && Number(histAnterior.custo_unitario_liquido) > 0) {
-                const custoAnt = Number(histAnterior.custo_unitario_liquido);
-                const custoNovo = Number(custoConvertido);
-                const variacao = ((custoNovo - custoAnt) / custoAnt) * 100;
-
-                if (variacao > 10) {
-                  let precoVendaAtual = Number(prodEye?.preco_venda || 0);
-                  let margemReal = Number(prodEye?.margem_real_percentual || 0);
-                  let precoSugerido = 0;
-
-                  if (precoVendaAtual > 0 && custoAnt > 0) {
-                    margemReal = ((precoVendaAtual / custoAnt) - 1) * 100;
-                    precoSugerido = custoNovo * (1 + margemReal / 100);
-                  } else {
-                    precoSugerido = custoNovo * 1.3;
-                  }
-
-                  const { data: novoAlerta } = await supabase
-                    .from("alertas_preco_pendentes")
-                    .insert({
-                      user_id: cbUserId,
-                      workspace_id: nf.workspace_id,
-                      nf_id: nfId,
-                      produto_eyemobile_id: prodEye?.eyemobile_id || null,
-                      produto_codigo: item.codigo_produto,
-                      produto_descricao: item.descricao,
-                      custo_anterior: custoAnt,
-                      custo_novo: custoNovo,
-                      variacao_custo_percentual: variacao,
-                      preco_venda_atual: precoVendaAtual > 0 ? precoVendaAtual : null,
-                      margem_real_percentual: margemReal > 0 ? margemReal : null,
-                      preco_sugerido: precoSugerido,
-                      status: "pendente",
-                    })
-                    .select("*")
-                    .single();
-
-                  if (novoAlerta) {
-                    alertasCriados.push(novoAlerta);
-                  }
-                }
-              }
-            } else {
-              itensPendentes++;
-            }
-          }
-        }
-
-        // Determina status final da NF baseado no resultado real do processamento
-        let statusFinalNF = "pendente";
-        if (itensPendentes === 0 && (itensRecemProcessados + itensJaProcessados > 0)) {
-          statusFinalNF = "confirmada";
-        } else if (itensRecemProcessados > 0 || itensJaProcessados > 0) {
-          statusFinalNF = "parcialmente_processada";
-        } else {
-          statusFinalNF = "pendente";
-        }
-
-        await supabase.from("notas_fiscais_compra").update({ status: statusFinalNF }).eq("id", nfId);
-        if (statusFinalNF === "confirmada") {
-          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("dados->>nf_id", nfId);
-        }
-
-        let msgConf = statusFinalNF === "confirmada"
-          ? `✅ <b>Nota Fiscal 100% Confirmada e Processada!</b>\n\n`
-          : `⚠️ <b>Nota Fiscal Processada com Pendências</b>\n\n`;
-
-        msgConf += `🏢 <b>Fornecedor:</b> ${nf.fornecedor || "N/A"}\n`;
-        msgConf += `📄 <b>NF:</b> ${nf.numero_nf || "N/A"}\n`;
-        msgConf += `💰 <b>Total:</b> ${fmt(nf.valor_total)}\n\n`;
-        msgConf += `📦 <b>Itens atualizados no estoque agora:</b> ${itensRecemProcessados}\n`;
-        if (itensJaProcessados > 0) {
-          msgConf += `ℹ️ <b>Itens já processados anteriormente:</b> ${itensJaProcessados}\n`;
-        }
-        if (itensPendentes > 0) {
-          msgConf += `⚠️ <b>Itens pendentes (sem produto ou sem fator CX):</b> ${itensPendentes}\n`;
-          msgConf += `<i>(Esses itens poderão ser processados assim que o cadastro/fator for ajustado no PDV).</i>\n`;
-        }
-
-        await editMessageText(cbChatId, callbackMessageId, msgConf);
-
-        if (alertasCriados.length > 0) {
-          for (const alerta of alertasCriados) {
-            let msgAlerta = `🚨 <b>ALERTA DE AUMENTO DE CUSTO</b>\n\n`;
-            msgAlerta += `📦 <b>${alerta.produto_descricao}</b>\n\n`;
-            msgAlerta += `💰 Custo anterior: ${fmt(alerta.custo_anterior)}\n`;
-            msgAlerta += `💰 Custo novo: ${fmt(alerta.custo_novo)}\n`;
-            msgAlerta += `📈 Aumento: <b>+${alerta.variacao_custo_percentual?.toFixed(1)}%</b>\n\n`;
-            if (alerta.preco_venda_atual) msgAlerta += `💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
-            msgAlerta += `💡 <b>PREÇO SUGERIDO: ${fmt(alerta.preco_sugerido)}</b>\n`;
-            if (alerta.margem_real_percentual) msgAlerta += `<i>(margem real ${alerta.margem_real_percentual.toFixed(0)}%)</i>`;
-
-            const botoesPreco = [
-              [{ text: `✅ CONFIRMAR ${fmt(alerta.preco_sugerido)}`, callback_data: `preco_confirmar:${alerta.id}` }],
-              [
-                { text: "✏️ EDITAR PREÇO", callback_data: `preco_editar:${alerta.id}` },
-                { text: "🚫 IGNORAR", callback_data: `preco_ignorar:${alerta.id}` },
-              ],
-            ];
-
-            await sendReplyWithButtons(cbChatId, msgAlerta, botoesPreco);
-          }
-
-          await supabase.from("telegram_conversas").upsert(
-            {
-              user_id: cbUserId,
-              chat_id: Number(cbChatId),
-              estado: "aguardando_ajuste_precos",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "chat_id" }
-          );
-        }
-
-        await answerCallback(callbackQuery.id, "NF confirmada com sucesso!");
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
@@ -1115,54 +1889,136 @@ serve(async (req) => {
       // ================================================================
       if (callbackData.startsWith("preco_confirmar:")) {
         const alertaId = callbackData.split(":")[1];
-        const { data: alerta } = await supabase
+        const { data: alertaPre } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("id", alertaId)
           .maybeSingle();
 
-        if (!alerta) {
+        if (!alertaPre) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
-        if (alerta.produto_eyemobile_id) {
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: cbUserId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: alerta.preco_sugerido,
-            }),
-          });
-          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        if (alertaPre.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Usuário não autorizado para este alerta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "aplicado",
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
+        const lock = await acquireAlertaLock(supabase, {
+          alertaId: alertaPre.id,
+          userId: alertaPre.user_id,
+          workspaceId: alertaPre.workspace_id,
+        });
 
-        if (alerta.produto_eyemobile_id) {
-          await supabase.from("produtos_eyemobile").update({
-            preco_venda: alerta.preco_sugerido,
-          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        if (!lock.acquired) {
+          if (lock.reason === "already_applied") {
+            await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+            await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          if (lock.reason === "already_processing") {
+            await answerCallback(callbackQuery.id, MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          await answerCallback(callbackQuery.id, "Alerta indisponível para processamento.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const alerta = lock.alerta;
+
+        if (!alerta.produto_eyemobile_id || !alerta.preco_sugerido || Number(alerta.preco_sugerido) <= 0) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: "Alerta sem produto_eyemobile_id ou preço sugerido inválido",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Preço inválido.");
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n📦 <b>${alerta.produto_descricao}</b>\n(Preço sugerido ou produto inválido)`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const precoConfirmar = Number(alerta.preco_sugerido);
+
+        const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+          user_id: alerta.user_id,
+          product_id: alerta.produto_eyemobile_id,
+          new_price: precoConfirmar,
+        });
+
+        if (!syncResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: syncResult.error || "Falha na chamada ao Eyemobile",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Falha ao atualizar preço no Eyemobile.");
+          const botoesRetry = [
+            [{ text: "🔄 TENTAR NOVAMENTE", callback_data: `preco_confirmar:${alerta.id}` }],
+            [{ text: "✏️ EDITAR", callback_data: `preco_editar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço tentado: <b>${fmt(precoConfirmar)}</b>\n` +
+            `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+            `Clique abaixo para tentar novamente ou editar:`,
+            { inline_keyboard: botoesRetry }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Persistência atômica via RPC
+        const persistResult = await persistConfirmedPriceAtomic(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          novoPreco: precoConfirmar,
+        });
+
+        if (!persistResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+            isRemoteSuccessLocalFailure: true,
+          });
+          await answerCallback(callbackQuery.id, "Erro ao registrar no banco local.");
+          const botoesReconciliar = [
+            [{ text: "🔄 RECONCILIAR AGORA", callback_data: `preco_confirmar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço no Eyemobile: <b>${fmt(precoConfirmar)}</b>\n\n` +
+            `Clique abaixo para sincronizar o banco local:`,
+            { inline_keyboard: botoesReconciliar }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
         await editMessageText(
           cbChatId,
           callbackMessageId,
-          `✅ <b>Preço atualizado!</b>\n\n` +
+          `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
           `📦 <b>${alerta.produto_descricao}</b>\n` +
-          `💰 Novo preço: <b>${fmt(alerta.preco_sugerido)}</b>` +
-          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+          `💰 Preço de venda: <b>${fmt(precoConfirmar)}</b>\n` +
+          `📈 Margem mantida: <b>${Number(alerta.margem_real_percentual || 0).toFixed(0)}%</b>`
         );
         await answerCallback(callbackQuery.id, "Preço aplicado no Eyemobile!");
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1181,6 +2037,18 @@ serve(async (req) => {
 
         if (!alerta) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicando") {
+          await answerCallback(callbackQuery.id, MSG_BLOQUEIO_APLICANDO_EDITAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
@@ -1214,9 +2082,33 @@ serve(async (req) => {
       // ================================================================
       if (callbackData.startsWith("preco_ignorar:")) {
         const alertaId = callbackData.split(":")[1];
+        const { data: alerta } = await supabase
+          .from("alertas_preco_pendentes")
+          .select("*")
+          .eq("id", alertaId)
+          .maybeSingle();
+
+        if (!alerta) {
+          await answerCallback(callbackQuery.id, "Alerta não encontrado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicando") {
+          await answerCallback(callbackQuery.id, MSG_BLOQUEIO_APLICANDO_IGNORAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+          await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         await supabase.from("alertas_preco_pendentes").update({
           status: "ignorado",
           data_resolucao: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         }).eq("id", alertaId);
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
@@ -1238,55 +2130,134 @@ serve(async (req) => {
         const alertaId = parts[1];
         const precoDigitado = parseFloat(parts[2]);
 
-        const { data: alerta } = await supabase
+        const { data: alertaPre } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("id", alertaId)
           .maybeSingle();
 
-        if (!alerta) {
+        if (!alertaPre) {
           await answerCallback(callbackQuery.id, "Alerta não encontrado.");
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        let updateResult: any = { success: true };
-        if (alerta.produto_eyemobile_id) {
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: cbUserId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: precoDigitado,
-            }),
-          });
-          updateResult = await updateResp.json().catch(() => ({ success: false }));
+        if (alertaPre.user_id !== cbUserId) {
+          await answerCallback(callbackQuery.id, "Usuário não autorizado para este alerta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "aplicado",
-          preco_definido_usuario: precoDigitado,
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
+        const lock = await acquireAlertaLock(supabase, {
+          alertaId: alertaPre.id,
+          userId: alertaPre.user_id,
+          workspaceId: alertaPre.workspace_id,
+        });
 
-        if (alerta.produto_eyemobile_id) {
-          await supabase.from("produtos_eyemobile").update({
-            preco_venda: precoDigitado,
-          }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", cbUserId);
+        if (!lock.acquired) {
+          if (lock.reason === "already_applied") {
+            await answerCallback(callbackQuery.id, MSG_ALERTA_JA_APLICADO);
+            await removeInlineKeyboard(cbChatId, callbackMessageId);
+            await editMessageText(cbChatId, callbackMessageId, MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          if (lock.reason === "already_processing") {
+            await answerCallback(callbackQuery.id, MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          await answerCallback(callbackQuery.id, "Alerta indisponível para processamento.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const alerta = lock.alerta;
+
+        if (!alerta.produto_eyemobile_id || isNaN(precoDigitado) || precoDigitado <= 0) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: "Alerta sem produto_eyemobile_id ou preço digitado inválido",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Preço inválido.");
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n📦 <b>${alerta.produto_descricao}</b>\n(Preço digitado inválido)`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+          user_id: alerta.user_id,
+          product_id: alerta.produto_eyemobile_id,
+          new_price: precoDigitado,
+        });
+
+        if (!syncResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: syncResult.error || "Falha na chamada ao Eyemobile",
+            isRemoteSuccessLocalFailure: false,
+          });
+          await answerCallback(callbackQuery.id, "Falha ao atualizar preço no Eyemobile.");
+          const botoesRetry = [
+            [{ text: "🔄 TENTAR NOVAMENTE", callback_data: `preco_confirmar_editado:${alerta.id}:${precoDigitado}` }],
+            [{ text: "✏️ EDITAR", callback_data: `preco_editar:${alerta.id}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_REMOTO}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço tentado: <b>${fmt(precoDigitado)}</b>\n` +
+            `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+            `Clique abaixo para tentar novamente ou editar:`,
+            { inline_keyboard: botoesRetry }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Persistência atômica via RPC
+        const persistResult = await persistConfirmedPriceAtomic(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          novoPreco: precoDigitado,
+        });
+
+        if (!persistResult.success) {
+          await handlePriceSyncFailure(supabase, {
+            alertaId: alerta.id,
+            userId: alerta.user_id,
+            workspaceId: alerta.workspace_id,
+            reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+            isRemoteSuccessLocalFailure: true,
+          });
+          await answerCallback(callbackQuery.id, "Erro ao registrar no banco local.");
+          const botoesReconciliar = [
+            [{ text: "🔄 RECONCILIAR AGORA", callback_data: `preco_confirmar_editado:${alerta.id}:${precoDigitado}` }],
+          ];
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+            `📦 <b>${alerta.produto_descricao}</b>\n` +
+            `💰 Preço no Eyemobile: <b>${fmt(precoDigitado)}</b>\n\n` +
+            `Clique abaixo para sincronizar o banco local:`,
+            { inline_keyboard: botoesReconciliar }
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         await removeInlineKeyboard(cbChatId, callbackMessageId);
         await editMessageText(
           cbChatId,
           callbackMessageId,
-          `✅ <b>Preço atualizado!</b>\n\n` +
+          `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
           `📦 <b>${alerta.produto_descricao}</b>\n` +
-          `💰 Novo preço: <b>${fmt(precoDigitado)}</b>` +
-          (updateResult?.success ? "" : "\n⚠️ <i>(Atualizado localmente)</i>")
+          `💰 Preço de venda: <b>${fmt(precoDigitado)}</b>\n` +
+          `📈 Margem mantida: <b>${alerta.margem_real_percentual ? Number(alerta.margem_real_percentual).toFixed(0) : "0"}%</b>`
         );
         await answerCallback(callbackQuery.id, "Preço aplicado!");
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1336,6 +2307,693 @@ serve(async (req) => {
           }),
         });
 
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ================================================================
+      // FASE 5: BOTÕES DE VINCULAÇÃO MANUAL DE PRODUTO DA NF (vp_*)
+      // ================================================================
+
+      // ─── BOTÃO: vp_in (Iniciar/reabrir seleção de produto) ───
+      if (callbackData.startsWith("vp_in:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Buscando candidatos...");
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+        const { data: nfRow } = await supabase
+          .from("notas_fiscais_compra")
+          .select("workspace_id")
+          .eq("id", propDados.nf_id)
+          .eq("user_id", cbUserId)
+          .maybeSingle();
+
+        const wsId = nfRow?.workspace_id || propDados.workspace_id;
+        const searchRes = await searchProductCandidates(supabase, {
+          userId: cbUserId,
+          workspaceId: wsId,
+          descricaoQuery: propDados.descricao_produto,
+          limit: 3,
+        });
+
+        const candidates = searchRes.ok ? searchRes.candidates : [];
+
+        if (candidates.length === 0) {
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: cbUserId,
+              chat_id: cbChatId,
+              estado: "aguardando_busca_produto_nf",
+              proposta_id: propRow.id,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+
+          await replyCallbackFn(
+            `🔍 <b>Nenhum candidato com cadastro PDV válido encontrado</b>\n\n` +
+            `Item na NF: <b>${propDados.descricao_produto}</b>\n\n` +
+            `Por favor, digite o <b>nome ou código</b> do produto cadastrado no seu PDV:\n` +
+            `<i>(Ou envie CANCELAR para voltar).</i>`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        propDados.candidatos = candidates;
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        let msgSel = `🔍 <b>Vincular Produto ao PDV</b>\n\n`;
+        msgSel += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+        msgSel += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+        msgSel += `🔢 <b>Código:</b> ${propDados.codigo_produto} | <b>Unidade:</b> ${propDados.unidade_produto || "UN"}\n\n`;
+        msgSel += `Selecione o produto correspondente no seu catálogo:\n\n`;
+        candidates.forEach((c: ProductCandidate, idx: number) => {
+          msgSel += `${idx + 1}️⃣ <b>${c.descricao}</b>${c.codigo ? ` (Cód: ${c.codigo})` : ""}\n`;
+        });
+
+        const botoesSel = candidates.map((c: ProductCandidate, idx: number) => [
+          { text: `${idx + 1}️⃣ ${c.descricao.slice(0, 28)}`, callback_data: `vp_c:${propRow.id}:${idx + 1}` },
+        ]);
+        botoesSel.push([
+          { text: "🔎 Buscar outro produto", callback_data: `vp_bus:${propRow.id}` },
+        ]);
+        botoesSel.push([
+          { text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` },
+        ]);
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgSel, { inline_keyboard: botoesSel });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgSel, botoesSel);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_c (Seleção do candidato) ───
+      if (callbackData.startsWith("vp_c:")) {
+        const parts = callbackData.split(":");
+        const propId = parts[1];
+        const idx = parseInt(parts[2], 10);
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+        const candidatos = propDados.candidatos as ProductCandidate[] | undefined;
+        const candidato = candidatos?.[idx - 1];
+
+        if (!candidato) {
+          await answerCallback(callbackQuery.id, "Candidato inválido.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (!candidato.eyemobileId || candidato.eyemobileId.trim() === "") {
+          await answerCallback(callbackQuery.id, "Produto sem identificador remoto (eyemobile_id).");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Produto selecionado!");
+        propDados.produto_selecionado = candidato;
+
+        const fatorSug = suggestConversionFactor(propDados.unidade_produto, propDados.descricao_produto);
+        propDados.fator_sugerido = fatorSug;
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+        const PACKAGING_UNITS = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"];
+        const ehEmbalagem = PACKAGING_UNITS.includes(uNorm);
+
+        let msgFat = `📦 <b>Fator de Conversão de Estoque</b>\n\n`;
+        msgFat += `📄 <b>Item na NF:</b> ${propDados.descricao_produto} (Un: <b>${propDados.unidade_produto || "UN"}</b>)\n`;
+        msgFat += `🎯 <b>Produto no PDV:</b> ${candidato.descricao}\n\n`;
+
+        let botoesFat: Array<Array<{ text: string; callback_data: string }>> = [];
+
+        if (ehEmbalagem) {
+          if (fatorSug && fatorSug > 1) {
+            msgFat += `Quantas unidades individuais existem em <b>1 ${propDados.unidade_produto}</b>?\n`;
+            msgFat += `💡 Sugestão identificada na descrição: <b>${fatorSug}</b>`;
+            botoesFat = [
+              [{ text: `✅ Confirmar ${fatorSug} unidades`, callback_data: `vp_f:${propRow.id}:sug` }],
+              [{ text: "✏️ Digitar outro número", callback_data: `vp_f:${propRow.id}:dig` }],
+              [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+            ];
+          } else {
+            msgFat += `A unidade de compra é <b>${propDados.unidade_produto}</b> (embalagem múltipla).\n`;
+            msgFat += `Informe a quantidade de unidades individuais em cada ${propDados.unidade_produto}:`;
+            botoesFat = [
+              [{ text: "✏️ Informar fator (ex: 6, 12, 24)", callback_data: `vp_f:${propRow.id}:dig` }],
+              [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+            ];
+          }
+        } else {
+          // Unidades fora da lista de embalagem (UN, KG, PCT, etc.): apenas conversão direta (fator = 1)
+          msgFat += `A conversão é direta (1 ${propDados.unidade_produto || "UN"} = 1 unidade no estoque)?`;
+          botoesFat = [
+            [{ text: `✅ Confirmar 1 ${propDados.unidade_produto || "UN"} = 1 UN`, callback_data: `vp_f:${propRow.id}:1` }],
+            [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+          ];
+        }
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgFat, { inline_keyboard: botoesFat });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgFat, botoesFat);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_f (Confirmação do fator ou solicitação de digitação) ───
+      if (callbackData.startsWith("vp_f:")) {
+        const parts = callbackData.split(":");
+        const propId = parts[1];
+        const opt = parts[2];
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+        const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+        const PACKAGING_UNITS = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"];
+        const ehEmbalagem = PACKAGING_UNITS.includes(uNorm);
+
+        if (opt === "dig") {
+          if (!ehEmbalagem) {
+            await answerCallback(callbackQuery.id, "Unidade suporta apenas conversão direta (fator 1).");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          await answerCallback(callbackQuery.id, "Aguardando digitação do fator.");
+          await supabase.from("telegram_conversas").upsert(
+            {
+              user_id: cbUserId,
+              chat_id: cbChatId,
+              estado: "aguardando_fator_conversao_nf",
+              proposta_id: propRow.id,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "chat_id" }
+          );
+
+          await replyCallbackFn(
+            `✏️ <b>Digite o número de unidades por embalagem</b> (ex: 6, 12, 24):\n` +
+            `<i>(Apenas números > 1. Ou responda CANCELAR para voltar).</i>`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        let fatorNum = 1;
+        if (opt === "sug") {
+          fatorNum = Number(propDados.fator_sugerido || 1);
+        } else if (opt === "1") {
+          fatorNum = 1;
+        } else {
+          fatorNum = Number(opt);
+        }
+
+        if (isNaN(fatorNum) || !isFinite(fatorNum) || fatorNum <= 0) {
+          await answerCallback(callbackQuery.id, "Fator inválido.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (ehEmbalagem && fatorNum <= 1) {
+          await answerCallback(callbackQuery.id, "Para embalagens, o fator deve ser > 1.");
+          await replyCallbackFn("⚠️ Para embalagens (caixas/fardos), o fator deve ser maior que 1. Clique em 'Digitar outro número' para informar o valor correto.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (!ehEmbalagem && Math.abs(fatorNum - 1) > 1e-6) {
+          await answerCallback(callbackQuery.id, "Unidade suporta apenas fator 1.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Fator definido!");
+        propDados.fator_escolhido = fatorNum;
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ dados: propDados })
+          .eq("id", propRow.id)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        // Tela 4: Resumo Final de Confirmação Obrigatório
+        let msgResumo = `📋 <b>CONFIRMAR VÍNCULO DE PRODUTO?</b>\n\n`;
+        msgResumo += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+        msgResumo += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+        msgResumo += `🔢 <b>Código Fornecedor:</b> ${propDados.codigo_produto}\n\n`;
+        msgResumo += `🎯 <b>Produto no PDV:</b> ${propDados.produto_selecionado?.descricao}\n`;
+        msgResumo += `⚖️ <b>Conversão:</b> 1 ${propDados.unidade_produto || "UN"} = <b>${fatorNum} unidade(s)</b>\n\n`;
+        msgResumo += `⚠️ <i>Este vínculo será salvo e reutilizado automaticamente em todas as próximas notas fiscais deste fornecedor.</i>`;
+
+        const botoesResumo = [
+          [{ text: "✅ Confirmar vínculo e atualizar estoque", callback_data: `vp_ok:${propRow.id}` }],
+          [{ text: "🔄 Alterar seleção", callback_data: `vp_in:${propRow.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+        ];
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, msgResumo, { inline_keyboard: botoesResumo });
+        } else {
+          await sendReplyWithButtons(cbChatId, msgResumo, botoesResumo);
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_bus (Ativar busca textual manual) ───
+      if (callbackData.startsWith("vp_bus:")) {
+        const propId = callbackData.split(":")[1];
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Digite o termo de busca.");
+
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: cbUserId,
+            chat_id: cbChatId,
+            estado: "aguardando_busca_produto_nf",
+            proposta_id: propId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+
+        await replyCallbackFn(
+          `🔎 <b>Buscar Produto no PDV</b>\n\n` +
+          `Digite o nome ou código do produto cadastrado no seu sistema:\n` +
+          `<i>(Ou envie CANCELAR para voltar).</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_ok (Confirmação final explícita do vínculo) ───
+      if (callbackData.startsWith("vp_ok:")) {
+        const propId = callbackData.split(":")[1];
+        await answerCallback(callbackQuery.id, "Salvando vínculo e processando estoque...");
+
+        // Lock atômico estrito: inclui id, user_id, chat_id, tipo, status e não-expiração no próprio UPDATE
+        const nowIso = new Date().toISOString();
+        const { data: propRow, error: lockErr } = await supabase
+          .from("telegram_propostas")
+          .update({ status: "em_processamento" })
+          .eq("id", propId)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente")
+          .gt("expires_at", nowIso)
+          .select("*")
+          .maybeSingle();
+
+        if (lockErr || !propRow) {
+          await answerCallback(callbackQuery.id, "Proposta inválida, expirada, não autorizada ou já processada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+
+        // Resolução de compatibilidade entre nf_item_id (novo) e item_id (legado)
+        const nfItemId = extrairNfItemIdDaProposta(propDados);
+        if (!nfItemId) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Identificador do item não encontrado na proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Revalidação autoritativa da NF no banco
+        const { data: nfRow, error: nfErr } = await supabase
+          .from("notas_fiscais_compra")
+          .select("id, workspace_id, user_id, fornecedor, cnpj_fornecedor")
+          .eq("id", propDados.nf_id)
+          .eq("user_id", cbUserId)
+          .maybeSingle();
+
+        if (nfErr || !nfRow) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Nota fiscal não encontrada ou não autorizada para este usuário.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const wsId = nfRow.workspace_id;
+
+        // Revalidação autoritativa do item da NF no banco
+        const { data: itemRow, error: itemErr } = await supabase
+          .from("nf_itens")
+          .select("id, nf_id, codigo_produto, descricao, unidade")
+          .eq("id", nfItemId)
+          .eq("nf_id", nfRow.id)
+          .maybeSingle();
+
+        if (itemErr || !itemRow) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Item da nota fiscal não encontrado ou desvinculado.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Revalidação autoritativa do produto canônico no banco (não confia em campos cacheados na proposta)
+        const prodUuid = propDados.produto_selecionado?.id;
+        if (!prodUuid) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Produto selecionado não identificado na proposta.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const { data: prodCanonical, error: prodErr } = await supabase
+          .from("produtos_eyemobile")
+          .select("id, workspace_id, user_id, eyemobile_id, descricao")
+          .eq("id", prodUuid)
+          .eq("workspace_id", wsId)
+          .eq("user_id", cbUserId)
+          .maybeSingle();
+
+        if (prodErr || !prodCanonical) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ Produto selecionado não encontrado no seu catálogo de produtos.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (!prodCanonical.eyemobile_id || String(prodCanonical.eyemobile_id).trim() === "") {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          await replyCallbackFn("❌ O produto selecionado não possui ID remoto válido no PDV (eyemobile_id).");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        const saveRes = await salvarEquivalenciaConfirmada(supabase, {
+          userId: cbUserId,
+          workspaceId: wsId,
+          cnpjFornecedor: nfRow.cnpj_fornecedor,
+          codigoProdutoFornecedor: itemRow.codigo_produto,
+          produtoEyemobileUuid: prodCanonical.id,
+          fatorConversao: propDados.fator_escolhido,
+          fornecedorNome: nfRow.fornecedor,
+          descricaoFornecedor: itemRow.descricao,
+          unidadeFornecedor: itemRow.unidade,
+        });
+
+        if (!saveRes.success) {
+          await supabase
+            .from("telegram_propostas")
+            .update({ status: "pendente" })
+            .eq("id", propRow.id)
+            .eq("user_id", propRow.user_id)
+            .eq("chat_id", propRow.chat_id)
+            .eq("tipo", "vincular_produto_nf")
+            .eq("status", "em_processamento");
+          if (callbackMessageId) await removeInlineKeyboard(cbChatId, callbackMessageId);
+          await replyCallbackFn(`⚠️ <b>Não foi possível salvar o vínculo:</b> ${saveRes.error}`);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let execRes: any;
+        try {
+          execRes = await executarConfirmacaoNfSegura({
+            targetUserId: cbUserId,
+            targetChatId: cbChatId,
+            nfId: propDados.nf_id,
+            replyFn: replyCallbackFn,
+            callbackQueryId: callbackQuery.id,
+            manualLinkItemInProgressId: nfItemId,
+          });
+        } catch (execErr: unknown) {
+          console.error("[telegram-webhook] Erro ao executar confirmação segura de NF:", execErr);
+          execRes = { success: false, reason: "exception", error: String(execErr) };
+        }
+
+        // Reler o status_estoque real do item após o executor
+        const { data: itemPosExec } = await supabase
+          .from("nf_itens")
+          .select("status_estoque")
+          .eq("id", nfItemId)
+          .eq("nf_id", nfRow.id)
+          .maybeSingle();
+
+        const itemEstoqueFinal = itemPosExec?.status_estoque;
+        const podeFinalizar = canFinalizeManualEquivalenceProposal({
+          executorSuccess: execRes?.success === true,
+          itemStatus: itemEstoqueFinal,
+        });
+
+        if (!podeFinalizar) {
+          // A equivalência foi salva com sucesso, mas o processamento de estoque falhou ou o item não é terminal.
+          // Devolve a proposta para pendente de forma escopada e valida o recovery CAS.
+          const { ok: recoverySuccess } = await reverterPropostaParaPendente(supabase, {
+            propostaId: propRow.id,
+            userId: propRow.user_id,
+            chatId: propRow.chat_id,
+          });
+
+          if (recoverySuccess) {
+            if (callbackMessageId) {
+              await editMessageText(
+                cbChatId,
+                callbackMessageId,
+                `⚠️ <b>Vínculo salvo, mas houve erro ao atualizar o estoque</b>\n\n` +
+                `O vínculo de <b>${prodCanonical.descricao}</b> foi salvo com sucesso, mas o estoque não pôde ser atualizado.\n` +
+                `Você pode tentar processar novamente clicando abaixo.`,
+                {
+                  inline_keyboard: [
+                    [{ text: "🔄 Tentar processar novamente", callback_data: `vp_ok:${propRow.id}` }],
+                    [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+                  ],
+                }
+              );
+            }
+            await replyCallbackFn("⚠️ Houve uma instabilidade técnica ao processar o estoque desta NF. O vínculo foi preservado e você pode tentar novamente.");
+          } else {
+            // Recovery falhou ou retornou zero linhas (conflito de concorrência ou falha no banco)
+            if (callbackMessageId) {
+              await editMessageText(
+                cbChatId,
+                callbackMessageId,
+                `⚠️ <b>Falha na recuperação da proposta</b>\n\n` +
+                `O vínculo foi salvo com sucesso, mas ocorreu uma instabilidade ao restaurar o estado da proposta.`
+              );
+            }
+            await replyCallbackFn("⚠️ O vínculo foi preservado, mas ocorreu uma instabilidade técnica ao restaurar a proposta. Tente reiniciar a operação.");
+          }
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Executor e item confirmados com sucesso: marca a proposta como executada usando CAS e valida o resultado do UPDATE!
+        const { data: finalizedProposal, error: finalizeError } = await supabase
+          .from("telegram_propostas")
+          .update({ status: "executada", executed_at: new Date().toISOString() })
+          .eq("id", propRow.id)
+          .eq("user_id", propRow.user_id)
+          .eq("chat_id", propRow.chat_id)
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "em_processamento")
+          .select("id, status")
+          .maybeSingle();
+
+        const finalizeSuccess = isProposalFinalizedSuccessfully(finalizedProposal, finalizeError);
+
+        if (!finalizeSuccess) {
+          console.error("[telegram-webhook] Falha no CAS de finalização da proposta:", finalizeError, finalizedProposal);
+          if (callbackMessageId) {
+            await editMessageText(
+              cbChatId,
+              callbackMessageId,
+              `⚠️ <b>Processamento concluído com pendência de registro</b>\n\n` +
+              `O estoque e o vínculo de <b>${prodCanonical.descricao}</b> foram processados com sucesso, mas a proposta não pôde ser marcada como finalizada no momento.`
+            );
+          }
+          await replyCallbackFn("⚠️ O processamento ocorreu, mas a finalização da operação precisa ser recuperada.");
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        // Somente se finalizeSuccess for true limpa a conversa e envia mensagem de sucesso!
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(
+            cbChatId,
+            callbackMessageId,
+            `✅ <b>Vínculo confirmado com sucesso!</b>\n` +
+            `📦 Produto: <b>${prodCanonical.descricao}</b> (Conversão: 1 = ${propDados.fator_escolhido})\n\n` +
+            `Estoque e custos processados com sucesso.`
+          );
+        }
+
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_can (Cancelar vinculação) ───
+      if (callbackData.startsWith("vp_can:")) {
+        const propId = callbackData.split(":")[1];
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Vinculação cancelada.");
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ status: "cancelada" })
+          .eq("id", propId)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, "❌ <b>Vinculação cancelada.</b> Nenhuma alteração foi realizada no catálogo ou estoque.");
+        }
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── BOTÃO: vp_skip (Pular item pendente) ───
+      if (callbackData.startsWith("vp_skip:")) {
+        const propId = callbackData.split(":")[1];
+
+        const { data: propRow } = await supabase
+          .from("telegram_propostas")
+          .select("*")
+          .eq("id", propId)
+          .maybeSingle();
+
+        const valProp = validarPropostaFase5(propRow, { userId: cbUserId, chatId: cbChatId });
+        if (!valProp.ok) {
+          await answerCallback(callbackQuery.id, valProp.reason);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        await answerCallback(callbackQuery.id, "Item mantido como pendente.");
+
+        await supabase
+          .from("telegram_propostas")
+          .update({ status: "cancelada" })
+          .eq("id", propId)
+          .eq("user_id", cbUserId)
+          .eq("chat_id", Number(cbChatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: cbUserId, chat_id: cbChatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+
+        if (callbackMessageId) {
+          await editMessageText(cbChatId, callbackMessageId, "⏭️ <b>Item mantido como pendente.</b> O estoque deste item não foi alterado e poderá ser vinculado posteriormente.");
+        }
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
@@ -1391,9 +3049,10 @@ serve(async (req) => {
     }
 
     // ─── RESOLUÇÃO DE USUÁRIO / GRUPO ───
-    const chatType = message.chat?.type || "private";
+    const chatObj = message?.chat as Record<string, unknown> | undefined;
+    const chatType = typeof chatObj?.type === "string" ? chatObj.type : "private";
     const isGroup = chatType === "group" || chatType === "supergroup";
-    let grupoConfig: any = null;
+    let grupoConfig: Record<string, unknown> | null = null;
     let userId: string = "";
     let workspaceId: string | null = null;
 
@@ -1423,12 +3082,7 @@ serve(async (req) => {
         userId = ws?.user_id || "";
       }
 
-      // Fallback para primeiro usuário ativo vinculado se não houver dono explícito
-      if (!userId) {
-        const { data: anyUser } = await supabase.from("usuarios_telegram").select("user_id").eq("ativo", true).limit(1).maybeSingle();
-        userId = anyUser?.user_id || "";
-      }
-
+      // Fail-closed: se não houver dono/administrador explícito vinculado, encerra
       if (!userId) {
         await sendReply("⚠️ Não foi possível identificar a conta administradora para este grupo.");
         return new Response("OK", { status: 200, headers: corsHeaders });
@@ -1567,10 +3221,20 @@ serve(async (req) => {
         .maybeSingle();
 
       if (alerta) {
+        if (alerta.status === "aplicando") {
+          await sendReply(MSG_BLOQUEIO_APLICANDO_EDITAR);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (alerta.status === "aplicado") {
+          await sendReply(MSG_ALERTA_JA_APLICADO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
         const custoNovo = Number(alerta.custo_novo || 0);
         const novaMargem = custoNovo > 0 ? ((precoDigitado / custoNovo) - 1) * 100 : 0;
 
-        const fmt = (v: any) =>
+        const fmt = (v: unknown) =>
           v != null && !isNaN(Number(v))
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -1595,6 +3259,7 @@ serve(async (req) => {
         await supabase.from("alertas_preco_pendentes").update({
           preco_definido_usuario: precoDigitado,
           status: "editado",
+          updated_at: new Date().toISOString(),
         }).eq("id", alertaId);
 
         await supabase.from("telegram_conversas").upsert(
@@ -1619,6 +3284,259 @@ serve(async (req) => {
       .eq("chat_id", chatId)
       .maybeSingle();
 
+    // ─── HANDLERS DE ESTADOS DA FASE 5 (BUSCA E FATOR DE VINCULAÇÃO) ───
+    if (conversaAtivaPre?.estado === "aguardando_busca_produto_nf" && conversaAtivaPre.proposta_id) {
+      const { data: propRow } = await supabase
+        .from("telegram_propostas")
+        .select("*")
+        .eq("id", conversaAtivaPre.proposta_id)
+        .maybeSingle();
+
+      if (!propRow) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Validação estrita do ator real do Telegram (message.from.id)
+      const msgFromId = (message as Record<string, unknown> | undefined)?.from
+        ? ((message as Record<string, unknown>).from as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+
+      const valAtor = await validarAtorTelegramFase5(supabase, {
+        telegramUserId: msgFromId,
+        propostaUserId: propRow.user_id,
+      });
+
+      if (!valAtor.ok) {
+        // Bloqueador 2: Rejeição imediata sem modificar/cancelar a proposta
+        await sendReply(`❌ ${valAtor.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const atorUserId = valAtor.userId;
+
+      const valProp = validarPropostaFase5(propRow, { userId: atorUserId, chatId });
+      if (!valProp.ok) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply(`❌ ${valProp.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      if (respLower === "cancelar") {
+        await supabase
+          .from("telegram_propostas")
+          .update({ status: "cancelada" })
+          .eq("id", propRow.id)
+          .eq("user_id", atorUserId)
+          .eq("chat_id", Number(chatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Busca cancelada. O item permaneceu pendente.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+      const { data: nfRow } = await supabase
+        .from("notas_fiscais_compra")
+        .select("workspace_id")
+        .eq("id", propDados.nf_id)
+        .eq("user_id", atorUserId)
+        .maybeSingle();
+
+      const wsId = nfRow?.workspace_id || propDados.workspace_id || workspaceId;
+      const searchRes = await searchProductCandidates(supabase, {
+        userId: atorUserId,
+        workspaceId: wsId,
+        descricaoQuery: text,
+        codigoQuery: text,
+        limit: 3,
+      });
+
+      const candidates = searchRes.ok ? searchRes.candidates : [];
+
+      if (candidates.length === 0) {
+        await sendReply(
+          `❌ Nenhum produto com cadastro PDV válido encontrado com o termo "<b>${text}</b>".\n\n` +
+          `Tente outro termo ou envie <b>CANCELAR</b> para voltar.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      propDados.candidatos = candidates;
+      await supabase
+        .from("telegram_propostas")
+        .update({ dados: propDados })
+        .eq("id", propRow.id)
+        .eq("user_id", atorUserId)
+        .eq("chat_id", Number(chatId))
+        .eq("tipo", "vincular_produto_nf")
+        .eq("status", "pendente");
+
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      let msgSel = `🔍 <b>Resultados da Busca para Vincular</b>\n\n`;
+      msgSel += `Item NF: <b>${propDados.descricao_produto}</b>\n\n`;
+      msgSel += `Selecione o produto correspondente:\n\n`;
+      candidates.forEach((c: ProductCandidate, idx: number) => {
+        msgSel += `${idx + 1}️⃣ <b>${c.descricao}</b>${c.codigo ? ` (Cód: ${c.codigo})` : ""}\n`;
+      });
+
+      const botoesSel = candidates.map((c: ProductCandidate, idx: number) => [
+        { text: `${idx + 1}️⃣ ${c.descricao.slice(0, 28)}`, callback_data: `vp_c:${propRow.id}:${idx + 1}` },
+      ]);
+      botoesSel.push([
+        { text: "🔎 Buscar outro produto", callback_data: `vp_bus:${propRow.id}` },
+      ]);
+      botoesSel.push([
+        { text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` },
+      ]);
+
+      await sendReplyWithButtons(chatId, msgSel, botoesSel);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    if (conversaAtivaPre?.estado === "aguardando_fator_conversao_nf" && conversaAtivaPre.proposta_id) {
+      const { data: propRow } = await supabase
+        .from("telegram_propostas")
+        .select("*")
+        .eq("id", conversaAtivaPre.proposta_id)
+        .maybeSingle();
+
+      if (!propRow) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: userId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Proposta não encontrada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Validação estrita do ator real do Telegram (message.from.id)
+      const msgFromId = (message as Record<string, unknown> | undefined)?.from
+        ? ((message as Record<string, unknown>).from as Record<string, unknown>).id as string | number | undefined
+        : undefined;
+
+      const valAtor = await validarAtorTelegramFase5(supabase, {
+        telegramUserId: msgFromId,
+        propostaUserId: propRow.user_id,
+      });
+
+      if (!valAtor.ok) {
+        // Bloqueador 2: Rejeição imediata sem modificar/cancelar a proposta
+        await sendReply(`❌ ${valAtor.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const atorUserId = valAtor.userId;
+
+      const valProp = validarPropostaFase5(propRow, { userId: atorUserId, chatId });
+      if (!valProp.ok) {
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply(`❌ ${valProp.reason}`);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      if (respLower === "cancelar") {
+        await supabase
+          .from("telegram_propostas")
+          .update({ status: "cancelada" })
+          .eq("id", propRow.id)
+          .eq("user_id", atorUserId)
+          .eq("chat_id", Number(chatId))
+          .eq("tipo", "vincular_produto_nf")
+          .eq("status", "pendente");
+
+        await supabase.from("telegram_conversas").upsert(
+          { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("❌ Definição de fator cancelada.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const fatorDigitado = Number(text.replace(",", "."));
+      if (isNaN(fatorDigitado) || !isFinite(fatorDigitado) || fatorDigitado <= 0) {
+        await sendReply(
+          `❌ Valor inválido. Digite um número positivo para o fator de conversão (ex: 6, 12, 24) ou envie <b>CANCELAR</b>:`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const propDados = typeof propRow.dados === "string" ? JSON.parse(propRow.dados) : propRow.dados;
+      const uNorm = (propDados.unidade_produto || "").toUpperCase().trim();
+      const PACKAGING_UNITS = ["CX", "FD", "PACK", "FARDO", "CAIXA", "CPJ"];
+      const ehEmbalagem = PACKAGING_UNITS.includes(uNorm);
+
+      if (ehEmbalagem) {
+        if (fatorDigitado <= 1) {
+          await sendReply(
+            `⚠️ Para embalagens (${propDados.unidade_produto}), o fator de conversão deve ser estritamente maior que 1.\n` +
+            `Digite o número correto de unidades por caixa ou envie <b>CANCELAR</b>:`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      } else {
+        if (Math.abs(fatorDigitado - 1) > 1e-6) {
+          await sendReply(
+            `⚠️ A unidade <b>${propDados.unidade_produto || "UN"}</b> suporta apenas conversão direta (fator = 1) no controle de estoque atual.\n` +
+            `Envie <b>1</b> para confirmar ou <b>CANCELAR</b> para voltar:`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+
+      propDados.fator_escolhido = fatorDigitado;
+      await supabase
+        .from("telegram_propostas")
+        .update({ dados: propDados })
+        .eq("id", propRow.id)
+        .eq("user_id", atorUserId)
+        .eq("chat_id", Number(chatId))
+        .eq("tipo", "vincular_produto_nf")
+        .eq("status", "pendente");
+
+      await supabase.from("telegram_conversas").upsert(
+        { user_id: atorUserId, chat_id: Number(chatId), estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
+        { onConflict: "chat_id" }
+      );
+
+      // Tela 4: Resumo Final
+      let msgResumo = `📋 <b>CONFIRMAR VÍNCULO DE PRODUTO?</b>\n\n`;
+      msgResumo += `🏢 <b>Fornecedor:</b> ${propDados.fornecedor_nome || "N/A"}\n`;
+      msgResumo += `📄 <b>Item na NF:</b> ${propDados.descricao_produto}\n`;
+      msgResumo += `🔢 <b>Código Fornecedor:</b> ${propDados.codigo_produto}\n\n`;
+      msgResumo += `🎯 <b>Produto no PDV:</b> ${propDados.produto_selecionado?.descricao}\n`;
+      msgResumo += `⚖️ <b>Conversão:</b> 1 ${propDados.unidade_produto || "UN"} = <b>${fatorDigitado} unidade(s)</b>\n\n`;
+      msgResumo += `⚠️ <i>Este vínculo será salvo e reutilizado automaticamente em todas as próximas notas fiscais deste fornecedor.</i>`;
+
+      const botoesResumo = [
+        [{ text: "✅ Confirmar vínculo e atualizar estoque", callback_data: `vp_ok:${propRow.id}` }],
+        [{ text: "🔄 Alterar seleção", callback_data: `vp_in:${propRow.id}` }],
+        [{ text: "❌ Cancelar", callback_data: `vp_can:${propRow.id}` }],
+      ];
+
+      await sendReplyWithButtons(chatId, msgResumo, botoesResumo);
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     if (respLower === "prosseguir" && conversaAtivaPre?.estado === "aguardando_correcao_nf") {
       const { data: nfParcial } = await supabase
         .from("notas_fiscais_compra")
@@ -1641,7 +3559,7 @@ serve(async (req) => {
 
       await supabase.from("notas_fiscais_compra").update({ status: "pendente" }).eq("id", nfParcial.id);
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1651,7 +3569,7 @@ serve(async (req) => {
       msg += `📦 <b>Itens:</b> ${itensParciais?.length || 0} produtos\n`;
       msg += `💰 <b>Valor Total NF:</b> ${fmt(nfParcial.valor_total)}\n\n`;
 
-      (itensParciais || []).forEach((item: any, i: number) => {
+      (itensParciais || []).forEach((item: Record<string, unknown>, i: number) => {
         msg += `${i + 1}. <b>${item.descricao || "Item"}</b>\n`;
         msg += `   📦 ${item.quantidade || 0} ${item.unidade || "UN"} × ${fmt(item.valor_unitario)}\n`;
         msg += `   💰 Total: ${fmt(item.valor_total)}\n`;
@@ -1727,7 +3645,7 @@ serve(async (req) => {
 
     // ─── 0. COMANDO /precos (LISTAR ALERTAS DE PREÇO PENDENTES) ───
     if (text.startsWith("/precos") || respLower.includes("alertas de preco") || respLower.includes("precos pendentes")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1736,7 +3654,7 @@ serve(async (req) => {
         .from("alertas_preco_pendentes")
         .select("*")
         .eq("user_id", userId)
-        .in("status", ["pendente", "editado"])
+        .in("status", ["pendente", "editado", "erro_integracao"])
         .order("created_at", { ascending: false });
 
       if (!alertas || alertas.length === 0) {
@@ -1746,16 +3664,19 @@ serve(async (req) => {
 
       let msgPrecos = `🚨 <b>Alertas de Preço Pendentes:</b> (${alertas.length} produto(s))\n\n`;
 
-      alertas.forEach((alerta: any, idx: number) => {
-        const idCurto = alerta.id.slice(0, 8);
-        const statusEmoji = alerta.status === "editado" ? "✏️" : "⏳";
+      alertas.forEach((alerta: Record<string, unknown>, idx: number) => {
+        const idCurto = String(alerta.id || "").slice(0, 8);
+        const statusEmoji = alerta.status === "editado" ? "✏️" : alerta.status === "erro_integracao" ? "⚠️" : "⏳";
 
         msgPrecos += `${idx + 1}. ${statusEmoji} <b>${alerta.produto_descricao}</b> (<code>${idCurto}</code>)\n`;
-        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${alerta.variacao_custo_percentual?.toFixed(1)}%)\n`;
+        msgPrecos += `   💰 Custo: ${fmt(alerta.custo_anterior)} → <b>${fmt(alerta.custo_novo)}</b> (+${Number(alerta.variacao_custo_percentual || 0).toFixed(1)}%)\n`;
         msgPrecos += `   💰 Preço venda atual: ${fmt(alerta.preco_venda_atual)}\n`;
-        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${alerta.margem_real_percentual?.toFixed(0)}%)\n`;
+        msgPrecos += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b> (margem ${Number(alerta.margem_real_percentual || 0).toFixed(0)}%)\n`;
         if (alerta.preco_definido_usuario) {
           msgPrecos += `   ✏️ Editado por você: <b>${fmt(alerta.preco_definido_usuario)}</b>\n`;
+        }
+        if (alerta.status === "erro_integracao") {
+          msgPrecos += `   ⚠️ <i>(Falha na tentativa anterior de sincronização com Eyemobile)</i>\n`;
         }
         msgPrecos += `   👉 <code>CONFIRMAR ${idCurto}</code> | <code>EDITAR ${idCurto} 15.00</code> | <code>IGNORAR ${idCurto}</code>\n\n`;
       });
@@ -1773,12 +3694,12 @@ serve(async (req) => {
       .maybeSingle();
 
     if (confirmarPrecoMatch || (respLower.startsWith("confirmar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
 
-      let alertaId: string | null = null;
+      let alertaCandidato: AlertaPreco | null = null;
 
       if (confirmarPrecoMatch) {
         const idCurto = confirmarPrecoMatch[1].toLowerCase();
@@ -1787,115 +3708,169 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao"])
           .maybeSingle();
-        alertaId = alerta?.id || null;
+        alertaCandidato = alerta as AlertaPreco | null;
       } else {
         const { data: alerta } = await supabase
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
-        alertaId = alerta?.id || null;
+        alertaCandidato = alerta as AlertaPreco | null;
       }
 
-      if (alertaId) {
-        const { data: alerta } = await supabase
-          .from("alertas_preco_pendentes")
-          .select("*")
-          .eq("id", alertaId)
-          .single();
-
-        if (alerta) {
-          const precoConfirmado = alerta.preco_definido_usuario || alerta.preco_sugerido;
-
-          await sendReply(
-            `🔄 <b>Atualizando preço no Eyemobile PDV...</b>\n` +
-            `📦 <b>Produto:</b> ${alerta.produto_descricao}\n` +
-            `💰 <b>Novo Preço:</b> <b>${fmt(precoConfirmado)}</b>`
-          );
-
-          const updateResp = await fetch(`${supabaseUrl}/functions/v1/eyemobile-sync`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              mode: "UPDATE_PRODUCT_PRICE",
-              user_id: userId,
-              product_id: alerta.produto_eyemobile_id,
-              new_price: precoConfirmado,
-            }),
-          });
-
-          let updateResult: any = null;
-          try {
-            updateResult = await updateResp.json();
-          } catch {
-            updateResult = { success: updateResp.ok };
-          }
-
-          if (updateResult?.success) {
-            await supabase.from("alertas_preco_pendentes").update({
-              status: "aplicado",
-              preco_definido_usuario: precoConfirmado,
-              data_resolucao: new Date().toISOString(),
-            }).eq("id", alertaId);
-
-            await supabase.from("produtos_eyemobile").update({
-              preco_venda: precoConfirmado,
-            }).eq("eyemobile_id", alerta.produto_eyemobile_id).eq("user_id", userId);
-
-            await sendReply(
-              `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
-              `📦 <b>${alerta.produto_descricao}</b>\n` +
-              `💰 Preço de venda: <b>${fmt(precoConfirmado)}</b>\n` +
-              `📈 Margem mantida: <b>${alerta.margem_real_percentual?.toFixed(0)}%</b>`
-            );
-          } else {
-            await sendReply(
-              `❌ <b>Erro ao atualizar preço no Eyemobile PDV:</b>\n` +
-              `${updateResult?.error || "Erro de comunicação com a API do Eyemobile"}\n\n` +
-              `💡 Você também pode ajustar diretamente no PDV.`
-            );
-          }
-
-          const { count: pendentesRestantes } = await supabase
+      if (!alertaCandidato) {
+        if (confirmarPrecoMatch) {
+          const idCurto = confirmarPrecoMatch[1].toLowerCase();
+          const { data: jaProcessado } = await supabase
             .from("alertas_preco_pendentes")
-            .select("*", { count: "exact", head: true })
+            .select("id, status")
             .eq("user_id", userId)
-            .in("status", ["pendente", "editado"]);
+            .ilike("id", `${idCurto}%`)
+            .maybeSingle();
 
-          if (pendentesRestantes === 0) {
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "inicio",
-                proposta_id: null,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-            await sendReply("🎉 <b>Todos os preços pendentes foram ajustados com sucesso!</b>");
-          } else {
-            await sendReply(`📋 Ainda há <b>${pendentesRestantes}</b> alerta(s) de preço pendente(s). Use /precos para ver.`);
+          if (jaProcessado?.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
           }
+          if (jaProcessado?.status === "aplicando") {
+            await sendReply(MSG_EM_PROCESSAMENTO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        }
+        await sendReply("❌ Alerta de preço não encontrado ou já processado. Use /precos para ver os alertas pendentes.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
 
+      const lock = await acquireAlertaLock(supabase, {
+        alertaId: alertaCandidato.id,
+        userId: alertaCandidato.user_id,
+        workspaceId: alertaCandidato.workspace_id,
+      });
+
+      if (!lock.acquired) {
+        if (lock.reason === "already_applied") {
+          await sendReply(MSG_ALERTA_JA_APLICADO);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
+        if (lock.reason === "already_processing") {
+          await sendReply(MSG_EM_PROCESSAMENTO);
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+        await sendReply("❌ Não foi possível iniciar o processamento deste alerta. Tente novamente.");
+        return new Response("OK", { status: 200, headers: corsHeaders });
       }
+
+      const alerta = lock.alerta;
+      const precoConfirmado = Number(alerta.preco_definido_usuario || alerta.preco_sugerido || 0);
+
+      if (!alerta.produto_eyemobile_id || isNaN(precoConfirmado) || precoConfirmado <= 0) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: "Alerta sem produto_eyemobile_id ou preço inválido",
+          isRemoteSuccessLocalFailure: false,
+        });
+        await sendReply("❌ <b>Preço inválido ou produto sem vínculo com Eyemobile.</b>");
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      await sendReply(
+        `🔄 <b>Atualizando preço no Eyemobile PDV...</b>\n` +
+        `📦 <b>Produto:</b> ${alerta.produto_descricao}\n` +
+        `💰 <b>Novo Preço:</b> <b>${fmt(precoConfirmado)}</b>`
+      );
+
+      const syncResult = await executeEyemobilePriceSync(supabaseUrl, supabaseServiceKey, {
+        user_id: alerta.user_id,
+        product_id: alerta.produto_eyemobile_id,
+        new_price: precoConfirmado,
+      });
+
+      if (!syncResult.success) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: syncResult.error || "Falha na chamada ao Eyemobile",
+          isRemoteSuccessLocalFailure: false,
+        });
+        await sendReply(
+          `${MSG_FALHA_REMOTO}\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Preço tentado: <b>${fmt(precoConfirmado)}</b>\n` +
+          `Erro: ${syncResult.error || "Sem resposta do Eyemobile"}\n\n` +
+          `💡 Você pode tentar novamente com: <code>CONFIRMAR ${alerta.id.slice(0, 8)}</code>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const persistResult = await persistConfirmedPriceAtomic(supabase, {
+        alertaId: alerta.id,
+        userId: alerta.user_id,
+        workspaceId: alerta.workspace_id,
+        novoPreco: precoConfirmado,
+      });
+
+      if (!persistResult.success) {
+        await handlePriceSyncFailure(supabase, {
+          alertaId: alerta.id,
+          userId: alerta.user_id,
+          workspaceId: alerta.workspace_id,
+          reason: persistResult.error || "Falha na persistência local pós-sucesso remoto",
+          isRemoteSuccessLocalFailure: true,
+        });
+        await sendReply(
+          `${MSG_FALHA_PERSISTENCIA_LOCAL}\n\n` +
+          `📦 <b>${alerta.produto_descricao}</b>\n` +
+          `💰 Preço atualizado no Eyemobile: <b>${fmt(precoConfirmado)}</b>\n\n` +
+          `💡 Para reconciliar o banco local, envie: <code>CONFIRMAR ${alerta.id.slice(0, 8)}</code>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      await sendReply(
+        `✅ <b>Preço atualizado com sucesso no Eyemobile!</b>\n\n` +
+        `📦 <b>${alerta.produto_descricao}</b>\n` +
+        `💰 Preço de venda: <b>${fmt(precoConfirmado)}</b>\n` +
+        `📈 Margem mantida: <b>${alerta.margem_real_percentual ? Number(alerta.margem_real_percentual).toFixed(0) : "0"}%</b>`
+      );
+
+      const { count: pendentesRestantes } = await supabase
+        .from("alertas_preco_pendentes")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .in("status", ["pendente", "editado"]);
+
+      if (pendentesRestantes === 0) {
+        await supabase.from("telegram_conversas").upsert(
+          {
+            user_id: userId,
+            chat_id: chatId,
+            estado: "inicio",
+            proposta_id: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "chat_id" }
+        );
+        await sendReply("🎉 <b>Todos os preços pendentes foram ajustados com sucesso!</b>");
+      } else {
+        await sendReply(`📋 Ainda há <b>${pendentesRestantes}</b> alerta(s) de preço pendente(s). Use /precos para ver.`);
+      }
+
+      return new Response("OK", { status: 200, headers: corsHeaders });
     }
 
     // ─── 0.2 HANDLER DE EDITAR PREÇO ───
     const editarPrecoMatch = text.match(/^editar\s+([a-f0-9]{8})\s+R?\$?\s*([0-9]+[.,]?[0-9]*)/i);
 
     if (editarPrecoMatch || (respLower.startsWith("editar") && conversaAtivaPreco?.estado === "aguardando_ajuste_precos")) {
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -1912,7 +3887,7 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .maybeSingle();
         alertaId = alerta?.id || null;
       } else {
@@ -1924,7 +3899,7 @@ serve(async (req) => {
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
@@ -1939,11 +3914,23 @@ serve(async (req) => {
           .single();
 
         if (alerta) {
-          const novaMargem = alerta.custo_novo > 0 ? ((precoEditado / Number(alerta.custo_novo)) - 1) * 100 : 0;
+          if (alerta.status === "aplicando") {
+            await sendReply(MSG_BLOQUEIO_APLICANDO_EDITAR);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          if (alerta.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          const custoNovo = Number(alerta.custo_novo || 0);
+          const novaMargem = custoNovo > 0 ? ((precoEditado / custoNovo) - 1) * 100 : 0;
 
           await supabase.from("alertas_preco_pendentes").update({
             preco_definido_usuario: precoEditado,
             status: "editado",
+            updated_at: new Date().toISOString(),
           }).eq("id", alertaId);
 
           await sendReply(
@@ -1973,7 +3960,7 @@ serve(async (req) => {
           .select("*")
           .eq("user_id", userId)
           .ilike("id", `${idCurto}%`)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .maybeSingle();
         alertaId = alerta?.id || null;
       } else {
@@ -1981,7 +3968,7 @@ serve(async (req) => {
           .from("alertas_preco_pendentes")
           .select("*")
           .eq("user_id", userId)
-          .in("status", ["pendente", "editado"])
+          .in("status", ["pendente", "editado", "erro_integracao", "aplicando", "aplicado"])
           .order("created_at", { ascending: true })
           .limit(1)
           .maybeSingle();
@@ -1989,37 +3976,56 @@ serve(async (req) => {
       }
 
       if (alertaId) {
-        await supabase.from("alertas_preco_pendentes").update({
-          status: "ignorado",
-          data_resolucao: new Date().toISOString(),
-        }).eq("id", alertaId);
-
-        await sendReply(
-          `🚫 <b>Alerta de preço ignorado.</b>\n` +
-          `O preço de venda no PDV não foi alterado.\n` +
-          `Você pode alterar manualmente quando desejar.`
-        );
-
-        const { count: pendentesRestantes } = await supabase
+        const { data: alerta } = await supabase
           .from("alertas_preco_pendentes")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", userId)
-          .in("status", ["pendente", "editado"]);
+          .select("*")
+          .eq("id", alertaId)
+          .single();
 
-        if (pendentesRestantes === 0) {
-          await supabase.from("telegram_conversas").upsert(
-            {
-              user_id: userId,
-              chat_id: chatId,
-              estado: "inicio",
-              proposta_id: null,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "chat_id" }
+        if (alerta) {
+          if (alerta.status === "aplicando") {
+            await sendReply(MSG_BLOQUEIO_APLICANDO_IGNORAR);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          if (alerta.status === "aplicado") {
+            await sendReply(MSG_ALERTA_JA_APLICADO);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          await supabase.from("alertas_preco_pendentes").update({
+            status: "ignorado",
+            data_resolucao: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq("id", alertaId);
+
+          await sendReply(
+            `🚫 <b>Alerta de preço ignorado.</b>\n` +
+            `O preço de venda no PDV não foi alterado.\n` +
+            `Você pode alterar manualmente quando desejar.`
           );
-        }
 
-        return new Response("OK", { status: 200, headers: corsHeaders });
+          const { count: pendentesRestantes } = await supabase
+            .from("alertas_preco_pendentes")
+            .select("*", { count: "exact", head: true })
+            .eq("user_id", userId)
+            .in("status", ["pendente", "editado"]);
+
+          if (pendentesRestantes === 0) {
+            await supabase.from("telegram_conversas").upsert(
+              {
+                user_id: userId,
+                chat_id: chatId,
+                estado: "inicio",
+                proposta_id: null,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "chat_id" }
+            );
+          }
+
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
       }
     }
 
@@ -2065,8 +4071,8 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const total = (ultimo.total || {}) as Record<string, any>;
-        const fmt = (v: any) =>
+        const total = (ultimo.total || {}) as Record<string, unknown>;
+        const fmt = (v: unknown) =>
           v != null && Number(v) > 0
             ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
             : "R$ 0,00";
@@ -2149,13 +4155,13 @@ serve(async (req) => {
         .eq("user_id", userId);
 
       const catNorm = categoriaNome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const categoria = (categorias || []).find((c: any) => {
+      const categoria = (categorias || []).find((c: { id: string; nome: string }) => {
         const n = (c.nome || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         return n === catNorm || n.includes(catNorm) || catNorm.includes(n);
       });
 
       if (!categoria) {
-        const sugestoes = (categorias || []).slice(0, 6).map((c: any) => `• ${c.nome}`).join("\n");
+        const sugestoes = (categorias || []).slice(0, 6).map((c: { id: string; nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ Categoria <b>"${categoriaNome}"</b> não encontrada.\n\n` +
           (sugestoes ? `<b>Categorias disponíveis:</b>\n${sugestoes}\n\n` : "") +
@@ -2216,13 +4222,13 @@ serve(async (req) => {
 
       const evts = events || [];
       const totalCalls = evts.length;
-      const successfulCalls = evts.filter((e: any) => e.execution_status === "success").length;
+      const successfulCalls = evts.filter((e: { execution_status?: string }) => e.execution_status === "success").length;
       const successRate = totalCalls > 0 ? (successfulCalls / totalCalls) * 100 : 100;
-      const totalTokens = evts.reduce((acc: number, e: any) => acc + (Number(e.tokens_total) || 500), 0);
+      const totalTokens = evts.reduce((acc: number, e: { tokens_total?: unknown }) => acc + (Number(e.tokens_total) || 500), 0);
       const estimatedCostUsd = (totalTokens / 1_000_000) * 0.15;
       const estimatedCostBrl = estimatedCostUsd * 5.65;
       const avgDuration = totalCalls > 0
-        ? Math.round(evts.reduce((acc: number, e: any) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
+        ? Math.round(evts.reduce((acc: number, e: { duration_ms?: unknown }) => acc + (Number(e.duration_ms) || 0), 0) / totalCalls)
         : 0;
 
       const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -2237,10 +4243,10 @@ serve(async (req) => {
 
       if (evts.length > 0) {
         msg += `📋 <b>Últimas Ações Auditadas:</b>\n`;
-        evts.slice(0, 4).forEach((e: any) => {
+        evts.slice(0, 4).forEach((e: { created_at: string; execution_status?: string; tool_name: string; duration_ms?: unknown }) => {
           const dt = new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
           const st = e.execution_status === "success" ? "✅" : "⚠️";
-          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${e.duration_ms || 0}ms)\n`;
+          msg += `• ${dt} — <code>${e.tool_name}</code> (${st} ${Number(e.duration_ms || 0)}ms)\n`;
         });
         msg += `\n`;
       }
@@ -2274,7 +4280,7 @@ serve(async (req) => {
 
       const { data: historico } = await query;
 
-      const fmt = (v: any) =>
+      const fmt = (v: unknown) =>
         v != null && !isNaN(Number(v))
           ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "R$ 0,00";
@@ -2289,7 +4295,7 @@ serve(async (req) => {
 
       let msg = `📊 <b>Histórico de Custo de Produtos</b>${produtoBusca ? ` — <i>"${produtoBusca}"</i>` : ""}\n\n`;
 
-      historico.forEach((h: any, i: number) => {
+      historico.forEach((h: Record<string, unknown>, i: number) => {
         const dataFmt = h.data_compra ? h.data_compra.split("-").reverse().join("/") : "Sem data";
         const variacao = Number(h.variacao_percentual) || 0;
         const emoji = variacao > 10 ? "🔴" : variacao > 0 ? "🟡" : "🟢";
@@ -2390,20 +4396,20 @@ serve(async (req) => {
       ]);
 
       const eventos = [
-        ...(compromissos || []).map((c: any) => ({
+        ...(compromissos || []).map((c: { titulo?: string; data: string; hora?: string | null; local?: string | null }) => ({
           tipo: "Compromisso",
           titulo: c.titulo,
           data: c.data,
           hora: c.hora,
           local: c.local,
-          descricao: null,
+          descricao: null as string | null,
         })),
-        ...(lembretes || []).map((l: any) => ({
+        ...(lembretes || []).map((l: { titulo?: string; data: string; hora?: string | null; descricao?: string | null }) => ({
           tipo: "Lembrete",
           titulo: l.titulo,
           data: l.data,
           hora: l.hora,
-          local: null,
+          local: null as string | null,
           descricao: l.descricao,
         })),
       ].sort((a, b) => {
@@ -2416,7 +4422,7 @@ serve(async (req) => {
         await sendReply(`📅 <b>Sem eventos ${periodoLabel}!</b>\n\nSua agenda está livre. 🎉`);
       } else {
         let msg = `📅 <b>Agenda & Eventos ${periodoLabel}:</b>\n\n`;
-        eventos.forEach((e: any, i: number) => {
+        eventos.forEach((e: { data: string; hora?: string | null; titulo?: string; local?: string | null; descricao?: string | null }, i: number) => {
           const [ano, mes, dia] = e.data.split("-");
           const dObj = new Date(Number(ano), Number(mes) - 1, Number(dia));
           const diaSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][dObj.getDay()];
@@ -2550,7 +4556,7 @@ serve(async (req) => {
         const hojeObj = new Date(hojeStr);
         let msg = `💳 <b>Suas Dívidas (${periodoDescricao}):</b>\n\n`;
 
-        dividas.forEach((d: any) => {
+        dividas.forEach((d: { valor_restante?: unknown; valor_total?: unknown; data_vencimento?: string; descricao?: string; credor?: string }) => {
           const valor = Number(d.valor_restante || d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
           const venc = d.data_vencimento ? d.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
           let atrasoText = "";
@@ -2574,7 +4580,7 @@ serve(async (req) => {
           msg += "\n";
         });
 
-        const totalDevido = dividas.reduce((acc: number, d: any) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
+        const totalDevido = dividas.reduce((acc: number, d: { valor_restante?: unknown; valor_total?: unknown }) => acc + Number(d.valor_restante || d.valor_total || 0), 0);
         msg += `📊 <b>Total devido:</b> <b>${totalDevido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\n\n`;
         msg += `<i>Se precisar de mais informações, estou à disposição!</i>`;
 
@@ -2607,7 +4613,7 @@ serve(async (req) => {
       const bancoMatch = respLower.match(/(?:divipay|nubank|inter|bradesco|itau|itaú|caixa|sicoob|pagbank|pagseguro|banco\s+do\s+brasil|bb)/i);
       if (bancoMatch) {
         const bTerm = bancoMatch[0].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        const filtradas = contas.filter((c: any) => {
+        const filtradas = contas.filter((c: { nome?: string }) => {
           const nNorm = (c.nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
           return nNorm.includes(bTerm);
         });
@@ -2625,7 +4631,7 @@ serve(async (req) => {
 
       if (contas.length > 0) {
         let totalEmContas = 0;
-        contas.forEach((c: any) => {
+        contas.forEach((c: { saldo_atual?: unknown; tipo?: string; nome?: string }) => {
           const s = Number(c.saldo_atual || 0);
           totalEmContas += s;
           const icon = c.tipo === "cartao_credito" ? "💳" : "🏛️";
@@ -2711,10 +4717,10 @@ serve(async (req) => {
       ]);
 
       const catMap = new Map<string, string>();
-      (categoriasRaw || []).forEach((c: any) => catMap.set(c.id, c.nome));
+      (categoriasRaw || []).forEach((c: { id: string; nome: string }) => catMap.set(c.id, c.nome));
 
       const despesas = [...(despesasRaw || []), ...(txsDespesasRaw || [])];
-      const totalDespesas = despesas.reduce((s: number, d: any) => s + Number(d.valor || 0), 0);
+      const totalDespesas = despesas.reduce((s: number, d: { valor?: unknown }) => s + Number(d.valor || 0), 0);
       const format = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
       if (despesas.length === 0) {
@@ -2734,7 +4740,7 @@ serve(async (req) => {
         outros: 0,
       };
 
-      despesas.forEach((d: any) => {
+      despesas.forEach((d: { valor?: unknown; categoria_id?: string | null; metodo_pagamento?: unknown }) => {
         const val = Number(d.valor || 0);
         const nomeCat = (d.categoria_id && catMap.get(d.categoria_id)) || "Sem categoria";
         porCat[nomeCat] = (porCat[nomeCat] || 0) + val;
@@ -2829,7 +4835,7 @@ serve(async (req) => {
 
       // Busca todas as receitas e vendas (com paginação ampla para suportar milhares de lançamentos)
       const fetchAllRows = async (table: string, filterTipo?: string) => {
-        const rows: any[] = [];
+        const rows: Array<{ data?: string; valor?: unknown; descricao?: string }> = [];
         let from = 0;
         const step = 1000;
         while (true) {
@@ -2861,7 +4867,7 @@ serve(async (req) => {
 
       const totalReceitas = todasReceitas.reduce((s, r) => s + Number(r.valor || 0), 0);
       const totalDespesas = todasDespesas.reduce((s, d) => s + Number(d.valor || 0), 0);
-      const saldoPeriodo = totalReceitas - totalDespesas;
+      const _saldoPeriodo = totalReceitas - totalDespesas;
 
       if (todasReceitas.length === 0 && todasDespesas.length === 0) {
         await sendReply(`📊 <b>Nenhuma movimentação registrada no período (${labelPeriodo}).</b>`);
@@ -2870,7 +4876,7 @@ serve(async (req) => {
 
       // Agrupa receitas por dia
       const porDia: Record<string, number> = {};
-      todasReceitas.forEach((v: any) => {
+      todasReceitas.forEach((v: { data?: string; valor?: unknown }) => {
         const d = (v.data || "").split("T")[0];
         const val = Number(v.valor || 0);
         porDia[d] = (porDia[d] || 0) + val;
@@ -2941,13 +4947,13 @@ serve(async (req) => {
         s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
       const catAlvoNorm = normalize(categoriaAlvoTerm);
 
-      const catEncontrada = (categorias || []).find((c: any) => {
+      const catEncontrada = (categorias || []).find((c: { id: string; nome: string; aliases?: string | null }) => {
         const cNorm = normalize(c.nome);
         return cNorm === catAlvoNorm || cNorm.includes(catAlvoNorm) || catAlvoNorm.includes(cNorm);
       });
 
       if (!catEncontrada) {
-        const nomesDisponiveis = (categorias || []).map((c: any) => `• ${c.nome}`).join("\n");
+        const nomesDisponiveis = (categorias || []).map((c: { nome: string }) => `• ${c.nome}`).join("\n");
         await sendReply(
           `❌ <b>Categoria "${categoriaAlvoTerm}" não encontrada.</b>\n\n` +
           `<b>Suas categorias disponíveis:</b>\n${nomesDisponiveis || "Nenhuma categoria cadastrada"}`
@@ -3016,7 +5022,7 @@ serve(async (req) => {
         .eq("chat_id", chatId)
         .maybeSingle();
 
-      let proposta: any = null;
+      let proposta: Record<string, unknown> | null = null;
 
       if (conversaAtiva?.proposta_id) {
         const { data: propById } = await supabase
@@ -3060,7 +5066,7 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        if (new Date(proposta.expires_at) < new Date()) {
+        if (new Date(String(proposta.expires_at)) < new Date()) {
           await supabase.from("telegram_propostas").update({ status: "expirada" }).eq("id", proposta.id);
           await supabase.from("telegram_conversas").upsert(
             { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
@@ -3072,333 +5078,42 @@ serve(async (req) => {
 
         const dados = typeof proposta.dados === "string" ? JSON.parse(proposta.dados) : proposta.dados;
         
-        // Sanitização de valores e datas
-        const parseNum = (v: any) => {
-          if (typeof v === "number") return isNaN(v) ? 0 : v;
-          if (!v) return 0;
-          const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-          const n = parseFloat(s);
-          return isNaN(n) ? 0 : n;
-        };
-
-        const parseDate = (v: any) => {
-          if (!v) return hojeStr;
-          const str = String(v).trim();
-          if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-          if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-            const p = str.split("/");
-            return `${p[2]}-${p[1]}-${p[0]}`;
-          }
-          return hojeStr;
-        };
-
         // ─── CASO B: PROPOSTA DE NF DE COMPRA (ESTOQUE & CUSTO) ───
         if (proposta.tipo === "atualizar_estoque_nf" || conversaAtiva?.estado === "aguardando_confirmacao_nf") {
           const nfId = dados?.nf_id || conversaAtiva?.proposta_id;
 
-          const { data: nf } = await supabase
-            .from("notas_fiscais_compra")
-            .select("*")
-            .eq("id", nfId)
-            .single();
-
-          const { data: itens } = await supabase
-            .from("nf_itens")
-            .select("*")
-            .eq("nf_id", nfId);
-
-          if (!nf || !itens || itens.length === 0) {
-            await sendReply("❌ NF não encontrada ou sem itens para atualização.");
+          if (!nfId) {
+            await sendReply("❌ Identificador da NF não encontrado na proposta.");
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
-          let msg = `✅ <b>Nota Fiscal de Compra Confirmada!</b>\n\nAtualizando estoque e custos...\n\n`;
-          const alertasAumento: string[] = [];
-          const sugestoesPreco: string[] = [];
-          const produtosAtualizados: string[] = [];
+          await executarConfirmacaoNfSegura({
+            targetUserId: userId,
+            targetChatId: chatId,
+            nfId,
+            propostaId: proposta.id,
+            replyFn: sendReply,
+          });
 
-          const fmt = (v: any) =>
-            v != null && !isNaN(Number(v))
-              ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-              : "R$ 0,00";
-
-          for (const item of itens) {
-            const { data: produtoExistente } = await supabase
-              .from("produtos_eyemobile")
-              .select("*")
-              .eq("user_id", userId)
-              .eq("codigo", item.codigo_produto)
-              .maybeSingle();
-
-            let variacaoPct = 0;
-            if (produtoExistente?.custo_atual && item.custo_unitario_liquido) {
-              variacaoPct = ((item.custo_unitario_liquido - produtoExistente.custo_atual) / produtoExistente.custo_atual) * 100;
-            }
-
-            await supabase.from("historico_custo_produto").insert({
-              user_id: userId,
-              workspace_id: nf.workspace_id,
-              produto_codigo: item.codigo_produto,
-              produto_descricao: item.descricao,
-              fornecedor: nf.fornecedor,
-              custo_unitario: item.custo_unitario_liquido,
-              quantidade: item.quantidade,
-              nf_id: nf.id,
-              data_compra: nf.data_entrada || hojeStr,
-              variacao_percentual: variacaoPct,
-            });
-
-            const dataLimite = new Date();
-            dataLimite.setMonth(dataLimite.getMonth() - 12);
-
-            const { data: historico12m } = await supabase
-              .from("historico_custo_produto")
-              .select("custo_unitario, data_compra")
-              .eq("user_id", userId)
-              .eq("produto_codigo", item.codigo_produto)
-              .gte("data_compra", dataLimite.toISOString().split("T")[0])
-              .order("data_compra", { ascending: true })
-              .limit(1);
-
-            const custoInicial12m = historico12m?.[0]?.custo_unitario || produtoExistente?.custo_atual || item.custo_unitario_liquido;
-            const variacao12m = custoInicial12m > 0
-              ? ((item.custo_unitario_liquido - custoInicial12m) / custoInicial12m) * 100
-              : 0;
-
-            // Usar margem real do produto ((preco_venda / custo_atual) - 1) * 100
-            let margemReal = Number(produtoExistente?.margem_real_percentual) || 0;
-            if (margemReal <= 0 && produtoExistente?.preco_venda && produtoExistente?.custo_atual) {
-              margemReal = ((Number(produtoExistente.preco_venda) / Number(produtoExistente.custo_atual)) - 1) * 100;
-            }
-            if (margemReal <= 0 || margemReal > 500) margemReal = 30; // Proteção e fallback
-
-            let markupAplicado = margemReal;
-
-            if (variacao12m > 10) {
-              const sugestaoPreco = item.custo_unitario_liquido * (1 + margemReal / 100);
-
-              const { data: alertaCriado } = await supabase.from("alertas_preco_pendentes").insert({
-                user_id: userId,
-                workspace_id: nf.workspace_id,
-                produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
-                produto_codigo: item.codigo_produto,
-                produto_descricao: item.descricao,
-                custo_anterior: custoInicial12m,
-                custo_novo: item.custo_unitario_liquido,
-                preco_venda_atual: produtoExistente?.preco_venda || 0,
-                preco_sugerido: sugestaoPreco,
-                margem_real_percentual: margemReal,
-                variacao_custo_percentual: variacao12m,
-                nf_id: nf.id,
-                status: "pendente",
-              }).select("id").single();
-
-              const idCurto = alertaCriado?.id ? alertaCriado.id.slice(0, 8) : "N/A";
-
-              alertasAumento.push(
-                `🔴 <b>${item.descricao}</b> (Alerta <code>#${idCurto}</code>)\n` +
-                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
-                `   Custo novo: <b>${fmt(item.custo_unitario_liquido)}</b>\n` +
-                `   📈 Aumento: <b>+${variacao12m.toFixed(1)}%</b> em 12 meses\n` +
-                `   💰 Preço venda atual: ${fmt(produtoExistente?.preco_venda)}\n` +
-                `   💡 PREÇO SUGERIDO: <b>${fmt(sugestaoPreco)}</b> (margem ${margemReal.toFixed(0)}%)`
-              );
-
-              await supabase.from("historico_custo_produto")
-                .update({ alerta_enviado: true, sugestao_preco_venda: sugestaoPreco, markup_aplicado: margemReal })
-                .eq("nf_id", nf.id)
-                .eq("produto_codigo", item.codigo_produto);
-            } else if (variacao12m > 0) {
-              alertasAumento.push(
-                `🟡 <b>${item.descricao}</b>\n` +
-                `   Custo 12m atrás: ${fmt(custoInicial12m)}\n` +
-                `   Custo novo: ${fmt(item.custo_unitario_liquido)}\n` +
-                `   📈 Aumento: +${variacao12m.toFixed(1)}% em 12 meses (dentro da margem)`
-              );
-            }
-
-            if (produtoExistente) {
-              await supabase.from("produtos_eyemobile").update({
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: (Number(produtoExistente.estoque_atual) || 0) + (Number(item.quantidade) || 0),
-                ultima_atualizacao_custo: new Date().toISOString(),
-                alerta_aumento_10pct: variacao12m > 10,
-              }).eq("id", produtoExistente.id);
-            } else {
-              await supabase.from("produtos_eyemobile").insert({
-                user_id: userId,
-                workspace_id: nf.workspace_id,
-                codigo: item.codigo_produto,
-                descricao: item.descricao,
-                custo_atual: item.custo_unitario_liquido,
-                estoque_atual: Number(item.quantidade) || 0,
-                ultima_atualizacao_custo: new Date().toISOString(),
-              });
-            }
-
-            await supabase.from("nf_itens").update({
-              status_estoque: "atualizado",
-              produto_eyemobile_id: produtoExistente?.eyemobile_id || item.codigo_produto,
-            }).eq("id", item.id);
-
-            produtosAtualizados.push(item.descricao);
-          }
-
-          await supabase.from("notas_fiscais_compra").update({ status: "custo_atualizado" }).eq("id", nfId);
-          await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-
-          msg += `<b>📦 Estoque atualizado:</b> ${produtosAtualizados.length} produtos\n`;
-          msg += `<b>💰 Custos atualizados:</b> ${produtosAtualizados.length} produtos\n\n`;
-
-          if (alertasAumento.length > 0) {
-            msg += `📊 <b>RESUMO DE VARIAÇÕES DE CUSTO:</b>\n\n`;
-            alertasAumento.forEach(a => msg += a + "\n\n");
-          }
-
-          const { data: alertasPendentes } = await supabase
-            .from("alertas_preco_pendentes")
-            .select("*")
-            .eq("nf_id", nfId)
-            .eq("status", "pendente");
-
-          if (alertasPendentes && alertasPendentes.length > 0) {
-            msg += `\n🚨 <b>PREÇOS DE VENDA PRECISAM SER AJUSTADOS:</b>\n\n`;
-            alertasPendentes.forEach((alerta: any, idx: number) => {
-              const idCurto = alerta.id.slice(0, 8);
-              msg += `${idx + 1}. <b>${alerta.produto_descricao}</b>\n`;
-              msg += `   💰 Preço atual: ${fmt(alerta.preco_venda_atual)}\n`;
-              msg += `   💡 Sugerido: <b>${fmt(alerta.preco_sugerido)}</b>\n`;
-              msg += `   ✅ Para confirmar: <code>CONFIRMAR ${idCurto}</code>\n`;
-              msg += `   ✏️ Para editar: <code>EDITAR ${idCurto} 15.00</code>\n`;
-              msg += `   🚫 Para ignorar: <code>IGNORAR ${idCurto}</code>\n\n`;
-            });
-
-            msg += `<i>💡 Ao responder CONFIRMAR, o preço sobe automaticamente para o Eyemobile PDV.</i>\n`;
-            msg += `<i>Alertas não resolvidos serão lembrados 1x por semana.</i>`;
-
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "aguardando_ajuste_precos",
-                proposta_id: nfId,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-          } else {
-            msg += `✅ <b>Nenhum aumento crítico de custo detectado (>10%).</b>\n`;
-            msg += `💡 Preços de venda estão dentro da margem esperada.`;
-
-            await supabase.from("telegram_conversas").upsert(
-              {
-                user_id: userId,
-                chat_id: chatId,
-                estado: "inicio",
-                proposta_id: null,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "chat_id" }
-            );
-          }
-
-          await sendReply(msg);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        const valorNum = parseNum(dados.valor_total || dados.valor);
-        const vencIso = parseDate(dados.data_vencimento || dados.vencimento);
-        const credorNome = String(dados.credor || dados.beneficiario || "Beneficiário Boleto").trim();
-        const desc = String(dados.descricao || `Boleto - ${credorNome}`).trim();
-
-        // Busca workspace do usuário para associar a dívida
-        const { data: wsMember } = await supabase
-          .from("workspace_members")
-          .select("workspace_id")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-
-        const insertPayload: Record<string, any> = {
-          user_id: userId,
-          descricao: desc,
-          valor_total: valorNum,
-          valor_restante: valorNum,
-          valor_pago: 0,
-          data_vencimento: vencIso,
-          credor: credorNome,
-          status: "pendente",
-          parcelas: 1,
-          parcelas_pagas: 0,
-          metodo_pagamento_esperado: "boleto",
-          linha_digitavel: dados.linha_digitavel || null,
-          codigo_barras: dados.codigo_barras || null,
-        };
-
-        if (dados.categoria_id) {
-          insertPayload.categoria_id = dados.categoria_id;
-        }
-
-        if (wsMember?.workspace_id) {
-          insertPayload.workspace_id = wsMember.workspace_id;
-        }
-
-        console.log("[telegram-webhook] Inserindo divida confirmada:", JSON.stringify(insertPayload));
-
-        const { data: dividaInserida, error: errDivida } = await supabase
-          .from("dividas")
-          .insert(insertPayload)
-          .select("id,descricao,valor_total,data_vencimento,credor,categoria_id")
-          .single();
-
-        if (errDivida) {
-          console.error("[telegram-webhook] Erro ao cadastrar dívida confirmada:", errDivida.message, JSON.stringify(errDivida));
-          await sendReply(`❌ <b>Erro ao cadastrar boleto no banco de dados:</b> ${errDivida.message}`);
-          return new Response("OK", { status: 200, headers: corsHeaders });
-        }
-
-        if (dividaInserida?.categoria_id && credorNome) {
-          salvarCacheCategoria(supabase, userId, credorNome, dividaInserida.categoria_id).catch(() => {});
-        }
-
-        await supabase.from("telegram_propostas").update({ status: "confirmada", executed_at: new Date().toISOString() }).eq("id", proposta.id);
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-
-        const valFmt = Number(dividaInserida.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-        const vencFmt = dividaInserida.data_vencimento ? dividaInserida.data_vencimento.split("T")[0].split("-").reverse().join("/") : "Sem data";
-
-        await sendReply(
-          `✅ <b>Boleto cadastrado com sucesso!</b>\n\n` +
-          `🏢 Beneficiário: <b>${dividaInserida.credor || "Beneficiário"}</b>\n` +
-          (dados.categoria_nome ? `🏷️ Categoria: <b>${dados.categoria_nome}</b>\n` : "") +
-          `💰 Valor: <b>${valFmt}</b>\n` +
-          `🗓️ Vencimento: <b>${vencFmt}</b>\n\n` +
-          `🔔 <b>Lembrete automático agendado para ${vencFmt} às 09:00!</b>\n` +
-          `<i>O lançamento já consta na sua Agenda Financeira e na lista de Dívidas.</i>`
-        );
+        // ─── CASO C: CADASTRO DE DÍVIDA / BOLETO BANCÁRIO ───
+        await executarConfirmacaoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
+
       } else if (isNao) {
-        if (proposta) {
-          await supabase.from("telegram_propostas").update({ status: "cancelada" }).eq("id", proposta.id);
-        }
-        await supabase.from("telegram_conversas").upsert(
-          { user_id: userId, chat_id: chatId, estado: "livre", proposta_id: null, updated_at: new Date().toISOString() },
-          { onConflict: "chat_id" }
-        );
-        await sendReply("❌ <b>Cadastro cancelado.</b> O boleto não foi registrado.");
+        await executarCancelamentoPropostaBoleto(userId, chatId, proposta, sendReply);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
       // Se não foi SIM nem NÃO, mas enviou uma nova foto ou comando, o fluxo prossegue abaixo e limpa o estado antigo.
     }
 
     // ─── CASO 3: Mensagem com Foto / Documento ───
-    const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
-    const hasDoc = !!message.document;
-    const caption = (message.caption || "").trim();
-    const promptText = (message.text || caption || "").trim();
+    const hasPhoto = Array.isArray(message?.photo) && message.photo.length > 0;
+    const hasDoc = !!message?.document;
+    const caption = (typeof message?.caption === "string" ? message.caption : "").trim();
+    const promptText = (typeof message?.text === "string" ? message.text : caption || "").trim();
 
     if (hasPhoto || hasDoc) {
       console.log("[telegram-webhook] ===== INÍCIO PROCESSAMENTO DE IMAGEM =====");
@@ -3416,8 +5131,8 @@ serve(async (req) => {
         }).catch(() => {});
 
         const fileId = hasPhoto
-          ? message.photo[message.photo.length - 1].file_id
-          : message.document.file_id;
+          ? (message?.photo as Array<{ file_id: string }>)[(message?.photo as Array<{ file_id: string }>).length - 1].file_id
+          : (message?.document as { file_id: string }).file_id;
 
         // IMPORTANTE: fotos enviadas como "foto" (hasPhoto) são comprimidas pelo Telegram para ~1280px.
         // Arquivos enviados como "documento" (hasDoc) mantêm a qualidade original.
@@ -3439,12 +5154,12 @@ serve(async (req) => {
 
         const filePath = fileInfo.result.file_path;
         const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
-        const docMime = (message.document?.mime_type || "").toLowerCase();
+        const docMime = ((message?.document as { mime_type?: string })?.mime_type || "").toLowerCase();
 
         // ─── VARIÁVEIS DE DOCUMENTO ───
         let finalImageBase64Uri = "";
-        let loadedDecodedImage: any = null;
-        let documentData: any = null;
+        let loadedDecodedImage: Image | null = null;
+        let documentData: Record<string, unknown> | null = null;
 
         // ============================================
         // FLUXO XML: Parser Nativo Determinístico de NF-e
@@ -3467,7 +5182,7 @@ serve(async (req) => {
 
           if (parsedNFe && parsedNFe.itens && parsedNFe.itens.length > 0) {
             console.log(`[telegram-webhook] XML de NF-e processado com sucesso! ${parsedNFe.itens.length} itens extraídos.`);
-            documentData = parsedNFe;
+            documentData = parsedNFe as unknown as Record<string, unknown>;
           } else {
             await sendReply(
               "⚠️ <b>Arquivo XML recebido, mas não foi identificado como NF-e padrão.</b>\n\n" +
@@ -3497,7 +5212,7 @@ serve(async (req) => {
           const pdfBuffer = await pdfDownloadResp.arrayBuffer();
           console.log("[telegram-webhook] PDF baixado:", pdfBuffer.byteLength, "bytes");
 
-          let pdfDocumentData: any = null;
+          let pdfDocumentData: Record<string, unknown> | null = null;
 
           // 2. Busca chave da OpenAI do usuário ou do ambiente
           const { data: iaCfg } = await supabase.from("ia_configuracoes").select("api_key").eq("user_id", userId).maybeSingle();
@@ -3577,7 +5292,7 @@ serve(async (req) => {
                     } catch {
                       const objMatch = rawMsg.match(/\{[\s\S]*\}/);
                       if (objMatch) {
-                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch {}
+                        try { pdfDocumentData = JSON.parse(objMatch[0]); } catch { /* ignore fallback */ }
                       }
                     }
                   }
@@ -3589,8 +5304,8 @@ serve(async (req) => {
                   headers: { Authorization: `Bearer ${openaiApiKey}` },
                 }).catch(() => {});
               }
-            } catch (asstErr: any) {
-              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr.message);
+            } catch (asstErr: unknown) {
+              console.error("[telegram-webhook] Falha no Assistente OpenAI:", asstErr instanceof Error ? asstErr.message : String(asstErr));
             }
           }
 
@@ -3636,7 +5351,7 @@ serve(async (req) => {
               const pdfValFmt = pdfValor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
               const pdfIsVencido = pdfVenc && pdfVenc < hojeStr;
               const pdfVencFmt = pdfVenc ? pdfVenc.split("-").reverse().join("/") : "Sem data";
-              await sendReply(
+              const msgPdfProposta =
                 `📄 <b>Boleto PDF identificado!</b>\n\n` +
                 `🏢 Beneficiário: <b>${pdfBenef}</b>\n` +
                 (pdfCat?.nome ? `🏷️ Categoria: <b>${pdfCat.nome}</b>\n` : "") +
@@ -3644,10 +5359,16 @@ serve(async (req) => {
                 `📅 Vencimento: <b>${pdfVencFmt}</b>${pdfIsVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
                 (pdfLinha ? `🔢 Linha digitável: <code>${pdfLinha}</code>\n` : "") +
                 `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-                `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-                `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-                `⏰ <i>Esta proposta expira em 30 minutos.</i>`
-              );
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+
+              const botoesPdf = [
+                [
+                  { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${pdfProposta.id}` },
+                  { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${pdfProposta.id}` },
+                ],
+              ];
+
+              await sendReplyWithButtons(chatId, msgPdfProposta, botoesPdf);
               return new Response("OK", { status: 200, headers: corsHeaders });
             }
           }
@@ -3703,8 +5424,8 @@ serve(async (req) => {
             // Re-encodificar overview como JPEG em alta qualidade (95)
             finalBase64Bytes = await overviewImage.encodeJPEG(95);
             mime = "image/jpeg";
-          } catch (imgErr: any) {
-            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr.message);
+          } catch (imgErr: unknown) {
+            console.log("[telegram-webhook] Não foi possível decodificar ou pré-processar imagem:", imgErr instanceof Error ? imgErr.message : String(imgErr));
           }
 
           const b64 = base64Encode(finalBase64Bytes);
@@ -3818,23 +5539,23 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             const rawContent = aiJson.choices?.[0]?.message?.content || "";
             console.log("[telegram-webhook] Resposta bruta conferência fechamento:", rawContent.slice(0, 300));
 
-            let fechamento: any = null;
+            let fechamento: Record<string, unknown> | null = null;
             try {
               fechamento = JSON.parse(rawContent.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
             } catch {
               const match = rawContent.match(/\{[\s\S]*\}/);
               if (match) {
-                try { fechamento = JSON.parse(match[0]); } catch {}
+                try { fechamento = JSON.parse(match[0]); } catch { /* ignore fallback */ }
               }
             }
 
             if (fechamento && fechamento.tipo === "fechamento") {
-              const fmt = (v: any) =>
+              const fmt = (v: unknown) =>
                 v != null && Number(v) > 0
                   ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                   : "R$ 0,00";
 
-              const env = fechamento.total || fechamento.envelope || {};
+              const env = (fechamento.total || fechamento.envelope || {}) as Record<string, unknown>;
               const envDinheiro = Number(env.dinheiro) || 0;
               const envDebito = Number(env.debito) || 0;
               const envCredito = Number(env.credito) || 0;
@@ -3901,15 +5622,17 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                 msg = `✅ <b>Fechamento OK — Confirmado!</b>\n\n`;
                 msg += `📅 <b>Data:</b> ${fechamento.data || hojeStr.split("-").reverse().join("/")}\n\n`;
 
-                const temCaixa1 = fechamento.caixa1 && Object.values(fechamento.caixa1).some((v: any) => Number(v) > 0);
-                const temCaixa2 = fechamento.caixa2 && Object.values(fechamento.caixa2).some((v: any) => Number(v) > 0);
+                const caixa1Obj = (fechamento.caixa1 || {}) as Record<string, unknown>;
+                const caixa2Obj = (fechamento.caixa2 || {}) as Record<string, unknown>;
+                const temCaixa1 = fechamento.caixa1 && Object.values(caixa1Obj).some((v: unknown) => Number(v) > 0);
+                const temCaixa2 = fechamento.caixa2 && Object.values(caixa2Obj).some((v: unknown) => Number(v) > 0);
 
                 if (temCaixa1 || temCaixa2) {
                   if (temCaixa1) {
-                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(fechamento.caixa1?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa1?.debito)} | 💳 Créd: ${fmt(fechamento.caixa1?.credito)} | 📲 Pix: ${fmt(fechamento.caixa1?.pix)}\n\n`;
+                    msg += `<b>Caixa 1:</b>\n  💰 ${fmt(caixa1Obj.dinheiro)} | 💳 Déb: ${fmt(caixa1Obj.debito)} | 💳 Créd: ${fmt(caixa1Obj.credito)} | 📲 Pix: ${fmt(caixa1Obj.pix)}\n\n`;
                   }
                   if (temCaixa2) {
-                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(fechamento.caixa2?.dinheiro)} | 💳 Déb: ${fmt(fechamento.caixa2?.debito)} | 💳 Créd: ${fmt(fechamento.caixa2?.credito)} | 📲 Pix: ${fmt(fechamento.caixa2?.pix)}\n\n`;
+                    msg += `<b>Caixa 2:</b>\n  💰 ${fmt(caixa2Obj.dinheiro)} | 💳 Déb: ${fmt(caixa2Obj.debito)} | 💳 Créd: ${fmt(caixa2Obj.credito)} | 📲 Pix: ${fmt(caixa2Obj.pix)}\n\n`;
                   }
                 }
 
@@ -4029,7 +5752,8 @@ REGRAS:
             }),
           });
 
-          let orientacaoAnalysis: any = null;
+          let orientacaoAnalysis: Record<string, unknown> | null = null;
+          let docAnalysis: Record<string, unknown> | null = null;
           if (aiResp1.ok) {
             const aiJson1 = await aiResp1.json();
             const raw1 = aiJson1.choices?.[0]?.message?.content || "";
@@ -4037,7 +5761,7 @@ REGRAS:
               orientacaoAnalysis = JSON.parse(raw1.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
             } catch {
               const m = raw1.match(/\{[\s\S]*\}/);
-              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch {} }
+              if (m) { try { orientacaoAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
             }
           }
 
@@ -4073,39 +5797,68 @@ REGRAS:
             const GEMINI_DANFE_MODEL = "gemini-3.6-flash";
             const isGeminiV2Enabled = Deno.env.get("DANFE_GEMINI_V2_ENABLED") === "true";
             const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+            const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 
-            let docAnalysis: any = null;
 
-            if (isGeminiV2Enabled && geminiApiKey && loadedDecodedImage) {
-              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Gemini 3.6 Flash ───
+            if (isGeminiV2Enabled && (geminiApiKey || geminiApiKeyBackup) && loadedDecodedImage) {
+              // ─── PASSO 2 (GEMINI V2): Extração de Cabeçalho, Totais e Região com Failover de Chave ───
               try {
                 const headerStart = Date.now();
                 const normJpgB64 = base64Encode(await loadedDecodedImage.encodeJPEG(95));
-                const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    contents: [{
-                      parts: [
-                        { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
-                        { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
-                      ]
-                    }],
-                    generationConfig: {
-                      temperature: 0.0,
-                      responseMimeType: "application/json",
-                      thinkingConfig: {
-                        thinkingBudget: 1
-                      }
+                const headerPayload = JSON.stringify({
+                  contents: [{
+                    parts: [
+                      { text: GEMINI_V2_PROMPT_CABECALHO_E_TOTAIS },
+                      { inline_data: { mime_type: "image/jpeg", data: normJpgB64 } }
+                    ]
+                  }],
+                  generationConfig: {
+                    temperature: 0.0,
+                    responseMimeType: "application/json",
+                    thinkingConfig: {
+                      thinkingBudget: 1
                     }
-                  }),
-                  signal: AbortSignal.timeout(30000)
+                  }
                 });
 
-                const headerDurationMs = Date.now() - headerStart;
-                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp.status}`);
+                let geminiResp: Response | null = null;
+                let activeSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
-                if (geminiResp.ok) {
+                // Tentativa 1: Chave Primária
+                if (geminiApiKey) {
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                  } catch (pErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave primária:", pErr);
+                  }
+                }
+
+                // Tentativa 2: Chave Reserva (se primária falhou por 429, timeout ou 5xx)
+                if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                  const pStatus = geminiResp ? geminiResp.status : "timeout";
+                  console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                  try {
+                    geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: headerPayload,
+                      signal: AbortSignal.timeout(30000)
+                    });
+                    activeSlot = "gemini_backup";
+                  } catch (bErr) {
+                    console.warn("[NF_V2_HEADER] Falha de rede/timeout na chave reserva:", bErr);
+                  }
+                }
+
+                const headerDurationMs = Date.now() - headerStart;
+                console.log(`[NF_V2_HEADER_TIMING] duration_ms=${headerDurationMs} status=${geminiResp?.status} slot=${activeSlot}`);
+
+                if (geminiResp && geminiResp.ok) {
                   const gJson = await geminiResp.json();
                   if (gJson.usageMetadata) {
                     console.log(`[NF_V2_USAGE] target=header promptTokenCount=${gJson.usageMetadata.promptTokenCount} candidatesTokenCount=${gJson.usageMetadata.candidatesTokenCount} thoughtsTokenCount=${gJson.usageMetadata.thoughtsTokenCount || 0} totalTokenCount=${gJson.usageMetadata.totalTokenCount}`);
@@ -4118,15 +5871,17 @@ REGRAS:
                     serie_nf: docAnalysis?.cabecalho?.serie_nf,
                     data_emissao: docAnalysis?.cabecalho?.data_emissao,
                     valor_produtos: docAnalysis?.valores_totais?.valor_produtos,
-                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf
+                    valor_total_nf: docAnalysis?.valores_totais?.valor_total_nf,
+                    slot: activeSlot,
                   });
                 } else {
-                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
+                  console.warn(`[NF_V2_HEADER_WARN] Gemini retornou status HTTP ${geminiResp?.status} ao extrair cabeçalho/totais em ${headerDurationMs}ms`);
                 }
-              } catch (hErr: any) {
-                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr.message);
+              } catch (hErr: unknown) {
+                console.error("[NF_V2_HEADER_ERROR] Erro ao extrair cabeçalho/totais via Gemini:", hErr instanceof Error ? hErr.message : String(hErr));
               }
-            } else {
+            }
+ else {
               // ─── PASSO 2 (LEGADO): GPT-4o Overview ───
               const promptCabecalhoTotaisETabela = `Você é um conferente especialista em documentos fiscais (DANFE) brasileiros.
 Esta imagem já está na orientação vertical correta (em pé).
@@ -4199,7 +5954,7 @@ REGRAS:
                   docAnalysis = JSON.parse(raw2.replace(/^```json\s*/i, "").replace(/```$/g, "").trim());
                 } catch {
                   const m = raw2.match(/\{[\s\S]*\}/);
-                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch {} }
+                  if (m) { try { docAnalysis = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
                 }
               }
             }
@@ -4236,38 +5991,66 @@ REGRAS:
 
                 console.log(`[NF_V2_CROP] continuous table crop: ${loadedDecodedImage.width}x${cropH} (top ${Math.round(topRatio*100)}% - bottom ${Math.round(bottomRatio*100)}%)`);
 
-                // 2. Chamada Vision ao Gemini com Timeout e Tratamento de Erros
+                // 2. Chamada Vision ao Gemini com Timeout, Tratamento de Erros e Failover de Chaves
                 let geminiRawText = "";
                 let geminiDurationMs = 0;
                 let geminiErrorCode = "";
+                let productsActiveSlot: "gemini_primary" | "gemini_backup" = "gemini_primary";
 
                 try {
                   const v2Start = Date.now();
-                  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`;
-
-                  const geminiResp = await fetch(geminiUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      contents: [{
-                        parts: [
-                          { text: GEMINI_V2_PROMPT_TABELA },
-                          { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
-                        ]
-                      }],
-                      generationConfig: {
-                        temperature: 0.0,
-                        responseMimeType: "application/json",
-                        thinkingConfig: {
-                          thinkingBudget: 1
-                        }
+                  const productsPayload = JSON.stringify({
+                    contents: [{
+                      parts: [
+                        { text: GEMINI_V2_PROMPT_TABELA },
+                        { inline_data: { mime_type: "image/jpeg", data: tableContinuousB64 } }
+                      ]
+                    }],
+                    generationConfig: {
+                      temperature: 0.0,
+                      responseMimeType: "application/json",
+                      thinkingConfig: {
+                        thinkingBudget: 1
                       }
-                    }),
-                    signal: AbortSignal.timeout(45000)
+                    }
                   });
 
+                  let geminiResp: Response | null = null;
+
+                  // Tentativa 1: Chave Primária
+                  if (geminiApiKey) {
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKey}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                    } catch (pErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave primária:", pErr);
+                    }
+                  }
+
+                  // Tentativa 2: Chave Reserva
+                  if ((!geminiResp || !geminiResp.ok) && geminiApiKeyBackup) {
+                    const pStatus = geminiResp ? geminiResp.status : "timeout";
+                    console.log(`[DANFE_PROVIDER] correlation_id=${chatId} provider=gemini credential_slot=gemini_backup fallback_count=1 fallback_reason=gemini_primary_${pStatus}`);
+                    try {
+                      geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DANFE_MODEL}:generateContent?key=${geminiApiKeyBackup}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: productsPayload,
+                        signal: AbortSignal.timeout(45000)
+                      });
+                      productsActiveSlot = "gemini_backup";
+                    } catch (bErr) {
+                      console.warn("[NF_V2_PRODUCTS] Falha de rede/timeout na chave reserva:", bErr);
+                    }
+                  }
+
                   geminiDurationMs = Date.now() - v2Start;
-                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp.status}`);
+                  console.log(`[NF_V2_PRODUCTS_TIMING] duration_ms=${geminiDurationMs} status=${geminiResp?.status} slot=${productsActiveSlot}`);
+
 
                   if (geminiResp.ok) {
                     const geminiJson = await geminiResp.json();
@@ -4284,17 +6067,18 @@ REGRAS:
                     const errText = await geminiResp.text();
                     console.error(`[NF_V2_ERROR] Gemini Vision HTTP ${geminiResp.status} em ${geminiDurationMs}ms:`, errText.slice(0, 300));
                   }
-                } catch (gemErr: any) {
-                  if (gemErr.name === "TimeoutError" || String(gemErr.message).includes("timeout") || String(gemErr.message).includes("aborted")) {
+                } catch (gemErr: unknown) {
+                  const errObj = gemErr as { name?: string; message?: string };
+                  if (errObj?.name === "TimeoutError" || String(errObj?.message).includes("timeout") || String(errObj?.message).includes("aborted")) {
                     geminiErrorCode = "gemini_timeout";
                   } else {
                     geminiErrorCode = "gemini_processing_error";
                   }
-                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, gemErr.message);
+                  console.error(`[NF_V2_EXCEPTION] Erro ao chamar Gemini Vision (${geminiErrorCode}):`, errObj?.message || String(gemErr));
                 }
 
                 if (!geminiErrorCode && geminiRawText) {
-                  let rawList: any[] | null = null;
+                  let rawList: unknown[] | null = null;
                   try {
                     const clean = geminiRawText.trim().replace(/^```json\s*/i, "").replace(/```$/g, "").trim();
                     const p = JSON.parse(clean);
@@ -4308,7 +6092,7 @@ REGRAS:
                         const p = JSON.parse(m[0]);
                         if (Array.isArray(p.itens)) rawList = p.itens;
                         else if (Array.isArray(p.produtos)) rawList = p.produtos;
-                      } catch (_) {}
+                      } catch { /* ignore fallback */ }
                     }
                   }
 
@@ -4347,7 +6131,7 @@ REGRAS:
                   } else {
                     // 3. Validação Estrutural Estrita com Sanitização de FCI
                     const itensValidados: DanfeItemV2[] = [];
-                    const itensRejeitados: any[] = [];
+                    const itensRejeitados: Array<{ index: number; motivo: unknown }> = [];
 
                     rawList.forEach((r, idx) => {
                       const v = validateProductRowV2(r);
@@ -4493,8 +6277,8 @@ FORMATO:
                     const tileJson = tileResp.ok ? await tileResp.json() : null;
                     const rawTile = tileJson?.choices?.[0]?.message?.content || "";
                     return { rawText: rawTile, httpStatus: tileResp.status };
-                  } catch (tileErr: any) {
-                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr.message);
+                  } catch (tileErr: unknown) {
+                    console.warn(`[NF] Erro ao chamar Vision no recorte ${label}:`, tileErr instanceof Error ? tileErr.message : String(tileErr));
                     return { rawText: "", httpStatus: 500 };
                   }
                 };
@@ -4558,15 +6342,319 @@ FORMATO:
                 isTelegramCompressedPhoto
               };
             }
-          } else if (docAnalysis?.tipo_documento === "boleto" || docAnalysis?.boleto_dados) {
+          } else if (
+            orientacaoAnalysis?.tipo_documento === "boleto" ||
+            orientacaoAnalysis?.boleto_dados
+          ) {
+            // ─── PASSO 2 BOLETO: Extração completa na imagem normalizada (pós-rotação) ───
+            // Usa a imagem já rotacionada (normalizedOverviewUri) para garantir leitura correta
+            // mesmo quando a foto foi tirada de lado (90° / 270°).
+            // Cadeia: Gemini Primary → Gemini Backup → OpenAI Vision → Fail-Closed
+            const correlationIdBoleto = `tg-boleto-${userId}-${Date.now()}`;
+            const geminiKeyBoleto = Deno.env.get("GEMINI_API_KEY") || "";
+            const geminiBackupBoleto = Deno.env.get("GEMINI_API_KEY_BACKUP") || "";
+            const openAiKeyBoleto = Deno.env.get("OPENAI_API_KEY") || "";
+
+            // Extrai base64 limpo da imagem normalizada
+            const normalizedB64Boleto = normalizedOverviewUri.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
+            const mimeTypeBoleto = "image/jpeg";
+
+            const GEMINI_BOLETO_PROMPT_TG = `Você é um especialista em leitura e extração de boletos bancários e guias de arrecadação brasileiras.
+
+Analise esta imagem de boleto (já orientada perfeitamente na vertical) e extraia os campos com máxima fidelidade e exatidão:
+
+1. BANCO: Nome do banco e código (ex: "Banco Itaú S.A. (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
+2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes de empresas conhecidas e NÃO use conhecimento prévio. Capture fielmente o que estiver impresso (ex: se estiver impresso "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso caractere a caractere).
+3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
+4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
+5. CNPJ/CPF DO PAGADOR: Se visível.
+6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY).
+7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1262.55). NÃO leia CNPJ, CPF ou código numérico de barras como valor.
+8. LINHA DIGITÁVEL: A sequência completa de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
+9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
+10. NOSSO NÚMERO: Código de identificação do título.
+11. NÚMERO DO DOCUMENTO / SEU NÚMERO: Número da fatura ou documento de referência.
+
+Retorne EXCLUSIVAMENTE um objeto JSON válido:
+{
+  "banco": "string ou null",
+  "beneficiario": "string ou null",
+  "cnpj_cpf_beneficiario": "string ou null",
+  "pagador": "string ou null",
+  "cnpj_cpf_pagador": "string ou null",
+  "data_vencimento": "YYYY-MM-DD ou DD/MM/YYYY ou null",
+  "valor": 0.00,
+  "linha_digitavel": "string ou null",
+  "codigo_barras": "string ou null",
+  "nosso_numero": "string ou null",
+  "numero_documento": "string ou null"
+}`;
+
+            interface BoletoVisionResponse { ok: boolean; status: number; text: string; providerUsed: string; credentialSlot: string; fallbackUsed: boolean; fallbackCount: number; fallbackReason?: string; durationMs: number; }
+            let boletoVisionResult: BoletoVisionResponse | null = null;
+
+            // ── 1. OpenAI GPT-4o Vision (Primário) ──
+            if (openAiKeyBoleto) {
+              const tStart = Date.now();
+              try {
+                const oResp = await fetch("https://api.openai.com/v1/chat/completions", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${openAiKeyBoleto}`,
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4o",
+                    temperature: 0.0,
+                    response_format: { type: "json_object" },
+                    messages: [
+                      { role: "system", content: GEMINI_BOLETO_PROMPT_TG },
+                      {
+                        role: "user",
+                        content: [
+                          { type: "text", text: "Extraia os dados deste boleto com máxima fidelidade em JSON puro." },
+                          { type: "image_url", image_url: { url: normalizedOverviewUri, detail: "high" } },
+                        ],
+                      },
+                    ],
+                  }),
+                });
+                const oJson = await oResp.json();
+                const rawText = oJson?.choices?.[0]?.message?.content || "";
+                if (oResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: oResp.status,
+                    text: rawText,
+                    providerUsed: "openai",
+                    credentialSlot: "openai_primary",
+                    fallbackUsed: false,
+                    fallbackCount: 0,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
+              } catch (eOai) {
+                console.warn(`[BOLETO_TRACE] provider=openai_primary ERRO: ${eOai}`);
+              }
+            }
+
+            // ── 2. Google Gemini 3.7 Flash (Fallback) ──
+            if ((!boletoVisionResult?.ok || !boletoVisionResult?.text) && (geminiKeyBoleto || geminiBackupBoleto)) {
+              const effectiveKey = geminiKeyBoleto || geminiBackupBoleto;
+              const tStart = Date.now();
+              try {
+                const gResp = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${effectiveKey}`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      contents: [{ parts: [
+                        { text: GEMINI_BOLETO_PROMPT_TG },
+                        { inline_data: { mime_type: mimeTypeBoleto, data: normalizedB64Boleto } },
+                      ]}],
+                      generationConfig: { temperature: 0.0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+                    }),
+                  }
+                );
+                const gJson = await gResp.json();
+                const rawText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                if (gResp.ok && rawText) {
+                  boletoVisionResult = {
+                    ok: true,
+                    status: gResp.status,
+                    text: rawText,
+                    providerUsed: "gemini",
+                    credentialSlot: "gemini_backup",
+                    fallbackUsed: true,
+                    fallbackCount: 1,
+                    durationMs: Date.now() - tStart,
+                  };
+                }
+              } catch (eGb) {
+                console.warn(`[BOLETO_TRACE] provider=gemini_backup ERRO: ${eGb}`);
+              }
+            }
+
+            // ── Parse do JSON retornado pelo provider ──
+            let bParsed: Record<string, unknown> = {};
+            if (boletoVisionResult?.ok && boletoVisionResult.text) {
+              try {
+                const cleaned = boletoVisionResult.text.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim();
+                bParsed = JSON.parse(cleaned);
+              } catch {
+                const m = boletoVisionResult.text.match(/\{[\s\S]*\}/);
+                if (m) { try { bParsed = JSON.parse(m[0]); } catch { /* ignore fallback */ } }
+              }
+            }
+
+            // ─── VALIDAÇÃO E CONCILIAÇÃO DETERMINÍSTICA CANÔNICA ───
+            const boletoDados = orientacaoAnalysis?.boleto_dados as Record<string, unknown> | undefined;
+            const rawLinha = (typeof bParsed.linha_digitavel === "string" ? bParsed.linha_digitavel : null) || (typeof boletoDados?.linha_digitavel === "string" ? boletoDados.linha_digitavel : null);
+            let validacaoCanonica = reconcileBoleto({
+              banco: typeof bParsed.banco === "string" ? bParsed.banco : null,
+              beneficiario: (typeof bParsed.beneficiario === "string" ? bParsed.beneficiario : typeof bParsed.cedente === "string" ? bParsed.cedente : typeof boletoDados?.beneficiario === "string" ? boletoDados.beneficiario : null),
+              cnpj_cpf_beneficiario: typeof bParsed.cnpj_cpf_beneficiario === "string" ? bParsed.cnpj_cpf_beneficiario : null,
+              pagador: (typeof bParsed.pagador === "string" ? bParsed.pagador : typeof bParsed.sacado === "string" ? bParsed.sacado : null),
+              cnpj_cpf_pagador: typeof bParsed.cnpj_cpf_pagador === "string" ? bParsed.cnpj_cpf_pagador : null,
+              data_vencimento: (typeof bParsed.data_vencimento === "string" ? bParsed.data_vencimento : typeof bParsed.vencimento === "string" ? bParsed.vencimento : typeof boletoDados?.data_vencimento === "string" ? boletoDados.data_vencimento : null),
+              valor: bParsed.valor ?? boletoDados?.valor ?? null,
+              linha_digitavel: rawLinha,
+              codigo_barras: typeof bParsed.codigo_barras === "string" ? bParsed.codigo_barras : null,
+              nosso_numero: typeof bParsed.nosso_numero === "string" ? bParsed.nosso_numero : null,
+              numero_documento: typeof bParsed.numero_documento === "string" ? bParsed.numero_documento : null,
+            });
+
+            // ─── PIPELINE DE AUTO-RECUPERAÇÃO DE LINHA DIGITÁVEL (SE 1ª LEITURA FOI INVÁLIDA/INCOMPLETA) ───
+            if (!validacaoCanonica.valido && (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto)) {
+              console.log(`[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} 1st pass invalid, starting recovery...`);
+
+              // Gerar regiões candidatas de forma segura sem eliminar a original
+              const candidateRegions: RegionCandidate[] = [
+                {
+                  region: "full_focused",
+                  base64: normalizedB64Boleto,
+                  original_width: loadedDecodedImage?.width,
+                  original_height: loadedDecodedImage?.height,
+                  crop_x: 0,
+                  crop_y: 0,
+                  crop_width: loadedDecodedImage?.width,
+                  crop_height: loadedDecodedImage?.height,
+                },
+              ];
+
+              // Tentar crop da metade inferior (Ficha de Compensação) se imagem for alta
+              if (loadedDecodedImage && loadedDecodedImage.height > 400) {
+                try {
+                  const origW = loadedDecodedImage.width;
+                  const origH = loadedDecodedImage.height;
+                  const cropY = Math.floor(origH * 0.45);
+                  const cropH = origH - cropY;
+                  const cropW = origW;
+                  const cropped = loadedDecodedImage.clone().crop(0, cropY, cropW, cropH);
+                  const croppedB64 = base64Encode(await cropped.encodeJPEG(95));
+                  candidateRegions.push({
+                    region: "lower_half",
+                    base64: croppedB64,
+                    original_width: origW,
+                    original_height: origH,
+                    crop_x: 0,
+                    crop_y: cropY,
+                    crop_width: cropW,
+                    crop_height: cropH,
+                  });
+                } catch (cropErr) {
+                  console.warn(`[BOLETO_RECOVERY] Falha ao gerar crop candidate: ${cropErr}`);
+                }
+              }
+
+              const recoveryRes = await recoverBoletoLineWithFailover({
+                base64: normalizedB64Boleto,
+                mimeType: mimeTypeBoleto,
+                openaiApiKey: openAiKeyBoleto,
+                geminiApiKey: geminiKeyBoleto,
+                geminiApiKeyBackup: geminiBackupBoleto,
+                correlationId: correlationIdBoleto,
+                regionCandidates: candidateRegions,
+              });
+
+              if (recoveryRes.recovered && recoveryRes.successfulCandidate && recoveryRes.validationResult?.valido) {
+                console.log(
+                  `[BOLETO_RECOVERY] correlation_id=${correlationIdBoleto} ` +
+                  `Linha recuperada com sucesso via ${recoveryRes.successfulCandidate.provider} (${recoveryRes.successfulCandidate.region})`
+                );
+                validacaoCanonica = reconcileBoleto({
+                  banco: bParsed.banco || null,
+                  beneficiario: bParsed.beneficiario || bParsed.cedente || orientacaoAnalysis?.boleto_dados?.beneficiario || null,
+                  cnpj_cpf_beneficiario: bParsed.cnpj_cpf_beneficiario || null,
+                  pagador: bParsed.pagador || bParsed.sacado || null,
+                  cnpj_cpf_pagador: bParsed.cnpj_cpf_pagador || null,
+                  data_vencimento: bParsed.data_vencimento || bParsed.vencimento || orientacaoAnalysis?.boleto_dados?.data_vencimento || null,
+                  valor: bParsed.valor ?? orientacaoAnalysis?.boleto_dados?.valor ?? null,
+                  linha_digitavel: recoveryRes.successfulCandidate.linha_digits,
+                  codigo_barras: recoveryRes.successfulCandidate.codigo_barras || bParsed.codigo_barras || null,
+                  nosso_numero: bParsed.nosso_numero || null,
+                  numero_documento: bParsed.numero_documento || null,
+                });
+                validacaoCanonica.warnings.push(
+                  `linha_recuperada_${recoveryRes.successfulCandidate.provider}_${recoveryRes.successfulCandidate.region}`
+                );
+              }
+            }
+
+            let beneficiarioFinal = validacaoCanonica.beneficiarioFinal;
+            const beneficiarioOcrGlobal = bParsed.beneficiario || bParsed.cedente || null;
+            let beneficiarioOcrFocused: string | null = null;
+
+            // Transcrição literal focalizada no campo Beneficiário para máxima precisão textual
+            if (openAiKeyBoleto || geminiKeyBoleto || geminiBackupBoleto) {
+              try {
+                const focusedRes = await extractFocusedBeneficiary({
+                  base64: normalizedB64Boleto,
+                  mimeType: mimeTypeBoleto,
+                  openaiApiKey: openAiKeyBoleto,
+                  geminiApiKey: geminiKeyBoleto || geminiBackupBoleto,
+                });
+                beneficiarioOcrFocused = focusedRes.beneficiario;
+                if (beneficiarioOcrFocused && beneficiarioOcrFocused.length >= 2) {
+                  beneficiarioFinal = beneficiarioOcrFocused;
+                } else if (!beneficiarioFinal) {
+                  validacaoCanonica.warnings.push("beneficiario_baixa_confianca");
+                }
+              } catch (fErr) {
+                console.warn(`[BOLETO_TRACE] Falha na extração focalizada de beneficiário: ${fErr}`);
+              }
+            }
+
+            const linhaDigits = validacaoCanonica.linhaDigitavel?.linhaLimpa || cleanDigits(rawLinha);
+            const linhaMasked = linhaDigits.length > 10
+              ? `${linhaDigits.slice(0, 5)}***${linhaDigits.slice(-4)}`
+              : (linhaDigits.length > 0 ? `raw:${linhaDigits.length}dig` : "ausente");
+
+            console.log(
+              `[BOLETO_TRACE] correlation_id=${correlationIdBoleto} ` +
+              `orientation_detected=${orientacaoDetectada}° rotation_applied=${orientacaoDetectada}° ` +
+              `provider=${boletoVisionResult?.credentialSlot || "nenhum"} validation_status=${validacaoCanonica.status} ` +
+              `linha_present=${Boolean(linhaDigits)} linha_raw_digits=${linhaDigits.length} linha_valid=${validacaoCanonica.valido} ` +
+              `linha_digitavel_masked=${linhaMasked} ` +
+              `valor_source=${validacaoCanonica.valorSource} valor_final=${validacaoCanonica.valorFinal} ` +
+              `vencimento_source=${validacaoCanonica.vencimentoSource} vencimento_final=${validacaoCanonica.dataVencimentoFinal} ` +
+              `beneficiario_global="${beneficiarioOcrGlobal || ""}" beneficiario_focused="${beneficiarioOcrFocused || ""}" ` +
+              `warnings=${JSON.stringify(validacaoCanonica.warnings)}`
+            );
+
             documentData = {
               tipo: "boleto",
-              beneficiario: docAnalysis?.boleto_dados?.beneficiario,
-              valor: docAnalysis?.boleto_dados?.valor,
-              data_vencimento: docAnalysis?.boleto_dados?.data_vencimento,
-              linha_digitavel: docAnalysis?.boleto_dados?.linha_digitavel,
+              banco: validacaoCanonica.bancoFinal,
+              beneficiario: beneficiarioFinal,
+              beneficiario_ocr_global: beneficiarioOcrGlobal,
+              beneficiario_ocr_focused: beneficiarioOcrFocused,
+              cnpj_cpf_beneficiario: validacaoCanonica.cnpjCpfBeneficiarioFinal || null,
+              pagador: validacaoCanonica.pagadorFinal || null,
+              valor: validacaoCanonica.valorFinal,
+              data_vencimento: validacaoCanonica.dataVencimentoFinal,
+              linha_digitavel: validacaoCanonica.linhaDigitavel?.linhaLimpa || null,
+              linha_digitavel_formatada: validacaoCanonica.linhaDigitavel?.linhaFormatada || null,
+              linha_digitavel_raw: rawLinha || null,
+              linha_digitavel_raw_digits: linhaDigits.length,
+              codigo_barras: validacaoCanonica.codigoBarras?.codigoLimpo || bParsed.codigo_barras || null,
+              nosso_numero: bParsed.nosso_numero || null,
+              numero_documento: bParsed.numero_documento || null,
+              validation_status: validacaoCanonica.status,
+              valor_source: validacaoCanonica.valorSource,
+              valor_ocr: parseBoletoAmount(bParsed.valor),
+              valor_derivado: validacaoCanonica.linhaDigitavel?.valorDerivado || null,
+              vencimento_source: validacaoCanonica.vencimentoSource,
+              vencimento_ocr: bParsed.data_vencimento || null,
+              vencimento_derivado: validacaoCanonica.linhaDigitavel?.dataVencimentoDerivada || null,
+              warnings: validacaoCanonica.warnings,
+              divergencias: validacaoCanonica.divergencias,
+              evidence: validacaoCanonica.evidence,
+              correlation_id: correlationIdBoleto,
             };
           }
+
+
         }
 
         const ehDANFE = Boolean(
@@ -4588,6 +6676,34 @@ FORMATO:
         if (documentData && ehDANFE) {
           console.log("[telegram-webhook] >>> NOTA FISCAL DE COMPRA IDENTIFICADA (PRIORIDADE 1) <<< Itens:", documentData.itens?.length);
 
+          // Conciliação Determinística do Número da NF com a Chave de Acesso Oficial (44 dígitos)
+          if (documentData.cabecalho) {
+            const chaveDetectada = (
+              findAccessKeyInPayload(documentData) ||
+              findAccessKeyInPayload(documentData.cabecalho) ||
+              documentData.cabecalho.chave_acesso ||
+              null
+            );
+            if (chaveDetectada) {
+              documentData.cabecalho.chave_acesso = chaveDetectada;
+            }
+
+            const rec = reconcileNFeNumber(
+              documentData.cabecalho.numero_nf,
+              documentData.cabecalho.serie_nf,
+              chaveDetectada,
+              String(chatId),
+              "telegram"
+            );
+            if (rec.numero_nf_formatado) {
+              documentData.cabecalho.numero_nf = rec.numero_nf_formatado;
+            }
+            if (rec.serie_nf) {
+              documentData.cabecalho.serie_nf = rec.serie_nf;
+            }
+          }
+
+
           const { data: wsData } = await supabase
             .from("workspaces")
             .select("id")
@@ -4598,7 +6714,8 @@ FORMATO:
 
           const wsId = wsData?.id || workspaceId || null;
 
-          const fmt = (v: any) =>
+
+          const fmt = (v: unknown) =>
             v != null && !isNaN(Number(v))
               ? Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
               : "R$ 0,00";
@@ -4679,7 +6796,7 @@ FORMATO:
             }
 
             // 4. Todas as páginas recebidas -> CONSOLIDAÇÃO ATÔMICA
-            const todosItens: any[] = [];
+            const todosItens: unknown[] = [];
             for (let pNum = 1; pNum <= totalPaginas; pNum++) {
               const pData = dadosSessao.paginas?.[String(pNum)];
               if (pData?.itens) {
@@ -4723,7 +6840,7 @@ FORMATO:
           const valorTotalProdutosNF = (documentData.valores_totais?.valor_produtos != null && !isNaN(Number(documentData.valores_totais.valor_produtos)) && Number(documentData.valores_totais.valor_produtos) > 0)
             ? Number(documentData.valores_totais.valor_produtos)
             : null;
-          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: any) => sum + (Number(item.valor_total) || 0), 0);
+          const valorTotalItens = validacao.somaItens || itensExtraidos.reduce((sum: number, item: { valor_total?: unknown }) => sum + (Number(item?.valor_total) || 0), 0);
 
           // ─── BLOQUEIO DE LEITURA DUVIDOSA / DIVERGENTE ───
           if (!validacao.valido || itensExtraidos.length === 0) {
@@ -4817,13 +6934,13 @@ FORMATO:
             .single();
 
           if (!errNF && nfSalva) {
-            const itensParaInserir = (documentData.itens || []).map((item: any) => ({
+            const itensParaInserir = (documentData.itens || []).map((item: Record<string, unknown>) => ({
               nf_id: nfSalva.id,
               codigo_produto: item.codigo,
               descricao: item.descricao,
               ncm: item.ncm,
               cfop: item.cfop,
-              unidade: item.unidade || "UN",
+              unidade: (item.unidade as string) || "UN",
               quantidade: item.quantidade,
               valor_unitario: item.valor_unitario,
               valor_total: item.valor_total,
@@ -4851,11 +6968,11 @@ FORMATO:
             }
             msg += `📦 <b>Itens:</b> ${documentData.itens.length} produtos\n\n`;
 
-            documentData.itens.slice(0, 10).forEach((item: any, i: number) => {
-              const qtd = item.quantidade != null ? `${item.quantidade} ${item.unidade || "UN"}` : "Qtd N/A";
-              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario) : "N/A";
-              const vTot = item.valor_total != null ? fmt(item.valor_total) : "N/A";
-              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido) : vUnit;
+            documentData.itens.slice(0, 10).forEach((item: Record<string, unknown>, i: number) => {
+              const qtd = item.quantidade != null ? `${item.quantidade} ${(item.unidade as string) || "UN"}` : "Qtd N/A";
+              const vUnit = item.valor_unitario != null ? fmt(item.valor_unitario as number | string) : "N/A";
+              const vTot = item.valor_total != null ? fmt(item.valor_total as number | string) : "N/A";
+              const vLiq = item.custo_unitario_liquido != null ? fmt(item.custo_unitario_liquido as number | string) : vUnit;
               msg += `${i + 1}. <b>${item.descricao || "Produto"}</b>\n`;
               msg += `   📦 ${qtd} × ${vUnit}\n`;
               msg += `   💰 Total: ${vTot} | Custo Líquido: <b>${vLiq}</b>\n\n`;
@@ -4924,40 +7041,27 @@ FORMATO:
             documentData.data_vencimento = documentData.vencimento;
           }
           // ─── VALIDAÇÃO DETERMINÍSTICA CONTRA ALUCINAÇÃO ───
-          const parseNum = (v: any) => {
-            if (typeof v === "number") return isNaN(v) ? 0 : v;
-            if (!v) return 0;
-            const s = String(v).replace("R$", "").trim().replace(/\./g, "").replace(",", ".");
-            const n = parseFloat(s);
-            return isNaN(n) ? 0 : n;
-          };
-
-          const parseDt = (v: any) => {
-            if (!v) return null;
-            const str = String(v).trim();
-            if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split("T")[0];
-            if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
-              const p = str.split("/");
-              return `${p[2]}-${p[1]}-${p[0]}`;
-            }
-            return null;
-          };
-
           let valor = parseNum(documentData.valor);
-          let dataVencimento = parseDt(documentData.data_vencimento);
+          let dataVencimento = parseDate(documentData.data_vencimento, "");
+          if (!dataVencimento) dataVencimento = null;
           let beneficiario = String(documentData.beneficiario || "").trim();
           const linhaDigitavel = String(documentData.linha_digitavel || "").replace(/\s/g, "");
 
           // ─── BLINDAGEM MATEMÁTICA FEBRABAN VIA LINHA DIGITÁVEL ───
+          // Apenas recalcula valores e datas a partir da linha se ela for matematicamente validada!
           if (linhaDigitavel) {
-            const febraban = parseLinhaDigitavelFebraban(linhaDigitavel);
-            if (febraban.valor && febraban.valor > 0) {
-              console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${febraban.valor}`);
-              valor = febraban.valor;
-            }
-            if (febraban.vencimento) {
-              console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${febraban.vencimento}`);
-              dataVencimento = febraban.vencimento;
+            const valLinha = validateLinhaDigitavel(linhaDigitavel);
+            if (valLinha.valido) {
+              if (valLinha.valorDerivado && valLinha.valorDerivado > 0) {
+                console.log(`[telegram-webhook] Valor recalculado via FEBRABAN: ${valor} -> ${valLinha.valorDerivado}`);
+                valor = valLinha.valorDerivado;
+              }
+              if (valLinha.dataVencimentoDerivada) {
+                console.log(`[telegram-webhook] Vencimento recalculado via FEBRABAN: ${dataVencimento} -> ${valLinha.dataVencimentoDerivada}`);
+                dataVencimento = valLinha.dataVencimentoDerivada;
+              }
+            } else {
+              console.log(`[telegram-webhook] Linha digitável não validada matematicamente pelos DVs, preservando valores do OCR visual.`);
             }
           }
 
@@ -5027,10 +7131,25 @@ FORMATO:
                 valor_restante: valor,
                 data_vencimento: dataVencimento || hojeStr,
                 credor: beneficiario,
+                banco: documentData.banco || null,
+                cnpj_cpf_beneficiario: documentData.cnpj_cpf_beneficiario || null,
                 categoria_id: categoriaId,
                 categoria_nome: categoriaNome,
                 status: "pendente",
                 linha_digitavel: linhaFmt || null,
+                linha_digitavel_raw: documentData.linha_digitavel_raw || null,
+                linha_digitavel_raw_digits: documentData.linha_digitavel_raw_digits ?? null,
+                linha_digitavel_validation_error: documentData.linha_digitavel_validation_error || null,
+                codigo_barras: documentData.codigo_barras || null,
+                validation_status: documentData.validation_status || "requer_revisao",
+                valor_source: documentData.valor_source || "ocr_visual",
+                valor_ocr: documentData.valor_ocr ?? null,
+                valor_derivado: documentData.valor_derivado ?? null,
+                vencimento_source: documentData.vencimento_source || "ocr_visual",
+                vencimento_ocr: documentData.vencimento_ocr ?? null,
+                vencimento_derivado: documentData.vencimento_derivado ?? null,
+                warnings: documentData.warnings || [],
+                correlation_id: documentData.correlation_id || null,
               },
               resumo: `Boleto de ${beneficiario} no valor de R$ ${valor.toFixed(2)} com vencimento em ${dataVencimento || hojeStr}`,
               status: "pendente",
@@ -5058,22 +7177,75 @@ FORMATO:
             const valFmt = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
             const isVencido = dataVencimento && dataVencimento < hojeStr;
             const vencFmt = dataVencimento ? dataVencimento.split("-").reverse().join("/") : "Sem data";
+            const isBoletoValidado = documentData.validation_status === "validado";
+            const isBoletoValidadoAlerta = documentData.validation_status === "validado_com_alerta";
+            const vencimentoAno = dataVencimento ? parseInt(dataVencimento.split("-")[0], 10) : null;
+            const anoAtual = new Date().getFullYear();
+            const vencimentoAnoSuspeito = vencimentoAno !== null && (vencimentoAno < anoAtual - 1 || vencimentoAno > anoAtual + 2);
 
-            let mensagemProposta =
-              `📄 <b>Boleto identificado!</b>\n\n` +
-              `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
-              (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
-              `💰 Valor: <b>${valFmt}</b>\n` +
-              `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
-              (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "");
+            let mensagemProposta = "";
 
-            mensagemProposta +=
-              `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
-              `👉 Responda <b>SIM</b> para confirmar o cadastro.\n` +
-              `👉 Responda <b>NÃO</b> para cancelar.\n\n` +
-              `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            if (isBoletoValidado) {
+              mensagemProposta =
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor: <b>${valFmt}</b>\n` +
+                `📅 Vencimento: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Linha digitável validada matematicamente.</b>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else if (isBoletoValidadoAlerta) {
+              mensagemProposta =
+                `📄 <b>Boleto identificado e validado!</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `💰 Valor validado: <b>${valFmt}</b>\n` +
+                `📅 Vencimento validado: <b>${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                (linhaFmt ? `🔢 Linha digitável: <code>${linhaFmt}</code>\n` : "") +
+                `\n✅ <b>Dados bancários validados pela linha digitável.</b>\n` +
+                `⚠️ <i>A leitura visual do documento apresentou divergência decorrente de compressão da imagem. Foram assumidos os dados validados matematicamente.</i>\n` +
+                `\n⚠️ <b>Deseja cadastrar este boleto como dívida?</b>\n\n` +
+                `⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            } else {
+              const avisoAnoSuspeito = vencimentoAnoSuspeito
+                ? `\n⚠️ <i>Ano do vencimento (${vencimentoAno}) pode estar incorreto — OCR pode ter lido errado.</i>\n`
+                : "";
+              const dicaArquivo = isTelegramCompressedPhoto
+                ? `\n💡 <i>Para leitura mais precisa da linha digitável, envie o boleto como arquivo:\n📎 → Arquivo/Documento (não "Galeria")</i>\n`
+                : "";
+              mensagemProposta =
+                `⚠️ <b>Boleto identificado — requer revisão</b>\n\n` +
+                `🏢 Beneficiário: <b>${beneficiario}</b>\n` +
+                (documentData.banco ? `🏦 Banco: <b>${documentData.banco}</b>\n` : "") +
+                (categoriaNome ? `🏷️ Categoria: <b>${categoriaNome}</b>\n` : "") +
+                `⚠️ <b>Valor visual não confirmado: ${valFmt}</b>\n` +
+                `📅 <b>Vencimento visual não confirmado: ${vencFmt}</b>${isVencido ? " <i>(⚠️ Boleto vencido)</i>" : ""}\n` +
+                avisoAnoSuspeito +
+                `\n⚠️ <b>Não foi possível validar a linha digitável com precisão matemática.</b>\n` +
+                `<i>Para sua segurança financeira, revise os dados antes de salvar.</i>\n` +
+                dicaArquivo +
+                `\n⏰ <i>Esta proposta expira em 30 minutos.</i>`;
+            }
 
-            await sendReply(mensagemProposta);
+            const botoesBoleto = isBoletoValidado || isBoletoValidadoAlerta
+              ? [
+                  [
+                    { text: "✅ Sim, cadastrar", callback_data: `confirmar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Não, cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ]
+              : [
+                  [
+                    { text: "✏️ Revisar dados", callback_data: `revisar_proposta:${propostaSalva.id}` },
+                    { text: "❌ Cancelar", callback_data: `cancelar_proposta:${propostaSalva.id}` },
+                  ],
+                ];
+
+            await sendReplyWithButtons(chatId, mensagemProposta, botoesBoleto);
             return new Response("OK", { status: 200, headers: corsHeaders });
           } else {
             console.error("[telegram-webhook] Erro ao salvar proposta:", errProp?.message);
@@ -5118,9 +7290,11 @@ FORMATO:
           await sendReply(msgFallback);
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
-      } catch (imgErr: any) {
-        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErr.message, imgErr.stack);
-        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErr.message);
+      } catch (imgErr: unknown) {
+        const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+        const imgErrStack = imgErr instanceof Error ? imgErr.stack : undefined;
+        console.error("[telegram-webhook] ERRO FATAL no processamento de imagem:", imgErrMsg, imgErrStack);
+        await sendReply("❌ Ocorreu um erro ao processar sua imagem: " + imgErrMsg);
         return new Response("OK", { status: 200, headers: corsHeaders });
       }
     }
@@ -5241,8 +7415,10 @@ Ferramentas disponíveis:
         const errorBody = await aiResponse.text();
         console.error("[telegram-webhook] openai-proxy retornou erro:", aiResponse.status, errorBody.slice(0, 500));
       }
-    } catch (aiErr: any) {
-      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErr.message, aiErr.stack);
+    } catch (aiErr: unknown) {
+      const aiErrMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+      const aiErrStack = aiErr instanceof Error ? aiErr.stack : undefined;
+      console.error("[telegram-webhook] EXCEPTION ao consultar openai-proxy:", aiErrMsg, aiErrStack);
     }
 
     // Fallback se a IA não retornar resposta
@@ -5253,8 +7429,9 @@ Ferramentas disponíveis:
     );
 
     return new Response("OK", { status: 200, headers: corsHeaders });
-  } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return new Response(JSON.stringify({ error: errMsg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

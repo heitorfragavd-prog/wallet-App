@@ -10,7 +10,7 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Badge } from "@/shared/components/ui/badge";
 import { Separator } from "@/shared/components/ui/separator";
 import { Skeleton } from "@/shared/components/ui/skeleton";
-import { Upload, Camera, FileText, Check, AlertCircle, X, Trash2, Loader2, Sparkles } from "lucide-react";
+import { Upload, Camera, FileText, Check, Trash2, Loader2, Sparkles } from "lucide-react";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { logger } from "@/core/logging/LoggerService";
 
@@ -228,8 +228,8 @@ export const UploadInteligente = () => {
         setNfItens(
           (parseResult.dados.itens || []).map(item => ({
             item,
-            updateCusto: true,
-            addEstoque: true
+            updateCusto: false,
+            addEstoque: false
           }))
         );
       } else {
@@ -300,52 +300,20 @@ export const UploadInteligente = () => {
         if (despErr) throw despErr;
       }
 
-      // 2. Atualizar estoque/custos de produtos
-      for (const iData of nfItens) {
-        if (!iData.updateCusto && !iData.addEstoque) continue;
-
-        // Buscar se produto existe
-        let foundProd: any = null;
-        if (iData.item.codigo) {
-          const { data } = await supabase.from("eyemobile_produtos")
-            .select("*")
-            .eq("user_id", user.id)
-            .eq("codigo_barras", iData.item.codigo)
-            .maybeSingle();
-          if (data) foundProd = data;
-        }
-        if (!foundProd) {
-          const { data } = await supabase.from("eyemobile_produtos")
-            .select("*")
-            .eq("user_id", user.id)
-            .ilike("nome", iData.item.nome)
-            .maybeSingle();
-          if (data) foundProd = data;
-        }
-
-        if (foundProd) {
-          // Atualizar
-          const updates: any = {};
-          if (iData.updateCusto) updates.custo = iData.item.valor_unitario;
-          if (iData.addEstoque) updates.estoque = Number(foundProd.estoque || 0) + Number(iData.item.quantidade || 0);
-
-          await supabase.from("eyemobile_produtos")
-            .update(updates)
-            .eq("id", foundProd.id);
-        } else {
-          // Inserir como novo se não achar
-          await supabase.from("eyemobile_produtos").insert({
-            user_id: user.id,
-            nome: iData.item.nome,
-            codigo_barras: iData.item.codigo || null,
-            custo: iData.updateCusto ? iData.item.valor_unitario : 0,
-            estoque: iData.addEstoque ? iData.item.quantidade : 0
-          });
-        }
-      }
-
+      // 2. Legado de produtos desativado com segurança
+      // O fluxo canônico de conciliação de produtos de NF utiliza produtos_eyemobile + produto_equivalencias via backend transacional.
       setIsConfirmed(true);
-      toast({ title: "Nota Fiscal Processada!", description: "Dados adicionados com sucesso." });
+      if (nfLancarDespesa) {
+        toast({
+          title: "Despesa lançada com sucesso!",
+          description: "Estoque e custo são processados pelo fluxo canônico de NF."
+        });
+      } else {
+        toast({
+          title: "Documento revisado",
+          description: "Nenhuma alteração financeira foi realizada. Estoque e custo devem ser processados pelo fluxo canônico de NF."
+        });
+      }
     } catch (err) {
       toast({ title: "Erro ao confirmar", description: String(err), variant: "destructive" });
     } finally {
@@ -397,7 +365,7 @@ export const UploadInteligente = () => {
             Scanner de Documentos Inteligente
           </CardTitle>
           <CardDescription>
-            Tire uma foto ou arraste comprovantes, notas fiscais ou boletos para atualizar seu estoque, custos e despesas instantaneamente.
+            Tire uma foto ou arraste comprovantes, notas fiscais ou boletos para analisar e organizar seus documentos financeiros. Notas fiscais que envolvem estoque e custo são processadas pelo fluxo canônico de NF.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -535,7 +503,7 @@ export const UploadInteligente = () => {
                                 <th className="px-4 py-3 text-center">Quant.</th>
                                 <th className="px-4 py-3 text-right">Valor Unit.</th>
                                 <th className="px-4 py-3 text-right">Total</th>
-                                <th className="px-4 py-3 text-center">Ações</th>
+                                <th className="px-4 py-3 text-center">Estoque & Custo</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-border/30">
@@ -545,25 +513,10 @@ export const UploadInteligente = () => {
                                   <td className="px-4 py-3 text-center">{iData.item.quantidade}</td>
                                   <td className="px-4 py-3 text-right">R$ {iData.item.valor_unitario.toFixed(2)}</td>
                                   <td className="px-4 py-3 text-right font-medium text-foreground">R$ {iData.item.valor_total.toFixed(2)}</td>
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center justify-center gap-4">
-                                      <label className="flex items-center gap-1 text-xs cursor-pointer">
-                                        <Checkbox checked={iData.updateCusto} onCheckedChange={(val) => {
-                                          const copy = [...nfItens];
-                                          copy[idx].updateCusto = !!val;
-                                          setNfItens(copy);
-                                        }} />
-                                        <span>Custo</span>
-                                      </label>
-                                      <label className="flex items-center gap-1 text-xs cursor-pointer">
-                                        <Checkbox checked={iData.addEstoque} onCheckedChange={(val) => {
-                                          const copy = [...nfItens];
-                                          copy[idx].addEstoque = !!val;
-                                          setNfItens(copy);
-                                        }} />
-                                        <span>Estoque</span>
-                                      </label>
-                                    </div>
+                                  <td className="px-4 py-3 text-center">
+                                    <span className="text-xs text-muted-foreground">
+                                      Estoque e custo são atualizados pelo fluxo canônico de NF.
+                                    </span>
                                   </td>
                                 </tr>
                               ))}
@@ -581,7 +534,7 @@ export const UploadInteligente = () => {
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" onClick={() => setExtracao(null)}>Rejeitar</Button>
                         <Button size="sm" onClick={handleConfirmarNF} disabled={isSubmitting} className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white">
-                          {isSubmitting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processando...</> : "Confirmar e Lançar NF"}
+                          {isSubmitting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processando...</> : (nfLancarDespesa ? "Confirmar e Lançar Despesa" : "Concluir Revisão")}
                         </Button>
                       </div>
                     </div>
@@ -652,9 +605,17 @@ export const UploadInteligente = () => {
                 <Check className="w-8 h-8" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-foreground">Documento Processado com Sucesso!</h3>
+                <h3 className="text-lg font-bold text-foreground">
+                  {extracao?.tipo_documento === "nota_fiscal"
+                    ? (nfLancarDespesa ? "Despesa lançada com sucesso!" : "Documento revisado")
+                    : "Documento Processado com Sucesso!"}
+                </h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto mt-1">
-                  Os dados foram salvos no sistema e suas finanças e estoque foram atualizados.
+                  {extracao?.tipo_documento === "nota_fiscal"
+                    ? (nfLancarDespesa
+                        ? "Despesa adicionada ao fluxo de caixa. Estoque e custo são processados pelo fluxo canônico de NF."
+                        : "Nenhuma alteração financeira foi realizada. Estoque e custo devem ser processados pelo fluxo canônico de NF.")
+                    : "Os dados foram salvos no sistema."}
                 </p>
               </div>
               <Button onClick={clearFile} variant="outline" className="mt-2">

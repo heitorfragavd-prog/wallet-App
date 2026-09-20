@@ -1,9 +1,9 @@
-﻿version: "3.8"
+version: "3.8"
 
 services:
   # Wallet App Frontend
   wallet-app:
-    image: heitor84/wallet:1.0.2
+    image: ${WALLET_IMAGE}
     deploy:
       replicas: 1
       restart_policy:

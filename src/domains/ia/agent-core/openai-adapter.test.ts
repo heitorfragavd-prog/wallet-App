@@ -106,9 +106,10 @@ describe("OpenAI Adapter", () => {
 
     const messages: LlmMessage[] = [{ role: "user", content: "Olá" }];
     await expect(runner.generateCompletion(messages, mockTools)).rejects.toThrow(
-      "openai_api_error_429",
+      "openai_quota_exceeded",
     );
   });
+
 
   it("deve calcular custos estimados corretamente para gpt-4o-mini e gpt-4o", () => {
     // 1M prompt gpt-4o-mini = $0.15 => 10k prompt = $0.0015
