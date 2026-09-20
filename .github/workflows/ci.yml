@@ -51,11 +51,11 @@ jobs:
       - name: TypeScript Check (TypeCheck Gate)
         run: npm run typecheck
 
-      - name: Unit & Integration Tests (Vitest Gate)
-        run: npm run test
-
       - name: Production Build (Vite Build Gate)
         run: npm run build
+
+      - name: Unit & Integration Tests (Vitest Gate)
+        run: npm run test
 
   lint-changed:
     name: Progressive Lint (Changed Files)
