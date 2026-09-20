@@ -1075,9 +1075,22 @@ Deno.serve(async (req: Request) => {
   // ================================================================
   if (url.pathname.endsWith("/transcribe-audio") || (req.headers.get("content-type") || "").includes("multipart/form-data")) {
     try {
+      // Validar identidade estrita do chamador via JWT para evitar Confused Deputy / IDOR de cota
+      const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY") || supabaseServiceKey);
+      const { data: { user: authUser }, error: authError } = await supabaseAuth.auth.getUser(jwt);
+      if (authError || !authUser) {
+        return createErrorResponse(req, {
+          status: 401,
+          message: "Autenticação obrigatória para transcrição de áudio",
+          correlationId,
+          corsHeaders: CORS_HEADERS,
+        });
+      }
+
+      // O targetUserId é estritamente o usuário autenticado no token (ignora injeção de terceiros)
+      const targetUserId = authUser.id;
       const formData = await req.formData();
       const audioFile = formData.get("audio") as File;
-      const targetUserId = (formData.get("user_id") as string) || "";
 
       if (!audioFile) {
         return createErrorResponse(req, {

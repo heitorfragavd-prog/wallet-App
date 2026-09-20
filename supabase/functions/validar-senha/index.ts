@@ -24,11 +24,37 @@ serve(async (req) => {
       auth: { persistSession: false, autoRefreshToken: false }
     });
 
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Token de autorização ausente", valido: false }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !authUser) {
+      return new Response(JSON.stringify({ error: "Sessão inválida ou expirada", valido: false }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { mode, user_id, senha } = await req.json();
 
     if (!user_id || !senha) {
       return new Response(JSON.stringify({ error: "Parâmetros inválidos" }), {
         status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Proteção estrita contra IDOR: usuário autenticado só pode operar sobre seu próprio user_id
+    if (authUser.id !== user_id) {
+      return new Response(JSON.stringify({ error: "Acesso não autorizado para este recurso", valido: false }), {
+        status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }

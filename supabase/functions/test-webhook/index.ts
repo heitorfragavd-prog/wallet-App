@@ -29,6 +29,40 @@ serve(async (req) => {
       }
     );
 
+    // Validação estrita de autenticação
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Acesso não autorizado: token ausente" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !authUser) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Sessão inválida ou expirada" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Verificar se o usuário possui permissão de administrador
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("role, is_admin")
+      .eq("id", authUser.id)
+      .maybeSingle();
+
+    const isAdmin = Boolean(profile?.is_admin || profile?.role === "admin" || authUser.app_metadata?.role === "admin");
+    if (!isAdmin) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Acesso negado: requer privilégios de administrador" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Buscar webhook URL configurada
     const { data: webhookSetting, error: webhookError } = await supabaseAdmin
       .from("system_settings")

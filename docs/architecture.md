@@ -84,3 +84,24 @@ Ao implementar uma nova funcionalidade ou refatoração, siga a árvore de decis
    👉 Coloque dentro do respectivo domínio em `src/domains/<domain>/` (subpastas: `components/`, `hooks/`, `services/`, `types/`).
 4. **É uma rota navegável associada a uma URL no browser?**
    👉 Registre o arquivo em `src/pages/` e adicione a rota em `src/App.tsx` com lazy loading (`lazyWithRetry`).
+
+<!-- specsfy:documentator:start -->
+## Componentes
+
+| Tipo | Quantidade |
+| --- | --- |
+| Código | 2824 |
+| Testes | 239 |
+
+## Diagramas
+
+```mermaid
+flowchart TD
+  Application[Aplicação]
+```
+
+```mermaid
+classDiagram
+  class Application
+```
+<!-- specsfy:documentator:end -->
