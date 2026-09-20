@@ -680,10 +680,10 @@ serve(async (req) => {
       )
       await supabaseAdmin
         .from('divipay_webhook_logs')
-        .update({ processed: false, error_message: error.message })
+        .update({ processed: false, error_message: error instanceof Error ? error.message : String(error) })
         .eq('id', webhookLogId)
     }
 
-    return jsonResponse({ success: false, error: error.message }, 500)
+    return jsonResponse({ success: false, error: error instanceof Error ? error.message : String(error) }, 500)
   }
 })

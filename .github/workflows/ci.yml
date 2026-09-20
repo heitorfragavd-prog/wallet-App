@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js LTS (22)
         uses: actions/setup-node@v4
@@ -49,11 +51,11 @@ jobs:
       - name: TypeScript Check (TypeCheck Gate)
         run: npm run typecheck
 
-      - name: Unit & Integration Tests (Vitest Gate)
-        run: npm run test
-
       - name: Production Build (Vite Build Gate)
         run: npm run build
+
+      - name: Unit & Integration Tests (Vitest Gate)
+        run: npm run test
 
   lint-changed:
     name: Progressive Lint (Changed Files)
