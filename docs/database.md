@@ -447,6 +447,11 @@
 | .worktrees\equipe-rescisao-transporte\supabase\migrations\RLS_VERIFICATION_REPORT.md |
 | .worktrees\equipe-rescisao-transporte\supabase\tests\equipe_centro_rh_financeiro.sql |
 | .worktrees\equipe-rescisao-transporte\tests\supabase-equipe\supabase\migrations\20260817000000_legacy_equipe_baseline.sql |
+| scripts\apply-phase-c-enforcement.sql |
+| scripts\test-isolated-pg-security.sql |
+| scripts\test-phase-abc-gating.sql |
+| scripts\test-phase-abc-rehearsal.sql |
+| scripts\test-real-schema-compat.sql |
 | src\domains\ia\agent-core\conversation-migration-security.test.ts |
 | src\domains\ia\agent-core\migration-security.test.ts |
 | supabase\.temp\storage-migration |
@@ -497,6 +502,8 @@
 | supabase\migrations\20260827130000_document_multipage_sessions_and_storage.sql |
 | supabase\migrations\20260904120000_wallet_ai_action_proposals_columns.sql |
 | supabase\migrations\20260905120000_telegram_processed_updates.sql |
+| supabase\migrations\20260908120000_security_phase_a_infrastructure.sql |
+| supabase\migrations\20260908120001_security_phase_c_enforcement.sql |
 | supabase\migrations\20260908122000_add_updated_at_to_alertas_preco_pendentes.sql |
 | supabase\migrations\20260909110000_produto_equivalencias_foundation.sql |
 | supabase\migrations\20260910120000_aplicar_item_nf_estoque_custo.sql |
@@ -573,9 +580,11 @@
 | supabase\migrations\rollback\20260818030000_wallet_ai_action_proposals.down.sql |
 | supabase\migrations\rollback\20260904120000_wallet_ai_action_proposals_columns.down.sql |
 | supabase\migrations\rollback\20260905120000_telegram_processed_updates.down.sql |
+| supabase\ops\rollback_20260908120000_safe_recovery.sql |
 | supabase\tests\aplicar_item_nf_estoque_custo_test.sql |
 | supabase\tests\equipe_centro_rh_financeiro.sql |
 | supabase\tests\produto_equivalencias_test.sql |
+| tests\setup-e2e-real-schema.sql |
 | tests\supabase-equipe\supabase\migrations\20260817000000_legacy_equipe_baseline.sql |
 | Nenhuma estrutura confirmada além das fontes listadas. |
 

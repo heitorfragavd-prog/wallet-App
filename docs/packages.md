@@ -67,6 +67,7 @@
 | Terceiro | desenvolvimento | @testing-library/jest-dom | ^6.9.1 | Custom jest matchers to test the state of the DOM | https://github.com/testing-library/jest-dom | https://github.com/testing-library/jest-dom |
 | Terceiro | desenvolvimento | @testing-library/react | ^16.3.0 | Simple and complete React DOM testing utilities that encourage good testing practices. | https://github.com/testing-library/react-testing-library | https://github.com/testing-library/react-testing-library |
 | Terceiro | desenvolvimento | @types/node | ^22.5.5 | TypeScript definitions for node | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| Terceiro | desenvolvimento | @types/pg | ^8.23.1 | Finalidade não descrita nos metadados locais. |  | — |
 | Terceiro | desenvolvimento | @types/react | ^18.3.3 | TypeScript definitions for react | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | desenvolvimento | @types/react-dom | ^18.3.0 | TypeScript definitions for react-dom | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | desenvolvimento | @vitejs/plugin-react-swc | ^3.5.0 | Speed up your Vite dev server with SWC | https://github.com/vitejs/vite-plugin-react | https://github.com/vitejs/vite-plugin-react |
@@ -750,6 +751,7 @@
 | Terceiro | transitiva | zoid | 9.0.63 | Cross domain components. | git://github.com/krakenjs/zoid | git://github.com/krakenjs/zoid |
 | Terceiro | transitiva | @babel/code-frame | 7.29.0 | Generate errors that contain a code frame that point to source locations. | https://github.com/babel/babel | https://github.com/babel/babel |
 | Terceiro | transitiva | @babel/helper-validator-identifier | 7.28.5 | Validate identifier/keywords name | https://github.com/babel/babel | https://github.com/babel/babel |
+| Terceiro | transitiva | @types/pg | 8.23.1 | Finalidade não descrita nos metadados locais. |  | — |
 | Terceiro | transitiva | pg | 8.23.0 | PostgreSQL client - pure javascript & libpq with the same API | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-cloudflare | 1.4.0 | A socket implementation that can run on Cloudflare Workers using native TCP connections. | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-connection-string | 2.14.0 | Functions for dealing with a PostgreSQL connection string | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |

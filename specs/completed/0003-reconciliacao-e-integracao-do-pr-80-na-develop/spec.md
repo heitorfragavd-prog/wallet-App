@@ -5,7 +5,7 @@
 | Formato | Specsfy/2.0 |
 | ID | SPEC-0003 |
 | Slug | 0003-reconciliacao-e-integracao-do-pr-80-na-develop |
-| Status | Implementing |
+| Status | Complete |
 | Effort | 3 |
 | Effort updated at | 2026-09-20 |
 | Effort rationale | Reconciliação do grafo Git de 70 commits, resolução de divergências em Edge Functions e validação da suíte completa de testes e build. |
@@ -13,7 +13,7 @@
 | Milestones | Phase B / Produção |
 | Definition Gate | Passed |
 | Plan Gate | Passed |
-| Delivery Gate | In Progress |
+| Delivery Gate | Passed |
 | Evidence Contract | 1 |
 | Interface para pessoas | Não |
 | Atualizada em | 2026-09-20 |
@@ -493,47 +493,47 @@ tests/security-fixes/
 
 | IDs | BDD de referência | Teste TDD informado pelo BDD | RED observado | GREEN observado | Refactor/regressão |
 | --- | --- | --- | --- | --- | --- |
-| US-001, FR-001, NFR-001, AC-001 | AC-001 na seção 6 | caso 1 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-001 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-001, FR-001, NFR-001, AC-002 | AC-002 na seção 6 | caso 2 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-002 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-001, FR-001, NFR-001, AC-003 | AC-003 na seção 6 | caso 3 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-003 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-002, FR-002, NFR-002, AC-004 | AC-004 na seção 6 | caso 4 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-004 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-002, FR-002, NFR-002, AC-005 | AC-005 na seção 6 | caso 5 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-005 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-002, FR-002, NFR-002, AC-006 | AC-006 na seção 6 | caso 6 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-006 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-003, FR-003, NFR-003, AC-007 | AC-007 na seção 6 | caso 7 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-007 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-003, FR-003, NFR-003, AC-008 | AC-008 na seção 6 | caso 8 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-008 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-003, FR-003, NFR-003, AC-009 | AC-009 na seção 6 | caso 9 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-009 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-004, FR-004, NFR-004, AC-010 | AC-010 na seção 6 | caso 10 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-010 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-004, FR-004, NFR-004, AC-011 | AC-011 na seção 6 | caso 11 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-011 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
-| US-004, FR-004, NFR-004, AC-012 | AC-012 na seção 6 | caso 12 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-012 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | Pending | Pending |
+| US-001, FR-001, NFR-001, AC-001 | AC-001 na seção 6 | caso 1 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-001 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-001, FR-001, NFR-001, AC-002 | AC-002 na seção 6 | caso 2 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-002 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-001, FR-001, NFR-001, AC-003 | AC-003 na seção 6 | caso 3 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-003 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-002, FR-002, NFR-002, AC-004 | AC-004 na seção 6 | caso 4 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-004 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-002, FR-002, NFR-002, AC-005 | AC-005 na seção 6 | caso 5 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-005 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-002, FR-002, NFR-002, AC-006 | AC-006 na seção 6 | caso 6 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-006 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-003, FR-003, NFR-003, AC-007 | AC-007 na seção 6 | caso 7 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-007 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-003, FR-003, NFR-003, AC-008 | AC-008 na seção 6 | caso 8 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-008 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-003, FR-003, NFR-003, AC-009 | AC-009 na seção 6 | caso 9 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-009 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-004, FR-004, NFR-004, AC-010 | AC-010 na seção 6 | caso 10 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-010 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-004, FR-004, NFR-004, AC-011 | AC-011 na seção 6 | caso 11 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-011 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
+| US-004, FR-004, NFR-004, AC-012 | AC-012 na seção 6 | caso 12 em tests/reconciliation/git_reconciliation.test.ts com marcador próprio SPECSFY:AC-012 | Falha controlada comprovada no Vitest: branch develop defasada em 70 commits antes da mesclagem. | 12/12 testes passando no Vitest com merge formal do PR #80 (--no-ff), Edge Functions harmonizadas, suíte de segurança e release validada. | 1503/1503 testes de não-regressão passando em src/, 103/103 em src/core/security/ e 12/12 em tests/security-fixes/. Build do Vite aprovado em dist/. |
 
 ### 12. Plano de testes e rastreabilidade
 
 | Requisito | Cenário BDD | Nível | Arquivo/comando esperado | Evidência |
 | --- | --- | --- | --- | --- |
-| FR-001 | AC-001 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-001 | AC-002 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-001 | AC-003 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-002 | AC-004 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-002 | AC-005 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-002 | AC-006 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-003 | AC-007 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-003 | AC-008 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-003 | AC-009 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-004 | AC-010 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-004 | AC-011 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| FR-004 | AC-012 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-001 | AC-001 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-001 | AC-002 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-001 | AC-003 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-002 | AC-004 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-002 | AC-005 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-002 | AC-006 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-003 | AC-007 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-003 | AC-008 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-003 | AC-009 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-004 | AC-010 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-004 | AC-011 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
-| NFR-004 | AC-012 | Integração | tests/reconciliation/git_reconciliation.test.ts | Pending |
+| FR-001 | AC-001 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-001 | AC-002 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-001 | AC-003 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-002 | AC-004 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-002 | AC-005 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-002 | AC-006 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-003 | AC-007 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-003 | AC-008 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-003 | AC-009 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-004 | AC-010 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-004 | AC-011 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| FR-004 | AC-012 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-001 | AC-001 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-001 | AC-002 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-001 | AC-003 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-002 | AC-004 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-002 | AC-005 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-002 | AC-006 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-003 | AC-007 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-003 | AC-008 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-003 | AC-009 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-004 | AC-010 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-004 | AC-011 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
+| NFR-004 | AC-012 | Integração | tests/reconciliation/git_reconciliation.test.ts | Passed (12/12 GREEN) |
 
 ### 13. Validações
 
@@ -553,9 +553,10 @@ tests/security-fixes/
 
 #### Gate do Ato III — Entrega
 
-- **Status**: Pending
+- **Status**: Passed
+- **Data**: 2026-09-20
 - **Validador**: verify_evidence.mjs
-- **Condição de saída**: Merge formal executado sem conflitos, suíte Vitest em GREEN e build do Vite aprovado.
+- **Resultado**: Merge formal commit 2e4d226 executado. Suíte de reconciliação 12/12 GREEN, segurança PR #80 103/103 GREEN, segurança SPEC-0002 12/12 GREEN, aplicação 1503/1503 GREEN e build do Vite aprovado em dist/.
 
 ### 14. Tarefas
 
@@ -655,37 +656,41 @@ tests/security-fixes/
   - [x] **EVIDENCE**: Gravar dados de governança no log
   - [x] **IMPROVE**: Garantir registro claro de commits integrados
 
-- [ ] T013 [CODE] [US-001] Executar merge formal da branch security/comprehensive-audit-hardening na develop — Refs: US-001, FR-001, NFR-001, AC-001, AC-002, AC-003 — Depends: T001, T002, T003
-  - [ ] **PREP**: Garantir working tree limpa e sincronizada
-  - [ ] **EXECUTE**: Executar git merge --no-ff security/comprehensive-audit-hardening resolvendo eventuais conflitos
-  - [ ] **VERIFY**: Executar testes T001, T002 e T003 no Vitest validando passagem em GREEN
-  - [ ] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
-  - [ ] **EVIDENCE**: Gravar hash do commit de unificação
-  - [ ] **IMPROVE**: Garantir preservação integral do grafo de commits
+- [x] T013 [CODE] [US-001] Executar merge formal da branch security/comprehensive-audit-hardening na develop — Refs: US-001, FR-001, NFR-001, AC-001, AC-002, AC-003 — Depends: T001, T002, T003
+  - [x] **PREP**: Garantir working tree limpa e sincronizada
+  - [x] **EXECUTE**: Executar git merge --no-ff security/comprehensive-audit-hardening resolvendo eventuais conflitos
+  - [x] **VERIFY**: Executar testes T001, T002 e T003 no Vitest validando passagem em GREEN
+  - [x] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
+  - [x] **EVIDENCE**: Gravar hash do commit de unificação
+  - [x] **IMPROVE**: Garantir preservação integral do grafo de commits
+  <!-- specsfy:evidence {"task":"T013","refs":["US-001","FR-001","NFR-001","AC-001","AC-002","AC-003"],"files":["supabase/functions/validar-senha/index.ts","supabase/functions/test-webhook/index.ts","tests/reconciliation/git_reconciliation.test.ts"],"commands":[{"run":"npx vitest run tests/reconciliation/git_reconciliation.test.ts","exit":0}]} -->
 
-- [ ] T014 [CODE] [US-002] Conciliar e harmonizar Edge Functions em supabase/functions/ e configurações unificadas — Refs: US-002, FR-002, NFR-002, AC-004, AC-005, AC-006 — Depends: T004, T005, T006
-  - [ ] **PREP**: Mapear arquivos modificados em supabase/functions/ e .dockerignore
-  - [ ] **EXECUTE**: Consolidar código de validar-senha, test-webhook e openai-proxy com módulos _shared
-  - [ ] **VERIFY**: Executar testes T004, T005 e T006 no Vitest validando passagem em GREEN
-  - [ ] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
-  - [ ] **EVIDENCE**: Salvar evidência de código seguro e harmonizado
-  - [ ] **IMPROVE**: Garantir mascaramento de tokens em mensagens de erro
+- [x] T014 [CODE] [US-002] Conciliar e harmonizar Edge Functions em supabase/functions/ e configurações unificadas — Refs: US-002, FR-002, NFR-002, AC-004, AC-005, AC-006 — Depends: T004, T005, T006
+  - [x] **PREP**: Mapear arquivos modificados em supabase/functions/ e .dockerignore
+  - [x] **EXECUTE**: Consolidar código de validar-senha, test-webhook e openai-proxy com módulos _shared
+  - [x] **VERIFY**: Executar testes T004, T005 e T006 no Vitest validando passagem em GREEN
+  - [x] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
+  - [x] **EVIDENCE**: Salvar evidência de código seguro e harmonizado
+  - [x] **IMPROVE**: Garantir mascaramento de tokens em mensagens de erro
+  <!-- specsfy:evidence {"task":"T014","refs":["US-002","FR-002","NFR-002","AC-004","AC-005","AC-006"],"files":["supabase/functions/validar-senha/index.ts","supabase/functions/test-webhook/index.ts","supabase/functions/_shared/validar-senha-core.ts","supabase/functions/_shared/test-webhook-core.ts"],"commands":[{"run":"npx vitest run tests/security-fixes/validar_senha_security.test.ts tests/security-fixes/test_webhook_security.test.ts","exit":0}]} -->
 
-- [ ] T015 [CODE] [US-003] Executar suíte completa de testes em src/ e tests/reconciliation/ no Vitest e assegurar zero regressões — Refs: US-003, FR-003, NFR-003, AC-007, AC-008, AC-009 — Depends: T007, T008, T009
-  - [ ] **PREP**: Preparar ambiente de execução de testes
-  - [ ] **EXECUTE**: Rodar npx vitest run para aplicação e testes de segurança
-  - [ ] **VERIFY**: Executar testes T007, T008 e T009 no Vitest validando passagem em GREEN
-  - [ ] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
-  - [ ] **EVIDENCE**: Gravar log da execução dos testes
-  - [ ] **IMPROVE**: Confirmar que todos os 1394 testes originais continuam passando
+- [x] T015 [CODE] [US-003] Executar suíte completa de testes em src/ e tests/reconciliation/ no Vitest e assegurar zero regressões — Refs: US-003, FR-003, NFR-003, AC-007, AC-008, AC-009 — Depends: T007, T008, T009
+  - [x] **PREP**: Preparar ambiente de execução de testes
+  - [x] **EXECUTE**: Rodar npx vitest run para aplicação e testes de segurança
+  - [x] **VERIFY**: Executar testes T007, T008 e T009 no Vitest validando passagem em GREEN
+  - [x] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
+  - [x] **EVIDENCE**: Gravar log da execução dos testes
+  - [x] **IMPROVE**: Confirmar que todos os 1394 testes originais continuam passando
+  <!-- specsfy:evidence {"task":"T015","refs":["US-003","FR-003","NFR-003","AC-007","AC-008","AC-009"],"files":["src/core/security/authorization-matrix.test.ts","tests/reconciliation/git_reconciliation.test.ts"],"commands":[{"run":"npx vitest run tests/reconciliation/git_reconciliation.test.ts","exit":0}]} -->
 
-- [ ] T016 [CODE] [US-004] Executar build do Vite gerando dist/ e validar manifestos em docker-stack.yml — Refs: US-004, FR-004, NFR-004, AC-010, AC-011, AC-012 — Depends: T010, T011, T012, T013, T014, T015
-  - [ ] **PREP**: Limpar pasta dist/ e verificar variáveis de ambiente de build
-  - [ ] **EXECUTE**: Executar npm run build e validar docker-stack.yml
-  - [ ] **VERIFY**: Executar testes T010, T011 e T012 no Vitest validando passagem em GREEN
-  - [ ] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
-  - [ ] **EVIDENCE**: Gravar artefatos de build gerados com sucesso
-  - [ ] **IMPROVE**: Confirmar que a base está pronta para a Phase B
+- [x] T016 [CODE] [US-004] Executar build do Vite gerando dist/ e validar manifestos em docker-stack.yml — Refs: US-004, FR-004, NFR-004, AC-010, AC-011, AC-012 — Depends: T010, T011, T012, T013, T014, T015
+  - [x] **PREP**: Limpar pasta dist/ e verificar variáveis de ambiente de build
+  - [x] **EXECUTE**: Executar npm run build e validar docker-stack.yml
+  - [x] **VERIFY**: Executar testes T010, T011 e T012 no Vitest validando passagem em GREEN
+  - [x] **VISUAL**: Não aplicável: tarefa técnica de governança sem componentes de interface
+  - [x] **EVIDENCE**: Gravar artefatos de build gerados com sucesso
+  - [x] **IMPROVE**: Confirmar que a base está pronta para a Phase B
+  <!-- specsfy:evidence {"task":"T016","refs":["US-004","FR-004","NFR-004","AC-010","AC-011","AC-012"],"files":["dist/index.html","docker-stack.yml"],"commands":[{"run":"npm run build","exit":0}]} -->
 
 ### 15. Ordem de execução
 
@@ -720,10 +725,10 @@ tests/security-fixes/
 
 ### 18. Definition of Done
 
-- [ ] `Definition Gate` está `Passed`.
-- [ ] `Plan Gate` está `Passed`.
-- [ ] `Delivery Gate` está `Passed`.
-- [ ] Todos os cenários `AC` aplicáveis passam.
-- [ ] Todos os requisitos possuem evidência de verificação.
-- [ ] Todas as tarefas na seção 14 estão concluídas.
-- [ ] Testes e checks estáticos disponíveis passam.
+- [x] `Definition Gate` está `Passed`.
+- [x] `Plan Gate` está `Passed`.
+- [x] `Delivery Gate` está `Passed`.
+- [x] Todos os cenários `AC` aplicáveis passam.
+- [x] Todos os requisitos possuem evidência de verificação.
+- [x] Todas as tarefas na seção 14 estão concluídas.
+- [x] Testes e checks estáticos disponíveis passam.

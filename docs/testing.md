@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 239.
+- Arquivos de teste: 252.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -156,7 +156,15 @@
 | src\core\logging\correlationId.test.ts |
 | src\core\logging\LoggerService.test.ts |
 | src\core\logging\sanitizer.test.ts |
+| src\core\security\ai-consumers-integration.test.ts |
+| src\core\security\authorization-matrix.test.ts |
+| src\core\security\cross-feature-regression.test.ts |
+| src\core\security\edge-functions-auth.test.ts |
+| src\core\security\gerar-recibo-xss.test.ts |
+| src\core\security\ssrf-protection.test.ts |
+| src\core\security\validar-senha-crypto.test.ts |
 | src\domains\auth\hooks\useAuth.test.ts |
+| src\domains\auth\hooks\useProfile.test.ts |
 | src\domains\finance\hooks\useColaboradorCalculos.test.ts |
 | src\domains\finance\hooks\useComparativoDiario.test.ts |
 | src\domains\finance\hooks\useConciliacao.test.ts |
@@ -238,14 +246,19 @@
 | src\domains\vehicles\hooks\useManutencoesCustomizadas.test.ts |
 | src\domains\vehicles\hooks\usePlanosManutencao.test.ts |
 | src\shared\utils\spreadsheetExport.test.ts |
+| src\test\deno-server-mock.ts |
+| src\test\empty.ts |
 | src\test\setup.ts |
 | supabase\functions\processar-lembretes-manutencao\index.test.ts |
+| tests\application-phase-abc-sequence.spec.ts |
 | tests\audit\git_governance.test.ts |
 | tests\audit\production_readiness.test.ts |
 | tests\audit\quality_audit.test.ts |
 | tests\audit\security_audit.test.ts |
+| tests\reconciliation\git_reconciliation.test.ts |
 | tests\security-fixes\dockerignore_security.test.ts |
 | tests\security-fixes\openai_proxy_security.test.ts |
 | tests\security-fixes\test_webhook_security.test.ts |
 | tests\security-fixes\validar_senha_security.test.ts |
+| tests\security-homologation.spec.ts |
 <!-- specsfy:documentator:end -->
