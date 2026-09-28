@@ -55,4 +55,17 @@ describe("EquipeForm", () => {
     expect(validateEquipeForm(values)).toEqual({});
     expect(buildColaboradorPayload(values).pix_chave).toBe("12345678900");
   });
+
+  it("preserva foto_url e foto_posicao no payload do colaborador", () => {
+    const values = {
+      ...createEquipeFormValues(),
+      nome: "Rainá Alice",
+      foto_url: "https://example.com/avatar.jpg",
+      foto_posicao: "50% 50%",
+    };
+
+    const payload = buildColaboradorPayload(values);
+    expect(payload.foto_url).toBe("https://example.com/avatar.jpg");
+    expect(payload.foto_posicao).toBe("50% 50%");
+  });
 });

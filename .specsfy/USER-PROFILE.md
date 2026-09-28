@@ -24,6 +24,8 @@ produção.
 | --- | --- | --- | --- | --- |
 | Perfil | Nível de conhecimento e style | iniciante (explicar termos técnicos e o efeito de cada escolha) | Pergunta 1 do specsfy-setup | 2026-09-15 |
 
+| Gestão do projeto | Organização dos agentes | CEO coordenadora sem execução; assistente atual como CTO; bots especialistas com nomes e personalidades, incluindo segurança e GitHub; delegação paralela | Pedido explícito nesta conversa; alcance: gestão do Wallet | 2026-09-27 |
+
 ## Uso pelo setup
 
 - Antes de perguntar, leia este arquivo, a conversa atual e as fontes do

@@ -100,12 +100,15 @@ async function buildLocalFallbackDashboard(
   const totalRevenue = transacoes.reduce((acc, t) => acc + Number(t.valor), 0);
   const totalTransactions = transacoes.length;
 
-  const sales = transacoes.map((t) => ({
-    total: t.valor,
-    time: t.created_at ?? t.data,
-    transaction_pays: [{ pay_type_name: t.metodo_pagamento ?? "Desconhecido" }],
-    items: Array.isArray(t.itens) ? t.itens : [],
-  }));
+  const sales = transacoes.map((t) => {
+    const saleTime = t.itens?.[0]?.time || (t.data ? (t.data.includes("T") ? t.data : `${t.data}T12:00:00.000Z`) : t.created_at);
+    return {
+      total: t.valor,
+      time: saleTime,
+      transaction_pays: [{ pay_type_name: t.metodo_pagamento ?? "Desconhecido" }],
+      items: Array.isArray(t.itens) ? t.itens : [],
+    };
+  });
 
   const products = await productsPromise;
 
@@ -143,7 +146,7 @@ async function fetchLiveDashboard(
   let invokeError: Error | null = null;
 
   try {
-    const result = await supabase.functions.invoke("eyemobile-sync", {
+    const invokePromise = supabase.functions.invoke("eyemobile-sync", {
       body: {
         mode: "DASHBOARD",
         start_date: isoStartDate,
@@ -152,6 +155,10 @@ async function fetchLiveDashboard(
         workspace_id: workspaceId,
       },
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout ao consultar API remota do Eyemobile (>6s)")), 6000)
+    );
+    const result = await Promise.race([invokePromise, timeoutPromise]);
     data = result.data as EyemobileSyncResponse | null;
     invokeError = result.error;
   } catch (err: unknown) {
@@ -159,19 +166,11 @@ async function fetchLiveDashboard(
   }
 
   if (invokeError || data?.success === false) {
-    console.warn("Edge Function indisponivel, usando fallback local...", invokeError || data?.error);
-    if (data?.configured || !data) {
-      return buildLocalFallbackDashboard(
-        { ...filters, startDate: isoStartDate, endDate: isoEndDate },
-        workspaceId,
-      );
-    }
-    return {
-      configured: false,
-      stores: [],
-      isLocalFallback: true,
-      ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
-    };
+    console.warn("Edge Function indisponivel ou lenta, usando fallback local...", invokeError || data?.error);
+    return buildLocalFallbackDashboard(
+      { ...filters, startDate: isoStartDate, endDate: isoEndDate },
+      workspaceId,
+    );
   }
 
   const dashboard = buildEyemobileDashboard({
@@ -181,6 +180,22 @@ async function fetchLiveDashboard(
     startDate: isoStartDate,
     endDate: isoEndDate,
   });
+
+  // Se a consulta remota não trouxe vendas para o período, tenta dados locais do banco apenas se não houver lojas ou dados retornados
+  if (dashboard.kpis.totalTransactions === 0 && (!data?.stores || data.stores.length === 0)) {
+    const local = await buildLocalFallbackDashboard(
+      { ...filters, startDate: isoStartDate, endDate: isoEndDate },
+      workspaceId,
+    );
+    if (local.kpis.totalTransactions > 0) {
+      return {
+        ...local,
+        stores: normalizeStores(data?.stores).length > 0 ? normalizeStores(data?.stores) : local.stores,
+        configured: data?.configured !== false,
+      };
+    }
+  }
+
   return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
 }
 
