@@ -1728,10 +1728,10 @@ export type Database = {
           fator_conversao: number
           fornecedor_nome: string | null
           id: string | null
-          on: any | null
+          on: unknown | null
           origem_matching: string
           produto_eyemobile_uuid: string
-          references: any | null
+          references: unknown | null
           unidade_fornecedor: string | null
           updated_at: string
           user_id: string
@@ -1746,10 +1746,10 @@ export type Database = {
           fator_conversao: number
           fornecedor_nome?: string | null
           id?: string | null
-          on?: any | null
+          on?: unknown | null
           origem_matching: string
           produto_eyemobile_uuid: string
-          references?: any | null
+          references?: unknown | null
           unidade_fornecedor?: string | null
           updated_at?: string
           user_id: string
@@ -1764,10 +1764,10 @@ export type Database = {
           fator_conversao?: number
           fornecedor_nome?: string | null
           id?: string | null
-          on?: any | null
+          on?: unknown | null
           origem_matching?: string
           produto_eyemobile_uuid?: string
-          references?: any | null
+          references?: unknown | null
           unidade_fornecedor?: string | null
           updated_at?: string
           user_id?: string
