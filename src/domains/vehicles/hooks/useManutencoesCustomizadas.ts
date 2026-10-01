@@ -15,7 +15,7 @@ interface AdicionarCustomizadaInput {
   dias_antecedencia?: number;
 }
 
-interface AtualizarCustomizadaInput {
+export interface AtualizarCustomizadaInput {
   id: string;
   nome?: string;
   sistema?: string;
@@ -46,7 +46,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
       const { data, error } = await query;
 
       if (error) {
-        logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao buscar manutenções customizadas:', error) });
+        logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao buscar manutenções customizadas: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao carregar manutenções customizadas",
@@ -57,7 +57,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
 
       setCustomizadas(data || []);
     } catch (error) {
-      logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao carregar manutenções customizadas",
@@ -96,7 +96,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
         .single();
 
       if (customizadaError) {
-        logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao adicionar manutenção customizada:', customizadaError) });
+        logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao adicionar manutenção customizada: ${String(customizadaError)}` });
         toast({
           title: "Erro",
           description: "Erro ao adicionar manutenção customizada",
@@ -120,7 +120,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
           }]);
 
         if (lembreteError) {
-          logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao criar lembrete:', lembreteError) });
+          logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao criar lembrete: ${String(lembreteError)}` });
           // Não falhar a operação se o lembrete não for criado
           toast({
             title: "Aviso",
@@ -138,7 +138,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
 
       return customizada;
     } catch (error) {
-      logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao adicionar manutenção customizada",
@@ -179,7 +179,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
         .single();
 
       if (error) {
-        logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao atualizar manutenção customizada:', error) });
+        logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao atualizar manutenção customizada: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao atualizar manutenção customizada",
@@ -196,7 +196,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
 
       return data;
     } catch (error) {
-      logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao atualizar manutenção customizada",
@@ -216,7 +216,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
         .eq('status', 'pendente');
 
       if (lembreteError) {
-        logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao cancelar lembretes:', lembreteError) });
+        logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao cancelar lembretes: ${String(lembreteError)}` });
         // Continuar mesmo se houver erro ao cancelar lembretes
       }
 
@@ -227,7 +227,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
         .eq('id', id);
 
       if (error) {
-        logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro ao remover manutenção customizada:', error) });
+        logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro ao remover manutenção customizada: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao remover manutenção customizada",
@@ -242,7 +242,7 @@ export const useManutencoesCustomizadas = (veiculoId?: string) => {
         description: "Manutenção customizada removida com sucesso!"
       });
     } catch (error) {
-      logger.error('useManutencoesCustomizadas', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useManutencoesCustomizadas', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao remover manutenção customizada",

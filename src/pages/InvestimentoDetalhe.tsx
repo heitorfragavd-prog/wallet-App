@@ -561,7 +561,7 @@ export default function InvestimentoDetalhe() {
                           <SelectItem value="nenhuma">Sem conta vinculada</SelectItem>
                           {contas?.map((c) => (
                             <SelectItem key={c.id} value={c.id} className="text-foreground">
-                              {c.nome} ({c.banco})
+                              {c.nome} {c.tipo ? `(${c.tipo})` : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>

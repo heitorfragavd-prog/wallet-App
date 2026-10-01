@@ -425,6 +425,7 @@ const Relatorios = () => {
       tipo: "receita" as const,
       data: r.data,
       created_at: r.created_at || r.data,
+      updated_at: r.updated_at || r.created_at || r.data,
       categorias: r.categorias || { nome: "Vendas / Entradas", cor: "#10b981", icone: "DollarSign" },
       metodo_pagamento: r.metodo_pagamento || "pix",
       conta_id: r.conta_id,

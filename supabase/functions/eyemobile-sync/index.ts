@@ -248,6 +248,19 @@ serve(async (req) => {
         environment: environment || "production"
       };
 
+      if ((!keysToUse.access_key || !keysToUse.secret_key) && user_id) {
+        const { data: dbCfg } = await supabaseAdmin
+          .from("eyemobile_config")
+          .select("access_key, secret_key, environment")
+          .eq("user_id", user_id)
+          .maybeSingle();
+        if (dbCfg) {
+          keysToUse.access_key = keysToUse.access_key || dbCfg.access_key || "";
+          keysToUse.secret_key = keysToUse.secret_key || dbCfg.secret_key || "";
+          keysToUse.environment = keysToUse.environment || dbCfg.environment || "production";
+        }
+      }
+
       if (!keysToUse.access_key || !keysToUse.secret_key) {
         throw new Error("Chave de acesso (Access Key) e Chave secreta (Secret Key) são obrigatórias.");
       }
@@ -1562,7 +1575,7 @@ async function syncUserEyemobile(
               // Already imported — self-healing: completa campos que faltam
               // (método de pagamento e/ou itens da venda p/ o Top 10).
               const saleItens = Array.isArray(sale.transaction_items) ? sale.transaction_items : null;
-              const needsMetodo = existingSales.metodo_pagamento === null && mappedMethod !== null;
+              const needsMetodo = mappedMethod !== null && existingSales.metodo_pagamento !== mappedMethod;
               const needsItens = existingSales.itens == null && saleItens && saleItens.length > 0;
 
               if (needsMetodo || needsItens) {

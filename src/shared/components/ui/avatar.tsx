@@ -21,13 +21,31 @@ Avatar.displayName = AvatarPrimitive.Root.displayName
 const AvatarImage = React.forwardRef<
   React.ElementRef<typeof AvatarPrimitive.Image>,
   React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Image>
->(({ className, ...props }, ref) => (
-  <AvatarPrimitive.Image
-    ref={ref}
-    className={cn("aspect-square h-full w-full object-cover", className)}
-    {...props}
-  />
-))
+>(({ className, src, ...props }, ref) => {
+  const normalizedSrc = React.useMemo(() => {
+    if (typeof src === "string" && typeof window !== "undefined") {
+      if (
+        src.includes("hdeguzxkdvebdrrutbnx.supabase.co") &&
+        import.meta.env.VITE_SUPABASE_URL?.includes("/supabase-proxy")
+      ) {
+        return src.replace(
+          "https://hdeguzxkdvebdrrutbnx.supabase.co",
+          `${window.location.origin}/supabase-proxy`
+        );
+      }
+    }
+    return src;
+  }, [src]);
+
+  return (
+    <AvatarPrimitive.Image
+      ref={ref}
+      src={normalizedSrc}
+      className={cn("aspect-square h-full w-full object-cover", className)}
+      {...props}
+    />
+  );
+})
 AvatarImage.displayName = AvatarPrimitive.Image.displayName
 
 const AvatarFallback = React.forwardRef<

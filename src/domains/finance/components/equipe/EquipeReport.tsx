@@ -27,23 +27,24 @@ export function EquipeReport({ startDate, endDate }: { startDate?: string | null
     queryKey: ["equipe-relatorio", activeWorkspace?.id, startDate, endDate],
     enabled: !!activeWorkspace?.id,
     queryFn: async () => {
-      const client = supabase as unknown as {
-        from: (table: string) => ReturnType<typeof supabase.from>;
-      };
-      let acertosQuery = client.from("colaborador_acertos").select("id").eq("workspace_id", activeWorkspace!.id).neq("status", "cancelado");
+      let acertosQuery = supabase
+        .from("colaborador_acertos")
+        .select("id")
+        .eq("workspace_id", activeWorkspace!.id)
+        .neq("status", "cancelado");
       if (startDate) acertosQuery = acertosQuery.gte("periodo_fim", startDate);
       if (endDate) acertosQuery = acertosQuery.lte("periodo_inicio", endDate);
       const { data: acertos, error: acertosError } = await acertosQuery;
       if (acertosError) throw acertosError;
-      const ids = (acertos ?? []).map((item: { id: string }) => item.id);
+      const ids = (acertos ?? []).map((item) => item.id);
       if (!ids.length) return aggregateEquipeReport([], []);
       const [{ data: items, error: itemsError }, { data: payments, error: paymentsError }] = await Promise.all([
-        client.from("colaborador_acerto_itens").select("natureza,valor").eq("workspace_id", activeWorkspace!.id).in("acerto_id", ids),
-        client.from("colaborador_pagamentos").select("taxa,status").eq("workspace_id", activeWorkspace!.id).in("acerto_id", ids),
+        supabase.from("colaborador_acerto_itens").select("natureza,valor").eq("workspace_id", activeWorkspace!.id).in("acerto_id", ids),
+        supabase.from("colaborador_pagamentos").select("taxa,status").eq("workspace_id", activeWorkspace!.id).in("acerto_id", ids),
       ]);
       if (itemsError) throw itemsError;
       if (paymentsError) throw paymentsError;
-      return aggregateEquipeReport(items ?? [], payments ?? []);
+      return aggregateEquipeReport((items ?? []) as Item[], (payments ?? []) as Pagamento[]);
     },
   });
 

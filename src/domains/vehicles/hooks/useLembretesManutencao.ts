@@ -68,7 +68,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
       const { data, error } = await query;
 
       if (error) {
-        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao buscar lembretes:', error) });
+        logger.error('useLembretesManutencao', 'Erro', { detail: `Erro ao buscar lembretes: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao carregar lembretes de manutenção",
@@ -109,9 +109,9 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         })
       );
 
-      setLembretes(lembretesComDetalhes);
+      setLembretes(lembretesComDetalhes as LembreteComDetalhes[]);
     } catch (error) {
-      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useLembretesManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao carregar lembretes de manutenção",
@@ -182,7 +182,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         .single();
 
       if (error) {
-        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao criar lembrete:', error) });
+        logger.error('useLembretesManutencao', 'Erro', { detail: `Erro ao criar lembrete: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao criar lembrete de manutenção",
@@ -192,7 +192,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
       }
 
       // Buscar detalhes adicionais
-      let lembreteComDetalhes = { ...lembrete };
+      let lembreteComDetalhes: LembreteComDetalhes = { ...lembrete };
       
       if (input.tipo_manutencao === 'plano') {
         const { data: plano } = await supabase
@@ -204,7 +204,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
           .eq('id', input.manutencao_id)
           .single();
 
-        lembreteComDetalhes.plano_manutencao = plano;
+        lembreteComDetalhes.plano_manutencao = plano as LembreteComDetalhes['plano_manutencao'];
       } else {
         const { data: customizada } = await supabase
           .from('manutencoes_customizadas')
@@ -212,7 +212,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
           .eq('id', input.manutencao_id)
           .single();
 
-        lembreteComDetalhes.manutencao_customizada = customizada;
+        lembreteComDetalhes.manutencao_customizada = customizada as LembreteComDetalhes['manutencao_customizada'];
       }
 
       setLembretes(prev => [lembreteComDetalhes, ...prev]);
@@ -223,7 +223,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
 
       return lembreteComDetalhes;
     } catch (error) {
-      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useLembretesManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao criar lembrete de manutenção",
@@ -240,7 +240,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         .eq('id', id);
 
       if (error) {
-        logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro ao cancelar lembrete:', error) });
+        logger.error('useLembretesManutencao', 'Erro', { detail: `Erro ao cancelar lembrete: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao cancelar lembrete de manutenção",
@@ -258,7 +258,7 @@ export const useLembretesManutencao = (veiculoId?: string) => {
         description: "Lembrete de manutenção cancelado com sucesso!"
       });
     } catch (error) {
-      logger.error('useLembretesManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useLembretesManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao cancelar lembrete de manutenção",

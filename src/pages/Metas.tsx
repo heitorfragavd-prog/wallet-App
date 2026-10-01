@@ -312,7 +312,7 @@ const Metas = () => {
           </div>
           <NovaMetaModal
             onAdicionarMeta={adicionarMeta}
-            categoriasMetas={categoriasMetas.filter((c) => c.ativa).map(c => ({ ...c, descricao: c.descricao ?? '' })) as CategoriaMeta[]}
+            categoriasMetas={categoriasMetas.filter((c) => c.ativa)}
           />
         </div>
 

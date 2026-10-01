@@ -44,7 +44,8 @@ export function useSenhaInvestimentos() {
         setHasPassword(Boolean(data));
       }
     } catch (err: unknown) {
-      logger.error("useSenhaInvestimentos", "Erro ao verificar existência de senha", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useSenhaInvestimentos", "Erro ao verificar existência de senha", { error: errorMsg });
     } finally {
       setLoading(false);
     }
@@ -90,11 +91,12 @@ export function useSenhaInvestimentos() {
       }
       throw new Error(resp.data?.error || "Falha no cadastro");
     } catch (err: unknown) {
-      logger.error("useSenhaInvestimentos", "Erro no cadastro de senha", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useSenhaInvestimentos", "Erro no cadastro de senha", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: err.message || "Erro ao cadastrar senha de investimentos",
+        description: errorMsg || "Erro ao cadastrar senha de investimentos",
       });
       return false;
     }
@@ -144,11 +146,12 @@ export function useSenhaInvestimentos() {
         return false;
       }
     } catch (err: unknown) {
-      logger.error("useSenhaInvestimentos", "Erro na validação de senha", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useSenhaInvestimentos", "Erro na validação de senha", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: err.message || "Erro ao validar senha",
+        description: errorMsg || "Erro ao validar senha",
       });
       return false;
     }

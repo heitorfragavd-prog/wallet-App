@@ -43,6 +43,13 @@ export interface ContaUsuario {
   user_id: string;
   nome: string;
   tipo: AccountType;
+  banco?: string;
+  pluggy_account_id?: string | null;
+  saldo_inicial?: number | null;
+  saldo?: number;
+  data_vencimento?: string | null;
+  data_fechamento?: string | null;
+  workspace_id?: string | null;
   created_at: string;
 }
 
@@ -64,16 +71,16 @@ export interface TransacaoRecorrente {
   tipo_transacao: 'receita' | 'despesa';
   descricao: string;
   valor: number;
-  categoria_id?: string;
-  metodo_pagamento?: PaymentMethod;
-  conta_id?: string;
+  categoria_id?: string | null;
+  metodo_pagamento?: PaymentMethod | string | null;
+  conta_id?: string | null;
   recorrencia: Exclude<RecurrenceType, 'unica'>;
-  dia_execucao?: number;
-  dia_semana?: number;
+  dia_execucao?: number | null;
+  dia_semana?: number | null;
   data_inicio: string;
-  data_fim?: string;
+  data_fim?: string | null;
   ativo: boolean;
-  ultima_execucao?: string;
+  ultima_execucao?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,6 +113,7 @@ export interface Despesa {
   conta_id?: string;
   observacoes?: string;
   recorrencia_id?: string;
+  status?: string | null;
   created_at: string;
   // Relations
   tags?: Tag[];

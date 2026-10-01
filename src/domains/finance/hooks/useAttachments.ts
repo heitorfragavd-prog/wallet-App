@@ -49,7 +49,7 @@ export const useAttachments = () => {
           description: validation.error,
           variant: "destructive",
         });
-        return { data: null, error: validation.error };
+        return { data: null, error: new Error(validation.error || 'Erro de validação') };
       }
 
       // Get current user
@@ -148,7 +148,7 @@ export const useAttachments = () => {
       if (error) throw error;
       return data.signedUrl;
     } catch (error) {
-      logger.error('useAttachments', 'Erro', { detail: String('Error getting signed URL:', error) });
+      logger.error('useAttachments', 'Erro', { detail: `Error getting signed URL: ${String(error)}` });
       return null;
     }
   };

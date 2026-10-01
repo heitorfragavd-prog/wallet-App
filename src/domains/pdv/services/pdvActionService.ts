@@ -98,7 +98,7 @@ export const pdvActionService = {
       return { 
         success: false, 
         status: "declined", 
-        message: e.message || "Falha de conexão", 
+        message: e instanceof Error ? e.message : "Falha de conexão", 
         timestamp: new Date().toISOString() 
       };
     }

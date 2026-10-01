@@ -15,4 +15,6 @@ Confirme os manifests e as fronteiras principais antes de completar o modelo gen
 
 ## Operação
 
+- Gestão do Wallet por agentes Hermes: CEO apenas coordena; assistente atual atua como CTO; especialistas possuem identidades e SOUL.md próprios. Segurança e GitHub/governança revisam cada entrega, com delegação paralela de tarefas independentes. Fonte: pedido explícito do usuário nesta conversa; escopo: gestão do desenvolvimento, não autorização de produção.
+
 ## Regras específicas do projeto

@@ -155,7 +155,7 @@ export function EyemobileSettingsCard() {
     }
   };
 
-  const isFormValid = accessKey.trim() !== "" && secretKey.trim() !== "";
+  const isFormValid = accessKey.trim() !== "" && (secretKey.trim() !== "" || Boolean(config?.has_secret));
   const isLoading = configLoading || contasLoading || categoriasLoading;
 
   return (
@@ -195,11 +195,18 @@ export function EyemobileSettingsCard() {
 
               {/* Secret Key */}
               <div className="space-y-2">
-                <Label htmlFor="eyemobile-secret-key">Secret Key (X-EYEMOBILE-SECRET-KEY)</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="eyemobile-secret-key">Secret Key (X-EYEMOBILE-SECRET-KEY)</Label>
+                  {config?.has_secret && (
+                    <Badge variant="outline" className="text-[11px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+                      Chave configurada
+                    </Badge>
+                  )}
+                </div>
                 <Input
                   id="eyemobile-secret-key"
                   type="password"
-                  placeholder="Insira sua Secret Key"
+                  placeholder={config?.has_secret ? "•••••••••••••••• (deixe em branco para manter a atual)" : "Insira sua Secret Key"}
                   value={secretKey}
                   onChange={(e) => setSecretKey(e.target.value)}
                 />

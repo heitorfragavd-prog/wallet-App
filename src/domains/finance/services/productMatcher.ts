@@ -655,7 +655,7 @@ export async function matchProduct(
     );
 
     // Se houve erro técnico no banco durante a busca de sugestões, propagar como erro
-    if (!suggestionsResult.ok) {
+    if (suggestionsResult.ok === false) {
       return {
         status: "error",
         code: suggestionsResult.error.code,

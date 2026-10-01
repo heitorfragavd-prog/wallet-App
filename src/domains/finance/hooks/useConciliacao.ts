@@ -38,10 +38,14 @@ async function fetchLancamentos(mes: string, workspaceId: string | null): Promis
   if (d.error) throw d.error;
   if (t.error) throw t.error;
 
+  const rData = (r.data ?? []) as Array<{ id: string; descricao: string; valor: number; data: string; conciliado: boolean | null; metodo_pagamento?: string | null }>;
+  const dData = (d.data ?? []) as Array<{ id: string; descricao: string; valor: number; data: string; conciliado: boolean | null; metodo_pagamento?: string | null }>;
+  const tData = (t.data ?? []) as Array<{ id: string; descricao: string; valor: number; data: string; conciliado: boolean | null; metodo_pagamento?: string | null; tipo: string }>;
+
   const lancamentos: LancamentoConciliacao[] = [
-    ...(r.data ?? []).map((x) => ({ ...x, fonte: "receitas" as const, tipo: "receita" as const })),
-    ...(d.data ?? []).map((x) => ({ ...x, fonte: "despesas" as const, tipo: "despesa" as const })),
-    ...(t.data ?? []).map((x) => ({
+    ...rData.map((x) => ({ ...x, fonte: "receitas" as const, tipo: "receita" as const })),
+    ...dData.map((x) => ({ ...x, fonte: "despesas" as const, tipo: "despesa" as const })),
+    ...tData.map((x) => ({
       id: x.id,
       descricao: x.descricao,
       valor: x.valor,
@@ -75,12 +79,22 @@ export const useConciliacao = (mes?: string) => {
 
   const marcarConciliado = useMutation({
     mutationFn: async ({ id, fonte, conciliado }: { id: string; fonte: LancamentoConciliacao["fonte"]; conciliado: boolean }) => {
-      let q = supabase.from(fonte).update({ conciliado }).eq("id", id);
-      if (currentWorkspaceId) {
-        q = q.eq("workspace_id", currentWorkspaceId);
+      if (fonte === "receitas") {
+        let q = supabase.from("receitas").update({ conciliado }).eq("id", id);
+        if (currentWorkspaceId) q = q.eq("workspace_id", currentWorkspaceId);
+        const { error } = await q;
+        if (error) throw error;
+      } else if (fonte === "despesas") {
+        let q = supabase.from("despesas").update({ conciliado }).eq("id", id);
+        if (currentWorkspaceId) q = q.eq("workspace_id", currentWorkspaceId);
+        const { error } = await q;
+        if (error) throw error;
+      } else {
+        let q = supabase.from("transacoes").update({ conciliado }).eq("id", id);
+        if (currentWorkspaceId) q = q.eq("workspace_id", currentWorkspaceId);
+        const { error } = await q;
+        if (error) throw error;
       }
-      const { error } = await q;
-      if (error) throw error;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: CONCILIACAO_QUERY_KEY });

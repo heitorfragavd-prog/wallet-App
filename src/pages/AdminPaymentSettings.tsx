@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -70,7 +71,7 @@ export default function AdminPaymentSettings() {
 
             if (error) throw error;
             setPaymentLinks(data || []);
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao carregar links de pagamento");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -95,7 +96,7 @@ export default function AdminPaymentSettings() {
             toast.success("Link atualizado com sucesso!");
             setEditingId(null);
             fetchPaymentLinks();
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao atualizar link");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         }
@@ -117,7 +118,7 @@ export default function AdminPaymentSettings() {
 
             toast.success(`Link ${!currentStatus ? 'ativado' : 'desativado'} com sucesso!`);
             fetchPaymentLinks();
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao atualizar status");
         }
     };
@@ -133,7 +134,7 @@ export default function AdminPaymentSettings() {
                 setTimeout(() => setCopiedLink(null), 2000);
             }
             toast.success("Copiado para área de transferência!");
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao copiar");
         }
     };

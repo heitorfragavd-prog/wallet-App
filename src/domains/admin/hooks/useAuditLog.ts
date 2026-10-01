@@ -1,9 +1,10 @@
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
+import type { Json } from "@/integrations/supabase/types";
 
 interface LogDetails {
-  [key: string]: unknown;
+  [key: string]: Json | undefined;
 }
 
 export const useAuditLog = () => {

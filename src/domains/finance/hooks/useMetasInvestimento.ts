@@ -100,11 +100,12 @@ export function useMetasInvestimento() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useMetasInvestimento", "Erro ao criar meta", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useMetasInvestimento", "Erro ao criar meta", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao criar meta: ${err.message}`,
+        description: `Erro ao criar meta: ${errorMsg}`,
       });
     },
   });
@@ -130,11 +131,12 @@ export function useMetasInvestimento() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useMetasInvestimento", "Erro ao atualizar meta", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useMetasInvestimento", "Erro ao atualizar meta", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao atualizar meta: ${err.message}`,
+        description: `Erro ao atualizar meta: ${errorMsg}`,
       });
     },
   });
@@ -156,11 +158,12 @@ export function useMetasInvestimento() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useMetasInvestimento", "Erro ao excluir meta", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useMetasInvestimento", "Erro ao excluir meta", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao excluir meta: ${err.message}`,
+        description: `Erro ao excluir meta: ${errorMsg}`,
       });
     },
   });

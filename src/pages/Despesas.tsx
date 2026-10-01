@@ -161,7 +161,7 @@ const Despesas = () => {
     categoria: "",
     data: "",
     tipo: "variavel" as "fixa" | "variavel",
-    metodo_pagamento: null as PaymentMethod | null,
+    metodo_pagamento: null as PaymentMethod | "outros" | null,
     conta_id: null as string | null,
     subcategoria_id: null as string | null,
     centro_custo_id: null as string | null,
@@ -270,7 +270,7 @@ const Despesas = () => {
     setActiveTab("lista");
   };
 
-  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categoria_id?: string | null; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
+  const handleEditarDespesa = (despesa: { id: string; descricao: string; valor: number; data: string; categoria_id?: string | null; categorias?: { nome: string }; metodo_pagamento?: PaymentMethod | 'outros' | null; conta_id?: string | null; observacoes?: string | null; tags?: Array<string | { id: string; nome: string; cor?: string }> }) => {
     // Preencher formulário com dados da despesa
     setNovaDespesa({
       id: despesa.id,

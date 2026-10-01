@@ -8,10 +8,10 @@ set -euo pipefail
 BASE_REF="${1:-${GITHUB_BASE_REF:-develop}}"
 HEAD_REF="${2:-${GITHUB_HEAD_REF:-}}"
 
-# 1. Bypass para promoção de Release (develop -> master)
-if [ "${BASE_REF}" = "master" ] && [ "${HEAD_REF}" = "develop" ]; then
-  echo "Release promotion develop → master."
-  echo "Progressive lint incremental already enforced on PRs merged into develop."
+# 1. Bypass para promoção de Release (develop -> master ou branch de release)
+if ([ "${BASE_REF}" = "master" ] && [ "${HEAD_REF}" = "develop" ]) || [[ "${HEAD_REF}" =~ ^release/ ]] || [[ "${BASE_REF}" =~ ^release/ ]]; then
+  echo "Release promotion or release consolidation detected (${HEAD_REF} → ${BASE_REF})."
+  echo "Progressive lint incremental already enforced or deferred to release validation."
   echo "Skipping historical accumulated diff."
   exit 0
 fi

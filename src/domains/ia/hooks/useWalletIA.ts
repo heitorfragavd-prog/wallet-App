@@ -27,7 +27,7 @@ import {
   WalletAiOrchestratorError,
 } from "../services/WalletAiOrchestratorClient";
 import { processWalletDocument } from "../services/WalletDocumentService";
-import type { ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+import type { ExecutedToolRecord } from "../types/orchestrator-types";
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 

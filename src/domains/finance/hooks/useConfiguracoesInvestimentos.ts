@@ -97,11 +97,12 @@ export function useConfiguracoesInvestimentos() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useConfiguracoesInvestimentos", "Erro ao salvar configurações", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useConfiguracoesInvestimentos", "Erro ao salvar configurações", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao salvar configurações: ${err.message}`,
+        description: `Erro ao salvar configurações: ${errorMsg}`,
       });
     },
   });
@@ -129,11 +130,12 @@ export function useConfiguracoesInvestimentos() {
       }
       throw new Error(resp.data?.error || "Erro desconhecido");
     } catch (err: unknown) {
-      logger.error("useConfiguracoesInvestimentos", "Erro ao atualizar cotações", { error: err.message });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error("useConfiguracoesInvestimentos", "Erro ao atualizar cotações", { error: errorMsg });
       toast({
         variant: "destructive",
         title: "Erro na atualização",
-        description: err.message || "Erro ao conectar com API de cotações",
+        description: errorMsg || "Erro ao conectar com API de cotações",
       });
       return false;
     }

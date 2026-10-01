@@ -188,7 +188,7 @@ const itemVariants = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] },
+    transition: { duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] as const },
   },
 };
 
@@ -267,7 +267,11 @@ export const PricingPremium = memo(function PricingPremium({
         limitsMap.set(limit.plan_id, existing);
       });
 
-      const combinedPlans = plansData?.map((plan: Plan) => {
+      const combinedPlans = plansData?.map((rawPlan) => {
+        const plan = {
+          ...rawPlan,
+          features: Array.isArray(rawPlan.features) ? rawPlan.features.map(String) : []
+        };
         const config = planConfigs[plan.name] || planConfigs['Essencial'];
         const paymentLink = linksMap.get(plan.id) || config.defaultLink;
         const planLimits = limitsMap.get(plan.id) || [];
@@ -334,7 +338,7 @@ export const PricingPremium = memo(function PricingPremium({
         setPlans(combinedPlans);
       }
     } catch (error) {
-      logger.error('PricingPremium', 'Erro', { detail: String('Erro ao carregar planos:', error) });
+      logger.error('PricingPremium', 'Erro', { detail: `Erro ao carregar planos: ${String(error)}` });
     } finally {
       setLoading(false);
     }

@@ -58,6 +58,27 @@ process.env.VITE_APP_NAME = process.env.VITE_APP_NAME || 'Wallet';
 process.env.VITE_APP_URL = process.env.VITE_APP_URL || 'http://localhost:8080';
 process.env.VITE_APP_ENVIRONMENT = process.env.VITE_APP_ENVIRONMENT || 'development';
 
+// Mock localStorage for test environment if not present
+if (typeof window !== 'undefined') {
+  const store: Record<string, string> = {};
+  const mockLocalStorage = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = String(value); },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    get length() { return Object.keys(store).length; },
+    key: (i: number) => Object.keys(store)[i] ?? null,
+  };
+  Object.defineProperty(window, 'localStorage', {
+    value: mockLocalStorage,
+    writable: true,
+  });
+  Object.defineProperty(global, 'localStorage', {
+    value: mockLocalStorage,
+    writable: true,
+  });
+}
+
 // Polyfill Promise.withResolvers for Node.js < 22 and PDF.js
 interface PromiseWithResolvers<T> {
   promise: Promise<T>;

@@ -55,7 +55,7 @@ import {
   // Viagens
   Plane,
   MapPin,
-  Suitcase,
+  Luggage,
   // Pets
   Bone,
   // Presentes / Doações

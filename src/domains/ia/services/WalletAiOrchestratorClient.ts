@@ -1,4 +1,4 @@
-import type { LlmMessage, LlmUsage, ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+import type { LlmMessage, LlmUsage, ExecutedToolRecord } from "../types/orchestrator-types";
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 
 export interface SendMessagePayload {

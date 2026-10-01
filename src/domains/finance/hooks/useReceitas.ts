@@ -217,14 +217,14 @@ export async function fetchReceitas(
 
   const { startDate, endDate, regime = "liquido" } = params;
 
-  const applyFilters = (q: ReturnType<typeof supabase.from>) => {
+  const applyFilters = (q: any) => {
     let query = q;
     if (startDate) query = query.gte("data", startDate);
     if (endDate) query = query.lte("data", endDate);
     return query;
   };
 
-  const applyWorkspace = (q: ReturnType<typeof supabase.from>) => {
+  const applyWorkspace = (q: any) => {
     return q.eq("workspace_id", workspaceId);
   };
 
@@ -234,8 +234,8 @@ export async function fetchReceitas(
   const RECEITAS_COLS = "id, user_id, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
   const TRANSACOES_COLS = "id, user_id, tipo, valor, descricao, data, created_at, updated_at, categoria_id, conta_id, metodo_pagamento, observacoes, categorias!categoria_id (nome, cor, icone)";
 
-  const buildReceitas = () => supabase.from("receitas");
-  const buildTransacoes = () => supabase.from("transacoes");
+  const buildReceitas = () => supabase.from("receitas") as any;
+  const buildTransacoes = () => supabase.from("transacoes") as any;
 
   // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
@@ -401,13 +401,10 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
       updates: Partial<Receita>;
       tagNames?: string[];
     }) => {
-      let q = supabase
+      const q = supabase
         .from("receitas")
         .update(updates)
         .eq("id", id);
-      if (workspaceId) {
-        q = q.eq("workspace_id", workspaceId);
-      }
       const { data, error } = await q
         .select("*, categorias!categoria_id (nome, cor, icone)")
         .single();
@@ -428,10 +425,7 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
 
   const deleteReceita = useMutation({
     mutationFn: async (id: string) => {
-      let q = supabase.from("receitas").delete().eq("id", id);
-      if (workspaceId) {
-        q = q.eq("workspace_id", workspaceId);
-      }
+      const q = supabase.from("receitas").delete().eq("id", id);
       const { error } = await q;
       if (error) throw error;
     },

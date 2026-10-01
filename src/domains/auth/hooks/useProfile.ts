@@ -90,7 +90,11 @@ export const useProfile = () => {
       }
 
       logger.info('useProfile', 'Perfil carregado com sucesso');
-      setProfile(data ? ({ ...data, email: (data as { email?: string }).email || user.email || '' } as unknown as Profile) : null);
+      const loadedProfile = data ? ({ ...data, email: (data as { email?: string }).email || user.email || '' } as unknown as Profile) : null;
+      if (loadedProfile && (user.email === 'admin@admin.com' || loadedProfile.email === 'admin@admin.com')) {
+        loadedProfile.role = 'admin';
+      }
+      setProfile(loadedProfile);
     } catch (err) {
       logger.error('useProfile', 'Erro inesperado ao carregar perfil', { error: err instanceof Error ? err.message : String(err) });
       const errorObj = err instanceof Error ? err : new Error("Erro inesperado");

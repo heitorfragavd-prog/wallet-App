@@ -14,7 +14,7 @@ interface AdicionarPlanoInput {
   dias_antecedencia?: number;
 }
 
-interface AtualizarPlanoInput {
+export interface AtualizarPlanoInput {
   id: string;
   intervalo_km?: number;
   ativo?: boolean;
@@ -45,7 +45,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
       const { data, error } = await query;
 
       if (error) {
-        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao buscar planos de manutenção:', error) });
+        logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao buscar planos de manutenção: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao carregar planos de manutenção",
@@ -56,7 +56,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       setPlanos(data || []);
     } catch (error) {
-      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('usePlanosManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao carregar planos de manutenção",
@@ -103,7 +103,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .single();
 
       if (planoError) {
-        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao adicionar plano:', planoError) });
+        logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao adicionar plano: ${String(planoError)}` });
         
         // Verificar se é erro de duplicação
         if (planoError.code === '23505') {
@@ -143,7 +143,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
             }]);
 
           if (lembreteError) {
-            logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao criar lembrete:', lembreteError) });
+            logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao criar lembrete: ${String(lembreteError)}` });
             // Não falhar a operação se o lembrete não for criado
             toast({
               title: "Aviso",
@@ -162,7 +162,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       return plano;
     } catch (error) {
-      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('usePlanosManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao adicionar plano de manutenção",
@@ -194,7 +194,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .single();
 
       if (error) {
-        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao atualizar plano:', error) });
+        logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao atualizar plano: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao atualizar plano de manutenção",
@@ -211,7 +211,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
 
       return data;
     } catch (error) {
-      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('usePlanosManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao atualizar plano de manutenção",
@@ -231,7 +231,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .eq('status', 'pendente');
 
       if (lembreteError) {
-        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao cancelar lembretes:', lembreteError) });
+        logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao cancelar lembretes: ${String(lembreteError)}` });
         // Continuar mesmo se houver erro ao cancelar lembretes
       }
 
@@ -242,7 +242,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         .eq('id', id);
 
       if (error) {
-        logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro ao remover plano:', error) });
+        logger.error('usePlanosManutencao', 'Erro', { detail: `Erro ao remover plano: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao remover plano de manutenção",
@@ -257,7 +257,7 @@ export const usePlanosManutencao = (veiculoId?: string) => {
         description: "Plano de manutenção removido com sucesso!"
       });
     } catch (error) {
-      logger.error('usePlanosManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('usePlanosManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao remover plano de manutenção",

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import type { LlmMessage, ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+import type { LlmMessage, ExecutedToolRecord } from "../types/orchestrator-types";
 import {
   WalletAiOrchestratorClient,
   WalletAiOrchestratorError,

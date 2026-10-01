@@ -36,7 +36,7 @@ export function useDivipayExtrato() {
         type: filters.type,
         limit: 100,
       };
-      logger.info("useDivipayExtrato", "Buscando movimentações Divipay", params);
+      logger.info("useDivipayExtrato", "Buscando movimentações Divipay", { ...params });
       return divipayService.listMovements(params);
     },
     enabled: Boolean(filters.initialDate && filters.finalDate),

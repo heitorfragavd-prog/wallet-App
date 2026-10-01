@@ -954,7 +954,7 @@ export const InvestimentosView: React.FC<InvestimentosViewProps> = ({
                   <SelectContent className="bg-[#0B132B] border-[#1E2942]">
                     <SelectItem value="nenhuma">Sem conta vinculada</SelectItem>
                     {contas?.map((c) => (
-                      <SelectItem key={c.id} value={c.id} className="text-foreground">{c.nome} ({c.banco})</SelectItem>
+                      <SelectItem key={c.id} value={c.id} className="text-foreground">{c.nome} {c.tipo ? `(${c.tipo})` : ""}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

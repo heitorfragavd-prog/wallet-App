@@ -1,7 +1,9 @@
-import { useState } from "react";
-import { ArrowLeft, Banknote, BriefcaseBusiness, CalendarDays, CircleDollarSign, Clock3, Pencil, Plus, ShieldAlert, UserRound } from "lucide-react";
+import { useRef, useState } from "react";
+import { ArrowLeft, Banknote, BriefcaseBusiness, CalendarDays, Camera, CircleDollarSign, Clock3, Loader2, Pencil, Plus, ShieldAlert, UserRound } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/shared/hooks/use-toast";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { AcertoPaymentDialog } from "@/domains/finance/components/equipe/AcertoPaymentDialog";
 import { AcertoSemanalFolguista } from "@/domains/finance/components/equipe/AcertoSemanalFolguista";
@@ -47,7 +49,7 @@ export default function EquipeDetalhePage() {
   const navigate = useNavigate();
   const { activeWorkspace } = useWorkspace();
   const monthRef = new Date().toISOString().slice(0, 7);
-  const { data: colaboradores, isLoading } = useColaboradores();
+  const { data: colaboradores, isLoading, refetch } = useColaboradores();
   const colaborador = colaboradores?.find((item) => item.id === id) ?? null;
   const { data: custos = [] } = useColaboradorCustos(id || null, monthRef);
   const { data: presencas = [] } = useColaboradorPresencas(id || null, monthRef);
@@ -59,8 +61,83 @@ export default function EquipeDetalhePage() {
     monthRef,
     activeWorkspace?.regime_encargos ?? "geral",
   );
+  const { toast } = useToast();
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingFoto, setUploadingFoto] = useState(false);
   const [paymentAcerto, setPaymentAcerto] = useState<EquipeAcerto | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
+
+  const handleDirectPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !id) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Arquivo inválido",
+        description: "Selecione uma imagem válida (JPG, PNG ou WEBP).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: "Imagem muito grande",
+        description: "A foto deve ter no máximo 5MB.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setUploadingFoto(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const userId = user?.id || "public";
+      const fileExt = file.name.split(".").pop() || "jpg";
+      const fileName = `equipe-${id}-${Date.now()}.${fileExt}`;
+      const filePath = `${userId}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(filePath, file, {
+          upsert: true,
+          contentType: file.type,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(filePath);
+
+      const canonicalUrl = publicUrl.replace(/^http:\/\/[^/]+\/supabase-proxy/, "https://hdeguzxkdvebdrrutbnx.supabase.co");
+
+      const { error: updateError } = await supabase
+        .from("colaboradores")
+        .update({ foto_url: canonicalUrl })
+        .eq("id", id);
+
+      if (updateError) throw updateError;
+
+      await refetch?.();
+      toast({
+        title: "Foto atualizada",
+        description: "A foto do colaborador foi atualizada com sucesso.",
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Erro desconhecido";
+      toast({
+        title: "Erro no upload",
+        description: `Não foi possível atualizar a foto: ${message}`,
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingFoto(false);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = "";
+      }
+    }
+  };
 
   if (isLoading) return <DashboardLayout><div className="mx-auto max-w-6xl p-6"><div className="h-72 animate-pulse rounded-2xl bg-muted/30" /></div></DashboardLayout>;
   if (!colaborador) return <DashboardLayout><div className="mx-auto max-w-3xl p-10 text-center"><ShieldAlert className="mx-auto h-10 w-10 text-muted-foreground" /><h1 className="mt-3 text-lg font-semibold">Perfil não encontrado ou sem permissão</h1><Button className="mt-4" variant="outline" onClick={() => navigate("/equipe")}>Voltar para Equipe</Button></div></DashboardLayout>;
@@ -78,7 +155,33 @@ export default function EquipeDetalhePage() {
           <div className="absolute -right-16 -top-20 h-52 w-52 rounded-full bg-primary/10 blur-3xl" />
           <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
             <Button aria-label="Voltar" variant="ghost" size="icon" onClick={() => navigate("/equipe")}><ArrowLeft className="h-5 w-5" /></Button>
-            <Avatar className="h-16 w-16 border border-border/70"><AvatarImage src={colaborador.foto_url || undefined} className="object-cover" style={{ objectPosition: colaborador.foto_posicao || "50% 15%" }} /><AvatarFallback className="bg-primary/15 text-xl font-bold text-primary">{colaborador.nome.split(" ").map((name) => name[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
+            <div className="relative group flex-shrink-0">
+              <Avatar
+                className="h-16 w-16 border border-border/70 cursor-pointer transition-transform group-hover:scale-105 shadow-sm"
+                onClick={() => avatarInputRef.current?.click()}
+                title="Clique para alterar a foto do colaborador"
+              >
+                <AvatarImage src={colaborador.foto_url || undefined} className="object-cover" style={{ objectPosition: colaborador.foto_posicao || "50% 15%" }} />
+                <AvatarFallback className="bg-primary/15 text-xl font-bold text-primary">{colaborador.nome.split(" ").map((name) => name[0]).join("").slice(0, 2).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <button
+                type="button"
+                aria-label="Alterar foto do colaborador"
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={uploadingFoto}
+                className="absolute -bottom-1 -right-1 rounded-full p-1.5 bg-primary text-primary-foreground shadow-md hover:bg-primary/90 transition-transform active:scale-95"
+                title="Alterar foto"
+              >
+                {uploadingFoto ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+              </button>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/jpg"
+                className="hidden"
+                onChange={handleDirectPhotoUpload}
+              />
+            </div>
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-2xl font-bold">{colaborador.nome}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -64,7 +64,7 @@ export function useInvestimentos() {
 
       const { data, error } = await supabase
         .from("investimentos")
-        .select("*, contas_usuario:conta_id (nome)")
+        .select("*")
         .eq("workspace_id", workspaceId)
         .order("nome", { ascending: true });
 
@@ -73,7 +73,7 @@ export function useInvestimentos() {
         throw error;
       }
 
-      return (data ?? []) as Investimento[];
+      return (data ?? []) as unknown as Investimento[];
     },
     enabled: !!workspaceId,
   });
@@ -104,11 +104,12 @@ export function useInvestimentos() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useInvestimentos", "Erro ao criar investimento", { error: err.message });
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("useInvestimentos", "Erro ao criar investimento", { error: msg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao cadastrar investimento: ${err.message}`,
+        description: `Erro ao cadastrar investimento: ${msg}`,
       });
     },
   });
@@ -134,11 +135,12 @@ export function useInvestimentos() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useInvestimentos", "Erro ao atualizar investimento", { error: err.message });
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("useInvestimentos", "Erro ao atualizar investimento", { error: msg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao atualizar investimento: ${err.message}`,
+        description: `Erro ao atualizar investimento: ${msg}`,
       });
     },
   });
@@ -160,11 +162,12 @@ export function useInvestimentos() {
       });
     },
     onError: (err: unknown) => {
-      logger.error("useInvestimentos", "Erro ao excluir investimento", { error: err.message });
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("useInvestimentos", "Erro ao excluir investimento", { error: msg });
       toast({
         variant: "destructive",
         title: "Erro",
-        description: `Erro ao excluir investimento: ${err.message}`,
+        description: `Erro ao excluir investimento: ${msg}`,
       });
     },
   });

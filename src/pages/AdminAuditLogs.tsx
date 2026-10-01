@@ -1,5 +1,7 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import {
     Table,
     TableBody,
@@ -24,15 +26,15 @@ import {
 
 interface AuditLog {
     id: string;
-    admin_id: string;
+    admin_id: string | null;
     action: string;
     entity_type: string;
     entity_id: string | null;
-    details: Record<string, unknown>;
-    created_at: string;
+    details: Json | null;
+    created_at: string | null;
     profiles: {
-        name: string;
-        email: string;
+        name: string | null;
+        email: string | null;
     } | null;
 }
 
@@ -103,7 +105,8 @@ export default function AdminAuditLogs() {
         return <Icon className="h-4 w-4" />;
     };
 
-    const formatDate = (dateString: string) => {
+    const formatDate = (dateString: string | null) => {
+        if (!dateString) return '-';
         const date = new Date(dateString);
         return date.toLocaleString('pt-BR', {
             day: '2-digit',
@@ -114,12 +117,14 @@ export default function AdminAuditLogs() {
         });
     };
 
-    const formatDetails = (details: Record<string, unknown>) => {
-        if (!details || Object.keys(details).length === 0) return '-';
+    const formatDetails = (details: Json | null) => {
+        if (!details || typeof details !== 'object' || Array.isArray(details)) {
+            return details ? String(details) : '-';
+        }
         
         return Object.entries(details)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join(', ');
+            .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+            .join(', ') || '-';
     };
 
     return (

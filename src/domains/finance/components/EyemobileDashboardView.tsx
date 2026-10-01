@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, Banknote, CreditCard, LayoutDashboard, RefreshCw, ShoppingCart, Ticket, TrendingUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { AlertCircle, AlertTriangle, Banknote, CreditCard, LayoutDashboard, RefreshCw, ShoppingCart, Ticket, TrendingUp, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -11,6 +11,7 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useEyemobileDashboard } from "@/domains/eyemobile/hooks/useEyemobileDashboard";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
+import { supabase } from "@/integrations/supabase/client";
 
 const getLocalDateString = (offsetDays: number = 0) => {
   const d = new Date();
@@ -20,7 +21,15 @@ const getLocalDateString = (offsetDays: number = 0) => {
 const today = getLocalDateString(0);
 const yesterday = getLocalDateString(-1);
 const last7Days = getLocalDateString(-6);
+const last30Days = getLocalDateString(-29);
 const monthStart = `${today.slice(0, 8)}01`;
+
+const now = new Date();
+const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+const prevMonthStart = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}-01`;
+const prevMonthEndObj = new Date(now.getFullYear(), now.getMonth(), 0);
+const prevMonthEnd = `${prevMonthEndObj.getFullYear()}-${String(prevMonthEndObj.getMonth() + 1).padStart(2, "0")}-${String(prevMonthEndObj.getDate()).padStart(2, "0")}`;
+
 const currency = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 function DashboardSkeleton() {
@@ -42,7 +51,9 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
   const isHoje = startDate === today && endDate === today;
   const isOntem = startDate === yesterday && endDate === yesterday;
   const isUltimos7 = startDate === last7Days && endDate === today;
+  const isUltimos30 = startDate === last30Days && endDate === today;
   const isMes = startDate === monthStart && endDate === today;
+  const isMesAnterior = startDate === prevMonthStart && endDate === prevMonthEnd;
 
   const [storeId, setStoreId] = useState<string>("all");
   const { toast } = useToast();
@@ -131,12 +142,30 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
             </button>
             <button
               type="button"
+              onClick={() => setRange(last30Days, today)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isUltimos30 ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              30 dias
+            </button>
+            <button
+              type="button"
               onClick={() => setRange(monthStart, today)}
               className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
                 isMes ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
               }`}
             >
               Este Mês
+            </button>
+            <button
+              type="button"
+              onClick={() => setRange(prevMonthStart, prevMonthEnd)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                isMesAnterior ? "bg-purple-600 text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              }`}
+            >
+              Mês Anterior
             </button>
           </div>
 
@@ -168,14 +197,31 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
             onClick={async () => {
               setIsSyncing(true);
               try {
+                // 1. Invoca sincronização no backend para puxar novas vendas da API
+                try {
+                  await supabase.functions.invoke("eyemobile-sync", {
+                    body: { mode: "SALES" }
+                  });
+                } catch {
+                  // Prossegue para atualizar a visualização mesmo se o sync de novas vendas demorar
+                }
+
+                // 2. Atualiza os dados do dashboard para o período selecionado
                 const result = await dashboardQuery.syncLive();
-                if (result?.isLocalFallback) {
-                  toast({ title: "Sincronização concluída (dados locais)", description: "Dados da API indisponíveis — exibindo vendas salvas no banco local.", variant: "default" });
-                } else if (!result?.configured) {
-                  toast({ title: "Chaves não configuradas", description: "Configure suas chaves de API do Eyemobile no Painel Admin para importar dados ao vivo.", variant: "destructive" });
+                const count = result?.kpis?.totalTransactions ?? 0;
+
+                if (count > 0) {
+                  toast({
+                    title: "Sincronização concluída",
+                    description: `${count.toLocaleString("pt-BR")} vendas exibidas no período selecionado!`,
+                    variant: "default",
+                  });
                 } else {
-                  const count = result?.kpis?.totalTransactions ?? 0;
-                  toast({ title: "Sincronização concluída", description: `${count} vendas importadas com sucesso!`, variant: "default" });
+                  toast({
+                    title: "Sincronização concluída",
+                    description: "Nenhuma venda registrada na data atual. Altere o filtro acima para '30 dias' ou 'Mês Anterior' para ver as vendas importadas.",
+                    variant: "default",
+                  });
                 }
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -191,6 +237,31 @@ export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewPr
           </Button>
         </div>
       </div>
+
+      {/* Banner explicativo quando o dia selecionado não possui vendas */}
+      {dashboard && dashboard.configured && dashboard.kpis.totalTransactions === 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-purple-950/20 border border-purple-500/30 rounded-2xl text-xs">
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <AlertCircle className="w-5 h-5 text-purple-400 shrink-0" />
+            <div>
+              <p className="font-semibold text-foreground">
+                Nenhuma venda registrada para {startDate === endDate ? `o dia ${startDate.split("-").reverse().join("/")}` : `o período selecionado`}.
+              </p>
+              <p className="text-muted-foreground mt-0.5">
+                Suas vendas estão salvas no banco de dados! Clique em <strong>"30 dias"</strong> ou <strong>"Mês Anterior"</strong> acima para visualizar seu histórico.
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-purple-500/40 text-purple-300 hover:bg-purple-500/20 hover:text-white shrink-0 self-start sm:self-auto"
+            onClick={() => setRange(prevMonthStart, prevMonthEnd)}
+          >
+            Ver Mês Anterior (Setembro)
+          </Button>
+        </div>
+      )}
 
       {/* Barra Horizontal de Destaques Inspirada no Eyemobile */}
       {dashboard && (

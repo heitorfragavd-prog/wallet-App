@@ -12,6 +12,7 @@ export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
   subcategoria_id?: string | null;
   centro_custo_id?: string | null;
   contato_id?: string | null;
+  status?: string;
   categorias?: {
     nome: string;
     cor: string;
@@ -352,16 +353,23 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
       // Se for cartão de crédito e fatura_id não veio preenchido, calcula automaticamente por período de fechamento
       if (!faturaIdToLink && despesa.conta_id) {
         try {
-          const { data: contaObj } = await supabase
+          const { data: rawConta } = await supabase
             .from("contas_usuario")
-            .select("id, tipo, dia_fechamento, dia_vencimento")
+            .select("*")
             .eq("id", despesa.conta_id)
             .eq("workspace_id", currentWorkspaceId)
             .maybeSingle();
 
+          const contaObj = rawConta as (typeof rawConta & {
+            dia_fechamento?: number | null;
+            dia_vencimento?: number | null;
+          }) | null;
+
           if (contaObj && contaObj.tipo === "cartao_credito") {
             const { determinarFaturaParaData, calcularPeriodoFatura } = await import("./useFaturasCartao");
-            const { mes_fatura, ano_fatura } = determinarFaturaParaData(despesa.data, contaObj.dia_fechamento);
+            const diaFechamentoNum = contaObj.dia_fechamento ? Number(contaObj.dia_fechamento) : (contaObj.data_fechamento ? parseInt(contaObj.data_fechamento, 10) : 1);
+            const diaVencimentoNum = contaObj.dia_vencimento ? Number(contaObj.dia_vencimento) : (contaObj.data_vencimento ? parseInt(contaObj.data_vencimento, 10) : 10);
+            const { mes_fatura, ano_fatura } = determinarFaturaParaData(despesa.data, diaFechamentoNum);
 
             const { data: faturaExistente } = await supabase
               .from("faturas_cartao")
@@ -375,7 +383,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
             if (faturaExistente) {
               faturaIdToLink = faturaExistente.id;
             } else {
-              const periodo = calcularPeriodoFatura(contaObj, mes_fatura, ano_fatura);
+              const periodo = calcularPeriodoFatura({ dia_fechamento: diaFechamentoNum, dia_vencimento: diaVencimentoNum }, mes_fatura, ano_fatura);
               const { data: novaFatura } = await supabase
                 .from("faturas_cartao")
                 .insert({
@@ -388,6 +396,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
                   data_fechamento: periodo.data_fechamento,
                   data_vencimento: periodo.data_vencimento,
                   valor_total: 0,
+                  valor_pago: 0,
                   status: "aberta",
                 })
                 .select("id")
@@ -397,7 +406,7 @@ export const useDespesas = (params: DespesasQueryParams = {}) => {
             }
           }
         } catch (e) {
-          logger.warn("useDespesas", "Aviso ao calcular fatura automática:", String(e));
+          logger.warn("useDespesas", "Aviso ao calcular fatura automática", { error: String(e) });
         }
       }
 
