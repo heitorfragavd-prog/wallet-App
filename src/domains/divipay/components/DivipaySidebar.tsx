@@ -36,7 +36,7 @@ export function DivipaySidebar({
   accountNumber = "590232-1",
   accountName = "49.683.323 Heitor Fraga de Oliveira",
 }: DivipaySidebarProps) {
-  const menuItems = [
+  const menuItems: { id: string; label: string; icon: any; targetTab?: string; indent?: boolean }[] = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "vendas", label: "Vendas", icon: TrendingUp, targetTab: "extrato" },
     { id: "cobrancas", label: "Cobranças", icon: QrCode },

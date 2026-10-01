@@ -6,8 +6,8 @@ import type { ProdutoComCusto, FoodCostSummary } from "@/domains/finance/types/f
 export const FOOD_COST_QUERY_KEY = ["food_cost"] as const;
 
 async function fetchFoodCost(workspaceId?: string | null): Promise<ProdutoComCusto[]> {
-  let query = supabase
-    .from("v_produtos_custo")
+  let query: any = supabase
+    .from("v_produtos_custo" as any)
     .select("*")
     .order("margem_percentual", { ascending: true });
   if (workspaceId) query = query.eq("workspace_id", workspaceId);

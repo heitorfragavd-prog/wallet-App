@@ -104,9 +104,9 @@ export const useFinancialContext = () => {
 
       // Construir as queries base do Supabase
       const qDividas = supabase.from("dividas").select("*").eq("workspace_id", workspaceId);
-      const qReceitas = supabase.from("receitas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
-      const qDespesas = supabase.from("despesas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
-      const qTransacoes = supabase.from("transacoes").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qReceitas = (supabase.from("receitas") as any).select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qDespesas = (supabase.from("despesas") as any).select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
+      const qTransacoes = (supabase.from("transacoes") as any).select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
       const qContas = supabase.from("contas_usuario").select("*").eq("workspace_id", workspaceId);
       const qEyemobileLogs = supabase.from("eyemobile_sync_logs").select("*").order("created_at", { ascending: false }).limit(5);
       const qVeiculos = supabase.from("veiculos").select("*, manutencoes(*)").eq("workspace_id", workspaceId);
@@ -220,10 +220,10 @@ export const useFinancialContext = () => {
 
       // ─── EYEMOBILE ───
       const vendasHoje = receitasList
-        .filter(r => r.data === hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String(r.origem || "").toLowerCase().includes("eyemobile")))
+        .filter(r => r.data === hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String((r as any).origem || "").toLowerCase().includes("eyemobile")))
         .reduce((sum, r) => sum + Number(r.valor || 0), 0);
       const vendasMes = receitasList
-        .filter(r => r.data >= inicioMes && r.data <= hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String(r.origem || "").toLowerCase().includes("eyemobile")))
+        .filter(r => r.data >= inicioMes && r.data <= hojeIso && (String(r.observacoes || "").toLowerCase().includes("eyemobile") || String((r as any).origem || "").toLowerCase().includes("eyemobile")))
         .reduce((sum, r) => sum + Number(r.valor || 0), 0);
 
       // ─── MERCADO & DESPENSA ───
@@ -332,7 +332,7 @@ export const useFinancialContext = () => {
       if (metasAtivas.length > 0) {
         metasAtivas.forEach(m => {
           const mPct = Number(m.valor_alvo) > 0 ? ((Number(m.valor_atual) / Number(m.valor_alvo)) * 100).toFixed(0) : "0";
-          text += `- *${m.nome || m.titulo}*: ${fmt(Number(m.valor_atual))} de ${fmt(Number(m.valor_alvo))} (${mPct}%)\n`;
+          text += `- *${m.titulo}*: ${fmt(Number(m.valor_atual))} de ${fmt(Number(m.valor_alvo))} (${mPct}%)\n`;
         });
       } else {
         text += `- Nenhuma meta ativa\n`;

@@ -22,8 +22,8 @@ import {
   Sparkles,
   AlertTriangle
 } from "lucide-react";
-import { usePlanosManutencao } from "../hooks/usePlanosManutencao";
-import { useManutencoesCustomizadas } from "../hooks/useManutencoesCustomizadas";
+import { usePlanosManutencao, type AtualizarPlanoInput } from "../hooks/usePlanosManutencao";
+import { useManutencoesCustomizadas, type AtualizarCustomizadaInput } from "../hooks/useManutencoesCustomizadas";
 import { useLembretesManutencao } from "../hooks/useLembretesManutencao";
 import { useToast } from "@/shared/hooks/use-toast";
 import { EditarManutencaoModal } from "./EditarManutencaoModal";
@@ -168,10 +168,10 @@ export const ListaManutencoes = ({ veiculoId, quilometragemAtual = 0 }: ListaMan
   };
 
   const handleSaveEditar = async (data: Partial<PlanoManutencaoVeiculo & ManutencaoCustomizada>) => {
-    if (editarModal.tipo === 'plano') {
-      await atualizarPlano(data as Partial<PlanoManutencaoVeiculo>);
-    } else {
-      await atualizarCustomizada(data as Partial<ManutencaoCustomizada>);
+    if (editarModal.tipo === 'plano' && (data.id || editarModal.plano?.id)) {
+      await atualizarPlano({ ...data, id: (data.id || editarModal.plano?.id)! } as AtualizarPlanoInput);
+    } else if (data.id || editarModal.customizada?.id) {
+      await atualizarCustomizada({ ...data, id: (data.id || editarModal.customizada?.id)! } as AtualizarCustomizadaInput);
     }
   };
 

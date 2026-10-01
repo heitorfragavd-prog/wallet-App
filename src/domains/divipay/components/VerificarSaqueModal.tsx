@@ -22,6 +22,8 @@ export interface SaqueDetails {
   tax: number;
   status: string;
   lote: string;
+  billetCode?: string;
+  createdAt?: string;
   // Detalhes estritos do modal "Verificar Saque"
   cliente?: string;
   documentoCliente?: string;

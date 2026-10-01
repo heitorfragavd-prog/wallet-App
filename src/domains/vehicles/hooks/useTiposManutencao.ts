@@ -27,7 +27,7 @@ export const useTiposManutencao = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        logger.error('useTiposManutencao', 'Erro', { detail: String('Erro ao buscar tipos de manutenção:', error) });
+        logger.error('useTiposManutencao', 'Erro', { detail: `Erro ao buscar tipos de manutenção: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao carregar tipos de manutenção",
@@ -38,7 +38,7 @@ export const useTiposManutencao = () => {
 
       setTiposManutencao(data || []);
     } catch (error) {
-      logger.error('useTiposManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useTiposManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao carregar tipos de manutenção",
@@ -71,7 +71,7 @@ export const useTiposManutencao = () => {
         .single();
 
       if (error) {
-        logger.error('useTiposManutencao', 'Erro', { detail: String('Erro ao adicionar tipo de manutenção:', error) });
+        logger.error('useTiposManutencao', 'Erro', { detail: `Erro ao adicionar tipo de manutenção: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao adicionar tipo de manutenção",
@@ -86,7 +86,7 @@ export const useTiposManutencao = () => {
         description: "Tipo de manutenção adicionado com sucesso!"
       });
     } catch (error) {
-      logger.error('useTiposManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useTiposManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao adicionar tipo de manutenção",
@@ -108,7 +108,7 @@ export const useTiposManutencao = () => {
         .eq('id', tipoEditado.id);
 
       if (error) {
-        logger.error('useTiposManutencao', 'Erro', { detail: String('Erro ao editar tipo de manutenção:', error) });
+        logger.error('useTiposManutencao', 'Erro', { detail: `Erro ao editar tipo de manutenção: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao editar tipo de manutenção",
@@ -123,7 +123,7 @@ export const useTiposManutencao = () => {
         description: "Tipo de manutenção editado com sucesso!"
       });
     } catch (error) {
-      logger.error('useTiposManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useTiposManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao editar tipo de manutenção",
@@ -140,7 +140,7 @@ export const useTiposManutencao = () => {
         .eq('id', id);
 
       if (error) {
-        logger.error('useTiposManutencao', 'Erro', { detail: String('Erro ao excluir tipo de manutenção:', error) });
+        logger.error('useTiposManutencao', 'Erro', { detail: `Erro ao excluir tipo de manutenção: ${String(error)}` });
         toast({
           title: "Erro",
           description: "Erro ao excluir tipo de manutenção",
@@ -155,7 +155,7 @@ export const useTiposManutencao = () => {
         description: "Tipo de manutenção excluído com sucesso!"
       });
     } catch (error) {
-      logger.error('useTiposManutencao', 'Erro', { detail: String('Erro:', error) });
+      logger.error('useTiposManutencao', 'Erro', { detail: `Erro: ${String(error)}` });
       toast({
         title: "Erro",
         description: "Erro ao excluir tipo de manutenção",

@@ -186,7 +186,7 @@ const Receitas = () => {
       categorizarIA({ descricao: desc, valor: val, tipo: "receita" }, {
         onSuccess: (result) => {
           if (result && result.confianca > 0.85 && result.categoria) {
-            const match = categorias.find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
+            const match = (categoriasReceita || []).find((c) => c.nome.toLowerCase().includes(result.categoria.toLowerCase()));
             if (match) {
               setNovaReceita((prev) => ({ ...prev, categoria: match.id }));
               toast({ title: `Categorizado com IA: ${match.nome}` });

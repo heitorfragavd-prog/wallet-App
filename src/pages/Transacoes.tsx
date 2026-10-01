@@ -176,7 +176,10 @@ const Transacoes = () => {
       // Filtro de tag
       let matchTag = true;
       if (tagFiltro && t.tags) {
-        matchTag = t.tags.some(tag => tag.toLowerCase().includes(tagFiltro.toLowerCase()));
+        matchTag = t.tags.some(tag => {
+          const nomeTag = typeof tag === 'string' ? tag : tag.nome;
+          return nomeTag.toLowerCase().includes(tagFiltro.toLowerCase());
+        });
       } else if (tagFiltro) {
         matchTag = false;
       }
@@ -650,11 +653,14 @@ const Transacoes = () => {
                               <span className="font-medium">{transacao.descricao}</span>
                               {transacao.tags && transacao.tags.length > 0 && (
                                 <div className="flex gap-1 mt-1">
-                                  {transacao.tags.slice(0, 2).map((tag, idx) => (
-                                    <Badge key={idx} variant="outline" className="text-xs px-1 py-0">
-                                      {tag}
-                                    </Badge>
-                                  ))}
+                                  {transacao.tags.slice(0, 2).map((tag, idx) => {
+                                    const nomeTag = typeof tag === 'string' ? tag : tag.nome;
+                                    return (
+                                      <Badge key={idx} variant="outline" className="text-xs px-1 py-0">
+                                        {nomeTag}
+                                      </Badge>
+                                    );
+                                  })}
                                   {transacao.tags.length > 2 && (
                                     <Badge variant="outline" className="text-xs px-1 py-0">
                                       +{transacao.tags.length - 2}

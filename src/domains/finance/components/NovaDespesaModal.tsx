@@ -15,6 +15,7 @@ import { useContasUsuario } from "@/domains/finance/hooks/useContasUsuario";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
 import { format } from "date-fns";
 import { MinusCircle, Check } from "lucide-react";
+import { PaymentMethod } from "@/domains/finance/types";
 
 interface NovaDespesaModalProps {
   isOpen: boolean;
@@ -37,7 +38,7 @@ export const NovaDespesaModal: React.FC<NovaDespesaModalProps> = ({
   const [contaId, setContaId] = useState("");
   const [categoriaId, setCategoriaId] = useState("");
   const [data, setData] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [metodoPagamento, setMetodoPagamento] = useState("pix");
+  const [metodoPagamento, setMetodoPagamento] = useState<PaymentMethod | "outros">("pix");
   const [observacoes, setObservacoes] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -84,7 +85,6 @@ export const NovaDespesaModal: React.FC<NovaDespesaModalProps> = ({
         categoria_id: categoriaId || null,
         metodo_pagamento: metodoPagamento,
         observacoes,
-        pago: true,
       });
 
       toast({
@@ -98,9 +98,10 @@ export const NovaDespesaModal: React.FC<NovaDespesaModalProps> = ({
       setObservacoes("");
       onClose();
     } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       toast({
         title: "Erro ao criar despesa",
-        description: err.message || "Tente novamente.",
+        description: msg || "Tente novamente.",
         variant: "destructive",
       });
     } finally {
@@ -191,7 +192,7 @@ export const NovaDespesaModal: React.FC<NovaDespesaModalProps> = ({
             <Label className="text-xs font-semibold text-muted-foreground">Forma de Pagamento</Label>
             <select
               value={metodoPagamento}
-              onChange={(e) => setMetodoPagamento(e.target.value)}
+              onChange={(e) => setMetodoPagamento(e.target.value as PaymentMethod | "outros")}
               className="w-full bg-muted/30 border border-border/50 rounded-2xl h-11 px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-rose-500/50"
             >
               <option value="pix">PIX</option>

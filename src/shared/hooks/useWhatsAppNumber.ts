@@ -35,7 +35,7 @@ export const useWhatsAppNumber = (): UseWhatsAppNumberReturn => {
         .single();
 
       if (error) {
-        logger.error('useWhatsAppNumber', 'Erro', { detail: String("Error fetching WhatsApp number:", error) });
+        logger.error('useWhatsAppNumber', 'Erro', { detail: `Error fetching WhatsApp number: ${String(error)}` });
         return null;
       }
 

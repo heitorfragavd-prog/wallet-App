@@ -82,6 +82,7 @@ export async function processWalletDocument(
             actionType: "cadastrar_divida_boleto",
             actionVersion: "1.0",
             summary: `Cadastrar Boleto: ${data.dados.beneficiario || "Boleto Bancário"} - R$ ${(data.dados.valor_total || data.dados.valor || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            riskLevel: "MEDIUM",
             payload: {
               descricao: `Boleto ${data.dados.beneficiario || ""}`.trim() || "Boleto a Pagar",
               valor: data.dados.valor_total || data.dados.valor || 0,
@@ -131,6 +132,7 @@ export async function processWalletDocument(
             actionType: "cadastrar_despesa_nf",
             actionVersion: "1.0",
             summary: `Importar NF ${numNota} (${fornecedor}) - R$ ${valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            riskLevel: "MEDIUM",
             payload: {
               fornecedor,
               numero_nf: numNota,

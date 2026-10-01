@@ -110,8 +110,12 @@ export const Pricing = () => {
       };
 
       // Combinar dados
-      const combinedPlans = plansData?.map((plan: Plan) => {
-        const config = planConfigs[plan.name] || {};
+      const combinedPlans = plansData?.map((rawPlan) => {
+        const plan = {
+          ...rawPlan,
+          features: Array.isArray(rawPlan.features) ? rawPlan.features.map(String) : []
+        };
+        const config: Partial<PlanConfig> = planConfigs[plan.name] || {};
         const paymentLink = linksMap.get(plan.id) || config.defaultLink || "/login";
 
         return {
@@ -119,7 +123,7 @@ export const Pricing = () => {
           price: plan.price === 0 ? "Grátis" : `R$ ${plan.price.toFixed(2).replace('.', ',')}`,
           period: plan.price > 0 ? "/mês" : undefined,
           description: config.description || "",
-          features: plan.features || [],
+          features: plan.features,
           notIncluded: config.notIncluded || [],
           buttonText: config.buttonText || "Assinar",
           popular: config.popular || false,
@@ -130,7 +134,7 @@ export const Pricing = () => {
 
       setPlans(combinedPlans);
     } catch (error) {
-      logger.error('Pricing', 'Erro', { detail: String("Erro ao carregar planos:", error) });
+      logger.error('Pricing', 'Erro', { detail: `Erro ao carregar planos: ${String(error)}` });
       // Fallback para planos estáticos em caso de erro
       setPlans([
         {

@@ -59,3 +59,11 @@ export type {
 export type {
   EnvironmentConfig,
 } from '../config/env';
+
+// PDV Reconciliation Domain Types
+export type {
+  PdvReconciliationStatus,
+  PdvConciliacao,
+  ReconcilePdvTransactionParams,
+  ReconcilePdvTransactionResult,
+} from './pdv-reconciliation';

@@ -18,20 +18,19 @@ export interface Veiculo {
   updated_at?: string;
 }
 
-const fetchVeiculosData = async (workspaceId?: string) => {
+const fetchVeiculosData = async (workspaceId?: string): Promise<Veiculo[]> => {
   if (!workspaceId) return [];
 
   const { data, error } = await supabase
     .from('veiculos')
     .select('*')
-    .eq('workspace_id', workspaceId)
     .order('created_at', { ascending: false });
 
   if (error) {
     logger.error('useVeiculos', 'Erro ao buscar veículos', { error: error.message });
     throw error;
   }
-  return (data || []) as Veiculo[];
+  return (data || []) as unknown as Veiculo[];
 };
 
 export const useVeiculos = () => {
@@ -118,9 +117,6 @@ export const useVeiculos = () => {
           quilometragem: veiculoEditado.quilometragem
         })
         .eq('id', veiculoEditado.id);
-      if (activeWorkspace?.id) {
-        q = q.eq('workspace_id', activeWorkspace.id);
-      }
 
       const { error } = await q;
 
@@ -149,7 +145,7 @@ export const useVeiculos = () => {
 
   const excluirVeiculo = async (id: string) => {
     try {
-      let q = supabase
+      let q: any = supabase
         .from('veiculos')
         .delete()
         .eq('id', id);

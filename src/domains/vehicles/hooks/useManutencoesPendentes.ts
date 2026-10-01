@@ -22,9 +22,10 @@ export interface ManutencaoPendente {
 interface ManutencaoRealizada {
   id: string;
   veiculo_id: string;
-  tipo_manutencao_id: string;
+  tipo_manutencao_id?: string;
   data_realizada: string;
-  quilometragem: number;
+  quilometragem?: number;
+  quilometragem_realizada?: number;
   status: string;
 }
 

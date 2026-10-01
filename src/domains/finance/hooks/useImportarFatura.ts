@@ -19,6 +19,8 @@ export interface TransacaoParseada {
   categoria_id?: string;
   categoria_nome?: string;
   categoria_sugerida?: string;
+  numero_linha?: number;
+  hash_importacao?: string;
   isDuplicada: boolean;
   selecionada: boolean;
 }
@@ -625,12 +627,20 @@ export function useImportarFatura() {
       if (ignorarDuplicatas) {
         comStatus = parseadasComHashes.map(t => ({ ...t, isDuplicada: false, selecionada: true }));
       } else {
-        const { data: existentes } = await supabase
+        const { data: rawExistentes } = await supabase
           .from("transacoes")
-          .select("descricao, valor, data, parcela_atual, total_parcelas, hash_importacao")
+          .select("descricao, valor, data, parcela_atual, parcela_total, hash_importacao")
           .eq("tipo", "despesa")
           .eq("cartao_id", contaId)
           .eq("mes_referencia", mesReferencia);
+
+        const existentes = (rawExistentes || []) as Array<{
+          descricao: string | null;
+          valor: number;
+          data: string;
+          parcela_atual: number | null;
+          hash_importacao: string | null;
+        }>;
         
         comStatus = parseadasComHashes.map(t => {
           const duplicada = existentes?.some(e => {
@@ -731,7 +741,7 @@ export function useImportarFatura() {
       await qc.invalidateQueries({ queryKey: ["contas_usuario"] });
       await qc.invalidateQueries({ queryKey: ["contas-cartoes"] });
       
-      const criadas = rpcData?.transacoes_criadas || payloadTransacoes.length;
+      const criadas = (rpcData as { transacoes_criadas?: number } | null)?.transacoes_criadas || payloadTransacoes.length;
       toast({ title: "Importação atômica concluída com sucesso!", description: `${criadas} transações criadas e vinculadas à fatura.` });
       setTransacoes([]);
       setBancoDetectado("desconhecido");

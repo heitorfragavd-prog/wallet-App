@@ -337,12 +337,14 @@ export const UploadInteligente = () => {
 
       const { error } = await supabase.from("dividas").insert({
         user_id: user.id,
-        descricao: `Boleto: ${bolBeneficiario}`,
+        credor: bolBeneficiario || "Boleto",
+        descricao: `Boleto: ${bolBeneficiario || "Diversos"}`,
         valor_total: bolValor,
-        data_vencimento: bolVencimento || null,
+        valor_restante: bolValor,
+        valor_pago: 0,
+        data_vencimento: bolVencimento || new Date().toISOString().split("T")[0],
         status: "pendente",
         categoria_id: bolCategoria || null,
-        observacoes: obsParts.join(" | ")
       });
 
       if (error) throw error;

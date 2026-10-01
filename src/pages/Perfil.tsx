@@ -301,14 +301,14 @@ const Perfil = () => {
                     )}
                   </div>
 
-                  {plan.features && plan.features.length > 0 && (
+                  {Array.isArray(plan.features) && plan.features.length > 0 && (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-muted-foreground">Recursos incluídos:</p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {plan.features.slice(0, 4).map((feature, index) => (
                           <div key={index} className="flex items-center gap-2 text-sm">
                             <Check className="w-4 h-4 text-green-500 shrink-0" />
-                            <span className="truncate">{feature}</span>
+                            <span className="truncate">{String(feature)}</span>
                           </div>
                         ))}
                       </div>

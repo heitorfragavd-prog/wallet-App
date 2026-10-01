@@ -66,31 +66,75 @@ async function fetchLiveProducts(): Promise<unknown[]> {
   }
 }
 
+async function checkEyemobileConfigured(): Promise<boolean> {
+  try {
+    const { data: status, error } = await supabase.rpc("get_eyemobile_config_status").maybeSingle();
+    if (!error && status) {
+      return Boolean(status.access_key && (status as { has_secret?: boolean }).has_secret);
+    }
+  } catch {
+    // fallback
+  }
+
+  try {
+    const { data: cfg } = await supabase
+      .from("eyemobile_config")
+      .select("id, access_key")
+      .maybeSingle();
+    return Boolean(cfg?.access_key);
+  } catch {
+    return false;
+  }
+}
+
 async function buildLocalFallbackDashboard(
   filters: DashboardFilters,
   workspaceId?: string,
 ): Promise<EyemobileDashboardResult> {
+  const isConfigured = await checkEyemobileConfigured();
   const productsPromise = fetchLiveProducts();
 
-  let query = supabase
-    .from("transacoes")
-    .select("*")
-    .eq("tipo", "receita")
-    .like("descricao", "Venda Eyemobile %")
-    .gte("data", filters.startDate)
-    .lte("data", filters.endDate)
-    .order("data", { ascending: false })
-    .limit(2000);
+  const transacoes: any[] = [];
+  let queryError: unknown = null;
+  const BATCH_SIZE = 1000;
+  let batchOffset = 0;
+  let hasMore = true;
 
-  if (workspaceId) {
-    query = query.eq("workspace_id", workspaceId);
+  while (hasMore && batchOffset < 50000) {
+    let q = supabase
+      .from("transacoes")
+      .select("*")
+      .eq("tipo", "receita")
+      .like("descricao", "Venda Eyemobile %")
+      .gte("data", filters.startDate)
+      .lte("data", filters.endDate.includes("T") ? filters.endDate : `${filters.endDate}T23:59:59.999Z`)
+      .order("data", { ascending: false })
+      .range(batchOffset, batchOffset + BATCH_SIZE - 1);
+
+    if (workspaceId) {
+      q = q.eq("workspace_id", workspaceId);
+    }
+
+    const { data: batch, error } = await q;
+    if (error) {
+      queryError = error;
+      break;
+    }
+    if (!batch || batch.length === 0) {
+      hasMore = false;
+      break;
+    }
+    transacoes.push(...batch);
+    if (batch.length < BATCH_SIZE) {
+      hasMore = false;
+    } else {
+      batchOffset += BATCH_SIZE;
+    }
   }
-
-  const { data: transacoes, error: queryError } = await query;
 
   if (queryError || !transacoes?.length) {
     return {
-      configured: false,
+      configured: isConfigured,
       stores: [],
       isLocalFallback: true,
       ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
@@ -101,7 +145,7 @@ async function buildLocalFallbackDashboard(
   const totalTransactions = transacoes.length;
 
   const sales = transacoes.map((t) => {
-    const saleTime = t.itens?.[0]?.time || (t.data ? (t.data.includes("T") ? t.data : `${t.data}T12:00:00.000Z`) : t.created_at);
+    const saleTime = t.itens?.[0]?.time || t.created_at || (t.data ? (t.data.includes("T") ? t.data : `${t.data}T12:00:00.000Z`) : new Date().toISOString());
     return {
       total: t.valor,
       time: saleTime,
@@ -121,7 +165,7 @@ async function buildLocalFallbackDashboard(
   });
 
   return {
-    configured: true,
+    configured: isConfigured,
     stores: [],
     isLocalFallback: true,
     ...dashboard,
@@ -156,7 +200,7 @@ async function fetchLiveDashboard(
       },
     });
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout ao consultar API remota do Eyemobile (>6s)")), 6000)
+      setTimeout(() => reject(new Error("Timeout ao consultar API remota do Eyemobile (>20s)")), 20000)
     );
     const result = await Promise.race([invokePromise, timeoutPromise]);
     data = result.data as EyemobileSyncResponse | null;

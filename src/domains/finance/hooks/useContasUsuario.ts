@@ -11,6 +11,7 @@ export interface ContaUsuario {
   workspace_id?: string;
   nome: string;
   tipo: "conta_corrente" | "poupanca" | "carteira" | "cartao_credito" | "outro";
+  banco?: string;
   saldo_inicial?: number;
   saldo_atual?: number;
   limite_credito?: number;

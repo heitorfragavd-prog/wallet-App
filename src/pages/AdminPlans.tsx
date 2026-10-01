@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -60,11 +61,11 @@ export default function AdminPlans() {
             // Parse features if they're stored as JSON
             const plansWithFeatures = data?.map(plan => ({
                 ...plan,
-                features: Array.isArray(plan.features) ? plan.features : []
+                features: Array.isArray(plan.features) ? plan.features.map(String) : []
             })) || [];
             
             setPlans(plansWithFeatures);
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao carregar planos");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -100,7 +101,7 @@ export default function AdminPlans() {
             setIsDialogOpen(false);
             fetchPlans();
             resetForm();
-        } catch (_error) {
+        } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Erro ao salvar plano";
             toast.error(errorMessage);
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });

@@ -75,8 +75,8 @@ export function AccountSelector({
       tipo: newAccountType,
     });
 
-    if (result.data) {
-      onChange(result.data.id);
+    if (result && 'id' in result) {
+      onChange(result.id);
       setShowCreateDialog(false);
       setNewAccountName("");
       setNewAccountType("conta_corrente");

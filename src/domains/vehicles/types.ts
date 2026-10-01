@@ -17,12 +17,14 @@ export interface Veiculo {
 
 export interface TipoManutencao {
   id: string;
-  user_id: string;
+  user_id?: string;
   nome: string;
-  descricao?: string;
+  sistema?: string;
   intervalo_km?: number;
   intervalo_meses?: number;
-  created_at: string;
+  descricao?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Manutencao {
@@ -73,12 +75,12 @@ export interface LembreteManutencao {
   user_id: string;
   veiculo_id: string;
   manutencao_id: string;
-  tipo_manutencao: 'plano' | 'customizada';
+  tipo_manutencao: string;
   data_prevista: string;
   dias_antecedencia: number;
-  status: 'pendente' | 'enviado' | 'cancelado';
-  webhook_enviado_em?: string;
-  webhook_response?: string;
+  status: string;
+  webhook_enviado_em?: string | null;
+  webhook_response?: string | null;
   created_at: string;
   updated_at: string;
 }

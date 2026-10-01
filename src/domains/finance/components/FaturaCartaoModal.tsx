@@ -48,7 +48,7 @@ import {
   X,
   Check,
 } from "lucide-react";
-import { ContaUsuario } from "@/domains/finance/hooks/useContasUsuario";
+import { ContaUsuario } from "@/domains/finance/types";
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { useComprasFatura } from "@/domains/finance/hooks/useComprasFatura";
@@ -265,7 +265,7 @@ export const FaturaCartaoModal: React.FC<FaturaCartaoModalProps> = ({
   const handleGerarDivida = async () => {
     if (!cartao || totalFatura <= 0) return;
     try {
-      await createDivida.mutateAsync({
+      await createDivida({
         descricao: `Fatura ${cartao.nome} - ${mesAnoCapitalizado}`,
         valor_total: totalFatura,
         valor_pago: 0,

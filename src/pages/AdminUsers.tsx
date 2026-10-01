@@ -1,3 +1,4 @@
+import { logger } from "@/core/logging/LoggerService";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -82,7 +83,7 @@ export default function AdminUsers() {
 
             if (error) throw error;
             setUsers(data || []);
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao carregar usuários");
             logger.error('AdminPage', 'Erro na operação', { error: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -100,7 +101,7 @@ export default function AdminUsers() {
             if (error) throw error;
             toast.success(`Função atualizada para ${newRole}`);
             fetchUsers();
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao atualizar função");
         }
     };
@@ -119,7 +120,7 @@ export default function AdminUsers() {
             if (error) throw error;
             toast.success("Plano atualizado com sucesso!");
             fetchUsers();
-        } catch (_error) {
+        } catch (error) {
             toast.error("Erro ao atualizar plano");
         }
     };

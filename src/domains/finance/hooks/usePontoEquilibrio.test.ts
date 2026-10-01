@@ -28,6 +28,14 @@ import { useDividas } from "./useDividas";
 import { useRecurringTransactions } from "./useRecurringTransactions";
 import { useColaboradores } from "./useColaboradores";
 
+vi.mock("../utils/dateHelpers", async () => {
+  const actual = await vi.importActual<typeof import("../utils/dateHelpers")>("../utils/dateHelpers");
+  return {
+    ...actual,
+    getHojeSaoPaulo: () => "2026-09-15",
+  };
+});
+
 describe("usePontoEquilibrio - Classificação Econômica e Homologação", () => {
   beforeEach(() => {
     vi.clearAllMocks();

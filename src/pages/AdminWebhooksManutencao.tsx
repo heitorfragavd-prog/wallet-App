@@ -24,7 +24,7 @@ interface WebhookStats {
   total: number;
   sucessos: number;
   erros: number;
-  taxaSucesso: string;
+  taxaSucesso: number | string;
   ultimosSete: number;
 }
 

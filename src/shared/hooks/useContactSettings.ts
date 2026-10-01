@@ -21,7 +21,7 @@ export const useContactSettings = (): UseContactSettingsReturn => {
         .in("key", ["contact_email", "contact_phone"]);
 
       if (error) {
-        logger.error('useContactSettings', 'Erro', { detail: String("Error fetching contact settings:", error) });
+        logger.error('useContactSettings', 'Erro', { detail: `Error fetching contact settings: ${String(error)}` });
         return { email: null, phone: null };
       }
 

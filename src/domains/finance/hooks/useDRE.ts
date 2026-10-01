@@ -42,7 +42,7 @@ interface DREHistoricoMes {
 }
 
 async function fetchAllRows(
-  table: string,
+  table: "receitas" | "transacoes" | "despesas",
   columns: string,
   inicioStr: string,
   fimStr: string,
@@ -55,7 +55,7 @@ async function fetchAllRows(
   let hasMore = true;
 
   while (hasMore) {
-    let q = supabase
+    let q: any = supabase
       .from(table)
       .select(columns)
       .gte("data", inicioStr)

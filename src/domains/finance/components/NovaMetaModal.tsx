@@ -24,7 +24,7 @@ interface CategoriaMeta {
   id: string;
   nome: string;
   cor: string;
-  descricao: string;
+  descricao?: string;
   ativa: boolean;
 }
 

@@ -102,21 +102,22 @@ export function useFaturaCartao({ cartaoId, mesReferencia, workspaceId }: UseFat
       const listaTransacoes = (transacoes || []) as FaturaCartaoTransacao[];
       const somaCalculada = listaTransacoes.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
-      const totalLancamentos = impData?.total_lancamentos !== undefined && impData?.total_lancamentos !== null
-        ? Number(impData.total_lancamentos)
+      const rawImp = impData as any;
+      const totalLancamentos = rawImp?.total_lancamentos !== undefined && rawImp?.total_lancamentos !== null
+        ? Number(rawImp.total_lancamentos)
         : somaCalculada;
 
       const totalFatura = impData?.total_fatura !== undefined && impData?.total_fatura !== null
         ? Number(impData.total_fatura)
-        : (totalLancamentos + Number(impData?.ajustes_fatura || 0));
+        : (totalLancamentos + Number(rawImp?.ajustes_fatura || 0));
 
-      const ajustesFatura = impData?.ajustes_fatura !== undefined && impData?.ajustes_fatura !== null
-        ? Number(impData.ajustes_fatura)
+      const ajustesFatura = rawImp?.ajustes_fatura !== undefined && rawImp?.ajustes_fatura !== null
+        ? Number(rawImp.ajustes_fatura)
         : 0;
 
       return {
         transacoes: listaTransacoes,
-        importacao: impData as FaturaImportacaoInfo | null,
+        importacao: impData as unknown as FaturaImportacaoInfo | null,
         totalLancamentos,
         totalFatura,
         ajustesFatura,

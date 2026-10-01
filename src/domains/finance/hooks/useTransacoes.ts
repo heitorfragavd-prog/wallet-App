@@ -20,6 +20,8 @@ export interface Transacao {
   updated_at: string;
   metodo_pagamento?: string;
   conta_id?: string;
+  observacoes?: string;
+  tags?: Array<{ id: string; nome: string; cor?: string } | string>;
   categorias?: {
     nome: string;
     cor: string;

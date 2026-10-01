@@ -14,6 +14,2540 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_token_reservations: {
+        Row: {
+          action: string
+          actual_tokens: number | null
+          bucket_key: string
+          created_at: string
+          outcome: string | null
+          reconciled_at: string | null
+          reservation_id: string | null
+          reserved_tokens: number
+          status: string
+          user_id: string
+          window_start: string
+          workspace_id: string | null
+        }
+        Insert: {
+          action: string
+          actual_tokens?: number | null
+          bucket_key: string
+          created_at?: string
+          outcome?: string | null
+          reconciled_at?: string | null
+          reservation_id?: string | null
+          reserved_tokens: number
+          status: string
+          user_id: string
+          window_start: string
+          workspace_id?: string | null
+        }
+        Update: {
+          action?: string
+          actual_tokens?: number | null
+          bucket_key?: string
+          created_at?: string
+          outcome?: string | null
+          reconciled_at?: string | null
+          reservation_id?: string | null
+          reserved_tokens?: number
+          status?: string
+          user_id?: string
+          window_start?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      alertas_preco_pendentes: {
+        Row: {
+          created_at: string | null
+          custo_anterior: number | null
+          custo_novo: number | null
+          data_criacao: string | null
+          data_resolucao: string | null
+          id: string | null
+          lembretes_enviados: number | null
+          margem_real_percentual: number | null
+          nf_id: string | null
+          preco_definido_usuario: number | null
+          preco_sugerido: number | null
+          preco_venda_atual: number | null
+          produto_codigo: string | null
+          produto_descricao: string | null
+          produto_eyemobile_id: string
+          status: string | null
+          ultimo_lembrete: string | null
+          updated_at: string | null
+          user_id: string | null
+          variacao_custo_percentual: number | null
+          workspace_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          custo_anterior?: number | null
+          custo_novo?: number | null
+          data_criacao?: string | null
+          data_resolucao?: string | null
+          id?: string | null
+          lembretes_enviados?: number | null
+          margem_real_percentual?: number | null
+          nf_id?: string | null
+          preco_definido_usuario?: number | null
+          preco_sugerido?: number | null
+          preco_venda_atual?: number | null
+          produto_codigo?: string | null
+          produto_descricao?: string | null
+          produto_eyemobile_id: string
+          status?: string | null
+          ultimo_lembrete?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+          variacao_custo_percentual?: number | null
+          workspace_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          custo_anterior?: number | null
+          custo_novo?: number | null
+          data_criacao?: string | null
+          data_resolucao?: string | null
+          id?: string | null
+          lembretes_enviados?: number | null
+          margem_real_percentual?: number | null
+          nf_id?: string | null
+          preco_definido_usuario?: number | null
+          preco_sugerido?: number | null
+          preco_venda_atual?: number | null
+          produto_codigo?: string | null
+          produto_descricao?: string | null
+          produto_eyemobile_id?: string
+          status?: string | null
+          ultimo_lembrete?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+          variacao_custo_percentual?: number | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      audio_transcricoes: {
+        Row: {
+          chat_id: number | null
+          comando_detectado: string | null
+          created_at: string | null
+          duracao_segundos: number | null
+          file_id: string | null
+          id: string | null
+          sucesso: boolean | null
+          transcricao: string | null
+          user_id: string | null
+        }
+        Insert: {
+          chat_id?: number | null
+          comando_detectado?: string | null
+          created_at?: string | null
+          duracao_segundos?: number | null
+          file_id?: string | null
+          id?: string | null
+          sucesso?: boolean | null
+          transcricao?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          chat_id?: number | null
+          comando_detectado?: string | null
+          created_at?: string | null
+          duracao_segundos?: number | null
+          file_id?: string | null
+          id?: string | null
+          sucesso?: boolean | null
+          transcricao?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      centros_custo: {
+        Row: {
+          ativo: boolean | null
+          created_at: string | null
+          descricao: string | null
+          id: string | null
+          nome: string
+          orcamento_mensal: number | null
+          responsavel: string | null
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          ativo?: boolean | null
+          created_at?: string | null
+          descricao?: string | null
+          id?: string | null
+          nome: string
+          orcamento_mensal?: number | null
+          responsavel?: string | null
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          ativo?: boolean | null
+          created_at?: string | null
+          descricao?: string | null
+          id?: string | null
+          nome?: string
+          orcamento_mensal?: number | null
+          responsavel?: string | null
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      channel_mappings: {
+        Row: {
+          access_level: string
+          channel_config: Json
+          channel_id: string
+          channel_type: string
+          created_at: string
+          id: string | null
+          is_active: boolean
+          nome_exibicao: string | null
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          access_level: string
+          channel_config: Json
+          channel_id: string
+          channel_type: string
+          created_at?: string
+          id?: string | null
+          is_active: boolean
+          nome_exibicao?: string | null
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          access_level?: string
+          channel_config?: Json
+          channel_id?: string
+          channel_type?: string
+          created_at?: string
+          id?: string | null
+          is_active?: boolean
+          nome_exibicao?: string | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_acerto_itens: {
+        Row: {
+          acerto_id: string
+          categoria_id: string | null
+          created_at: string
+          descricao: string
+          escala_id: string | null
+          id: string | null
+          natureza: string
+          valor: number
+          workspace_id: string
+        }
+        Insert: {
+          acerto_id: string
+          categoria_id?: string | null
+          created_at?: string
+          descricao: string
+          escala_id?: string | null
+          id?: string | null
+          natureza: string
+          valor: number
+          workspace_id: string
+        }
+        Update: {
+          acerto_id?: string
+          categoria_id?: string | null
+          created_at?: string
+          descricao?: string
+          escala_id?: string | null
+          id?: string | null
+          natureza?: string
+          valor?: number
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_acertos: {
+        Row: {
+          colaborador_id: string
+          created_at: string
+          despesa_id: string | null
+          id: string | null
+          periodo_fim: string
+          periodo_inicio: string
+          pix_chave_snapshot: string | null
+          status: string
+          tipo: string
+          updated_at: string
+          valor_total: number
+          vencimento: string
+          workspace_id: string
+        }
+        Insert: {
+          colaborador_id: string
+          created_at?: string
+          despesa_id?: string | null
+          id?: string | null
+          periodo_fim: string
+          periodo_inicio: string
+          pix_chave_snapshot?: string | null
+          status: string
+          tipo: string
+          updated_at?: string
+          valor_total: number
+          vencimento: string
+          workspace_id: string
+        }
+        Update: {
+          colaborador_id?: string
+          created_at?: string
+          despesa_id?: string | null
+          id?: string | null
+          periodo_fim?: string
+          periodo_inicio?: string
+          pix_chave_snapshot?: string | null
+          status?: string
+          tipo?: string
+          updated_at?: string
+          valor_total?: number
+          vencimento?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_ajustes: {
+        Row: {
+          acerto_origem_id: string | null
+          aplicado_em_acerto_id: string | null
+          colaborador_id: string
+          created_at: string
+          id: string | null
+          motivo: string
+          updated_at: string
+          valor: number
+          workspace_id: string
+        }
+        Insert: {
+          acerto_origem_id?: string | null
+          aplicado_em_acerto_id?: string | null
+          colaborador_id: string
+          created_at?: string
+          id?: string | null
+          motivo: string
+          updated_at?: string
+          valor: number
+          workspace_id: string
+        }
+        Update: {
+          acerto_origem_id?: string | null
+          aplicado_em_acerto_id?: string | null
+          colaborador_id?: string
+          created_at?: string
+          id?: string | null
+          motivo?: string
+          updated_at?: string
+          valor?: number
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_custos: {
+        Row: {
+          colaborador_id: string
+          created_at: string | null
+          data: string
+          descricao: string | null
+          id: string | null
+          lancado_na_despesa: boolean | null
+          tipo: string
+          valor: number
+          workspace_id: string | null
+        }
+        Insert: {
+          colaborador_id: string
+          created_at?: string | null
+          data: string
+          descricao?: string | null
+          id?: string | null
+          lancado_na_despesa?: boolean | null
+          tipo: string
+          valor: number
+          workspace_id?: string | null
+        }
+        Update: {
+          colaborador_id?: string
+          created_at?: string | null
+          data?: string
+          descricao?: string | null
+          id?: string | null
+          lancado_na_despesa?: boolean | null
+          tipo?: string
+          valor?: number
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      colaborador_escalas: {
+        Row: {
+          bateu_meta: boolean | null
+          colaborador_id: string
+          created_at: string | null
+          data: string
+          id: string | null
+          observacao: string | null
+          turno: string | null
+          valor_diaria: number
+          valor_meta: number | null
+          valor_total: number
+          workspace_id: string
+        }
+        Insert: {
+          bateu_meta?: boolean | null
+          colaborador_id: string
+          created_at?: string | null
+          data: string
+          id?: string | null
+          observacao?: string | null
+          turno?: string | null
+          valor_diaria: number
+          valor_meta?: number | null
+          valor_total: number
+          workspace_id: string
+        }
+        Update: {
+          bateu_meta?: boolean | null
+          colaborador_id?: string
+          created_at?: string | null
+          data?: string
+          id?: string | null
+          observacao?: string | null
+          turno?: string | null
+          valor_diaria?: number
+          valor_meta?: number | null
+          valor_total?: number
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_pagamentos: {
+        Row: {
+          acerto_id: string
+          comprovante_url: string | null
+          created_at: string
+          divipay_external_id: string | null
+          erro_codigo: string | null
+          id: string | null
+          idempotency_key: string
+          origem: string
+          paid_at: string | null
+          status: string
+          taxa: number
+          updated_at: string
+          valor: number
+          workspace_id: string
+        }
+        Insert: {
+          acerto_id: string
+          comprovante_url?: string | null
+          created_at?: string
+          divipay_external_id?: string | null
+          erro_codigo?: string | null
+          id?: string | null
+          idempotency_key: string
+          origem: string
+          paid_at?: string | null
+          status: string
+          taxa: number
+          updated_at?: string
+          valor: number
+          workspace_id: string
+        }
+        Update: {
+          acerto_id?: string
+          comprovante_url?: string | null
+          created_at?: string
+          divipay_external_id?: string | null
+          erro_codigo?: string | null
+          id?: string | null
+          idempotency_key?: string
+          origem?: string
+          paid_at?: string | null
+          status?: string
+          taxa?: number
+          updated_at?: string
+          valor?: number
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      colaborador_presencas: {
+        Row: {
+          atraso_minutos: number | null
+          colaborador_id: string
+          data: string
+          horas_trabalhadas: number | null
+          id: string | null
+          justificativa: string | null
+          presente: boolean | null
+        }
+        Insert: {
+          atraso_minutos?: number | null
+          colaborador_id: string
+          data: string
+          horas_trabalhadas?: number | null
+          id?: string | null
+          justificativa?: string | null
+          presente?: boolean | null
+        }
+        Update: {
+          atraso_minutos?: number | null
+          colaborador_id?: string
+          data?: string
+          horas_trabalhadas?: number | null
+          id?: string | null
+          justificativa?: string | null
+          presente?: boolean | null
+        }
+        Relationships: []
+      }
+      colaboradores: {
+        Row: {
+          carga_horaria_semanal: number | null
+          cargo: string | null
+          contato_emergencia_1: string | null
+          cpf: string | null
+          created_at: string | null
+          data_admissao: string | null
+          data_demissao: string | null
+          dias_experiencia: number | null
+          foto_url: string | null
+          id: string | null
+          nome: string
+          outros_beneficios: number | null
+          salario_bruto: number | null
+          status: string | null
+          tipo: string
+          updated_at: string | null
+          user_id: string | null
+          vale_refeicao: number | null
+          vale_transporte: number | null
+          vale_transporte_diario: number | null
+          workspace_id: string
+        }
+        Insert: {
+          carga_horaria_semanal?: number | null
+          cargo?: string | null
+          contato_emergencia_1?: string | null
+          cpf?: string | null
+          created_at?: string | null
+          data_admissao?: string | null
+          data_demissao?: string | null
+          dias_experiencia?: number | null
+          foto_url?: string | null
+          id?: string | null
+          nome: string
+          outros_beneficios?: number | null
+          salario_bruto?: number | null
+          status?: string | null
+          tipo: string
+          updated_at?: string | null
+          user_id?: string | null
+          vale_refeicao?: number | null
+          vale_transporte?: number | null
+          vale_transporte_diario?: number | null
+          workspace_id: string
+        }
+        Update: {
+          carga_horaria_semanal?: number | null
+          cargo?: string | null
+          contato_emergencia_1?: string | null
+          cpf?: string | null
+          created_at?: string | null
+          data_admissao?: string | null
+          data_demissao?: string | null
+          dias_experiencia?: number | null
+          foto_url?: string | null
+          id?: string | null
+          nome?: string
+          outros_beneficios?: number | null
+          salario_bruto?: number | null
+          status?: string | null
+          tipo?: string
+          updated_at?: string | null
+          user_id?: string | null
+          vale_refeicao?: number | null
+          vale_transporte?: number | null
+          vale_transporte_diario?: number | null
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      compromissos: {
+        Row: {
+          created_at: string | null
+          data: string
+          hora: string | null
+          id: string | null
+          lembrete: boolean | null
+          local: string | null
+          repetir: string | null
+          titulo: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          data: string
+          hora?: string | null
+          id?: string | null
+          lembrete?: boolean | null
+          local?: string | null
+          repetir?: string | null
+          titulo: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          data?: string
+          hora?: string | null
+          id?: string | null
+          lembrete?: boolean | null
+          local?: string | null
+          repetir?: string | null
+          titulo?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      configuracoes_investimentos: {
+        Row: {
+          alerta_desbalanceamento: number | null
+          created_at: string | null
+          id: string | null
+          mostrar_liquido_ir: boolean | null
+          mostrar_real_ipca: boolean | null
+          sweep_caixa_minimo: number | null
+          taxa_ipca_anual: number | null
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          alerta_desbalanceamento?: number | null
+          created_at?: string | null
+          id?: string | null
+          mostrar_liquido_ir?: boolean | null
+          mostrar_real_ipca?: boolean | null
+          sweep_caixa_minimo?: number | null
+          taxa_ipca_anual?: number | null
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          alerta_desbalanceamento?: number | null
+          created_at?: string | null
+          id?: string | null
+          mostrar_liquido_ir?: boolean | null
+          mostrar_real_ipca?: boolean | null
+          sweep_caixa_minimo?: number | null
+          taxa_ipca_anual?: number | null
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      contatos: {
+        Row: {
+          cnpj_cpf: string | null
+          contato_nome: string | null
+          created_at: string | null
+          email: string | null
+          endereco: string | null
+          id: string | null
+          nome: string
+          observacoes: string | null
+          prazo_pagamento_dias: number | null
+          telefone: string | null
+          tipo: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          cnpj_cpf?: string | null
+          contato_nome?: string | null
+          created_at?: string | null
+          email?: string | null
+          endereco?: string | null
+          id?: string | null
+          nome: string
+          observacoes?: string | null
+          prazo_pagamento_dias?: number | null
+          telefone?: string | null
+          tipo: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          cnpj_cpf?: string | null
+          contato_nome?: string | null
+          created_at?: string | null
+          email?: string | null
+          endereco?: string | null
+          id?: string | null
+          nome?: string
+          observacoes?: string | null
+          prazo_pagamento_dias?: number | null
+          telefone?: string | null
+          tipo?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      cotacoes_diarias: {
+        Row: {
+          codigo: string
+          created_at: string | null
+          data: string
+          fonte: string | null
+          id: string | null
+          preco: number
+          tipo: string
+        }
+        Insert: {
+          codigo: string
+          created_at?: string | null
+          data: string
+          fonte?: string | null
+          id?: string | null
+          preco: number
+          tipo: string
+        }
+        Update: {
+          codigo?: string
+          created_at?: string | null
+          data?: string
+          fonte?: string | null
+          id?: string | null
+          preco?: number
+          tipo?: string
+        }
+        Relationships: []
+      }
+      depositos_investimentos: {
+        Row: {
+          comprovante_url: string | null
+          created_at: string | null
+          data: string
+          id: string | null
+          investimento_id: string
+          observacoes: string | null
+          preco_unitario: number | null
+          quantidade: number | null
+          user_id: string
+          valor: number
+          workspace_id: string | null
+        }
+        Insert: {
+          comprovante_url?: string | null
+          created_at?: string | null
+          data: string
+          id?: string | null
+          investimento_id: string
+          observacoes?: string | null
+          preco_unitario?: number | null
+          quantidade?: number | null
+          user_id: string
+          valor: number
+          workspace_id?: string | null
+        }
+        Update: {
+          comprovante_url?: string | null
+          created_at?: string | null
+          data?: string
+          id?: string | null
+          investimento_id?: string
+          observacoes?: string | null
+          preco_unitario?: number | null
+          quantidade?: number | null
+          user_id?: string
+          valor?: number
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      documento_sessoes: {
+        Row: {
+          chave_acesso: string | null
+          conversation_id: string | null
+          created_at: string
+          dados_sessao: Json
+          documento_tipo: string
+          fornecedor: string | null
+          id: string | null
+          numero_nf: string | null
+          paginas_recebidas: number
+          status: string
+          total_paginas: number
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          chave_acesso?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          dados_sessao: Json
+          documento_tipo: string
+          fornecedor?: string | null
+          id?: string | null
+          numero_nf?: string | null
+          paginas_recebidas: number
+          status: string
+          total_paginas: number
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          chave_acesso?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          dados_sessao?: Json
+          documento_tipo?: string
+          fornecedor?: string | null
+          id?: string | null
+          numero_nf?: string | null
+          paginas_recebidas?: number
+          status?: string
+          total_paginas?: number
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      equipe_feriados: {
+        Row: {
+          created_at: string
+          data: string
+          id: string | null
+          nome: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          data: string
+          id?: string | null
+          nome: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          data?: string
+          id?: string | null
+          nome?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      eyemobile_cache: {
+        Row: {
+          created_at: string | null
+          data: Json
+          key: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          data: Json
+          key?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          data?: Json
+          key?: string | null
+        }
+        Relationships: []
+      }
+      eyemobile_config: {
+        Row: {
+          last_synced_offset: number | null
+          access_key: string
+          auto_sync_sales: boolean
+          auto_sync_stock: boolean
+          created_at: string
+          default_categoria_receita_id: string | null
+          default_categoria_taxa_id: string | null
+          default_conta_id: string | null
+          environment: string
+          id: string | null
+          secret_key: string
+          store_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          last_synced_offset?: number | null
+          access_key: string
+          auto_sync_sales: boolean
+          auto_sync_stock: boolean
+          created_at?: string
+          default_categoria_receita_id?: string | null
+          default_categoria_taxa_id?: string | null
+          default_conta_id?: string | null
+          environment: string
+          id?: string | null
+          secret_key: string
+          store_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          last_synced_offset?: number | null
+          access_key?: string
+          auto_sync_sales?: boolean
+          auto_sync_stock?: boolean
+          created_at?: string
+          default_categoria_receita_id?: string | null
+          default_categoria_taxa_id?: string | null
+          default_conta_id?: string | null
+          environment?: string
+          id?: string | null
+          secret_key?: string
+          store_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      eyemobile_sync_logs: {
+        Row: {
+          created_at: string
+          error_message: string | null
+          id: string | null
+          items_processed: number
+          payload: Json | null
+          status: string
+          type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          error_message?: string | null
+          id?: string | null
+          items_processed: number
+          payload?: Json | null
+          status: string
+          type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          error_message?: string | null
+          id?: string | null
+          items_processed?: number
+          payload?: Json | null
+          status?: string
+          type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      fatura_cartao_importacoes: {
+        Row: {
+          conta_id: string
+          created_at: string | null
+          hash_transacoes: string
+          id: string | null
+          mes_referencia: string
+          total_fatura: number | null
+          transacoes_criadas: number | null
+          user_id: string
+          vencimento: string | null
+          workspace_id: string | null
+        }
+        Insert: {
+          conta_id: string
+          created_at?: string | null
+          hash_transacoes: string
+          id?: string | null
+          mes_referencia: string
+          total_fatura?: number | null
+          transacoes_criadas?: number | null
+          user_id: string
+          vencimento?: string | null
+          workspace_id?: string | null
+        }
+        Update: {
+          conta_id?: string
+          created_at?: string | null
+          hash_transacoes?: string
+          id?: string | null
+          mes_referencia?: string
+          total_fatura?: number | null
+          transacoes_criadas?: number | null
+          user_id?: string
+          vencimento?: string | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      faturas_cartao: {
+        Row: {
+          ano_fatura: number
+          cartao_id: string
+          created_at: string | null
+          data_fechamento: string
+          data_inicio: string
+          data_vencimento: string
+          divida_id: string | null
+          id: string | null
+          mes_fatura: number
+          status: string
+          updated_at: string | null
+          user_id: string
+          valor_pago: number
+          valor_total: number
+          workspace_id: string | null
+        }
+        Insert: {
+          ano_fatura: number
+          cartao_id: string
+          created_at?: string | null
+          data_fechamento: string
+          data_inicio: string
+          data_vencimento: string
+          divida_id?: string | null
+          id?: string | null
+          mes_fatura: number
+          status: string
+          updated_at?: string | null
+          user_id: string
+          valor_pago: number
+          valor_total: number
+          workspace_id?: string | null
+        }
+        Update: {
+          ano_fatura?: number
+          cartao_id?: string
+          created_at?: string | null
+          data_fechamento?: string
+          data_inicio?: string
+          data_vencimento?: string
+          divida_id?: string | null
+          id?: string | null
+          mes_fatura?: number
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+          valor_pago?: number
+          valor_total?: number
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      fichas_tecnicas: {
+        Row: {
+          created_at: string
+          custo_unitario: number
+          id: string | null
+          insumo_id: string | null
+          insumo_nome: string
+          produto_id: string
+          quantidade: number
+          unidade_medida: string
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          custo_unitario: number
+          id?: string | null
+          insumo_id?: string | null
+          insumo_nome: string
+          produto_id: string
+          quantidade: number
+          unidade_medida: string
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          custo_unitario?: number
+          id?: string | null
+          insumo_id?: string | null
+          insumo_nome?: string
+          produto_id?: string
+          quantidade?: number
+          unidade_medida?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      fornecedores: {
+        Row: {
+          cnpj: string | null
+          contato_nome: string | null
+          created_at: string
+          email: string | null
+          id: string | null
+          nome: string
+          prazo_pagamento_dias: number | null
+          telefone: string | null
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          cnpj?: string | null
+          contato_nome?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string | null
+          nome: string
+          prazo_pagamento_dias?: number | null
+          telefone?: string | null
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          cnpj?: string | null
+          contato_nome?: string | null
+          created_at?: string
+          email?: string | null
+          id?: string | null
+          nome?: string
+          prazo_pagamento_dias?: number | null
+          telefone?: string | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      historico_custo_produto: {
+        Row: {
+          alerta_enviado: boolean | null
+          created_at: string | null
+          custo_unitario: number | null
+          data_compra: string | null
+          fornecedor: string | null
+          id: string | null
+          markup_aplicado: number | null
+          nf_id: string | null
+          produto_codigo: string | null
+          produto_descricao: string | null
+          produto_eyemobile_uuid: string | null
+          quantidade: number | null
+          sugestao_preco_venda: number | null
+          user_id: string | null
+          variacao_percentual: number | null
+          workspace_id: string | null
+        }
+        Insert: {
+          alerta_enviado?: boolean | null
+          created_at?: string | null
+          custo_unitario?: number | null
+          data_compra?: string | null
+          fornecedor?: string | null
+          id?: string | null
+          markup_aplicado?: number | null
+          nf_id?: string | null
+          produto_codigo?: string | null
+          produto_descricao?: string | null
+          produto_eyemobile_uuid?: string | null
+          quantidade?: number | null
+          sugestao_preco_venda?: number | null
+          user_id?: string | null
+          variacao_percentual?: number | null
+          workspace_id?: string | null
+        }
+        Update: {
+          alerta_enviado?: boolean | null
+          created_at?: string | null
+          custo_unitario?: number | null
+          data_compra?: string | null
+          fornecedor?: string | null
+          id?: string | null
+          markup_aplicado?: number | null
+          nf_id?: string | null
+          produto_codigo?: string | null
+          produto_descricao?: string | null
+          produto_eyemobile_uuid?: string | null
+          quantidade?: number | null
+          sugestao_preco_venda?: number | null
+          user_id?: string | null
+          variacao_percentual?: number | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      historico_rendimentos: {
+        Row: {
+          ano: number
+          id: string | null
+          investimento_id: string
+          mes: number
+          rendimento_mes: number
+          user_id: string
+          valor_final: number
+          valor_inicial: number
+        }
+        Insert: {
+          ano: number
+          id?: string | null
+          investimento_id: string
+          mes: number
+          rendimento_mes: number
+          user_id: string
+          valor_final: number
+          valor_inicial: number
+        }
+        Update: {
+          ano?: number
+          id?: string | null
+          investimento_id?: string
+          mes?: number
+          rendimento_mes?: number
+          user_id?: string
+          valor_final?: number
+          valor_inicial?: number
+        }
+        Relationships: []
+      }
+      ia_leitura_erros: {
+        Row: {
+          campos_suspeitos: string | null
+          channel_type: string | null
+          created_at: string
+          id: string | null
+          motivo: string
+          raw_analysis: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          campos_suspeitos?: string | null
+          channel_type?: string | null
+          created_at?: string
+          id?: string | null
+          motivo: string
+          raw_analysis?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          campos_suspeitos?: string | null
+          channel_type?: string | null
+          created_at?: string
+          id?: string | null
+          motivo?: string
+          raw_analysis?: Json | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      investimentos: {
+        Row: {
+          ativo: boolean | null
+          cnpj_instituicao: string | null
+          codigo_b3: string | null
+          conta_id: string | null
+          created_at: string | null
+          data_inicio: string
+          data_vencimento: string | null
+          id: string | null
+          instituicao: string | null
+          meta_id: string | null
+          nome: string
+          taxa_referencia: string | null
+          taxa_rendimento_anual: number
+          tipo: string
+          updated_at: string | null
+          user_id: string
+          valor_atual: number
+          valor_investido: number
+          workspace_id: string | null
+        }
+        Insert: {
+          ativo?: boolean | null
+          cnpj_instituicao?: string | null
+          codigo_b3?: string | null
+          conta_id?: string | null
+          created_at?: string | null
+          data_inicio: string
+          data_vencimento?: string | null
+          id?: string | null
+          instituicao?: string | null
+          meta_id?: string | null
+          nome: string
+          taxa_referencia?: string | null
+          taxa_rendimento_anual: number
+          tipo: string
+          updated_at?: string | null
+          user_id: string
+          valor_atual: number
+          valor_investido: number
+          workspace_id?: string | null
+        }
+        Update: {
+          ativo?: boolean | null
+          cnpj_instituicao?: string | null
+          codigo_b3?: string | null
+          conta_id?: string | null
+          created_at?: string | null
+          data_inicio?: string
+          data_vencimento?: string | null
+          id?: string | null
+          instituicao?: string | null
+          meta_id?: string | null
+          nome?: string
+          taxa_referencia?: string | null
+          taxa_rendimento_anual?: number
+          tipo?: string
+          updated_at?: string | null
+          user_id?: string
+          valor_atual?: number
+          valor_investido?: number
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      investimentos_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          session_id: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          session_id?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          session_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      lembretes: {
+        Row: {
+          created_at: string
+          data: string
+          descricao: string
+          hora: string
+          id: string | null
+          notificado_em: string | null
+          notificar_navegador: boolean
+          notificar_telegram: boolean
+          notificar_whatsapp: boolean
+          origem_id: string | null
+          origem_tabela: string | null
+          status: string
+          tipo: string
+          titulo: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          data: string
+          descricao: string
+          hora: string
+          id?: string | null
+          notificado_em?: string | null
+          notificar_navegador: boolean
+          notificar_telegram: boolean
+          notificar_whatsapp: boolean
+          origem_id?: string | null
+          origem_tabela?: string | null
+          status: string
+          tipo: string
+          titulo: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          data?: string
+          descricao?: string
+          hora?: string
+          id?: string | null
+          notificado_em?: string | null
+          notificar_navegador?: boolean
+          notificar_telegram?: boolean
+          notificar_whatsapp?: boolean
+          origem_id?: string | null
+          origem_tabela?: string | null
+          status?: string
+          tipo?: string
+          titulo?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      metas_investimento: {
+        Row: {
+          alocacao_fixa: number | null
+          alocacao_variavel: number | null
+          ativo: boolean | null
+          created_at: string | null
+          data_objetivo: string | null
+          descricao: string | null
+          id: string | null
+          imagem_url: string | null
+          nome: string
+          tipo: string
+          user_id: string
+          valor_atual: number
+          valor_meta: number
+          workspace_id: string | null
+        }
+        Insert: {
+          alocacao_fixa?: number | null
+          alocacao_variavel?: number | null
+          ativo?: boolean | null
+          created_at?: string | null
+          data_objetivo?: string | null
+          descricao?: string | null
+          id?: string | null
+          imagem_url?: string | null
+          nome: string
+          tipo: string
+          user_id: string
+          valor_atual: number
+          valor_meta: number
+          workspace_id?: string | null
+        }
+        Update: {
+          alocacao_fixa?: number | null
+          alocacao_variavel?: number | null
+          ativo?: boolean | null
+          created_at?: string | null
+          data_objetivo?: string | null
+          descricao?: string | null
+          id?: string | null
+          imagem_url?: string | null
+          nome?: string
+          tipo?: string
+          user_id?: string
+          valor_atual?: number
+          valor_meta?: number
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      nf_itens: {
+        Row: {
+          cfop: string | null
+          codigo_produto: string | null
+          cofins_aliquota: number | null
+          created_at: string | null
+          custo_unitario_liquido: number | null
+          descricao: string | null
+          icms_aliquota: number | null
+          id: string | null
+          ipi_aliquota: number | null
+          ncm: string | null
+          nf_id: string | null
+          pis_aliquota: number | null
+          produto_eyemobile_id: string | null
+          quantidade: number | null
+          status_estoque: string | null
+          unidade: string | null
+          valor_total: number | null
+          valor_unitario: number | null
+        }
+        Insert: {
+          cfop?: string | null
+          codigo_produto?: string | null
+          cofins_aliquota?: number | null
+          created_at?: string | null
+          custo_unitario_liquido?: number | null
+          descricao?: string | null
+          icms_aliquota?: number | null
+          id?: string | null
+          ipi_aliquota?: number | null
+          ncm?: string | null
+          nf_id?: string | null
+          pis_aliquota?: number | null
+          produto_eyemobile_id?: string | null
+          quantidade?: number | null
+          status_estoque?: string | null
+          unidade?: string | null
+          valor_total?: number | null
+          valor_unitario?: number | null
+        }
+        Update: {
+          cfop?: string | null
+          codigo_produto?: string | null
+          cofins_aliquota?: number | null
+          created_at?: string | null
+          custo_unitario_liquido?: number | null
+          descricao?: string | null
+          icms_aliquota?: number | null
+          id?: string | null
+          ipi_aliquota?: number | null
+          ncm?: string | null
+          nf_id?: string | null
+          pis_aliquota?: number | null
+          produto_eyemobile_id?: string | null
+          quantidade?: number | null
+          status_estoque?: string | null
+          unidade?: string | null
+          valor_total?: number | null
+          valor_unitario?: number | null
+        }
+        Relationships: []
+      }
+      notas_fiscais_compra: {
+        Row: {
+          chat_id: number | null
+          chave_acesso: string | null
+          cnpj_fornecedor: string | null
+          created_at: string | null
+          data_emissao: string | null
+          data_entrada: string | null
+          fornecedor: string | null
+          id: string | null
+          imagem_base64: string | null
+          numero_nf: string | null
+          origem: string | null
+          serie_nf: string | null
+          status: string | null
+          user_id: string | null
+          valor_frete: number | null
+          valor_icms: number | null
+          valor_ipi: number | null
+          valor_produtos: number | null
+          valor_total: number | null
+          workspace_id: string | null
+        }
+        Insert: {
+          chat_id?: number | null
+          chave_acesso?: string | null
+          cnpj_fornecedor?: string | null
+          created_at?: string | null
+          data_emissao?: string | null
+          data_entrada?: string | null
+          fornecedor?: string | null
+          id?: string | null
+          imagem_base64?: string | null
+          numero_nf?: string | null
+          origem?: string | null
+          serie_nf?: string | null
+          status?: string | null
+          user_id?: string | null
+          valor_frete?: number | null
+          valor_icms?: number | null
+          valor_ipi?: number | null
+          valor_produtos?: number | null
+          valor_total?: number | null
+          workspace_id?: string | null
+        }
+        Update: {
+          chat_id?: number | null
+          chave_acesso?: string | null
+          cnpj_fornecedor?: string | null
+          created_at?: string | null
+          data_emissao?: string | null
+          data_entrada?: string | null
+          fornecedor?: string | null
+          id?: string | null
+          imagem_base64?: string | null
+          numero_nf?: string | null
+          origem?: string | null
+          serie_nf?: string | null
+          status?: string | null
+          user_id?: string | null
+          valor_frete?: number | null
+          valor_icms?: number | null
+          valor_ipi?: number | null
+          valor_produtos?: number | null
+          valor_total?: number | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      notificacoes_log: {
+        Row: {
+          created_at: string | null
+          enviado: boolean | null
+          erro: string | null
+          id: string | null
+          mensagem: string
+          tipo: string
+          titulo: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          enviado?: boolean | null
+          erro?: string | null
+          id?: string | null
+          mensagem: string
+          tipo: string
+          titulo: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          enviado?: boolean | null
+          erro?: string | null
+          id?: string | null
+          mensagem?: string
+          tipo?: string
+          titulo?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      orcamento_configuracoes: {
+        Row: {
+          created_at: string | null
+          id: string | null
+          temas: Json
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string | null
+          temas: Json
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string | null
+          temas?: Json
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      orcamentos_categorias: {
+        Row: {
+          categoria_id: string
+          created_at: string | null
+          id: string | null
+          mes_referencia: string
+          updated_at: string | null
+          user_id: string
+          valor_limite: number
+        }
+        Insert: {
+          categoria_id: string
+          created_at?: string | null
+          id?: string | null
+          mes_referencia: string
+          updated_at?: string | null
+          user_id: string
+          valor_limite: number
+        }
+        Update: {
+          categoria_id?: string
+          created_at?: string | null
+          id?: string | null
+          mes_referencia?: string
+          updated_at?: string | null
+          user_id?: string
+          valor_limite?: number
+        }
+        Relationships: []
+      }
+      pluggy_items: {
+        Row: {
+          client_user_id: string | null
+          connector_id: number | null
+          connector_name: string | null
+          created_at: string
+          id: string | null
+          item_id: string
+          status: string | null
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          client_user_id?: string | null
+          connector_id?: number | null
+          connector_name?: string | null
+          created_at?: string
+          id?: string | null
+          item_id: string
+          status?: string | null
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          client_user_id?: string | null
+          connector_id?: number | null
+          connector_name?: string | null
+          created_at?: string
+          id?: string | null
+          item_id?: string
+          status?: string | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      produto_equivalencias: {
+        Row: {
+          cnpj_fornecedor_normalizado: string
+          codigo_produto_fornecedor: string
+          confirmado_por_usuario: boolean
+          created_at: string
+          descricao_fornecedor: string | null
+          fator_conversao: number
+          fornecedor_nome: string | null
+          id: string | null
+          on: any | null
+          origem_matching: string
+          produto_eyemobile_uuid: string
+          references: any | null
+          unidade_fornecedor: string | null
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          cnpj_fornecedor_normalizado: string
+          codigo_produto_fornecedor: string
+          confirmado_por_usuario: boolean
+          created_at?: string
+          descricao_fornecedor?: string | null
+          fator_conversao: number
+          fornecedor_nome?: string | null
+          id?: string | null
+          on?: any | null
+          origem_matching: string
+          produto_eyemobile_uuid: string
+          references?: any | null
+          unidade_fornecedor?: string | null
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          cnpj_fornecedor_normalizado?: string
+          codigo_produto_fornecedor?: string
+          confirmado_por_usuario?: boolean
+          created_at?: string
+          descricao_fornecedor?: string | null
+          fator_conversao?: number
+          fornecedor_nome?: string | null
+          id?: string | null
+          on?: any | null
+          origem_matching?: string
+          produto_eyemobile_uuid?: string
+          references?: any | null
+          unidade_fornecedor?: string | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      produtos_cardapio: {
+        Row: {
+          ativo: boolean
+          categoria: string
+          created_at: string
+          descricao: string | null
+          eyemobile_product_id: string | null
+          id: string | null
+          imagem_url: string | null
+          nome: string
+          preco_venda: number
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          ativo: boolean
+          categoria: string
+          created_at?: string
+          descricao?: string | null
+          eyemobile_product_id?: string | null
+          id?: string | null
+          imagem_url?: string | null
+          nome: string
+          preco_venda: number
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          ativo?: boolean
+          categoria?: string
+          created_at?: string
+          descricao?: string | null
+          eyemobile_product_id?: string | null
+          id?: string | null
+          imagem_url?: string | null
+          nome?: string
+          preco_venda?: number
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      produtos_eyemobile: {
+        Row: {
+          alerta_aumento_10pct: boolean | null
+          ativo: boolean | null
+          categoria: string | null
+          codigo: string | null
+          created_at: string | null
+          custo_atual: number | null
+          descricao: string | null
+          estoque_atual: number | null
+          eyemobile_id: string | null
+          id: string | null
+          margem_real_percentual: number | null
+          markup_padrao: number | null
+          preco_venda: number | null
+          ultima_atualizacao_custo: string | null
+          user_id: string | null
+          workspace_id: string | null
+        }
+        Insert: {
+          alerta_aumento_10pct?: boolean | null
+          ativo?: boolean | null
+          categoria?: string | null
+          codigo?: string | null
+          created_at?: string | null
+          custo_atual?: number | null
+          descricao?: string | null
+          estoque_atual?: number | null
+          eyemobile_id?: string | null
+          id?: string | null
+          margem_real_percentual?: number | null
+          markup_padrao?: number | null
+          preco_venda?: number | null
+          ultima_atualizacao_custo?: string | null
+          user_id?: string | null
+          workspace_id?: string | null
+        }
+        Update: {
+          alerta_aumento_10pct?: boolean | null
+          ativo?: boolean | null
+          categoria?: string | null
+          codigo?: string | null
+          created_at?: string | null
+          custo_atual?: number | null
+          descricao?: string | null
+          estoque_atual?: number | null
+          eyemobile_id?: string | null
+          id?: string | null
+          margem_real_percentual?: number | null
+          markup_padrao?: number | null
+          preco_venda?: number | null
+          ultima_atualizacao_custo?: string | null
+          user_id?: string | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      proventos_esperados: {
+        Row: {
+          created_at: string | null
+          data_pagamento: string
+          id: string | null
+          investimento_id: string
+          status: string | null
+          tipo: string
+          user_id: string
+          valor_estimado: number
+        }
+        Insert: {
+          created_at?: string | null
+          data_pagamento: string
+          id?: string | null
+          investimento_id: string
+          status?: string | null
+          tipo: string
+          user_id: string
+          valor_estimado: number
+        }
+        Update: {
+          created_at?: string | null
+          data_pagamento?: string
+          id?: string | null
+          investimento_id?: string
+          status?: string | null
+          tipo?: string
+          user_id?: string
+          valor_estimado?: number
+        }
+        Relationships: []
+      }
+      push_subscriptions: {
+        Row: {
+          auth: string
+          created_at: string | null
+          endpoint: string
+          id: string | null
+          p256dh: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          auth: string
+          created_at?: string | null
+          endpoint: string
+          id?: string | null
+          p256dh: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          auth?: string
+          created_at?: string | null
+          endpoint?: string
+          id?: string | null
+          p256dh?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      rate_limits: {
+        Row: {
+          bucket_key: string | null
+          last_request: string
+          request_count: number
+          window_start: string
+        }
+        Insert: {
+          bucket_key?: string | null
+          last_request: string
+          request_count: number
+          window_start: string
+        }
+        Update: {
+          bucket_key?: string | null
+          last_request?: string
+          request_count?: number
+          window_start?: string
+        }
+        Relationships: []
+      }
+      sefaz_documentos_recebidos: {
+        Row: {
+          chave_acesso: string
+          created_at: string
+          data_emissao: string | null
+          destinatario_cnpj: string | null
+          emitente_cnpj: string | null
+          emitente_nome: string | null
+          id: string | null
+          nf_compra_id: string | null
+          nsu: string
+          status_processamento: string
+          tipo_documento: string
+          user_id: string
+          valor_total: number | null
+          workspace_id: string | null
+          xml_conteudo: string | null
+        }
+        Insert: {
+          chave_acesso: string
+          created_at?: string
+          data_emissao?: string | null
+          destinatario_cnpj?: string | null
+          emitente_cnpj?: string | null
+          emitente_nome?: string | null
+          id?: string | null
+          nf_compra_id?: string | null
+          nsu: string
+          status_processamento: string
+          tipo_documento: string
+          user_id: string
+          valor_total?: number | null
+          workspace_id?: string | null
+          xml_conteudo?: string | null
+        }
+        Update: {
+          chave_acesso?: string
+          created_at?: string
+          data_emissao?: string | null
+          destinatario_cnpj?: string | null
+          emitente_cnpj?: string | null
+          emitente_nome?: string | null
+          id?: string | null
+          nf_compra_id?: string | null
+          nsu?: string
+          status_processamento?: string
+          tipo_documento?: string
+          user_id?: string
+          valor_total?: number | null
+          workspace_id?: string | null
+          xml_conteudo?: string | null
+        }
+        Relationships: []
+      }
+      senha_investimentos: {
+        Row: {
+          bloqueado_ate: string | null
+          created_at: string | null
+          id: string | null
+          senha_hash: string
+          tentativas_falhas: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          bloqueado_ate?: string | null
+          created_at?: string | null
+          id?: string | null
+          senha_hash: string
+          tentativas_falhas?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          bloqueado_ate?: string | null
+          created_at?: string | null
+          id?: string | null
+          senha_hash?: string
+          tentativas_falhas?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      subcategorias: {
+        Row: {
+          ativo: boolean | null
+          categoria_id: string | null
+          cor: string | null
+          created_at: string | null
+          id: string | null
+          nome: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          ativo?: boolean | null
+          categoria_id?: string | null
+          cor?: string | null
+          created_at?: string | null
+          id?: string | null
+          nome: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          ativo?: boolean | null
+          categoria_id?: string | null
+          cor?: string | null
+          created_at?: string | null
+          id?: string | null
+          nome?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subcategorias_categoria_id_fkey"
+            columns: ["categoria_id"]
+            isOneToOne: false
+            referencedRelation: "categorias"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      telegram_conversas: {
+        Row: {
+          chat_id: string
+          dados_documento: Json | null
+          estado: string
+          id: string | null
+          proposta_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          chat_id: string
+          dados_documento?: Json | null
+          estado: string
+          id?: string | null
+          proposta_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          chat_id?: string
+          dados_documento?: Json | null
+          estado?: string
+          id?: string | null
+          proposta_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      telegram_link_tokens: {
+        Row: {
+          created_at: string | null
+          telegram_chat_id: string
+          telegram_username: string | null
+          token: string | null
+          usado: boolean | null
+        }
+        Insert: {
+          created_at?: string | null
+          telegram_chat_id: string
+          telegram_username?: string | null
+          token?: string | null
+          usado?: boolean | null
+        }
+        Update: {
+          created_at?: string | null
+          telegram_chat_id?: string
+          telegram_username?: string | null
+          token?: string | null
+          usado?: boolean | null
+        }
+        Relationships: []
+      }
+      telegram_processed_updates: {
+        Row: {
+          bot_id: string
+          chat_id: number | null
+          expires_at: string
+          processed_at: string
+          update_id: number
+        }
+        Insert: {
+          bot_id: string
+          chat_id?: number | null
+          expires_at: string
+          processed_at: string
+          update_id: number
+        }
+        Update: {
+          bot_id?: string
+          chat_id?: number | null
+          expires_at?: string
+          processed_at?: string
+          update_id?: number
+        }
+        Relationships: []
+      }
+      telegram_propostas: {
+        Row: {
+          chat_id: string
+          created_at: string
+          dados: Json
+          error_message: string | null
+          executed_at: string | null
+          expires_at: string
+          id: string | null
+          resumo: string
+          status: string
+          tipo: string
+          user_id: string
+        }
+        Insert: {
+          chat_id: string
+          created_at?: string
+          dados: Json
+          error_message?: string | null
+          executed_at?: string | null
+          expires_at: string
+          id?: string | null
+          resumo: string
+          status: string
+          tipo: string
+          user_id: string
+        }
+        Update: {
+          chat_id?: string
+          created_at?: string
+          dados?: Json
+          error_message?: string | null
+          executed_at?: string | null
+          expires_at?: string
+          id?: string | null
+          resumo?: string
+          status?: string
+          tipo?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      transferencias: {
+        Row: {
+          conta_destino_id: string
+          conta_origem_id: string
+          created_at: string | null
+          data: string
+          descricao: string | null
+          id: string | null
+          observacoes: string | null
+          user_id: string
+          valor: number
+          workspace_id: string | null
+        }
+        Insert: {
+          conta_destino_id: string
+          conta_origem_id: string
+          created_at?: string | null
+          data: string
+          descricao?: string | null
+          id?: string | null
+          observacoes?: string | null
+          user_id: string
+          valor: number
+          workspace_id?: string | null
+        }
+        Update: {
+          conta_destino_id?: string
+          conta_origem_id?: string
+          created_at?: string | null
+          data?: string
+          descricao?: string | null
+          id?: string | null
+          observacoes?: string | null
+          user_id?: string
+          valor?: number
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transferencias_conta_origem_id_fkey"
+            columns: ["conta_origem_id"]
+            isOneToOne: false
+            referencedRelation: "contas_usuario"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transferencias_conta_destino_id_fkey"
+            columns: ["conta_destino_id"]
+            isOneToOne: false
+            referencedRelation: "contas_usuario"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      usuarios_telegram: {
+        Row: {
+          ativo: boolean | null
+          created_at: string | null
+          id: string | null
+          telegram_chat_id: string
+          telegram_username: string | null
+          user_id: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          created_at?: string | null
+          id?: string | null
+          telegram_chat_id: string
+          telegram_username?: string | null
+          user_id: string
+        }
+        Update: {
+          ativo?: boolean | null
+          created_at?: string | null
+          id?: string | null
+          telegram_chat_id?: string
+          telegram_username?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      wallet_ai_action_proposals: {
+        Row: {
+          action_type: string
+          action_version: string
+          confirmed_at: string | null
+          conversation_id: string | null
+          created_at: string
+          executed_at: string | null
+          expires_at: string
+          id: string | null
+          idempotency_hash: string
+          payload: Json
+          previous_state: Json | null
+          risk_level: string | null
+          status: string
+          summary: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          action_type: string
+          action_version: string
+          confirmed_at?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          executed_at?: string | null
+          expires_at: string
+          id?: string | null
+          idempotency_hash: string
+          payload: Json
+          previous_state?: Json | null
+          risk_level?: string | null
+          status: string
+          summary: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          action_type?: string
+          action_version?: string
+          confirmed_at?: string | null
+          conversation_id?: string | null
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string | null
+          idempotency_hash?: string
+          payload?: Json
+          previous_state?: Json | null
+          risk_level?: string | null
+          status?: string
+          summary?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      wallet_ai_audit_events: {
+        Row: {
+          created_at: string
+          duration_ms: number
+          error_code: string | null
+          execution_status: string
+          id: string | null
+          record_count: number
+          request_id: string
+          tool_name: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_ms: number
+          error_code?: string | null
+          execution_status: string
+          id?: string | null
+          record_count: number
+          request_id: string
+          tool_name: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number
+          error_code?: string | null
+          execution_status?: string
+          id?: string | null
+          record_count?: number
+          request_id?: string
+          tool_name?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      wallet_ai_conversations: {
+        Row: {
+          created_at: string
+          id: string | null
+          is_archived: boolean
+          summary: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string | null
+          is_archived: boolean
+          summary?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string | null
+          is_archived?: boolean
+          summary?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      wallet_ai_messages: {
+        Row: {
+          content: string | null
+          conversation_id: string
+          created_at: string
+          id: string | null
+          role: string
+          sources: Json | null
+          tokens_count: number | null
+          tool_calls: Json | null
+          tool_results: Json | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          content?: string | null
+          conversation_id: string
+          created_at?: string
+          id?: string | null
+          role: string
+          sources?: Json | null
+          tokens_count?: number | null
+          tool_calls?: Json | null
+          tool_results?: Json | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          content?: string | null
+          conversation_id?: string
+          created_at?: string
+          id?: string | null
+          role?: string
+          sources?: Json | null
+          tokens_count?: number | null
+          tool_calls?: Json | null
+          tool_results?: Json | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
+      workspace_certificados_sefaz: {
+        Row: {
+          ambiente: string
+          certificado_senha_criptografada: string | null
+          certificado_storage_path: string | null
+          cnpj: string
+          created_at: string
+          erro_mensagem: string | null
+          id: string | null
+          max_nsu: string | null
+          razao_social: string | null
+          sincronizacao_automatica: boolean | null
+          status: string
+          uf: string
+          ultima_sincronizacao: string | null
+          ultimo_nsu: string | null
+          updated_at: string
+          user_id: string
+          validade_fim: string | null
+          workspace_id: string | null
+        }
+        Insert: {
+          ambiente: string
+          certificado_senha_criptografada?: string | null
+          certificado_storage_path?: string | null
+          cnpj: string
+          created_at?: string
+          erro_mensagem?: string | null
+          id?: string | null
+          max_nsu?: string | null
+          razao_social?: string | null
+          sincronizacao_automatica?: boolean | null
+          status: string
+          uf: string
+          ultima_sincronizacao?: string | null
+          ultimo_nsu?: string | null
+          updated_at?: string
+          user_id: string
+          validade_fim?: string | null
+          workspace_id?: string | null
+        }
+        Update: {
+          ambiente?: string
+          certificado_senha_criptografada?: string | null
+          certificado_storage_path?: string | null
+          cnpj?: string
+          created_at?: string
+          erro_mensagem?: string | null
+          id?: string | null
+          max_nsu?: string | null
+          razao_social?: string | null
+          sincronizacao_automatica?: boolean | null
+          status?: string
+          uf?: string
+          ultima_sincronizacao?: string | null
+          ultimo_nsu?: string | null
+          updated_at?: string
+          user_id?: string
+          validade_fim?: string | null
+          workspace_id?: string | null
+        }
+        Relationships: []
+      }
+      workspace_members: {
+        Row: {
+          active: boolean
+          created_at: string
+          role: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          active: boolean
+          created_at?: string
+          role: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          role?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: []
+      }
       workspaces: {
         Row: {
           id: string
@@ -159,7 +2693,7 @@ export type Database = {
           tamanho: number
           tipo_arquivo: string
           transacao_id: string
-          transacao_tipo: string
+          transacao_tipo: "receita" | "despesa" | "divida"
           user_id: string
         }
         Insert: {
@@ -170,7 +2704,7 @@ export type Database = {
           tamanho: number
           tipo_arquivo: string
           transacao_id: string
-          transacao_tipo: string
+          transacao_tipo: "receita" | "despesa" | "divida"
           user_id: string
         }
         Update: {
@@ -181,7 +2715,7 @@ export type Database = {
           tamanho?: number
           tipo_arquivo?: string
           transacao_id?: string
-          transacao_tipo?: string
+          transacao_tipo?: "receita" | "despesa" | "divida"
           user_id?: string
         }
         Relationships: []
@@ -358,6 +2892,16 @@ export type Database = {
       }
       contas_usuario: {
         Row: {
+          saldo_inicial: number | null
+          saldo_atual: number | null
+          limite_credito: number | null
+          dia_fechamento: number | null
+          dia_vencimento: number | null
+          cor: string | null
+          pluggy_account_id: string | null
+          data_vencimento: string | null
+          data_fechamento: string | null
+          workspace_id: string | null
           created_at: string
           id: string
           nome: string
@@ -366,6 +2910,16 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          saldo_inicial?: number | null
+          saldo_atual?: number | null
+          limite_credito?: number | null
+          dia_fechamento?: number | null
+          dia_vencimento?: number | null
+          cor?: string | null
+          pluggy_account_id?: string | null
+          data_vencimento?: string | null
+          data_fechamento?: string | null
+          workspace_id?: string | null
           created_at?: string
           id?: string
           nome: string
@@ -374,6 +2928,16 @@ export type Database = {
           user_id: string
         }
         Update: {
+          saldo_inicial?: number | null
+          saldo_atual?: number | null
+          limite_credito?: number | null
+          dia_fechamento?: number | null
+          dia_vencimento?: number | null
+          cor?: string | null
+          pluggy_account_id?: string | null
+          data_vencimento?: string | null
+          data_fechamento?: string | null
+          workspace_id?: string | null
           created_at?: string
           id?: string
           nome?: string
@@ -381,7 +2945,15 @@ export type Database = {
           tipo?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "contas_usuario_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       debt_reminders: {
         Row: {
@@ -465,6 +3037,15 @@ export type Database = {
       }
       despesas: {
         Row: {
+          workspace_id: string | null
+          status: string | null
+          deduplication_key: string | null
+          fatura_id: string | null
+          conciliado: boolean | null
+          contato_id: string | null
+          centro_custo_id: string | null
+          subcategoria_id: string | null
+          fornecedor_id: string | null
           categoria_id: string | null
           conta_id: string | null
           created_at: string
@@ -479,6 +3060,15 @@ export type Database = {
           valor: number
         }
         Insert: {
+          workspace_id?: string | null
+          status?: string | null
+          deduplication_key?: string | null
+          fatura_id?: string | null
+          conciliado?: boolean | null
+          contato_id?: string | null
+          centro_custo_id?: string | null
+          subcategoria_id?: string | null
+          fornecedor_id?: string | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -493,6 +3083,15 @@ export type Database = {
           valor: number
         }
         Update: {
+          workspace_id?: string | null
+          status?: string | null
+          deduplication_key?: string | null
+          fatura_id?: string | null
+          conciliado?: boolean | null
+          contato_id?: string | null
+          centro_custo_id?: string | null
+          subcategoria_id?: string | null
+          fornecedor_id?: string | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -1575,6 +4174,13 @@ export type Database = {
       }
       receitas: {
         Row: {
+          workspace_id: string | null
+          status: string | null
+          deduplication_key: string | null
+          conciliado: boolean | null
+          contato_id: string | null
+          centro_custo_id: string | null
+          subcategoria_id: string | null
           categoria_id: string | null
           conta_id: string | null
           created_at: string
@@ -1589,6 +4195,13 @@ export type Database = {
           valor: number
         }
         Insert: {
+          workspace_id?: string | null
+          status?: string | null
+          deduplication_key?: string | null
+          conciliado?: boolean | null
+          contato_id?: string | null
+          centro_custo_id?: string | null
+          subcategoria_id?: string | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -1603,6 +4216,13 @@ export type Database = {
           valor: number
         }
         Update: {
+          workspace_id?: string | null
+          status?: string | null
+          deduplication_key?: string | null
+          conciliado?: boolean | null
+          contato_id?: string | null
+          centro_custo_id?: string | null
+          subcategoria_id?: string | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -1789,6 +4409,22 @@ export type Database = {
       }
       transacoes: {
         Row: {
+          numero_linha: number | null
+          mes_referencia: string | null
+          cartao_id: string | null
+          parcela_atual: number | null
+          workspace_id: string | null
+          parcela_total: number | null
+          parcela_numero: number | null
+          pluggy_bill_id: string | null
+          status_transacao: string | null
+          pluggy_transaction_id: string | null
+          numero_linha_importacao: number | null
+          hash_importacao: string | null
+          importacao_id: string | null
+          deduplication_key: string | null
+          itens: string | null
+          conciliado: boolean | null
           categoria_id: string | null
           conta_id: string | null
           created_at: string
@@ -1803,6 +4439,22 @@ export type Database = {
           valor: number
         }
         Insert: {
+          numero_linha?: number | null
+          mes_referencia?: string | null
+          cartao_id?: string | null
+          parcela_atual?: number | null
+          workspace_id?: string | null
+          parcela_total?: number | null
+          parcela_numero?: number | null
+          pluggy_bill_id?: string | null
+          status_transacao?: string | null
+          pluggy_transaction_id?: string | null
+          numero_linha_importacao?: number | null
+          hash_importacao?: string | null
+          importacao_id?: string | null
+          deduplication_key?: string | null
+          itens?: string | null
+          conciliado?: boolean | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -1817,6 +4469,22 @@ export type Database = {
           valor: number
         }
         Update: {
+          numero_linha?: number | null
+          mes_referencia?: string | null
+          cartao_id?: string | null
+          parcela_atual?: number | null
+          workspace_id?: string | null
+          parcela_total?: number | null
+          parcela_numero?: number | null
+          pluggy_bill_id?: string | null
+          status_transacao?: string | null
+          pluggy_transaction_id?: string | null
+          numero_linha_importacao?: number | null
+          hash_importacao?: string | null
+          importacao_id?: string | null
+          deduplication_key?: string | null
+          itens?: string | null
+          conciliado?: boolean | null
           categoria_id?: string | null
           conta_id?: string | null
           created_at?: string
@@ -1853,8 +4521,8 @@ export type Database = {
           dia_semana: number | null
           id: string
           metodo_pagamento: string | null
-          recorrencia: string
-          tipo_transacao: string
+          recorrencia: "diaria" | "semanal" | "mensal" | "anual"
+          tipo_transacao: "receita" | "despesa"
           ultima_execucao: string | null
           updated_at: string
           user_id: string
@@ -1872,8 +4540,8 @@ export type Database = {
           dia_semana?: number | null
           id?: string
           metodo_pagamento?: string | null
-          recorrencia: string
-          tipo_transacao: string
+          recorrencia: "diaria" | "semanal" | "mensal" | "anual"
+          tipo_transacao: "receita" | "despesa"
           ultima_execucao?: string | null
           updated_at?: string
           user_id: string
@@ -1891,8 +4559,8 @@ export type Database = {
           dia_semana?: number | null
           id?: string
           metodo_pagamento?: string | null
-          recorrencia?: string
-          tipo_transacao?: string
+          recorrencia?: "diaria" | "semanal" | "mensal" | "anual"
+          tipo_transacao?: "receita" | "despesa"
           ultima_execucao?: string | null
           updated_at?: string
           user_id?: string
@@ -2112,6 +4780,227 @@ export type Database = {
       }
     }
     Functions: {
+      update_updated_at_column: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      handle_new_user: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      invoke_process_reminders: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      atualizar_status_validade: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_faturas_cartao_updated_at: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      normalizar_chave_pix: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      sincronizar_proprietario_workspace: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      equipe_atualizar_updated_at: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      validar_workspace_equipe: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      validar_transicao_acerto: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      validar_transicao_pagamento: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      gerar_acerto_semanal: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      iniciar_pagamento_acerto: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      registrar_falha_pagamento: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      registrar_escala_folguista: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      confirmar_pagamento_acerto: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      cancelar_escala_e_recalcular_acerto: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      equipe_quinto_dia_util: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      gerar_obrigacoes_mensais_equipe: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      criar_lembrete_divida: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      importar_fatura_atomica: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      merge_nf_multipage_page: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      get_ia_config_status: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      merge_documento_sessao_page: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      get_divipay_config_status: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      has_senha_investimentos: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      registrar_falha_senha_investimentos: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      protect_profiles_role: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      enforce_profiles_role_insert: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      check_rate_limit: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      reserve_ai_tokens: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      reconcile_ai_tokens: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      reconcile_rate_limit: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      desbloquear_sessao_investimentos: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      is_investimentos_unlocked: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      aplicar_preco_alerta_eyemobile: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      validar_produto_equivalencia_tenant: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      validar_historico_custo_produto_tenant: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      aplicar_item_nf_estoque_custo: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_divida_after_payment: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      revert_divida_after_payment_deletion: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_valor_restante: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_payment_links_updated_at: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_meta_status: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      update_item_status: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      calcular_proxima_manutencao: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      log_admin_action: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      ensure_user_default_workspaces: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      sync_pagamento_divida_to_despesa: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      preencher_workspace_id_custo: {
+        Args: Record<string, unknown>
+        Returns: unknown
+      }
+      get_eyemobile_config_status: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          has_config: boolean
+          environment: string
+          has_secret: boolean
+          store_id: string | null
+          default_conta_id: string | null
+          default_categoria_receita_id: string | null
+          default_categoria_taxa_id: string | null
+          auto_sync_sales: boolean
+          auto_sync_stock: boolean
+          last_synced_offset: number
+        }[]
+      }
+      tem_acesso_workspace: {
+        Args: {
+          p_workspace_id: string
+        }
+        Returns: boolean
+      }
       cleanup_expired_tokens: { Args: never; Returns: undefined }
       create_default_categories: {
         Args: { p_user_id: string }
