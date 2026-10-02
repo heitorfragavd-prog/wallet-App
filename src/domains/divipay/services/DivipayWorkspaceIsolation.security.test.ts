@@ -17,6 +17,7 @@
  * - TESTE 13 (Novo): Chamada de saveConfig sem workspaceId lança erro (fail-closed)
  * - TESTE 14 (Novo): Verificação estática da Edge Function divipay-api (proíbe fallback legado e exige workspace_id)
  * - TESTE 15 (Novo): Verificação estática da Migration (proíbe 'workspace_id IS NULL' nas policies RLS)
+ * - TESTE 16 (Novo): Same-Workspace User Impersonation: Usuário A com acesso ao mesmo workspace não acessa divipay_config de Usuário B mesmo manipulando userId (fail-closed)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -303,5 +304,52 @@ describe('SEC-001: Isolamento de Workspace na Integração Divipay', () => {
     // Deve exigir workspace_id IS NOT NULL E tem_acesso_workspace
     expect(content).toMatch(/workspace_id IS NOT NULL/i);
     expect(content).toMatch(/public\.tem_acesso_workspace\(workspace_id\)/i);
+  });
+
+  it('TESTE 16: Same-Workspace User Impersonation: Usuário A com acesso ao mesmo workspace não acessa divipay_config do Usuário B mesmo manipulando userId (fail-closed)', async () => {
+    const USER_A_ID = 'user-a-1111-1111';
+    const WORKSPACE_SHARED = 'workspace-shared-pj';
+
+    // 1. Verificação estática da Edge Function:
+    // Garante que o endpoint divipay-api deriva targetUserId obrigatoriamente do JWT para clientes comuns,
+    // ignorando qualquer manipulação de user_id vindo do payload do cliente, mesmo com service_role disponível no backend.
+    const edgeFunctionPath = path.resolve(process.cwd(), 'supabase/functions/divipay-api/index.ts');
+    const edgeContent = fs.readFileSync(edgeFunctionPath, 'utf8');
+
+    // Confirma que requestBody.user_id só é permitido se isServiceRole === true
+    expect(edgeContent).toMatch(/if\s*\(\s*isServiceRole\s*&&\s*requestBody\.user_id\s*\)/);
+
+    // Confirma que cliente comum (não service_role) tem targetUserId estritamente extraído de auth.getUser(token)
+    expect(edgeContent).toMatch(/targetUserId\s*=\s*user\.id/);
+
+    // Confirma que a consulta a divipay_config filtra estritamente por targetUserId
+    expect(edgeContent).toMatch(/\.eq\(['"]user_id['"],\s*targetUserId\)/);
+
+    // 2. Simulação funcional: Usuário A autenticado tenta acessar o workspace compartilhado
+    // onde apenas o Usuário B possui credenciais Divipay cadastradas.
+    vi.mocked(supabase.auth.getUser).mockResolvedValueOnce({
+      data: { user: { id: USER_A_ID } as unknown as import('@supabase/supabase-js').User },
+      error: null,
+    });
+
+    // Como o Usuário A não possui registro próprio em divipay_config para este workspace,
+    // a Edge Function retorna erro 400 (fail-closed), independentemente de o Usuário B ter registro.
+    vi.mocked(supabase.functions.invoke).mockResolvedValueOnce({
+      data: {
+        success: false,
+        error: 'Configuração Divipay não encontrada para este workspace. Cadastre as credenciais na aba Configurações.',
+      },
+      error: null,
+    });
+
+    await expect(divipayService.getBalance(WORKSPACE_SHARED))
+      .rejects.toThrow('Configuração Divipay não encontrada para este workspace');
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith('divipay-api', {
+      body: expect.objectContaining({
+        action: 'getBalance',
+        workspace_id: WORKSPACE_SHARED,
+      }),
+    });
   });
 });
