@@ -18,6 +18,9 @@
  * - TESTE 14 (Novo): Verificação estática da Edge Function divipay-api (proíbe fallback legado e exige workspace_id)
  * - TESTE 15 (Novo): Verificação estática da Migration (proíbe 'workspace_id IS NULL' nas policies RLS)
  * - TESTE 16 (Novo): Same-Workspace User Impersonation: Usuário A com acesso ao mesmo workspace não acessa divipay_config de Usuário B mesmo manipulando userId (fail-closed)
+ * - TESTE 17 (Novo): Migration contém backfill defensivo de divipay_conciliacoes (fail-closed, com guardas de contagem e validação de PJ)
+ * - TESTE 18 (Novo): Migration impede que conciliações legadas fiquem inacessíveis por workspace_id NULL e aplica NOT NULL em divipay_transacoes
+ * - TESTE 19 (Novo): Migration possui transação explícita BEGIN e COMMIT (garantia de atomicidade integral sem DDL incompatível)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -351,5 +354,52 @@ describe('SEC-001: Isolamento de Workspace na Integração Divipay', () => {
         workspace_id: WORKSPACE_SHARED,
       }),
     });
+  });
+
+  it('TESTE 17: Migration contém backfill defensivo de divipay_conciliacoes (fail-closed, dinâmico e validação de PJ)', () => {
+    const migrationPath = path.resolve(process.cwd(), 'supabase/migrations/20261002061000_isolate_divipay_by_workspace.sql');
+    expect(fs.existsSync(migrationPath)).toBe(true);
+
+    const content = fs.readFileSync(migrationPath, 'utf8');
+
+    // Valida presença do backfill de divipay_conciliacoes
+    expect(content).toMatch(/UPDATE\s+public\.divipay_conciliacoes\s+SET\s+workspace_id\s*=\s*v_rodo_point_ws_id/i);
+
+    // Valida guardas estritas de integridade
+    expect(content).toMatch(/v_expected_user_id\s*CONSTANT\s*UUID\s*:=\s*'0adfbd4b-bc98-48c4-8f3b-e22ee5c317c0'/i);
+    expect(content).toMatch(/v_rodo_point_ws_id\s*CONSTANT\s*UUID\s*:=\s*'2af415b6-76aa-4134-8133-a9b405671c1c'/i);
+    expect(content).toMatch(/v_ws_record\.tipo\s*<>\s*'PJ'/i);
+    expect(content).toMatch(/user_id\s*<>\s*v_expected_user_id/i);
+
+    // Valida checagem dinâmica de ROW_COUNT do update
+    expect(content).toMatch(/v_rows_updated\s*<>\s*v_total_null_conciliacoes/i);
+  });
+
+  it('TESTE 18: Migration impede que conciliações legadas fiquem inacessíveis e aplica NOT NULL em divipay_transacoes', () => {
+    const migrationPath = path.resolve(process.cwd(), 'supabase/migrations/20261002061000_isolate_divipay_by_workspace.sql');
+    const content = fs.readFileSync(migrationPath, 'utf8');
+
+    // Valida asserção final garantindo que 0 conciliações restaram com workspace_id NULL
+    expect(content).toMatch(/SELECT\s+COUNT\(\*\)\s+INTO\s+v_remaining_null_count\s+FROM\s+public\.divipay_conciliacoes\s+WHERE\s+workspace_id\s+IS\s+NULL/i);
+    expect(content).toMatch(/IF\s+v_remaining_null_count\s*>\s*0\s+THEN/i);
+
+    // Valida que divipay_transacoes agora recebe NOT NULL
+    expect(content).toMatch(/ALTER\s+TABLE\s+public\.divipay_transacoes\s+ALTER\s+COLUMN\s+workspace_id\s+SET\s+NOT\s+NULL/i);
+
+    // Valida que índice de workspace em conciliações é criado
+    expect(content).toMatch(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_divipay_conciliacoes_workspace/i);
+  });
+
+  it('TESTE 19: Migration possui transação explícita BEGIN e COMMIT (garantia de atomicidade integral sem DDL incompatível)', () => {
+    const migrationPath = path.resolve(process.cwd(), 'supabase/migrations/20261002061000_isolate_divipay_by_workspace.sql');
+    const content = fs.readFileSync(migrationPath, 'utf8');
+
+    // Transação explícita
+    expect(content).toMatch(/\bBEGIN;/);
+    expect(content).toMatch(/\bCOMMIT;/);
+
+    // Proíbe comandos que quebram transação no PostgreSQL
+    expect(content).not.toMatch(/CREATE\s+INDEX\s+CONCURRENTLY/i);
+    expect(content).not.toMatch(/\bVACUUM\b/i);
   });
 });
