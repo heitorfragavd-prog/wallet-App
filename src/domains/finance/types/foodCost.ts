@@ -96,6 +96,7 @@ export interface DREGerencial {
   margemEbitda: number;     // %
   margemLiquida: number;    // %
   linhas: LinhaDRE[];
+  despesasCartao?: number;
 }
 
 // ─── Tipos: Validades ────────────────────────────────────────────────────────
