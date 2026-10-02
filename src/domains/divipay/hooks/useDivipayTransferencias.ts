@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { CreateWithdrawParams, DivipayTransacao } from "@/domains/divipay/types";
 
 export const DIVIPAY_TRANSFERENCIAS_QUERY_KEY = ["divipay-transferencias"] as const;
