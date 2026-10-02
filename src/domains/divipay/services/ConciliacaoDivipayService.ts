@@ -36,8 +36,8 @@ export interface ResumoConciliacao {
   ignorados: number;
 }
 
-const CATEGORIA_SAQUES = "Transferências e Saques Divipay";
-const CATEGORIA_TAXAS = "Taxas Divipay / Tarifas Bancárias";
+export const CATEGORIA_SAQUES = "Transferências e Saques Divipay";
+export const CATEGORIA_TAXAS = "Taxas Divipay / Tarifas Bancárias";
 
 // ─── Helpers de banco ───────────────────────────────────────────────────
 

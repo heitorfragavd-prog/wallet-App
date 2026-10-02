@@ -431,7 +431,7 @@ describe('SEC-001: Isolamento de Workspace na Integração Divipay', () => {
 
     // Com workspace_id válido: executa upsert com workspace_id
     const mockUpsert = vi.fn().mockResolvedValue({ error: null });
-    vi.mocked(supabase.from).mockReturnValueOnce({ upsert: mockUpsert } as any);
+    vi.mocked(supabase.from).mockReturnValueOnce({ upsert: mockUpsert } as unknown as ReturnType<typeof supabase.from>);
 
     await conciliacaoDivipayService.registrarConciliacao(USER_ID, WORKSPACE_PJ, mockSaque, 'pendente');
 
