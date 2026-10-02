@@ -20,6 +20,7 @@ const BASE_URLS: Record<string, string> = {
 interface DivipayConfig {
   id: string
   user_id: string
+  workspace_id?: string | null
   client_id: string | null
   client_secret: string | null
   environment: 'sandbox' | 'production'
@@ -210,32 +211,76 @@ serve(async (req) => {
 
     const requestBody = await req.json().catch(() => ({}))
     let targetUserId = ''
+    let authenticatedUser: { id: string } | null = null
 
     if (isServiceRole && requestBody.user_id) {
       targetUserId = String(requestBody.user_id)
+      authenticatedUser = { id: targetUserId }
     } else {
       const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token)
       if (authError || !user) {
         return jsonResponse({ success: false, error: 'Usuário não autenticado' }, 401)
       }
       targetUserId = user.id
+      authenticatedUser = user
+    }
+    const user = authenticatedUser!
+
+    // 2. Extrai e valida workspace_id
+    const targetWorkspaceId = requestBody.workspace_id ? String(requestBody.workspace_id).trim() : ''
+    if (!targetWorkspaceId) {
+      return jsonResponse({
+        success: false,
+        error: 'workspace_id é obrigatório para acessar recursos da Divipay.',
+      }, 400)
     }
 
-    // 2. Carrega a configuração Divipay do usuário
+    // Valida que o usuário autenticado possui acesso ao workspace solicitado
+    if (!isServiceRole) {
+      const { data: temAcesso, error: accessError } = await supabaseAdmin.rpc('tem_acesso_workspace', {
+        p_workspace_id: targetWorkspaceId,
+      })
+
+      if (accessError || !temAcesso) {
+        // Fallback defensivo: checa se é o dono do workspace
+        const { data: wsOwner } = await supabaseAdmin
+          .from('workspaces')
+          .select('id')
+          .eq('id', targetWorkspaceId)
+          .eq('user_id', targetUserId)
+          .maybeSingle()
+
+        if (!wsOwner) {
+          return jsonResponse({
+            success: false,
+            error: 'Acesso negado: usuário não possui permissão para o workspace informado.',
+          }, 403)
+        }
+      }
+    }
+
+    // 3. Carrega a configuração Divipay vinculada ESTRITAMENTE ao workspace solicitado.
+    // FAIL-CLOSED: É terminantemente proibido qualquer fallback por tipo de workspace (PJ),
+    // fallback por user_id isolado ou aceitar divipay_config com workspace_id NULL.
     const { data: config, error: configError } = await supabaseAdmin
       .from('divipay_config')
       .select('*')
       .eq('user_id', targetUserId)
+      .eq('workspace_id', targetWorkspaceId)
+      .not('workspace_id', 'is', null)
       .maybeSingle()
 
     if (configError || !config) {
-      return jsonResponse({ success: false, error: 'Configuração Divipay não encontrada. Cadastre as credenciais na aba Configurações.' }, 400)
+      return jsonResponse({
+        success: false,
+        error: 'Configuração Divipay não encontrada para este workspace. Cadastre as credenciais na aba Configurações.',
+      }, 400)
     }
     if (!config.is_active) {
-      return jsonResponse({ success: false, error: 'Integração Divipay está desativada.' }, 400)
+      return jsonResponse({ success: false, error: 'Integração Divipay está desativada para este workspace.' }, 400)
     }
     if (!config.client_id || !config.client_secret) {
-      return jsonResponse({ success: false, error: 'Credenciais Divipay (client_id/client_secret) não configuradas.' }, 400)
+      return jsonResponse({ success: false, error: 'Credenciais Divipay (client_id/client_secret) não configuradas para este workspace.' }, 400)
     }
 
     const { action, ...params } = requestBody
@@ -294,6 +339,7 @@ serve(async (req) => {
           .from('divipay_transacoes')
           .insert({
             user_id: user.id,
+            workspace_id: targetWorkspaceId,
             external_id: externalId ?? referenceId,
             amount,
             type: 'CASH_IN',
@@ -382,6 +428,7 @@ serve(async (req) => {
           .from('divipay_transacoes')
           .insert({
             user_id: user.id,
+            workspace_id: targetWorkspaceId,
             external_id: data?.id ?? null,
             amount,
             type: 'CASH_OUT',

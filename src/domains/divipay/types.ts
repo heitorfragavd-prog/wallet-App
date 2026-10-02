@@ -1,12 +1,24 @@
 import type { Database } from "@/integrations/supabase/types";
 
-export type DivipayConfig = Database["public"]["Tables"]["divipay_config"]["Row"];
-export type DivipayConfigInsert = Database["public"]["Tables"]["divipay_config"]["Insert"];
-export type DivipayConfigUpdate = Database["public"]["Tables"]["divipay_config"]["Update"];
+export type DivipayConfig = Database["public"]["Tables"]["divipay_config"]["Row"] & {
+  workspace_id?: string | null;
+};
+export type DivipayConfigInsert = Database["public"]["Tables"]["divipay_config"]["Insert"] & {
+  workspace_id?: string | null;
+};
+export type DivipayConfigUpdate = Database["public"]["Tables"]["divipay_config"]["Update"] & {
+  workspace_id?: string | null;
+};
 
-export type DivipayTransacao = Database["public"]["Tables"]["divipay_transacoes"]["Row"];
-export type DivipayTransacaoInsert = Database["public"]["Tables"]["divipay_transacoes"]["Insert"];
-export type DivipayTransacaoUpdate = Database["public"]["Tables"]["divipay_transacoes"]["Update"];
+export type DivipayTransacao = Database["public"]["Tables"]["divipay_transacoes"]["Row"] & {
+  workspace_id?: string | null;
+};
+export type DivipayTransacaoInsert = Database["public"]["Tables"]["divipay_transacoes"]["Insert"] & {
+  workspace_id?: string | null;
+};
+export type DivipayTransacaoUpdate = Database["public"]["Tables"]["divipay_transacoes"]["Update"] & {
+  workspace_id?: string | null;
+};
 
 export type DivipayWebhookLog = Database["public"]["Tables"]["divipay_webhook_logs"]["Row"];
 

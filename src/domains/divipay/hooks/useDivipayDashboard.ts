@@ -88,7 +88,7 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
       let connectionError: string | null = null;
 
       try {
-        balances = await divipayService.getBalance();
+        balances = await divipayService.getBalance(workspaceId);
         connected = balances.length > 0;
       } catch (err: unknown) {
         connectionError = err instanceof Error ? err.message : "Erro ao conectar com a API Divipay";
@@ -112,7 +112,7 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
             type: type && type !== "all" ? type : undefined,
             cursor,
             limit: 200,
-          });
+          }, workspaceId);
           const newItems = response.items ?? [];
           movements = [...movements, ...newItems];
           hasMore = response.hasMore === true && !!response.nextCursor && newItems.length > 0;
@@ -128,7 +128,7 @@ export function useDivipayDashboard(filters?: DivipayDashboardFilters) {
         transacoes = await divipayService.getTransacoes({
           startDate: `${initialDate}T00:00:00.000Z`,
           endDate: `${finalDate}T23:59:59.999Z`,
-        });
+        }, workspaceId);
       } catch (err: unknown) {
         logger.error("useDivipayDashboard", "Erro ao buscar transacoes locais", { error: err instanceof Error ? err.message : String(err) });
       }

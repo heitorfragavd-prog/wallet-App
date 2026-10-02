@@ -103,24 +103,26 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
   let somaReceitasBanco = soma(recRows) + soma(transRecRows);
 
   let somaDivipay = 0;
-  try {
-    const divipayResp = await divipayService.listMovements({
-      initialDate: `${inicioStr}T00:00:00`,
-      finalDate: `${fimStr}T23:59:59`,
-      limit: 1000,
-    });
-    const items = divipayResp.items ?? [];
-    somaDivipay = items
-      .filter((m) => {
-        const tp = String(m.type || "").toUpperCase();
-        const st = String(m.status || "").toUpperCase();
-        if (DIVIPAY_CASH_OUT_TYPES.some((t) => tp.includes(t))) return false;
-        if (st && DIVIPAY_NON_SETTLED_STATUSES.some((s) => st.includes(s))) return false;
-        return true;
-      })
-      .reduce((acc, m) => acc + (m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0)), 0);
-  } catch (err) {
-    console.warn("DRE: Erro ao buscar movimentações Divipay", err);
+  if (workspaceId) {
+    try {
+      const divipayResp = await divipayService.listMovements({
+        initialDate: `${inicioStr}T00:00:00`,
+        finalDate: `${fimStr}T23:59:59`,
+        limit: 1000,
+      }, workspaceId);
+      const items = divipayResp.items ?? [];
+      somaDivipay = items
+        .filter((m) => {
+          const tp = String(m.type || "").toUpperCase();
+          const st = String(m.status || "").toUpperCase();
+          if (DIVIPAY_CASH_OUT_TYPES.some((t) => tp.includes(t))) return false;
+          if (st && DIVIPAY_NON_SETTLED_STATUSES.some((s) => st.includes(s))) return false;
+          return true;
+        })
+        .reduce((acc, m) => acc + (m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0)), 0);
+    } catch (err) {
+      console.warn("DRE: Erro ao buscar movimentações Divipay", err);
+    }
   }
 
   const receitaBruta = somaReceitasBanco + somaDivipay;

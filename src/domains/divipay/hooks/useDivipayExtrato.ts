@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { logger } from "@/core/logging/LoggerService";
 import { useToast } from "@/shared/hooks/use-toast";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { DivipayMovement, ListMovementsParams } from "@/domains/divipay/types";
 
 export const DIVIPAY_EXTRATO_QUERY_KEY = ["divipay-extrato"] as const;
@@ -16,6 +17,8 @@ export interface DivipayExtratoFilters {
 
 export function useDivipayExtrato() {
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
   const [filters, setFilters] = useState<DivipayExtratoFilters>(() => {
     const today = new Date().toISOString().split("T")[0];
     const start = new Date();
@@ -27,8 +30,9 @@ export function useDivipayExtrato() {
   });
 
   const { data, isLoading: loading, error } = useQuery({
-    queryKey: [...DIVIPAY_EXTRATO_QUERY_KEY, filters],
+    queryKey: [...DIVIPAY_EXTRATO_QUERY_KEY, workspaceId, filters],
     queryFn: async () => {
+      if (!workspaceId) return { items: [], hasMore: false };
       const params: ListMovementsParams = {
         initialDate: filters.initialDate,
         finalDate: filters.finalDate,
@@ -36,10 +40,10 @@ export function useDivipayExtrato() {
         type: filters.type,
         limit: 100,
       };
-      logger.info("useDivipayExtrato", "Buscando movimentações Divipay", params);
-      return divipayService.listMovements(params);
+      logger.info("useDivipayExtrato", "Buscando movimentações Divipay", { ...params, workspaceId });
+      return divipayService.listMovements(params, workspaceId);
     },
-    enabled: Boolean(filters.initialDate && filters.finalDate),
+    enabled: Boolean(workspaceId && filters.initialDate && filters.finalDate),
     staleTime: 1000 * 60,
   });
 

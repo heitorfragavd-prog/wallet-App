@@ -144,7 +144,7 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
           finalDate: chunk.final,
           limit: DIVIPAY_PAGE_LIMIT,
           cursor,
-        });
+        }, workspaceId);
         items.push(...(response.items ?? []));
         if (!response.hasMore || !response.nextCursor) break;
         cursor = response.nextCursor;
@@ -282,30 +282,9 @@ export async function fetchReceitas(
       divipayReceitas = await fetchDivipayReceitas(startDate, endDate, workspaceId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn("useReceitas", "Divipay API indisponível, usando cache fallback", { error: message });
-      
-      const hoje = new Date().toISOString();
-      divipayReceitas = [
-        {
-          id: "divipay-fallback-1",
-          user_id: "",
-          workspace_id: workspaceId || "",
-          tipo: "receita",
-          valor: 994.12,
-          descricao: "Entrada Digital (Offline Divipay)",
-          data: hoje,
-          created_at: hoje,
-          updated_at: hoje,
-          metodo_pagamento: "pix",
-          observacoes: "Fallback offline da integração Divipay",
-          categorias: {
-            nome: "Vendas Divipay",
-            cor: "#f59e0b",
-            icone: "Smartphone",
-          },
-        } as Receita
-      ];
-      options.onDivipayError?.("A conexão com a Divipay está instável. Exibindo dados do cache recente.");
+      logger.warn("useReceitas", "Divipay API não retornou dados para este workspace", { error: message });
+      divipayReceitas = [];
+      options.onDivipayError?.("A integração com a Divipay não está disponível para este workspace.");
     }
   }
 
