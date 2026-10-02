@@ -99,6 +99,30 @@ async function performMandatoryBrowserLogin(page: Page, appUrl: string, email: s
     }
   });
 
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (!text.includes('token') && !text.includes('key')) {
+      console.log(`[E2E BROWSER ${msg.type()}]:`, text);
+    } else {
+      console.log(`[E2E BROWSER ${msg.type()}]: [REDACTED CONSOLE MESSAGE]`);
+    }
+  });
+
+  page.on('pageerror', (err) => {
+    console.log(`[E2E BROWSER PAGEERROR]:`, err.message);
+    if (err.stack) console.log(`[E2E BROWSER STACK]:`, err.stack);
+  });
+
+  page.on('requestfailed', (req) => {
+    console.log(`[E2E REQUEST FAILED]:`, req.method(), req.url(), req.failure()?.errorText);
+  });
+
+  page.on('response', (res) => {
+    if (res.status() >= 400) {
+      console.log(`[E2E HTTP ERROR]: ${res.status()} ${res.url()}`);
+    }
+  });
+
   await page.goto(`${appUrl}/login`);
   await page.waitForLoadState('domcontentloaded');
 
@@ -120,7 +144,15 @@ async function performMandatoryBrowserLogin(page: Page, appUrl: string, email: s
 
   // Exige elemento exclusivo da área autenticada
   const authElement = page.locator('aside, nav, [data-sidebar="sidebar"], button:has-text("Sair"), #dashboard, h1, header').first();
-  await expect(authElement).toBeVisible({ timeout: 15000 });
+  try {
+    await expect(authElement).toBeVisible({ timeout: 15000 });
+  } catch (err) {
+    console.log('[DEBUG CURRENT URL]:', page.url());
+    console.log('[DEBUG TITLE]:', await page.title().catch(() => 'unknown'));
+    const bodySnippet = await page.evaluate(() => document.body.innerHTML.slice(0, 3000)).catch(() => 'unavailable');
+    console.log('[DEBUG BODY SNIPPET]:', bodySnippet);
+    throw err;
+  }
 }
 
 // 2. Helper de Extração de Claims da Sessão no Navegador (sem expor/logar segredos)
