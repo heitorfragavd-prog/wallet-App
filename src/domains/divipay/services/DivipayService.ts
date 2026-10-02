@@ -19,6 +19,12 @@ import type {
 const COMPONENT = "DivipayService";
 
 export class DivipayService {
+  private activeWorkspaceId: string | null = null;
+
+  setWorkspaceId(workspaceId: string | null): void {
+    this.activeWorkspaceId = workspaceId;
+  }
+
   private async getUser() {
     const {
       data: { user },
@@ -34,11 +40,13 @@ export class DivipayService {
     return user.id;
   }
 
-  private async invoke<T = unknown>(action: string, params?: Record<string, unknown>): Promise<T> {
-    logger.info(COMPONENT, `Invocando divipay-api: ${action}`, { action });
+  private async invoke<T = unknown>(action: string, params?: Record<string, unknown>, workspaceId?: string | null): Promise<T> {
+    logger.info(COMPONENT, `Invocando divipay-api: ${action}`, { action, workspaceId: workspaceId ?? this.activeWorkspaceId });
+
+    const effectiveWorkspaceId = workspaceId ?? this.activeWorkspaceId;
 
     const { data, error } = await supabase.functions.invoke("divipay-api", {
-      body: { action, ...(params ?? {}) },
+      body: { action, ...(params ?? {}), ...(effectiveWorkspaceId ? { workspace_id: effectiveWorkspaceId } : {}) },
     });
 
     if (error) {
@@ -59,8 +67,8 @@ export class DivipayService {
     return payload;
   }
 
-  async getBalance(): Promise<DivipayBalance[]> {
-    const data = await this.invoke<unknown>("getBalance");
+  async getBalance(workspaceId?: string | null): Promise<DivipayBalance[]> {
+    const data = await this.invoke<unknown>("getBalance", undefined, workspaceId);
     // A API /api/me retorna um único objeto; normalizamos para array.
     let list: unknown[] = [];
     if (Array.isArray(data)) {
@@ -81,21 +89,21 @@ export class DivipayService {
     });
   }
 
-  async createPixCharge(params: CreatePixChargeParams): Promise<{ transacao: DivipayTransacao; charge: unknown }> {
-    const data = await this.invoke<{ transacao: DivipayTransacao; charge: unknown }>("createPixCharge", params as Record<string, unknown>);
+  async createPixCharge(params: CreatePixChargeParams, workspaceId?: string | null): Promise<{ transacao: DivipayTransacao; charge: unknown }> {
+    const data = await this.invoke<{ transacao: DivipayTransacao; charge: unknown }>("createPixCharge", params as Record<string, unknown>, workspaceId);
     return data;
   }
 
-  async cancelPixCharge(chargeId: string): Promise<{ success: boolean; id?: string }> {
-    const data = await this.invoke<Record<string, unknown>>("cancelPixCharge", { chargeId });
+  async cancelPixCharge(chargeId: string, workspaceId?: string | null): Promise<{ success: boolean; id?: string }> {
+    const data = await this.invoke<Record<string, unknown>>("cancelPixCharge", { chargeId }, workspaceId);
     return {
       success: data?.success !== false,
       id: data?.id ? String(data.id) : chargeId,
     };
   }
 
-  async validatePixKey(key: string): Promise<PixKeyValidationResult> {
-    const data = await this.invoke<Record<string, unknown>>("validatePixKey", { key });
+  async validatePixKey(key: string, workspaceId?: string | null): Promise<PixKeyValidationResult> {
+    const data = await this.invoke<Record<string, unknown>>("validatePixKey", { key }, workspaceId);
     const consultId = data?.consultId
       ? String(data.consultId)
       : data?.consult_id
@@ -114,12 +122,12 @@ export class DivipayService {
     };
   }
 
-  async createWithdraw(params: CreateWithdrawParams): Promise<{ transacao: DivipayTransacao; withdraw: unknown }> {
-    return this.invoke<{ transacao: DivipayTransacao; withdraw: unknown }>("createWithdraw", params as Record<string, unknown>);
+  async createWithdraw(params: CreateWithdrawParams, workspaceId?: string | null): Promise<{ transacao: DivipayTransacao; withdraw: unknown }> {
+    return this.invoke<{ transacao: DivipayTransacao; withdraw: unknown }>("createWithdraw", params as Record<string, unknown>, workspaceId);
   }
 
-  async getWithdraw(id: string): Promise<DivipaySaque> {
-    const data = await this.invoke<unknown>("getWithdraw", { id });
+  async getWithdraw(id: string, workspaceId?: string | null): Promise<DivipaySaque> {
+    const data = await this.invoke<unknown>("getWithdraw", { id }, workspaceId);
     const r = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
     return {
       id: String(r.id ?? ""),
@@ -137,8 +145,8 @@ export class DivipayService {
     };
   }
 
-  async listWithdraws(params?: { limit?: number; offset?: number }): Promise<{ items: DivipaySaque[]; hasMore: boolean }> {
-    const data = await this.invoke<unknown>("listWithdraws", params as Record<string, unknown>);
+  async listWithdraws(params?: { limit?: number; offset?: number }, workspaceId?: string | null): Promise<{ items: DivipaySaque[]; hasMore: boolean }> {
+    const data = await this.invoke<unknown>("listWithdraws", params as Record<string, unknown>, workspaceId);
     const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
     const rawItems = Array.isArray(data) ? data : (record.data as unknown[]) ?? (record.items as unknown[]) ?? [];
 
@@ -162,9 +170,8 @@ export class DivipayService {
     return { items, hasMore };
   }
 
-
-  async listMovements(params: ListMovementsParams): Promise<ListMovementsResult> {
-    const data = await this.invoke<Record<string, unknown>>("listMovements", params as Record<string, unknown>);
+  async listMovements(params: ListMovementsParams, workspaceId?: string | null): Promise<ListMovementsResult> {
+    const data = await this.invoke<Record<string, unknown>>("listMovements", params as Record<string, unknown>, workspaceId);
     const rawItems = Array.isArray(data) ? data : (data?.data as unknown[]) ?? (data?.items as unknown[]) ?? [];
 
     const items: DivipayMovement[] = rawItems.map((item): DivipayMovement => {
@@ -190,17 +197,23 @@ export class DivipayService {
     };
   }
 
-  async configureWebhook(): Promise<{ success: boolean; message?: string }> {
-    return this.invoke<{ success: boolean; message?: string }>("configureWebhook");
+  async configureWebhook(workspaceId?: string | null): Promise<{ success: boolean; message?: string }> {
+    return this.invoke<{ success: boolean; message?: string }>("configureWebhook", undefined, workspaceId);
   }
 
-  async getConfig(): Promise<DivipayConfig | null> {
+  async getConfig(workspaceId?: string | null): Promise<DivipayConfig | null> {
     const userId = await this.requireUser();
-    const safeColumns = "id, user_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
+    const effectiveWorkspaceId = workspaceId ?? this.activeWorkspaceId;
+    if (!effectiveWorkspaceId) {
+      return null;
+    }
+    const safeColumns = "id, user_id, workspace_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
+
     const { data, error } = await supabase
       .from("divipay_config")
       .select(safeColumns)
       .eq("user_id", userId)
+      .eq("workspace_id", effectiveWorkspaceId)
       .maybeSingle();
 
     if (error) {
@@ -217,14 +230,22 @@ export class DivipayService {
     };
   }
 
-  async saveConfig(config: Partial<DivipayConfigInsert> & Pick<DivipayConfigInsert, "client_id" | "client_secret" | "environment">): Promise<DivipayConfig> {
+  async saveConfig(
+    config: Partial<DivipayConfigInsert> & Pick<DivipayConfigInsert, "client_id" | "client_secret" | "environment">,
+    workspaceId?: string | null
+  ): Promise<DivipayConfig> {
     const userId = await this.requireUser();
-    const existing = await this.getConfig();
+    const effectiveWorkspaceId = workspaceId ?? config.workspace_id ?? this.activeWorkspaceId;
+    if (!effectiveWorkspaceId) {
+      throw new Error("workspace_id é obrigatório para salvar configuração da Divipay");
+    }
+    const existing = await this.getConfig(effectiveWorkspaceId);
 
-    const safeColumns = "id, user_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
+    const safeColumns = "id, user_id, workspace_id, client_id, environment, is_active, webhook_url, token_expires_at, created_at, updated_at";
 
     const payload: DivipayConfigInsert = {
       user_id: userId,
+      workspace_id: effectiveWorkspaceId,
       client_id: config.client_id,
       client_secret: config.client_secret,
       environment: config.environment,
@@ -242,6 +263,10 @@ export class DivipayService {
         webhook_url: config.webhook_url ?? existing.webhook_url,
         updated_at: new Date().toISOString(),
       };
+
+      if (effectiveWorkspaceId) {
+        updatePayload.workspace_id = effectiveWorkspaceId;
+      }
 
       // Só atualiza o client_secret se um novo valor não vazio for fornecido
       if (config.client_secret && config.client_secret.trim() !== "") {
@@ -285,10 +310,17 @@ export class DivipayService {
     };
   }
 
-  async getTransacoes(filters?: { type?: string; startDate?: string; endDate?: string }): Promise<DivipayTransacao[]> {
+  async getTransacoes(
+    filters?: { type?: string; startDate?: string; endDate?: string },
+    workspaceId?: string | null
+  ): Promise<DivipayTransacao[]> {
     const userId = await this.requireUser();
+    const effectiveWorkspaceId = workspaceId ?? this.activeWorkspaceId;
     let query = supabase.from("divipay_transacoes").select("*").eq("user_id", userId);
 
+    if (effectiveWorkspaceId) {
+      query = query.eq("workspace_id", effectiveWorkspaceId);
+    }
     if (filters?.type) {
       query = query.eq("type", filters.type);
     }
@@ -306,7 +338,7 @@ export class DivipayService {
       throw error;
     }
 
-    return data ?? [];
+    return (data ?? []) as unknown as DivipayTransacao[];
   }
 
   async getWebhookLogs(limit = 50): Promise<DivipayWebhookLog[]> {

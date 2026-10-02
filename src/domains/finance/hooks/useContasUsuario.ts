@@ -44,9 +44,9 @@ async function fetchContas(workspaceId?: string | null): Promise<ContaUsuario[]>
   // persiste no banco para as demais telas. Em caso de falha, mantém o
   // último saldo conhecido do banco.
   const divipayConta = contas.find((c) => c.nome.toLowerCase().includes("divipay"));
-  if (divipayConta) {
+  if (divipayConta && workspaceId) {
     try {
-      const balances = await divipayService.getBalance();
+      const balances = await divipayService.getBalance(workspaceId);
       const saldoReal = balances.reduce((acc, b) => acc + (Number(b.balance) || 0), 0);
       if (balances.length > 0) {
         divipayConta.saldo_atual = saldoReal;

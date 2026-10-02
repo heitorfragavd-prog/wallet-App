@@ -339,11 +339,14 @@ describe("usePontoEquilibrio - Classificação Econômica e Homologação", () =
   // =========================================================================
 
   it("Cenário Real Setembro 2026: Consolidação de Custos Fixos (Internet 99 + Água 811,90 + Suellen 1.961 = R$ 2.871,90)", () => {
-    // Vendas reais de hoje (15/09/2026): R$ 597,93
-    vi.mocked(useReceitas).mockReturnValue({
-      receitas: [{ id: "rec-pdv", valor: 597.93, data: "2026-09-15" }],
-      loading: false,
-    } as unknown as ReturnType<typeof useReceitas>);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
+    try {
+      // Vendas reais de hoje (15/09/2026): R$ 597,93
+      vi.mocked(useReceitas).mockReturnValue({
+        receitas: [{ id: "rec-pdv", valor: 597.93, data: "2026-09-15" }],
+        loading: false,
+      } as unknown as ReturnType<typeof useReceitas>);
 
     // Conjunto dos 31 saques da Divipay + 1 despesa local Nilko
     vi.mocked(useDespesas).mockReturnValue({
@@ -384,6 +387,9 @@ describe("usePontoEquilibrio - Classificação Econômica e Homologação", () =
     expect(Number(result.current.custoFixoDiario.toFixed(2))).toBe(111.61);
     expect(Number(result.current.pontoEquilibrio.toFixed(2))).toBe(159.45);
     expect(result.current.percentual).toBe(100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // =========================================================================

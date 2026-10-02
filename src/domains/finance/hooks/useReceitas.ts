@@ -36,23 +36,26 @@ export interface ReceitasQueryParams {
 // Aqui paginamos de 1000 em 1000 com ORDER BY determinístico.
 const POSTGREST_PAGE_SIZE = 1000;
 
+type PostgrestQuery = ReturnType<ReturnType<typeof supabase.from>["select"]>;
+
 async function fetchAllRows<T>(
   buildQuery: () => ReturnType<typeof supabase.from>,
-  applyFilters: (q: any) => any,
+  applyFilters: (q: PostgrestQuery) => PostgrestQuery,
   columns: string,
   maxRows: number = 2000
 ): Promise<T[]> {
   const all: T[] = [];
   try {
     for (let offset = 0; offset < maxRows; offset += POSTGREST_PAGE_SIZE) {
-      const { data, error } = await applyFilters(buildQuery().select(columns))
+      const baseQuery = buildQuery().select(columns) as unknown as PostgrestQuery;
+      const { data, error } = await applyFilters(baseQuery)
         .order("data", { ascending: false })
         .range(offset, offset + POSTGREST_PAGE_SIZE - 1);
       if (error) {
         console.warn("Error fetching rows:", error.message);
         break; // devolve o que já conseguiu em vez de zerar o mês inteiro
       }
-      const rows = (data as T[]) ?? [];
+      const rows = (data as unknown as T[]) ?? [];
       all.push(...rows);
       if (rows.length < POSTGREST_PAGE_SIZE) break; // última página
     }
@@ -144,7 +147,7 @@ async function fetchDivipayReceitas(startDate?: string | null, endDate?: string 
           finalDate: chunk.final,
           limit: DIVIPAY_PAGE_LIMIT,
           cursor,
-        });
+        }, workspaceId);
         items.push(...(response.items ?? []));
         if (!response.hasMore || !response.nextCursor) break;
         cursor = response.nextCursor;
@@ -239,8 +242,8 @@ export async function fetchReceitas(
 
   // Invocação das receitas normais e transações de receitas
   const [receitasResp, transacoesResp] = await Promise.all([
-    fetchAllRows<any>(buildReceitas, (q) => applyWorkspace(applyFilters(q)), RECEITAS_COLS, 100000),
-    fetchAllRows<any>(buildTransacoes, (q) => applyWorkspace(applyFilters(q)).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
+    fetchAllRows<Receita>(buildReceitas, (q) => applyWorkspace(applyFilters(q)), RECEITAS_COLS, 100000),
+    fetchAllRows<Receita & { tipo?: string }>(buildTransacoes, (q) => (applyWorkspace(applyFilters(q)) as ReturnType<typeof supabase.from>).eq("tipo", "receita"), TRANSACOES_COLS, 100000),
   ]);
 
   const mappedReceitas = (receitasResp ?? []).map((r) => ({
@@ -282,30 +285,9 @@ export async function fetchReceitas(
       divipayReceitas = await fetchDivipayReceitas(startDate, endDate, workspaceId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn("useReceitas", "Divipay API indisponível, usando cache fallback", { error: message });
-      
-      const hoje = new Date().toISOString();
-      divipayReceitas = [
-        {
-          id: "divipay-fallback-1",
-          user_id: "",
-          workspace_id: workspaceId || "",
-          tipo: "receita",
-          valor: 994.12,
-          descricao: "Entrada Digital (Offline Divipay)",
-          data: hoje,
-          created_at: hoje,
-          updated_at: hoje,
-          metodo_pagamento: "pix",
-          observacoes: "Fallback offline da integração Divipay",
-          categorias: {
-            nome: "Vendas Divipay",
-            cor: "#f59e0b",
-            icone: "Smartphone",
-          },
-        } as Receita
-      ];
-      options.onDivipayError?.("A conexão com a Divipay está instável. Exibindo dados do cache recente.");
+      logger.warn("useReceitas", "Divipay API não retornou dados para este workspace", { error: message });
+      divipayReceitas = [];
+      options.onDivipayError?.("A integração com a Divipay não está disponível para este workspace.");
     }
   }
 
@@ -387,7 +369,12 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao criar receita", { error: String(error) });
-      toast({ title: "Erro ao criar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      const msg = error instanceof Error
+        ? error.message
+        : (typeof error === "object" && error !== null && "message" in error && typeof (error as { message: unknown }).message === "string")
+          ? (error as { message: string }).message
+          : String(error);
+      toast({ title: "Erro ao criar receita", description: msg, variant: "destructive" });
     },
   });
 
@@ -422,7 +409,12 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao atualizar receita", { error: String(error) });
-      toast({ title: "Erro ao atualizar receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      const msg = error instanceof Error
+        ? error.message
+        : (typeof error === "object" && error !== null && "message" in error && typeof (error as { message: unknown }).message === "string")
+          ? (error as { message: string }).message
+          : String(error);
+      toast({ title: "Erro ao atualizar receita", description: msg, variant: "destructive" });
     },
   });
 
@@ -442,7 +434,12 @@ export const useReceitas = (params: ReceitasQueryParams = {}) => {
     },
     onError: (error) => {
       logger.error("useReceitas", "Erro ao remover receita", { error: String(error) });
-      toast({ title: "Erro ao remover receita", description: error instanceof Error ? error.message : (typeof error === 'object' && error !== null && 'message' in error ? (error as any).message : String(error)), variant: "destructive" });
+      const msg = error instanceof Error
+        ? error.message
+        : (typeof error === "object" && error !== null && "message" in error && typeof (error as { message: unknown }).message === "string")
+          ? (error as { message: string }).message
+          : String(error);
+      toast({ title: "Erro ao remover receita", description: msg, variant: "destructive" });
     },
   });
 

@@ -264,6 +264,7 @@ serve(async (req) => {
       const metadata: Record<string, unknown> = { ...(transacao.metadata ?? {}) }
 
       if (transacao.type === 'CASH_IN') {
+        const cashInWorkspaceId = transacao.workspace_id ?? defaultWorkspaceId
         // Receita com o valor bruto
         const categoriaReceitaId = await findOrCreateCategoria(
           supabaseAdmin, userId, 'Recebimentos Divipay', 'receita', 'Landmark', '#22c55e',
@@ -274,7 +275,7 @@ serve(async (req) => {
             user_id: userId,
             categoria_id: categoriaReceitaId,
             conta_id: contaId,
-            workspace_id: defaultWorkspaceId,
+            workspace_id: cashInWorkspaceId,
             descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
             valor: transacao.amount,
             data: hoje,
@@ -301,7 +302,7 @@ serve(async (req) => {
               user_id: userId,
               categoria_id: categoriaTaxaId,
               conta_id: contaId,
-              workspace_id: defaultWorkspaceId,
+              workspace_id: cashInWorkspaceId,
               descricao: `Taxa Divipay - transação ${externalId}`,
               valor: Number(effectiveFee),
               data: hoje,
@@ -318,6 +319,12 @@ serve(async (req) => {
           }
         }
       } else if (transacao.type === 'CASH_OUT') {
+        const targetWorkspaceId = transacao.workspace_id ?? null
+        if (!targetWorkspaceId) {
+          console.error('Transação CASH_OUT sem workspace_id vinculado; abortando conciliação (fail-closed):', externalId)
+          await markLog(false, 'Transação sem workspace_id vinculado (fail-closed)')
+          return jsonResponse({ success: true, message: 'Conciliação abortada: transação sem workspace_id vinculado (fail-closed)' })
+        }
         const dividaId = typeof metadata.divida_id === 'string' ? metadata.divida_id : null
         let dividaWorkspaceId: string | null = null
 
@@ -394,11 +401,12 @@ serve(async (req) => {
           const saqueValor = Number(transacao.amount || 0)
           const saqueData = transacao.created_at || hoje
 
-          // Busca dívidas em aberto
+          // Busca dívidas em aberto no mesmo workspace da transação
           const { data: dividas } = await supabaseAdmin
             .from('dividas')
             .select('id, descricao, credor, documento_favorecido, valor_restante, data_vencimento, workspace_id')
             .eq('user_id', userId)
+            .eq('workspace_id', targetWorkspaceId)
             .neq('status', 'quitada')
             .gt('valor_restante', 0)
 
@@ -523,6 +531,7 @@ serve(async (req) => {
             await supabaseAdmin.from('divipay_conciliacoes').upsert(
               {
                 user_id: userId,
+                workspace_id: targetWorkspaceId,
                 divipay_external_id: externalId,
                 tipo: typeof metaType === 'string' ? metaType : null,
                 favorecido_nome: saqueFavorecidoNome,
@@ -550,6 +559,7 @@ serve(async (req) => {
             await supabaseAdmin.from('divipay_conciliacoes').upsert(
               {
                 user_id: userId,
+                workspace_id: targetWorkspaceId,
                 divipay_external_id: externalId,
                 tipo: typeof metaType === 'string' ? metaType : null,
                 favorecido_nome: saqueFavorecidoNome,
@@ -580,7 +590,7 @@ serve(async (req) => {
                 user_id: userId,
                 categoria_id: categoriaSaidaId,
                 conta_id: contaId,
-                workspace_id: defaultWorkspaceId,
+                workspace_id: targetWorkspaceId,
                 descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
                 valor: transacao.amount,
                 data: hoje,
@@ -601,6 +611,7 @@ serve(async (req) => {
               await supabaseAdmin.from('divipay_conciliacoes').upsert(
                 {
                   user_id: userId,
+                  workspace_id: targetWorkspaceId,
                   divipay_external_id: externalId,
                   tipo: typeof metaType === 'string' ? metaType : null,
                   favorecido_nome: saqueFavorecidoNome,
@@ -641,7 +652,7 @@ serve(async (req) => {
                 user_id: userId,
                 categoria_id: categoriaTaxaSaqueId,
                 conta_id: contaId,
-                workspace_id: dividaWorkspaceId ?? defaultWorkspaceId,
+                workspace_id: targetWorkspaceId,
                 descricao: `Taxa Divipay - saque ${externalId}`,
                 valor: Number(effectiveFee),
                 data: hoje,
