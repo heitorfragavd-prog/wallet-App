@@ -233,6 +233,18 @@ ALTER TABLE public.divipay_config
 ALTER TABLE public.divipay_transacoes
   ALTER COLUMN workspace_id SET NOT NULL;
 
+-- Tornar workspace_id obrigatório em divipay_conciliacoes (backfill defensivo executado na ETAPA 2, writers validados)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'divipay_conciliacoes'
+  ) THEN
+    ALTER TABLE public.divipay_conciliacoes
+      ALTER COLUMN workspace_id SET NOT NULL;
+  END IF;
+END $$;
+
 -- ============================================================================
 -- ETAPA 4: Índices de Alta Performance
 -- ============================================================================

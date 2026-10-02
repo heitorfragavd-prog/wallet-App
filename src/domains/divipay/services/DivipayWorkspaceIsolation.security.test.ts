@@ -21,10 +21,15 @@
  * - TESTE 17 (Novo): Migration contém backfill defensivo de divipay_conciliacoes (fail-closed, com guardas de contagem e validação de PJ)
  * - TESTE 18 (Novo): Migration impede que conciliações legadas fiquem inacessíveis por workspace_id NULL e aplica NOT NULL em divipay_transacoes
  * - TESTE 19 (Novo): Migration possui transação explícita BEGIN e COMMIT (garantia de atomicidade integral sem DDL incompatível)
+ * - TESTE 20 (Novo): registrarConciliacao exige workspace_id (fail-closed) e inclui workspace_id no upsert
+ * - TESTE 21 (Novo): Webhook nunca cria divipay_conciliacoes sem workspace_id (fail-closed, 3 fluxos auditados)
+ * - TESTE 22 (Novo): Migration aplica NOT NULL em divipay_conciliacoes e divipay_transacoes com todos os writers compatíveis
+ * - TESTE 23 (Novo): Não existe fallback por PJ/user/primeiro workspace nos writers (ConciliacaoDivipayService e webhook)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { divipayService } from './DivipayService';
+import { conciliacaoDivipayService } from './ConciliacaoDivipayService';
 import { supabase } from '@/integrations/supabase/client';
 import fs from 'fs';
 import path from 'path';
@@ -401,5 +406,103 @@ describe('SEC-001: Isolamento de Workspace na Integração Divipay', () => {
     // Proíbe comandos que quebram transação no PostgreSQL
     expect(content).not.toMatch(/CREATE\s+INDEX\s+CONCURRENTLY/i);
     expect(content).not.toMatch(/\bVACUUM\b/i);
+  });
+
+  it('TESTE 20: registrarConciliacao exige workspace_id (fail-closed) e inclui workspace_id no upsert', async () => {
+    const mockSaque = {
+      externalId: 'ext-saque-123',
+      tipo: 'PIX',
+      favorecidoNome: 'Fornecedor Teste',
+      favorecidoDocumento: '12345678000199',
+      valor: 250.50,
+      taxa: 3.50,
+      dataPagamento: '2026-10-02T12:00:00Z',
+      descricao: 'Pagamento de teste',
+    };
+
+    // Sem workspace_id: FAIL-CLOSED imediato
+    await expect(
+      conciliacaoDivipayService.registrarConciliacao(USER_ID, '', mockSaque, 'pendente')
+    ).rejects.toThrow(/workspace_id é obrigatório/i);
+
+    await expect(
+      conciliacaoDivipayService.registrarConciliacao(USER_ID, null as unknown as string, mockSaque, 'pendente')
+    ).rejects.toThrow(/workspace_id é obrigatório/i);
+
+    // Com workspace_id válido: executa upsert com workspace_id
+    const mockUpsert = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(supabase.from).mockReturnValueOnce({ upsert: mockUpsert } as any);
+
+    await conciliacaoDivipayService.registrarConciliacao(USER_ID, WORKSPACE_PJ, mockSaque, 'pendente');
+
+    expect(supabase.from).toHaveBeenCalledWith('divipay_conciliacoes');
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: USER_ID,
+        workspace_id: WORKSPACE_PJ,
+        divipay_external_id: 'ext-saque-123',
+        status: 'pendente',
+      }),
+      { onConflict: 'user_id,divipay_external_id' },
+    );
+  });
+
+  it('TESTE 21: Webhook nunca cria divipay_conciliacoes sem workspace_id (fail-closed, 3 fluxos auditados)', () => {
+    const webhookPath = path.resolve(process.cwd(), 'supabase/functions/divipay-webhook/index.ts');
+    expect(fs.existsSync(webhookPath)).toBe(true);
+
+    const content = fs.readFileSync(webhookPath, 'utf8');
+
+    // CASH_OUT aborta se transacao.workspace_id for nulo (fail-closed)
+    expect(content).toMatch(/if\s*\(!targetWorkspaceId\)\s*\{[\s\S]*?Conciliação abortada: transação sem workspace_id/i);
+
+    // Contagem de writers de divipay_conciliacoes no webhook
+    const upsertMatches = content.match(/from\(['"]divipay_conciliacoes['"]\)\.upsert/g);
+    expect(upsertMatches).not.toBeNull();
+    expect(upsertMatches?.length).toBe(3);
+
+    // Todos os 3 upserts passam workspace_id: targetWorkspaceId
+    const conciliaBlocks = content.match(/from\(['"]divipay_conciliacoes['"]\)\.upsert\(\s*\{[\s\S]*?\}\s*,\s*\{/g);
+    expect(conciliaBlocks).not.toBeNull();
+    expect(conciliaBlocks?.length).toBe(3);
+
+    for (const block of conciliaBlocks ?? []) {
+      expect(block).toMatch(/workspace_id:\s*targetWorkspaceId/);
+      expect(block).not.toMatch(/workspace_id:\s*defaultWorkspaceId/);
+    }
+  });
+
+  it('TESTE 22: Migration aplica NOT NULL em divipay_conciliacoes e divipay_transacoes com todos os writers compatíveis', () => {
+    const migrationPath = path.resolve(process.cwd(), 'supabase/migrations/20261002061000_isolate_divipay_by_workspace.sql');
+    const content = fs.readFileSync(migrationPath, 'utf8');
+
+    // divipay_config recebe NOT NULL
+    expect(content).toMatch(/ALTER\s+TABLE\s+public\.divipay_config\s+ALTER\s+COLUMN\s+workspace_id\s+SET\s+NOT\s+NULL/i);
+
+    // divipay_transacoes recebe NOT NULL
+    expect(content).toMatch(/ALTER\s+TABLE\s+public\.divipay_transacoes\s+ALTER\s+COLUMN\s+workspace_id\s+SET\s+NOT\s+NULL/i);
+
+    // divipay_conciliacoes recebe NOT NULL
+    expect(content).toMatch(/ALTER\s+TABLE\s+public\.divipay_conciliacoes\s+ALTER\s+COLUMN\s+workspace_id\s+SET\s+NOT\s+NULL/i);
+  });
+
+  it('TESTE 23: Não existe fallback por PJ/user/primeiro workspace nos writers (ConciliacaoDivipayService e webhook)', () => {
+    const servicePath = path.resolve(process.cwd(), 'src/domains/divipay/services/ConciliacaoDivipayService.ts');
+    const serviceContent = fs.readFileSync(servicePath, 'utf8');
+
+    // ConciliacaoDivipayService não deve ter queries de fallback por PJ ou default workspace
+    expect(serviceContent).not.toMatch(/resolveWorkspaceId/);
+    expect(serviceContent).not.toMatch(/\.eq\(['"]tipo['"],\s*['"]PJ['"]\)/);
+    expect(serviceContent).not.toMatch(/\.eq\(['"]is_default['"],\s*true\)/);
+
+    // Webhook: divipay_conciliacoes não recebe defaultWorkspaceId
+    const webhookPath = path.resolve(process.cwd(), 'supabase/functions/divipay-webhook/index.ts');
+    const webhookContent = fs.readFileSync(webhookPath, 'utf8');
+
+    const webhookConciliaUpserts = webhookContent.match(/from\(['"]divipay_conciliacoes['"]\)\.upsert\([\s\S]*?\)/g) || [];
+    for (const upsert of webhookConciliaUpserts) {
+      expect(upsert).not.toMatch(/defaultWorkspaceId/);
+      expect(upsert).not.toMatch(/findDefaultWorkspace/);
+    }
   });
 });

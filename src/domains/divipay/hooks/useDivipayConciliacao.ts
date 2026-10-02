@@ -20,9 +20,13 @@ function invalidarTudo(qc: ReturnType<typeof useQueryClient>) {
 }
 
 export function useDivipayConciliacoes(status = "pendente") {
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
+
   return useQuery({
-    queryKey: [...DIVIPAY_CONCILIACOES_QUERY_KEY, status],
-    queryFn: () => conciliacaoDivipayService.listar(status),
+    queryKey: [...DIVIPAY_CONCILIACOES_QUERY_KEY, status, workspaceId],
+    queryFn: () => conciliacaoDivipayService.listar(status, workspaceId),
+    enabled: !!workspaceId,
     staleTime: 1000 * 30,
   });
 }
@@ -110,8 +114,8 @@ export function useDivipayConciliacaoAuto() {
   const disparou = useRef(false);
 
   useEffect(() => {
-    if (disparou.current || loading || transferencias.length === 0) return;
-    const chave = `divipay-conciliacao-auto:${new Date().toISOString().slice(0, 10)}`;
+    if (disparou.current || loading || transferencias.length === 0 || !activeWorkspace?.id) return;
+    const chave = `divipay-conciliacao-auto:${activeWorkspace.id}:${new Date().toISOString().slice(0, 10)}`;
     if (sessionStorage.getItem(chave)) return;
     disparou.current = true;
     sessionStorage.setItem(chave, "1");
