@@ -41,6 +41,16 @@ interface DREHistoricoMes {
   margemLiquida: number;
 }
 
+interface DREDatabaseRow {
+  valor?: number | string | null;
+  descricao?: string | null;
+  workspace_id?: string | null;
+  conta_id?: string | null;
+  cartao_id?: string | null;
+  fatura_id?: string | null;
+  metodo_pagamento?: string | null;
+}
+
 async function fetchAllRows(
   table: string,
   columns: string,
@@ -48,9 +58,9 @@ async function fetchAllRows(
   fimStr: string,
   tipo?: string,
   workspaceId?: string | null
-): Promise<any[]> {
+): Promise<DREDatabaseRow[]> {
   const PAGE_SIZE = 1000;
-  let allRows: any[] = [];
+  let allRows: DREDatabaseRow[] = [];
   let from = 0;
   let hasMore = true;
 
@@ -73,7 +83,7 @@ async function fetchAllRows(
     if (error || !data || data.length === 0) {
       break;
     }
-    allRows = allRows.concat(data);
+    allRows = allRows.concat(data as unknown as DREDatabaseRow[]);
     if (data.length < PAGE_SIZE) {
       hasMore = false;
     } else {
@@ -97,30 +107,32 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
     fetchAllRows("transacoes", "valor, descricao, workspace_id, cartao_id, metodo_pagamento", inicioStr, fimStr, "despesa", workspaceId),
   ]);
 
-  const soma = (rows: any[] | null) =>
-    (rows ?? []).reduce((acc: number, r: any) => acc + Number(r.valor || 0), 0);
+  const soma = (rows: DREDatabaseRow[] | null) =>
+    (rows ?? []).reduce((acc: number, r: DREDatabaseRow) => acc + Number(r.valor || 0), 0);
 
-  let somaReceitasBanco = soma(recRows) + soma(transRecRows);
+  const somaReceitasBanco = soma(recRows) + soma(transRecRows);
 
   let somaDivipay = 0;
-  try {
-    const divipayResp = await divipayService.listMovements({
-      initialDate: `${inicioStr}T00:00:00`,
-      finalDate: `${fimStr}T23:59:59`,
-      limit: 1000,
-    });
-    const items = divipayResp.items ?? [];
-    somaDivipay = items
-      .filter((m) => {
-        const tp = String(m.type || "").toUpperCase();
-        const st = String(m.status || "").toUpperCase();
-        if (DIVIPAY_CASH_OUT_TYPES.some((t) => tp.includes(t))) return false;
-        if (st && DIVIPAY_NON_SETTLED_STATUSES.some((s) => st.includes(s))) return false;
-        return true;
-      })
-      .reduce((acc, m) => acc + (m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0)), 0);
-  } catch (err) {
-    console.warn("DRE: Erro ao buscar movimentações Divipay", err);
+  if (workspaceId) {
+    try {
+      const divipayResp = await divipayService.listMovements({
+        initialDate: `${inicioStr}T00:00:00`,
+        finalDate: `${fimStr}T23:59:59`,
+        limit: 1000,
+      }, workspaceId);
+      const items = divipayResp.items ?? [];
+      somaDivipay = items
+        .filter((m) => {
+          const tp = String(m.type || "").toUpperCase();
+          const st = String(m.status || "").toUpperCase();
+          if (DIVIPAY_CASH_OUT_TYPES.some((t) => tp.includes(t))) return false;
+          if (st && DIVIPAY_NON_SETTLED_STATUSES.some((s) => st.includes(s))) return false;
+          return true;
+        })
+        .reduce((acc, m) => acc + (m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0)), 0);
+    } catch (err) {
+      console.warn("DRE: Erro ao buscar movimentações Divipay", err);
+    }
   }
 
   const receitaBruta = somaReceitasBanco + somaDivipay;
@@ -145,16 +157,16 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
   const lucroBruto = receitaLiquida - cmv;
 
   // SEPARAÇÃO CORRETA: Despesas Operacionais do Negócio vs Cartão de Crédito
-  const isCartao = (r: any) =>
+  const isCartao = (r: DREDatabaseRow) =>
     Boolean(r.cartao_id) || Boolean(r.fatura_id) || String(r.metodo_pagamento || "").toLowerCase().includes("credito");
 
   const despesasOperacionais =
-    despRows.reduce((acc: number, r: any) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0) +
-    transDespRows.reduce((acc: number, r: any) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0);
+    despRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0) +
+    transDespRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0);
 
   const despesasCartao =
-    despRows.reduce((acc: number, r: any) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0) +
-    transDespRows.reduce((acc: number, r: any) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0);
+    despRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0) +
+    transDespRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0);
 
   const ebitda = lucroBruto - despesasOperacionais;
   const depreciacao = receitaBruta * 0.01;
@@ -205,7 +217,7 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
     margemLiquida: pct(lucroLiquido),
     linhas,
     despesasCartao,
-  } as any;
+  };
 }
 
 async function buscarHistoricoDRE(mesAtual: number, anoAtual: number, meses: number, workspaceId?: string | null): Promise<DREHistoricoMes[]> {
@@ -222,7 +234,7 @@ async function buscarHistoricoDRE(mesAtual: number, anoAtual: number, meses: num
         receitaLiquida: dre.receitaLiquida,
         lucroBruto: dre.lucroBruto,
         despesasOperacionais: dre.despesasOperacionais,
-        despesasCartao: (dre as any).despesasCartao || 0,
+        despesasCartao: dre.despesasCartao || 0,
         ebitda: dre.ebitda,
         lair: dre.lair,
         lucroLiquido: dre.lucroLiquido,

@@ -88,8 +88,10 @@ async function fetchDivipayDespesas(startDate?: string | null, endDate?: string 
     const allWithdraws: import("@/domains/divipay/types").DivipaySaque[] = [];
     const seenIds = new Set<string>();
 
+    if (!workspaceId) return [];
+
     for (let page = 0; page < MAX_PAGES; page++) {
-      const { items } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE });
+      const { items } = await divipayService.listWithdraws({ limit: PAGE, offset: page * PAGE }, workspaceId);
       const fresh = (items || []).filter((w) => w.id && !seenIds.has(w.id));
       fresh.forEach((w) => seenIds.add(w.id));
       allWithdraws.push(...fresh);

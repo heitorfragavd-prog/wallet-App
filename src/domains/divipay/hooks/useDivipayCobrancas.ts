@@ -3,38 +3,44 @@ import { supabase } from "@/integrations/supabase/client";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { CreatePixChargeParams, DivipayTransacao } from "@/domains/divipay/types";
 
 export const DIVIPAY_COBRANCAS_QUERY_KEY = ["divipay-cobrancas"] as const;
 
-async function fetchCobrancas(): Promise<DivipayTransacao[]> {
+async function fetchCobrancas(workspaceId?: string | null): Promise<DivipayTransacao[]> {
   const userId = (await supabase.auth.getUser()).data.user?.id;
   if (!userId) throw new Error("Usuário não autenticado");
+  if (!workspaceId) return [];
 
   const { data, error } = await supabase
     .from("divipay_transacoes")
     .select("*")
     .eq("user_id", userId)
+    .eq("workspace_id", workspaceId)
     .eq("type", "CASH_IN")
     .order("created_at", { ascending: false });
 
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []) as unknown as DivipayTransacao[];
 }
 
 export function useDivipayCobrancas() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
 
   const { data: cobrancas = [], isLoading: loading } = useQuery({
-    queryKey: DIVIPAY_COBRANCAS_QUERY_KEY,
-    queryFn: fetchCobrancas,
+    queryKey: [...DIVIPAY_COBRANCAS_QUERY_KEY, workspaceId],
+    queryFn: () => fetchCobrancas(workspaceId),
+    enabled: !!workspaceId,
     staleTime: 1000 * 60,
   });
 
   const createCobranca = useMutation({
     mutationFn: async (params: CreatePixChargeParams) => {
-      const { transacao } = await divipayService.createPixCharge(params);
+      const { transacao } = await divipayService.createPixCharge(params, workspaceId);
       return transacao;
     },
     onSuccess: () => {
@@ -55,7 +61,7 @@ export function useDivipayCobrancas() {
   const cancelCobranca = useMutation({
     mutationFn: async (charge: DivipayTransacao) => {
       if (!charge.external_id) throw new Error("Cobrança sem identificador externo");
-      await divipayService.cancelPixCharge(charge.external_id);
+      await divipayService.cancelPixCharge(charge.external_id, workspaceId);
 
       const { data, error } = await supabase
         .from("divipay_transacoes")

@@ -2,20 +2,28 @@ import { useCallback, useEffect, useState } from "react";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { DivipayConfig, DivipayEnvironment } from "@/domains/divipay/types";
 
 export const DIVIPAY_CONFIG_QUERY_KEY = ["divipay-config"] as const;
 
 export function useDivipayConfig() {
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
   const [config, setConfig] = useState<DivipayConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const fetchConfig = useCallback(async () => {
+    if (!workspaceId) {
+      setConfig(null);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const data = await divipayService.getConfig();
+      const data = await divipayService.getConfig(workspaceId);
       setConfig(data);
     } catch (err: unknown) {
       logger.error("useDivipayConfig", "Erro ao carregar configuração", { error: err instanceof Error ? err.message : String(err) });
@@ -27,18 +35,27 @@ export function useDivipayConfig() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [workspaceId, toast]);
 
   const saveCredentials = useCallback(
     async (clientId: string, clientSecret: string, environment: DivipayEnvironment) => {
+      if (!workspaceId) {
+        toast({
+          title: "Erro",
+          description: "Workspace não selecionado.",
+          variant: "destructive",
+        });
+        return;
+      }
       try {
         setSaving(true);
-        logger.info("useDivipayConfig", "Salvando credenciais Divipay", { environment });
+        logger.info("useDivipayConfig", "Salvando credenciais Divipay", { environment, workspaceId });
         const updated = await divipayService.saveConfig({
           client_id: clientId.trim(),
           client_secret: clientSecret.trim(),
           environment,
-        });
+          workspace_id: workspaceId,
+        }, workspaceId);
         // Garante reset local da configuracao
         setConfig(updated);
         toast({
@@ -58,7 +75,7 @@ export function useDivipayConfig() {
         setSaving(false);
       }
     },
-    [toast]
+    [workspaceId, toast]
   );
 
   const toggleEnvironment = useCallback(
