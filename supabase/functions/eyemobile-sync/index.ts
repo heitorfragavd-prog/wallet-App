@@ -1,7 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, no-empty, @typescript-eslint/no-unused-vars, prefer-const */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
-import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 import {
   validateRemoteProductsPage,
   validateRemoteSnapshot,
@@ -147,30 +145,7 @@ serve(async (req) => {
     try {
       requestBody = await req.json();
     } catch (_) {}
-    if (requestBody.mode === "RUN_MIGRATION") {
-      const dbUrl = Deno.env.get("SUPABASE_DB_URL") || Deno.env.get("DATABASE_URL");
-      if (!dbUrl) {
-        return new Response(JSON.stringify({ error: "No DB URL in Deno env", success: false }), {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        });
-      }
-      
-      const client = new Client(dbUrl);
-      try {
-        await client.connect();
-        const res = await client.queryArray(requestBody.query as string);
-        return new Response(JSON.stringify({ success: true, rows: res.rows, columns: res.rowDescription?.columns.map(c => c.name) }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        });
-      } catch (err: any) {
-        return new Response(JSON.stringify({ error: err.message, success: false }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        });
-      } finally {
-        await client.end();
-      }
-    }
+
 
     const authHeader = req.headers.get("Authorization") || "";
     const token = authHeader.replace("Bearer ", "").trim();
@@ -938,7 +913,12 @@ serve(async (req) => {
     if (mode === "UPDATE_PRODUCT_PRICE") {
       const productId = requestBody.product_id;
       const newPrice = requestBody.new_price;
-      const targetUserId = user_id || requestBody.user_id;
+      // Validação estrita de autorização contra IDOR:
+      // Chamadores com chave de serviço (service_role) podem definir targetUserId via body para reconciliações internas.
+      // Usuários autenticados comuns NUNCA podem injetar user_id de terceiros; targetUserId é estritamente o user_id autenticado no token.
+      const targetUserId = isServiceRole
+        ? (typeof requestBody.user_id === "string" && requestBody.user_id.trim() ? requestBody.user_id.trim() : user_id)
+        : user_id;
 
       if (!targetUserId || !productId || newPrice === undefined) {
         return new Response(JSON.stringify({ success: false, error: "user_id, product_id e new_price são obrigatórios" }), {
