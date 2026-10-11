@@ -1,16 +1,18 @@
--- Migration: Create user_profile_complete view
--- Requirements: 2.3
--- Description: Create comprehensive view with all user data for RPC function
+-- ============================================================================
+-- AVISO DE SEGURANÇA E DEPRECAÇÃO — SEC-003.1
+-- ============================================================================
+-- Script legado órfão referente à spec arquivada user-registration-sync.
+-- NÃO EXECUTAR MANUALMENTE EM PRODUÇÃO.
+-- A view 'user_profile_complete' foi identificada como inexistente em produção.
+-- Para prevenir vazamentos em reconstruções locais, security_invoker foi ativado
+-- e o acesso foi restrito exclusivamente a service_role.
+-- ============================================================================
 
--- ============================================================================
 -- Drop existing view if exists
--- ============================================================================
 DROP VIEW IF EXISTS public.user_profile_complete;
 
--- ============================================================================
--- Create user_profile_complete view with all required columns
--- ============================================================================
-CREATE OR REPLACE VIEW public.user_profile_complete AS
+-- Create user_profile_complete view with security_invoker enabled
+CREATE OR REPLACE VIEW public.user_profile_complete WITH (security_invoker = true) AS
 SELECT
   -- Profile data (with aliases for compatibility)
   p.id,
@@ -145,7 +147,10 @@ LEFT JOIN public.plans pl ON pl.id = s.plan_id;
 -- ============================================================================
 -- Grant permissions
 -- ============================================================================
-GRANT SELECT ON public.user_profile_complete TO authenticated;
+-- SEC-003.1: Revoga permissões de PUBLIC, anon e authenticated contra acesso indevido
+REVOKE ALL ON public.user_profile_complete FROM PUBLIC;
+REVOKE ALL ON public.user_profile_complete FROM anon;
+REVOKE ALL ON public.user_profile_complete FROM authenticated;
 GRANT SELECT ON public.user_profile_complete TO service_role;
 
 -- ============================================================================

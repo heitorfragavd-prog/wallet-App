@@ -273,113 +273,26 @@ BEGIN
 END;
 $function$;
 
+-- -- =====================================================
+-- 12. Deprecado: get_user_profile_by_phone (SEC-003.1)
 -- =====================================================
--- 12. Fix get_user_profile_by_phone (SECURITY DEFINER)
--- =====================================================
-CREATE OR REPLACE FUNCTION public.get_user_profile_by_phone(phone_number text)
-RETURNS json
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $function$
-DECLARE
-  result JSON;
+-- A criação desta função foi neutralizada por segurança na SEC-003.1.
+-- O objeto dependia de 'user_profile_complete' (view órfã não implantada em produção)
+-- e permitia enumeração de dados financeiros por telefone.
+-- Se porventura existir em ambiente de testes legado, revoga permissões públicas:
+DO $$
 BEGIN
-  SELECT json_build_object(
-    'user', json_build_object(
-      'id', upc.profile_id,
-      'user_id', upc.user_id,
-      'name', upc.name,
-      'email', upc.email,
-      'telefone', upc.telefone,
-      'endereco', upc.endereco,
-      'organization_name', upc.organization_name,
-      'avatar_url', upc.avatar_url,
-      'role', upc.role,
-      'created_at', upc.profile_created_at
-    ),
-    'subscription', json_build_object(
-      'id', upc.subscription_id,
-      'status', upc.subscription_status,
-      'expires_at', upc.subscription_expires_at,
-      'created_at', upc.subscription_created_at,
-      'is_expired', upc.subscription_expired,
-      'days_until_expiration', upc.days_until_expiration
-    ),
-    'plan', json_build_object(
-      'id', upc.plan_id,
-      'name', upc.plan_name,
-      'price', upc.plan_price,
-      'features', upc.plan_features,
-      'checkout_link', upc.plan_checkout_link
-    ),
-    'limits', json_build_object(
-      'transactions_per_month', upc.limit_transactions,
-      'custom_categories', upc.limit_categories,
-      'ai_analysis_per_month', upc.limit_ai_analysis,
-      'file_uploads_per_month', upc.limit_file_uploads,
-      'vehicles', upc.limit_vehicles,
-      'goals', upc.limit_goals,
-      'market_items', upc.limit_market_items
-    ),
-    'usage', json_build_object(
-      'transactions_this_month', upc.usage_transactions_mes,
-      'receitas_this_month', upc.usage_receitas_mes,
-      'despesas_this_month', upc.usage_despesas_mes,
-      'categories', upc.usage_categories,
-      'vehicles', upc.usage_vehicles,
-      'goals', upc.usage_goals,
-      'market_items', upc.usage_market_items,
-      'file_uploads_this_month', upc.usage_file_uploads_mes,
-      'ai_analysis_this_month', upc.usage_ai_analysis_mes
-    ),
-    'limits_reached', json_build_object(
-      'transactions', CASE 
-        WHEN upc.limit_transactions IS NULL THEN false 
-        ELSE upc.usage_transactions_mes >= upc.limit_transactions 
-      END,
-      'categories', CASE 
-        WHEN upc.limit_categories IS NULL THEN false 
-        ELSE upc.usage_categories >= upc.limit_categories 
-      END,
-      'vehicles', CASE 
-        WHEN upc.limit_vehicles IS NULL THEN false 
-        ELSE upc.usage_vehicles >= upc.limit_vehicles 
-      END,
-      'goals', CASE 
-        WHEN upc.limit_goals IS NULL THEN false 
-        ELSE upc.usage_goals >= upc.limit_goals 
-      END,
-      'market_items', CASE 
-        WHEN upc.limit_market_items IS NULL THEN false 
-        ELSE upc.usage_market_items >= upc.limit_market_items 
-      END,
-      'ai_analysis', CASE 
-        WHEN upc.limit_ai_analysis IS NULL THEN false 
-        WHEN upc.limit_ai_analysis = 0 THEN true
-        ELSE upc.usage_ai_analysis_mes >= upc.limit_ai_analysis 
-      END,
-      'file_uploads', CASE 
-        WHEN upc.limit_file_uploads IS NULL THEN false 
-        WHEN upc.limit_file_uploads = 0 THEN true
-        ELSE upc.usage_file_uploads_mes >= upc.limit_file_uploads 
-      END
-    ),
-    'financial_summary', json_build_object(
-      'total_receitas', upc.total_receitas,
-      'total_despesas', upc.total_despesas,
-      'total_dividas', upc.total_dividas,
-      'receitas_mes_valor', upc.receitas_mes_valor,
-      'despesas_mes_valor', upc.despesas_mes_valor,
-      'saldo_mes', upc.receitas_mes_valor - upc.despesas_mes_valor
-    )
-  ) INTO result
-  FROM public.user_profile_complete upc
-  WHERE upc.telefone = phone_number;
-  
-  RETURN result;
-END;
-$function$;
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = 'get_user_profile_by_phone'
+  ) THEN
+    REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(text) FROM PUBLIC;
+    REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(text) FROM anon;
+    REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(text) FROM authenticated;
+    GRANT EXECUTE ON FUNCTION public.get_user_profile_by_phone(text) TO service_role;
+  END IF;
+END $$;
 
 -- =====================================================
 -- 13. Fix verificar_manutencoes_nao_migradas (SECURITY DEFINER)
