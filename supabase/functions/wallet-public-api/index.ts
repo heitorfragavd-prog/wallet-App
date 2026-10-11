@@ -78,6 +78,19 @@ Deno.serve(async (req: Request) => {
   // ─── ENDPOINT: TELEGRAM (ASSÍNCRONO - PREVINE TIMEOUT) ──────────────────────
   if (path.endsWith("/telegram")) {
     try {
+      // Validação do token de webhook secreto do Telegram
+      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+      if (telegramWebhookSecret) {
+        const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
+        if (!secretHeader || secretHeader !== telegramWebhookSecret) {
+          console.warn("[Telegram Webhook] Token de webhook inválido ou ausente.");
+          return new Response(JSON.stringify({ error: "Unauthorized webhook caller" }), {
+            status: 401,
+            headers: CORS_HEADERS,
+          });
+        }
+      }
+
       const body = await req.json();
       const message = body.message || body.edited_message;
       if (!message || !message.chat) {
@@ -167,6 +180,19 @@ Deno.serve(async (req: Request) => {
   // ─── ENDPOINT: WHATSAPP (ASSÍNCRONO - PREVINE TIMEOUT) ──────────────────────
   if (path.endsWith("/whatsapp")) {
     try {
+      // Validação do token de webhook secreto do WhatsApp / Evolution API
+      const whatsappWebhookSecret = Deno.env.get("EVOLUTION_WEBHOOK_SECRET") || Deno.env.get("WHATSAPP_WEBHOOK_SECRET");
+      if (whatsappWebhookSecret) {
+        const secretHeader = req.headers.get("apikey") || req.headers.get("x-webhook-secret") || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+        if (!secretHeader || secretHeader !== whatsappWebhookSecret) {
+          console.warn("[WhatsApp Webhook] Token de webhook inválido ou ausente.");
+          return new Response(JSON.stringify({ error: "Unauthorized webhook caller" }), {
+            status: 401,
+            headers: CORS_HEADERS,
+          });
+        }
+      }
+
       const body = await req.json();
       
       // O webhook da Evolution API normalmente envia eventos como 'messages.upsert'

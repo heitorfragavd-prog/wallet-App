@@ -304,12 +304,14 @@ serve(async (req) => {
       // Usuário não existe, criar diretamente com senha aleatória
       console.log('Criando novo usuário com senha aleatória')
 
-      // Gerar senha aleatória segura (12 caracteres)
+      // Gerar senha aleatória criptograficamente segura via CSPRNG (16 caracteres)
       const generatePassword = () => {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*'
+        const randomBytes = new Uint8Array(16)
+        crypto.getRandomValues(randomBytes)
         let password = ''
-        for (let i = 0; i < 12; i++) {
-          password += chars.charAt(Math.floor(Math.random() * chars.length))
+        for (let i = 0; i < 16; i++) {
+          password += chars.charAt(randomBytes[i] % chars.length)
         }
         return password
       }
@@ -396,10 +398,8 @@ serve(async (req) => {
       try {
         // Nota: O Supabase não tem API direta para enviar emails customizados
         // Você precisará usar um serviço externo como Resend, SendGrid, etc.
-        // Por enquanto, vamos apenas logar as credenciais
-        console.log('Credenciais do novo usuário:')
-        console.log('Email:', payload.email)
-        console.log('Senha:', randomPassword)
+        // Por segurança, NUNCA logar credenciais em texto claro
+        console.log('Credenciais temporárias geradas com sucesso para novo usuário provisionado via webhook de pagamento.')
         
         // TODO: Integrar com serviço de email
         // Exemplo com Resend:

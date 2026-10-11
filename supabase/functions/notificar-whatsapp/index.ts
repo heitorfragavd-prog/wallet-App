@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { isAuthorizedCronCaller, unauthorizedResponse } from "../_shared/auth-guard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,6 +8,11 @@ const corsHeaders = {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // Exigir chamada autorizada de backend (service_role ou CRON_SECRET)
+  if (!isAuthorizedCronCaller(req)) {
+    return unauthorizedResponse("Unauthorized: Cron secret or service role key required to relay WhatsApp messages", corsHeaders);
+  }
 
   try {
     const { telefone, mensagem } = await req.json();

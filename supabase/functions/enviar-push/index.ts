@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import webpush from "https://esm.sh/web-push@3.6.7";
+import { authorizeUserOrService } from "../_shared/auth-guard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,6 +29,15 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
     });
+
+    // Validar se chamador é service_role ou o próprio usuário destino (anti-IDOR)
+    const authCheck = await authorizeUserOrService(req, user_id, supabase);
+    if (!authCheck.authorized) {
+      return new Response(
+        JSON.stringify({ success: false, error: authCheck.reason }),
+        { status: authCheck.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!vapidPublicKey || !vapidPrivateKey) {
       // Registrar log de erro
