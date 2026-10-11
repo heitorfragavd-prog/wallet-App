@@ -8,7 +8,7 @@
  * 4. Validação do papel de service_role para chamadas administrativas
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
