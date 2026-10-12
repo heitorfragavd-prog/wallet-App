@@ -1,21 +1,24 @@
--- Migration: Create/Fix get_user_profile_by_phone function
--- Requirements: 2.1, 2.3
--- Description: RPC function to get complete user profile by phone number
+-- ============================================================================
+-- AVISO DE SEGURANÇA E DEPRECAÇÃO — SEC-003.1
+-- ============================================================================
+-- Script legado órfão referente à spec arquivada user-registration-sync.
+-- NÃO EXECUTAR MANUALMENTE EM PRODUÇÃO.
+-- A função foi identificada como inexistente no PostgreSQL de produção.
+-- Para prevenir enumeração de perfis em reconstruções locais de ambiente:
+-- 1. search_path foi restrito a (public, pg_temp)
+-- 2. Guard clause de isolamento auth.uid() foi adicionado
+-- 3. Execução para 'authenticated' foi desativada; restrito a 'service_role'.
+-- ============================================================================
 
--- ============================================================================
 -- Drop existing function if exists
--- ============================================================================
 DROP FUNCTION IF EXISTS public.get_user_profile_by_phone(TEXT);
 
--- ============================================================================
 -- Create get_user_profile_by_phone function
--- Returns complete user data including profile, subscription, plan, limits, usage
--- ============================================================================
 CREATE OR REPLACE FUNCTION public.get_user_profile_by_phone(phone_number TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path TO 'public'
+SET search_path = public, pg_temp
 AS $function$
 DECLARE
   result JSONB;
@@ -36,6 +39,11 @@ BEGIN
   
   -- Return NULL if no user found (Requirement 2.2)
   IF user_data IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- Defesa em profundidade (SEC-003.1): se chamado por usuário autenticado, só permite consultar a si mesmo
+  IF coalesce(auth.role(), '') = 'authenticated' AND (user_data.user_id IS DISTINCT FROM auth.uid()) THEN
     RETURN NULL;
   END IF;
   
@@ -108,7 +116,10 @@ $function$;
 -- ============================================================================
 -- Grant permissions
 -- ============================================================================
-GRANT EXECUTE ON FUNCTION public.get_user_profile_by_phone(TEXT) TO authenticated;
+-- SEC-003.1: Revoga permissões de PUBLIC, anon e authenticated (PostgreSQL concede EXECUTE a PUBLIC por padrão)
+REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(TEXT) FROM anon;
+REVOKE ALL ON FUNCTION public.get_user_profile_by_phone(TEXT) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_profile_by_phone(TEXT) TO service_role;
 
 -- ============================================================================
