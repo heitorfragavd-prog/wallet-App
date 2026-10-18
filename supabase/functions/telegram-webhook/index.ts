@@ -763,6 +763,41 @@ serve(async (req) => {
     auth: { persistSession: false },
   });
 
+  let incomingUpdateId: number | null = null;
+  let updateClaimed = false;
+
+  const markUpdateStatus = async (status: "completed" | "failed", errorMessage?: string) => {
+    if (!incomingUpdateId || !updateClaimed) return;
+    try {
+      if (status === "completed") {
+        const { error } = await supabase.rpc("concluir_telegram_update", {
+          p_update_id: incomingUpdateId,
+          p_bot_id: "default",
+        });
+        if (error) {
+          await supabase
+            .from("telegram_processed_updates")
+            .update({ status: "completed", error_message: null })
+            .match({ bot_id: "default", update_id: incomingUpdateId });
+        }
+      } else {
+        const { error } = await supabase.rpc("falhar_telegram_update", {
+          p_update_id: incomingUpdateId,
+          p_bot_id: "default",
+          p_error_message: errorMessage || null,
+        });
+        if (error) {
+          await supabase
+            .from("telegram_processed_updates")
+            .update({ status: "failed", error_message: errorMessage || null })
+            .match({ bot_id: "default", update_id: incomingUpdateId });
+        }
+      }
+    } catch (_err) {
+      // Falha silenciosa defensiva
+    }
+  };
+
   try {
     let body: Record<string, unknown> = {};
     try {
@@ -920,7 +955,64 @@ serve(async (req) => {
           { status: authResult.statusCode || 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
+
+      // Deduplicação e Idempotência Distribuída (Bloqueador 04)
+      incomingUpdateId = body?.update_id !== undefined ? Number(body.update_id) : null;
+      if (incomingUpdateId) {
+        const incomingChatId = body?.message?.chat?.id || body?.callback_query?.message?.chat?.id || null;
+        try {
+          const { data: claimData, error: claimErr } = await supabase.rpc("reivindicar_telegram_update", {
+            p_update_id: incomingUpdateId,
+            p_bot_id: "default",
+            p_chat_id: incomingChatId ? Number(incomingChatId) : null,
+            p_lease_seconds: 180,
+            p_max_attempts: 3,
+          });
+
+          if (!claimErr && claimData && claimData.length > 0) {
+            const claim = claimData[0];
+            if (!claim.should_process) {
+              console.warn(`[telegram-webhook] Update ${incomingUpdateId} ignorado via RPC: ${claim.reason}`);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+            updateClaimed = true;
+          } else {
+            // Fallback defensivo com insert direto se RPC falhar
+            const { error: dedupErr } = await supabase
+              .from("telegram_processed_updates")
+              .insert({
+                update_id: incomingUpdateId,
+                bot_id: "default",
+                chat_id: incomingChatId ? Number(incomingChatId) : null,
+                status: "processing",
+              });
+
+            if (dedupErr) {
+              console.warn(`[telegram-webhook] Update ${incomingUpdateId} já registrado ou em processamento (fallback idempotente).`);
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+            updateClaimed = true;
+          }
+        } catch (_claimErr) {
+          const { error: dedupErr } = await supabase
+            .from("telegram_processed_updates")
+            .insert({
+              update_id: incomingUpdateId,
+              bot_id: "default",
+              chat_id: incomingChatId ? Number(incomingChatId) : null,
+              status: "processing",
+            });
+
+          if (dedupErr) {
+            console.warn(`[telegram-webhook] Update ${incomingUpdateId} já registrado (fallback de exceção).`);
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+          updateClaimed = true;
+        }
+      }
     }
+
+    const runUpdateProcessing = async (): Promise<Response> => {
 
     const sendReplyWithButtons = async (replyChatId: string | number, replyText: string, buttons: Array<Array<{ text: string; callback_data: string }>>) => {
       if (!telegramBotToken) return null;
@@ -7429,8 +7521,22 @@ Ferramentas disponíveis:
     );
 
     return new Response("OK", { status: 200, headers: corsHeaders });
+    };
+
+    const res = await runUpdateProcessing();
+    if (incomingUpdateId && updateClaimed) {
+      if (res.ok) {
+        await markUpdateStatus("completed");
+      } else {
+        await markUpdateStatus("failed", `HTTP ${res.status}`);
+      }
+    }
+    return res;
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
+    if (incomingUpdateId && updateClaimed) {
+      await markUpdateStatus("failed", errMsg);
+    }
     return new Response(JSON.stringify({ error: errMsg }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

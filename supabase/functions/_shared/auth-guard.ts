@@ -63,6 +63,29 @@ export async function timingSafeEqualHash(a: string, b: string): Promise<boolean
   return diff === 0;
 }
 
+/**
+ * Validação segura de token de webhook com fail-closed e comparação em tempo constante.
+ * - Retorna false imediatamente se o segredo esperado não estiver configurado no servidor (Fail-Closed).
+ * - Retorna false se o token fornecido for nulo ou vazio.
+ * - NUNCA imprime segredos ou tokens em logs.
+ */
+export function validateWebhookSecret(
+  providedToken: string | null | undefined,
+  expectedSecret: string | null | undefined
+): boolean {
+  const expected = expectedSecret ? expectedSecret.trim() : "";
+  const provided = providedToken ? providedToken.trim() : "";
+
+  if (!expected || expected.length === 0) {
+    return false; // Fail-closed: segredo do servidor não configurado
+  }
+  if (!provided || provided.length === 0) {
+    return false;
+  }
+
+  return timingSafeEqual(provided, expected);
+}
+
 export function isAuthorizedCronCaller(req: Request): boolean {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
   const cronSecret = Deno.env.get("CRON_SECRET")?.trim();

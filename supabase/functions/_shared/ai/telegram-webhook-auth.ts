@@ -10,6 +10,8 @@
  * - Secret ausente no ambiente em produção -> fail-closed (401/403).
  */
 
+import { timingSafeEqual } from "../auth-guard.ts";
+
 export interface TelegramWebhookAuthResult {
   authorized: boolean;
   statusCode?: number;
@@ -57,8 +59,8 @@ export function validateTelegramWebhookSecret(
     };
   }
 
-  // 3. Validação do segredo
-  if (secretHeader === cleanExpected) {
+  // 3. Validação criptográfica do segredo em tempo constante
+  if (timingSafeEqual(secretHeader.trim(), cleanExpected)) {
     return { authorized: true };
   }
 

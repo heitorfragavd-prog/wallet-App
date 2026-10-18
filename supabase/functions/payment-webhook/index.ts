@@ -227,11 +227,46 @@ serve(async (req) => {
           status: 200 
         }
       )
-    }
-
-    // 3. Validar dados obrigatórios
+    // 3. Validar dados obrigatórios e integridade financeira
     if (!payload.email) {
       throw new Error('Email é obrigatório')
+    }
+
+    if (payload.amount !== undefined && (typeof payload.amount !== 'number' || payload.amount < 0 || isNaN(payload.amount))) {
+      throw new Error('Valor de pagamento inválido')
+    }
+
+    // 3.1 Idempotência Financeira: Verificar se a transação já foi processada anteriormente
+    if (payload.transaction_id) {
+      const { data: existingPayment } = await supabaseAdmin
+        .from('subscription_payments')
+        .select('id')
+        .eq('transaction_id', payload.transaction_id)
+        .maybeSingle()
+
+      if (existingPayment) {
+        console.log(`[payment-webhook] Transação ${payload.transaction_id} já processada anteriormente (idempotente).`)
+        await supabaseAdmin
+          .from('webhook_logs')
+          .update({ 
+            status: 'processed',
+            processed_at: new Date().toISOString(),
+            error_message: 'Transação já processada anteriormente (idempotente)'
+          })
+          .eq('id', webhookLogId)
+
+        return new Response(
+          JSON.stringify({ 
+            success: true, 
+            message: 'Transação já processada anteriormente (idempotente)',
+            duplicate: true
+          }),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200 
+          }
+        )
+      }
     }
 
     // 4. Buscar plano
@@ -278,26 +313,61 @@ serve(async (req) => {
         .single()
 
       if (profile) {
-        // Atualizar ou criar assinatura
-        await supabaseAdmin
-          .from('subscriptions')
-          .upsert({
-            user_id: profile.id,
-            plan_id: planId,
-            status: 'active',
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 dias
-          }, { onConflict: 'user_id' })
-
-        // Registrar pagamento
-        await supabaseAdmin
-          .from('subscription_payments')
-          .insert({
-            user_id: userId,
-            plan_id: planId,
-            amount: payload.amount || 0,
-            status: 'paid',
-            payment_date: new Date().toISOString()
+        let processedViaRpc = false
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('registrar_pagamento_assinatura_atomico', {
+            p_user_id: userId,
+            p_profile_id: profile.id,
+            p_plan_id: planId,
+            p_provider: payload.metadata?.platform ? String(payload.metadata.platform).toLowerCase() : 'payment',
+            p_transaction_id: payload.transaction_id ? String(payload.transaction_id) : null,
+            p_amount: payload.amount || 0,
+            p_duration_days: 30
           })
+
+          if (!rpcErr && rpcRes?.success) {
+            processedViaRpc = true
+            if (rpcRes.duplicate) {
+              console.log(`[payment-webhook] Transação ${payload.transaction_id} já processada anteriormente (idempotente RPC).`)
+            }
+          } else if (rpcErr) {
+            const isMissingFunction = rpcErr.code === 'PGRST202' || rpcErr.code === '42883' || rpcErr.message?.includes('function') || rpcErr.message?.includes('not found');
+            if (!isMissingFunction) {
+              console.error('[payment-webhook] Falha controlada na RPC registrar_pagamento_assinatura_atomico:', rpcErr);
+              throw new Error(`Falha atômica ao registrar pagamento: ${rpcErr.message}`);
+            }
+            console.warn('[payment-webhook] RPC registrar_pagamento_assinatura_atomico ausente, usando fallback legado...');
+          }
+        } catch (rpcEx) {
+          if (rpcEx instanceof Error && rpcEx.message.includes('Falha atômica')) {
+            throw rpcEx;
+          }
+        }
+
+        if (!processedViaRpc) {
+          // Atualizar ou criar assinatura
+          await supabaseAdmin
+            .from('subscriptions')
+            .upsert({
+              user_id: profile.id,
+              plan_id: planId,
+              status: 'active',
+              expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 dias
+            }, { onConflict: 'user_id' })
+
+          // Registrar pagamento
+          await supabaseAdmin
+            .from('subscription_payments')
+            .insert({
+              user_id: userId,
+              plan_id: planId,
+              amount: payload.amount || 0,
+              status: 'paid',
+              provider: payload.metadata?.platform ? String(payload.metadata.platform).toLowerCase() : 'payment',
+              payment_date: new Date().toISOString(),
+              transaction_id: payload.transaction_id || null,
+            })
+        }
       }
 
     } else {
@@ -355,26 +425,61 @@ serve(async (req) => {
         throw new Error(`Erro ao criar perfil: ${profileError.message}`)
       }
 
-      // Criar assinatura
-      await supabaseAdmin
-        .from('subscriptions')
-        .insert({
-          user_id: newProfile.id,
-          plan_id: planId,
-          status: 'active',
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 dias
+      let processedViaRpc = false
+      try {
+        const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('registrar_pagamento_assinatura_atomico', {
+          p_user_id: userId,
+          p_profile_id: newProfile.id,
+          p_plan_id: planId,
+          p_provider: payload.metadata?.platform ? String(payload.metadata.platform).toLowerCase() : 'payment',
+          p_transaction_id: payload.transaction_id ? String(payload.transaction_id) : null,
+          p_amount: payload.amount || 0,
+          p_duration_days: 30
         })
 
-      // Registrar pagamento
-      await supabaseAdmin
-        .from('subscription_payments')
-        .insert({
-          user_id: userId,
-          plan_id: planId,
-          amount: payload.amount || 0,
-          status: 'paid',
-          payment_date: new Date().toISOString()
-        })
+        if (!rpcErr && rpcRes?.success) {
+          processedViaRpc = true
+          if (rpcRes.duplicate) {
+            console.log(`[payment-webhook] Transação ${payload.transaction_id} já processada anteriormente (idempotente RPC).`)
+          }
+        } else if (rpcErr) {
+          const isMissingFunction = rpcErr.code === 'PGRST202' || rpcErr.code === '42883' || rpcErr.message?.includes('function') || rpcErr.message?.includes('not found');
+          if (!isMissingFunction) {
+            console.error('[payment-webhook] Falha controlada na RPC registrar_pagamento_assinatura_atomico:', rpcErr);
+            throw new Error(`Falha atômica ao registrar pagamento: ${rpcErr.message}`);
+          }
+          console.warn('[payment-webhook] RPC registrar_pagamento_assinatura_atomico ausente, usando fallback legado...');
+        }
+      } catch (rpcEx) {
+        if (rpcEx instanceof Error && rpcEx.message.includes('Falha atômica')) {
+          throw rpcEx;
+        }
+      }
+
+      if (!processedViaRpc) {
+        // Criar assinatura
+        await supabaseAdmin
+          .from('subscriptions')
+          .insert({
+            user_id: newProfile.id,
+            plan_id: planId,
+            status: 'active',
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 dias
+          })
+
+        // Registrar pagamento
+        await supabaseAdmin
+          .from('subscription_payments')
+          .insert({
+            user_id: userId,
+            plan_id: planId,
+            amount: payload.amount || 0,
+            status: 'paid',
+            provider: payload.metadata?.platform ? String(payload.metadata.platform).toLowerCase() : 'payment',
+            payment_date: new Date().toISOString(),
+            transaction_id: payload.transaction_id || null,
+          })
+      }
 
       // Enviar email com credenciais
       // Nota: Você precisará configurar um serviço de email (Resend, SendGrid, etc)
