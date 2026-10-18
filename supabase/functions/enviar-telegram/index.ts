@@ -13,8 +13,8 @@ serve(async (req) => {
   try {
     const { user_id, mensagem, titulo = "Wallet Bot" } = await req.json();
 
-    if (!user_id || !mensagem) {
-      return new Response(JSON.stringify({ success: false, error: "user_id e mensagem são obrigatórios" }), {
+    if (!mensagem) {
+      return new Response(JSON.stringify({ success: false, error: "mensagem é obrigatória" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -28,7 +28,7 @@ serve(async (req) => {
       auth: { persistSession: false },
     });
 
-    // Validar se chamador é service_role ou o próprio usuário destino (anti-IDOR)
+    // Validar se chamador é service_role ou usuário autorizado (anti-IDOR e isolamento cross-workspace)
     const authCheck = await authorizeUserOrService(req, user_id, supabase);
     if (!authCheck.authorized) {
       return new Response(
@@ -37,9 +37,17 @@ serve(async (req) => {
       );
     }
 
+    const targetUserId = authCheck.userId;
+    if (!targetUserId) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Destinatário inválido ou não identificado" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (!telegramBotToken) {
       await supabase.from("notificacoes_log").insert({
-        user_id,
+        user_id: targetUserId,
         tipo: "telegram",
         titulo,
         mensagem,
@@ -57,13 +65,13 @@ serve(async (req) => {
     const { data: usuarioTg, error: tgErr } = await supabase
       .from("usuarios_telegram")
       .select("telegram_chat_id")
-      .eq("user_id", user_id)
+      .eq("user_id", targetUserId)
       .eq("ativo", true)
       .maybeSingle();
 
     if (tgErr || !usuarioTg?.telegram_chat_id) {
       await supabase.from("notificacoes_log").insert({
-        user_id,
+        user_id: targetUserId,
         tipo: "telegram",
         titulo,
         mensagem,
@@ -94,7 +102,7 @@ serve(async (req) => {
     if (!resJson.ok) {
       const errorMsg = resJson.description || "Erro na API do Telegram";
       await supabase.from("notificacoes_log").insert({
-        user_id,
+        user_id: targetUserId,
         tipo: "telegram",
         titulo,
         mensagem,
@@ -109,7 +117,7 @@ serve(async (req) => {
     }
 
     await supabase.from("notificacoes_log").insert({
-      user_id,
+      user_id: targetUserId,
       tipo: "telegram",
       titulo,
       mensagem,
@@ -118,10 +126,10 @@ serve(async (req) => {
     });
 
     return new Response(
-      JSON.stringify({ success: true, message: "Mensagem enviada com sucesso via Telegram" }),
+      JSON.stringify({ success: true, message: "Mensagem enviada com sucesso via Telegram", user_id: targetUserId }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: unknown) {
+  } catch (error: any) {
     return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

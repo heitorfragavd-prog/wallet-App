@@ -94,11 +94,11 @@ const ConfiguracoesNotificacoes = () => {
         console.warn("Aviso ao criar dívida de teste:", insertErr.message);
       }
 
-      // 2. Dispara a Edge Function cron-notificacoes ou enviar-push direto
-      await supabase.functions.invoke("cron-notificacoes");
-
-      // 3. Fallback: dispara push direto com aviso de dívida
-      await push.testarPush();
+      // 2. Dispara teste individual no canal do usuário (sem chamar rotina global de cron)
+      await push.testarPush(
+        "🔔 Alerta de Vencimento D+1 (Simulação)",
+        "Fatura Cartão - Teste Alerta Push no valor de R$ 250,00 vence amanhã!"
+      );
     } catch (err: unknown) {
       console.error("Erro ao simular tarefa:", err);
     } finally {
