@@ -807,63 +807,119 @@ REVOKE ALL ON FUNCTION public.auditar_falhas_operacionais(INTEGER) FROM PUBLIC, 
 GRANT EXECUTE ON FUNCTION public.auditar_falhas_operacionais(INTEGER) TO postgres, service_role;
 
 -- ============================================================================
--- 5. ATUALIZAÇÃO IDEMPOTENTE DOS JOBS NO PG_CRON (CASO PG_CRON EXISTA)
 -- ============================================================================
--- Atualiza os jobs existentes para utilizar cron_dispatch_edge_function,
--- eliminando completamente o risco de erros fatais por GUCs inexistentes.
+-- 5. PROCEDIMENTO DE ATIVAÇÃO CONTROLADA DOS JOBS NO PG_CRON
+-- ============================================================================
+-- Define a função administrativa para substituir com segurança os 4 jobs legados
+-- e cadastrar os 4 novos jobs resilientes.
+-- A ativação dos agendamentos é desacoplada da migration DDL para permitir que
+-- as Edge Functions sejam publicadas e validadas ANTES de qualquer disparo.
 
-DO $$
+CREATE OR REPLACE FUNCTION public.ativar_agendamentos_cron_sec003_2()
+RETURNS TABLE (
+  job_name TEXT,
+  schedule TEXT,
+  status TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'cron') THEN
-    -- 1. processar-lembretes-manutencao
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'processar-lembretes-manutencao') THEN
-      PERFORM cron.unschedule('processar-lembretes-manutencao');
-    END IF;
-
-    PERFORM cron.schedule(
-      'processar-lembretes-manutencao',
-      '0 8 * * *',
-      $cmd$SELECT public.cron_dispatch_edge_function('processar-lembretes-manutencao', 'processar-lembretes-manutencao');$cmd$
-    );
-
-    -- 2. process-recurring-transactions
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'process-recurring-transactions') THEN
-      PERFORM cron.unschedule('process-recurring-transactions');
-    END IF;
-
-    PERFORM cron.schedule(
-      'process-recurring-transactions',
-      '5 0 * * *',
-      $cmd$SELECT public.cron_dispatch_edge_function('process-recurring-transactions', 'process-recurring-transactions');$cmd$
-    );
-
-    -- 3. cron-notificacoes (cadastrado de forma segura às 08:30)
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cron-notificacoes') THEN
-      PERFORM cron.unschedule('cron-notificacoes');
-    END IF;
-
-    PERFORM cron.schedule(
-      'cron-notificacoes',
-      '30 8 * * *',
-      $cmd$SELECT public.cron_dispatch_edge_function('cron-notificacoes', 'cron-notificacoes');$cmd$
-    );
-
-    -- 4. reconciliar-telegram-updates (a cada 15 minutos via SQL nativo)
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'reconciliar-telegram-updates') THEN
-      PERFORM cron.unschedule('reconciliar-telegram-updates');
-    END IF;
-
-    PERFORM cron.schedule(
-      'reconciliar-telegram-updates',
-      '*/15 * * * *',
-      $cmd$SELECT public.reconciliar_telegram_updates_abandonados('default', 300, 3);$cmd$
-    );
-
-    RAISE NOTICE 'pg_cron configurado com sucesso utilizando o despachante seguro.';
-  ELSE
-    RAISE NOTICE 'pg_cron não disponível no ambiente atual; as funções utilitárias e RPCs foram criadas.';
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'cron') THEN
+    RETURN QUERY SELECT 'pg_cron'::TEXT, 'none'::TEXT, 'not_installed'::TEXT;
+    RETURN;
   END IF;
-EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'Aviso: configuração do pg_cron ignorada defensivamente: %', SQLERRM;
+
+  -- 1. eyemobile-sync-every-30m (substitui legado com JWT exposto)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'eyemobile-sync-every-30m') THEN
+    PERFORM cron.unschedule('eyemobile-sync-every-30m');
+  END IF;
+  PERFORM cron.schedule(
+    'eyemobile-sync-every-30m',
+    '*/30 * * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('eyemobile-sync-every-30m', 'eyemobile-sync', '{"mode": "ALL"}'::jsonb);$cmd$
+  );
+  RETURN QUERY SELECT 'eyemobile-sync-every-30m'::TEXT, '*/30 * * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 2. notificar-lembretes-diario (substitui legado com JWT exposto)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'notificar-lembretes-diario') THEN
+    PERFORM cron.unschedule('notificar-lembretes-diario');
+  END IF;
+  PERFORM cron.schedule(
+    'notificar-lembretes-diario',
+    '0 12 * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('notificar-lembretes-diario', 'notificar-lembretes', '{}'::jsonb);$cmd$
+  );
+  RETURN QUERY SELECT 'notificar-lembretes-diario'::TEXT, '0 12 * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 3. sync-eyemobile-products (substitui legado com JWT exposto)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'sync-eyemobile-products') THEN
+    PERFORM cron.unschedule('sync-eyemobile-products');
+  END IF;
+  PERFORM cron.schedule(
+    'sync-eyemobile-products',
+    '0 */6 * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('sync-eyemobile-products', 'eyemobile-sync', '{"mode": "SYNC_PRODUCTS"}'::jsonb);$cmd$
+  );
+  RETURN QUERY SELECT 'sync-eyemobile-products'::TEXT, '0 */6 * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 4. lembrete-precos-semanal (substitui legado com JWT exposto)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'lembrete-precos-semanal') THEN
+    PERFORM cron.unschedule('lembrete-precos-semanal');
+  END IF;
+  PERFORM cron.schedule(
+    'lembrete-precos-semanal',
+    '0 9 * * 1',
+    $cmd$SELECT public.cron_dispatch_edge_function('lembrete-precos-semanal', 'lembrete-precos', '{}'::jsonb);$cmd$
+  );
+  RETURN QUERY SELECT 'lembrete-precos-semanal'::TEXT, '0 9 * * 1'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 5. processar-lembretes-manutencao (novo Blocker 05)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'processar-lembretes-manutencao') THEN
+    PERFORM cron.unschedule('processar-lembretes-manutencao');
+  END IF;
+  PERFORM cron.schedule(
+    'processar-lembretes-manutencao',
+    '0 8 * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('processar-lembretes-manutencao', 'processar-lembretes-manutencao');$cmd$
+  );
+  RETURN QUERY SELECT 'processar-lembretes-manutencao'::TEXT, '0 8 * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 6. process-recurring-transactions (novo Blocker 05)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'process-recurring-transactions') THEN
+    PERFORM cron.unschedule('process-recurring-transactions');
+  END IF;
+  PERFORM cron.schedule(
+    'process-recurring-transactions',
+    '5 0 * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('process-recurring-transactions', 'process-recurring-transactions');$cmd$
+  );
+  RETURN QUERY SELECT 'process-recurring-transactions'::TEXT, '5 0 * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 7. cron-notificacoes (novo Blocker 05)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'cron-notificacoes') THEN
+    PERFORM cron.unschedule('cron-notificacoes');
+  END IF;
+  PERFORM cron.schedule(
+    'cron-notificacoes',
+    '30 8 * * *',
+    $cmd$SELECT public.cron_dispatch_edge_function('cron-notificacoes', 'cron-notificacoes');$cmd$
+  );
+  RETURN QUERY SELECT 'cron-notificacoes'::TEXT, '30 8 * * *'::TEXT, 'scheduled_secure'::TEXT;
+
+  -- 8. reconciliar-telegram-updates (novo Blocker 05 - rotina SQL nativa)
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'reconciliar-telegram-updates') THEN
+    PERFORM cron.unschedule('reconciliar-telegram-updates');
+  END IF;
+  PERFORM cron.schedule(
+    'reconciliar-telegram-updates',
+    '*/15 * * * *',
+    $cmd$SELECT public.reconciliar_telegram_updates_abandonados('default', 300, 3);$cmd$
+  );
+  RETURN QUERY SELECT 'reconciliar-telegram-updates'::TEXT, '*/15 * * * *'::TEXT, 'scheduled_secure'::TEXT;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.ativar_agendamentos_cron_sec003_2() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ativar_agendamentos_cron_sec003_2() TO postgres, service_role;

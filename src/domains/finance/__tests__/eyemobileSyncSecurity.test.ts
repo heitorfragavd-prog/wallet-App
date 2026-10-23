@@ -81,14 +81,13 @@ describe('Eyemobile-Sync — Validação de Segurança em Ambiente Isolado', () 
 
   describe('3. Validação do Fluxo de Autenticação da Função', () => {
     it('exige verificação de Bearer token quando não é service_role', () => {
-      expect(code).toContain('authHeader.replace("Bearer ", "").trim()');
+      expect(code).toMatch(/authHeader\.replace\(\/\^Bearer\\s\+\/i,\s*["']["']\)\.trim\(\)/);
       expect(code).toContain('supabaseUserClient.auth.getUser(token)');
       expect(code).toContain('Não autorizado: token inválido.');
     });
 
     it('valida service_role estritamente por chave de serviço ou cron secret', () => {
-      expect(code).toContain('supabaseServiceKey && token === supabaseServiceKey');
-      expect(code).toContain('cronSecret.length > 0 && token === cronSecret');
+      expect(code).toContain('isTrustedServiceRoleCaller(authHeader, supabaseServiceKey, cronSecret)');
     });
   });
 });
