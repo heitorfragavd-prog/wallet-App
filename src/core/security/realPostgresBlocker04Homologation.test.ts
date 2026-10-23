@@ -66,6 +66,32 @@ describe('SEC-003.2 — Homologação Real em PostgreSQL Isolado (Bloqueador 04)
         DROP TABLE IF EXISTS public.profiles CASCADE;
         DROP TABLE IF EXISTS public.telegram_processed_updates CASCADE;
 
+        -- Drop funções existentes para evitar conflitos de sobrecarga
+        DO $$
+        DECLARE
+          r RECORD;
+        BEGIN
+          FOR r IN (
+            SELECT oid::regprocedure AS q
+            FROM pg_proc
+            WHERE proname IN (
+              'reivindicar_telegram_update',
+              'reconciliar_telegram_updates_abandonados',
+              'concluir_telegram_update',
+              'falhar_telegram_update',
+              'processar_divipay_cashin_atomico',
+              'registrar_pagamento_assinatura_atomico',
+              'recuperar_telegram_updates_para_reprocessamento',
+              'cron_dispatch_edge_function',
+              'auditar_respostas_pg_net',
+              'auditar_falhas_operacionais'
+            )
+            AND pronamespace = 'public'::regnamespace
+          ) LOOP
+            EXECUTE 'DROP FUNCTION IF EXISTS ' || r.q || ' CASCADE';
+          END LOOP;
+        END $$;
+
         CREATE TABLE public.plans (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           name TEXT NOT NULL,

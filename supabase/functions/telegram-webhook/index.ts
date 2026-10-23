@@ -34,6 +34,7 @@ import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
 import { validateTelegramWebhookSecret } from "../_shared/ai/telegram-webhook-auth.ts";
+import { timingSafeEqual } from "../_shared/auth-guard.ts";
 import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
 import {
   cleanDigits,
@@ -765,6 +766,7 @@ serve(async (req) => {
 
   let incomingUpdateId: number | null = null;
   let updateClaimed = false;
+  let claimAttemptCount: number | null = null;
 
   const markUpdateStatus = async (status: "completed" | "failed", errorMessage?: string) => {
     if (!incomingUpdateId || !updateClaimed) return;
@@ -773,6 +775,7 @@ serve(async (req) => {
         const { error } = await supabase.rpc("concluir_telegram_update", {
           p_update_id: incomingUpdateId,
           p_bot_id: "default",
+          p_expected_attempt: claimAttemptCount,
         });
         if (error) {
           await supabase
@@ -785,6 +788,7 @@ serve(async (req) => {
           p_update_id: incomingUpdateId,
           p_bot_id: "default",
           p_error_message: errorMessage || null,
+          p_expected_attempt: claimAttemptCount,
         });
         if (error) {
           await supabase
@@ -942,7 +946,22 @@ serve(async (req) => {
       body?.edited_message
     );
 
-    if (isTelegramWebhookUpdate) {
+    const isReprocessCall = req.headers.get("x-telegram-reprocess") === "true";
+    if (isReprocessCall) {
+      const authHeader = req.headers.get("Authorization");
+      const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+      const isAuthorizedService = Boolean(supabaseServiceKey && token && timingSafeEqual(token, supabaseServiceKey));
+      if (!isAuthorizedService) {
+        return new Response(JSON.stringify({ error: "Unauthorized reprocess caller" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      incomingUpdateId = body?.update_id !== undefined ? Number(body.update_id) : null;
+      const attemptHeader = req.headers.get("x-telegram-attempt-count");
+      claimAttemptCount = attemptHeader ? Number(attemptHeader) : null;
+      updateClaimed = true;
+    } else if (isTelegramWebhookUpdate) {
       const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
       const authResult = validateTelegramWebhookSecret(req.headers, telegramWebhookSecret, {
         isProduction: Deno.env.get("ENVIRONMENT") === "production" || !Deno.env.get("DENO_DEPLOYMENT_ID"),
@@ -956,7 +975,7 @@ serve(async (req) => {
         );
       }
 
-      // Deduplicação e Idempotência Distribuída (Bloqueador 04)
+      // Deduplicação e Idempotência Distribuída (Bloqueador 04/05)
       incomingUpdateId = body?.update_id !== undefined ? Number(body.update_id) : null;
       if (incomingUpdateId) {
         const incomingChatId = body?.message?.chat?.id || body?.callback_query?.message?.chat?.id || null;
@@ -967,6 +986,7 @@ serve(async (req) => {
             p_chat_id: incomingChatId ? Number(incomingChatId) : null,
             p_lease_seconds: 180,
             p_max_attempts: 3,
+            p_payload: body,
           });
 
           if (!claimErr && claimData && claimData.length > 0) {
@@ -976,6 +996,7 @@ serve(async (req) => {
               return new Response("OK", { status: 200, headers: corsHeaders });
             }
             updateClaimed = true;
+            claimAttemptCount = Number(claim.attempt_count) || null;
           } else {
             // Fallback defensivo com insert direto se RPC falhar
             const { error: dedupErr } = await supabase
@@ -985,6 +1006,7 @@ serve(async (req) => {
                 bot_id: "default",
                 chat_id: incomingChatId ? Number(incomingChatId) : null,
                 status: "processing",
+                payload: body,
               });
 
             if (dedupErr) {

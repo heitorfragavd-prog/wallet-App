@@ -148,14 +148,11 @@ serve(async (req) => {
 
 
     const authHeader = req.headers.get("Authorization") || "";
-    const token = authHeader.replace("Bearer ", "").trim();
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
 
     // Check if the caller has service role authorization (e.g. Cron ou chamada interna).
     const cronSecret = Deno.env.get("CRON_SECRET") || "";
-    const isServiceRole = Boolean(
-      (supabaseServiceKey && token === supabaseServiceKey) ||
-      (cronSecret.length > 0 && token === cronSecret)
-    );
+    const isServiceRole = isTrustedServiceRoleCaller(authHeader, supabaseServiceKey, cronSecret);
 
     let user_id: string | null = null;
 
