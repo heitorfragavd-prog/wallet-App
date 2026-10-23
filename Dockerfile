@@ -16,7 +16,7 @@ COPY . .
 ARG VITE_SUPABASE_URL=https://placeholder.supabase.co
 ARG VITE_SUPABASE_ANON_KEY=placeholder-anon-key
 ARG VITE_APP_NAME=Wallet
-ARG VITE_APP_URL=https://wallet.cortexx.online
+ARG VITE_APP_URL=https://wallet.wonderwold.com.br
 ARG VITE_APP_ENVIRONMENT=production
 ARG VITE_ENABLE_ANALYTICS=false
 ARG VITE_ENABLE_DEBUG_LOGS=false
