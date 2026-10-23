@@ -422,15 +422,29 @@ BEGIN
     RAISE EXCEPTION 'Acesso negado: Edge Function "%" não permitida no despachante cron.', p_function_name;
   END IF;
 
-  -- 2. Resolução segura de URL (com missing_ok = true)
-  v_supabase_url := NULLIF(trim(current_setting('app.settings.supabase_url', true)), '');
-  IF v_supabase_url IS NULL THEN
+  -- 2. Resolução segura de URL (Vault prioritário com fallback para GUC app.settings.supabase_url)
+  BEGIN
+    IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'vault') THEN
+      SELECT decrypted_secret INTO v_supabase_url
+      FROM vault.decrypted_secrets
+      WHERE name = 'supabase_url'
+      LIMIT 1;
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    v_supabase_url := NULL;
+  END;
+
+  IF v_supabase_url IS NULL OR length(trim(v_supabase_url)) = 0 THEN
+    v_supabase_url := NULLIF(trim(current_setting('app.settings.supabase_url', true)), '');
+  END IF;
+
+  IF v_supabase_url IS NULL OR length(trim(v_supabase_url)) = 0 THEN
     INSERT INTO public.cron_execution_logs (job_name, function_name, status, message)
     VALUES (
       COALESCE(p_job_name, 'unknown_cron'),
       p_function_name,
       'skipped_missing_guc',
-      'Configuração ausente: app.settings.supabase_url não definida no banco de dados'
+      'Configuração ausente: supabase_url não definida no vault nem em app.settings'
     );
     RETURN NULL;
   END IF;
