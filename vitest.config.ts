@@ -14,6 +14,7 @@ export default defineConfig({
       '**/dist/**',
       'tests/security-homologation.spec.ts',
       'tests/application-phase-abc-sequence.spec.ts',
+      'src/core/security/realPostgres*.test.ts',
     ],
     testTimeout: 15000,
     coverage: {

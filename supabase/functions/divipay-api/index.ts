@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { timingSafeEqual } from '../_shared/auth-guard.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -207,7 +208,7 @@ serve(async (req) => {
     const serviceRoleKey = (Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim()
 
     // Service-role é autorizado SOMENTE se o token corresponder exatamente à secret key do backend
-    const isServiceRole = Boolean(serviceRoleKey && token === serviceRoleKey)
+    const isServiceRole = Boolean(serviceRoleKey && timingSafeEqual(token, serviceRoleKey))
 
     const requestBody = await req.json().catch(() => ({}))
     let targetUserId = ''

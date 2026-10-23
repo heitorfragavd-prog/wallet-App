@@ -4,6 +4,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isAuthorizedCronCaller, unauthorizedResponse } from "../_shared/auth-guard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,6 +34,11 @@ serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+
+  // Validar se chamada possui service_role ou CRON_SECRET válido
+  if (!isAuthorizedCronCaller(req)) {
+    return unauthorizedResponse("Unauthorized: Cron secret or service role key required", corsHeaders);
   }
 
   try {
@@ -102,9 +108,43 @@ serve(async (req) => {
           continue;
         }
 
-        // Criar nova transação
+        // Execução atômica e idempotente no PostgreSQL (proteção contra concorrência real)
+        try {
+          const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(
+            "processar_transacao_recorrente_atomica",
+            {
+              p_recorrencia_id: recorrente.id,
+              p_user_id: recorrente.user_id,
+              p_tipo_transacao: recorrente.tipo_transacao,
+              p_descricao: recorrente.descricao,
+              p_valor: recorrente.valor,
+              p_data: hojeISO,
+              p_categoria_id: recorrente.categoria_id,
+              p_metodo_pagamento: recorrente.metodo_pagamento,
+              p_conta_id: recorrente.conta_id,
+            }
+          );
+
+          if (!rpcError && rpcResult && rpcResult.length > 0) {
+            const res = rpcResult[0];
+            if (res.duplicate) {
+              console.log(`Transação recorrente ${recorrente.id} já gerada hoje (idempotência atômica).`);
+              skippedCount++;
+            } else if (res.success) {
+              console.log(`Transação recorrente ${recorrente.id} criada via RPC atômica.`);
+              processedCount++;
+            } else {
+              console.error(`Falha na RPC para ${recorrente.id}:`, res.message);
+              failedCount++;
+            }
+            continue;
+          }
+        } catch (_rpcErr) {
+          // Fallback defensivo com insert direto se RPC não estiver disponível
+        }
+
         const tabela = recorrente.tipo_transacao === 'receita' ? 'receitas' : 'despesas';
-        
+        const deduplicationKey = `recorrente_${recorrente.id}_${hojeISO}`;
         const novaTransacao = {
           user_id: recorrente.user_id,
           descricao: recorrente.descricao,
@@ -114,6 +154,7 @@ serve(async (req) => {
           metodo_pagamento: recorrente.metodo_pagamento,
           conta_id: recorrente.conta_id,
           recorrencia_id: recorrente.id,
+          deduplication_key: deduplicationKey,
         };
 
         const { error: insertError } = await supabaseAdmin
@@ -121,13 +162,17 @@ serve(async (req) => {
           .insert([novaTransacao]);
 
         if (insertError) {
-          console.error(`Erro ao criar transação para ${recorrente.id}:`, insertError);
-          failedCount++;
+          if ((insertError as { code?: string }).code === "23505") {
+            console.log(`Concorrência evitada via constraint única: ${recorrente.id} já inserido por outra instância.`);
+            skippedCount++;
+          } else {
+            console.error(`Erro ao criar transação para ${recorrente.id}:`, insertError);
+            failedCount++;
+          }
           continue;
         }
 
-        // Atualizar ultima_execucao
-        const { error: updateError } = await supabaseAdmin
+        await supabaseAdmin
           .from("transacoes_recorrentes")
           .update({
             ultima_execucao: hojeISO,
@@ -135,9 +180,7 @@ serve(async (req) => {
           })
           .eq("id", recorrente.id);
 
-        if (updateError) {
-          console.error(`Erro ao atualizar ultima_execucao para ${recorrente.id}:`, updateError);
-        }
+        processedCount++;
 
         console.log(`Transação criada com sucesso para ${recorrente.id}`);
         processedCount++;

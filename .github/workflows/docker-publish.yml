@@ -1,4 +1,4 @@
-﻿name: Build & Push Docker Image
+name: Build & Push Docker Image
 
 # Publica no Docker Hub SOMENTE após o CI Quality Gates concluir com sucesso no push para develop ou master.
 # Impede que PRs ou commits que falhem nos testes gerem/substituam imagens Docker.
@@ -81,7 +81,7 @@ jobs:
             VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
             VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
             VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'Wallet' }}
-            VITE_APP_URL=https://wallet.cortexx.online
+            VITE_APP_URL=${{ vars.VITE_APP_URL || 'https://wallet.wonderwold.com.br' }}
             VITE_APP_ENVIRONMENT=production
             VITE_ENABLE_ANALYTICS=false
             VITE_ENABLE_DEBUG_LOGS=false

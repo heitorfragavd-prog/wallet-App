@@ -46,7 +46,7 @@ jobs:
           node-version: 20
 
       - name: Install pg client for concurrency tests
-        run: npm install --no-save pg
+        run: npm install --no-save --legacy-peer-deps pg
 
       - name: Run PostgreSQL Security Battery (Phase A, Phase C, RLS, Concurrency & Column Security)
         env:
@@ -193,7 +193,7 @@ jobs:
 
       - name: Install Playwright and Dependencies
         run: |
-          npm install --no-save @playwright/test pg
+          npm install --no-save --legacy-peer-deps @playwright/test pg
           npx playwright install --with-deps chromium
 
       - name: Start Mock External Providers (OpenAI, Divipay, Eyemobile)

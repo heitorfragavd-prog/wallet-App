@@ -22,8 +22,8 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
     expect(content).not.toMatch(/atob\([^)]+\)\.role/);
     expect(content).not.toMatch(/payload\.role\s*===\s*['"]service_role['"]/);
     
-    // Prova que service_role exige igualdade estrita com a chave do backend
-    expect(content).toMatch(/serviceRoleKey\s*&&\s*token\s*===\s*serviceRoleKey/);
+    // Prova que service_role exige validação segura com tempo constante (timingSafeEqual)
+    expect(content).toMatch(/timingSafeEqual\(token,\s*serviceRoleKey\)/);
     // Prova que autenticação de usuário é chamada
     expect(content).toMatch(/supabaseAdmin\.auth\.getUser\(token\)/);
   });
@@ -48,7 +48,7 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
 
     expect(content).not.toMatch(/decoded\.iss\s*===\s*['"]supabase['"]/);
     expect(content).not.toMatch(/decoded\.role\s*===\s*['"]service_role['"]/);
-    expect(content).toMatch(/token\s*===\s*supabaseServiceKey/);
+    expect(content).toMatch(/isTrustedServiceRoleCaller\(/);
   });
 
   it("VULN-02: validar-senha exige token de autenticação e obtém userId com segurança", () => {
@@ -110,14 +110,18 @@ describe("Segurança das Edge Functions — Autenticação e Autorização", () 
   it("VULN-07: cron-alertas-investimentos e sefaz-sync exigem autenticação segura", () => {
     const cronPath = path.join(rootDir, "supabase/functions/cron-alertas-investimentos/index.ts");
     const sefazPath = path.join(rootDir, "supabase/functions/sefaz-sync/index.ts");
+    const authGuardPath = path.join(rootDir, "supabase/functions/_shared/auth-guard.ts");
 
     const cronContent = fs.readFileSync(cronPath, "utf8");
     const sefazContent = fs.readFileSync(sefazPath, "utf8");
+    const authGuardContent = fs.readFileSync(authGuardPath, "utf8");
 
-    expect(cronContent).toMatch(/isAuthorized\s*=\s*Boolean/);
-    expect(cronContent).toMatch(/401/);
+    expect(cronContent).toMatch(/isAuthorizedCronCaller\(req\)/);
+    expect(cronContent).toMatch(/unauthorizedResponse/);
 
-    expect(sefazContent).toMatch(/isAuthorized\s*=\s*Boolean/);
-    expect(sefazContent).toMatch(/401/);
+    expect(sefazContent).toMatch(/isAuthorizedCronCaller\(req\)/);
+    expect(sefazContent).toMatch(/unauthorizedResponse/);
+
+    expect(authGuardContent).toMatch(/status:\s*401/);
   });
 });

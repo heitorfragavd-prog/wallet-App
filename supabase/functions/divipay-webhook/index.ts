@@ -9,17 +9,11 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { validateWebhookSecret } from '../_shared/auth-guard.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-// Validação inline (mesmo comportamento de _shared/validation.ts:validateWebhookToken)
-function validateWebhookToken(token: string | null, secret: string): boolean {
-  if (!token) return false
-  if (!secret) return false
-  return token === secret
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
@@ -170,13 +164,13 @@ serve(async (req) => {
   let webhookLogId: string | null = null
 
   try {
-    // 1. Valida o token do webhook
+    // 1. Valida o token do webhook (Fail-Closed e Tempo Constante)
     const url = new URL(req.url)
     const token = url.searchParams.get('token') || req.headers.get('x-webhook-token')
-    const secret = Deno.env.get('DIVIPAY_WEBHOOK_SECRET') ?? ''
+    const secret = Deno.env.get('DIVIPAY_WEBHOOK_SECRET')
 
-    if (!validateWebhookToken(token, secret)) {
-      console.error('Webhook Divipay: token inválido', { hasToken: !!token, hasSecret: !!secret })
+    if (!validateWebhookSecret(token, secret)) {
+      console.error('Webhook Divipay: token inválido ou ausente (Fail-Closed)')
       return jsonResponse({ error: 'Unauthorized' }, 401)
     }
 
@@ -236,24 +230,48 @@ serve(async (req) => {
         .eq('id', webhookLogId)
     }
 
-    // 4. Idempotência: transação já finalizada não gera novos lançamentos
-    if (transacao.status === 'PAID') {
-      await markLog(true)
-      return jsonResponse({ success: true, message: 'Transação já processada anteriormente' })
+    // 4. Idempotência e Auto-recuperação Financeira:
+    // Se a transação já está PAID mas NÃO possui receita vinculada nos metadados (devido a falha intermediária anterior),
+    // NÃO aborta! Permite auto-recuperação financeira integral dos lançamentos.
+    const isAlreadyPaid = transacao.status === 'PAID';
+    if (isAlreadyPaid) {
+      const hasReceitaId = Boolean(transacao.metadata?.receita_id);
+      if (hasReceitaId) {
+        await markLog(true)
+        return jsonResponse({ success: true, message: 'Transação já processada anteriormente' })
+      } else {
+        console.warn(`[divipay-webhook] Transação ${externalId} com status PAID sem receita_id vinculada. Iniciando auto-recuperação financeira...`)
+      }
     }
 
-    const newStatus = mapStatus(status ?? event)
+    const newStatus = isAlreadyPaid ? 'PAID' : mapStatus(status ?? event)
     if (!newStatus || newStatus === 'PENDING') {
       await markLog(true, 'Evento sem mudança de status relevante')
       return jsonResponse({ success: true, message: 'Evento ignorado (status sem alteração)' })
     }
 
-    // 5. Atualiza o status da transação
+    // 5. Atualização atômica do status da transação com proteção contra concorrência
     const effectiveFee = fee ?? transacao.fee ?? null
-    await supabaseAdmin
-      .from('divipay_transacoes')
-      .update({ status: newStatus, fee: effectiveFee })
-      .eq('id', transacao.id)
+    if (newStatus === 'PAID' && !isAlreadyPaid) {
+      const { data: updatedTx } = await supabaseAdmin
+        .from('divipay_transacoes')
+        .update({ status: 'PAID', fee: effectiveFee, updated_at: new Date().toISOString() })
+        .eq('id', transacao.id)
+        .neq('status', 'PAID')
+        .select('id')
+        .maybeSingle()
+
+      if (!updatedTx) {
+        console.log(`[divipay-webhook] Transação ${externalId} já concluída concorrentemente (idempotente).`)
+        await markLog(true, 'Transação já processada concorrentemente')
+        return jsonResponse({ success: true, message: 'Transação já processada anteriormente' })
+      }
+    } else if (!isAlreadyPaid) {
+      await supabaseAdmin
+        .from('divipay_transacoes')
+        .update({ status: newStatus, fee: effectiveFee, updated_at: new Date().toISOString() })
+        .eq('id', transacao.id)
+    }
 
     // 6. Integração financeira apenas para confirmações (PAID)
     if (newStatus === 'PAID') {
@@ -269,53 +287,102 @@ serve(async (req) => {
         const categoriaReceitaId = await findOrCreateCategoria(
           supabaseAdmin, userId, 'Recebimentos Divipay', 'receita', 'Landmark', '#22c55e',
         )
-        const { data: receita, error: receitaError } = await supabaseAdmin
-          .from('receitas')
-          .insert({
-            user_id: userId,
-            categoria_id: categoriaReceitaId,
-            conta_id: contaId,
-            workspace_id: cashInWorkspaceId,
-            descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
-            valor: transacao.amount,
-            data: hoje,
-            metodo_pagamento: 'pix',
-            status: 'recebido',
-          })
-          .select('id')
-          .single()
+        const categoriaTaxaId = effectiveFee && Number(effectiveFee) > 0 ? await findOrCreateCategoria(
+          supabaseAdmin, userId, 'Taxas Bancárias / Tarifas de Gateway', 'despesa', 'Percent', '#ef4444',
+        ) : null
 
-        if (receitaError) {
-          console.error('Erro ao criar receita:', receitaError)
-        } else {
-          metadata.receita_id = receita.id
+        // Tentar processamento atômico transacional via RPC no PostgreSQL
+        let processedViaRpc = false
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('processar_divipay_cashin_atomico', {
+            p_transacao_id: transacao.id,
+            p_external_id: externalId,
+            p_user_id: userId,
+            p_workspace_id: cashInWorkspaceId,
+            p_amount: transacao.amount,
+            p_fee: effectiveFee ? Number(effectiveFee) : 0,
+            p_conta_id: contaId,
+            p_categoria_receita_id: categoriaReceitaId,
+            p_categoria_taxa_id: categoriaTaxaId,
+            p_descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
+            p_data: hoje,
+          })
+
+          if (!rpcErr && rpcRes?.success) {
+            processedViaRpc = true
+            metadata.receita_id = rpcRes.receita_id
+            metadata.despesa_taxa_id = rpcRes.despesa_taxa_id
+            if (rpcRes.already_processed) {
+              await markLog(true, 'Transação já processada e reconciliada via RPC atômica')
+              return jsonResponse({ success: true, message: 'Transação já processada anteriormente' })
+            }
+          } else if (rpcErr) {
+            // Falha controlada: se a RPC existe mas retornou erro de negócio ou banco,
+            // NÃO cair no fallback não-atômico. Falha de forma controlada para permitir recuperação segura.
+            const isMissingFunction = rpcErr.code === 'PGRST202' || rpcErr.code === '42883' || rpcErr.message?.includes('function') || rpcErr.message?.includes('not found');
+            if (!isMissingFunction) {
+              console.error('[divipay-webhook] Falha controlada na RPC atômica:', rpcErr);
+              await markLog(false, `Falha controlada na RPC atômica: ${rpcErr.message}`);
+              throw new Error(`Falha atômica ao processar cash-in Divipay: ${rpcErr.message}`);
+            }
+            console.warn('[divipay-webhook] RPC atômica não instalada no banco (PGRST202). Executando fallback legado...');
+          }
+        } catch (rpcEx) {
+          if (rpcEx instanceof Error && rpcEx.message.includes('Falha atômica')) {
+            throw rpcEx;
+          }
+          console.warn('[divipay-webhook] RPC atômica indisponível, executando fallback defensivo com deduplication_key:', rpcEx)
         }
 
-        // Despesa com a taxa do gateway
-        if (effectiveFee && Number(effectiveFee) > 0) {
-          const categoriaTaxaId = await findOrCreateCategoria(
-            supabaseAdmin, userId, 'Taxas Bancárias / Tarifas de Gateway', 'despesa', 'Percent', '#ef4444',
-          )
-          const { data: despesaTaxa, error: taxaError } = await supabaseAdmin
-            .from('despesas')
+        if (!processedViaRpc) {
+          // Fallback defensivo com deduplication_key única no PostgreSQL
+          const { data: receita, error: receitaError } = await supabaseAdmin
+            .from('receitas')
             .insert({
               user_id: userId,
-              categoria_id: categoriaTaxaId,
+              categoria_id: categoriaReceitaId,
               conta_id: contaId,
               workspace_id: cashInWorkspaceId,
-              descricao: `Taxa Divipay - transação ${externalId}`,
-              valor: Number(effectiveFee),
+              descricao: transacao.description ?? `Recebimento Pix Divipay ${externalId}`,
+              valor: transacao.amount,
               data: hoje,
               metodo_pagamento: 'pix',
-              status: 'pago',
+              status: 'recebido',
+              deduplication_key: `divipay:cashin:${transacao.id}`,
             })
             .select('id')
             .single()
 
-          if (taxaError) {
-            console.error('Erro ao criar despesa de taxa:', taxaError)
+          if (receitaError) {
+            console.error('Erro ao criar receita no fallback:', receitaError)
           } else {
-            metadata.despesa_taxa_id = despesaTaxa.id
+            metadata.receita_id = receita.id
+          }
+
+          // Despesa com a taxa do gateway
+          if (effectiveFee && Number(effectiveFee) > 0 && categoriaTaxaId) {
+            const { data: despesaTaxa, error: taxaError } = await supabaseAdmin
+              .from('despesas')
+              .insert({
+                user_id: userId,
+                categoria_id: categoriaTaxaId,
+                conta_id: contaId,
+                workspace_id: cashInWorkspaceId,
+                descricao: `Taxa Divipay - transação ${externalId}`,
+                valor: Number(effectiveFee),
+                data: hoje,
+                metodo_pagamento: 'pix',
+                status: 'pago',
+                deduplication_key: `divipay:fee:${transacao.id}`,
+              })
+              .select('id')
+              .single()
+
+            if (taxaError) {
+              console.error('Erro ao criar despesa de taxa no fallback:', taxaError)
+            } else {
+              metadata.despesa_taxa_id = despesaTaxa.id
+            }
           }
         }
       } else if (transacao.type === 'CASH_OUT') {

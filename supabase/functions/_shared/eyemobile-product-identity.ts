@@ -12,6 +12,8 @@
  * - Trusted service role exige chave secreta criptográfica estrita (não confia em JWT decodificado).
  */
 
+import { timingSafeEqual } from "./auth-guard.ts";
+
 export interface RawRemoteProduct {
   id?: unknown;
   name?: unknown;
@@ -107,11 +109,14 @@ export function isTrustedServiceRoleCaller(
   cronSecret?: string | null | undefined
 ): boolean {
   if (!token) return false;
-  const cleanToken = token.replace("Bearer ", "").trim();
+  const cleanToken = token.replace(/^Bearer\s+/i, "").trim();
   if (!cleanToken) return false;
 
-  const matchesServiceKey = Boolean(serviceRoleKey && cleanToken === serviceRoleKey.trim());
-  const matchesCronSecret = Boolean(cronSecret && cronSecret.trim().length > 0 && cleanToken === cronSecret.trim());
+  const expectedServiceKey = serviceRoleKey ? serviceRoleKey.trim() : "";
+  const expectedCronSecret = cronSecret ? cronSecret.trim() : "";
+
+  const matchesServiceKey = Boolean(expectedServiceKey && timingSafeEqual(cleanToken, expectedServiceKey));
+  const matchesCronSecret = Boolean(expectedCronSecret && timingSafeEqual(cleanToken, expectedCronSecret));
 
   return matchesServiceKey || matchesCronSecret;
 }

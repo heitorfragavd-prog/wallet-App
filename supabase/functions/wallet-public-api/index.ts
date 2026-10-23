@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchTelegramMedia, fetchWhatsAppMedia } from "./media-fetcher.ts";
 import { sendToTelegram, sendToWhatsApp } from "./adapters.ts";
 import { processMessage } from "./processor.ts";
+import { timingSafeEqual } from "../_shared/auth-guard.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -78,6 +79,25 @@ Deno.serve(async (req: Request) => {
   // ─── ENDPOINT: TELEGRAM (ASSÍNCRONO - PREVINE TIMEOUT) ──────────────────────
   if (path.endsWith("/telegram")) {
     try {
+      // Validação estrita e Fail-Closed do token de webhook secreto do Telegram
+      const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET")?.trim();
+      if (!telegramWebhookSecret) {
+        console.error("[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET não configurado no ambiente (Fail-Closed).");
+        return new Response(JSON.stringify({ error: "Server misconfiguration: webhook secret required" }), {
+          status: 500,
+          headers: CORS_HEADERS,
+        });
+      }
+
+      const secretHeader = req.headers.get("x-telegram-bot-api-secret-token")?.trim();
+      if (!secretHeader || !timingSafeEqual(secretHeader, telegramWebhookSecret)) {
+        console.warn("[Telegram Webhook] Token de webhook inválido ou ausente.");
+        return new Response(JSON.stringify({ error: "Unauthorized webhook caller" }), {
+          status: 401,
+          headers: CORS_HEADERS,
+        });
+      }
+
       const body = await req.json();
       const message = body.message || body.edited_message;
       if (!message || !message.chat) {
@@ -167,6 +187,25 @@ Deno.serve(async (req: Request) => {
   // ─── ENDPOINT: WHATSAPP (ASSÍNCRONO - PREVINE TIMEOUT) ──────────────────────
   if (path.endsWith("/whatsapp")) {
     try {
+      // Validação estrita e Fail-Closed do token de webhook secreto do WhatsApp / Evolution API
+      const whatsappWebhookSecret = (Deno.env.get("EVOLUTION_WEBHOOK_SECRET") || Deno.env.get("WHATSAPP_WEBHOOK_SECRET"))?.trim();
+      if (!whatsappWebhookSecret) {
+        console.error("[WhatsApp Webhook] EVOLUTION_WEBHOOK_SECRET/WHATSAPP_WEBHOOK_SECRET não configurado no ambiente (Fail-Closed).");
+        return new Response(JSON.stringify({ error: "Server misconfiguration: webhook secret required" }), {
+          status: 500,
+          headers: CORS_HEADERS,
+        });
+      }
+
+      const secretHeader = (req.headers.get("apikey") || req.headers.get("x-webhook-secret") || req.headers.get("authorization")?.replace(/^Bearer\s+/i, ""))?.trim();
+      if (!secretHeader || !timingSafeEqual(secretHeader, whatsappWebhookSecret)) {
+        console.warn("[WhatsApp Webhook] Token de webhook inválido ou ausente.");
+        return new Response(JSON.stringify({ error: "Unauthorized webhook caller" }), {
+          status: 401,
+          headers: CORS_HEADERS,
+        });
+      }
+
       const body = await req.json();
       
       // O webhook da Evolution API normalmente envia eventos como 'messages.upsert'

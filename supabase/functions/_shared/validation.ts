@@ -22,25 +22,27 @@ export interface PayloadValidator<T> {
   validate(payload: unknown): { isValid: boolean; data?: T; errors?: string[] };
 }
 
+import { timingSafeEqual } from './auth-guard.ts';
+
 /**
- * Validates webhook token against expected secret
+ * Validates webhook token against expected secret using constant-time comparison
  * 
  * @param token - Token from webhook request
  * @param secret - Expected secret token
- * @returns true if token matches secret
+ * @returns true if token matches secret in constant time
  */
-export function validateWebhookToken(token: string | null, secret: string): boolean {
+export function validateWebhookToken(token: string | null | undefined, secret: string | null | undefined): boolean {
   if (!token) {
     console.warn('Webhook validation failed: No token provided');
     return false;
   }
 
-  if (!secret) {
-    console.error('Webhook validation failed: No secret configured');
+  if (!secret || secret.trim().length === 0) {
+    console.error('Webhook validation failed: No secret configured (fail-closed)');
     return false;
   }
 
-  const isValid = token === secret;
+  const isValid = timingSafeEqual(token.trim(), secret.trim());
   
   if (!isValid) {
     console.warn('Webhook validation failed: Token mismatch');

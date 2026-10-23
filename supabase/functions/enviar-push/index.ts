@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import webpush from "https://esm.sh/web-push@3.6.7";
+import { authorizeUserOrService } from "../_shared/auth-guard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,8 +14,8 @@ serve(async (req) => {
   try {
     const { user_id, titulo, mensagem, url = "/" } = await req.json();
 
-    if (!user_id || !titulo || !mensagem) {
-      return new Response(JSON.stringify({ success: false, error: "user_id, titulo e mensagem são obrigatórios" }), {
+    if (!titulo || !mensagem) {
+      return new Response(JSON.stringify({ success: false, error: "titulo e mensagem são obrigatórios" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -29,10 +30,27 @@ serve(async (req) => {
       auth: { persistSession: false },
     });
 
+    // Validar se chamador é service_role ou usuário autorizado (anti-IDOR e isolamento cross-workspace)
+    const authCheck = await authorizeUserOrService(req, user_id, supabase);
+    if (!authCheck.authorized) {
+      return new Response(
+        JSON.stringify({ success: false, error: authCheck.reason }),
+        { status: authCheck.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const targetUserId = authCheck.userId;
+    if (!targetUserId) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Destinatário inválido ou não identificado" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (!vapidPublicKey || !vapidPrivateKey) {
       // Registrar log de erro
       await supabase.from("notificacoes_log").insert({
-        user_id,
+        user_id: targetUserId,
         tipo: "push",
         titulo,
         mensagem,
@@ -56,11 +74,11 @@ serve(async (req) => {
     const { data: subs, error: fetchErr } = await supabase
       .from("push_subscriptions")
       .select("*")
-      .eq("user_id", user_id);
+      .eq("user_id", targetUserId);
 
     if (fetchErr || !subs || subs.length === 0) {
       await supabase.from("notificacoes_log").insert({
-        user_id,
+        user_id: targetUserId,
         tipo: "push",
         titulo,
         mensagem,
@@ -89,7 +107,7 @@ serve(async (req) => {
         };
         await webpush.sendNotification(pushSubscription, payload);
         enviosComSucesso++;
-      } catch (err: unknown) {
+      } catch (err: any) {
         const msg = err?.message || String(err);
         erros.push(msg);
         // Se a subscription expirou ou foi revogada (404/410), remove do banco
@@ -101,7 +119,7 @@ serve(async (req) => {
 
     const sucesso = enviosComSucesso > 0;
     await supabase.from("notificacoes_log").insert({
-      user_id,
+      user_id: targetUserId,
       tipo: "push",
       titulo,
       mensagem,
@@ -110,10 +128,10 @@ serve(async (req) => {
     });
 
     return new Response(
-      JSON.stringify({ success: sucesso, envios: enviosComSucesso, total: subs.length }),
+      JSON.stringify({ success: sucesso, envios: enviosComSucesso, total: subs.length, user_id: targetUserId }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: unknown) {
+  } catch (error: any) {
     return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
