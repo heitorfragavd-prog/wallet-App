@@ -5,6 +5,57 @@
 -- Revisão Complementar: Imutabilidade de Tenancy/Ownership e Restrição de Delete
 -- =========================================================================
 
+-- 0. TABELA DE COLABORADORES DO WORKSPACE (Garante compatibilidade caso ainda não exista)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA auth TO supabase_auth_admin';
+  END IF;
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS public.workspace_members (
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role text NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'member')),
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS workspace_members_user_active_idx
+  ON public.workspace_members (user_id, active, workspace_id);
+
+ALTER TABLE public.workspace_members ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'workspace_members' AND policyname = 'workspace_members_user_isolation'
+  ) THEN
+    CREATE POLICY workspace_members_user_isolation ON public.workspace_members
+      FOR ALL TO authenticated
+      USING (
+        user_id = auth.uid() OR EXISTS (
+          SELECT 1 FROM public.workspaces w WHERE w.id = workspace_members.workspace_id AND w.user_id = auth.uid()
+        )
+      )
+      WITH CHECK (
+        user_id = auth.uid() OR EXISTS (
+          SELECT 1 FROM public.workspaces w WHERE w.id = workspace_members.workspace_id AND w.user_id = auth.uid()
+        )
+      );
+  END IF;
+END $$;
+
+-- Sincroniza proprietários existentes dos workspaces como membros ativos
+INSERT INTO public.workspace_members (workspace_id, user_id, role, active)
+SELECT id, user_id, 'admin', true
+FROM public.workspaces
+ON CONFLICT (workspace_id, user_id) DO NOTHING;
+
 -- Função canônica segura para verificação de acesso ao workspace
 CREATE OR REPLACE FUNCTION public.tem_acesso_workspace(p_workspace_id uuid)
 RETURNS boolean
@@ -395,16 +446,25 @@ USING (true)
 WITH CHECK (true);
 
 -- 8. INFRAESTRUTURA DE SEGURANÇA E RATE LIMIT (VULN-04)
--- Ativação formal de RLS nas tabelas auxiliares
+-- Ativação formal de RLS nas tabelas auxiliares (somente se existirem)
 ALTER TABLE IF EXISTS public.rate_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.ai_token_reservations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.investimentos_sessions ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.rate_limits FROM anon, authenticated, PUBLIC;
-GRANT ALL ON public.rate_limits TO service_role;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'rate_limits') THEN
+    EXECUTE 'REVOKE ALL ON public.rate_limits FROM anon, authenticated, PUBLIC';
+    EXECUTE 'GRANT ALL ON public.rate_limits TO service_role';
+  END IF;
 
-REVOKE ALL ON public.ai_token_reservations FROM anon, authenticated, PUBLIC;
-GRANT ALL ON public.ai_token_reservations TO service_role;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'ai_token_reservations') THEN
+    EXECUTE 'REVOKE ALL ON public.ai_token_reservations FROM anon, authenticated, PUBLIC';
+    EXECUTE 'GRANT ALL ON public.ai_token_reservations TO service_role';
+  END IF;
 
-REVOKE ALL ON public.investimentos_sessions FROM anon, authenticated, PUBLIC;
-GRANT ALL ON public.investimentos_sessions TO service_role;
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'investimentos_sessions') THEN
+    EXECUTE 'REVOKE ALL ON public.investimentos_sessions FROM anon, authenticated, PUBLIC';
+    EXECUTE 'GRANT ALL ON public.investimentos_sessions TO service_role';
+  END IF;
+END $$;

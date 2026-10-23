@@ -8,7 +8,7 @@
 BEGIN;
 
 -- ============================================================================
--- 1. TABELA subscription_payments: Idempotência Multi-Provedor
+-- 1. TABELA subscription_payments: Idempotência Multi-Provedor e Subscriptions
 -- ============================================================================
 
 ALTER TABLE public.subscription_payments
@@ -21,6 +21,28 @@ ALTER TABLE public.subscription_payments
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_payments_provider_tx
   ON public.subscription_payments (COALESCE(provider, 'pepper'), transaction_id)
   WHERE transaction_id IS NOT NULL;
+
+-- Hardening da tabela public.subscriptions para suporte a idempotência e ativação
+ALTER TABLE public.subscriptions
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now());
+
+-- Verificação prévia de unicidade de user_id antes de criar o índice
+DO $$
+DECLARE
+  v_dup_users integer;
+BEGIN
+  SELECT count(*) INTO v_dup_users
+  FROM (
+    SELECT user_id FROM public.subscriptions GROUP BY user_id HAVING count(*) > 1
+  ) d;
+
+  IF v_dup_users > 0 THEN
+    RAISE EXCEPTION 'Atenção: Existem assinaturas duplicadas para o mesmo user_id (total: % usuários). Intervenção manual requerida para desambiguação segura.', v_dup_users;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_user_id
+  ON public.subscriptions(user_id);
 
 -- ============================================================================
 -- 2. TABELA telegram_processed_updates: Ciclo de Vida e Recuperação
@@ -242,6 +264,105 @@ REVOKE ALL ON FUNCTION public.reconciliar_telegram_updates_abandonados(TEXT, INT
 GRANT EXECUTE ON FUNCTION public.reconciliar_telegram_updates_abandonados(TEXT, INTEGER) TO service_role;
 
 -- ============================================================================
+-- 3.1 INFRAESTRUTURA DE DEDUPLICAÇÃO E TENANCY (Divipay e Finanças)
+-- ============================================================================
+
+-- Garante coluna workspace_id e índice de isolamento em public.divipay_transacoes se a tabela existir
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'divipay_transacoes') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'workspaces') THEN
+      ALTER TABLE public.divipay_transacoes
+        ADD COLUMN IF NOT EXISTS workspace_id UUID REFERENCES public.workspaces(id) ON DELETE CASCADE;
+    ELSE
+      ALTER TABLE public.divipay_transacoes
+        ADD COLUMN IF NOT EXISTS workspace_id UUID;
+    END IF;
+    CREATE INDEX IF NOT EXISTS idx_divipay_transacoes_workspace
+      ON public.divipay_transacoes(workspace_id);
+  END IF;
+END $$;
+
+-- Garante colunas de deduplicação e índices únicos nas tabelas financeiras existentes
+DO $$
+BEGIN
+  -- 1. Receitas
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'receitas') THEN
+    ALTER TABLE public.receitas ADD COLUMN IF NOT EXISTS deduplication_key TEXT;
+    UPDATE public.receitas SET deduplication_key = 'receita:' || id::TEXT WHERE deduplication_key IS NULL;
+    
+    IF EXISTS (
+      SELECT 1 FROM public.receitas
+      WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+      GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+    ) THEN
+      UPDATE public.receitas r
+      SET deduplication_key = r.deduplication_key || ':dup:' || r.id::text
+      WHERE (r.workspace_id, r.deduplication_key) IN (
+        SELECT workspace_id, deduplication_key
+        FROM public.receitas
+        WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+        GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+      );
+    END IF;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_receitas_wallet_ai_dedup
+      ON public.receitas(workspace_id, deduplication_key)
+      WHERE workspace_id IS NOT NULL;
+  END IF;
+
+  -- 2. Despesas
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'despesas') THEN
+    ALTER TABLE public.despesas ADD COLUMN IF NOT EXISTS deduplication_key TEXT;
+    UPDATE public.despesas SET deduplication_key = 'despesa:' || id::TEXT WHERE deduplication_key IS NULL;
+
+    IF EXISTS (
+      SELECT 1 FROM public.despesas
+      WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+      GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+    ) THEN
+      UPDATE public.despesas d
+      SET deduplication_key = d.deduplication_key || ':dup:' || d.id::text
+      WHERE (d.workspace_id, d.deduplication_key) IN (
+        SELECT workspace_id, deduplication_key
+        FROM public.despesas
+        WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+        GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+      );
+    END IF;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_despesas_wallet_ai_dedup
+      ON public.despesas(workspace_id, deduplication_key)
+      WHERE workspace_id IS NOT NULL;
+  END IF;
+
+  -- 3. Transações
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'transacoes') THEN
+    ALTER TABLE public.transacoes ADD COLUMN IF NOT EXISTS deduplication_key TEXT;
+    UPDATE public.transacoes SET deduplication_key = 'transacao:' || id::TEXT WHERE deduplication_key IS NULL;
+
+    IF EXISTS (
+      SELECT 1 FROM public.transacoes
+      WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+      GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+    ) THEN
+      UPDATE public.transacoes t
+      SET deduplication_key = t.deduplication_key || ':dup:' || t.id::text
+      WHERE (t.workspace_id, t.deduplication_key) IN (
+        SELECT workspace_id, deduplication_key
+        FROM public.transacoes
+        WHERE workspace_id IS NOT NULL AND deduplication_key IS NOT NULL
+        GROUP BY workspace_id, deduplication_key HAVING count(*) > 1
+      );
+    END IF;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_transacoes_wallet_ai_dedup
+      ON public.transacoes(workspace_id, deduplication_key)
+      WHERE workspace_id IS NOT NULL;
+  END IF;
+END $$;
+
+-- ============================================================================
 -- 4. RPC: Processamento Atômico Transacional do Divipay Cash-In
 -- ============================================================================
 -- Garante que o status PAID só seja definitivo se a receita e a taxa forem criadas.
@@ -389,6 +510,7 @@ BEGIN
   -- 5. Atualiza o status da transação para PAID e vincula metadados atomicamente
   UPDATE public.divipay_transacoes
   SET status = 'PAID',
+      workspace_id = COALESCE(workspace_id, p_workspace_id),
       fee = COALESCE(p_fee, fee),
       metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
         'receita_id', v_receita_id,
