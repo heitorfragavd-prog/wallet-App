@@ -1,5 +1,5 @@
 /**
- * Utilitário canônico para resolução de credenciais Supabase modernas e legadas em Edge Functions (Deno).
+ * Utilitário canônico para resolução de credenciais Supabase modernas e legadas em Edge Functions (Deno e Node/Vitest).
  * Documentação oficial: "Migrating to publishable and secret API keys"
  * https://supabase.com/docs/guides/getting-started/migrating-to-new-api-keys
  *
@@ -9,8 +9,24 @@
  * 3. Fallback defensivo legado: SUPABASE_SERVICE_ROLE_KEY / SUPABASE_ANON_KEY
  */
 
+function getEnv(key: string): string | undefined {
+  try {
+    if (typeof Deno !== "undefined" && Deno?.env?.get) {
+      return Deno.env.get(key);
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof process !== "undefined" && process?.env) {
+      return process.env[key];
+    }
+  } catch (_) {}
+
+  return undefined;
+}
+
 export function getSupabaseSecretKey(): string {
-  const raw = Deno.env.get("SUPABASE_SECRET_KEYS");
+  const raw = getEnv("SUPABASE_SECRET_KEYS");
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
@@ -28,12 +44,12 @@ export function getSupabaseSecretKey(): string {
     }
   }
 
-  const directSecret = Deno.env.get("SUPABASE_SECRET_KEY");
+  const directSecret = getEnv("SUPABASE_SECRET_KEY");
   if (directSecret && directSecret.trim().length > 0) {
     return directSecret.trim();
   }
 
-  const legacyKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const legacyKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   if (legacyKey && legacyKey.trim().length > 0) {
     return legacyKey.trim();
   }
@@ -42,7 +58,7 @@ export function getSupabaseSecretKey(): string {
 }
 
 export function getSupabasePublishableKey(): string {
-  const raw = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
+  const raw = getEnv("SUPABASE_PUBLISHABLE_KEYS");
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
@@ -60,12 +76,12 @@ export function getSupabasePublishableKey(): string {
     }
   }
 
-  const directPub = Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
+  const directPub = getEnv("SUPABASE_PUBLISHABLE_KEY");
   if (directPub && directPub.trim().length > 0) {
     return directPub.trim();
   }
 
-  const legacyAnon = Deno.env.get("SUPABASE_ANON_KEY");
+  const legacyAnon = getEnv("SUPABASE_ANON_KEY");
   if (legacyAnon && legacyAnon.trim().length > 0) {
     return legacyAnon.trim();
   }
