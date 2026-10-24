@@ -78,10 +78,76 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Hook central de IA com conversaId conectado
+  // Resposta rápida canônica sincronizada com as métricas reais do painel executivo
+  const fastQueryFn = useCallback(
+    (pergunta: string): string => {
+      const p = pergunta.toLowerCase();
+      // Pergunta sobre vendas/faturamento de ontem
+      if (p.includes('ontem')) {
+        const valOntem = kpis.faturamentoOntem || 0;
+        const mediaOntem = kpis.mediaDiaSemanaOntem || 0;
+        const diaNome = kpis.diaSemanaOntemNome || 'ontem';
+        const varPct = kpis.variacaoOntemVsMedia;
+        const varTxt =
+          varPct !== null && varPct !== undefined
+            ? ` (${varPct >= 0 ? '+' : ''}${varPct}% em relação à média)`
+            : '';
+        return `🏪 **Vendas de Ontem (${diaNome}):**\n\n- **Faturamento apurado:** **R$ ${valOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${varTxt}\n- **Média histórica das ${diaNome}s:** R$ ${mediaOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente a partir das transações PDV da Rodo Point.`;
+      }
+
+      // Pergunta sobre mês atual ou faturamento do mês
+      if (
+        (p.includes('fatur') || p.includes('vend') || p.includes('receit')) &&
+        (p.includes('mes') || p.includes('mês') || p.includes('atual'))
+      ) {
+        const fatMes = kpis.faturamentoMes || 0;
+        const pedMes = kpis.pedidosMes || 0;
+        const tm = kpis.ticketMedioMes || 0;
+        const cresc = kpis.crescimentoMes;
+        const crescTxt =
+          cresc !== null && cresc !== undefined
+            ? ` (${cresc >= 0 ? '+' : ''}${cresc}% vs mês anterior)`
+            : '';
+        return `📊 **Faturamento Deste Mês (Visão Executiva):**\n\n- **Vendas totais apuradas:** **R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${crescTxt}\n- **Pedidos concluídos:** ${pedMes}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)`;
+      }
+
+      // Pergunta sobre despesas
+      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo')) {
+        const desp = kpis.despesasMes || 0;
+        const despAnt = kpis.despesasMesAnterior || 0;
+        const varDesp = kpis.variacaoDespesasPercent;
+        const varTxt =
+          varDesp !== null && varDesp !== undefined
+            ? ` (${varDesp >= 0 ? '+' : ''}${varDesp}% vs mês anterior)`
+            : '';
+        return `💳 **Despesas Deste Mês:**\n\n- **Total apurado:** **R$ ${desp.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${varTxt}\n- **Mês anterior:** R$ ${despAnt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+
+      // Resumo executivo rápido
+      if (p.includes('resumo') || p.includes('como estamos') || p.includes('painel')) {
+        return `📈 **Resumo Executivo Rodo Point:**\n\n- **Faturamento do Mês:** R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas do Mês:** R$ ${(kpis.despesasMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n- **Vendas de Ontem:** R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+      }
+
+      return `📊 **Painel Executivo CEO:**\n- Faturamento Mês: R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Faturamento Ontem: R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Despesas Mês: R$ ${(kpis.despesasMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+    },
+    [kpis]
+  );
+
+  const dadosFinanceiros = useMemo(
+    () => ({
+      receitas: [{ valor: kpis.faturamentoMes || 0, data: new Date().toISOString() }],
+      despesas: [{ valor: kpis.despesasMes || 0, data: new Date().toISOString() }],
+      contas: [],
+    }),
+    [kpis.faturamentoMes, kpis.despesasMes]
+  );
+
+  // Hook central de IA com conversaId conectado e dados do painel sincronizados
   const { messages, isLoading, sendMessage, clearChat, loadHistory } = useWalletIA({
     workspaceId,
     conversaId: conversaId || undefined,
+    dadosFinanceiros,
+    fastQueryFn,
     onMessagePersist: async (msg, targetId) => {
       if (!workspaceId || !user?.id || !targetId) return;
       try {

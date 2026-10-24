@@ -668,12 +668,12 @@ export class CeoFinancialMetricsService {
       // 1. Consulta itens de delivery_order_items (pedidos delivery)
       const { data: itemsDelivery } = await supabase
         .from('delivery_order_items')
-        .select('name, quantity, total_price')
+        .select('product_name, quantity, total_price')
         .eq('workspace_id', workspaceId)
         .limit(2000);
 
       for (const item of itemsDelivery || []) {
-        const name = item.name || 'Produto sem nome';
+        const name = (item as any).product_name || (item as any).name || 'Produto sem nome';
         const qtd = Number(item.quantity || 1);
         const valor = Number(item.total_price || 0);
         const current = productMap.get(name) || { quantidade: 0, faturamento: 0 };

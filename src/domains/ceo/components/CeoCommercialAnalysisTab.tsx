@@ -108,26 +108,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         dayMap.set(d, (dayMap.get(d) || 0) + Number(t.valor || 0));
       }
 
-      let topProdsList: TopProdutoFaturamento[] = prods;
-
-      // Enriquecimento opcional de itens via Eyemobile live dashboard se disponível
-      const eyemobileData = await fetchLiveDashboard(
-        { startDate: inicioStr, endDate: fimStr },
-        workspaceId
-      ).catch(() => null);
-
-      if (eyemobileData?.configured && eyemobileData.topProducts && eyemobileData.topProducts.length > 0 && topProdsList.length === 0) {
-        topProdsList = eyemobileData.topProducts.map((p, idx) => ({
-          rank: idx + 1,
-          id: p.id,
-          produto: p.product,
-          quantidade: p.quantity,
-          faturamento: p.total,
-          percentualFaturamento: total > 0 ? Math.round((p.total / total) * 1000) / 10 : 0,
-          margemEstimada: null,
-        }));
-      }
-
+      // Atualiza métricas fundamentais imediatamente sem esperar Edge Functions externas
       setVendasTotais(total);
       setPedidosTotal(count);
       setTicketMedio(count > 0 ? Math.round((total / count) * 100) / 100 : null);
@@ -152,7 +133,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         setCrescimentoTicket(null);
       }
 
-      // 3. Vendas por dia (BarChart real)
+      // Vendas por dia (BarChart real)
       const dailyBars: DailySaleBar[] = [];
       const numDias = Math.min(range.diasNoPeriodo, 30);
       const hoje = new Date();
@@ -168,7 +149,29 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
       setDailySalesData(dailyBars);
 
-      // 4. Itens vendidos reais calculados sobre todas as vendas do período
+      let topProdsList: TopProdutoFaturamento[] = prods;
+
+      // Enriquecimento opcional de itens via Eyemobile live dashboard com timeout estrito de 3.5s
+      const eyemobilePromise = fetchLiveDashboard(
+        { startDate: inicioStr, endDate: fimStr },
+        workspaceId
+      ).catch(() => null);
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
+      const eyemobileData = await Promise.race([eyemobilePromise, timeoutPromise]);
+
+      if (eyemobileData?.configured && eyemobileData.topProducts && eyemobileData.topProducts.length > 0 && topProdsList.length === 0) {
+        topProdsList = eyemobileData.topProducts.map((p, idx) => ({
+          rank: idx + 1,
+          id: p.id,
+          produto: p.product,
+          quantidade: p.quantity,
+          faturamento: p.total,
+          percentualFaturamento: total > 0 ? Math.round((p.total / total) * 1000) / 10 : 0,
+          margemEstimada: null,
+        }));
+      }
+
+      // Itens vendidos reais calculados sobre todas as vendas do período
       const totalItems = eyemobileData?.kpis?.totalItemsSold;
       const coverage = eyemobileData?.kpis?.itemsCoverage ?? 'unavailable';
       const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? 0;
@@ -183,7 +186,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
       setCrescimentoItens(null);
 
-      // 5. Top 5 Produtos reais (exclusivamente classificação de produtos)
+      // Top 5 Produtos reais
       setTopProducts(topProdsList.slice(0, 5));
     } catch (err: unknown) {
       console.warn('[CeoCommercialAnalysisTab] Erro ao carregar dados comerciais:', err);
