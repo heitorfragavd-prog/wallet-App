@@ -12,7 +12,7 @@ import {
 } from "./supabase-adapter.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const serviceRoleKey = getSupabaseSecretKey();
+const serviceRoleKey = getSupabaseSecretKey() || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 if (!supabaseUrl || !serviceRoleKey) {
   throw new Error("wallet_ai_server_configuration_missing");
 }
