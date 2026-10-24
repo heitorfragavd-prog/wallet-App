@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey, getSupabasePublishableKey } from "../_shared/supabase-keys.ts";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Supabase Edge Function: pluggy-api
 // Proxy seguro, autenticado e endurecido para a API da Pluggy (Open Finance).
@@ -337,8 +338,8 @@ serve(async (req: Request) => {
 
     const token = authHeader.replace("Bearer ", "").trim();
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabaseAnonKey = getSupabasePublishableKey();
+    const supabaseServiceKey = getSupabaseSecretKey();
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
       logger.error("Configuração do Supabase ausente ou incompleta", {

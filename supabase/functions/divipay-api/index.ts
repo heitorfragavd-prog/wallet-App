@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 // Edge Function: proxy autenticado para a API Divipay
 // URL: https://[seu-projeto].supabase.co/functions/v1/divipay-api
 // O usuário é autenticado via JWT do Supabase; as credenciais Divipay
@@ -200,15 +201,16 @@ serve(async (req) => {
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getSupabaseSecretKey(),
       { auth: { autoRefreshToken: false, persistSession: false } },
     )
 
     const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-    const serviceRoleKey = (Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim()
+    const serviceRoleKey = getSupabaseSecretKey()
+    const legacyServiceKey = (Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim()
 
     // Service-role é autorizado SOMENTE se o token corresponder exatamente à secret key do backend
-    const isServiceRole = Boolean(serviceRoleKey && timingSafeEqual(token, serviceRoleKey))
+    const isServiceRole = Boolean((serviceRoleKey && timingSafeEqual(token, serviceRoleKey)) || (legacyServiceKey && timingSafeEqual(token, legacyServiceKey)))
 
     const requestBody = await req.json().catch(() => ({}))
     let targetUserId = ''

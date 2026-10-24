@@ -13,6 +13,7 @@
  */
 
 import { timingSafeEqual } from "./auth-guard.ts";
+import { getSupabaseSecretKey } from "./supabase-keys.ts";
 
 export interface RawRemoteProduct {
   id?: unknown;
@@ -115,10 +116,12 @@ export function isTrustedServiceRoleCaller(
   const expectedServiceKey = serviceRoleKey ? serviceRoleKey.trim() : "";
   const expectedCronSecret = cronSecret ? cronSecret.trim() : "";
 
+  const modernSecret = getSupabaseSecretKey();
+  const matchesModernSecret = Boolean(modernSecret && timingSafeEqual(cleanToken, modernSecret));
   const matchesServiceKey = Boolean(expectedServiceKey && timingSafeEqual(cleanToken, expectedServiceKey));
   const matchesCronSecret = Boolean(expectedCronSecret && timingSafeEqual(cleanToken, expectedCronSecret));
 
-  return matchesServiceKey || matchesCronSecret;
+  return matchesModernSecret || matchesServiceKey || matchesCronSecret;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 // Edge Function para processar transações recorrentes
 // Executado via pg_cron diariamente
 // URL: https://[seu-projeto].supabase.co/functions/v1/process-recurring-transactions
@@ -45,7 +46,7 @@ serve(async (req) => {
     // Criar cliente Supabase com service_role (bypass RLS)
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      getSupabaseSecretKey(),
       {
         auth: {
           autoRefreshToken: false,
