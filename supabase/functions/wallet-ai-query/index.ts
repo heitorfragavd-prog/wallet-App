@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 import { authorizeAiRequest } from "../_shared/ai/auth.ts";
 import { createFinancialRepository } from "../_shared/ai/financial-repository.ts";
@@ -11,7 +12,7 @@ import {
 } from "./supabase-adapter.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const serviceRoleKey = getSupabaseSecretKey() || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 if (!supabaseUrl || !serviceRoleKey) {
   throw new Error("wallet_ai_server_configuration_missing");
 }

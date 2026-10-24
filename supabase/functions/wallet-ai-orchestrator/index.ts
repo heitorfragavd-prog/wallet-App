@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 import type { AiExecutionContext } from "../_shared/ai/auth.ts";
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
@@ -21,7 +22,7 @@ import {
 } from "../wallet-ai-query/supabase-adapter.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const serviceRoleKey = getSupabaseSecretKey();
 const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
 const openAiBaseUrl = Deno.env.get("OPENAI_BASE_URL");
 const geminiApiKey = Deno.env.get("GEMINI_API_KEY");

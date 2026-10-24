@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchTelegramMedia, fetchWhatsAppMedia } from "./media-fetcher.ts";
 import { sendToTelegram, sendToWhatsApp } from "./adapters.ts";
@@ -19,7 +20,7 @@ Deno.serve(async (req: Request) => {
   const path = url.pathname;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabaseServiceKey = getSupabaseSecretKey();
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   // ─── ENDPOINT: CHATGPT (SÍNCRONO) ──────────────────────────────────────────

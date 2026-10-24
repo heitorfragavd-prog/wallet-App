@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 // Edge Function: recepção de webhooks da Divipay
 // URL: https://[seu-projeto].supabase.co/functions/v1/divipay-webhook?token=<DIVIPAY_WEBHOOK_SECRET>
 //
@@ -176,7 +177,7 @@ serve(async (req) => {
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      getSupabaseSecretKey(),
       { auth: { autoRefreshToken: false, persistSession: false } },
     )
 
@@ -753,7 +754,7 @@ serve(async (req) => {
     if (webhookLogId) {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+        getSupabaseSecretKey(),
         { auth: { autoRefreshToken: false, persistSession: false } },
       )
       await supabaseAdmin

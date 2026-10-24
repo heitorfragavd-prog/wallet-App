@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { isAllowedWebhookUrl, validateSafeExternalUrl } from "../_shared/ssrf-validator.ts";
@@ -25,7 +26,7 @@ export async function handleIaDeposito(
     }
 
     const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
-    const supabaseServiceKey = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") : process.env.SUPABASE_SERVICE_ROLE_KEY) || "";
+    const supabaseServiceKey = getSupabaseSecretKey();
     const supabaseAdmin = injectedSupabaseAdmin || createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false, autoRefreshToken: false }
     });

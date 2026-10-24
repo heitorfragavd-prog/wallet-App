@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey, getSupabasePublishableKey } from "../_shared/supabase-keys.ts";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -326,7 +327,7 @@ async function consultarVendasEyemobile(
     let apiSales: any[] = [];
     if (config?.access_key && config?.secret_key) {
       const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const serviceRoleKey = getSupabaseSecretKey();
       const syncUrl = `${supabaseUrl}/functions/v1/eyemobile-sync`;
 
       try {
@@ -462,7 +463,7 @@ async function consultarSaidasCaixaPeriodo(
 
     // 2. Busca paralela nas 4 fontes de saídas no banco e DiviPay API
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const serviceRoleKey = getSupabaseSecretKey();
 
     const [despRes, txRes, custosRes, pagDividasRes, diviResp] = await Promise.all([
       supabase
@@ -1072,7 +1073,7 @@ export async function handleOpenAIProxy(
   }
 
   const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
-  const supabaseServiceKey = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") : process.env.SUPABASE_SERVICE_ROLE_KEY) || "";
+  const supabaseServiceKey = getSupabaseSecretKey();
   const jwt = authHeader.replace("Bearer ", "").trim();
 
   // ================================================================
@@ -1081,7 +1082,7 @@ export async function handleOpenAIProxy(
   if (url.pathname.endsWith("/transcribe-audio") || (req.headers.get("content-type") || "").includes("multipart/form-data")) {
     try {
       // Validar identidade estrita do chamador via JWT para evitar Confused Deputy / IDOR de cota
-      const supabaseAuth = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY") || supabaseServiceKey);
+      const supabaseAuth = createClient(supabaseUrl, getSupabasePublishableKey() || supabaseServiceKey);
       const { data: { user: authUser }, error: authError } = await supabaseAuth.auth.getUser(jwt);
       if (authError || !authUser) {
         return createErrorResponse(req, {

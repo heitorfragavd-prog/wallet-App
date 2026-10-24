@@ -17,6 +17,8 @@
  * contra si mesmo com a flag de divergência ativada, impedindo vazamento de informação sobre
  * o comprimento do segredo através do tempo de execução do loop.
  */
+import { getSupabaseSecretKey } from "./supabase-keys.ts";
+
 export function timingSafeEqual(a: string, b: string): boolean {
   if (typeof a !== "string" || typeof b !== "string") {
     return false;
@@ -87,6 +89,7 @@ export function validateWebhookSecret(
 }
 
 export function isAuthorizedCronCaller(req: Request): boolean {
+  const secretKey = getSupabaseSecretKey();
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
   const cronSecret = Deno.env.get("CRON_SECRET")?.trim();
 
@@ -94,6 +97,10 @@ export function isAuthorizedCronCaller(req: Request): boolean {
   const xCronSecret = req.headers.get("x-cron-secret")?.trim();
 
   const token = authHeader ? authHeader.replace(/^Bearer\s+/i, "").trim() : null;
+
+  if (secretKey && token && timingSafeEqual(token, secretKey)) {
+    return true;
+  }
 
   if (serviceRoleKey && token && timingSafeEqual(token, serviceRoleKey)) {
     return true;

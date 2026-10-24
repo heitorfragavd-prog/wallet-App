@@ -1,3 +1,4 @@
+import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { isAuthorizedCronCaller, unauthorizedResponse } from "../_shared/auth-guard.ts";
@@ -26,7 +27,7 @@ serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim();
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
+    const supabaseServiceKey = getSupabaseSecretKey();
 
     if (!supabaseUrl || !supabaseServiceKey) {
       console.error("[telegram-reprocess-worker] SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY não configurado.");
