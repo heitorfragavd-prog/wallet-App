@@ -16,10 +16,10 @@ import { ensureCorrelationId } from '../logging/correlationId';
  * User-friendly error messages by category (safe for end users)
  */
 const USER_MESSAGES: Record<ErrorCategory, string> = {
-  [ErrorCategory.AUTHENTICATION]: 'Sua sessÃ£o expirou ou nÃ£o foi autorizada. FaÃ§a login novamente.',
-  [ErrorCategory.VALIDATION]: 'Por favor, verifique as informaÃ§Ãµes inseridas.',
-  [ErrorCategory.NETWORK]: 'Falha na conexÃ£o de rede. Verifique sua internet.',
-  [ErrorCategory.SERVER]: 'ServiÃ§o temporariamente indisponÃ­vel. Tente novamente em instantes.',
+  [ErrorCategory.AUTHENTICATION]: 'Sua sessão expirou ou não foi autorizada. Faça login novamente.',
+  [ErrorCategory.VALIDATION]: 'Por favor, verifique as informações inseridas.',
+  [ErrorCategory.NETWORK]: 'Falha na conexão de rede. Verifique sua internet.',
+  [ErrorCategory.SERVER]: 'Serviço temporariamente indisponível. Tente novamente em instantes.',
   [ErrorCategory.UNKNOWN]: 'Ocorreu um erro inesperado.',
 };
 

@@ -88,8 +88,8 @@ export function getConfig(): EnvironmentConfig {
   // Load configuration from import.meta.env
   const config: Partial<EnvironmentConfig> = {
     supabase: {
-      url: import.meta.env.VITE_SUPABASE_URL,
-      anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      url: (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/^[\uFEFF\xA0]+/, ""),
+      anonKey: (import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim().replace(/^[\uFEFF\xA0]+/, ""),
     },
     app: {
       name: import.meta.env.VITE_APP_NAME || 'Wallet',

@@ -59,7 +59,7 @@ describe("ErrorService", () => {
     const appError = service.handle(rawError);
 
     const userMessage = service.getUserMessage(appError);
-    expect(userMessage).toBe("ServiÃ§o temporariamente indisponÃ­vel. Tente novamente em instantes.");
+    expect(userMessage).toBe("Serviço temporariamente indisponível. Tente novamente em instantes.");
     expect(userMessage).not.toContain("internal error");
     expect(userMessage).not.toContain("/var/www/db.ts");
   });
