@@ -175,7 +175,9 @@ export function useSenhaInvestimentos() {
             const errBody = await resp.error.context.json();
             if (errBody?.error) msg = errBody.error;
           }
-        } catch (_) {}
+        } catch {
+          // Ignora falha de parse do corpo de erro da resposta
+        }
         throw new Error(msg || "Falha na recuperação de senha");
       }
 

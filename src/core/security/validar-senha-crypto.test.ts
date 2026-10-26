@@ -145,6 +145,7 @@ it("Gera novo hash PBKDF2 na recuperação de senha e valida com sucesso", async
     const newSessionId = "new-session-guid-222";
 
     const oldToken = await createInvestmentToken(USER_ID, SECRET_KEY, oldSessionId);
+    expect(oldToken).toBeDefined();
     const newToken = await createInvestmentToken(USER_ID, SECRET_KEY, newSessionId);
 
     // Validação na sessão antiga com token novo é rejeitada
