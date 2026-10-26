@@ -164,7 +164,9 @@ export function extractSessionIdFromJwt(jwt: string): string | null {
 export async function processValidarSenha(
   req: Request,
   supabaseAdmin: any,
-  serviceKey: string
+  serviceKey: string,
+  publishableKey?: string,
+  supabaseUrl?: string
 ): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -202,7 +204,7 @@ export async function processValidarSenha(
     }
 
     const body = await req.json().catch(() => ({}));
-    const { mode, senha, senha_atual, nova_senha, token: invToken } = body;
+    const { mode, senha, senha_atual, nova_senha, senha_conta, token: invToken } = body;
 
     // -----------------------------------------------------------------------
     // 1. verify_token (Coerência de sessão + validação DB ativa)
@@ -469,6 +471,137 @@ export async function processValidarSenha(
       });
     }
 
+
+    // -----------------------------------------------------------------------
+    // 4.1. recuperar_senha (Recuperação com confirmação de identidade via Supabase Auth)
+    // -----------------------------------------------------------------------
+    if (mode === "recuperar_senha") {
+      if (!senha_conta || typeof senha_conta !== "string" || senha_conta.trim().length === 0) {
+        return new Response(JSON.stringify({ error: "Comprovação de identidade obrigatória: informe a senha da sua conta de acesso" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      if (!nova_senha || typeof nova_senha !== "string" || nova_senha.trim().length < 4) {
+        return new Response(JSON.stringify({ error: "A nova senha deve ter no mínimo 4 caracteres" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // Validação da identidade do proprietário diretamente contra o Supabase Auth / GoTrue
+      const targetUrl = supabaseUrl || (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : "") || "https://hdeguzxkdvebdrrutbnx.supabase.co";
+      const targetPubKey = publishableKey || serviceKey;
+
+      const authRes = await fetch(`${targetUrl}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: {
+          "apikey": targetPubKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: user.email,
+          password: senha_conta,
+        }),
+      });
+
+      if (!authRes.ok) {
+        return new Response(JSON.stringify({
+          valido: false,
+          error: "Falha na confirmação de identidade: senha da conta incorreta",
+        }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const authData = await authRes.json();
+      if (!authData.user || authData.user.id !== authenticatedUserId) {
+        return new Response(JSON.stringify({
+          valido: false,
+          error: "Falha na confirmação de identidade: usuário não corresponde ao proprietário autenticado",
+        }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const newHash = await derivePbkdf2Hash(nova_senha, userSalt);
+
+      // Atualiza ou insere na tabela senha_investimentos e reseta bloqueio / tentativas
+      const { data: existingRecord, error: fetchErr } = await supabaseAdmin
+        .from("senha_investimentos")
+        .select("id")
+        .eq("user_id", authenticatedUserId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      if (existingRecord) {
+        const { error: updateErr } = await supabaseAdmin
+          .from("senha_investimentos")
+          .update({
+            senha_hash: newHash,
+            tentativas_falhas: 0,
+            bloqueado_ate: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", authenticatedUserId);
+
+        if (updateErr) throw updateErr;
+      } else {
+        const { error: insertErr } = await supabaseAdmin
+          .from("senha_investimentos")
+          .insert({
+            user_id: authenticatedUserId,
+            senha_hash: newHash,
+            tentativas_falhas: 0,
+            bloqueado_ate: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+
+        if (insertErr) throw insertErr;
+      }
+
+      // REVOGA TODAS as sessões anteriores de investimentos deste usuário (fail-closed)
+      const { error: delAllErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .delete()
+        .eq("user_id", authenticatedUserId);
+
+      if (delAllErr) {
+        console.error("[validar-senha] Falha crítica ao revogar sessões anteriores:", delAllErr);
+        return new Response(JSON.stringify({ error: "Falha ao revogar sessões anteriores no banco" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // Desbloqueia exclusivamente a sessão atual
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      const { error: insSessErr } = await supabaseAdmin
+        .from("investimentos_sessions")
+        .insert({
+          session_id: authenticatedSessionId,
+          user_id: authenticatedUserId,
+          expires_at: expiresAt,
+        });
+
+      if (insSessErr) {
+        console.error("[validar-senha] Falha crítica ao registrar nova sessão desbloqueada:", insSessErr);
+        return new Response(JSON.stringify({ error: "Falha ao registrar nova sessão desbloqueada" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const sessionToken = await createInvestmentToken(authenticatedUserId, serviceKey, authenticatedSessionId);
+      return new Response(JSON.stringify({ success: true, message: "Senha de investimentos redefinida com sucesso", token: sessionToken }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
     // -----------------------------------------------------------------------
     // 5. validar (Autenticação comum com senha de investimentos)
     // -----------------------------------------------------------------------

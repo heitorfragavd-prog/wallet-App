@@ -127,4 +127,33 @@ describe("validar-senha — Criptografia e Tokens com Funções de Produção", 
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/expirado/i);
   });
+it("Gera novo hash PBKDF2 na recuperação de senha e valida com sucesso", async () => {
+    const novaSenha = "NovaSenhaInvestimentos@2026";
+    const newHash = await derivePbkdf2Hash(novaSenha, USER_SALT);
+
+    expect(newHash).toMatch(/^\$pbkdf2\$100000\$[0-9a-f]{64}$/);
+    const isValid = await verifyPassword(novaSenha, USER_SALT, newHash);
+    expect(isValid).toBe(true);
+
+    // Senha antiga deve falhar contra novo hash
+    const oldPasswordValid = await verifyPassword("SenhaAntigaEsquecida", USER_SALT, newHash);
+    expect(oldPasswordValid).toBe(false);
+  });
+
+  it("Revogação pós-recuperação: sessões antigas não validam novos tokens", async () => {
+    const oldSessionId = "old-session-guid-111";
+    const newSessionId = "new-session-guid-222";
+
+    const oldToken = await createInvestmentToken(USER_ID, SECRET_KEY, oldSessionId);
+    const newToken = await createInvestmentToken(USER_ID, SECRET_KEY, newSessionId);
+
+    // Validação na sessão antiga com token novo é rejeitada
+    const verifyMismatch = await verifyInvestmentToken(newToken, USER_ID, SECRET_KEY, oldSessionId);
+    expect(verifyMismatch.valid).toBe(false);
+    expect(verifyMismatch.reason).toMatch(/sessão autenticada atual/i);
+
+    // Validação na nova sessão com token novo é aceita
+    const verifyMatch = await verifyInvestmentToken(newToken, USER_ID, SECRET_KEY, newSessionId);
+    expect(verifyMatch.valid).toBe(true);
+  });
 });

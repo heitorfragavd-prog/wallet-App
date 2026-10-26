@@ -1,4 +1,4 @@
-import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
+import { getSupabaseSecretKey, getSupabasePublishableKey } from "../_shared/supabase-keys.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { processValidarSenha, corsHeaders } from "../_shared/validar-senha-core.ts";
@@ -6,6 +6,7 @@ import { processValidarSenha, corsHeaders } from "../_shared/validar-senha-core.
 serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const supabaseServiceKey = getSupabaseSecretKey();
+  const supabasePublishableKey = getSupabasePublishableKey();
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
@@ -13,6 +14,6 @@ serve(async (req) => {
   // Validação estrita de autorização e proteção IDOR em validar-senha-core:
   // - Extrai e valida Authorization via auth.getUser(token) (retorna 401 se ausente)
   // - Rejeita tentativas onde authUser.id !== user_id com código 403
-  // - Gerencia operações de mode === "cadastrar" e mode === "validar" em senha_investimentos
-  return processValidarSenha(req, supabaseAdmin, supabaseServiceKey);
+  // - Gerencia operações de mode === "cadastrar", "validar", "alterar_senha", "recuperar_senha", "verify_token", "invalidar_sessao"
+  return processValidarSenha(req, supabaseAdmin, supabaseServiceKey, supabasePublishableKey, supabaseUrl);
 });
