@@ -1,4 +1,4 @@
-import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
+import { getSupabaseSecretKey, getSupabasePublishableKey } from "../_shared/supabase-keys.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
@@ -35,7 +35,7 @@ import { OpenAiLlmRunner } from "../_shared/ai/openai-adapter.ts";
 import { executeSupabaseFinancialQuery } from "../wallet-ai-query/supabase-adapter.ts";
 import { processDocumentPipeline } from "../_shared/ai/document-pipeline.ts";
 import { validateTelegramWebhookSecret } from "../_shared/ai/telegram-webhook-auth.ts";
-import { timingSafeEqual } from "../_shared/auth-guard.ts";
+import { timingSafeEqual, isAuthorizedCronCaller } from "../_shared/auth-guard.ts";
 import { SupabaseConversationRepository } from "../_shared/ai/memory-core.ts";
 import {
   cleanDigits,
@@ -813,7 +813,12 @@ serve(async (req) => {
     if (body?.action === "get_webhook_info" || body?.action === "setup_webhook" || req.method === "GET") {
       const authHeader = req.headers.get("Authorization");
       const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
-      const isServiceRole = Boolean(supabaseServiceKey && token === supabaseServiceKey);
+      const serviceKeyHeader = req.headers.get("x-supabase-service-key")?.trim();
+      const isServiceRole = Boolean(
+        (supabaseServiceKey && token === supabaseServiceKey) ||
+        (supabaseServiceKey && serviceKeyHeader === supabaseServiceKey) ||
+        isAuthorizedCronCaller(req)
+      );
 
       if (!isServiceRole) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -841,7 +846,7 @@ serve(async (req) => {
         }
         const targetUrl = `${supabaseUrl}/functions/v1/telegram-webhook`;
         const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
-        let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}&drop_pending_updates=true`;
+        let setWebhookUrl = `https://api.telegram.org/bot${telegramBotToken}/setWebhook?url=${encodeURIComponent(targetUrl)}`;
         if (telegramWebhookSecret) {
           setWebhookUrl += `&secret_token=${encodeURIComponent(telegramWebhookSecret)}`;
         }
@@ -951,7 +956,12 @@ serve(async (req) => {
     if (isReprocessCall) {
       const authHeader = req.headers.get("Authorization");
       const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
-      const isAuthorizedService = Boolean(supabaseServiceKey && token && timingSafeEqual(token, supabaseServiceKey));
+      const serviceKeyHeader = req.headers.get("x-supabase-service-key")?.trim();
+      const isAuthorizedService = Boolean(
+        (supabaseServiceKey && token && timingSafeEqual(token, supabaseServiceKey)) ||
+        (supabaseServiceKey && serviceKeyHeader && timingSafeEqual(serviceKeyHeader, supabaseServiceKey)) ||
+        isAuthorizedCronCaller(req)
+      );
       if (!isAuthorizedService) {
         return new Response(JSON.stringify({ error: "Unauthorized reprocess caller" }), {
           status: 401,
@@ -1745,6 +1755,15 @@ serve(async (req) => {
       openaiApiKey,
       geminiApiKey,
       geminiApiKeyBackup,
+      idempotencyRepo: {
+        claimUpdate: async (upId: number) => {
+          if (updateClaimed && incomingUpdateId === upId) {
+            return true;
+          }
+          const repo = new SupabaseTelegramIdempotencyRepository(supabase);
+          return await repo.claimUpdate(upId);
+        },
+      },
       findDuplicateFn: async (_ctx, params) => {
         try {
           if (params.chaveAcesso) {
@@ -3131,7 +3150,7 @@ serve(async (req) => {
 
     const sendReply = async (replyText: string) => {
       if (!telegramBotToken) return;
-      await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+      const resp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3141,6 +3160,19 @@ serve(async (req) => {
           disable_web_page_preview: true,
         }),
       });
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => ({}));
+        console.warn("[telegram-webhook] Erro ao enviar sendReply HTML, tentando texto puro:", errJson);
+        await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText.replace(/<[^>]*>/g, ""),
+            disable_web_page_preview: true,
+          }),
+        }).catch(() => {});
+      }
     };
 
     // Comando /start
@@ -7503,10 +7535,13 @@ Ferramentas disponíveis:
 
     try {
       console.log("[telegram-webhook] Encaminhando para openai-proxy:", { userId, model: "gpt-4o-mini", messageCount: aiMessages.length });
+      const pubKey = getSupabasePublishableKey();
       const aiResponse = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${supabaseServiceKey}`,
+          apikey: pubKey,
+          Authorization: `Bearer ${pubKey}`,
+          "x-supabase-service-key": supabaseServiceKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

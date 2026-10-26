@@ -10,13 +10,14 @@ import {
   OPENAI_ERROR_CODES,
 } from "../_shared/observability/index.ts";
 import { checkSharedRateLimit, validateUserWorkspace, reconcileAiTokens } from "../_shared/ai-rate-limiter.ts";
+import { timingSafeEqual, isAuthorizedCronCaller } from "../_shared/auth-guard.ts";
 
 const logger = createBackendLogger("openai-proxy");
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-correlation-id",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-correlation-id, x-supabase-service-key, x-cron-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -305,6 +306,7 @@ async function consultarVendasEyemobile(
       .select("valor, data, metodo_pagamento, descricao, created_at, observacoes")
       .eq("user_id", userId)
       .eq("tipo", "receita")
+      .ilike("observacoes", "%Integrado via Eyemobile API.%")
       .gte("data", startDate)
       .lte("data", endDate);
 
@@ -328,13 +330,16 @@ async function consultarVendasEyemobile(
     if (config?.access_key && config?.secret_key) {
       const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
       const serviceRoleKey = getSupabaseSecretKey();
+      const publishableKey = getSupabasePublishableKey();
       const syncUrl = `${supabaseUrl}/functions/v1/eyemobile-sync`;
 
       try {
         const response = await fetchWithTimeout(syncUrl, {
           method: "POST",
           headers: {
+            "apikey": publishableKey,
             "Authorization": `Bearer ${serviceRoleKey}`,
+            "x-supabase-service-key": serviceRoleKey,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -1062,8 +1067,16 @@ export async function handleOpenAIProxy(
   }
 
   const url = new URL(req.url);
+  const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
+  const supabaseServiceKey = getSupabaseSecretKey();
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) {
+  const serviceKeyHeader = req.headers.get("x-supabase-service-key")?.trim();
+  const isCronOrServiceRole = Boolean(
+    (supabaseServiceKey && serviceKeyHeader && timingSafeEqual(serviceKeyHeader, supabaseServiceKey)) ||
+    isAuthorizedCronCaller(req)
+  );
+
+  if (!authHeader && !isCronOrServiceRole) {
     return createErrorResponse(req, {
       status: 401,
       message: "Missing authorization header",
@@ -1072,9 +1085,7 @@ export async function handleOpenAIProxy(
     });
   }
 
-  const supabaseUrl = (typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_URL") : process.env.SUPABASE_URL) || "";
-  const supabaseServiceKey = getSupabaseSecretKey();
-  const jwt = authHeader.replace("Bearer ", "").trim();
+  const jwt = authHeader ? authHeader.replace(/^Bearer\s+/i, "").trim() : "";
 
   // ================================================================
   // ENDPOINT: /transcribe-audio (Whisper Transcription)
@@ -1202,7 +1213,17 @@ export async function handleOpenAIProxy(
   let userId: string;
 
   // Validação segura: service-role SOMENTE por correspondência exata com o secret do backend
-  const isServiceRoleCall = Boolean(supabaseServiceKey && jwt === supabaseServiceKey && body.user_id);
+  const isServiceRoleCall = Boolean(
+    (supabaseServiceKey && jwt === supabaseServiceKey && body.user_id) ||
+    (
+      body.user_id &&
+      (
+        (supabaseServiceKey && jwt && timingSafeEqual(jwt, supabaseServiceKey)) ||
+        (supabaseServiceKey && serviceKeyHeader && timingSafeEqual(serviceKeyHeader, supabaseServiceKey)) ||
+        isAuthorizedCronCaller(req)
+      )
+    )
+  );
 
   if (isServiceRoleCall) {
     // Chamada interna autorizada exclusivamente pela chave service-role
