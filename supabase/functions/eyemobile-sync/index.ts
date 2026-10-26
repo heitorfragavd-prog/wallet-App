@@ -37,14 +37,14 @@ async function findStartOffsetParallel(
   limit: number,
   storeId?: string,
   dbCountBeforeDate: number = 0,
-  totalDbCount: number = 0
+  totalDbCount: number = 0,
+  knownMaxOffset: number = 85000
 ): Promise<number> {
   const getTxAtOffset = async (off: number) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(off) });
     if (storeId) params.set("store_id", storeId);
-    if (startDateStr) params.set("start_date", startDateStr); // Keep params in case API supports it
     
-    const salesUrl = `${baseUrl}/sales?${params.toString()}`;
+    // Eyemobile API standard endpoint is /transactions
     const txUrl = `${baseUrl}/transactions?${params.toString()}`;
     
     try {
@@ -53,20 +53,15 @@ async function findStartOffsetParallel(
         const data = await response.json();
         return data.data?.[0] || null;
       }
-      const fallbackResponse = await fetch(salesUrl, { headers });
-      if (fallbackResponse.ok) {
-        const data = await fallbackResponse.json();
-        return data.data?.[0] || null;
-      }
       return null;
     } catch {
       return null;
     }
   };
 
-  // We search the entire range of completed sales (up to page 650, which covers 65,000 sales)
+  // We search dynamically across the full range of completed sales without hardcoded page caps
   let lowPage = 0;
-  let highPage = 650;
+  let highPage = Math.max(900, Math.ceil(knownMaxOffset / limit) + 20);
   let ansPage = highPage;
   
   while (lowPage <= highPage) {
@@ -77,7 +72,7 @@ async function findStartOffsetParallel(
       ansPage = midPage;
       continue;
     }
-    const txDate = (checkTx.time || checkTx.created_at || "").split("T")[0];
+    const txDate = toSaoPauloDate(checkTx.time || checkTx.created_at || "");
     const isCompleted = checkTx.completed && !checkTx.cancelled;
     
     // If we hit an uncompleted or cancelled transaction, it means we have crossed the boundary of completed sales,
@@ -97,10 +92,8 @@ async function findStartOffsetParallel(
   if (prevPage >= 0) {
     const params = new URLSearchParams({ limit: String(limit), offset: String(prevPage * limit) });
     if (storeId) params.set("store_id", storeId);
-    if (startDateStr) params.set("start_date", startDateStr);
     
     const txUrl = `${baseUrl}/transactions?${params.toString()}`;
-    const salesUrl = `${baseUrl}/sales?${params.toString()}`;
     
     let txs = [];
     try {
@@ -108,12 +101,6 @@ async function findStartOffsetParallel(
       if (response.ok) {
         const data = await response.json();
         txs = data.data || [];
-      } else {
-        const fallbackResponse = await fetch(salesUrl, { headers });
-        if (fallbackResponse.ok) {
-          const data = await fallbackResponse.json();
-          txs = data.data || [];
-        }
       }
     } catch {
       // Ignore errors in refinement fallback
@@ -121,7 +108,7 @@ async function findStartOffsetParallel(
     
     for (let i = 0; i < txs.length; i++) {
       const tx = txs[i];
-      const txDate = (tx.time || tx.created_at || "").split("T")[0];
+      const txDate = toSaoPauloDate(tx.time || tx.created_at || "");
       const isCompleted = tx.completed && !tx.cancelled;
       if (isCompleted && txDate >= startDateStr) {
         return prevPage * limit + i;
@@ -149,11 +136,16 @@ serve(async (req) => {
 
 
     const authHeader = req.headers.get("Authorization") || "";
+    const svcHeader = req.headers.get("x-supabase-service-key") || "";
+    const cronSecretHeader = req.headers.get("x-cron-secret") || "";
     const token = authHeader.replace(/^Bearer\s+/i, "").trim();
 
     // Check if the caller has service role authorization (e.g. Cron ou chamada interna).
     const cronSecret = Deno.env.get("CRON_SECRET") || "";
-    const isServiceRole = isTrustedServiceRoleCaller(authHeader, supabaseServiceKey, cronSecret);
+    const isServiceRole = isTrustedServiceRoleCaller(authHeader, supabaseServiceKey, cronSecret) ||
+      (svcHeader && svcHeader === supabaseServiceKey) ||
+      (cronSecretHeader && cronSecret && cronSecretHeader === cronSecret) ||
+      (token && token === supabaseServiceKey);
 
     let user_id: string | null = null;
 
@@ -1135,17 +1127,14 @@ async function fetchDashboardData(
   const effectiveEndDate = endDate || effectiveStartDate;
 
   // Busca vendas com paginação completa (iterando todas as páginas até que acabe o período)
+  // Eyemobile standard endpoint é /transactions (/sales não existe)
   const buildUrl = (off: number) => {
     const params = new URLSearchParams({ limit: String(customLimit), offset: String(off) });
-    if (effectiveStartDate) params.set("start_date", effectiveStartDate);
-    if (effectiveEndDate) params.set("end_date", effectiveEndDate);
     if (selectedStoreId) params.set("store_id", selectedStoreId);
-    return `${baseUrl}/sales?${params.toString()}`;
+    return `${baseUrl}/transactions?${params.toString()}`;
   };
   const buildFallbackUrl = (off: number) => {
     const params = new URLSearchParams({ limit: String(customLimit), offset: String(off) });
-    if (effectiveStartDate) params.set("start_date", effectiveStartDate);
-    if (effectiveEndDate) params.set("end_date", effectiveEndDate);
     if (selectedStoreId) params.set("store_id", selectedStoreId);
     return `${baseUrl}/transactions?${params.toString()}`;
   };
@@ -1170,6 +1159,7 @@ async function fetchDashboardData(
         .ilike("observacoes", "%Integrado via Eyemobile API.%")
         .lt("data", effectiveStartDate);
 
+      const maxOffsetHint = Number(config.last_synced_offset || 85000);
       startOffset = await findStartOffsetParallel(
         baseUrl,
         headers,
@@ -1177,7 +1167,8 @@ async function fetchDashboardData(
         customLimit,
         selectedStoreId,
         dbCountBeforeDate || 0,
-        totalDbCount || 0
+        totalDbCount || 0,
+        maxOffsetHint
       );
       console.log(`Resolved API start offset for date ${effectiveStartDate}: ${startOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
     } catch (e: any) {
@@ -1383,18 +1374,15 @@ async function syncUserEyemobile(
         }
       }
 
-      // O offset salvo (last_synced_offset) só faz sentido no modo HISTORY,
-      // que varre a API inteira sem filtro de data. Nos syncs incrementais
-      // (ALL/SALES com start_date), o conjunto já vem filtrado por data e um
-      // offset global grande (ex.: 66.900) ultrapassa o fim da lista — o sync
-      // rodava "com sucesso" sem trazer nenhuma venda.
-      let offset = typeof customOffset === "number"
-        ? customOffset
-        : (mode === "HISTORY" ? (config.last_synced_offset || 0) : 0);
+      // A API Eyemobile /transactions NÃO filtra por start_date e segue stream global cronológico.
+      // Portanto, o offset persistido (last_synced_offset) é o cursor canônico de sincronização.
       let limit = typeof customLimit === "number" ? customLimit : 100;
+      let offset = 0;
 
-      // Se o offset for 0 e tivermos startStr, resolvemos o offset correspondente na API
-      if (offset === 0 && startStr && typeof customOffset !== "number") {
+      if (typeof customOffset === "number") {
+        offset = customOffset;
+      } else if (customStartDate) {
+        // Se o chamador solicitou uma data específica manualmente, busca o offset dessa data
         try {
           const { count: totalDbCount } = await supabaseAdmin
             .from("transacoes")
@@ -1411,22 +1399,27 @@ async function syncUserEyemobile(
             .eq("workspace_id", syncWorkspaceId)
             .eq("tipo", "receita")
             .ilike("observacoes", "%Integrado via Eyemobile API.%")
-            .lt("data", startStr);
+            .lt("data", customStartDate);
 
-          const apiStartOffset = await findStartOffsetParallel(
+          offset = await findStartOffsetParallel(
             baseUrl,
             apiHeaders,
-            startStr,
+            customStartDate,
             limit,
             undefined,
             dbCountBeforeDate || 0,
-            totalDbCount || 0
+            totalDbCount || 0,
+            config.last_synced_offset || 85000
           );
-          console.log(`Resolved API sync start offset for date ${startStr}: ${apiStartOffset} (beforeDate: ${dbCountBeforeDate}, total: ${totalDbCount})`);
-          offset = apiStartOffset;
+          console.log(`Resolved API sync start offset for date ${customStartDate}: ${offset}`);
         } catch (e: any) {
           console.error(`Error resolving API sync start offset: ${e.message}`);
+          offset = Math.max(0, (config.last_synced_offset || 0) - 50);
         }
+      } else {
+        // Sincronização incremental padrão (ALL / SALES a cada 30min):
+        // Inicia com recuo de segurança de 50 itens antes do cursor para cobrir vendas recém-fechadas
+        offset = Math.max(0, (config.last_synced_offset || 0) - 50);
       }
       let hasMore = true;
       let pagesFetched = 0;
@@ -1436,11 +1429,8 @@ async function syncUserEyemobile(
       let fetchedHasMore = false;
 
       while (hasMore && pagesFetched < maxPages) {
-        // Build URL with optional start parameter
-        let salesUrl = `${baseUrl}/transactions?limit=${limit}&offset=${offset}`;
-        if (startStr) {
-          salesUrl += `&start_date=${startStr}`;
-        }
+        // Build URL directly to /transactions
+        const salesUrl = `${baseUrl}/transactions?limit=${limit}&offset=${offset}`;
         console.log(`Fetching sales: ${salesUrl}`);
         const salesResp = await fetch(salesUrl, { headers: apiHeaders });
         if (!salesResp.ok) {
@@ -1520,11 +1510,18 @@ async function syncUserEyemobile(
             }
           }
 
-          for (const sale of salesData.data) {
-            // Skip cancelled or uncompleted sales
+          let hitBoundary = false;
+          let completedInPage = 0;
+          for (let sIdx = 0; sIdx < salesData.data.length; sIdx++) {
+            const sale = salesData.data[sIdx];
+            // Na API Eyemobile, todas as vendas completadas estão no início do stream cronológico.
+            // Ao encontrar a primeira venda não-completada ou cancelada, atingimos o fim do stream de completadas.
             if (sale.cancelled || !sale.completed) {
-              continue;
+              console.log(`[eyemobile-sync] Boundary de vendas completadas atingido no offset ${offset + sIdx} (venda #${sale.id}).`);
+              hitBoundary = true;
+              break;
             }
+            completedInPage++;
 
             // Check for duplicate sales: check if a transaction with the same Eyemobile ID already exists
             const saleMarker = `Integrado via Eyemobile API. Venda: #${sale.id}`;
@@ -1588,26 +1585,35 @@ async function syncUserEyemobile(
             }
             salesCount++;
           }
-          fetchedHasMore = salesData.has_more === true;
-          hasMore = salesData.has_more === true;
-          offset += limit;
-          pagesFetched++;
+          fetchedHasMore = salesData.has_more === true && !hitBoundary;
+          hasMore = salesData.has_more === true && !hitBoundary;
+          const newHighestOffset = offset + completedInPage;
 
-          // Salva o progresso a cada página processada
+          // Salva o progresso garantindo que nunca regrida
+          const safeOffsetToSave = Math.max(config.last_synced_offset || 0, newHighestOffset);
           await supabaseAdmin
             .from("eyemobile_config")
-            .update({ last_synced_offset: offset })
+            .update({ last_synced_offset: safeOffsetToSave, updated_at: new Date().toISOString() })
             .eq("user_id", user_id);
+          config.last_synced_offset = safeOffsetToSave;
+
+          if (hitBoundary) {
+            break;
+          }
+
+          offset += limit;
+          pagesFetched++;
         } else {
           hasMore = false;
           fetchedHasMore = false;
         }
       }
 
-      // Salva o progresso no banco de dados para permitir continuar depois
+      // Salva o progresso final de forma segura
+      const finalOffsetToSave = Math.max(config.last_synced_offset || 0, offset);
       await supabaseAdmin
         .from("eyemobile_config")
-        .update({ last_synced_offset: offset })
+        .update({ last_synced_offset: finalOffsetToSave, updated_at: new Date().toISOString() })
         .eq("user_id", user_id);
 
       if (isExternalPagination) {

@@ -289,7 +289,22 @@ export function createDefaultTelegramApiClient(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return await resp.json().catch(() => ({ ok: false }));
+      let result = await resp.json().catch(() => ({ ok: false }));
+      if (!resp.ok && parseMode) {
+        const desc = (result as Record<string, unknown>)?.description || "";
+        if (typeof desc === "string" && (desc.includes("parse entities") || desc.includes("can't parse") || resp.status === 400)) {
+          console.warn("[telegram-adapter] Erro de parsing Telegram HTML. Executando fallback plain text:", desc);
+          const fallbackBody = { ...body };
+          delete fallbackBody.parse_mode;
+          const fallbackResp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(fallbackBody),
+          });
+          result = await fallbackResp.json().catch(() => ({ ok: false }));
+        }
+      }
+      return result;
     },
 
     async editMessageText({ chatId, messageId, text, parseMode = "HTML" }) {
@@ -1601,7 +1616,7 @@ export async function processTelegramUpdate(
       const trimmed = msg.text.trim();
 
       // Deixa comandos administrativos básicos para manipulação legada/onboarding se necessário
-      if (trimmed === "/start" || trimmed === "/help" || trimmed.startsWith("/vincular")) {
+      if (trimmed === "/start" || trimmed === "/help" || trimmed === "/ajuda" || trimmed.startsWith("/vincular")) {
         return { handled: false };
       }
 

@@ -1,4 +1,4 @@
-import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
+import { getSupabaseSecretKey, getSupabasePublishableKey } from "../_shared/supabase-keys.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { isAuthorizedCronCaller, unauthorizedResponse } from "../_shared/auth-guard.ts";
@@ -92,12 +92,15 @@ serve(async (req) => {
 
       try {
         // 4. Encaminha para o processador telegram-webhook com cabeçalho de reprocessamento autenticado
+        const pubKey = getSupabasePublishableKey();
         const webhookUrl = `${rtrim(supabaseUrl, "/")}/functions/v1/telegram-webhook`;
         const res = await fetch(webhookUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseServiceKey}`,
+            "apikey": pubKey,
+            "Authorization": `Bearer ${pubKey}`,
+            "x-supabase-service-key": supabaseServiceKey,
             "x-telegram-reprocess": "true",
             "x-telegram-attempt-count": String(item.attempt_count),
           },

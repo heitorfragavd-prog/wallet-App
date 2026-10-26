@@ -54,7 +54,7 @@ serve(async (req) => {
   for (const divida of dividasAmanha || []) {
     // Buscar chat_id do usuário
     const { data: userTelegram } = await supabase
-      .from("telegram_usuarios")
+      .from("usuarios_telegram")
       .select("telegram_chat_id")
       .eq("user_id", divida.user_id)
       .maybeSingle();
@@ -99,7 +99,7 @@ serve(async (req) => {
 
   for (const divida of dividas3dias || []) {
     const { data: userTelegram } = await supabase
-      .from("telegram_usuarios")
+      .from("usuarios_telegram")
       .select("telegram_chat_id")
       .eq("user_id", divida.user_id)
       .maybeSingle();
