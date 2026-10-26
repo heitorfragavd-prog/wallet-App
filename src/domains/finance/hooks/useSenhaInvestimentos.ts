@@ -154,6 +154,60 @@ export function useSenhaInvestimentos() {
     }
   };
 
+  const recuperarSenha = async (senhaConta: string, novaSenha: string): Promise<boolean> => {
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) throw new Error("Usuário não autenticado");
+
+      const resp = await supabase.functions.invoke("validar-senha", {
+        body: {
+          mode: "recuperar_senha",
+          user_id: userData.user.id,
+          senha_conta: senhaConta,
+          nova_senha: novaSenha,
+        },
+      });
+
+      if (resp.error) {
+        let msg = resp.error.message;
+        try {
+          if (resp.error.context && typeof resp.error.context.json === "function") {
+            const errBody = await resp.error.context.json();
+            if (errBody?.error) msg = errBody.error;
+          }
+        } catch {
+          // Ignora falha de parse do corpo de erro da resposta
+        }
+        throw new Error(msg || "Falha na recuperação de senha");
+      }
+
+      if (resp.data?.success) {
+        toast({
+          title: "Senha redefinida",
+          description: "Sua senha de investimentos foi redefinida com sucesso!",
+        });
+        setHasPassword(true);
+        const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutos
+        localStorage.setItem(AUTH_KEY, resp.data.token || "temp_token");
+        localStorage.setItem(EXPIRES_KEY, expiresAt.toString());
+        localStorage.removeItem(TENTATIVAS_KEY);
+        setTentativasRestantes(3);
+        setIsLocked(false);
+        return true;
+      }
+      throw new Error(resp.data?.error || "Falha ao recuperar senha");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("useSenhaInvestimentos", "Erro na recuperação de senha", { error: msg });
+      toast({
+        variant: "destructive",
+        title: "Erro na Recuperação",
+        description: msg || "Erro ao recuperar senha de investimentos",
+      });
+      return false;
+    }
+  };
+
   const logoutInvestimentos = () => {
     localStorage.removeItem(AUTH_KEY);
     localStorage.removeItem(EXPIRES_KEY);
@@ -167,6 +221,7 @@ export function useSenhaInvestimentos() {
     loading,
     cadastrarSenha,
     validarSenha,
+    recuperarSenha,
     logoutInvestimentos,
   };
 }
