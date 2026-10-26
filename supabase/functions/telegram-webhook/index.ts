@@ -814,11 +814,9 @@ serve(async (req) => {
       const authHeader = req.headers.get("Authorization");
       const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
       const serviceKeyHeader = req.headers.get("x-supabase-service-key")?.trim();
-      const isServiceRole = Boolean(
-        (supabaseServiceKey && token === supabaseServiceKey) ||
-        (supabaseServiceKey && serviceKeyHeader === supabaseServiceKey) ||
-        isAuthorizedCronCaller(req)
-      );
+      const isServiceRole = Boolean(supabaseServiceKey && token === supabaseServiceKey) ||
+        Boolean(supabaseServiceKey && serviceKeyHeader === supabaseServiceKey) ||
+        isAuthorizedCronCaller(req);
 
       if (!isServiceRole) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {

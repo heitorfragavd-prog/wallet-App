@@ -90,8 +90,9 @@ export function validateWebhookSecret(
 
 export function isAuthorizedCronCaller(req: Request): boolean {
   const secretKey = getSupabaseSecretKey();
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim();
-  const cronSecret = Deno.env.get("CRON_SECRET")?.trim();
+  const getEnv = (key: string) => (typeof Deno !== "undefined" ? Deno.env.get(key) : process.env[key])?.trim();
+  const serviceRoleKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const cronSecret = getEnv("CRON_SECRET");
 
   const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
   const xCronSecret = req.headers.get("x-cron-secret")?.trim();
