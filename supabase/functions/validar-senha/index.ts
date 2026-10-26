@@ -14,6 +14,6 @@ serve(async (req) => {
   // Validação estrita de autorização e proteção IDOR em validar-senha-core:
   // - Extrai e valida Authorization via auth.getUser(token) (retorna 401 se ausente)
   // - Rejeita tentativas onde authUser.id !== user_id com código 403
-  // - Gerencia operações de mode === "cadastrar", "validar", "alterar_senha", "recuperar_senha", "verify_token", "invalidar_sessao"
+  // - Gerencia operações de mode === "cadastrar" e mode === "validar" e mode === "recuperar_senha" em senha_investimentos
   return processValidarSenha(req, supabaseAdmin, supabaseServiceKey, supabasePublishableKey, supabaseUrl);
 });
