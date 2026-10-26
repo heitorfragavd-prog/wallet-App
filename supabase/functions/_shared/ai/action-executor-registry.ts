@@ -132,22 +132,102 @@ export function registerMetaActionHandlers(registry: ActionExecutorRegistry): vo
 }
 
 /**
+ * Registra o manipulador de persistência para boletos validados após confirmação humana.
+ * 
+ * REGRAS DE SEGURANÇA E NEGÓCIO:
+ * - workspace_id e user_id obtidos estritamente do contexto de execução autenticado server-side.
+ * - Boleto é cadastrado estritamente com status: 'pendente' e valor_pago: 0 (NÃO pago, NÃO liquidado).
+ * - Nenhuma despesa liquidada é gerada automaticamente.
+ * - Validações numéricas e de formato obrigatórias.
+ */
+export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): void {
+  registry.register("cadastrar_divida_boleto", async (payload, context, client) => {
+    if (!context.workspaceId || !context.userId) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "workspaceId e userId são obrigatórios no contexto de execução.",
+      );
+    }
+
+    const valor = Number(payload.valor_total ?? payload.valor);
+    if (!Number.isFinite(valor) || valor <= 0) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "Valor do boleto deve ser maior que zero.",
+      );
+    }
+
+    const dataVencimento = String(payload.data_vencimento || "").trim();
+    if (!dataVencimento) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "Data de vencimento é obrigatória para cadastro de boleto.",
+      );
+    }
+
+    const beneficiario = String(payload.beneficiario || payload.credor || "Beneficiário").trim();
+    const descricao = String(payload.descricao || `Boleto ${beneficiario}`).trim();
+
+    const insertRow = {
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      descricao,
+      credor: beneficiario,
+      documento_favorecido: payload.cnpj_cpf_beneficiario ? String(payload.cnpj_cpf_beneficiario).trim() : null,
+      valor_total: valor,
+      valor_pago: 0,
+      valor_restante: valor,
+      data_vencimento: dataVencimento,
+      status: "pendente",
+      metodo_pagamento_esperado: "boleto",
+      linha_digitavel: payload.linha_digitavel ? String(payload.linha_digitavel).trim() : null,
+      codigo_barras: payload.codigo_barras ? String(payload.codigo_barras).trim() : null,
+      parcelas: 1,
+      parcelas_pagas: 0,
+      parcela_atual: 1,
+      total_parcelas: 1,
+    };
+
+    const { data, error } = await client
+      .from("dividas")
+      .insert([insertRow])
+      .select("id")
+      .single();
+
+    if (error || !data) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_EXECUTION_ERROR",
+        500,
+        `Erro ao persistir dívida de boleto no banco: ${error?.message ?? "Falha na inserção"}`,
+      );
+    }
+
+    return { recordId: data.id, data };
+  });
+}
+
+/**
  * Cria o ActionExecutorRegistry padrão canônico.
  * 
- * CHECKPOINT 9.4A.1 AUDIT & DECISION:
- * Em produção, 0 executores de banco permanecem ativos por padrão.
- * Como 'public.metas' não possui 'workspace_id', ativar executores diretos
- * permitiria que um usuário em múltiplos workspaces alterasse metas de outro contexto.
- * Portanto, para garantir risco ZERO de mutação cross-workspace ('NÃO deixar executor LOW ativo se houver risco cross-workspace'),
- * todos os 9 Action Types operam em modo PROPOSAL-ONLY até evolução do schema de metas.
+ * AUDITORIA DE SEGURANÇA & ROLLOUT:
+ * - Metas: opera 100% Proposal-only por padrão por não ter workspace_id no schema legado.
+ * - Boleto: executor ativo com isolamento multi-tenant garantido por workspace_id em public.dividas.
  */
 export function createDefaultActionExecutorRegistry(options?: {
   enableUserScopedMetaExecutors?: boolean;
+  disableBoletoExecutor?: boolean;
 }): ActionExecutorRegistry {
   const registry = new ActionExecutorRegistry();
 
   if (options?.enableUserScopedMetaExecutors) {
     registerMetaActionHandlers(registry);
+  }
+
+  if (!options?.disableBoletoExecutor) {
+    registerBoletoActionHandlers(registry);
   }
 
   return registry;
