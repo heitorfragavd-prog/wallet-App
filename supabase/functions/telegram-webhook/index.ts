@@ -1764,23 +1764,60 @@ serve(async (req) => {
       },
       findDuplicateFn: async (_ctx, params) => {
         try {
+          // 1. Checa dividas persistidas (linha_digitavel ou codigo_barras no workspace)
+          if (params.linhaDigitavel || params.codigoBarras) {
+            let divQuery = supabase
+              .from("dividas")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId);
+            const orFilters: string[] = [];
+            if (params.linhaDigitavel) {
+              orFilters.push(`linha_digitavel.eq.${params.linhaDigitavel}`);
+            }
+            if (params.codigoBarras) {
+              orFilters.push(`codigo_barras.eq.${params.codigoBarras}`);
+            }
+            divQuery = divQuery.or(orFilters.join(","));
+            const { data: divData } = await divQuery.limit(1);
+            if (divData && divData.length > 0) {
+              return { isDuplicate: true, existingRecordId: divData[0].id, type: "divida" };
+            }
+          }
+
+          // 2. Checa propostas ativas (prepared/confirmed/executed) de boleto no workspace
+          if (params.linhaDigitavel) {
+            const { data: propData } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .neq("status", "cancelled")
+              .contains("payload", { linha_digitavel: params.linhaDigitavel })
+              .limit(1);
+            if (propData && propData.length > 0) {
+              return { isDuplicate: true, existingRecordId: propData[0].id, type: "proposal" };
+            }
+          }
+          if (params.codigoBarras) {
+            const { data: propData } = await supabase
+              .from("wallet_ai_action_proposals")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .neq("status", "cancelled")
+              .contains("payload", { codigo_barras: params.codigoBarras })
+              .limit(1);
+            if (propData && propData.length > 0) {
+              return { isDuplicate: true, existingRecordId: propData[0].id, type: "proposal" };
+            }
+          }
+
+          // 3. Checa DANFE por chave de acesso
           if (params.chaveAcesso) {
             const { data } = await supabase
               .from("wallet_ai_action_proposals")
               .select("id, status")
               .eq("workspace_id", params.workspaceId)
+              .neq("status", "cancelled")
               .contains("payload", { chave_acesso: params.chaveAcesso })
-              .limit(1);
-            if (data && data.length > 0) {
-              return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
-            }
-          }
-          if (params.linhaDigitavel) {
-            const { data } = await supabase
-              .from("wallet_ai_action_proposals")
-              .select("id, status")
-              .eq("workspace_id", params.workspaceId)
-              .contains("payload", { linha_digitavel: params.linhaDigitavel })
               .limit(1);
             if (data && data.length > 0) {
               return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };

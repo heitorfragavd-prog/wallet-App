@@ -406,12 +406,40 @@ export async function processDocumentPipeline(
     `${input.fileName || ""} ${input.textContext || ""}`
   );
 
-  // 3. Classificação Fail-Closed
-  const docType = classifyDocumentType({
+  const cleanBase64 = input.base64.includes(",")
+    ? input.base64.split(",")[1]
+    : input.base64;
+
+  // 3. Classificação Fail-Closed (Heurística determinística preliminar)
+  let docType = classifyDocumentType({
     documentTypeHint: input.documentTypeHint,
     fileName: input.fileName,
     textContext: input.textContext,
   });
+
+  // Se heurística for DESCONHECIDO e não houver injeção, acionar inspeção visual autorizada
+  if (docType === "DESCONHECIDO" && !injectionCheck.hasInjection) {
+    if (input.visualClassifierFn) {
+      try {
+        docType = await input.visualClassifierFn(cleanBase64, input.mimeType);
+      } catch {
+        docType = "DESCONHECIDO";
+      }
+    } else if (input.openaiApiKey || input.geminiApiKey || input.geminiApiKeyBackup) {
+      try {
+        docType = await classifyDocumentVisually({
+          base64: cleanBase64,
+          mimeType: input.mimeType,
+          openaiApiKey: input.openaiApiKey,
+          geminiApiKey: input.geminiApiKey,
+          geminiApiKeyBackup: input.geminiApiKeyBackup,
+          correlationId,
+        });
+      } catch {
+        docType = "DESCONHECIDO";
+      }
+    }
+  }
 
   if (injectionCheck.hasInjection) {
     const durationMs = Date.now() - startTime;
@@ -436,11 +464,39 @@ export async function processDocumentPipeline(
     };
   }
 
-  const cleanBase64 = input.base64.includes(",")
-    ? input.base64.split(",")[1]
-    : input.base64;
-
   try {
+    // ───────────────────────────────────────────────────────────────────────────
+    // FLUXO COMPROVANTE: RECONHECIDO MAS NÃO GERA DÍVIDA
+    // ───────────────────────────────────────────────────────────────────────────
+    if (docType === "COMPROVANTE") {
+      const durationMs = Date.now() - startTime;
+      return {
+        success: false,
+        documentType: "COMPROVANTE",
+        status: "requer_revisao",
+        confidence: 0.9,
+        data: {},
+        validation: {
+          isValid: false,
+          errors: ["Comprovantes de pagamento não geram agendamento de dívida."],
+          warnings: [],
+        },
+        hasPromptInjection: injectionCheck.hasInjection,
+        isDuplicate: false,
+        formattedMessage: [
+          "🧾 **Comprovante de Pagamento Identificado**",
+          "",
+          "Identificamos que este documento é um comprovante de pagamento ou transferência já realizada.",
+          "O fluxo de leitura por foto cadastra **boletos pendentes** ou **notas fiscais**.",
+          "",
+          "🔒 *Nenhuma alteração foi realizada.*",
+        ].join("\n"),
+        correlationId,
+        durationMs,
+        errorCode: "WALLET_AI_RECEIPT_NOT_SUPPORTED",
+      };
+    }
+
     // ───────────────────────────────────────────────────────────────────────────
     // FLUXO A: BOLETO BANCÁRIO
     // ───────────────────────────────────────────────────────────────────────────
@@ -916,7 +972,7 @@ export async function processDocumentPipeline(
       data: {},
       validation: {
         isValid: false,
-        errors: ["Tipo de documento não identificado com precisão suficiente."],
+        errors: ["Tipo de documento não identificado com precisão suficiente ou imagem ilegível."],
         warnings: [],
       },
       hasPromptInjection: injectionCheck.hasInjection,
@@ -926,13 +982,15 @@ export async function processDocumentPipeline(
         "",
         `• **Arquivo:** ${input.fileName || "documento"}`,
         "",
-        "Não identifiquei este arquivo como uma Nota Fiscal (DANFE) ou Boleto Bancário.",
+        "Não identifiquei este arquivo como uma Nota Fiscal (DANFE) ou Boleto Bancário legível.",
         "Para processamento automático, envie uma imagem ou PDF nítido de um Boleto ou Nota Fiscal.",
         "",
         "🔒 *Nenhuma ação financeira foi executada.*",
       ].join("\n"),
       correlationId,
       durationMs,
+      errorCode: "WALLET_AI_DOCUMENT_UNRECOGNIZED",
+      error: "Tipo de documento não identificado com precisão suficiente ou imagem ilegível.",
     };
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;

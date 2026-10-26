@@ -480,6 +480,39 @@ export function formatProposalMessage(proposal: ActionProposal): {
   buttons: TelegramInlineButton[][];
 } {
   const p = proposal.payload || {};
+
+  // Formatação específica para boletos identificados (Requisito 4)
+  if (proposal.actionType === "cadastrar_divida_boleto") {
+    const beneficiario = p.beneficiario || p.credor || "Beneficiário do Boleto";
+    const valor = Number(p.valor_total ?? p.valor ?? 0);
+    const vencimento = p.data_vencimento || p.vencimento || "N/A";
+    const linhaDigitavel = p.linha_digitavel || p.codigo_barras || "Validada via FEBRABAN";
+
+    const lines: string[] = [
+      `📄 <b>Boleto identificado</b>`,
+      ``,
+      `🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(beneficiario))}`,
+      `💰 <b>Valor:</b> ${formatCurrencyBrl(valor)}`,
+      `🗓️ <b>Vencimento:</b> ${escapeTelegramHtml(String(vencimento))}`,
+      `🔢 <b>Linha digitável validada:</b> <code>${escapeTelegramHtml(String(linhaDigitavel))}</code>`,
+      `⏳ <b>Status:</b> Aguardando confirmação`,
+      ``,
+      `<i>Clique abaixo para cadastrar esta dívida pendente na sua carteira.</i>`,
+    ];
+
+    const buttons: TelegramInlineButton[][] = [
+      [
+        { text: "✅ Cadastrar boleto", callback_data: `confirm_prop:${proposal.id}` },
+        { text: "❌ Cancelar", callback_data: `cancel_prop:${proposal.id}` },
+      ],
+    ];
+
+    return {
+      text: lines.join("\n"),
+      buttons,
+    };
+  }
+
   const valor = p.valor || p.valor_total || p.valor_alvo || p.novo_custo || 0;
   const data = p.data || p.data_vencimento || p.data_limite || "N/A";
   const desc = p.descricao || p.titulo || p.nome || proposal.summary;
@@ -1265,6 +1298,23 @@ export async function handleTelegramCallback(
         await deps.proposalRepo.updateStatus(proposalId, "executed", { executedAt: new Date().toISOString() });
       }
 
+      if (confirmedProposal.actionType === "cadastrar_divida_boleto") {
+        const p = confirmedProposal.payload || {};
+        const ben = p.beneficiario || p.credor || "Boleto";
+        const val = formatCurrencyBrl(Number(p.valor_total ?? p.valor ?? 0));
+        const venc = p.data_vencimento || "N/A";
+        return {
+          answerText: "✅ Boleto cadastrado com sucesso como dívida pendente!",
+          updatedMessageText: `✅ <b>Boleto Cadastrado com Sucesso!</b>\n\n` +
+            `🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(ben))}\n` +
+            `💰 <b>Valor:</b> ${val}\n` +
+            `🗓️ <b>Vencimento:</b> ${escapeTelegramHtml(String(venc))}\n` +
+            `📌 <b>Status:</b> Dívida pendente cadastrada na carteira.\n\n` +
+            `<i>O boleto não foi marcado como pago nem liquidado.</i>`,
+          removeKeyboard: true,
+        };
+      }
+
       return {
         answerText: "✅ Ação confirmada com sucesso!",
         updatedMessageText: `✅ <b>Ação Confirmada e Executada!</b>\n\n${escapeTelegramHtml(
@@ -1344,49 +1394,63 @@ export async function handleTelegramDocument(
 
   const documentRunner = deps.documentPipelineRunner ?? processDocumentPipeline;
 
-  const pipelineInput: ProcessDocumentPipelineInput = {
+  // Monta entrada estritamente compatível com ProcessDocumentPipelineInput
+  // mantendo retrocompatibilidade defensiva (fileBase64, fileType, caption)
+  const pipelineInput: any = {
+    workspaceId: identity.workspaceId,
+    userId: identity.userId,
+    base64: downloadResult.base64,
     fileBase64: downloadResult.base64,
+    mimeType: downloadResult.mimeType || fileType,
     fileType: downloadResult.mimeType || fileType,
     fileName: fileName || "telegram_upload",
+    textContext: caption,
     caption,
+    correlationId: context.correlationId,
+    geminiApiKey: deps.geminiApiKey,
+    geminiApiKeyBackup: deps.geminiApiKeyBackup,
+    openaiApiKey: deps.openaiApiKey,
+    findDuplicateFn: deps.findDuplicateFn
+      ? (p: any) => deps.findDuplicateFn!(context, p)
+      : undefined,
+    saveProposalFn: async (proposal: ActionProposal) => {
+      await deps.proposalRepo.saveProposal(proposal);
+    },
   };
 
-  const pipelineResult = await documentRunner(pipelineInput, context, {
+  const pipelineResult = await (documentRunner as any)(pipelineInput, context, {
     geminiApiKey: deps.geminiApiKey,
     openaiApiKey: deps.openaiApiKey,
     findDuplicateFn: deps.findDuplicateFn,
   });
 
-  // Duplicata detectada (FAIL-CLOSED)
+  // 1. Duplicata detectada (FAIL-CLOSED)
   if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
     const ident =
-      pipelineResult.extractedData?.chave_acesso ||
-      pipelineResult.extractedData?.linha_digitavel ||
-      pipelineResult.extractedData?.numero_nf ||
+      pipelineResult.data?.linha_digitavel ||
+      pipelineResult.data?.codigo_barras ||
+      pipelineResult.data?.chave_acesso ||
+      (pipelineResult as any).extractedData?.chave_acesso ||
+      (pipelineResult as any).extractedData?.linha_digitavel ||
+      (pipelineResult as any).extractedData?.numero_nf ||
       "identificador do documento";
+
+    const isBoleto =
+      pipelineResult.documentType === "BOLETO" ||
+      Boolean(pipelineResult.data?.linha_digitavel || (pipelineResult as any).extractedData?.linha_digitavel);
+
+    const titulo = isBoleto ? "Boleto Duplicado Detectado!" : "Documento Duplicado Detectado!";
 
     return {
       text:
-        `⚠️ <b>Documento Duplicado Detectado!</b>\n\n` +
+        `⚠️ <b>${titulo}</b>\n\n` +
         `Este documento (<code>${escapeTelegramHtml(String(ident))}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
         `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`,
       pipelineResult,
     };
   }
 
-  // Falha de validação matemática ou classificação suspeita
-  if (pipelineResult.status === "requer_revisao" && !pipelineResult.actionProposal) {
-    const warnings = pipelineResult.warnings.join("\n• ");
-    return {
-      text:
-        `⚠️ <b>Documento Requer Revisão Manual</b>\n\n` +
-        `Não foi possível validar as informações fiscais com precisão:\n• ${escapeTelegramHtml(warnings)}\n\n` +
-        `<i>Envie o arquivo como PDF/XML original ou revise os dados no app web.</i>`,
-      pipelineResult,
-    };
-  }
-
-  // Proposta de ação gerada
+  // 2. Proposta de ação gerada pronta para confirmação
   if (pipelineResult.actionProposal) {
     await deps.proposalRepo.saveProposal(pipelineResult.actionProposal);
     const formatted = formatProposalMessage(pipelineResult.actionProposal);
@@ -1398,8 +1462,121 @@ export async function handleTelegramDocument(
     };
   }
 
+  // 3. Tratamento de Erros, Rejeições e Revisões Específicas (Elimina retorno genérico)
+  const errors: string[] = [
+    ...(pipelineResult.validation?.errors || []),
+    ...((pipelineResult as any).errors || []),
+  ];
+  const warnings: string[] = [
+    ...(pipelineResult.validation?.warnings || []),
+    ...((pipelineResult as any).warnings || []),
+  ];
+
+  // A: Prompt Injection bloqueado
+  if (pipelineResult.hasPromptInjection || pipelineResult.errorCode === "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT") {
+    return {
+      text: "🛡️ <b>Aviso de Segurança:</b> O documento contém padrões suspeitos ou instruções maliciosas e foi bloqueado para revisão.",
+      pipelineResult,
+    };
+  }
+
+  // B: Comprovante de pagamento identificado (informativo, não gera dívida pendente)
+  if (pipelineResult.documentType === "COMPROVANTE" || pipelineResult.errorCode === "WALLET_AI_RECEIPT_NOT_SUPPORTED") {
+    return {
+      text:
+        `🧾 <b>Comprovante de Pagamento Identificado</b>\n\n` +
+        `Identificamos que este documento é um comprovante de pagamento ou transferência já realizada.\n` +
+        `O cadastro automático aceita <b>boletos bancários pendentes</b> ou <b>notas fiscais (DANFE)</b>.\n\n` +
+        `<i>Nenhuma alteração financeira foi realizada.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // C: Boleto com linha digitável inválida ou divergência FEBRABAN
+  if (
+    pipelineResult.documentType === "BOLETO" &&
+    errors.some((e) => /linha digit[aá]vel|c[oó]digo de barras|febraban|d[íi]gito verificador/i.test(e))
+  ) {
+    const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    return {
+      text:
+        `⚠️ <b>Boleto com Linha Digitável Inválida</b>\n\n` +
+        `A linha digitável do boleto não passou na validação matemática FEBRABAN:\n${errList}\n\n` +
+        `<i>Por favor, tire uma nova foto mais nítida do boleto ou digite a linha digitável no app web.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // D: Boleto com informações incompletas (beneficiário, vencimento, valor)
+  if (
+    pipelineResult.documentType === "BOLETO" &&
+    errors.some((e) => /benefici[aá]rio|vencimento|valor|ausente|n[aã]o identificad/i.test(e))
+  ) {
+    const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    return {
+      text:
+        `⚠️ <b>Informações Incompletas no Boleto</b>\n\n` +
+        `Não foi possível extrair todos os dados essenciais para o cadastro:\n${errList}\n\n` +
+        `<i>Envie uma foto em que apareçam claramente o beneficiário, data de vencimento e valor do boleto.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // E: Documento Não Identificado / Imagem Ilegível
+  if (
+    pipelineResult.documentType === "DESCONHECIDO" ||
+    pipelineResult.errorCode === "WALLET_AI_DOCUMENT_UNRECOGNIZED" ||
+    (pipelineResult.documentType !== "BOLETO" && pipelineResult.documentType !== "DANFE" && errors.some((e) => /não identificado|ileg[íi]vel|desconhecido/i.test(e)))
+  ) {
+    return {
+      text:
+        `📎 <b>Documento Não Identificado</b>\n\n` +
+        `Não foi possível identificar este arquivo como um Boleto Bancário ou Nota Fiscal (DANFE) legível.\n\n` +
+        `• <i>Dica:</i> Envie uma foto nítida e bem iluminada do boleto, com o código de barras e a linha digitável visíveis e sem cortes.`,
+      pipelineResult,
+    };
+  }
+
+  // F: Falha temporária no processador / serviço externo
+  if (
+    pipelineResult.status === "erro" ||
+    pipelineResult.errorCode === "WALLET_AI_DOCUMENT_PROCESSING_FAILED" ||
+    pipelineResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
+  ) {
+    const errMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    return {
+      text:
+        `⚠️ <b>Falha Temporária do Processador</b>\n\n` +
+        `Não foi possível concluir o processamento do documento no momento:\n` +
+        `• ${escapeTelegramHtml(errMsg)}\n\n` +
+        `<i>Por favor, tente enviar novamente em alguns instantes.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // G: Documento Requer Revisão Geral (ex: DANFE com inconsistências)
+  const allNotes = [...errors, ...warnings];
+  if (allNotes.length > 0) {
+    const notesList = allNotes.map((n) => `• ${escapeTelegramHtml(n)}`).join("\n");
+    return {
+      text:
+        `⚠️ <b>Documento Requer Revisão Manual</b>\n\n` +
+        `Não foi possível validar as informações fiscais com precisão suficiente:\n${notesList}\n\n` +
+        `<i>Envie o arquivo como PDF/XML original ou revise os dados no app web.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // H: Fallback seguro usando formattedMessage se disponível
+  if (pipelineResult.formattedMessage) {
+    return {
+      text: pipelineResult.formattedMessage,
+      pipelineResult,
+    };
+  }
+
   return {
-    text: "📄 Documento processado, porém nenhuma ação financeira foi identificada.",
+    text: "⚠️ <b>Não foi possível identificar ação financeira no documento</b>.\n\n<i>Envie uma foto nítida de um Boleto Bancário ou Nota Fiscal (DANFE).</i>",
     pipelineResult,
   };
 }
