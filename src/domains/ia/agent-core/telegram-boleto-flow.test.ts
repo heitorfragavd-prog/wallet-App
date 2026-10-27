@@ -1327,4 +1327,170 @@ describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () =
     expect(result.inlineKeyboard).toBeUndefined();
     expect(insertedDividas.length).toBe(1);
   });
+
+  it("Teste H — Desambiguação Boleto vs Comprovante: boleto com 'Recibo do Pagador' é reclassificado para BOLETO", async () => {
+    let openAiCalls = 0;
+    // Simula a resposta da IA que confundiu o campo 'Recibo do Pagador' com comprovante de pagamento
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("getFile")) {
+        return {
+          ok: true,
+          json: async () => ({ ok: true, result: { file_path: "photos/recibo_pagador.jpg" } }),
+        };
+      }
+      if (url.includes("photos/recibo_pagador.jpg")) {
+        return {
+          ok: true,
+          blob: async () => new Blob(["fake-image-bytes"], { type: "image/jpeg" }),
+        };
+      }
+      if (url.includes("api.openai.com/v1/chat/completions")) {
+        openAiCalls++;
+        // Primeira chamada OpenAI: Classificação visual (IA confunde 'Recibo do Pagador' mas detecta código de barras)
+        if (openAiCalls === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      documentType: "COMPROVANTE",
+                      confidence: 85,
+                      reasoning: "Documento apresenta a frase Recibo do Pagador no cabeçalho.",
+                      evidence: {
+                        hasBarcodeOrLinhaDigitavel: true,
+                        hasDanfeAccessKey: false,
+                        hasReceiptProof: false,
+                        detectedKeywords: ["Recibo do Pagador", "Banco Santander", "Vencimento", "Valor do Documento"],
+                      },
+                    }),
+                  },
+                },
+              ],
+            }),
+          };
+        } else {
+          // Segunda chamada OpenAI: Extração dos dados do boleto
+          return {
+            ok: true,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      tipo: "BOLETO",
+                      codigoBarras: CODIGO_BARRAS_VALIDO,
+                      linhaDigitavel: LINHA_DIGITAVEL_VALIDA,
+                      valor: 350.0,
+                      vencimento: "2026-11-20",
+                      beneficiario: "Fornecedor Auto Peças Ltda",
+                      cnpjBeneficiario: "12.345.678/0001-90",
+                    }),
+                  },
+                },
+              ],
+            }),
+          };
+        }
+      }
+      return { ok: false, status: 404 };
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_recibo_pagador_boleto",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    // Deve ser desambiguado para BOLETO e apresentar proposta interativa com botões
+    expect(result.text).toContain("Boleto identificado");
+    expect(result.text).not.toContain("Comprovante de Pagamento Identificado");
+    expect(result.inlineKeyboard).toBeDefined();
+    expect(savedProposals.size).toBe(1);
+  });
+
+  it("Teste I — Comprovante genuíno de pagamento / PIX permanece como COMPROVANTE informativo", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("getFile")) {
+        return {
+          ok: true,
+          json: async () => ({ ok: true, result: { file_path: "photos/comprovante_pix.jpg" } }),
+        };
+      }
+      if (url.includes("photos/comprovante_pix.jpg")) {
+        return {
+          ok: true,
+          blob: async () => new Blob(["fake-image-bytes"], { type: "image/jpeg" }),
+        };
+      }
+      if (url.includes("api.openai.com/v1/chat/completions")) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    documentType: "COMPROVANTE",
+                    confidence: 95,
+                    reasoning: "Comprovante de transferência PIX realizada com autenticação mecânica bancária.",
+                    evidence: {
+                      hasBarcodeOrLinhaDigitavel: false,
+                      hasDanfeAccessKey: false,
+                      hasReceiptProof: true,
+                      detectedKeywords: ["Comprovante de Transferência PIX", "Transação realizada", "Autenticação"],
+                    },
+                  }),
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_comprovante_pix",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("Comprovante de Pagamento Identificado");
+    expect(result.text).toContain("Identificamos que este documento é um comprovante de pagamento");
+    expect(result.inlineKeyboard).toBeUndefined();
+    expect(savedProposals.size).toBe(0);
+    expect(insertedDividas.length).toBe(0);
+  });
 });
