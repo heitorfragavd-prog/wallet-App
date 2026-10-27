@@ -818,6 +818,7 @@ export interface TelegramAdapterDependencies {
   openaiApiKey?: string;
   geminiApiKey?: string;
   geminiApiKeyBackup?: string;
+  fetchFn?: typeof fetch;
   findDuplicateFn?: (
     context: AiExecutionContext,
     params: {
@@ -1394,35 +1395,41 @@ export async function handleTelegramDocument(
 
   const documentRunner = deps.documentPipelineRunner ?? processDocumentPipeline;
 
-  // Monta entrada estritamente compatível com ProcessDocumentPipelineInput
-  // mantendo retrocompatibilidade defensiva (fileBase64, fileType, caption)
-  const pipelineInput: any = {
+  let effectiveOpenAiKey = deps.openaiApiKey;
+  if ((!effectiveOpenAiKey || !effectiveOpenAiKey.startsWith("sk-")) && deps.supabase && identity.userId) {
+    try {
+      const { data: userCfg } = await deps.supabase
+        .from("ia_configuracoes")
+        .select("api_key")
+        .eq("user_id", identity.userId)
+        .maybeSingle();
+      if (userCfg?.api_key && userCfg.api_key.startsWith("sk-")) {
+        effectiveOpenAiKey = userCfg.api_key;
+      }
+    } catch {
+      // Fallback defensivo silencioso
+    }
+  }
+
+  // Monta entrada estritamente tipada com ProcessDocumentPipelineInput
+  const pipelineInput: ProcessDocumentPipelineInput = {
     workspaceId: identity.workspaceId,
     userId: identity.userId,
     base64: downloadResult.base64,
-    fileBase64: downloadResult.base64,
     mimeType: downloadResult.mimeType || fileType,
-    fileType: downloadResult.mimeType || fileType,
     fileName: fileName || "telegram_upload",
     textContext: caption,
-    caption,
     correlationId: context.correlationId,
     geminiApiKey: deps.geminiApiKey,
     geminiApiKeyBackup: deps.geminiApiKeyBackup,
-    openaiApiKey: deps.openaiApiKey,
+    openaiApiKey: effectiveOpenAiKey,
+    fetchFn: deps.fetchFn,
     findDuplicateFn: deps.findDuplicateFn
-      ? (p: any) => deps.findDuplicateFn!(context, p)
+      ? (params) => deps.findDuplicateFn!(context, params)
       : undefined,
-    saveProposalFn: async (proposal: ActionProposal) => {
-      await deps.proposalRepo.saveProposal(proposal);
-    },
   };
 
-  const pipelineResult = await (documentRunner as any)(pipelineInput, context, {
-    geminiApiKey: deps.geminiApiKey,
-    openaiApiKey: deps.openaiApiKey,
-    findDuplicateFn: deps.findDuplicateFn,
-  });
+  const pipelineResult: ProcessDocumentPipelineResult = await documentRunner(pipelineInput);
 
   // 1. Duplicata detectada (FAIL-CLOSED)
   if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
@@ -1452,7 +1459,10 @@ export async function handleTelegramDocument(
 
   // 2. Proposta de ação gerada pronta para confirmação
   if (pipelineResult.actionProposal) {
-    await deps.proposalRepo.saveProposal(pipelineResult.actionProposal);
+    // Se o pipeline já possuía saveProposalFn, já foi persistido; caso contrário salva como salvaguarda
+    if (!pipelineInput.saveProposalFn) {
+      await deps.proposalRepo.saveProposal(pipelineResult.actionProposal);
+    }
     const formatted = formatProposalMessage(pipelineResult.actionProposal);
 
     return {
@@ -1522,7 +1532,25 @@ export async function handleTelegramDocument(
     };
   }
 
-  // E: Documento Não Identificado / Imagem Ilegível
+  // E: Falha técnica temporária no processador visual / provedor externo (executa ANTES de documento não identificado)
+  if (
+    pipelineResult.status === "erro" ||
+    pipelineResult.errorCode?.startsWith("WALLET_AI_VISION_") ||
+    pipelineResult.errorCode === "WALLET_AI_DOCUMENT_PROCESSING_FAILED" ||
+    pipelineResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
+  ) {
+    const errMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    return {
+      text:
+        `⚠️ <b>Falha Temporária no Processamento Visual</b>\n\n` +
+        `Não foi possível analisar o documento no momento devido a uma instabilidade no serviço de visão computacional:\n` +
+        `• <i>${escapeTelegramHtml(errMsg)}</i>\n\n` +
+        `<i>Por favor, tente enviar novamente em alguns instantes.</i>`,
+      pipelineResult,
+    };
+  }
+
+  // F: Documento Não Identificado / Imagem Ilegível (somente quando NÃO for falha técnica)
   if (
     pipelineResult.documentType === "DESCONHECIDO" ||
     pipelineResult.errorCode === "WALLET_AI_DOCUMENT_UNRECOGNIZED" ||
@@ -1533,23 +1561,6 @@ export async function handleTelegramDocument(
         `📎 <b>Documento Não Identificado</b>\n\n` +
         `Não foi possível identificar este arquivo como um Boleto Bancário ou Nota Fiscal (DANFE) legível.\n\n` +
         `• <i>Dica:</i> Envie uma foto nítida e bem iluminada do boleto, com o código de barras e a linha digitável visíveis e sem cortes.`,
-      pipelineResult,
-    };
-  }
-
-  // F: Falha temporária no processador / serviço externo
-  if (
-    pipelineResult.status === "erro" ||
-    pipelineResult.errorCode === "WALLET_AI_DOCUMENT_PROCESSING_FAILED" ||
-    pipelineResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
-  ) {
-    const errMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
-    return {
-      text:
-        `⚠️ <b>Falha Temporária do Processador</b>\n\n` +
-        `Não foi possível concluir o processamento do documento no momento:\n` +
-        `• ${escapeTelegramHtml(errMsg)}\n\n` +
-        `<i>Por favor, tente enviar novamente em alguns instantes.</i>`,
       pipelineResult,
     };
   }
