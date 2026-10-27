@@ -59,20 +59,40 @@ export const CLASSIFIER_SYSTEM_PROMPT = `Você é um classificador visual especi
 Analise a imagem fornecida e determine a classificação correta entre exatamente 4 categorias:
 
 1. "BOLETO":
-   Boleto bancário de cobrança ou fatura contendo código de barras, linha digitável (47 ou 48 dígitos), vencimento, valor do documento, cedente/beneficiário e sacado/pagador.
-   IMPORTANTE: Só classifique como BOLETO se houver evidência visual clara de um boleto de cobrança bancária pendente de pagamento (NÃO confunda com comprovante de pagamento já liquidado).
+   Documento de cobrança bancária (boleto bancário tradicional, fatura de concessionária/serviço, DARF, GPS ou guia de recolhimento com código de barras/linha digitável).
+   ELEMENTOS CARACTERÍSTICOS:
+   - Código de barras (faixa de barras verticais paralelas) ou Linha Digitável (47 ou 48 dígitos, em blocos como XXXXX.XXXXX XXXXX.XXXXXX XXXXX.XXXXXX X XXXXXXXXXXXXXX).
+   - Ficha de Compensação ou Recibo do Pagador/Sacado.
+   - Campos padronizados bancários: "Vencimento" (ou "Data de Vencimento"), "Valor do Documento", "Beneficiário" (ou "Cedente"), "Pagador" (ou "Sacado"), "Nosso Número", "Agência / Código Beneficiário", "Carteira", "Espécie", "Instruções".
+   - Logotipo ou nome de banco/instituição financeira (ex.: Banco do Brasil, Bradesco, Itaú, Santander, Caixa, Sicoob, Sicredi, Safra, Inter, Nubank, etc.).
+   
+   ⚠️ REGRA MANDATÓRIA SOBRE "RECIBO DO PAGADOR":
+   - ATENÇÃO CRÍTICA: Praticamente todo boleto bancário brasileiro possui uma via ou canhoto intitulado "RECIBO DO PAGADOR" ou "RECIBO DO SACADO".
+   - A presença da expressão "RECIBO DO PAGADOR" NÃO significa que o boleto já foi pago! Trata-se da via do pagador do boleto de cobrança a ser liquidado.
+   - NUNCA classifique um documento como COMPROVANTE apenas por conter os termos "RECIBO DO PAGADOR", "RECIBO DO SACADO" ou "RECIBO".
+   - Se o documento contiver linha digitável, código de barras, ficha de compensação bancária ou campos de boleto (vencimento, valor, agência/código, beneficiário), ele DEVE ser classificado como "BOLETO".
 
 2. "DANFE":
-   Documento Auxiliar da Nota Fiscal Eletrônica (DANFE, NFC-e, CF-e), contendo chave de acesso de 44 dígitos numéricos, CNPJ do emitente/destinatário, quadro de produtos/itens e impostos.
+   Documento Auxiliar da Nota Fiscal Eletrônica (DANFE, NFC-e, CF-e, extrato SAT).
+   ELEMENTOS CARACTERÍSTICOS:
+   - Chave de acesso de 44 dígitos numéricos (ou código de barras bidimensional QR Code de NFC-e).
+   - Título explícito: "DANFE", "Documento Auxiliar da Nota Fiscal Eletrônica", "NFC-e", "Nota Fiscal de Consumidor Eletrônica".
+   - Dados de emitente e destinatário (CNPJ, Inscrição Estadual, Razão Social), quadro detalhado de produtos/serviços (código, descrição, NCM, CST, quantidade, valor unitário, valor total), base de cálculo e alíquotas de ICMS/IPI/PIS/COFINS.
 
 3. "COMPROVANTE":
-   Comprovante de pagamento já efetuado, comprovante de transferência bancária ou PIX realizado, recibo de quitação. Indica uma transação já liquidada no passado, não um título a pagar.
+   Comprovante de pagamento ou transferência já efetivamente consumada e liquidada no passado.
+   ELEMENTOS CARACTERÍSTICOS EXCLUSIVOS:
+   - Captura de tela (print) de aplicativo bancário ou comprovante de terminal/internet banking contendo cabeçalho explícito como "Comprovante de Transação", "Comprovante de Pagamento", "Comprovante PIX", "Comprovante de Transferência", "TED Realizada", "Pagamento Efetuado com Sucesso".
+   - Dados de liquidação consumada: "Data do Pagamento", "Data do Débito", "Autenticação Mecânica / Eletrônica", hash/código de autenticação (ex.: A.123.456.789...), identificador de transação ponta a ponta (E2E) PIX, conta debitada.
+   - NÃO contém Ficha de Compensação bancária com código de barras a ser liquidado.
+   - Se o documento apresentar código de barras legível, linha digitável para pagamento ou estrutura de ficha de compensação bancária, a classificação CORRETA É "BOLETO", NUNCA "COMPROVANTE".
 
 4. "DESCONHECIDO":
-   Fotografias do cotidiano, pessoas, animais, produtos soltos, capturas sem relação fiscal/financeira, ou imagens completamente borradas/ilegíveis sem elementos reconhecíveis.
+   Fotografias do cotidiano, pessoas, animais, produtos avulsos, capturas sem relação fiscal/financeira, ou imagens completamente borradas/ilegíveis sem elementos reconhecíveis.
 
-Regras Estritas:
-- NUNCA classifique como BOLETO sem evidência visual de código de barras ou linha digitável ou campos típicos de boleto.
+Regras Estritas de Decisão:
+- Em caso de dúvida entre BOLETO e COMPROVANTE: se houver linha digitável, código de barras, ficha de compensação, logotipo de banco com campos de vencimento/valor ou o termo "Recibo do Pagador", a precedência é ABSOLUTA de "BOLETO".
+- Só classifique como COMPROVANTE se for evidente a comprovação de liquidação bancária concluída (comprovante de transferência/PIX/débito já realizado), sem presença de boleto de cobrança com código de barras/linha digitável a pagar.
 - NUNCA invente informações.
 - Responda ESTRITAMENTE um objeto JSON válido, sem texto adicional, no seguinte formato:
 {
@@ -426,6 +446,29 @@ function parseClassificationJson(
     };
 
     let docType = docTypeRaw as VisualDocumentType;
+
+    // ─── SALVAGUARDA DE DESAMBIGUAÇÃO: "RECIBO DO PAGADOR" E CÓDIGO DE BARRAS ───
+    // Se o modelo classificar como COMPROVANTE, mas detectar linha digitável/código de barras,
+    // ou se evidências/palavras-chave/reasoning indicarem termos de boleto (ex.: "Recibo do Pagador", "Ficha de Compensação"):
+    // Reclassifica deterministamente para BOLETO (a presença de "Recibo do Pagador" faz parte da estrutura do boleto).
+    if (docType === "COMPROVANTE") {
+      const reasoningLower = (obj.reasoning || "").toLowerCase();
+      const keywordsLower = evidence.detectedKeywords?.map((k) => k.toLowerCase()) || [];
+      const hasBoletoSignals =
+        evidence.hasBarcodeOrLinhaDigitavel ||
+        keywordsLower.some((k) =>
+          /recibo do pagador|recibo do sacado|ficha de compensa|linha digit[aá]vel|c[oó]digo de barras|cedente|benefici[aá]rio|sacado|nosso n[uú]mero|ag[eê]ncia/i.test(k)
+        ) ||
+        /recibo do pagador|recibo do sacado|ficha de compensa|linha digit[aá]vel|c[oó]digo de barras|cedente|benefici[aá]rio/i.test(reasoningLower);
+
+      if (hasBoletoSignals) {
+        console.log(
+          `[VISUAL_CLASSIFIER] Desambiguação aplicada: documento reclassificado de COMPROVANTE para BOLETO (sinais de cobrança detectados: barcode=${evidence.hasBarcodeOrLinhaDigitavel}, keywords=${keywordsLower.join(",")})`
+        );
+        docType = "BOLETO";
+        evidence.hasBarcodeOrLinhaDigitavel = true;
+      }
+    }
 
     // Regra de segurança: só permite BOLETO se houver evidência visual concreta ou confiança >= 70
     if (docType === "BOLETO" && !evidence.hasBarcodeOrLinhaDigitavel && confidence < 70) {
