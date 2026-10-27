@@ -131,7 +131,7 @@ jobs:
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/ia-deposito/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
-          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/telegram-webhook/index.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/_shared/ai/visual-classifier.ts
 
   e2e-browser-homologation:
     name: Full E2E Browser & Real Supabase Stack Homologation
