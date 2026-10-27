@@ -12,6 +12,9 @@ import {
   type ProcessDocumentPipelineInput,
 } from "../../../../supabase/functions/_shared/ai/document-pipeline.ts";
 import {
+  classifyDocumentVisually,
+} from "../../../../supabase/functions/_shared/ai/visual-classifier.ts";
+import {
   createDefaultActionExecutorRegistry,
   SupabaseActionDatabaseMutator,
 } from "../../../../supabase/functions/_shared/ai/action-executor-registry.ts";
@@ -22,9 +25,9 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
   const TEST_WORKSPACE_ID = "ws-telegram-boleto-123";
   const TEST_USER_ID = "user-proprietario-456";
 
-  // Linha digitável FEBRABAN válida (Banco Santander - 47 dígitos)
-  const LINHA_DIGITAVEL_VALIDA = "03399.00109 00000.123456 00000.000008 1 98760000035000";
-  const CODIGO_BARRAS_VALIDO = "03391987600000350000010000001234500000000000";
+  // Linha digitável FEBRABAN válida (Banco Santander - 47 dígitos matematicamente consistentes)
+  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 1 98760000035000";
+  const CODIGO_BARRAS_VALIDO = "03391987600000350009001000000123450000000000";
 
   let savedProposals: Map<string, ActionProposal>;
   let mockProposalRepo: ActionRepository;
@@ -729,5 +732,599 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
     expect(capturedParams.workspaceId).toBe(TEST_WORKSPACE_ID);
     expect(capturedParams.linhaDigitavel).toBe(LINHA_DIGITAVEL_VALIDA);
     expect(capturedParams.codigoBarras).toBe(CODIGO_BARRAS_VALIDO);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ETAPA 6: TESTES NORMATIVOS REALÍSTICAS (A - G) SEM RESPOSTAS PRONTAS
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () => {
+  const TEST_WORKSPACE_ID = "ws-telegram-boleto-visual-test";
+  const TEST_USER_ID = "user-proprietario-visual-test";
+  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 1 98760000035000";
+  const CODIGO_BARRAS_VALIDO = "03391987600000350009001000000123450000000000";
+
+  let savedProposals: Map<string, ActionProposal>;
+  let mockProposalRepo: ActionRepository;
+  let mockApiClient: TelegramApiClient;
+  let insertedDividas: any[];
+  let mockSupabase: any;
+  let mutator: SupabaseActionDatabaseMutator;
+
+  const validIdentity = {
+    authorized: true,
+    userId: TEST_USER_ID,
+    workspaceId: TEST_WORKSPACE_ID,
+    userRole: "owner" as const,
+  };
+
+  beforeEach(() => {
+    savedProposals = new Map<string, ActionProposal>();
+    insertedDividas = [];
+
+    mockProposalRepo = {
+      saveProposal: vi.fn(async (prop: ActionProposal) => {
+        savedProposals.set(prop.id, { ...prop });
+      }),
+      getProposal: vi.fn(async (id: string) => savedProposals.get(id) || null),
+      updateStatus: vi.fn(async (id: string, status: any) => {
+        const p = savedProposals.get(id);
+        if (p) p.status = status;
+      }),
+      confirmProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (!p || p.status !== "prepared") {
+          return { success: false, code: "WALLET_AI_ACTION_ALREADY_PROCESSED" };
+        }
+        p.status = "confirmed";
+        p.confirmedAt = new Date().toISOString();
+        return { success: true, proposal: p };
+      }),
+      executeProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (p) {
+          p.status = "executed";
+          p.executedAt = new Date().toISOString();
+        }
+      }),
+      cancelProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (!p || p.status !== "prepared") return false;
+        p.status = "cancelled";
+        return true;
+      }),
+    };
+
+    mockApiClient = {
+      sendMessage: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async () => ({ ok: true })),
+      editMessageReplyMarkup: vi.fn(async () => ({ ok: true })),
+      answerCallbackQuery: vi.fn(async () => ({ ok: true })),
+      downloadFileAsBase64: vi.fn(async () => ({
+        base64: "dGVzdGUtYm9sZXRvLWJhc2U2NA==",
+        mimeType: "image/jpeg",
+      })),
+    };
+
+    mockSupabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "dividas") {
+          return {
+            insert: vi.fn().mockImplementation((rows: any[]) => {
+              for (const r of rows) {
+                const inserted = { id: `divida-${Date.now()}-${Math.random()}`, ...r };
+                insertedDividas.push(inserted);
+              }
+              return {
+                select: vi.fn().mockReturnValue({
+                  single: vi.fn().mockResolvedValue({ data: insertedDividas[insertedDividas.length - 1], error: null }),
+                }),
+              };
+            }),
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                or: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockResolvedValue({ data: insertedDividas, error: null }),
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === "channel_mappings") {
+          const mappingReturn = {
+            data: {
+              user_id: TEST_USER_ID,
+              workspace_id: TEST_WORKSPACE_ID,
+              access_level: "owner",
+              is_active: true,
+              nome_exibicao: "Proprietário",
+            },
+            error: null,
+          };
+          const chain: any = {};
+          chain.eq = vi.fn().mockReturnValue(chain);
+          chain.maybeSingle = vi.fn().mockResolvedValue(mappingReturn);
+          chain.single = vi.fn().mockResolvedValue(mappingReturn);
+          return { select: vi.fn().mockReturnValue(chain) };
+        }
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+            }),
+          }),
+        };
+      }),
+    };
+
+    const registry = createDefaultActionExecutorRegistry();
+    mutator = new SupabaseActionDatabaseMutator(mockSupabase, registry);
+  });
+
+  // Teste A: Imagem sem legenda passando pelo pipeline real com mock apenas na camada HTTP (fetchFn)
+  it("Teste A — Imagem sem legenda: classificador visual real é acionado e identifica BOLETO", async () => {
+    let visualClassifiedCalled = false;
+    let extractionCalled = false;
+
+    const mockFetch = vi.fn(async (url: any, opts: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes("api.openai.com/v1/chat/completions")) {
+        const body = JSON.parse(opts.body);
+        if (body.model === "gpt-4o-mini") {
+          visualClassifiedCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      documentType: "BOLETO",
+                      confidence: 95,
+                      reasoning: "Código de barras e linha digitável claramente identificados.",
+                      evidence: {
+                        hasBarcodeOrLinhaDigitavel: true,
+                        detectedKeywords: ["Boleto", "Vencimento"],
+                      },
+                    }),
+                  },
+                },
+              ],
+            }),
+          } as Response;
+        }
+        if (body.model === "gpt-4o") {
+          extractionCalled = true;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      banco: "Santander (033)",
+                      beneficiario: "Companhia de Energia Elétrica S.A.",
+                      cnpj_cpf_beneficiario: "12.345.678/0001-90",
+                      data_vencimento: "2026-11-20",
+                      valor: 350.00,
+                      linha_digitavel: LINHA_DIGITAVEL_VALIDA,
+                      codigo_barras: CODIGO_BARRAS_VALIDO,
+                    }),
+                  },
+                },
+              ],
+            }),
+          } as Response;
+        }
+      }
+      return { ok: false, status: 404, json: async () => ({}) } as Response;
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-real-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_celular_12345",
+        fileType: "image/jpeg",
+        fileName: undefined,
+        caption: undefined,
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(visualClassifiedCalled).toBe(true);
+    expect(extractionCalled).toBe(true);
+    expect(result.pipelineResult?.documentType).toBe("BOLETO");
+    expect(result.text).toContain("Boleto identificado");
+    expect(result.text).toContain("Companhia de Energia Elétrica S.A.");
+    expect(result.text).toContain("350,00");
+    expect(result.inlineKeyboard).toBeDefined();
+    expect(result.inlineKeyboard![0][0].text).toBe("✅ Cadastrar boleto");
+  });
+
+  // Teste B: Função existente
+  it("Teste B — Função existente: comprova que classifyDocumentVisually está implementada, importada e executável", async () => {
+    expect(typeof classifyDocumentVisually).toBe("function");
+
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                documentType: "BOLETO",
+                confidence: 90,
+                reasoning: "Linha digitável presente",
+                evidence: { hasBarcodeOrLinhaDigitavel: true },
+              }),
+            },
+          },
+        ],
+      }),
+    }));
+
+    const classification = await classifyDocumentVisually({
+      base64: "dGVzdGUtYmFzZTY0",
+      mimeType: "image/jpeg",
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    });
+
+    expect(classification.documentType).toBe("BOLETO");
+    expect(classification.confidence).toBe(90);
+    expect(classification.technicalError).toBeUndefined();
+    expect(classification.providerUsed).toBe("openai");
+  });
+
+  // Teste C: Provedor indisponível
+  it("Teste C — Provedor indisponível: erros 401, 403, 429 e timeout geram falha temporária sem mascaramento como ilegível", async () => {
+    const errorScenarios = [
+      { status: 401, errorName: "AUTH_FAILED" },
+      { status: 403, errorName: "AUTH_FAILED" },
+      { status: 429, errorName: "RATE_LIMITED" },
+      { status: 504, errorName: "TIMEOUT", throwTimeout: true },
+    ];
+
+    for (const scenario of errorScenarios) {
+      const mockFetch = vi.fn(async () => {
+        if (scenario.throwTimeout) {
+          const err = new Error("Request timed out");
+          err.name = "AbortError";
+          throw err;
+        }
+        return {
+          ok: false,
+          status: scenario.status,
+          json: async () => ({ error: { message: "Simulated error" } }),
+        } as Response;
+      });
+
+      const deps: TelegramAdapterDependencies = {
+        supabase: mockSupabase,
+        telegramBotToken: "mock-token",
+        telegramApi: mockApiClient,
+        runnerFactory: () => ({} as any),
+        repoFactory: () => ({} as any),
+        proposalRepo: mockProposalRepo,
+        mutator,
+        openaiApiKey: "sk-test-failing-key",
+        fetchFn: mockFetch as any,
+      };
+
+      const result = await handleTelegramDocument(
+        {
+          fileId: `photo_err_${scenario.status}`,
+          fileType: "image/jpeg",
+          identity: validIdentity,
+        },
+        deps,
+      );
+
+      expect(result.pipelineResult?.status).toBe("erro");
+      expect(result.pipelineResult?.errorCode).toContain("WALLET_AI_VISION_");
+      expect(result.text).toContain("Falha Temporária no Processamento Visual");
+      expect(result.text).not.toContain("Documento Não Identificado");
+      expect(result.text).not.toContain("Não foi possível identificar este arquivo como um Boleto Bancário ou Nota Fiscal");
+    }
+  });
+
+  // Teste D: Documento desconhecido
+  it("Teste D — Documento desconhecido: foto de objeto/animal retorna DESCONHECIDO sem gerar proposta nem dívida", async () => {
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                documentType: "DESCONHECIDO",
+                confidence: 5,
+                reasoning: "Fotografia de uma xícara de café sobre uma mesa de escritório.",
+                evidence: {
+                  hasBarcodeOrLinhaDigitavel: false,
+                  hasDanfeAccessKey: false,
+                  hasReceiptProof: false,
+                  detectedKeywords: [],
+                },
+              }),
+            },
+          },
+        ],
+      }),
+    }));
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_xicara_cafe",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(result.pipelineResult?.documentType).toBe("DESCONHECIDO");
+    expect(result.text).toContain("Documento Não Identificado");
+    expect(result.inlineKeyboard).toBeUndefined();
+    expect(savedProposals.size).toBe(0);
+    expect(insertedDividas.length).toBe(0);
+  });
+
+  // Teste E: Boleto reconhecido
+  it("Teste E — Boleto reconhecido: executa cadeia completa Imagem -> Classificação -> Extração -> FEBRABAN -> Proposta", async () => {
+    const mockFetch = vi.fn(async (url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      if (body.model === "gpt-4o-mini") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    documentType: "BOLETO",
+                    confidence: 98,
+                    reasoning: "Boleto bancário Itaú com código de barras evidente",
+                    evidence: { hasBarcodeOrLinhaDigitavel: true },
+                  }),
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  banco: "Itaú Unibanco (341)",
+                  beneficiario: "Telecomunicações Brasileiras S.A.",
+                  cnpj_cpf_beneficiario: "00.000.000/0001-91",
+                  data_vencimento: "2026-11-25",
+                  valor: 350.00,
+                  linha_digitavel: LINHA_DIGITAVEL_VALIDA,
+                  codigo_barras: CODIGO_BARRAS_VALIDO,
+                }),
+              },
+            },
+          ],
+        }),
+      };
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_boleto_itau",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(result.pipelineResult?.documentType).toBe("BOLETO");
+    expect(result.pipelineResult?.actionProposal).toBeDefined();
+    expect(result.pipelineResult?.actionProposal?.status).toBe("prepared");
+    expect(result.pipelineResult?.actionProposal?.payload.beneficiario).toBe("Telecomunicações Brasileiras S.A.");
+    expect(result.pipelineResult?.actionProposal?.payload.valor).toBe(350.00);
+    expect(insertedDividas.length).toBe(0);
+  });
+
+  // Teste F: Confirmação
+  it("Teste F — Confirmação: botões inline gerados e persistência de dívida ocorre estritamente após confirmação", async () => {
+    const mockFetch = vi.fn(async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      if (body.model === "gpt-4o-mini") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    documentType: "BOLETO",
+                    confidence: 95,
+                    reasoning: "Boleto válido",
+                    evidence: { hasBarcodeOrLinhaDigitavel: true },
+                  }),
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  beneficiario: "Fornecedor Teste",
+                  data_vencimento: "2026-12-10",
+                  valor: 350.00,
+                  linha_digitavel: LINHA_DIGITAVEL_VALIDA,
+                  codigo_barras: CODIGO_BARRAS_VALIDO,
+                }),
+              },
+            },
+          ],
+        }),
+      };
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+    };
+
+    const docResult = await handleTelegramDocument(
+      {
+        fileId: "photo_fornecedor",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(docResult.inlineKeyboard).toBeDefined();
+    expect(docResult.inlineKeyboard![0][0].text).toBe("✅ Cadastrar boleto");
+    expect(docResult.inlineKeyboard![0][1].text).toBe("❌ Cancelar");
+
+    const proposalId = docResult.pipelineResult?.actionProposal?.id;
+    expect(proposalId).toBeDefined();
+    expect(insertedDividas.length).toBe(0);
+
+    const cbResult = await handleTelegramCallback(
+      {
+        callbackData: `confirm_prop:${proposalId}`,
+        callbackQueryId: "cb_q_test_f",
+        telegramUserId: 99999,
+        chatId: 99999,
+      },
+      deps,
+    );
+
+    expect(cbResult.answerText).toContain("Boleto cadastrado com sucesso como dívida pendente");
+    expect(insertedDividas.length).toBe(1);
+    expect(insertedDividas[0].status).toBe("pendente");
+    expect(insertedDividas[0].valor_pago).toBe(0);
+    expect(insertedDividas[0].valor_total).toBe(350.00);
+  });
+
+  // Teste G: Duplicidade
+  it("Teste G — Duplicidade: mesma linha digitável já registrada impede nova proposta e nova dívida", async () => {
+    insertedDividas.push({
+      id: "divida-existente-1",
+      workspace_id: TEST_WORKSPACE_ID,
+      linha_digitavel: LINHA_DIGITAVEL_VALIDA,
+      status: "pendente",
+    });
+
+    const findDuplicateFnMock = vi.fn(async (_ctx: any, params: any) => {
+      if (params.linhaDigitavel === LINHA_DIGITAVEL_VALIDA) {
+        return { isDuplicate: true, existingRecordId: "divida-existente-1", type: "divida" };
+      }
+      return { isDuplicate: false };
+    });
+
+    const mockFetch = vi.fn(async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      if (body.model === "gpt-4o-mini") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{ message: { content: JSON.stringify({ documentType: "BOLETO", confidence: 95, evidence: { hasBarcodeOrLinhaDigitavel: true } }) } }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify({ beneficiario: "Cemig", valor: 250, linha_digitavel: LINHA_DIGITAVEL_VALIDA, codigo_barras: CODIGO_BARRAS_VALIDO, data_vencimento: "2026-11-30" }) } }],
+        }),
+      };
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      fetchFn: mockFetch as any,
+      findDuplicateFn: findDuplicateFnMock,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_boleto_duplicado",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("Boleto Duplicado Detectado!");
+    expect(result.text).toContain("já foi registrado anteriormente");
+    expect(result.inlineKeyboard).toBeUndefined();
+    expect(insertedDividas.length).toBe(1);
   });
 });

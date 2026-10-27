@@ -29,6 +29,10 @@ import {
   prepareActionProposal,
   type ActionProposal,
 } from "./action-gateway.ts";
+import {
+  classifyDocumentVisually,
+  type VisualClassificationResult,
+} from "./visual-classifier.ts";
 
 // ─── LIMITES E CONSTANTES DE SEGURANÇA ─────────────────────────────────────────
 
@@ -84,6 +88,10 @@ export interface ProcessDocumentPipelineInput {
   saveProposalFn?: (proposal: ActionProposal) => Promise<void>;
   // Hook opcional para auditoria estruturada
   auditLogFn?: (event: Record<string, unknown>) => Promise<void>;
+  // Injeção de classificador visual alternativo para testes
+  visualClassifierFn?: (base64: string, mimeType: string) => Promise<DocumentType>;
+  // Injeção de fetch customizado para testes
+  fetchFn?: typeof fetch;
 }
 
 export interface DocumentMathValidationItem {
@@ -422,22 +430,46 @@ export async function processDocumentPipeline(
     if (input.visualClassifierFn) {
       try {
         docType = await input.visualClassifierFn(cleanBase64, input.mimeType);
-      } catch {
+      } catch (err: unknown) {
+        console.warn(`[DOCUMENT_PIPELINE] visualClassifierFn error:`, err);
         docType = "DESCONHECIDO";
       }
     } else if (input.openaiApiKey || input.geminiApiKey || input.geminiApiKeyBackup) {
-      try {
-        docType = await classifyDocumentVisually({
-          base64: cleanBase64,
-          mimeType: input.mimeType,
-          openaiApiKey: input.openaiApiKey,
-          geminiApiKey: input.geminiApiKey,
-          geminiApiKeyBackup: input.geminiApiKeyBackup,
+      const visualResult: VisualClassificationResult = await classifyDocumentVisually({
+        base64: cleanBase64,
+        mimeType: input.mimeType,
+        openaiApiKey: input.openaiApiKey,
+        geminiApiKey: input.geminiApiKey,
+        geminiApiKeyBackup: input.geminiApiKeyBackup,
+        correlationId,
+        fetchFn: input.fetchFn,
+      });
+
+      // ETAPA 3: Se o classificador encontrou erro técnico, NÃO transformar em DESCONHECIDO / imagem ilegível!
+      if (visualResult.technicalError) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "DESCONHECIDO",
+          status: "erro",
+          confidence: 0,
+          data: {},
+          validation: {
+            isValid: false,
+            errors: [visualResult.technicalError.message],
+            warnings: [],
+          },
+          hasPromptInjection: false,
+          isDuplicate: false,
+          errorCode: `WALLET_AI_VISION_${visualResult.technicalError.code}`,
+          formattedMessage: `⚠️ Falha temporária no processamento visual (${visualResult.technicalError.code}): ${visualResult.technicalError.message}. Por favor, tente novamente em instantes.`,
           correlationId,
-        });
-      } catch {
-        docType = "DESCONHECIDO";
+          durationMs,
+          error: visualResult.technicalError.message,
+        };
       }
+
+      docType = visualResult.documentType;
     }
   }
 
@@ -508,6 +540,7 @@ export async function processDocumentPipeline(
         geminiApiKeyBackup: input.geminiApiKeyBackup,
         openaiApiKey: input.openaiApiKey,
         workspaceId: input.workspaceId,
+        fetchImpl: input.fetchFn,
       });
 
       const dados = boletoOutput.dados || {};
