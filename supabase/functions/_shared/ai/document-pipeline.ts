@@ -312,7 +312,13 @@ export function validateDanfeMathStrict(danfeData: {
 
   const itens = danfeData.itens || [];
   const totais = danfeData.valores_totais || {};
-  const totalDeclarado = Number(totais.valor_total_nota ?? totais.valor_total_produtos ?? 0);
+  const totalDeclarado = Number(
+    totais.valor_total_nota ??
+    totais.valor_total_nf ??
+    totais.valor_total_produtos ??
+    totais.valor_produtos ??
+    0
+  );
 
   if (totalDeclarado <= 0) {
     errors.push("Valor total da nota fiscal deve ser maior que zero.");
@@ -763,6 +769,7 @@ export async function processDocumentPipeline(
           geminiApiKeyBackup: input.geminiApiKeyBackup,
           openaiApiKey: input.openaiApiKey,
           workspaceId: input.workspaceId,
+          fetchImpl: input.fetchFn,
         });
       } catch (_err: unknown) {
         const durationMs = Date.now() - startTime;
@@ -895,9 +902,24 @@ export async function processDocumentPipeline(
         itens: itens,
       });
 
-      const valorTotalNota = Number(valoresTotais.valor_total_nota ?? valoresTotais.valor_total_produtos ?? 0);
-      const fornecedorNome = (cabecalho.emitente_razao_social || cabecalho.emitente_nome_fantasia || "").trim();
-      const hasNumeroOuChave = Boolean(cabecalho.numero_nota || cabecalho.chave_acesso);
+      const valorTotalNota = Number(
+        valoresTotais.valor_total_nota ??
+        valoresTotais.valor_total_nf ??
+        valoresTotais.valor_total_produtos ??
+        valoresTotais.valor_produtos ??
+        0
+      );
+      const fornecedorNome = (
+        cabecalho.fornecedor ||
+        cabecalho.emitente_razao_social ||
+        cabecalho.emitente_nome_fantasia ||
+        ""
+      ).trim();
+      const hasNumeroOuChave = Boolean(
+        cabecalho.numero_nf ||
+        cabecalho.numero_nota ||
+        cabecalho.chave_acesso
+      );
       const hasMinimumData = Boolean(fornecedorNome && hasNumeroOuChave && valorTotalNota > 0 && itens.length > 0);
 
       const allErrors = [...mathValidation.errors];

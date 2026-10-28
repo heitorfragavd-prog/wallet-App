@@ -6,6 +6,7 @@ import {
   handleTelegramTextMessage,
   formatProposalMessage,
   sanitizeUserFacingErrorMessage,
+  clearTelegramAdapterState,
   type TelegramApiClient,
   type TelegramAdapterDependencies,
 } from "../../../../supabase/functions/_shared/ai/telegram-channel-adapter.ts";
@@ -52,6 +53,7 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
   };
 
   beforeEach(() => {
+    clearTelegramAdapterState();
     savedProposals = new Map<string, ActionProposal>();
     insertedDividas = [];
 
@@ -767,6 +769,7 @@ describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () =
   };
 
   beforeEach(() => {
+    clearTelegramAdapterState();
     savedProposals = new Map<string, ActionProposal>();
     insertedDividas = [];
 
@@ -1531,6 +1534,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
   };
 
   beforeEach(() => {
+    clearTelegramAdapterState();
     savedProposals = new Map<string, ActionProposal>();
     insertedDividas = [];
 
@@ -1830,6 +1834,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
 
   // 5. Correção Manual: Usuário digita a Linha Digitável via texto no Telegram
   it("Cenário 5 — Usuário envia linha digitável via mensagem de texto no Telegram: valida FEBRABAN e gera proposta de cadastro", async () => {
+    const mockFindDuplicate = vi.fn(async () => ({ isDuplicate: false }));
     const deps: TelegramAdapterDependencies = {
       supabase: mockSupabase,
       telegramBotToken: "mock-token",
@@ -1837,9 +1842,11 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
       runnerFactory: () => ({} as any),
       repoFactory: () => ({} as any),
       proposalRepo: mockProposalRepo,
+      findDuplicateFn: mockFindDuplicate,
     };
 
-    const result = await handleTelegramTextMessage(
+    // Turno 1: Usuário envia linha digitável. Como é entrada manual direta sem documento prévio, o bot solicita o beneficiário
+    const result1 = await handleTelegramTextMessage(
       {
         text: LINHA_VALIDA_SANTANDER,
         identity: validIdentity,
@@ -1848,14 +1855,34 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
       deps,
     );
 
-    expect(result.text).toContain("Boleto identificado");
-    expect(result.text).toContain("Santander");
-    expect(result.text).toContain("350,00");
-    expect(result.inlineKeyboard).toBeDefined();
-    expect(result.inlineKeyboard![0][0].text).toContain("Cadastrar boleto");
-    expect(result.actionProposals).toBeDefined();
-    expect(result.actionProposals!.length).toBe(1);
+    expect(result1.text).toContain("Linha Digitável Validada");
+    expect(result1.text).toContain("Santander");
+    expect(result1.text).toContain("350,00");
+    expect(result1.text).toContain("nome do Beneficiário");
+    expect(savedProposals.size).toBe(0);
+
+    // Turno 2: Usuário informa o beneficiário real
+    const result2 = await handleTelegramTextMessage(
+      {
+        text: "Companhia Fornecedora de Bebidas",
+        identity: validIdentity,
+        chatId: 1139976533,
+      },
+      deps,
+    );
+
+    expect(result2.text).toContain("Boleto identificado");
+    expect(result2.text).toContain("Companhia Fornecedora de Bebidas");
+    expect(result2.text).toContain("350,00");
+    expect(result2.inlineKeyboard).toBeDefined();
+    expect(result2.inlineKeyboard![0][0].text).toContain("Cadastrar boleto");
+    expect(result2.actionProposals).toBeDefined();
+    expect(result2.actionProposals!.length).toBe(1);
     expect(savedProposals.size).toBe(1);
+
+    const savedProp = Array.from(savedProposals.values())[0];
+    expect(savedProp.payload.beneficiario).toBe("Companhia Fornecedora de Bebidas");
+    expect(savedProp.payload.banco).toContain("Santander");
   });
 
   // 6. Correção Manual: Usuário digita linha com DVs inválidos -> rejeição matemática imediata sem chamada ao LLM
