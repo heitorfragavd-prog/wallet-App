@@ -15,6 +15,7 @@
  */
 
 import {
+  normalizeDate,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
 import {
@@ -311,7 +312,13 @@ export function validateDanfeMathStrict(danfeData: {
 
   const itens = danfeData.itens || [];
   const totais = danfeData.valores_totais || {};
-  const totalDeclarado = Number(totais.valor_total_nota ?? totais.valor_total_produtos ?? 0);
+  const totalDeclarado = Number(
+    totais.valor_total_nota ??
+    totais.valor_total_nf ??
+    totais.valor_total_produtos ??
+    totais.valor_produtos ??
+    0
+  );
 
   if (totalDeclarado <= 0) {
     errors.push("Valor total da nota fiscal deve ser maior que zero.");
@@ -633,9 +640,14 @@ export async function processDocumentPipeline(
 
       // Reconciliação determinística e validação FEBRABAN + Dados Mínimos
       const numValor = typeof dados.valor === "number" ? dados.valor : parseFloat(String(dados.valor || 0));
+
+      // Normalização e validação determinística de data de vencimento
+      // Hierarquia: 1. Linha FEBRABAN íntegra (fator de vencimento) 2. Data visual validada no calendário
+      const dataVencimentoResolvida = validacao?.dataVencimentoFinal || normalizeDate(dados.data_vencimento).iso;
+
       const hasMinimumBoletoData = Boolean(
         dados.beneficiario &&
-        dados.data_vencimento &&
+        dataVencimentoResolvida &&
         (dados.linha_digitavel || dados.codigo_barras)
       );
       const isFebrabanValid = validacao?.valido === true;
@@ -651,7 +663,13 @@ export async function processDocumentPipeline(
       }
       if (!hasMinimumBoletoData) {
         if (!dados.beneficiario) errors.push("Beneficiário do boleto não identificado.");
-        if (!dados.data_vencimento) errors.push("Data de vencimento do boleto não identificada.");
+        if (!dataVencimentoResolvida) {
+          if (!dados.data_vencimento) {
+            errors.push("Data de vencimento do boleto não identificada.");
+          } else {
+            errors.push(`Data de vencimento do boleto inválida no calendário: ${dados.data_vencimento}.`);
+          }
+        }
         if (!dados.linha_digitavel && !dados.codigo_barras) errors.push("Código de barras ou linha digitável ausente.");
       }
 
@@ -676,10 +694,13 @@ export async function processDocumentPipeline(
           formattedMessage: boletoOutput.mensagemFormatada || "⚠️ **Boleto com Inconsistências:** Dados não puderam ser validados com segurança.",
           correlationId,
           durationMs,
-          error: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+          error: errors[0] || "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
           errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
         };
       }
+
+      // Atualizar dados com vencimento validado
+      dados.data_vencimento = dataVencimentoResolvida;
 
       // Se válido em TODOS os gates, gerar Action Proposal canônica (100% proposal-only)
       const proposalPayload: Record<string, unknown> = {
@@ -688,7 +709,7 @@ export async function processDocumentPipeline(
         pagador: dados.pagador || undefined,
         valor: numValor,
         valor_total: numValor,
-        data_vencimento: dados.data_vencimento,
+        data_vencimento: dataVencimentoResolvida,
         linha_digitavel: dados.linha_digitavel || undefined,
         codigo_barras: dados.codigo_barras || undefined,
         banco: dados.banco || undefined,
@@ -748,6 +769,7 @@ export async function processDocumentPipeline(
           geminiApiKeyBackup: input.geminiApiKeyBackup,
           openaiApiKey: input.openaiApiKey,
           workspaceId: input.workspaceId,
+          fetchImpl: input.fetchFn,
         });
       } catch (_err: unknown) {
         const durationMs = Date.now() - startTime;
@@ -880,9 +902,24 @@ export async function processDocumentPipeline(
         itens: itens,
       });
 
-      const valorTotalNota = Number(valoresTotais.valor_total_nota ?? valoresTotais.valor_total_produtos ?? 0);
-      const fornecedorNome = (cabecalho.emitente_razao_social || cabecalho.emitente_nome_fantasia || "").trim();
-      const hasNumeroOuChave = Boolean(cabecalho.numero_nota || cabecalho.chave_acesso);
+      const valorTotalNota = Number(
+        valoresTotais.valor_total_nota ??
+        valoresTotais.valor_total_nf ??
+        valoresTotais.valor_total_produtos ??
+        valoresTotais.valor_produtos ??
+        0
+      );
+      const fornecedorNome = (
+        cabecalho.fornecedor ||
+        cabecalho.emitente_razao_social ||
+        cabecalho.emitente_nome_fantasia ||
+        ""
+      ).trim();
+      const hasNumeroOuChave = Boolean(
+        cabecalho.numero_nf ||
+        cabecalho.numero_nota ||
+        cabecalho.chave_acesso
+      );
       const hasMinimumData = Boolean(fornecedorNome && hasNumeroOuChave && valorTotalNota > 0 && itens.length > 0);
 
       const allErrors = [...mathValidation.errors];

@@ -1,9 +1,16 @@
 import type { ActionProposal } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
+import {
+  cleanDigits,
+  validateLinhaDigitavel,
+  normalizeDate,
+} from "./boleto-validator.ts";
+import { prepareActionProposal } from "./action-gateway.ts";
 import type {
   ActionRepository,
   ActionDatabaseMutator,
   AuditEventSinkLike,
+
 } from "./action-gateway.ts";
 import {
   runOrchestratorTurn,
@@ -420,6 +427,42 @@ export function createDefaultTelegramApiClient(
 
 // ─── UTILITÁRIOS DE FORMATAÇÃO ────────────────────────────────────────────────
 
+/**
+ * Sanitiza mensagens de erro técnicas para exibição clara e amigável ao usuário do Telegram.
+ * Remove códigos internos de erro como [WALLET_AI_...] ou Error: e substitui mensagens técnicas
+ * por instruções claras em português.
+ */
+export function sanitizeUserFacingErrorMessage(rawMessage: string | null | undefined): string {
+  if (!rawMessage) return "Ocorreu um erro no processamento. Por favor, tente novamente.";
+
+  let cleaned = String(rawMessage).trim();
+
+  // Remove códigos entre colchetes como [WALLET_AI_ACTION_INVALID]
+  cleaned = cleaned.replace(/^\[WALLET_AI_[A-Z0-9_]+\]\s*/i, "");
+  cleaned = cleaned.replace(/^Error:\s*/i, "");
+
+  // Mapeamentos específicos amigáveis
+  if (/Data inválida para o campo data_vencimento/i.test(cleaned) || /inválida no calendário/i.test(cleaned)) {
+    return "A data de vencimento do boleto é inválida no calendário ou não pôde ser confirmada.";
+  }
+  if (/Valor do boleto deve ser maior que zero/i.test(cleaned)) {
+    return "O valor identificado para o boleto é inválido ou igual a zero.";
+  }
+  if (/Beneficiário do boleto não identificado/i.test(cleaned)) {
+    return "Não foi possível identificar com clareza o beneficiário deste boleto.";
+  }
+  if (/Validação FEBRABAN do código de barras/i.test(cleaned)) {
+    return "A linha digitável ou código de barras não passou na validação bancária FEBRABAN.";
+  }
+  if (/WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT/i.test(rawMessage)) {
+    return "O documento contém instruções suspeitas ou formato não autorizado.";
+  }
+  if (/WALLET_AI_DOCUMENT_DUPLICATE/i.test(rawMessage)) {
+    return "Este documento já foi registrado anteriormente.";
+  }
+
+  return cleaned || "Ocorreu uma falha inesperada no processamento.";
+}
 export function escapeTelegramHtml(text: string): string {
   if (!text) return "";
   return text
@@ -803,6 +846,334 @@ export async function resolveTelegramIdentity(
 
 // ─── DEPENDÊNCIAS DO ADAPTER ──────────────────────────────────────────────────
 
+export interface TelegramRecentDocumentContext {
+  chatId?: string | number;
+  workspaceId: string;
+  userId: string;
+  beneficiario?: string;
+  data_vencimento?: string; // YYYY-MM-DD
+  valor?: number;
+  banco?: string;
+  linha_digitavel?: string;
+  timestamp: number;
+}
+
+export interface TelegramPendingManualBoletoDraft {
+  chatId?: string | number;
+  workspaceId: string;
+  userId: string;
+  linhaLimpa: string;
+  linhaFormatada: string;
+  codigoBarras: string;
+  bancoNome: string;
+  bancoCodigo?: string;
+  valor: number;
+  beneficiario?: string;
+  dataVencimento?: string; // YYYY-MM-DD
+  waitingFor: "beneficiario" | "data_vencimento";
+  expiresAt: number;
+}
+
+const RECENT_DOCUMENT_CONTEXTS = new Map<string, TelegramRecentDocumentContext>();
+const PENDING_MANUAL_BOLETO_DRAFTS = new Map<string, TelegramPendingManualBoletoDraft>();
+
+export function clearTelegramAdapterState(): void {
+  RECENT_DOCUMENT_CONTEXTS.clear();
+  PENDING_MANUAL_BOLETO_DRAFTS.clear();
+}
+
+export function isGenericOrBankName(candidate: string, bancoNome?: string): boolean {
+  const normCand = candidate.trim().toLowerCase();
+  if (normCand.length < 2) return true;
+
+  const genericTerms = [
+    "boleto",
+    "boleto bancario",
+    "boleto bancário",
+    "bancario",
+    "bancário",
+    "banco",
+    "pagamento",
+    "cobranca",
+    "cobrança",
+    "titulo",
+    "título",
+    "documento",
+    "conta",
+    "fatura",
+  ];
+  if (genericTerms.includes(normCand)) return true;
+
+  if (bancoNome) {
+    const normBanco = bancoNome.trim().toLowerCase();
+    if (normCand === normBanco) return true;
+    const bancoWords = normBanco
+      .split(/[\s(),.-]+/)
+      .filter((w) => w.length > 3 && !genericTerms.includes(w));
+    if (bancoWords.some((w) => normCand === w || normCand.includes(w))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getCompatibleDocumentContext(
+  sessionKey: string,
+  valorDerivado?: number,
+  _bancoNome?: string
+): TelegramRecentDocumentContext | null {
+  const ctx = RECENT_DOCUMENT_CONTEXTS.get(sessionKey);
+  if (!ctx) return null;
+  if (Date.now() - ctx.timestamp > 15 * 60 * 1000) {
+    RECENT_DOCUMENT_CONTEXTS.delete(sessionKey);
+    return null;
+  }
+  if (ctx.valor && valorDerivado && Math.abs(ctx.valor - valorDerivado) > 0.05) {
+    return null;
+  }
+  return ctx;
+}
+
+async function getCompatibleDocumentContextAsync(
+  sessionKey: string,
+  valorDerivado?: number,
+  bancoNome?: string,
+  chatId?: string | number,
+  supabase?: any
+): Promise<TelegramRecentDocumentContext | null> {
+  let ctx = getCompatibleDocumentContext(sessionKey, valorDerivado, bancoNome);
+  if (!ctx && supabase && chatId && typeof supabase.from === "function") {
+    try {
+      const tbl = supabase.from("telegram_conversas");
+      if (typeof tbl?.select === "function") {
+        const { data, error } = await tbl
+          .select("dados_documento")
+          .eq("chat_id", String(chatId))
+          .maybeSingle();
+
+        if (!error && data?.dados_documento?.type === "recent_document_context" && data.dados_documento.context) {
+          const persisted = data.dados_documento.context as TelegramRecentDocumentContext;
+          if (Date.now() - persisted.timestamp <= 15 * 60 * 1000) {
+            if (!persisted.valor || !valorDerivado || Math.abs(persisted.valor - valorDerivado) <= 0.05) {
+              RECENT_DOCUMENT_CONTEXTS.set(sessionKey, persisted);
+              ctx = persisted;
+            }
+          }
+        }
+      }
+    } catch {
+      // Falha defensiva silenciosa
+    }
+  }
+  return ctx;
+}
+
+async function getPendingBoletoDraft(
+  sessionKey: string,
+  chatId?: string | number,
+  supabase?: any
+): Promise<TelegramPendingManualBoletoDraft | null> {
+  const mem = PENDING_MANUAL_BOLETO_DRAFTS.get(sessionKey);
+  if (mem) {
+    if (Date.now() > mem.expiresAt) {
+      PENDING_MANUAL_BOLETO_DRAFTS.delete(sessionKey);
+      return null;
+    }
+    return mem;
+  }
+  if (!supabase || !chatId || typeof supabase.from !== "function") return null;
+  try {
+    const tbl = supabase.from("telegram_conversas");
+    if (typeof tbl?.select !== "function") return null;
+    const { data, error } = await tbl
+      .select("estado, dados_documento, updated_at")
+      .eq("chat_id", String(chatId))
+      .maybeSingle();
+
+    if (error || !data || !data.dados_documento) return null;
+    if (data.dados_documento.type === "pending_manual_boleto_draft" && data.dados_documento.draft) {
+      const draft = data.dados_documento.draft as TelegramPendingManualBoletoDraft;
+      if (draft.expiresAt && Date.now() > draft.expiresAt) {
+        await supabase
+          .from("telegram_conversas")
+          .update({ estado: "livre", dados_documento: null, updated_at: new Date().toISOString() })
+          .eq("chat_id", String(chatId));
+        return null;
+      }
+      PENDING_MANUAL_BOLETO_DRAFTS.set(sessionKey, draft);
+      return draft;
+    }
+  } catch (err) {
+    console.warn("[telegram-adapter] Erro defensivo ao consultar rascunho persistido:", err);
+  }
+  return null;
+}
+
+async function savePendingBoletoDraft(
+  sessionKey: string,
+  draft: TelegramPendingManualBoletoDraft,
+  chatId?: string | number,
+  supabase?: any
+): Promise<void> {
+  PENDING_MANUAL_BOLETO_DRAFTS.set(sessionKey, draft);
+  if (!supabase || !chatId || typeof supabase.from !== "function") return;
+  try {
+    const estado = draft.waitingFor === "data_vencimento" ? "aguardando_vencimento_manual" : "aguardando_beneficiario_manual";
+    const tbl = supabase.from("telegram_conversas");
+    if (typeof tbl?.upsert === "function") {
+      await tbl.upsert(
+        {
+          chat_id: String(chatId),
+          user_id: draft.userId,
+          estado,
+          dados_documento: {
+            type: "pending_manual_boleto_draft",
+            draft,
+          },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "chat_id" }
+      );
+    }
+  } catch (err) {
+    console.warn("[telegram-adapter] Erro defensivo ao persistir rascunho:", err);
+  }
+}
+
+async function clearPendingBoletoDraft(
+  sessionKey: string,
+  chatId?: string | number,
+  supabase?: any
+): Promise<void> {
+  PENDING_MANUAL_BOLETO_DRAFTS.delete(sessionKey);
+  if (!supabase || !chatId || typeof supabase.from !== "function") return;
+  try {
+    const tbl = supabase.from("telegram_conversas");
+    if (typeof tbl?.update === "function") {
+      await tbl
+        .update({ estado: "livre", dados_documento: null, updated_at: new Date().toISOString() })
+        .eq("chat_id", String(chatId));
+    }
+  } catch (err) {
+    console.warn("[telegram-adapter] Erro defensivo ao limpar rascunho:", err);
+  }
+}
+
+async function saveRecentDocumentContext(
+  sessionKey: string,
+  ctx: TelegramRecentDocumentContext,
+  chatId?: string | number,
+  supabase?: any
+): Promise<void> {
+  RECENT_DOCUMENT_CONTEXTS.set(sessionKey, ctx);
+  if (!supabase || !chatId || typeof supabase.from !== "function") return;
+  try {
+    const tbl = supabase.from("telegram_conversas");
+    if (typeof tbl?.upsert === "function") {
+      await tbl.upsert(
+        {
+          chat_id: String(chatId),
+          user_id: ctx.userId,
+          estado: "documento_recebido",
+          dados_documento: {
+            type: "recent_document_context",
+            context: ctx,
+          },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "chat_id" }
+      );
+    }
+  } catch (err) {
+    console.warn("[telegram-adapter] Erro defensivo ao persistir contexto recente:", err);
+  }
+}
+
+async function finalizeManualBoletoProposal(
+  draft: {
+    linhaLimpa: string;
+    linhaFormatada: string;
+    codigoBarras: string;
+    bancoNome: string;
+    valor: number;
+    beneficiario: string;
+    dataVencimento: string;
+  },
+  identity: ResolvedTelegramIdentity,
+  deps: TelegramAdapterDependencies
+): Promise<{
+  text: string;
+  inlineKeyboard?: TelegramInlineButton[][];
+  actionProposals?: ActionProposal[];
+}> {
+  if (!deps.findDuplicateFn) {
+    return {
+      text:
+        `⚠️ <b>Verificação de Duplicidade Indisponível</b>\n\n` +
+        `O verificador de duplicidade financeira não está configurado para este canal.\n` +
+        `Por segurança financeira (fail-closed), o cadastro do boleto foi bloqueado até a restauração do serviço.`,
+    };
+  }
+
+  let dupRes: { isDuplicate: boolean; existingRecordId?: string; type?: string };
+  try {
+    dupRes = await deps.findDuplicateFn(
+      { workspaceId: identity.workspaceId },
+      {
+        workspaceId: identity.workspaceId,
+        linhaDigitavel: draft.linhaLimpa,
+        codigoBarras: draft.codigoBarras,
+      }
+    );
+  } catch (err: unknown) {
+    console.error("[telegram-adapter] Erro ao consultar duplicidade:", err);
+    return {
+      text:
+        `⚠️ <b>Serviço Temporariamente Indisponível</b>\n\n` +
+        `Não foi possível verificar a duplicidade deste boleto no momento devido a uma instabilidade na consulta.\n` +
+        `Por segurança financeira (fail-closed), nenhuma proposta foi criada. Por favor, tente novamente em instantes.`,
+    };
+  }
+
+  if (dupRes?.isDuplicate) {
+    return {
+      text:
+        `⚠️ <b>Boleto Duplicado Detectado!</b>\n\n` +
+        `Este boleto (<code>${escapeTelegramHtml(draft.linhaFormatada)}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
+        `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`,
+    };
+  }
+
+  const proposal = prepareActionProposal({
+    workspaceId: identity.workspaceId,
+    userId: identity.userId,
+    actionType: "cadastrar_divida_boleto",
+    summary: `Cadastrar Boleto: ${draft.beneficiario} - R$ ${draft.valor.toFixed(2)}`,
+    payload: {
+      beneficiario: draft.beneficiario,
+      banco: draft.bancoNome,
+      valor: draft.valor,
+      valor_total: draft.valor,
+      data_vencimento: draft.dataVencimento,
+      linha_digitavel: draft.linhaLimpa,
+      codigo_barras: draft.codigoBarras,
+      descricao: `Boleto ${draft.beneficiario}`.trim(),
+    },
+  });
+
+  if (deps.proposalRepo) {
+    await deps.proposalRepo.saveProposal(proposal);
+  }
+
+  const formatted = formatProposalMessage(proposal);
+  return {
+    text: formatted.text,
+    inlineKeyboard: formatted.buttons,
+    actionProposals: [proposal],
+  };
+}
+
 export interface TelegramAdapterDependencies {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
@@ -862,6 +1233,270 @@ export async function handleTelegramTextMessage(
     return {
       text: identity.error || "Usuário ou chat não autorizado.",
     };
+  }
+
+  const sessionKey = `${params.chatId ?? "default"}:${identity.workspaceId}:${identity.userId}`;
+
+  // ─── 0. Verificação de Rascunho Manual Pendente (Aguardando Beneficiário ou Vencimento) ───
+  const existingDraft = await getPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+  if (existingDraft) {
+    if (Date.now() > existingDraft.expiresAt) {
+      await clearPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+    } else {
+      const lower = text.trim().toLowerCase();
+      if (lower === "/cancelar" || lower === "cancelar") {
+        await clearPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+        return {
+          text: "❌ <b>Cadastro de boleto cancelado.</b>",
+        };
+      }
+
+      // Se o usuário digitou uma nova linha digitável completa (46 a 48 dígitos), descarta o rascunho anterior
+      const cleanNewDigits = cleanDigits(text);
+      const isNewLinha = cleanNewDigits.length >= 46 && cleanNewDigits.length <= 48;
+      if (!isNewLinha) {
+        if (existingDraft.waitingFor === "beneficiario") {
+          const candidate = text.trim();
+          if (isGenericOrBankName(candidate, existingDraft.bancoNome)) {
+            return {
+              text:
+                `⚠️ <b>Beneficiário Inválido</b>\n\n` +
+                `"<code>${escapeTelegramHtml(candidate)}</code>" parece ser o nome do banco emissor ou um termo genérico.\n` +
+                `O beneficiário deve ser a entidade ou fornecedor que recebe o pagamento (ex: SPAL Bebidas, Cemig, Fornecedor X).\n\n` +
+                `Por favor, informe o <b>nome do Beneficiário</b> (ou digite /cancelar):`,
+            };
+          }
+
+          existingDraft.beneficiario = candidate;
+          if (!existingDraft.dataVencimento) {
+            existingDraft.waitingFor = "data_vencimento";
+            await savePendingBoletoDraft(sessionKey, existingDraft, params.chatId, deps.supabase);
+            return {
+              text:
+                `🏢 <b>Beneficiário registrado:</b> ${escapeTelegramHtml(candidate)}\n\n` +
+                `Agora, por favor informe a <b>data de vencimento</b> no formato <b>DD/MM/AAAA</b> (ex: 30/10/2026):`,
+            };
+          }
+
+          // Ambos os campos essenciais estão preenchidos! Finaliza a proposta
+          await clearPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+          RECENT_DOCUMENT_CONTEXTS.delete(sessionKey);
+          return await finalizeManualBoletoProposal(
+            {
+              linhaLimpa: existingDraft.linhaLimpa,
+              linhaFormatada: existingDraft.linhaFormatada,
+              codigoBarras: existingDraft.codigoBarras,
+              bancoNome: existingDraft.bancoNome,
+              valor: existingDraft.valor,
+              beneficiario: existingDraft.beneficiario,
+              dataVencimento: existingDraft.dataVencimento,
+            },
+            identity,
+            deps
+          );
+        }
+
+        if (existingDraft.waitingFor === "data_vencimento") {
+          const normDate = normalizeDate(text.trim());
+          if (!normDate.iso) {
+            return {
+              text:
+                `⚠️ <b>Data de Vencimento Inválida</b>\n\n` +
+                `A data informada (<code>${escapeTelegramHtml(text.trim())}</code>) não é válida no calendário.\n` +
+                `Por favor, informe uma data válida no formato <b>DD/MM/AAAA</b> (ex: 30/10/2026) ou digite /cancelar:`,
+            };
+          }
+
+          existingDraft.dataVencimento = normDate.iso;
+          if (!existingDraft.beneficiario) {
+            existingDraft.waitingFor = "beneficiario";
+            await savePendingBoletoDraft(sessionKey, existingDraft, params.chatId, deps.supabase);
+            return {
+              text:
+                `📅 <b>Vencimento registrado:</b> ${escapeTelegramHtml(normDate.formattedBr || normDate.iso)}\n\n` +
+                `Agora, por favor informe o <b>nome do Beneficiário</b> (quem receberá este pagamento):`,
+            };
+          }
+
+          // Ambos os campos essenciais estão preenchidos! Finaliza a proposta
+          await clearPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+          RECENT_DOCUMENT_CONTEXTS.delete(sessionKey);
+          return await finalizeManualBoletoProposal(
+            {
+              linhaLimpa: existingDraft.linhaLimpa,
+              linhaFormatada: existingDraft.linhaFormatada,
+              codigoBarras: existingDraft.codigoBarras,
+              bancoNome: existingDraft.bancoNome,
+              valor: existingDraft.valor,
+              beneficiario: existingDraft.beneficiario,
+              dataVencimento: existingDraft.dataVencimento,
+            },
+            identity,
+            deps
+          );
+        }
+      } else {
+        // Nova linha informada: descarta rascunho anterior
+        await clearPendingBoletoDraft(sessionKey, params.chatId, deps.supabase);
+      }
+    }
+  }
+
+  // ─── Interceptação Determinística de Linha Digitável Digitada / Corrigida Manualmente ───
+  const digitsOnly = cleanDigits(text);
+  if (digitsOnly.length >= 46 && digitsOnly.length <= 48) {
+    const validacaoLinha = validateLinhaDigitavel(text);
+    if (validacaoLinha.valido && validacaoLinha.valorDerivado && validacaoLinha.valorDerivado > 0) {
+      // 1. Verificação de Duplicidade (FAIL-CLOSED)
+      if (!deps.findDuplicateFn) {
+        return {
+          text:
+            `⚠️ <b>Verificação de Duplicidade Indisponível</b>\n\n` +
+            `O verificador de duplicidade financeira não está configurado para este canal.\n` +
+            `Por segurança financeira (fail-closed), o cadastro do boleto foi bloqueado até a restauração do serviço.`,
+        };
+      }
+
+      let dupRes: { isDuplicate: boolean; existingRecordId?: string; type?: string };
+      try {
+        dupRes = await deps.findDuplicateFn(
+          { workspaceId: identity.workspaceId },
+          {
+            workspaceId: identity.workspaceId,
+            linhaDigitavel: validacaoLinha.linhaLimpa,
+            codigoBarras: validacaoLinha.codigoBarrasDerivado,
+          }
+        );
+      } catch (err: unknown) {
+        console.error("[telegram-adapter] Erro ao consultar duplicidade:", err);
+        return {
+          text:
+            `⚠️ <b>Serviço Temporariamente Indisponível</b>\n\n` +
+            `Não foi possível verificar a duplicidade deste boleto no momento devido a uma instabilidade na consulta.\n` +
+            `Por segurança financeira (fail-closed), nenhuma proposta foi criada. Por favor, tente novamente em instantes.`,
+        };
+      }
+
+      if (dupRes?.isDuplicate) {
+        return {
+          text:
+            `⚠️ <b>Boleto Duplicado Detectado!</b>\n\n` +
+            `Este boleto (<code>${escapeTelegramHtml(validacaoLinha.linhaFormatada)}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
+            `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`,
+        };
+      }
+
+      // 2. Extração segura de campos e correlação estrita com fotografia anterior
+      const numValor = validacaoLinha.valorDerivado;
+      const bancoNome = validacaoLinha.bancoNome || "Boleto Bancário";
+      let dataVenc = validacaoLinha.dataVencimentoDerivada;
+      let beneficiario: string | undefined;
+
+      const docCtx = await getCompatibleDocumentContextAsync(sessionKey, numValor, bancoNome, params.chatId, deps.supabase);
+      if (docCtx) {
+        if (!dataVenc && docCtx.data_vencimento) {
+          dataVenc = docCtx.data_vencimento;
+        }
+        if (docCtx.beneficiario && !isGenericOrBankName(docCtx.beneficiario, bancoNome)) {
+          beneficiario = docCtx.beneficiario;
+        }
+      }
+
+      // Se ambos os dados essenciais estiverem disponíveis com segurança:
+      if (beneficiario && dataVenc) {
+        RECENT_DOCUMENT_CONTEXTS.delete(sessionKey);
+        return await finalizeManualBoletoProposal(
+          {
+            linhaLimpa: validacaoLinha.linhaLimpa,
+            linhaFormatada: validacaoLinha.linhaFormatada,
+            codigoBarras: validacaoLinha.codigoBarrasDerivado!,
+            bancoNome,
+            valor: numValor,
+            beneficiario,
+            dataVencimento: dataVenc,
+          },
+          identity,
+          deps
+        );
+      }
+
+      // Se o beneficiário não estiver identificado:
+      if (!beneficiario) {
+        await savePendingBoletoDraft(
+          sessionKey,
+          {
+            chatId: params.chatId,
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            linhaLimpa: validacaoLinha.linhaLimpa,
+            linhaFormatada: validacaoLinha.linhaFormatada,
+            codigoBarras: validacaoLinha.codigoBarrasDerivado!,
+            bancoNome,
+            bancoCodigo: validacaoLinha.bancoCodigo,
+            valor: numValor,
+            dataVencimento: dataVenc,
+            waitingFor: "beneficiario",
+            expiresAt: Date.now() + 15 * 60 * 1000,
+          },
+          params.chatId,
+          deps.supabase
+        );
+
+        const vencLine = dataVenc
+          ? `📅 <b>Vencimento:</b> ${normalizeDate(dataVenc).formattedBr || dataVenc}\n`
+          : "";
+
+        return {
+          text:
+            `🔢 <b>Linha Digitável Validada!</b>\n\n` +
+            `🏦 <b>Banco Emissor:</b> ${escapeTelegramHtml(bancoNome)}\n` +
+            `💰 <b>Valor:</b> R$ ${numValor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+            `${vencLine}` +
+            `⚠️ <i>O banco emissor não é o beneficiário final da cobrança.</i>\n\n` +
+            `Por favor, digite o <b>nome do Beneficiário</b> (quem deve receber este pagamento):`,
+        };
+      }
+
+      // Se o beneficiário está identificado mas a data de vencimento não pôde ser determinada:
+      await savePendingBoletoDraft(
+        sessionKey,
+        {
+          chatId: params.chatId,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          linhaLimpa: validacaoLinha.linhaLimpa,
+          linhaFormatada: validacaoLinha.linhaFormatada,
+          codigoBarras: validacaoLinha.codigoBarrasDerivado!,
+          bancoNome,
+          bancoCodigo: validacaoLinha.bancoCodigo,
+          valor: numValor,
+          beneficiario,
+          waitingFor: "data_vencimento",
+          expiresAt: Date.now() + 15 * 60 * 1000,
+        },
+        params.chatId,
+        deps.supabase
+      );
+
+      return {
+        text:
+          `🔢 <b>Linha Digitável Validada!</b>\n\n` +
+          `🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(beneficiario)}\n` +
+          `🏦 <b>Banco Emissor:</b> ${escapeTelegramHtml(bancoNome)}\n` +
+          `💰 <b>Valor:</b> R$ ${numValor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n` +
+          `⚠️ <i>Não foi possível determinar a data de vencimento pela linha digitável.</i>\n\n` +
+          `Por favor, informe a <b>data de vencimento</b> no formato <b>DD/MM/AAAA</b> (ex: 30/10/2026):`,
+      };
+    } else if (!validacaoLinha.valido) {
+      // Usuário forneceu expressamente uma linha digitável, mas os dígitos são matematicamente inválidos
+      const errList = validacaoLinha.erros.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+      return {
+        text:
+          `⚠️ <b>Linha Digitável Inválida</b>\n\n` +
+          `A linha digitável informada não passou na validação matemática FEBRABAN:\n${errList}\n\n` +
+          `<i>Por favor, confira os números digitados e tente novamente.</i>`,
+      };
+    }
   }
 
   const generatedTgCorrelationId =
@@ -1338,7 +1973,7 @@ export async function handleTelegramCallback(
 
       return {
         answerText: `⚠️ Falha ao executar: ${msg}`,
-        updatedMessageText: `⚠️ <b>Ação Não Executada</b>\n\n${escapeTelegramHtml(msg)}`,
+        updatedMessageText: `⚠️ <b>Ação Não Executada</b>\n\n${escapeTelegramHtml(sanitizeUserFacingErrorMessage(msg))}`,
         removeKeyboard: true,
       };
     }
@@ -1360,6 +1995,7 @@ export async function handleTelegramDocument(
     fileType?: string;
     fileName?: string;
     caption?: string;
+    chatId?: string | number;
     identity: ResolvedTelegramIdentity;
   },
   deps: TelegramAdapterDependencies,
@@ -1368,7 +2004,7 @@ export async function handleTelegramDocument(
   inlineKeyboard?: TelegramInlineButton[][];
   pipelineResult?: ProcessDocumentPipelineResult;
 }> {
-  const { fileId, fileType = "image/jpeg", fileName, caption, identity } = params;
+  const { fileId, fileType = "image/jpeg", fileName, caption, identity, chatId } = params;
 
   if (!identity.authorized || !identity.userId || !identity.workspaceId) {
     return {
@@ -1430,6 +2066,46 @@ export async function handleTelegramDocument(
   };
 
   const pipelineResult: ProcessDocumentPipelineResult = await documentRunner(pipelineInput);
+
+  // Armazena contexto recente de boleto para suporte seguro à correlação manual (Bloqueador 2)
+  if (pipelineResult.documentType === "BOLETO") {
+    const data = pipelineResult.data || {};
+    const normVenc = normalizeDate(data.data_vencimento || (pipelineResult as any).extractedData?.data_vencimento);
+    const numVal =
+      typeof data.valor === "number"
+        ? data.valor
+        : typeof (pipelineResult as any).extractedData?.valor === "number"
+        ? (pipelineResult as any).extractedData.valor
+        : parseFloat(String(data.valor || (pipelineResult as any).extractedData?.valor || 0));
+
+    const candBeneficiario =
+      data.beneficiario ||
+      data.credor ||
+      (pipelineResult as any).extractedData?.beneficiario ||
+      (pipelineResult as any).extractedData?.credor;
+
+    const candBanco = data.banco || (pipelineResult as any).extractedData?.banco;
+    const sessionKey = `${chatId ?? "default"}:${identity.workspaceId}:${identity.userId}`;
+
+    await saveRecentDocumentContext(
+      sessionKey,
+      {
+        chatId,
+        workspaceId: identity.workspaceId,
+        userId: identity.userId,
+        beneficiario: candBeneficiario && !isGenericOrBankName(String(candBeneficiario), candBanco ? String(candBanco) : undefined)
+          ? String(candBeneficiario).trim()
+          : undefined,
+        data_vencimento: normVenc.iso || undefined,
+        valor: numVal > 0 ? numVal : undefined,
+        banco: candBanco ? String(candBanco).trim() : undefined,
+        linha_digitavel: data.linha_digitavel || (pipelineResult as any).extractedData?.linha_digitavel,
+        timestamp: Date.now(),
+      },
+      chatId,
+      deps.supabase
+    );
+  }
 
   // 1. Duplicata detectada (FAIL-CLOSED)
   if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
@@ -1507,12 +2183,30 @@ export async function handleTelegramDocument(
     pipelineResult.documentType === "BOLETO" &&
     errors.some((e) => /linha digit[aá]vel|c[oó]digo de barras|febraban|d[íi]gito verificador/i.test(e))
   ) {
-    const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    const errList = errors.map((e) => `• ${escapeTelegramHtml(sanitizeUserFacingErrorMessage(e))}`).join("\n");
+    const data = pipelineResult.data || {};
+
+    const infoLines: string[] = [];
+    if (data.beneficiario) infoLines.push(`🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(data.beneficiario))}`);
+    if (data.banco) infoLines.push(`🏦 <b>Banco:</b> ${escapeTelegramHtml(String(data.banco))}`);
+    if (data.data_vencimento) {
+      const vencFmt = normalizeDate(data.data_vencimento).formattedBr || String(data.data_vencimento);
+      infoLines.push(`📅 <b>Vencimento:</b> ${escapeTelegramHtml(vencFmt)}`);
+    }
+    const valNum = typeof data.valor === "number" ? data.valor : parseFloat(String(data.valor || 0));
+    if (valNum > 0) {
+      infoLines.push(`💰 <b>Valor:</b> R$ ${valNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    }
+    if (data.linha_digitavel) {
+      infoLines.push(`🔢 <b>Linha lida:</b> <code>${escapeTelegramHtml(String(data.linha_digitavel))}</code>`);
+    }
+
+    const infoBlock = infoLines.length > 0 ? `\n\n<b>Dados identificados no documento:</b>\n${infoLines.join("\n")}` : "";
     return {
       text:
         `⚠️ <b>Boleto com Linha Digitável Inválida</b>\n\n` +
-        `A linha digitável do boleto não passou na validação matemática FEBRABAN:\n${errList}\n\n` +
-        `<i>Por favor, tire uma nova foto mais nítida do boleto ou digite a linha digitável no app web.</i>`,
+        `A linha digitável do boleto não passou na validação matemática FEBRABAN:\n${errList}${infoBlock}\n\n` +
+        `<i>Por favor, tire uma nova foto mais nítida ou digite a linha digitável por mensagem de texto para continuarmos com segurança.</i>`,
       pipelineResult,
     };
   }
@@ -1523,6 +2217,24 @@ export async function handleTelegramDocument(
     errors.some((e) => /benefici[aá]rio|vencimento|valor|ausente|n[aã]o identificad/i.test(e))
   ) {
     const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    const data = pipelineResult.data || {};
+
+    const infoLines: string[] = [];
+    if (data.beneficiario) infoLines.push(`🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(data.beneficiario))}`);
+    if (data.banco) infoLines.push(`🏦 <b>Banco:</b> ${escapeTelegramHtml(String(data.banco))}`);
+    if (data.data_vencimento) {
+      const vencFmt = normalizeDate(data.data_vencimento).formattedBr || String(data.data_vencimento);
+      infoLines.push(`📅 <b>Vencimento:</b> ${escapeTelegramHtml(vencFmt)}`);
+    }
+    const valNum = typeof data.valor === "number" ? data.valor : parseFloat(String(data.valor || 0));
+    if (valNum > 0) {
+      infoLines.push(`💰 <b>Valor:</b> R$ ${valNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    }
+    if (data.linha_digitavel) {
+      infoLines.push(`🔢 <b>Linha lida:</b> <code>${escapeTelegramHtml(String(data.linha_digitavel))}</code>`);
+    }
+
+    const infoBlock = infoLines.length > 0 ? `\n\n<b>Dados identificados no documento:</b>\n${infoLines.join("\n")}` : "";
     return {
       text:
         `⚠️ <b>Informações Incompletas no Boleto</b>\n\n` +
@@ -1539,7 +2251,8 @@ export async function handleTelegramDocument(
     pipelineResult.errorCode === "WALLET_AI_DOCUMENT_PROCESSING_FAILED" ||
     pipelineResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
   ) {
-    const errMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    const rawErrMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    const errMsg = sanitizeUserFacingErrorMessage(rawErrMsg);
     return {
       text:
         `⚠️ <b>Falha Temporária no Processamento Visual</b>\n\n` +
@@ -1737,6 +2450,7 @@ export async function processTelegramUpdate(
           fileId: bestPhoto.file_id,
           fileType: "image/jpeg",
           caption: msg.caption,
+          chatId: msg.chat.id,
           identity,
         },
         deps,
@@ -1761,6 +2475,7 @@ export async function processTelegramUpdate(
           fileType: doc.mime_type || "application/pdf",
           fileName: doc.file_name,
           caption: msg.caption,
+          chatId: msg.chat.id,
           identity,
         },
         deps,

@@ -20,6 +20,7 @@ export interface BoletoValidationEvidence {
   valor_derivado: number | null;
   vencimento_derivado: string | null;
   linha_matematicamente_valida: boolean;
+  reconciliacao_zero_padding?: boolean;
 }
 
 export interface ValidatedLinhaDigitavel {
@@ -206,7 +207,42 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
     };
   }
 
-  const clean = cleanDigits(linhaRaw);
+  let clean = cleanDigits(linhaRaw);
+  let zeroPaddingReconciled = false;
+
+  // Reconciliação Determinística de Zero-Padding no Campo 5 (46 -> 47 dígitos)
+  // Ocorre quando OCR de visão suprime um zero no preenchimento do valor nominal (ex: 4 zeros em vez de 5 zeros).
+  // Validação estrita: SÓ é aceita se os 3 primeiros blocos satisfazem Módulo 10 E o código de barras resultante satisfaz Módulo 11 do DV Geral.
+  if (clean.length === 46) {
+    const b1 = clean.substring(0, 9);
+    const d1 = parseInt(clean[9], 10);
+    const b2 = clean.substring(10, 20);
+    const d2 = parseInt(clean[20], 10);
+    const b3 = clean.substring(21, 31);
+    const d3 = parseInt(clean[31], 10);
+    const dGeral = parseInt(clean[32], 10);
+    const fator = clean.substring(33, 37);
+    const val9 = clean.substring(37, 46);
+
+    if (
+      calcularModulo10(b1) === d1 &&
+      calcularModulo10(b2) === d2 &&
+      calcularModulo10(b3) === d3
+    ) {
+      const candClean = clean.substring(0, 37) + "0" + val9;
+      const bCodigo = candClean.substring(0, 3);
+      const mMoeda = candClean[3];
+      const val10 = candClean.substring(37, 47);
+      const cLivre = candClean.substring(4, 9) + b2 + b3;
+      const cSemDV = `${bCodigo}${mMoeda}${fator}${val10}${cLivre}`;
+      const dGeralCalc = calcularModulo11Boleto(cSemDV);
+
+      if (dGeralCalc === dGeral) {
+        clean = candClean;
+        zeroPaddingReconciled = true;
+      }
+    }
+  }
 
   // 1. BOLETO BANCÁRIO (47 dígitos)
   if (clean.length === 47) {
@@ -277,6 +313,7 @@ export function validateLinhaDigitavel(linhaRaw: string | null | undefined): Val
       valor_derivado: valorNum > 0 ? valorNum : null,
       vencimento_derivado: dataVenc || null,
       linha_matematicamente_valida: linhaMatematicaValida,
+      ...(zeroPaddingReconciled ? { reconciliacao_zero_padding: true } : {}),
     };
 
     return {
@@ -520,35 +557,81 @@ export function parseBoletoAmount(val: unknown): number {
 }
 
 /**
+ * Verifica se um ano é bissexto pelo calendário gregoriano.
+ */
+export function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+}
+
+/**
+ * Retorna o número de dias no mês (1-12) para um ano específico.
+ */
+export function getDaysInMonth(year: number, month: number): number {
+  switch (month) {
+    case 1: case 3: case 5: case 7: case 8: case 10: case 12:
+      return 31;
+    case 4: case 6: case 9: case 11:
+      return 30;
+    case 2:
+      return isLeapYear(year) ? 29 : 28;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Validação puramente matemática de data do calendário gregoriano.
+ * Evita armadilhas de fuso horário / timezone de objetos Date do JS.
+ */
+export function isValidCalendarDate(year: number, month: number, day: number): boolean {
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return false;
+  if (year < 1900 || year > 2100) return false;
+  if (month < 1 || month > 12) return false;
+  const maxDays = getDaysInMonth(year, month);
+  return day >= 1 && day <= maxDays;
+}
+
+/**
  * Normaliza e formata datas para YYYY-MM-DD internamente e DD/MM/YYYY para exibição.
+ * Suporta DD/MM/YYYY, DD-MM-YYYY e YYYY-MM-DD.
+ * Rejeita datas impossíveis (ex: 31/02/2026) e não altera o dia por timezone.
  */
 export function normalizeDate(dateRaw: unknown): { iso: string | null; formattedBr: string | null } {
   if (!dateRaw) return { iso: null, formattedBr: null };
   const str = String(dateRaw).trim();
 
+  let dd: string;
+  let mm: string;
+  let yyyy: string;
+
   const brMatch = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
   if (brMatch) {
-    const dd = brMatch[1].padStart(2, "0");
-    const mm = brMatch[2].padStart(2, "0");
-    const yyyy = brMatch[3];
-    return {
-      iso: `${yyyy}-${mm}-${dd}`,
-      formattedBr: `${dd}/${mm}/${yyyy}`,
-    };
+    dd = brMatch[1].padStart(2, "0");
+    mm = brMatch[2].padStart(2, "0");
+    yyyy = brMatch[3];
+  } else {
+    const isoMatch = str.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+    if (isoMatch) {
+      yyyy = isoMatch[1];
+      mm = isoMatch[2].padStart(2, "0");
+      dd = isoMatch[3].padStart(2, "0");
+    } else {
+      return { iso: null, formattedBr: null };
+    }
   }
 
-  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) {
-    const yyyy = isoMatch[1];
-    const mm = isoMatch[2];
-    const dd = isoMatch[3];
-    return {
-      iso: `${yyyy}-${mm}-${dd}`,
-      formattedBr: `${dd}/${mm}/${yyyy}`,
-    };
+  const yearNum = parseInt(yyyy, 10);
+  const monthNum = parseInt(mm, 10);
+  const dayNum = parseInt(dd, 10);
+
+  if (!isValidCalendarDate(yearNum, monthNum, dayNum)) {
+    return { iso: null, formattedBr: null };
   }
 
-  return { iso: null, formattedBr: null };
+  return {
+    iso: `${yyyy}-${mm}-${dd}`,
+    formattedBr: `${dd}/${mm}/${yyyy}`,
+  };
 }
 
 export function parseNum(v: unknown): number {
@@ -649,7 +732,11 @@ export function reconcileBoleto(raw: {
       hasVisualDivergence = true;
     }
 
-    if (hasVisualDivergence) {
+    if (linhaValidada?.evidence?.reconciliacao_zero_padding) {
+      warnings.push("Linha digitável reconciliada deterministicamente: zero de preenchimento recomposto no campo de valor conforme Módulo 11 da FEBRABAN.");
+    }
+
+    if (hasVisualDivergence || linhaValidada?.evidence?.reconciliacao_zero_padding) {
       status = "validado_com_alerta";
       valido = true;
     } else {

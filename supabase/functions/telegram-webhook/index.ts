@@ -1778,7 +1778,10 @@ serve(async (req) => {
               orFilters.push(`codigo_barras.eq.${params.codigoBarras}`);
             }
             divQuery = divQuery.or(orFilters.join(","));
-            const { data: divData } = await divQuery.limit(1);
+            const { data: divData, error: divErr } = await divQuery.limit(1);
+            if (divErr) {
+              throw new Error(`Erro na consulta de dívidas em duplicidade: ${divErr.message}`);
+            }
             if (divData && divData.length > 0) {
               return { isDuplicate: true, existingRecordId: divData[0].id, type: "divida" };
             }
@@ -1786,25 +1789,31 @@ serve(async (req) => {
 
           // 2. Checa propostas ativas (prepared/confirmed/executed) de boleto no workspace
           if (params.linhaDigitavel) {
-            const { data: propData } = await supabase
+            const { data: propData, error: propErr } = await supabase
               .from("wallet_ai_action_proposals")
               .select("id, status")
               .eq("workspace_id", params.workspaceId)
               .neq("status", "cancelled")
               .contains("payload", { linha_digitavel: params.linhaDigitavel })
               .limit(1);
+            if (propErr) {
+              throw new Error(`Erro na consulta de propostas em duplicidade por linha: ${propErr.message}`);
+            }
             if (propData && propData.length > 0) {
               return { isDuplicate: true, existingRecordId: propData[0].id, type: "proposal" };
             }
           }
           if (params.codigoBarras) {
-            const { data: propData } = await supabase
+            const { data: propData, error: propErr } = await supabase
               .from("wallet_ai_action_proposals")
               .select("id, status")
               .eq("workspace_id", params.workspaceId)
               .neq("status", "cancelled")
               .contains("payload", { codigo_barras: params.codigoBarras })
               .limit(1);
+            if (propErr) {
+              throw new Error(`Erro na consulta de propostas em duplicidade por código de barras: ${propErr.message}`);
+            }
             if (propData && propData.length > 0) {
               return { isDuplicate: true, existingRecordId: propData[0].id, type: "proposal" };
             }
@@ -1812,19 +1821,23 @@ serve(async (req) => {
 
           // 3. Checa DANFE por chave de acesso
           if (params.chaveAcesso) {
-            const { data } = await supabase
+            const { data, error: danfeErr } = await supabase
               .from("wallet_ai_action_proposals")
               .select("id, status")
               .eq("workspace_id", params.workspaceId)
               .neq("status", "cancelled")
               .contains("payload", { chave_acesso: params.chaveAcesso })
               .limit(1);
+            if (danfeErr) {
+              throw new Error(`Erro na consulta de DANFE em duplicidade: ${danfeErr.message}`);
+            }
             if (data && data.length > 0) {
               return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
             }
           }
-        } catch {
-          // Fail-safe
+        } catch (err: unknown) {
+          console.error("[telegram-webhook] Falha na consulta de duplicidade (fail-closed):", err);
+          throw err;
         }
         return { isDuplicate: false };
       },

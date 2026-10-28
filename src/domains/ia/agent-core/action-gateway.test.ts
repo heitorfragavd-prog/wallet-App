@@ -109,15 +109,52 @@ describe("Action Gateway — Human-in-the-Loop & Security Suite", () => {
       }).toThrowError(/WALLET_AI_ACTION_INVALID/);
     });
 
-    it("rejeita proposta com data em formato inválido", () => {
+    it("aceita e normaliza datas nos formatos DD/MM/YYYY e YYYY-MM-DD", () => {
+      const sanitizedBr = sanitizeActionPayload("cadastrar_transacao", {
+        descricao: "Teste",
+        valor: 100,
+        tipo: "despesa",
+        data: "30/10/2026", // formato brasileiro
+      });
+      expect(sanitizedBr.data).toBe("2026-10-30");
+
+      const sanitizedIso = sanitizeActionPayload("cadastrar_transacao", {
+        descricao: "Teste",
+        valor: 100,
+        tipo: "despesa",
+        data: "2026-10-30", // formato ISO
+      });
+      expect(sanitizedIso.data).toBe("2026-10-30");
+    });
+
+    it("rejeita proposta com data impossível no calendário (fail-closed)", () => {
       expect(() => {
         sanitizeActionPayload("cadastrar_transacao", {
           descricao: "Teste",
           valor: 100,
           tipo: "despesa",
-          data: "03/09/2026", // formato incorreto (deve ser YYYY-MM-DD)
+          data: "31/02/2026", // data impossível
         });
       }).toThrowError(/WALLET_AI_ACTION_INVALID/);
+
+      expect(() => {
+        sanitizeActionPayload("cadastrar_transacao", {
+          descricao: "Teste",
+          valor: 100,
+          tipo: "despesa",
+          data: "data-invalida",
+        });
+      }).toThrowError(/WALLET_AI_ACTION_INVALID/);
+    });
+
+    it("aceita data válida em ano bissexto (29/02/2028)", () => {
+      const sanitized = sanitizeActionPayload("cadastrar_transacao", {
+        descricao: "Teste Bissexto",
+        valor: 100,
+        tipo: "despesa",
+        data: "29/02/2028",
+      });
+      expect(sanitized.data).toBe("2028-02-29");
     });
 
     it("atualizar_divida: valida proposta com risco MEDIUM e exige divida_id", () => {

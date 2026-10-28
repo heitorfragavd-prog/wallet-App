@@ -102,14 +102,39 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
       expect(parseBoletoAmount(null)).toBe(0);
     });
 
-    it("F: normalização de data para YYYY-MM-DD e DD/MM/YYYY", () => {
-      const d1 = normalizeDate("20/09/2026");
-      expect(d1.iso).toBe("2026-09-20");
-      expect(d1.formattedBr).toBe("20/09/2026");
+    it("F: normalização de data para YYYY-MM-DD e DD/MM/YYYY com validação estrita de calendário", () => {
+      // Formato brasileiro válido
+      const d1 = normalizeDate("30/10/2026");
+      expect(d1.iso).toBe("2026-10-30");
+      expect(d1.formattedBr).toBe("30/10/2026");
 
-      const d2 = normalizeDate("2026-09-20");
-      expect(d2.iso).toBe("2026-09-20");
-      expect(d2.formattedBr).toBe("20/09/2026");
+      // Formato ISO válido
+      const d2 = normalizeDate("2026-10-30");
+      expect(d2.iso).toBe("2026-10-30");
+      expect(d2.formattedBr).toBe("30/10/2026");
+
+      // Rejeição de datas impossíveis no calendário (fail-closed, sem timezone shift)
+      const dImpossivel1 = normalizeDate("31/02/2026");
+      expect(dImpossivel1.iso).toBeNull();
+      expect(dImpossivel1.formattedBr).toBeNull();
+
+      const dImpossivel2 = normalizeDate("29/02/2026"); // 2026 não é bissexto
+      expect(dImpossivel2.iso).toBeNull();
+      expect(dImpossivel2.formattedBr).toBeNull();
+
+      const dImpossivel3 = normalizeDate("31/04/2026"); // Abril só tem 30 dias
+      expect(dImpossivel3.iso).toBeNull();
+      expect(dImpossivel3.formattedBr).toBeNull();
+
+      // Ano bissexto válido
+      const dBissexto = normalizeDate("29/02/2028"); // 2028 é bissexto
+      expect(dBissexto.iso).toBe("2028-02-29");
+      expect(dBissexto.formattedBr).toBe("29/02/2028");
+
+      // Valores nulos ou inválidos
+      expect(normalizeDate(null).iso).toBeNull();
+      expect(normalizeDate("").iso).toBeNull();
+      expect(normalizeDate("invalido").iso).toBeNull();
     });
 
     it("G: beneficiário, CPF/CNPJ e pagador são preservados e formatados", () => {
