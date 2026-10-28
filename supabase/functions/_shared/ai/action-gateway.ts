@@ -6,6 +6,7 @@ import {
   type PrepareActionInput,
 } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
+import { normalizeDate } from "./boleto-validator.ts";
 
 export type ActionErrorCode =
   | "WALLET_AI_ACTION_INVALID"
@@ -114,19 +115,21 @@ export function sanitizeActionPayload(
     }
   }
 
-  // Validação de datas
+  // Validação e normalização de datas (suporta YYYY-MM-DD e DD/MM/YYYY válidos no calendário)
   const dateFields = ["data", "data_vencimento", "data_limite", "data_emissao"];
   for (const dateKey of dateFields) {
-    if (sanitized[dateKey] !== undefined) {
+    if (sanitized[dateKey] !== undefined && sanitized[dateKey] !== null) {
       const dateStr = String(sanitized[dateKey]).trim();
-      if (!ISO_DATE_PATTERN.test(dateStr)) {
+      if (!dateStr) continue;
+      const normalized = normalizeDate(dateStr);
+      if (!normalized.iso) {
         throw new ActionGatewayError(
           "WALLET_AI_ACTION_INVALID",
           400,
-          `Data inválida para o campo ${dateKey}. Esperado formato YYYY-MM-DD: ${dateStr}`,
+          `Data inválida para o campo ${dateKey}. Esperado formato YYYY-MM-DD ou DD/MM/YYYY válido no calendário: ${dateStr}`,
         );
       }
-      sanitized[dateKey] = dateStr;
+      sanitized[dateKey] = normalized.iso;
     }
   }
 

@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   handleTelegramDocument,
   handleTelegramCallback,
+  handleTelegramTextMessage,
   formatProposalMessage,
+  sanitizeUserFacingErrorMessage,
   type TelegramApiClient,
   type TelegramAdapterDependencies,
 } from "../../../../supabase/functions/_shared/ai/telegram-channel-adapter.ts";
@@ -14,6 +16,12 @@ import {
 import {
   classifyDocumentVisually,
 } from "../../../../supabase/functions/_shared/ai/visual-classifier.ts";
+import {
+  validateLinhaDigitavel,
+} from "../../../../supabase/functions/_shared/ai/boleto-validator.ts";
+import {
+  processBoletoDocument,
+} from "../../../../supabase/functions/_shared/ai/boleto-service.ts";
 import {
   createDefaultActionExecutorRegistry,
   SupabaseActionDatabaseMutator,
@@ -1492,5 +1500,616 @@ describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () =
     expect(result.inlineKeyboard).toBeUndefined();
     expect(savedProposals.size).toBe(0);
     expect(insertedDividas.length).toBe(0);
+  });
+});
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ETAPA 7: CENÁRIOS CRÍTICOS DE RECUPERAÇÃO DO PIPELINE DE BOLETOS
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconciliação Determinística", () => {
+  const TEST_WORKSPACE_ID = "ws-recovery-test";
+  const TEST_USER_ID = "user-recovery-test";
+
+  // Linha real do teste do proprietário com 46 dígitos (falta 1 zero de padding no valor)
+  const LINHA_46_DIGITOS_REAL = "34191.09008 20981.805607 59884.260007 5 1618000047010";
+  const LINHA_VALIDA_SANTANDER = "03399.00102 00000.123455 00000.000000 1 98760000035000";
+
+  let savedProposals: Map<string, ActionProposal>;
+  let mockProposalRepo: ActionRepository;
+  let mockApiClient: TelegramApiClient;
+  let insertedDividas: any[];
+  let mockSupabase: any;
+  let mutator: SupabaseActionDatabaseMutator;
+
+  const validIdentity = {
+    authorized: true,
+    userId: TEST_USER_ID,
+    workspaceId: TEST_WORKSPACE_ID,
+    userRole: "owner" as const,
+  };
+
+  beforeEach(() => {
+    savedProposals = new Map<string, ActionProposal>();
+    insertedDividas = [];
+
+    mockProposalRepo = {
+      saveProposal: vi.fn(async (prop: ActionProposal) => {
+        savedProposals.set(prop.id, { ...prop });
+      }),
+      getProposal: vi.fn(async (id: string) => savedProposals.get(id) || null),
+      updateStatus: vi.fn(async (id: string, status: any) => {
+        const p = savedProposals.get(id);
+        if (p) p.status = status;
+      }),
+      confirmProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (!p || p.status !== "prepared") {
+          return { success: false, code: "WALLET_AI_ACTION_ALREADY_PROCESSED" };
+        }
+        p.status = "confirmed";
+        p.confirmedAt = new Date().toISOString();
+        return { success: true, proposal: p };
+      }),
+      executeProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (p) {
+          p.status = "executed";
+          p.executedAt = new Date().toISOString();
+        }
+      }),
+      cancelProposalAtomically: vi.fn(async (id: string) => {
+        const p = savedProposals.get(id);
+        if (!p || p.status !== "prepared") return false;
+        p.status = "cancelled";
+        return true;
+      }),
+    };
+
+    mockApiClient = {
+      sendMessage: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async () => ({ ok: true })),
+      editMessageReplyMarkup: vi.fn(async () => ({ ok: true })),
+      answerCallbackQuery: vi.fn(async () => ({ ok: true })),
+      downloadFileAsBase64: vi.fn(async () => ({
+        base64: "dGVzdGUtYm9sZXRvLXJlYWwtYmFzZTY0",
+        mimeType: "image/jpeg",
+      })),
+    };
+
+    mockSupabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "dividas") {
+          return {
+            insert: vi.fn().mockImplementation((rows: any[]) => {
+              insertedDividas.push(...rows);
+              return { error: null };
+            }),
+          };
+        }
+        return {
+          insert: vi.fn().mockReturnValue({ error: null }),
+        };
+      }),
+    };
+
+    mutator = new SupabaseActionDatabaseMutator(mockSupabase);
+  });
+
+  // 1. Reconciliação Determinística FEBRABAN da Linha Real com 46 Dígitos
+  it("Cenário 1 — Reconciliação determinística de 46 dígitos (zero-padding no Campo 5) valida Módulo 10 e Módulo 11", () => {
+    const res = validateLinhaDigitavel(LINHA_46_DIGITOS_REAL);
+    expect(res.valido).toBe(true);
+    expect(res.linhaLimpa).toBe("34191090082098180560759884260007516180000047010");
+    expect(res.linhaLimpa.length).toBe(47);
+    expect(res.valorDerivado).toBe(470.10);
+    expect(res.dataVencimentoDerivada).toBe("2026-11-02");
+    expect(res.bancoCodigo).toBe("341");
+    expect(res.bancoNome).toBe("Itaú Unibanco");
+    expect(res.evidence?.reconciliacao_zero_padding).toBe(true);
+    expect(res.evidence?.dv_geral_valid).toBe(true);
+  });
+
+  // 2. Fluxo Completo Telegram com Linha de 46 dígitos gera Action Proposal e requer confirmação
+  it("Cenário 2 — Boleto com linha de 46 dígitos no Telegram passa na reconciliação determinística e gera proposta interativa", async () => {
+    const mockFetch = vi.fn(async (_url: any, opts: any) => {
+      const body = opts?.body ? JSON.parse(opts.body) : {};
+      if (body.model === "gpt-4o-mini") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    documentType: "BOLETO",
+                    confidence: 95,
+                    reasoning: "Boleto bancário identificado com código de barras e ficha de compensação.",
+                    evidence: { hasBarcodeOrLinhaDigitavel: true },
+                  }),
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  banco: "Banco Itaú (341)",
+                  beneficiario: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A",
+                  cnpj_cpf_beneficiario: "61.451.102/0001-44",
+                  valor: 470.10,
+                  data_vencimento: "2026-11-02",
+                  linha_digitavel: LINHA_46_DIGITOS_REAL,
+                }),
+              },
+            },
+          ],
+        }),
+      };
+    });
+
+    const runner = async (input: ProcessDocumentPipelineInput) => {
+      return processDocumentPipeline({
+        ...input,
+        fetchFn: mockFetch as any,
+      });
+    };
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      mutator,
+      openaiApiKey: "sk-test-key",
+      documentPipelineRunner: runner as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_boleto_spal_46dig",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("Boleto identificado");
+    expect(result.text).toContain("SPAL INDUSTRIA BRASILEIRA DE BEBIDAS S/A");
+    expect(result.text).toContain("470,10");
+    expect(result.text).toContain("2026-11-02");
+    expect(result.inlineKeyboard).toBeDefined();
+    expect(result.inlineKeyboard![0][0].text).toContain("Cadastrar boleto");
+    expect(result.inlineKeyboard![0][1].text).toContain("Cancelar");
+
+    // Proposta gerada mas NENHUMA dívida inserida no banco ainda
+    expect(savedProposals.size).toBe(1);
+    expect(insertedDividas.length).toBe(0);
+  });
+
+  // 3. Fallback de Recuperação Focalizada (recoverBoletoLineWithFailover) em OCR com falha inicial
+  it("Cenário 3 — Falha de OCR na primeira extração aciona recuperação focalizada e produz linha válida", async () => {
+    let attemptCount = 0;
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("chat/completions")) {
+        attemptCount++;
+        if (attemptCount === 1) {
+          // Primeira tentativa (visão geral): extrai linha incompleta
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      banco: "Santander",
+                      beneficiario: "Fornecedor Alpha",
+                      valor: 350.00,
+                      data_vencimento: "2026-12-10",
+                      linha_digitavel: "03399.00102 00000.123", // Incompleta (20 dígitos)
+                    }),
+                  },
+                },
+              ],
+            }),
+          };
+        } else {
+          // Segunda tentativa (recuperação focalizada com FOCUSED_BOLETO_LINE_PROMPT): extrai campos íntegros
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      campo1: "0339900102",
+                      campo2: "00000123455",
+                      campo3: "00000000000",
+                      dv_geral: "1",
+                      campo5: "98760000035000",
+                      linha_digitavel: LINHA_VALIDA_SANTANDER,
+                    }),
+                  },
+                },
+              ],
+            }),
+          };
+        }
+      }
+      return { ok: false, status: 404 };
+    });
+
+    const out = await processBoletoDocument({
+      base64: "dGVzdGU=",
+      mimeType: "image/jpeg",
+      geminiApiKey: "",
+      openaiApiKey: "sk-test",
+      workspaceId: TEST_WORKSPACE_ID,
+      fetchImpl: mockFetch as any,
+    });
+
+    expect(attemptCount).toBeGreaterThanOrEqual(2);
+    expect(out.validacao.valido).toBe(true);
+    expect(out.dados.linha_digitavel).toBe("03399001020000012345500000000000198760000035000");
+    expect(out.validacao.valorFinal).toBe(350.00);
+  });
+
+  // 4. Bloqueio Seguro quando a linha é definitivamente inválida (sem inventar dados)
+  it("Cenário 4 — Linha definitivamente ilegível/inválida bloqueia proposta, mas exibe dados parciais legíveis", async () => {
+    const mockFebrabanInvalidoRunner = vi.fn(async () => ({
+      success: false,
+      documentType: "BOLETO" as const,
+      status: "requer_revisao" as const,
+      confidence: 90,
+      data: {
+        banco: "Bradesco",
+        beneficiario: "Fornecedor Beta",
+        valor: 1200.50,
+        data_vencimento: "2026-11-15",
+        linha_digitavel: "23790.00000 00000.000000 00000.000000 9 99990000120050",
+      },
+      validation: {
+        isValid: false,
+        errors: ["Dígito verificador geral da linha inválido (esperado 3, recebido 9)"],
+        warnings: [],
+      },
+      hasPromptInjection: false,
+      isDuplicate: false,
+      errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+      correlationId: "test-corr-bloqueio",
+      durationMs: 50,
+    }));
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      documentPipelineRunner: mockFebrabanInvalidoRunner as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_boleto_invalido",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    // Contém cabeçalho específico de erro
+    expect(result.text).toContain("⚠️ <b>Boleto com Linha Digitável Inválida</b>");
+    expect(result.text).toContain("Dígito verificador geral da linha inválido");
+    // Apresenta dados parciais para revisão do usuário
+    expect(result.text).toContain("Fornecedor Beta");
+    expect(result.text).toContain("Bradesco");
+    expect(result.text).toContain("1.200,50");
+    // Orienta envio por texto
+    expect(result.text).toContain("digite a linha digitável por mensagem de texto");
+    // Nenhuma proposta nem dívida criada
+    expect(result.inlineKeyboard).toBeUndefined();
+    expect(savedProposals.size).toBe(0);
+    expect(insertedDividas.length).toBe(0);
+  });
+
+  // 5. Correção Manual: Usuário digita a Linha Digitável via texto no Telegram
+  it("Cenário 5 — Usuário envia linha digitável via mensagem de texto no Telegram: valida FEBRABAN e gera proposta de cadastro", async () => {
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+    };
+
+    const result = await handleTelegramTextMessage(
+      {
+        text: LINHA_VALIDA_SANTANDER,
+        identity: validIdentity,
+        chatId: 1139976533,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("Boleto identificado");
+    expect(result.text).toContain("Santander");
+    expect(result.text).toContain("350,00");
+    expect(result.inlineKeyboard).toBeDefined();
+    expect(result.inlineKeyboard![0][0].text).toContain("Cadastrar boleto");
+    expect(result.actionProposals).toBeDefined();
+    expect(result.actionProposals!.length).toBe(1);
+    expect(savedProposals.size).toBe(1);
+  });
+
+  // 6. Correção Manual: Usuário digita linha com DVs inválidos -> rejeição matemática imediata sem chamada ao LLM
+  it("Cenário 6 — Linha digitável digitada no texto com DVs violados é rejeitada imediatamente com detalhamento FEBRABAN", async () => {
+    const LINHA_DV_ERRADO = "03399.00102 00000.123455 00000.000000 8 98760000035000"; // DV geral errado (8 em vez de 1)
+
+    const runnerFactoryMock = vi.fn();
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: runnerFactoryMock,
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+    };
+
+    const result = await handleTelegramTextMessage(
+      {
+        text: LINHA_DV_ERRADO,
+        identity: validIdentity,
+        chatId: 1139976533,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("⚠️ <b>Linha Digitável Inválida</b>");
+    expect(result.text).toContain("Dígito verificador geral da linha inválido");
+    expect(runnerFactoryMock).not.toHaveBeenCalled(); // Não gasta tokens de LLM
+    expect(savedProposals.size).toBe(0);
+  });
+
+  // 7. Correção Manual: Linha digitável digitada que já existe no banco é bloqueada por duplicidade
+  it("Cenário 7 — Linha digitável digitada no texto que já existe no banco é bloqueada com aviso de duplicidade", async () => {
+    const mockFindDuplicate = vi.fn(async () => ({ isDuplicate: true }));
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      findDuplicateFn: mockFindDuplicate,
+    };
+
+    const result = await handleTelegramTextMessage(
+      {
+        text: LINHA_VALIDA_SANTANDER,
+        identity: validIdentity,
+        chatId: 1139976533,
+      },
+      deps,
+    );
+
+    expect(result.text).toContain("⚠️ <b>Boleto Duplicado Detectado!</b>");
+    expect(result.text).toContain("nenhuma proposta em duplicidade foi gerada");
+    expect(savedProposals.size).toBe(0);
+  });
+
+  // 8. Normalização da Data de Vencimento 30/10/2026 -> 2026-10-30 no pipeline sem erro WALLET_AI_ACTION_INVALID
+  it("Cenário 8 — Boleto com data de vencimento no formato brasileiro DD/MM/YYYY (30/10/2026) é normalizado para YYYY-MM-DD sem erro interno", async () => {
+    const rawPhotoBase64 = "dGVzdGUtYm9sZXRvLTMwLTEwLTIwMjY=";
+    const mockApiClient = {
+      getFile: vi.fn(async () => ({ file_path: "photos/boleto_30_10.jpg" })),
+      downloadFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
+      downloadFileAsBase64: vi.fn(async () => ({ base64: rawPhotoBase64, mimeType: "image/jpeg" })),
+      sendMessage: vi.fn(async () => ({ message_id: 8881 })),
+      answerCallbackQuery: vi.fn(async () => true),
+      editMessageText: vi.fn(async () => true),
+    };
+
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                banco: "Companhia de Água e Saneamento",
+                beneficiario: "SPAL INDUSTRIA BRASILEIRA DE BEBIDAS",
+                cnpj_cpf_beneficiario: "61.450.911/0001-97",
+                data_vencimento: "30/10/2026", // Data brasileira que antes causava WALLET_AI_ACTION_INVALID
+                valor: 143.50,
+                linha_digitavel: "846700000017435000240208240123456784901234567898",
+              }),
+            },
+          },
+        ],
+      }),
+    }));
+
+    const mockDocumentRunner = vi.fn(async (input: ProcessDocumentPipelineInput) => {
+      return await processDocumentPipeline({
+        ...input,
+        openaiApiKey: "sk-test-key",
+        documentTypeHint: "BOLETO",
+        fetchFn: mockFetch as any,
+      });
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      openaiApiKey: "sk-test-key",
+      documentPipelineRunner: mockDocumentRunner as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_30_10",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    // Deve gerar a proposta interativa normalmente, sem cair em erro técnico
+    expect(result.text).toContain("📄 <b>Boleto identificado</b>");
+    expect(result.text).toContain("SPAL INDUSTRIA BRASILEIRA DE BEBIDAS");
+    expect(result.text).toContain("143,50");
+    expect(result.text).toContain("2026-10-30");
+    expect(result.text).not.toContain("WALLET_AI_ACTION_INVALID");
+    expect(result.inlineKeyboard).toBeDefined();
+
+    // Proposta gerada deve ter data normalizada no padrão ISO
+    expect(result.pipelineResult?.actionProposal).toBeDefined();
+    expect((result.pipelineResult?.actionProposal?.payload as any)?.data_vencimento).toBe("2026-10-30");
+    const savedProp = Array.from(savedProposals.values())[0];
+    expect((savedProp?.payload as any)?.data_vencimento).toBe("2026-10-30");
+  });
+
+  // 9. Data impossível no calendário (31/02/2026) exige revisão fail-closed
+  it("Cenário 9 — Boleto com data de vencimento impossível no calendário (31/02/2026) exige revisão fail-closed sem vazar código técnico", async () => {
+    const rawPhotoBase64 = "dGVzdGUtYm9sZXRvLWZlYjMx";
+    const mockApiClient = {
+      getFile: vi.fn(async () => ({ file_path: "photos/boleto_feb31.jpg" })),
+      downloadFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
+      downloadFileAsBase64: vi.fn(async () => ({ base64: rawPhotoBase64, mimeType: "image/jpeg" })),
+      sendMessage: vi.fn(async () => ({ message_id: 8882 })),
+      answerCallbackQuery: vi.fn(async () => true),
+      editMessageText: vi.fn(async () => true),
+    };
+
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                banco: "Companhia de Água e Saneamento",
+                beneficiario: "SABESP",
+                data_vencimento: "31/02/2026", // Data impossível
+                valor: 143.50,
+                linha_digitavel: "846700000017435000240208240123456784901234567898", // Linha de arrecadação válida (sem fator FEBRABAN)
+              }),
+            },
+          },
+        ],
+      }),
+    }));
+
+    const mockDocumentRunner = vi.fn(async (input: ProcessDocumentPipelineInput) => {
+      return await processDocumentPipeline({
+        ...input,
+        openaiApiKey: "sk-test-key",
+        documentTypeHint: "BOLETO",
+        fetchFn: mockFetch as any,
+      });
+    });
+
+    const deps: TelegramAdapterDependencies = {
+      supabase: mockSupabase,
+      telegramBotToken: "mock-token",
+      telegramApi: mockApiClient,
+      runnerFactory: () => ({} as any),
+      repoFactory: () => ({} as any),
+      proposalRepo: mockProposalRepo,
+      openaiApiKey: "sk-test-key",
+      documentPipelineRunner: mockDocumentRunner as any,
+    };
+
+    const result = await handleTelegramDocument(
+      {
+        fileId: "photo_feb31",
+        fileType: "image/jpeg",
+        identity: validIdentity,
+      },
+      deps,
+    );
+
+    // Não deve vazar código de erro técnico nem crashar
+    expect(result.text).not.toContain("WALLET_AI_");
+    expect(result.text).toContain("Informações Incompletas no Boleto");
+    expect(result.text).toContain("inválida no calendário");
+    expect(result.inlineKeyboard).toBeUndefined(); // Fail-closed: nenhuma proposta de cadastro gerada
+  });
+
+  // 10. Sanitização de mensagens de erro internas no Telegram
+  it("Cenário 10 — sanitizeUserFacingErrorMessage remove prefixos técnicos e traduz erros para linguagem amigável", () => {
+    const rawErr1 = "[WALLET_AI_ACTION_INVALID] Data inválida para o campo data_vencimento. Esperado formato YYYY-MM-DD: 30/10/2026";
+    const cleanErr1 = sanitizeUserFacingErrorMessage(rawErr1);
+    expect(cleanErr1).toBe("A data de vencimento do boleto é inválida no calendário ou não pôde ser confirmada.");
+    expect(cleanErr1).not.toContain("WALLET_AI");
+
+    const rawErr2 = "[WALLET_AI_ACTION_INVALID] Valor do boleto deve ser maior que zero";
+    const cleanErr2 = sanitizeUserFacingErrorMessage(rawErr2);
+    expect(cleanErr2).toBe("O valor identificado para o boleto é inválido ou igual a zero.");
+
+    const rawErr3 = "Error: Falha inesperada";
+    const cleanErr3 = sanitizeUserFacingErrorMessage(rawErr3);
+    expect(cleanErr3).toBe("Falha inesperada");
+  });
+
+  // 11. Boleto sem data de vencimento não substitui pela data atual
+  it("Cenário 11 — Boleto sem data de vencimento não assume data atual por suposição e exige revisão", async () => {
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                banco: "Companhia de Água e Saneamento",
+                beneficiario: "Fornecedor XYZ",
+                data_vencimento: null, // Sem vencimento
+                valor: 143.50,
+                linha_digitavel: "846700000017435000240208240123456784901234567898", // Linha de arrecadação válida (sem fator)
+              }),
+            },
+          },
+        ],
+      }),
+    }));
+
+    const res = await processDocumentPipeline({
+      workspaceId: validIdentity.workspaceId,
+      userId: validIdentity.userId,
+      base64: "dGVzdGU=",
+      mimeType: "image/jpeg",
+      openaiApiKey: "sk-test-key",
+      documentTypeHint: "BOLETO",
+      fetchFn: mockFetch as any,
+    });
+
+    expect(res.status).toBe("requer_revisao");
+    expect(res.validation.errors).toContain("Data de vencimento do boleto não identificada.");
+    expect(res.actionProposal).toBeUndefined(); // Nenhuma proposta criada com data de hoje fictícia
   });
 });

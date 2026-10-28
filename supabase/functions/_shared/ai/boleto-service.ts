@@ -65,7 +65,7 @@ Analise esta imagem ou documento PDF de boleto e extraia os campos com máxima f
 3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
 4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
 5. CNPJ/CPF DO PAGADOR: Se visível.
-6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY).
+6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY). ATENÇÃO: Identifique especificamente o campo "Vencimento" ou "Data de Vencimento". NUNCA confunda com "Data do Documento", "Data de Emissão" ou "Data de Processamento". Se houver datas diferentes, "Vencimento" é a data limite para pagamento sem juros.
 7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1250.00).
 8. LINHA DIGITÁVEL: A sequência de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
 9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
@@ -597,7 +597,7 @@ async function executeFocusedLineAttempt(params: {
     let digits = "";
     let rawLinha: string | null = null;
 
-    if (c1.length === 10 && c2.length === 11 && c3.length === 11 && dv.length === 1 && c5.length === 14) {
+    if (c1.length === 10 && c2.length === 11 && c3.length === 11 && dv.length === 1 && (c5.length === 14 || c5.length === 13)) {
       digits = c1 + c2 + c3 + dv + c5;
       rawLinha = `${c1} ${c2} ${c3} ${dv} ${c5}`;
     } else {
@@ -959,7 +959,30 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
     };
 
     // Validação e Reconciliação Determinística
-    const validacao = reconcileBoleto(dados);
+    let validacao = reconcileBoleto(dados);
+
+    // Se a validação inicial falhar, aciona a recuperação focalizada com failover de regiões/provedores
+    if (!validacao.valido && (input.openaiApiKey || input.geminiApiKey || input.geminiApiKeyBackup)) {
+      console.log(`[BOLETO_PROCESS] Validação inicial inválida (${validacao.motivo || "linha divergente"}). Acionando recoverBoletoLineWithFailover...`);
+      const recovery = await recoverBoletoLineWithFailover({
+        base64: cleanB64,
+        mimeType: input.mimeType,
+        openaiApiKey: input.openaiApiKey,
+        geminiApiKey: input.geminiApiKey,
+        geminiApiKeyBackup: input.geminiApiKeyBackup,
+        fetchImpl: fetchFn,
+        correlationId: input.workspaceId,
+      });
+
+      if (recovery.recovered && recovery.validationResult?.valido) {
+        console.log(`[BOLETO_PROCESS] Linha recuperada com sucesso via failover focalizado!`);
+        dados.linha_digitavel = recovery.validationResult.linhaDigitavel?.linhaLimpa || recovery.successfulCandidate?.linha_digits || dados.linha_digitavel;
+        if (recovery.validationResult.codigoBarrasDerivado && !dados.codigo_barras) {
+          dados.codigo_barras = recovery.validationResult.codigoBarrasDerivado;
+        }
+        validacao = reconcileBoleto(dados);
+      }
+    }
 
     const mensagemFormatada = formatBoletoMessage(dados, validacao);
 

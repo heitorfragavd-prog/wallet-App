@@ -1,9 +1,16 @@
 import type { ActionProposal } from "./action-types.ts";
 import type { AiExecutionContext } from "./auth.ts";
+import {
+  cleanDigits,
+  validateLinhaDigitavel,
+  normalizeDate,
+} from "./boleto-validator.ts";
+import { prepareActionProposal } from "./action-gateway.ts";
 import type {
   ActionRepository,
   ActionDatabaseMutator,
   AuditEventSinkLike,
+
 } from "./action-gateway.ts";
 import {
   runOrchestratorTurn,
@@ -420,6 +427,42 @@ export function createDefaultTelegramApiClient(
 
 // ─── UTILITÁRIOS DE FORMATAÇÃO ────────────────────────────────────────────────
 
+/**
+ * Sanitiza mensagens de erro técnicas para exibição clara e amigável ao usuário do Telegram.
+ * Remove códigos internos de erro como [WALLET_AI_...] ou Error: e substitui mensagens técnicas
+ * por instruções claras em português.
+ */
+export function sanitizeUserFacingErrorMessage(rawMessage: string | null | undefined): string {
+  if (!rawMessage) return "Ocorreu um erro no processamento. Por favor, tente novamente.";
+
+  let cleaned = String(rawMessage).trim();
+
+  // Remove códigos entre colchetes como [WALLET_AI_ACTION_INVALID]
+  cleaned = cleaned.replace(/^\[WALLET_AI_[A-Z0-9_]+\]\s*/i, "");
+  cleaned = cleaned.replace(/^Error:\s*/i, "");
+
+  // Mapeamentos específicos amigáveis
+  if (/Data inválida para o campo data_vencimento/i.test(cleaned) || /inválida no calendário/i.test(cleaned)) {
+    return "A data de vencimento do boleto é inválida no calendário ou não pôde ser confirmada.";
+  }
+  if (/Valor do boleto deve ser maior que zero/i.test(cleaned)) {
+    return "O valor identificado para o boleto é inválido ou igual a zero.";
+  }
+  if (/Beneficiário do boleto não identificado/i.test(cleaned)) {
+    return "Não foi possível identificar com clareza o beneficiário deste boleto.";
+  }
+  if (/Validação FEBRABAN do código de barras/i.test(cleaned)) {
+    return "A linha digitável ou código de barras não passou na validação bancária FEBRABAN.";
+  }
+  if (/WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT/i.test(rawMessage)) {
+    return "O documento contém instruções suspeitas ou formato não autorizado.";
+  }
+  if (/WALLET_AI_DOCUMENT_DUPLICATE/i.test(rawMessage)) {
+    return "Este documento já foi registrado anteriormente.";
+  }
+
+  return cleaned || "Ocorreu uma falha inesperada no processamento.";
+}
 export function escapeTelegramHtml(text: string): string {
   if (!text) return "";
   return text
@@ -862,6 +905,82 @@ export async function handleTelegramTextMessage(
     return {
       text: identity.error || "Usuário ou chat não autorizado.",
     };
+  }
+
+  // ─── Interceptação Determinística de Linha Digitável Digitada / Corrigida Manualmente ───
+  const digitsOnly = cleanDigits(text);
+  if (digitsOnly.length >= 46 && digitsOnly.length <= 48) {
+    const validacaoLinha = validateLinhaDigitavel(text);
+    if (validacaoLinha.valido && validacaoLinha.valorDerivado && validacaoLinha.valorDerivado > 0) {
+      // 1. Verificação de Duplicidade (FAIL-CLOSED)
+      let isDup = false;
+      if (deps.findDuplicateFn) {
+        try {
+          const dupRes = await deps.findDuplicateFn(
+            { workspaceId: identity.workspaceId },
+            {
+              workspaceId: identity.workspaceId,
+              linhaDigitavel: validacaoLinha.linhaLimpa,
+              codigoBarras: validacaoLinha.codigoBarrasDerivado,
+            }
+          );
+          if (dupRes?.isDuplicate) isDup = true;
+        } catch {
+          // Defensivo
+        }
+      }
+
+      if (isDup) {
+        return {
+          text:
+            `⚠️ <b>Boleto Duplicado Detectado!</b>\n\n` +
+            `Este boleto (<code>${escapeTelegramHtml(validacaoLinha.linhaFormatada)}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
+            `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`,
+        };
+      }
+
+      // 2. Criar Action Proposal Canônica (100% human-in-the-loop, sem execução direta)
+      const numValor = validacaoLinha.valorDerivado;
+      const dataVenc = validacaoLinha.dataVencimentoDerivada || new Date().toISOString().split("T")[0];
+      const bancoNome = validacaoLinha.bancoNome || "Boleto Bancário";
+
+      const proposal = prepareActionProposal({
+        workspaceId: identity.workspaceId,
+        userId: identity.userId,
+        actionType: "cadastrar_divida_boleto",
+        summary: `Cadastrar Boleto: ${bancoNome} - R$ ${numValor.toFixed(2)}`,
+        payload: {
+          beneficiario: bancoNome,
+          banco: bancoNome,
+          valor: numValor,
+          valor_total: numValor,
+          data_vencimento: dataVenc,
+          linha_digitavel: validacaoLinha.linhaLimpa,
+          codigo_barras: validacaoLinha.codigoBarrasDerivado,
+          descricao: `Boleto ${bancoNome}`.trim(),
+        },
+      });
+
+      if (deps.proposalRepo) {
+        await deps.proposalRepo.saveProposal(proposal);
+      }
+
+      const formatted = formatProposalMessage(proposal);
+      return {
+        text: formatted.text,
+        inlineKeyboard: formatted.buttons,
+        actionProposals: [proposal],
+      };
+    } else if (!validacaoLinha.valido) {
+      // Usuário forneceu expressamente uma linha digitável, mas os dígitos são matematicamente inválidos
+      const errList = validacaoLinha.erros.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+      return {
+        text:
+          `⚠️ <b>Linha Digitável Inválida</b>\n\n` +
+          `A linha digitável informada não passou na validação matemática FEBRABAN:\n${errList}\n\n` +
+          `<i>Por favor, confira os números digitados e tente novamente.</i>`,
+      };
+    }
   }
 
   const generatedTgCorrelationId =
@@ -1338,7 +1457,7 @@ export async function handleTelegramCallback(
 
       return {
         answerText: `⚠️ Falha ao executar: ${msg}`,
-        updatedMessageText: `⚠️ <b>Ação Não Executada</b>\n\n${escapeTelegramHtml(msg)}`,
+        updatedMessageText: `⚠️ <b>Ação Não Executada</b>\n\n${escapeTelegramHtml(sanitizeUserFacingErrorMessage(msg))}`,
         removeKeyboard: true,
       };
     }
@@ -1507,12 +1626,30 @@ export async function handleTelegramDocument(
     pipelineResult.documentType === "BOLETO" &&
     errors.some((e) => /linha digit[aá]vel|c[oó]digo de barras|febraban|d[íi]gito verificador/i.test(e))
   ) {
-    const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    const errList = errors.map((e) => `• ${escapeTelegramHtml(sanitizeUserFacingErrorMessage(e))}`).join("\n");
+    const data = pipelineResult.data || {};
+
+    const infoLines: string[] = [];
+    if (data.beneficiario) infoLines.push(`🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(data.beneficiario))}`);
+    if (data.banco) infoLines.push(`🏦 <b>Banco:</b> ${escapeTelegramHtml(String(data.banco))}`);
+    if (data.data_vencimento) {
+      const vencFmt = normalizeDate(data.data_vencimento).formattedBr || String(data.data_vencimento);
+      infoLines.push(`📅 <b>Vencimento:</b> ${escapeTelegramHtml(vencFmt)}`);
+    }
+    const valNum = typeof data.valor === "number" ? data.valor : parseFloat(String(data.valor || 0));
+    if (valNum > 0) {
+      infoLines.push(`💰 <b>Valor:</b> R$ ${valNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    }
+    if (data.linha_digitavel) {
+      infoLines.push(`🔢 <b>Linha lida:</b> <code>${escapeTelegramHtml(String(data.linha_digitavel))}</code>`);
+    }
+
+    const infoBlock = infoLines.length > 0 ? `\n\n<b>Dados identificados no documento:</b>\n${infoLines.join("\n")}` : "";
     return {
       text:
         `⚠️ <b>Boleto com Linha Digitável Inválida</b>\n\n` +
-        `A linha digitável do boleto não passou na validação matemática FEBRABAN:\n${errList}\n\n` +
-        `<i>Por favor, tire uma nova foto mais nítida do boleto ou digite a linha digitável no app web.</i>`,
+        `A linha digitável do boleto não passou na validação matemática FEBRABAN:\n${errList}${infoBlock}\n\n` +
+        `<i>Por favor, tire uma nova foto mais nítida ou digite a linha digitável por mensagem de texto para continuarmos com segurança.</i>`,
       pipelineResult,
     };
   }
@@ -1523,6 +1660,24 @@ export async function handleTelegramDocument(
     errors.some((e) => /benefici[aá]rio|vencimento|valor|ausente|n[aã]o identificad/i.test(e))
   ) {
     const errList = errors.map((e) => `• ${escapeTelegramHtml(e)}`).join("\n");
+    const data = pipelineResult.data || {};
+
+    const infoLines: string[] = [];
+    if (data.beneficiario) infoLines.push(`🏢 <b>Beneficiário:</b> ${escapeTelegramHtml(String(data.beneficiario))}`);
+    if (data.banco) infoLines.push(`🏦 <b>Banco:</b> ${escapeTelegramHtml(String(data.banco))}`);
+    if (data.data_vencimento) {
+      const vencFmt = normalizeDate(data.data_vencimento).formattedBr || String(data.data_vencimento);
+      infoLines.push(`📅 <b>Vencimento:</b> ${escapeTelegramHtml(vencFmt)}`);
+    }
+    const valNum = typeof data.valor === "number" ? data.valor : parseFloat(String(data.valor || 0));
+    if (valNum > 0) {
+      infoLines.push(`💰 <b>Valor:</b> R$ ${valNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    }
+    if (data.linha_digitavel) {
+      infoLines.push(`🔢 <b>Linha lida:</b> <code>${escapeTelegramHtml(String(data.linha_digitavel))}</code>`);
+    }
+
+    const infoBlock = infoLines.length > 0 ? `\n\n<b>Dados identificados no documento:</b>\n${infoLines.join("\n")}` : "";
     return {
       text:
         `⚠️ <b>Informações Incompletas no Boleto</b>\n\n` +
@@ -1539,7 +1694,8 @@ export async function handleTelegramDocument(
     pipelineResult.errorCode === "WALLET_AI_DOCUMENT_PROCESSING_FAILED" ||
     pipelineResult.errorCode === "WALLET_AI_INVALID_PAYLOAD"
   ) {
-    const errMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    const rawErrMsg = pipelineResult.error || errors[0] || "Falha temporária de comunicação com o processador visual.";
+    const errMsg = sanitizeUserFacingErrorMessage(rawErrMsg);
     return {
       text:
         `⚠️ <b>Falha Temporária no Processamento Visual</b>\n\n` +

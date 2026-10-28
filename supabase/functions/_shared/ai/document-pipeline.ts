@@ -15,6 +15,7 @@
  */
 
 import {
+  normalizeDate,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
 import {
@@ -633,9 +634,14 @@ export async function processDocumentPipeline(
 
       // Reconciliação determinística e validação FEBRABAN + Dados Mínimos
       const numValor = typeof dados.valor === "number" ? dados.valor : parseFloat(String(dados.valor || 0));
+
+      // Normalização e validação determinística de data de vencimento
+      // Hierarquia: 1. Linha FEBRABAN íntegra (fator de vencimento) 2. Data visual validada no calendário
+      const dataVencimentoResolvida = validacao?.dataVencimentoFinal || normalizeDate(dados.data_vencimento).iso;
+
       const hasMinimumBoletoData = Boolean(
         dados.beneficiario &&
-        dados.data_vencimento &&
+        dataVencimentoResolvida &&
         (dados.linha_digitavel || dados.codigo_barras)
       );
       const isFebrabanValid = validacao?.valido === true;
@@ -651,7 +657,13 @@ export async function processDocumentPipeline(
       }
       if (!hasMinimumBoletoData) {
         if (!dados.beneficiario) errors.push("Beneficiário do boleto não identificado.");
-        if (!dados.data_vencimento) errors.push("Data de vencimento do boleto não identificada.");
+        if (!dataVencimentoResolvida) {
+          if (!dados.data_vencimento) {
+            errors.push("Data de vencimento do boleto não identificada.");
+          } else {
+            errors.push(`Data de vencimento do boleto inválida no calendário: ${dados.data_vencimento}.`);
+          }
+        }
         if (!dados.linha_digitavel && !dados.codigo_barras) errors.push("Código de barras ou linha digitável ausente.");
       }
 
@@ -676,10 +688,13 @@ export async function processDocumentPipeline(
           formattedMessage: boletoOutput.mensagemFormatada || "⚠️ **Boleto com Inconsistências:** Dados não puderam ser validados com segurança.",
           correlationId,
           durationMs,
-          error: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+          error: errors[0] || "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
           errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
         };
       }
+
+      // Atualizar dados com vencimento validado
+      dados.data_vencimento = dataVencimentoResolvida;
 
       // Se válido em TODOS os gates, gerar Action Proposal canônica (100% proposal-only)
       const proposalPayload: Record<string, unknown> = {
@@ -688,7 +703,7 @@ export async function processDocumentPipeline(
         pagador: dados.pagador || undefined,
         valor: numValor,
         valor_total: numValor,
-        data_vencimento: dados.data_vencimento,
+        data_vencimento: dataVencimentoResolvida,
         linha_digitavel: dados.linha_digitavel || undefined,
         codigo_barras: dados.codigo_barras || undefined,
         banco: dados.banco || undefined,
