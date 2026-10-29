@@ -673,7 +673,8 @@ export class CeoFinancialMetricsService {
         .limit(2000);
 
       for (const item of itemsDelivery || []) {
-        const name = (item as any).product_name || (item as any).name || 'Produto sem nome';
+        const rawItem = item as Record<string, unknown>;
+        const name = (rawItem.product_name as string) || (rawItem.name as string) || 'Produto sem nome';
         const qtd = Number(item.quantity || 1);
         const valor = Number(item.total_price || 0);
         const current = productMap.get(name) || { quantidade: 0, faturamento: 0 };
