@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import type { AiExecutionContext } from "./auth.ts";
 import { ActionGatewayError } from "./action-gateway.ts";
+import {
+  cleanDigits,
+  validateLinhaDigitavel,
+  validateCodigoBarras,
+} from "./boleto-validator.ts";
 
 export type ActionExecutionHandler = (
   payload: Record<string, unknown>,
@@ -171,6 +176,66 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
     const beneficiario = String(payload.beneficiario || payload.credor || "Beneficiário").trim();
     const descricao = String(payload.descricao || `Boleto ${beneficiario}`).trim();
 
+    let finalLinha = payload.linha_digitavel ? String(payload.linha_digitavel).trim() : null;
+    let finalCodigoBarras = payload.codigo_barras ? String(payload.codigo_barras).trim() : null;
+
+    if (finalLinha) {
+      const validacaoLinha = validateLinhaDigitavel(finalLinha);
+      if (validacaoLinha.valido && validacaoLinha.codigoBarrasDerivado) {
+        const cbDerivado = validacaoLinha.codigoBarrasDerivado;
+        if (!finalCodigoBarras || cleanDigits(finalCodigoBarras) !== cbDerivado) {
+          const cbAtualClean = cleanDigits(finalCodigoBarras);
+          const cbAtualValidacao = cbAtualClean ? validateCodigoBarras(cbAtualClean) : null;
+          if (!cbAtualValidacao || !cbAtualValidacao.valido) {
+            // OCR bruto com 48 dígitos, ruído ou checksum incorreto -> adotar canônico derivado de 44 dígitos
+            finalCodigoBarras = cbDerivado;
+          } else if (cbAtualClean !== cbDerivado) {
+            // Código de barras fornecido é válido por si só mas contradiz a linha digitável válida
+            throw new ActionGatewayError(
+              "WALLET_AI_ACTION_INVALID",
+              400,
+              "Inconsistência irreconciliável: código de barras e linha digitável válidos apontam para documentos diferentes.",
+            );
+          }
+        } else {
+          finalCodigoBarras = cbDerivado;
+        }
+        finalLinha = finalLinha || validacaoLinha.linhaFormatada;
+      } else {
+        // Linha digitável informada é inválida
+        if (finalCodigoBarras) {
+          const cbClean = cleanDigits(finalCodigoBarras);
+          const validacaoCb = validateCodigoBarras(cbClean);
+          if (!validacaoCb.valido) {
+            throw new ActionGatewayError(
+              "WALLET_AI_ACTION_INVALID",
+              400,
+              `Linha digitável e código de barras inválidos: ${validacaoLinha.erros.join("; ")} | ${validacaoCb.erros.join("; ")}`,
+            );
+          }
+          finalCodigoBarras = cbClean;
+          finalLinha = null;
+        } else {
+          throw new ActionGatewayError(
+            "WALLET_AI_ACTION_INVALID",
+            400,
+            `Linha digitável do boleto inválida: ${validacaoLinha.erros.join("; ")}`,
+          );
+        }
+      }
+    } else if (finalCodigoBarras) {
+      const cbClean = cleanDigits(finalCodigoBarras);
+      const validacaoCb = validateCodigoBarras(cbClean);
+      if (!validacaoCb.valido) {
+        throw new ActionGatewayError(
+          "WALLET_AI_ACTION_INVALID",
+          400,
+          `Código de barras inválido: ${validacaoCb.erros.join(", ")}`,
+        );
+      }
+      finalCodigoBarras = cbClean;
+    }
+
     const insertRow = {
       user_id: context.userId,
       workspace_id: context.workspaceId,
@@ -183,8 +248,8 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
       data_vencimento: dataVencimento,
       status: "pendente",
       metodo_pagamento_esperado: "boleto",
-      linha_digitavel: payload.linha_digitavel ? String(payload.linha_digitavel).trim() : null,
-      codigo_barras: payload.codigo_barras ? String(payload.codigo_barras).trim() : null,
+      linha_digitavel: finalLinha,
+      codigo_barras: finalCodigoBarras,
       parcelas: 1,
       parcelas_pagas: 0,
       parcela_atual: 1,

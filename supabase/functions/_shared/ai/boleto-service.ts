@@ -13,6 +13,8 @@
 import {
   cleanDigits,
   validateLinhaDigitavel,
+  validateCodigoBarras,
+  barcodeToLinhaDigitavel,
   reconcileBoleto,
   normalizeDate,
   parseBoletoAmount,
@@ -36,15 +38,19 @@ export interface BoletoExtractedData {
   pagador?: string | null;
   cnpj_cpf_pagador?: string | null;
   data_vencimento?: string | null;
+  data_emissao?: string | null;
+  data_processamento?: string | null;
   valor?: number | string | null;
+  valor_nominal?: number | string | null;
+  desconto?: number | null;
+  juros_multa?: number | null;
+  tributos_retencoes?: number | null;
   linha_digitavel?: string | null;
   codigo_barras?: string | null;
   nosso_numero?: string | null;
   numero_documento?: string | null;
   agencia_codigo_beneficiario?: string | null;
-  juros_multa?: number | null;
-  desconto?: number | null;
-  data_emissao?: string | null;
+  instrucoes?: string | null;
 }
 
 export interface ProcessBoletoOutput {
@@ -60,19 +66,28 @@ export const GEMINI_BOLETO_PROMPT = `Você é um especialista em leitura e extra
 
 Analise esta imagem ou documento PDF de boleto e extraia os campos com máxima fidelidade e exatidão:
 
-1. BANCO: Nome do banco e código (ex: "Itaú Unibanco (341)", "Banco do Brasil (001)", "Bradesco (237)", "Caixa", etc.)
-2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes de empresas conhecidas e NÃO use conhecimento prévio. Se estiver visível apenas "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso sem inventar caracteres.
+REGRAS DE SEPARAÇÃO ESTRITA DE VALORES E DATAS:
+1. BANCO: Nome do banco emissor e código de compensação (ex: "Itaú Unibanco (341)", "Banco do Brasil (001)", "Bradesco (237)", etc.).
+2. BENEFICIÁRIO (CEDENTE): Transcreva EXATAMENTE os caracteres literais impressos no campo Beneficiário/Cedente do documento. NÃO altere letras, NÃO complete palavras por adivinhação, NÃO deduza nomes conhecidos. Se estiver visível apenas "SPAL INDUSTRIA BRASILEIRA DE", transcreva exatamente isso sem inventar.
 3. CNPJ/CPF DO BENEFICIÁRIO: Apenas números ou formatado.
 4. PAGADOR (SACADO): Nome da pessoa/empresa que deve pagar.
 5. CNPJ/CPF DO PAGADOR: Se visível.
-6. DATA DE VENCIMENTO: Data de vencimento no formato YYYY-MM-DD (ou DD/MM/YYYY). ATENÇÃO: Identifique especificamente o campo "Vencimento" ou "Data de Vencimento". NUNCA confunda com "Data do Documento", "Data de Emissão" ou "Data de Processamento". Se houver datas diferentes, "Vencimento" é a data limite para pagamento sem juros.
-7. VALOR DO DOCUMENTO: Valor nominal a ser pago (ex: 1250.00).
-8. LINHA DIGITÁVEL: A sequência de 47 ou 48 dígitos que aparece no topo ou rodapé do boleto (com ou sem pontos/espaços).
-9. CÓDIGO DE BARRAS: Sequência de 44 dígitos se estiver expressa numericamente.
-10. NOSSO NÚMERO: Código de identificação do título.
-11. NÚMERO DO DOCUMENTO / SEU NÚMERO: Número da fatura ou documento de referência.
-12. AGÊNCIA / CÓDIGO BENEFICIÁRIO: Código da agência e conta do cedente.
-13. DATA DO DOCUMENTO / EMISSÃO: Data de emissão se disponível.
+6. DATA DE VENCIMENTO: A data de vencimento final impressa no campo "( = ) Vencimento" ou "Data de Vencimento" da Ficha de Compensação (formato YYYY-MM-DD ou DD/MM/YYYY).
+   ATENÇÃO CRÍTICA: NUNCA use a "Data do Documento", "Data de Emissão" ou "Data de Processamento" como vencimento. Vencimento é a data limite para pagamento sem acréscimos.
+7. DATA DE EMISSÃO / DO DOCUMENTO: A data de emissão ou faturamento do documento (geralmente anterior ao vencimento).
+8. DATA DE PROCESSAMENTO: Data em que o banco processou o boleto, se informada.
+9. VALOR DO DOCUMENTO / VALOR NOMINAL: O valor nominal principal a pagar, impresso no campo "( = ) Valor do Documento" da Ficha de Compensação (ex: 2076.44).
+   ATENÇÃO CRÍTICA:
+   - NUNCA use valores de impostos ou retenções (como ICMS, ICMS-ST, PIS, COFINS, IPI).
+   - NUNCA use valores de desconto, juros ou multa como valor principal.
+   - O valor nominal é o montante total cobrado pelo boleto.
+10. DESCONTO / ABATIMENTO: Valor de desconto ou abatimento, se houver.
+11. JUROS / MULTA: Valor de encargos ou juros/mora, se houver.
+12. LINHA DIGITÁVEL: A sequência de 47 ou 48 dígitos que aparece na Ficha de Compensação (com ou sem pontos/espaços).
+13. CÓDIGO DE BARRAS: Sequência numérica de 44 dígitos se estiver visível numericamente abaixo ou acima das barras gráficas.
+14. NOSSO NÚMERO: Código de identificação do título.
+15. NÚMERO DO DOCUMENTO: Número da fatura ou documento de referência.
+16. AGÊNCIA / CÓDIGO BENEFICIÁRIO: Código da agência e conta do cedente.
 
 Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
 {
@@ -82,13 +97,16 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
   "pagador": "string ou null",
   "cnpj_cpf_pagador": "string ou null",
   "data_vencimento": "YYYY-MM-DD ou DD/MM/YYYY ou null",
+  "data_emissao": "YYYY-MM-DD ou DD/MM/YYYY ou null",
+  "data_processamento": "YYYY-MM-DD ou DD/MM/YYYY ou null",
   "valor": 0.00,
+  "desconto": 0.00 ou null,
+  "juros_multa": 0.00 ou null,
   "linha_digitavel": "string ou null",
   "codigo_barras": "string ou null",
   "nosso_numero": "string ou null",
   "numero_documento": "string ou null",
-  "agencia_codigo_beneficiario": "string ou null",
-  "data_emissao": "string ou null"
+  "agencia_codigo_beneficiario": "string ou null"
 }`;
 
 export interface VisionBoletoCallOptions {
@@ -459,27 +477,33 @@ export interface RecoverBoletoLineResult {
 
 export const FOCUSED_BOLETO_LINE_PROMPT = `Você é um leitor óptico especializado em Ficha de Compensação de boletos bancários brasileiros.
 
-Localize a LINHA DIGITÁVEL impressa na FICHA DE COMPENSAÇÃO (geralmente acima ou abaixo do código de barras).
+Localize a FICHA DE COMPENSAÇÃO (onde constam os dados bancários, linha digitável e código de barras).
 
-Transcreva os 5 CAMPOS NUMÉRICOS EXATOS que compõem a linha digitável:
+Transcreva os seguintes campos com máxima fidelidade e exatidão:
+
+1. LINHA DIGITÁVEL (5 CAMPOS NUMÉRICOS EXATOS):
 - campo1: exatamente 10 dígitos numéricos (primeiros 5 dígitos + ponto + 5 dígitos);
 - campo2: exatamente 11 dígitos numéricos;
 - campo3: exatamente 11 dígitos numéricos;
 - dv_geral: exatamente 1 dígito numérico isolado (dígito verificador geral);
 - campo5: exatamente 14 dígitos numéricos (fator de vencimento de 4 dígitos + valor nominal de 10 dígitos).
 
+2. CÓDIGO DE BARRAS NUMÉRICO:
+- codigo_barras: Transcreva a sequência numérica de 44 dígitos se visível (geralmente impressa em números menores logo abaixo ou acima das barras gráficas).
+
+3. DADOS VISUAIS DA FICHA DE COMPENSAÇÃO:
+- valor_visual: O valor nominal impresso no campo "( = ) Valor do Documento" da Ficha de Compensação.
+- vencimento_visual: A data de vencimento expressa no campo "( = ) Vencimento" da Ficha de Compensação.
+
 REGRAS RÍGIDAS DE TRANSCRIÇÃO:
 1. Transcreva LITERALMENTE o que está visível no documento;
-2. NÃO calcule;
-3. NÃO corrija números;
-4. NÃO complete dígitos ausentes;
-5. NÃO use conhecimento de FEBRABAN para inferir dígitos;
-6. Se algum campo não estiver legível, retorne null para esse campo;
-7. ATENÇÃO ESPECIAL À FRONTEIRA ENTRE "dv_geral" E "campo5":
-   - "dv_geral" e "campo5" são DOIS campos separados por espaço;
-   - Exemplo conceitual: se estiver impresso "... [DV de 1 dígito] [campo5 de 14 dígitos]", certifique-se de capturar o DV em "dv_geral" (1 dígito) e todos os 14 dígitos em "campo5";
-   - Mesmo que o DV seja "1" e o campo5 comece com "1" (ex: "... 1 15580000060247"), transcreva "dv_geral": "1" e "campo5": "15580000060247";
-8. NÃO use o valor nominal ou datas impressas para deduzir/reconstruir o campo5; transcreva estritamente os caracteres impressos.
+2. NÃO calcule nem deduza;
+3. NÃO corrija números nem invente caracteres;
+4. Se algum campo não estiver legível, retorne null para esse campo;
+5. ATENÇÃO ESPECIAL À FRONTEIRA ENTRE "dv_geral" E "campo5":
+   - "dv_geral" e "campo5" são DOIS campos separados por espaço (ex: "... 1 16190000207644");
+   - Transcreva "dv_geral" isolado (1 dígito) e "campo5" completo (14 dígitos);
+6. ZEROS CONSECUTIVOS NO VALOR: No campo5, atente para transcrever com exatidão todos os zeros consecutivos de preenchimento (ex: fator 1619 + valor 0000207644 = 16190000207644).
 
 Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
 {
@@ -489,10 +513,91 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido no formato:
   "dv_geral": "string de 1 dígito numérico ou null",
   "campo5": "string de 14 dígitos numéricos ou null",
   "linha_digitavel": "string de 47 dígitos contínuos sem pontos/espaços ou null",
-  "codigo_barras": "string de 44 dígitos se visíveis numericamente ou null",
+  "codigo_barras": "string de 44 dígitos numéricos se visíveis ou null",
   "valor_visual": 0.00,
   "vencimento_visual": "YYYY-MM-DD ou DD/MM/YYYY ou null"
 }`;
+
+/**
+ * Recorta a região de interesse do boleto (ex: metade inferior ou terço inferior contendo a ficha de compensação)
+ */
+export async function cropBoletoRegion(
+  base64Data: string,
+  topRatio: number,
+  bottomRatio: number
+): Promise<{ base64: string; cropped: boolean }> {
+  const cleanB64 = base64Data.replace(/^data:[^;]+;base64,/i, "").replace(/[\r\n\s]+/g, "");
+
+  const safeTop = Math.max(0.05, Math.min(0.85, typeof topRatio === "number" ? topRatio : 0.45));
+  const safeBottom = Math.max(safeTop + 0.10, Math.min(1.0, typeof bottomRatio === "number" ? bottomRatio : 1.0));
+
+  if ("Deno" in globalThis) {
+    try {
+      // @ts-ignore dynamic import for Deno runtime
+      const { Image } = await import("https://deno.land/x/imagescript@1.2.15/mod.ts");
+      // @ts-ignore dynamic import for Deno runtime
+      const { encode: base64Encode } = await import("https://deno.land/std@0.168.0/encoding/base64.ts");
+
+      const binaryString = atob(cleanB64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const decoded = await Image.decode(bytes);
+      const cropY = Math.max(0, Math.floor(decoded.height * safeTop));
+      const cropH = Math.min(decoded.height - cropY, Math.floor(decoded.height * (safeBottom - safeTop)));
+
+      const croppedImg = decoded.crop(0, cropY, decoded.width, cropH);
+      const encodedJpeg = await croppedImg.encodeJPEG(90);
+
+      return {
+        base64: base64Encode(encodedJpeg),
+        cropped: true,
+      };
+    } catch (err) {
+      console.warn("[boleto-service] Falha defensiva ao recortar região do boleto:", err);
+    }
+  }
+
+  return {
+    base64: cleanB64,
+    cropped: false,
+  };
+}
+
+/**
+ * Constrói regiões candidatas com foco na ficha de compensação para recuperação de boletos.
+ */
+export async function buildBoletoRegionCandidates(base64Data: string): Promise<RegionCandidate[]> {
+  const candidates: RegionCandidate[] = [
+    { region: "full_focused", base64: base64Data },
+  ];
+
+  // Região Ficha de Compensação (Metade inferior do documento: y de 45% a 100%)
+  const lowerHalf = await cropBoletoRegion(base64Data, 0.45, 1.0);
+  if (lowerHalf.cropped && lowerHalf.base64 !== base64Data) {
+    candidates.push({
+      region: "lower_half",
+      base64: lowerHalf.base64,
+      crop_y: 45,
+      crop_height: 55,
+    });
+  }
+
+  // Região Código de Barras / Linha Digitável (Terço inferior do documento: y de 65% a 100%)
+  const lowerThird = await cropBoletoRegion(base64Data, 0.65, 1.0);
+  if (lowerThird.cropped && lowerThird.base64 !== base64Data) {
+    candidates.push({
+      region: "lower_third",
+      base64: lowerThird.base64,
+      crop_y: 65,
+      crop_height: 35,
+    });
+  }
+
+  return candidates;
+}
 
 /**
  * Executa uma tentativa de extração focalizada de linha em um provedor e região específicos.
@@ -664,7 +769,7 @@ export async function recoverBoletoLineWithFailover(
 
   const regions: RegionCandidate[] = options.regionCandidates && options.regionCandidates.length > 0
     ? options.regionCandidates
-    : [{ region: "full_focused", base64 }];
+    : await buildBoletoRegionCandidates(base64);
 
   const allCandidates: FocusedBoletoLineCandidate[] = [];
   let attemptCounter = 0;
@@ -705,7 +810,26 @@ export async function recoverBoletoLineWithFailover(
 
       if (candidate) {
         allCandidates.push(candidate);
-        const valRes = validateLinhaDigitavel(candidate.linha_digits);
+        let valRes = validateLinhaDigitavel(candidate.linha_digits);
+
+        // Se a linha lida não é válida, mas temos código de barras de 44 dígitos no candidato
+        if (!valRes.valido && candidate.codigo_barras) {
+          const cbClean = cleanDigits(candidate.codigo_barras);
+          if (cbClean.length === 44) {
+            const cbVal = validateCodigoBarras(cbClean);
+            if (cbVal.valido) {
+              const derived = barcodeToLinhaDigitavel(cbClean);
+              if (derived && derived.valido) {
+                const derivedValRes = validateLinhaDigitavel(derived.linhaLimpa);
+                if (derivedValRes.valido) {
+                  valRes = derivedValRes;
+                  candidate.linha_digits = derived.linhaLimpa;
+                  candidate.linha_raw = derived.linhaFormatada;
+                }
+              }
+            }
+          }
+        }
 
         const validationErrors = valRes.valido
           ? "none"
@@ -763,7 +887,26 @@ export async function recoverBoletoLineWithFailover(
 
       if (candidate) {
         allCandidates.push(candidate);
-        const valRes = validateLinhaDigitavel(candidate.linha_digits);
+        let valRes = validateLinhaDigitavel(candidate.linha_digits);
+
+        // Se a linha lida não é válida, mas temos código de barras de 44 dígitos no candidato
+        if (!valRes.valido && candidate.codigo_barras) {
+          const cbClean = cleanDigits(candidate.codigo_barras);
+          if (cbClean.length === 44) {
+            const cbVal = validateCodigoBarras(cbClean);
+            if (cbVal.valido) {
+              const derived = barcodeToLinhaDigitavel(cbClean);
+              if (derived && derived.valido) {
+                const derivedValRes = validateLinhaDigitavel(derived.linhaLimpa);
+                if (derivedValRes.valido) {
+                  valRes = derivedValRes;
+                  candidate.linha_digits = derived.linhaLimpa;
+                  candidate.linha_raw = derived.linhaFormatada;
+                }
+              }
+            }
+          }
+        }
 
         const validationErrors = valRes.valido
           ? "none"
@@ -941,21 +1084,22 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
     }
 
     const dados: BoletoExtractedData = {
-      banco: parsedJson.banco || null,
-      beneficiario: parsedJson.beneficiario || parsedJson.cedente || null,
-      cnpj_cpf_beneficiario: parsedJson.cnpj_cpf_beneficiario || parsedJson.cnpj_beneficiario || null,
-      pagador: parsedJson.pagador || parsedJson.sacado || null,
-      cnpj_cpf_pagador: parsedJson.cnpj_cpf_pagador || parsedJson.cpf_cnpj_pagador || null,
-      data_vencimento: parsedJson.data_vencimento || parsedJson.vencimento || null,
-      valor: parsedJson.valor ?? parsedJson.valor_documento ?? null,
-      linha_digitavel: parsedJson.linha_digitavel || parsedJson.linhaDigitavel || null,
-      codigo_barras: parsedJson.codigo_barras || parsedJson.codigoBarras || null,
-      nosso_numero: parsedJson.nosso_numero || null,
-      numero_documento: parsedJson.numero_documento || null,
-      agencia_codigo_beneficiario: parsedJson.agencia_codigo_beneficiario || null,
-      juros_multa: parsedJson.juros_multa || null,
-      desconto: parsedJson.desconto || null,
-      data_emissao: parsedJson.data_emissao || null,
+      banco: parsedJson.banco ? String(parsedJson.banco) : null,
+      beneficiario: parsedJson.beneficiario || parsedJson.cedente ? String(parsedJson.beneficiario || parsedJson.cedente) : null,
+      cnpj_cpf_beneficiario: parsedJson.cnpj_cpf_beneficiario || parsedJson.cnpj_beneficiario ? String(parsedJson.cnpj_cpf_beneficiario || parsedJson.cnpj_beneficiario) : null,
+      pagador: parsedJson.pagador || parsedJson.sacado ? String(parsedJson.pagador || parsedJson.sacado) : null,
+      cnpj_cpf_pagador: parsedJson.cnpj_cpf_pagador || parsedJson.cpf_cnpj_pagador ? String(parsedJson.cnpj_cpf_pagador || parsedJson.cpf_cnpj_pagador) : null,
+      data_vencimento: parsedJson.data_vencimento || parsedJson.vencimento ? String(parsedJson.data_vencimento || parsedJson.vencimento) : null,
+      data_emissao: parsedJson.data_emissao || parsedJson.data_documento ? String(parsedJson.data_emissao || parsedJson.data_documento) : null,
+      data_processamento: parsedJson.data_processamento ? String(parsedJson.data_processamento) : null,
+      valor: parsedJson.valor ?? parsedJson.valor_documento ?? parsedJson.valor_nominal ?? null,
+      desconto: parsedJson.desconto !== undefined && parsedJson.desconto !== null ? Number(parsedJson.desconto) : null,
+      juros_multa: parsedJson.juros_multa !== undefined && parsedJson.juros_multa !== null ? Number(parsedJson.juros_multa) : null,
+      linha_digitavel: parsedJson.linha_digitavel || parsedJson.linhaDigitavel ? String(parsedJson.linha_digitavel || parsedJson.linhaDigitavel) : null,
+      codigo_barras: parsedJson.codigo_barras || parsedJson.codigoBarras ? String(parsedJson.codigo_barras || parsedJson.codigoBarras) : null,
+      nosso_numero: parsedJson.nosso_numero ? String(parsedJson.nosso_numero) : null,
+      numero_documento: parsedJson.numero_documento ? String(parsedJson.numero_documento) : null,
+      agencia_codigo_beneficiario: parsedJson.agencia_codigo_beneficiario ? String(parsedJson.agencia_codigo_beneficiario) : null,
     };
 
     // Validação e Reconciliação Determinística
@@ -964,6 +1108,7 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
     // Se a validação inicial falhar, aciona a recuperação focalizada com failover de regiões/provedores
     if (!validacao.valido && (input.openaiApiKey || input.geminiApiKey || input.geminiApiKeyBackup)) {
       console.log(`[BOLETO_PROCESS] Validação inicial inválida (${validacao.motivo || "linha divergente"}). Acionando recoverBoletoLineWithFailover...`);
+      const regionCandidates = await buildBoletoRegionCandidates(cleanB64);
       const recovery = await recoverBoletoLineWithFailover({
         base64: cleanB64,
         mimeType: input.mimeType,
@@ -972,13 +1117,18 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
         geminiApiKeyBackup: input.geminiApiKeyBackup,
         fetchImpl: fetchFn,
         correlationId: input.workspaceId,
+        regionCandidates,
       });
 
       if (recovery.recovered && recovery.validationResult?.valido) {
         console.log(`[BOLETO_PROCESS] Linha recuperada com sucesso via failover focalizado!`);
         dados.linha_digitavel = recovery.validationResult.linhaDigitavel?.linhaLimpa || recovery.successfulCandidate?.linha_digits || dados.linha_digitavel;
-        if (recovery.validationResult.codigoBarrasDerivado && !dados.codigo_barras) {
-          dados.codigo_barras = recovery.validationResult.codigoBarrasDerivado;
+        dados.codigo_barras = recovery.validationResult.codigoBarrasDerivado || recovery.successfulCandidate?.codigo_barras || dados.codigo_barras;
+        if (recovery.successfulCandidate?.valor_visual && (!dados.valor || Number(dados.valor) <= 0)) {
+          dados.valor = recovery.successfulCandidate.valor_visual;
+        }
+        if (recovery.successfulCandidate?.vencimento_visual && !dados.data_vencimento) {
+          dados.data_vencimento = recovery.successfulCandidate.vencimento_visual;
         }
         validacao = reconcileBoleto(dados);
       }

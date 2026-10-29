@@ -16,6 +16,7 @@
 
 import {
   normalizeDate,
+  cleanDigits,
   type BoletoValidationResult,
 } from "./boleto-validator.ts";
 import {
@@ -639,7 +640,14 @@ export async function processDocumentPipeline(
       }
 
       // Reconciliação determinística e validação FEBRABAN + Dados Mínimos
-      const numValor = typeof dados.valor === "number" ? dados.valor : parseFloat(String(dados.valor || 0));
+      const numValor =
+        validacao?.valorFinal && validacao.valorFinal > 0
+          ? validacao.valorFinal
+          : typeof dados.valor === "number"
+          ? dados.valor
+          : parseFloat(String(dados.valor || 0));
+
+      dados.valor = numValor;
 
       // Normalização e validação determinística de data de vencimento
       // Hierarquia: 1. Linha FEBRABAN íntegra (fator de vencimento) 2. Data visual validada no calendário
@@ -702,6 +710,29 @@ export async function processDocumentPipeline(
       // Atualizar dados com vencimento validado
       dados.data_vencimento = dataVencimentoResolvida;
 
+      // Reconciliação canônica de código de barras e linha digitável
+      const canonicalCodigoBarras =
+        validacao?.codigoBarrasFinal ||
+        validacao?.linhaDigitavel?.codigoBarrasDerivado ||
+        (validacao?.codigoBarras?.valido ? validacao.codigoBarras.codigoLimpo : undefined);
+
+      const canonicalLinha =
+        validacao?.linhaDigitavelFinal ||
+        validacao?.linhaDigitavel?.linhaLimpa ||
+        (dados.linha_digitavel ? cleanDigits(dados.linha_digitavel) : undefined);
+
+      if (canonicalCodigoBarras) {
+        if (dados.codigo_barras && cleanDigits(dados.codigo_barras) !== canonicalCodigoBarras) {
+          console.info(
+            `[BOLETO_BARCODE_CANONICAL] correlation_id=${correlationId} raw_ocr_length=${cleanDigits(dados.codigo_barras).length} canonical_length=${canonicalCodigoBarras.length} status=reconciled`
+          );
+        }
+        dados.codigo_barras = canonicalCodigoBarras;
+      }
+      if (canonicalLinha) {
+        dados.linha_digitavel = canonicalLinha;
+      }
+
       // Se válido em TODOS os gates, gerar Action Proposal canônica (100% proposal-only)
       const proposalPayload: Record<string, unknown> = {
         beneficiario: dados.beneficiario || "Beneficiário do Boleto",
@@ -710,9 +741,9 @@ export async function processDocumentPipeline(
         valor: numValor,
         valor_total: numValor,
         data_vencimento: dataVencimentoResolvida,
-        linha_digitavel: dados.linha_digitavel || undefined,
-        codigo_barras: dados.codigo_barras || undefined,
-        banco: dados.banco || undefined,
+        linha_digitavel: canonicalLinha || undefined,
+        codigo_barras: canonicalCodigoBarras || undefined,
+        banco: dados.banco || validacao?.bancoFinal || undefined,
         descricao: `Boleto ${dados.beneficiario || "a Pagar"}`.trim(),
       };
 

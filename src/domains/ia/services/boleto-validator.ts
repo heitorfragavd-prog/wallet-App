@@ -10,6 +10,7 @@ export {
   fatorVencimentoParaData,
   validateLinhaDigitavel,
   validateCodigoBarras,
+  barcodeToLinhaDigitavel,
   parseBoletoAmount,
   normalizeDate,
   isValidCalendarDate,
