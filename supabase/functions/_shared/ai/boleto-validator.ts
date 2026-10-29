@@ -59,6 +59,8 @@ export interface BoletoValidationResult {
   warnings: string[];
   linhaDigitavel?: ValidatedLinhaDigitavel;
   codigoBarras?: ValidatedCodigoBarras;
+  codigoBarrasFinal?: string | null;
+  linhaDigitavelFinal?: string | null;
   valorFinal: number;
   valorSource: "febraban_linha" | "ocr_visual";
   dataVencimentoFinal: string | null;
@@ -530,6 +532,87 @@ export function validateCodigoBarras(codigoRaw: string | null | undefined): Vali
 }
 
 /**
+ * Deriva deterministicamente a linha digitável (47 dígitos para bancário ou 48 dígitos para arrecadação)
+ * a partir de um código de barras de 44 dígitos válido segundo a norma FEBRABAN.
+ */
+export function barcodeToLinhaDigitavel(codigoBarrasRaw: string | null | undefined): {
+  valido: boolean;
+  tipo: "bancario" | "arrecadacao" | "invalido";
+  linhaLimpa: string;
+  linhaFormatada: string;
+} | null {
+  if (!codigoBarrasRaw) return null;
+  const clean = cleanDigits(codigoBarrasRaw);
+  if (clean.length !== 44) return null;
+
+  // 1. Boleto de Arrecadação / Concessionárias (Começa com 8)
+  if (clean.startsWith("8")) {
+    const codMoeda = clean[2];
+    const isMod10 = codMoeda === "6" || codMoeda === "7";
+
+    const b1 = clean.substring(0, 11);
+    const b2 = clean.substring(11, 22);
+    const b3 = clean.substring(22, 33);
+    const b4 = clean.substring(33, 44);
+
+    const dv1 = isMod10 ? calcularModulo10(b1) : calcularModulo11Arrecadacao(b1);
+    const dv2 = isMod10 ? calcularModulo10(b2) : calcularModulo11Arrecadacao(b2);
+    const dv3 = isMod10 ? calcularModulo10(b3) : calcularModulo11Arrecadacao(b3);
+    const dv4 = isMod10 ? calcularModulo10(b4) : calcularModulo11Arrecadacao(b4);
+
+    const linhaLimpa = `${b1}${dv1}${b2}${dv2}${b3}${dv3}${b4}${dv4}`;
+    const linhaFormatada = `${b1}-${dv1} ${b2}-${dv2} ${b3}-${dv3} ${b4}-${dv4}`;
+
+    return {
+      valido: true,
+      tipo: "arrecadacao",
+      linhaLimpa,
+      linhaFormatada,
+    };
+  }
+
+  // 2. Boleto Bancário (44 dígitos -> 47 dígitos)
+  // Posições: Banco(0-2), Moeda(3), DV Geral(4), Fator(5-8), Valor(9-18), CampoLivre(19-43)
+  const cSemDV = clean.substring(0, 4) + clean.substring(5);
+  const dvGeralCalculado = calcularModulo11Boleto(cSemDV);
+  const dvGeralOriginal = parseInt(clean[4], 10);
+  if (dvGeralCalculado !== dvGeralOriginal) {
+    return null; // Código de barras inválido por Módulo 11
+  }
+
+  // Campo 1: Banco(3) + Moeda(1) + CampoLivre[0..4] (5 dígitos) + DV Módulo 10
+  const c1Base = clean.substring(0, 4) + clean.substring(19, 24);
+  const c1Dv = calcularModulo10(c1Base);
+
+  // Campo 2: CampoLivre[5..14] (10 dígitos) + DV Módulo 10
+  const c2Base = clean.substring(24, 34);
+  const c2Dv = calcularModulo10(c2Base);
+
+  // Campo 3: CampoLivre[15..24] (10 dígitos) + DV Módulo 10
+  const c3Base = clean.substring(34, 44);
+  const c3Dv = calcularModulo10(c3Base);
+
+  // Campo 4: DV Geral
+  const c4 = String(dvGeralOriginal);
+
+  // Campo 5: Fator de Vencimento (4) + Valor Nominal (10)
+  const c5 = clean.substring(5, 19);
+
+  const linhaLimpa = `${c1Base}${c1Dv}${c2Base}${c2Dv}${c3Base}${c3Dv}${c4}${c5}`;
+  const linhaFormatada = `${c1Base.substring(0, 5)}.${c1Base.substring(5)}${c1Dv} ` +
+                         `${c2Base.substring(0, 5)}.${c2Base.substring(5)}${c2Dv} ` +
+                         `${c3Base.substring(0, 5)}.${c3Base.substring(5)}${c3Dv} ` +
+                         `${c4} ${c5}`;
+
+  return {
+    valido: true,
+    tipo: "bancario",
+    linhaLimpa,
+    linhaFormatada,
+  };
+}
+
+/**
  * Parser monetário determinístico para valores de boleto.
  * Suporta "1.234,56", "1234.56", 1234.56, "R$ 1.234,56".
  */
@@ -677,7 +760,10 @@ export function reconcileBoleto(raw: {
   pagador?: string | null;
   cnpj_cpf_pagador?: string | null;
   data_vencimento?: string | null;
+  data_emissao?: string | null;
   valor?: unknown;
+  desconto?: unknown;
+  juros_multa?: unknown;
   linha_digitavel?: string | null;
   codigo_barras?: string | null;
   nosso_numero?: string | null;
@@ -689,6 +775,7 @@ export function reconcileBoleto(raw: {
 
   const valorVisual = parseBoletoAmount(raw.valor);
   const dataVisual = normalizeDate(raw.data_vencimento);
+  const dataEmissaoVisual = normalizeDate(raw.data_emissao);
 
   const linhaValidada = raw.linha_digitavel ? validateLinhaDigitavel(raw.linha_digitavel) : undefined;
   const codigoValidado = raw.codigo_barras ? validateCodigoBarras(raw.codigo_barras) : undefined;
@@ -700,12 +787,15 @@ export function reconcileBoleto(raw: {
   let status: "validado" | "validado_com_alerta" | "requer_revisao" | "rejeitado" = "requer_revisao";
   let valido = false;
 
+  let codigoBarrasFinal: string | null = null;
+  let linhaDigitavelFinal: string | null = linhaValidada?.linhaLimpa || (raw.linha_digitavel ? cleanDigits(raw.linha_digitavel) : null);
+
   const linhaMatematicamenteValida = Boolean(
     linhaValidada?.evidence?.linha_matematicamente_valida || (linhaValidada?.valido && linhaValidada?.tipo === "arrecadacao")
   );
 
   if (linhaMatematicamenteValida && linhaValidada && linhaValidada.valorDerivado && linhaValidada.valorDerivado > 0) {
-    // ── HIERARQUIA: LINHA MATEMATICAMENTE ÍNTEGRA É AUTORIDADE PARA VALOR E DATA ──
+    // ── HIERARQUIA 1: LINHA MATEMATICAMENTE ÍNTEGRA É AUTORIDADE PARA VALOR E DATA ──
     valorFinal = linhaValidada.valorDerivado;
     valorSource = "febraban_linha";
 
@@ -726,9 +816,15 @@ export function reconcileBoleto(raw: {
 
     // Verificar se vencimento visual divergiu do vencimento da linha
     if (dataVisual.iso && dataVencimentoFinal && dataVisual.iso !== dataVencimentoFinal) {
-      warnings.push(
-        `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
-      );
+      if (dataEmissaoVisual.iso && dataVisual.iso === dataEmissaoVisual.iso) {
+        warnings.push(
+          `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
+        );
+      } else {
+        warnings.push(
+          `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
+        );
+      }
       hasVisualDivergence = true;
     }
 
@@ -742,6 +838,40 @@ export function reconcileBoleto(raw: {
     } else {
       status = "validado";
       valido = true;
+    }
+  } else if (codigoValidado && codigoValidado.valido && codigoValidado.valorDerivado && codigoValidado.valorDerivado > 0) {
+    // ── HIERARQUIA 2: CÓDIGO DE BARRAS DE 44 DÍGITOS ÍNTEGRO É AUTORIDADE SE LINHA ESTIVER AUSENTE OU CORROMPIDA ──
+    const derived = barcodeToLinhaDigitavel(codigoValidado.codigoLimpo);
+    if (derived && derived.valido) {
+      valorFinal = codigoValidado.valorDerivado;
+      valorSource = "febraban_linha";
+      if (codigoValidado.dataVencimentoDerivada) {
+        dataVencimentoFinal = codigoValidado.dataVencimentoDerivada;
+        vencimentoSource = "febraban_linha";
+      }
+      codigoBarrasFinal = codigoValidado.codigoLimpo;
+      linhaDigitavelFinal = derived.linhaLimpa;
+
+      let hasVisualDivergence = false;
+      if (valorVisual > 0 && Math.abs(valorVisual - valorFinal) > 0.05) {
+        warnings.push(
+          `divergencia_valor_ocr: valor visual lido (R$ ${valorVisual.toFixed(2)}) difere do valor validado pelo código de barras (R$ ${valorFinal.toFixed(2)})`
+        );
+        hasVisualDivergence = true;
+      }
+      if (dataVisual.iso && dataVencimentoFinal && dataVisual.iso !== dataVencimentoFinal) {
+        warnings.push(
+          `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pelo código de barras (${normalizeDate(dataVencimentoFinal).formattedBr})`
+        );
+        hasVisualDivergence = true;
+      }
+      warnings.push("linha_digitavel_recomposta_do_codigo_barras: Linha digitável recomposta com sucesso a partir do código de barras canônico validado pela FEBRABAN.");
+      status = "validado_com_alerta";
+      valido = true;
+    } else {
+      status = "requer_revisao";
+      valido = false;
+      divergencias.push("Falha ao recompor linha digitável a partir do código de barras");
     }
   } else if (linhaValidada && !linhaValidada.valido) {
     // Linha informada mas matematicamente inválida
@@ -778,7 +908,37 @@ export function reconcileBoleto(raw: {
   const pagadorFinal = raw.pagador ? String(raw.pagador).trim() : null;
   const cnpjCpfPagador = normalizeCpfCnpj(raw.cnpj_cpf_pagador);
 
-  if (codigoValidado && !codigoValidado.valido) {
+  // 5. Reconciliação e Normalização Canônica do Código de Barras (44 dígitos)
+  if (!linhaDigitavelFinal && linhaValidada?.linhaLimpa) {
+    linhaDigitavelFinal = linhaValidada.linhaLimpa;
+  }
+
+  if (linhaMatematicamenteValida && linhaValidada?.codigoBarrasDerivado) {
+    const cbDerivado = linhaValidada.codigoBarrasDerivado;
+    if (raw.codigo_barras) {
+      const cbClean = cleanDigits(raw.codigo_barras);
+      if (cbClean === cbDerivado) {
+        codigoBarrasFinal = cbDerivado;
+      } else {
+        // Código bruto do OCR difere do código canônico derivado
+        const cbRawValidacao = validateCodigoBarras(cbClean);
+        if (cbRawValidacao.valido && cbClean !== cbDerivado) {
+          // Ambos são códigos válidos por si sós, mas CONTRADITÓRIOS (apontam para títulos distintos)
+          divergencias.push("Inconsistência irreconciliável: código de barras e linha digitável válidos apontam para documentos diferentes.");
+          status = "requer_revisao";
+          valido = false;
+        } else {
+          // OCR bruto é inválido (48 dígitos, ruído visual, checksum inválido). A linha íntegra é a autoridade canônica.
+          codigoBarrasFinal = cbDerivado;
+          warnings.push("divergencia_codigo_barras_ocr: OCR bruto inválido substituído pelo código canônico derivado de 44 dígitos da linha FEBRABAN.");
+        }
+      }
+    } else {
+      codigoBarrasFinal = cbDerivado;
+    }
+  } else if (codigoValidado && codigoValidado.valido) {
+    codigoBarrasFinal = codigoValidado.codigoLimpo;
+  } else if (codigoValidado && !codigoValidado.valido && !linhaMatematicamenteValida) {
     divergencias.push(...codigoValidado.erros);
   }
 
@@ -789,6 +949,8 @@ export function reconcileBoleto(raw: {
     warnings,
     linhaDigitavel: linhaValidada,
     codigoBarras: codigoValidado,
+    codigoBarrasFinal,
+    linhaDigitavelFinal,
     valorFinal,
     valorSource,
     dataVencimentoFinal,
@@ -798,7 +960,11 @@ export function reconcileBoleto(raw: {
     pagadorFinal,
     cnpjCpfPagadorFinal: cnpjCpfPagador.formatted || cnpjCpfPagador.clean,
     bancoFinal,
-    evidence: linhaValidada?.evidence,
+    evidence: {
+      ...linhaValidada?.evidence,
+      codigo_barras_canonico_derivado: Boolean(codigoBarrasFinal && codigoBarrasFinal.length === 44),
+      codigo_barras_divergente_ocr: Boolean(raw.codigo_barras && cleanDigits(raw.codigo_barras) !== codigoBarrasFinal),
+    },
     motivo: divergencias.length > 0 ? divergencias.join(" | ") : (warnings.length > 0 ? warnings.join(" | ") : undefined),
   };
 }
