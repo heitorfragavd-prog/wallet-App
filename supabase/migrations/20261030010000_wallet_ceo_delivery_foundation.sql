@@ -278,6 +278,15 @@ CREATE TABLE IF NOT EXISTS public.delivery_catalog_items (
 CREATE INDEX IF NOT EXISTS idx_delivery_catalog_workspace
   ON public.delivery_catalog_items(workspace_id, is_available);
 
+-- 7. CONCESSÃO DE PERMISSÕES BASE (GRANT) PARA authenticated E service_role
+-- Permite que o runtime autenticado acesse as tabelas, sendo governado pelas políticas de RLS e triggers
+GRANT ALL ON TABLE public.wallet_growth_opportunities TO authenticated, service_role;
+GRANT ALL ON TABLE public.wallet_commercial_experiments TO authenticated, service_role;
+GRANT ALL ON TABLE public.delivery_channels TO authenticated, service_role;
+GRANT ALL ON TABLE public.delivery_orders TO authenticated, service_role;
+GRANT ALL ON TABLE public.delivery_order_items TO authenticated, service_role;
+GRANT ALL ON TABLE public.delivery_catalog_items TO authenticated, service_role;
+
 
 -- ==============================================================================
 -- 8. INTEGRIDADE ENTRE WORKSPACES E PROTEÇÃO CONTRA ADULTERAÇÃO (TRIGGERS)

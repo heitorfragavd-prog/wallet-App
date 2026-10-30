@@ -34,7 +34,9 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       expect(fs.existsSync(migrationPath)).toBe(true);
       const sql = fs.readFileSync(migrationPath, 'utf8');
 
-      // 1. Tabelas base com SELECT restrito a admin
+      // 1. Tabelas base com SELECT restrito a admin e GRANT ALL para authenticated (governado por RLS)
+      expect(sql).toContain('GRANT ALL ON TABLE public.delivery_channels TO authenticated, service_role');
+      expect(sql).toContain('GRANT ALL ON TABLE public.delivery_orders TO authenticated, service_role');
       expect(sql).toContain('CREATE POLICY "delivery_channels_select_admin"');
       expect(sql).toContain('CREATE POLICY "delivery_catalog_items_select_admin"');
       expect(sql).toContain('CREATE POLICY "delivery_orders_select_admin"');

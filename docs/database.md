@@ -1,6 +1,6 @@
 # Banco de dados
 
-<!-- specsfy:docs:updated: 2026-10-30T15:00:00Z - trg_check_delivery_order_dispatch_checklist -->
+<!-- specsfy:docs:updated: 2026-10-30T15:20:00Z - grants authenticated on delivery tables -->
 
 <!-- specsfy:documentator:start -->
 ## Fontes de persistência
