@@ -23,4 +23,5 @@ export {
   type ValidatedLinhaDigitavel,
   type ValidatedCodigoBarras,
   type BoletoValidationResult,
+  type BoletoValidationEvidence,
 } from "../../../../supabase/functions/_shared/ai/boleto-validator";

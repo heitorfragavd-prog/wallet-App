@@ -34,9 +34,9 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
   const TEST_WORKSPACE_ID = "ws-telegram-boleto-123";
   const TEST_USER_ID = "user-proprietario-456";
 
-  // Linha digitável FEBRABAN válida (Banco Santander - 47 dígitos matematicamente consistentes)
-  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 1 98760000035000";
-  const CODIGO_BARRAS_VALIDO = "03391987600000350009001000000123450000000000";
+  // Linha digitável FEBRABAN válida (Banco Santander - 47 dígitos matematicamente consistentes para 20/11/2026)
+  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 2 16360000035000";
+  const CODIGO_BARRAS_VALIDO = "03392163600000350009001000000123450000000000";
 
   let savedProposals: Map<string, ActionProposal>;
   let mockProposalRepo: ActionRepository;
@@ -302,12 +302,12 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
       actionType: "cadastrar_divida_boleto",
       actionVersion: "v1",
       riskLevel: "MEDIUM",
-      summary: "Cadastrar Boleto: Telefônica Brasil - R$ 129,90",
+      summary: "Cadastrar Boleto: Telefônica Brasil - R$ 350,00",
       payload: {
         beneficiario: "Telefônica Brasil S.A.",
         cnpj_cpf_beneficiario: "02.558.157/0001-62",
-        valor: 129.90,
-        valor_total: 129.90,
+        valor: 350.00,
+        valor_total: 350.00,
         data_vencimento: "2026-11-20",
         linha_digitavel: LINHA_DIGITAVEL_VALIDA,
         codigo_barras: CODIGO_BARRAS_VALIDO,
@@ -357,9 +357,9 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
     expect(dividaCriada.workspace_id).toBe(TEST_WORKSPACE_ID);
     expect(dividaCriada.user_id).toBe(TEST_USER_ID);
     expect(dividaCriada.credor).toBe("Telefônica Brasil S.A.");
-    expect(dividaCriada.valor_total).toBe(129.90);
+    expect(dividaCriada.valor_total).toBe(350.00);
     expect(dividaCriada.valor_pago).toBe(0); // NÃO PAGO
-    expect(dividaCriada.valor_restante).toBe(129.90);
+    expect(dividaCriada.valor_restante).toBe(350.00);
     expect(dividaCriada.status).toBe("pendente"); // PENDENTE
     expect(dividaCriada.metodo_pagamento_esperado).toBe("boleto");
     expect(dividaCriada.linha_digitavel).toBe(LINHA_DIGITAVEL_VALIDA);
@@ -751,8 +751,8 @@ describe("Telegram Boleto Flow — Correção do Cadastro por Fotografia (End-to
 describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () => {
   const TEST_WORKSPACE_ID = "ws-telegram-boleto-visual-test";
   const TEST_USER_ID = "user-proprietario-visual-test";
-  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 1 98760000035000";
-  const CODIGO_BARRAS_VALIDO = "03391987600000350009001000000123450000000000";
+  const LINHA_DIGITAVEL_VALIDA = "03399.00102 00000.123455 00000.000000 2 16360000035000";
+  const CODIGO_BARRAS_VALIDO = "03392163600000350009001000000123450000000000";
 
   let savedProposals: Map<string, ActionProposal>;
   let mockProposalRepo: ActionRepository;
@@ -1517,7 +1517,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
 
   // Linha real do teste do proprietário com 46 dígitos (falta 1 zero de padding no valor)
   const LINHA_46_DIGITOS_REAL = "34191.09008 20981.805607 59884.260007 5 1618000047010";
-  const LINHA_VALIDA_SANTANDER = "03399.00102 00000.123455 00000.000000 1 98760000035000";
+  const LINHA_VALIDA_SANTANDER = "03399.00102 00000.123455 00000.000000 2 16360000035000";
 
   let savedProposals: Map<string, ActionProposal>;
   let mockProposalRepo: ActionRepository;
@@ -1743,8 +1743,8 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
                       campo1: "0339900102",
                       campo2: "00000123455",
                       campo3: "00000000000",
-                      dv_geral: "1",
-                      campo5: "98760000035000",
+                      dv_geral: "2",
+                      campo5: "16360000035000",
                       linha_digitavel: LINHA_VALIDA_SANTANDER,
                     }),
                   },
@@ -1768,7 +1768,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
 
     expect(attemptCount).toBeGreaterThanOrEqual(2);
     expect(out.validacao.valido).toBe(true);
-    expect(out.dados.linha_digitavel).toBe("03399001020000012345500000000000198760000035000");
+    expect(out.dados.linha_digitavel).toBe("03399001020000012345500000000000216360000035000");
     expect(out.validacao.valorFinal).toBe(350.00);
   });
 
@@ -1887,7 +1887,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
 
   // 6. Correção Manual: Usuário digita linha com DVs inválidos -> rejeição matemática imediata sem chamada ao LLM
   it("Cenário 6 — Linha digitável digitada no texto com DVs violados é rejeitada imediatamente com detalhamento FEBRABAN", async () => {
-    const LINHA_DV_ERRADO = "03399.00102 00000.123455 00000.000000 8 98760000035000"; // DV geral errado (8 em vez de 1)
+    const LINHA_DV_ERRADO = "03399.00102 00000.123455 00000.000000 8 16360000035000"; // DV geral errado (8 em vez de 2)
 
     const runnerFactoryMock = vi.fn();
     const deps: TelegramAdapterDependencies = {

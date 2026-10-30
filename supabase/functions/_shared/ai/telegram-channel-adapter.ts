@@ -454,6 +454,12 @@ export function sanitizeUserFacingErrorMessage(rawMessage: string | null | undef
   if (/Validação FEBRABAN do código de barras/i.test(cleaned)) {
     return "A linha digitável ou código de barras não passou na validação bancária FEBRABAN.";
   }
+  if (/divergência material/i.test(cleaned) || /divergencia_material/i.test(cleaned)) {
+    return "Os dados visuais do boleto (valor ou vencimento) divergem das informações codificadas na linha digitável. Por segurança, o cadastro automático foi bloqueado.";
+  }
+  if (/vencimento anômalo/i.test(cleaned) || /vencimento_anomalo/i.test(cleaned)) {
+    return "A data de vencimento identificada no boleto possui um ano fora do intervalo aceitável. O cadastro foi bloqueado para revisão manual.";
+  }
   if (/WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT/i.test(rawMessage)) {
     return "O documento contém instruções suspeitas ou formato não autorizado.";
   }

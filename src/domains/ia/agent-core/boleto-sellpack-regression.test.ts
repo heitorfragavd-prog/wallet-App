@@ -65,12 +65,12 @@ describe('SELLPACK Boleto Deterministic Ground Truth & FEBRABAN Validation', () 
       data_vencimento: '20/08/2026',
       linha_digitavel: LINHA_SELLPACK_REAL,
     });
-    expect(recon.valido).toBe(true);
-    expect(recon.status).toBe('validado_com_alerta');
-    expect(recon.valorFinal).toBe(602.47);
-    expect(recon.dataVencimentoFinal).toBe('2026-09-03');
-    expect(recon.valorSource).toBe('febraban_linha');
-    expect(recon.vencimentoSource).toBe('febraban_linha');
+    expect(recon.valido).toBe(false);
+    expect(recon.status).toBe('requer_revisao');
+    expect(recon.evidence?.has_unresolved_material_divergence).toBe(true);
+    expect(recon.dataVencimentoFinal).toBe('2026-08-20');
+    expect(recon.valorSource).toBe('ocr_visual');
+    expect(recon.vencimentoSource).toBe('ocr_visual');
   });
 
   it('8. Rejeita a linha corrompida do OCR inicial e protege contra R$ 6.327,47', () => {

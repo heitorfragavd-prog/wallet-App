@@ -155,6 +155,14 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
       );
     }
 
+    if (Boolean(payload.has_unresolved_material_divergence)) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "Proposta de boleto contém divergência material não resolvida entre o documento e os dados digitáveis.",
+      );
+    }
+
     const valor = Number(payload.valor_total ?? payload.valor);
     if (!Number.isFinite(valor) || valor <= 0) {
       throw new ActionGatewayError(
@@ -179,9 +187,36 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
     let finalLinha = payload.linha_digitavel ? String(payload.linha_digitavel).trim() : null;
     let finalCodigoBarras = payload.codigo_barras ? String(payload.codigo_barras).trim() : null;
 
+    const valorPropostaCentavos = Math.round(valor * 100);
+
     if (finalLinha) {
       const validacaoLinha = validateLinhaDigitavel(finalLinha);
       if (validacaoLinha.valido && validacaoLinha.codigoBarrasDerivado) {
+        // Verificação estrita de coerência entre proposta e linha digitável em CENTAVOS INTEIROS
+        if (validacaoLinha.valorDerivado && validacaoLinha.valorDerivado > 0) {
+          const valorLinhaCentavos = Math.round(validacaoLinha.valorDerivado * 100);
+          if (valorPropostaCentavos !== valorLinhaCentavos) {
+            throw new ActionGatewayError(
+              "WALLET_AI_ACTION_INVALID",
+              400,
+              `Divergência de valor nominal: valor da proposta (R$ ${(valorPropostaCentavos / 100).toFixed(2)}) difere do valor da linha digitável (R$ ${(valorLinhaCentavos / 100).toFixed(2)}).`,
+            );
+          }
+        }
+
+        // Verificação de divergência comprovada de vencimento (ano discordante)
+        if (validacaoLinha.dataVencimentoDerivada) {
+          const anoProposta = parseInt(dataVencimento.split("-")[0], 10);
+          const anoLinha = parseInt(validacaoLinha.dataVencimentoDerivada.split("-")[0], 10);
+          if (anoProposta && anoLinha && anoProposta !== anoLinha) {
+            throw new ActionGatewayError(
+              "WALLET_AI_ACTION_INVALID",
+              400,
+              `Divergência comprovada de vencimento: data da proposta (${dataVencimento}) difere do vencimento da linha digitável (${validacaoLinha.dataVencimentoDerivada}).`,
+            );
+          }
+        }
+
         const cbDerivado = validacaoLinha.codigoBarrasDerivado;
         if (!finalCodigoBarras || cleanDigits(finalCodigoBarras) !== cbDerivado) {
           const cbAtualClean = cleanDigits(finalCodigoBarras);
@@ -232,6 +267,27 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
           400,
           `Código de barras inválido: ${validacaoCb.erros.join(", ")}`,
         );
+      }
+      if (validacaoCb.valorDerivado && validacaoCb.valorDerivado > 0) {
+        const cbValorCentavos = Math.round(validacaoCb.valorDerivado * 100);
+        if (valorPropostaCentavos !== cbValorCentavos) {
+          throw new ActionGatewayError(
+            "WALLET_AI_ACTION_INVALID",
+            400,
+            `Divergência de valor nominal: valor da proposta (R$ ${(valorPropostaCentavos / 100).toFixed(2)}) difere do código de barras (R$ ${(cbValorCentavos / 100).toFixed(2)}).`,
+          );
+        }
+      }
+      if (validacaoCb.dataVencimentoDerivada) {
+        const anoProposta = parseInt(dataVencimento.split("-")[0], 10);
+        const anoCb = parseInt(validacaoCb.dataVencimentoDerivada.split("-")[0], 10);
+        if (anoProposta && anoCb && anoProposta !== anoCb) {
+          throw new ActionGatewayError(
+            "WALLET_AI_ACTION_INVALID",
+            400,
+            `Divergência comprovada de vencimento: data da proposta (${dataVencimento}) difere do vencimento do código de barras (${validacaoCb.dataVencimentoDerivada}).`,
+          );
+        }
       }
       finalCodigoBarras = cbClean;
     }

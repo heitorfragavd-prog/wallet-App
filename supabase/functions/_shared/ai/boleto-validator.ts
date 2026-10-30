@@ -21,6 +21,8 @@ export interface BoletoValidationEvidence {
   vencimento_derivado: string | null;
   linha_matematicamente_valida: boolean;
   reconciliacao_zero_padding?: boolean;
+  has_unresolved_material_divergence?: boolean;
+  divergencia_material_detalhes?: string[];
 }
 
 export interface ValidatedLinhaDigitavel {
@@ -794,80 +796,147 @@ export function reconcileBoleto(raw: {
     linhaValidada?.evidence?.linha_matematicamente_valida || (linhaValidada?.valido && linhaValidada?.tipo === "arrecadacao")
   );
 
+  let hasUnresolvedMaterialDivergence = false;
+
   if (linhaMatematicamenteValida && linhaValidada && linhaValidada.valorDerivado && linhaValidada.valorDerivado > 0) {
-    // ── HIERARQUIA 1: LINHA MATEMATICAMENTE ÍNTEGRA É AUTORIDADE PARA VALOR E DATA ──
-    valorFinal = linhaValidada.valorDerivado;
-    valorSource = "febraban_linha";
+    const valorDerivado = linhaValidada.valorDerivado;
+    const vencimentoDerivado = linhaValidada.dataVencimentoDerivada;
 
-    if (linhaValidada.dataVencimentoDerivada) {
-      dataVencimentoFinal = linhaValidada.dataVencimentoDerivada;
-      vencimentoSource = "febraban_linha";
-    }
+    // 1. Verificação Estrita de Valor Nominal em CENTAVOS INTEIROS (sem tolerância solta)
+    const valorVisualCentavos = Math.round(valorVisual * 100);
+    const valorDerivadoCentavos = Math.round(valorDerivado * 100);
+    let temDivergenciaMaterialValor = false;
 
-    let hasVisualDivergence = false;
-
-    // Verificar se valor visual divergiu do valor da linha
-    if (valorVisual > 0 && Math.abs(valorVisual - valorFinal) > 0.05) {
-      warnings.push(
-        `divergencia_valor_ocr: valor visual lido (R$ ${valorVisual.toFixed(2)}) difere do valor validado pela linha (R$ ${valorFinal.toFixed(2)})`
+    if (valorVisualCentavos > 0 && valorVisualCentavos !== valorDerivadoCentavos) {
+      temDivergenciaMaterialValor = true;
+      hasUnresolvedMaterialDivergence = true;
+      divergencias.push(
+        `divergencia_material_valor: valor visual impresso no documento (R$ ${(valorVisualCentavos / 100).toFixed(2)}) difere do valor nominal derivado da linha digitável (R$ ${(valorDerivadoCentavos / 100).toFixed(2)})`
       );
-      hasVisualDivergence = true;
     }
 
-    // Verificar se vencimento visual divergiu do vencimento da linha
-    if (dataVisual.iso && dataVencimentoFinal && dataVisual.iso !== dataVencimentoFinal) {
-      if (dataEmissaoVisual.iso && dataVisual.iso === dataEmissaoVisual.iso) {
-        warnings.push(
-          `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
-        );
-      } else {
-        warnings.push(
-          `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(dataVencimentoFinal).formattedBr})`
-        );
+    // 2. Verificação de Coerência de Vencimento por Evidência Comprovada (sem bloqueio cego por ano)
+    let temDivergenciaMaterialVencimento = false;
+
+    if (vencimentoDerivado) {
+      if (dataVisual.iso && dataVisual.iso !== vencimentoDerivado) {
+        const anoDerivado = parseInt(vencimentoDerivado.split("-")[0], 10);
+        const anoVisual = parseInt(dataVisual.iso.split("-")[0], 10);
+        const divergenciaDeAno = Boolean(anoVisual && anoDerivado && anoVisual !== anoDerivado);
+
+        // Se o documento indica 2026 e a linha deriva 2039 (ou anos discordantes), há divergência comprovada
+        if (divergenciaDeAno) {
+          temDivergenciaMaterialVencimento = true;
+          hasUnresolvedMaterialDivergence = true;
+          divergencias.push(
+            `divergencia_material_vencimento: vencimento visual impresso (${dataVisual.formattedBr || dataVisual.iso}) difere comprovadamente do vencimento derivado da linha (${normalizeDate(vencimentoDerivado).formattedBr || vencimentoDerivado})`
+          );
+        } else {
+          // Dentro do mesmo ano operacional e com valor nominal estritamente corroborado em centavos
+          const isConfusaoEmissao = Boolean(
+            dataEmissaoVisual.iso &&
+            dataVisual.iso === dataEmissaoVisual.iso &&
+            vencimentoDerivado >= dataEmissaoVisual.iso &&
+            !temDivergenciaMaterialValor
+          );
+
+          if (isConfusaoEmissao) {
+            warnings.push(
+              `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pela linha (${normalizeDate(vencimentoDerivado).formattedBr})`
+            );
+          } else {
+            warnings.push(
+              `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(vencimentoDerivado).formattedBr})`
+            );
+          }
+        }
       }
-      hasVisualDivergence = true;
     }
 
     if (linhaValidada?.evidence?.reconciliacao_zero_padding) {
       warnings.push("Linha digitável reconciliada deterministicamente: zero de preenchimento recomposto no campo de valor conforme Módulo 11 da FEBRABAN.");
     }
 
-    if (hasVisualDivergence || linhaValidada?.evidence?.reconciliacao_zero_padding) {
-      status = "validado_com_alerta";
-      valido = true;
+    if (hasUnresolvedMaterialDivergence) {
+      // REGRA FUNDAMENTAL: Linha matematicamente válida NÃO é autoridade se diverge materialmente do documento
+      // Bloqueia status para requer_revisao e NÃO substitui silenciosamente os valores visuais
+      status = "requer_revisao";
+      valido = false;
+      valorFinal = valorVisual > 0 ? valorVisual : valorDerivado;
+      valorSource = valorVisual > 0 ? "ocr_visual" : "febraban_linha";
+      dataVencimentoFinal = dataVisual.iso || vencimentoDerivado || null;
+      vencimentoSource = dataVisual.iso ? "ocr_visual" : "febraban_linha";
     } else {
-      status = "validado";
-      valido = true;
+      valorFinal = valorDerivado;
+      valorSource = "febraban_linha";
+      dataVencimentoFinal = vencimentoDerivado || dataVisual.iso;
+      vencimentoSource = vencimentoDerivado ? "febraban_linha" : "ocr_visual";
+
+      if (warnings.length > 0 || linhaValidada?.evidence?.reconciliacao_zero_padding) {
+        status = "validado_com_alerta";
+        valido = true;
+      } else {
+        status = "validado";
+        valido = true;
+      }
     }
   } else if (codigoValidado && codigoValidado.valido && codigoValidado.valorDerivado && codigoValidado.valorDerivado > 0) {
-    // ── HIERARQUIA 2: CÓDIGO DE BARRAS DE 44 DÍGITOS ÍNTEGRO É AUTORIDADE SE LINHA ESTIVER AUSENTE OU CORROMPIDA ──
+    // ── HIERARQUIA 2: CÓDIGO DE BARRAS DE 44 DÍGITOS COM CORROBORAÇÃO OBRIGATÓRIA ──
     const derived = barcodeToLinhaDigitavel(codigoValidado.codigoLimpo);
     if (derived && derived.valido) {
-      valorFinal = codigoValidado.valorDerivado;
-      valorSource = "febraban_linha";
-      if (codigoValidado.dataVencimentoDerivada) {
-        dataVencimentoFinal = codigoValidado.dataVencimentoDerivada;
-        vencimentoSource = "febraban_linha";
-      }
-      codigoBarrasFinal = codigoValidado.codigoLimpo;
-      linhaDigitavelFinal = derived.linhaLimpa;
+      const cbValor = codigoValidado.valorDerivado;
+      const cbVenc = codigoValidado.dataVencimentoDerivada;
 
-      let hasVisualDivergence = false;
-      if (valorVisual > 0 && Math.abs(valorVisual - valorFinal) > 0.05) {
-        warnings.push(
-          `divergencia_valor_ocr: valor visual lido (R$ ${valorVisual.toFixed(2)}) difere do valor validado pelo código de barras (R$ ${valorFinal.toFixed(2)})`
+      const valorVisualCentavos = Math.round(valorVisual * 100);
+      const cbValorCentavos = Math.round(cbValor * 100);
+      let cbMaterialDivergence = false;
+
+      if (valorVisualCentavos > 0 && valorVisualCentavos !== cbValorCentavos) {
+        cbMaterialDivergence = true;
+        hasUnresolvedMaterialDivergence = true;
+        divergencias.push(
+          `divergencia_material_valor: valor visual impresso (R$ ${(valorVisualCentavos / 100).toFixed(2)}) difere do código de barras (R$ ${(cbValorCentavos / 100).toFixed(2)})`
         );
-        hasVisualDivergence = true;
       }
-      if (dataVisual.iso && dataVencimentoFinal && dataVisual.iso !== dataVencimentoFinal) {
-        warnings.push(
-          `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pelo código de barras (${normalizeDate(dataVencimentoFinal).formattedBr})`
-        );
-        hasVisualDivergence = true;
+
+      if (cbVenc) {
+        if (dataVisual.iso && dataVisual.iso !== cbVenc) {
+          const anoCb = parseInt(cbVenc.split("-")[0], 10);
+          const anoVisual = parseInt(dataVisual.iso.split("-")[0], 10);
+          const divergenciaDeAno = Boolean(anoVisual && anoCb && anoVisual !== anoCb);
+
+          if (divergenciaDeAno) {
+            cbMaterialDivergence = true;
+            hasUnresolvedMaterialDivergence = true;
+            divergencias.push(
+              `divergencia_material_vencimento: vencimento visual impresso (${dataVisual.formattedBr || dataVisual.iso}) difere comprovadamente do código de barras (${normalizeDate(cbVenc).formattedBr || cbVenc})`
+            );
+          } else {
+            warnings.push(
+              `divergencia_vencimento_ocr: vencimento visual impresso (${dataVisual.formattedBr}) difere da data validada pelo código de barras (${normalizeDate(cbVenc).formattedBr})`
+            );
+          }
+        }
       }
-      warnings.push("linha_digitavel_recomposta_do_codigo_barras: Linha digitável recomposta com sucesso a partir do código de barras canônico validado pela FEBRABAN.");
-      status = "validado_com_alerta";
-      valido = true;
+
+      if (cbMaterialDivergence) {
+        status = "requer_revisao";
+        valido = false;
+        valorFinal = valorVisual > 0 ? valorVisual : cbValor;
+        valorSource = valorVisual > 0 ? "ocr_visual" : "febraban_linha";
+        dataVencimentoFinal = dataVisual.iso || cbVenc || null;
+        vencimentoSource = dataVisual.iso ? "ocr_visual" : "febraban_linha";
+      } else {
+        valorFinal = cbValor;
+        valorSource = "febraban_linha";
+        dataVencimentoFinal = cbVenc || dataVisual.iso;
+        vencimentoSource = cbVenc ? "febraban_linha" : "ocr_visual";
+        codigoBarrasFinal = codigoValidado.codigoLimpo;
+        linhaDigitavelFinal = derived.linhaLimpa;
+        warnings.push("linha_digitavel_recomposta_do_codigo_barras: Linha digitável recomposta com sucesso a partir do código de barras canônico validado pela FEBRABAN.");
+        status = "validado_com_alerta";
+        valido = true;
+      }
     } else {
       status = "requer_revisao";
       valido = false;
@@ -964,6 +1033,8 @@ export function reconcileBoleto(raw: {
       ...linhaValidada?.evidence,
       codigo_barras_canonico_derivado: Boolean(codigoBarrasFinal && codigoBarrasFinal.length === 44),
       codigo_barras_divergente_ocr: Boolean(raw.codigo_barras && cleanDigits(raw.codigo_barras) !== codigoBarrasFinal),
+      has_unresolved_material_divergence: hasUnresolvedMaterialDivergence,
+      divergencia_material_detalhes: hasUnresolvedMaterialDivergence ? divergencias : undefined,
     },
     motivo: divergencias.length > 0 ? divergencias.join(" | ") : (warnings.length > 0 ? warnings.join(" | ") : undefined),
   };
