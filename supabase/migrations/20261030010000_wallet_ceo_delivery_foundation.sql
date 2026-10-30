@@ -469,23 +469,30 @@ DROP POLICY IF EXISTS "wallet_growth_opportunities_member_access" ON public.wall
 DROP POLICY IF EXISTS "wallet_commercial_experiments_admin_all" ON public.wallet_commercial_experiments;
 DROP POLICY IF EXISTS "wallet_commercial_experiments_member_access" ON public.wallet_commercial_experiments;
 DROP POLICY IF EXISTS "delivery_channels_select_op" ON public.delivery_channels;
+DROP POLICY IF EXISTS "delivery_channels_select_admin" ON public.delivery_channels;
 DROP POLICY IF EXISTS "delivery_channels_write_admin" ON public.delivery_channels;
 DROP POLICY IF EXISTS "delivery_channels_member_access" ON public.delivery_channels;
 DROP POLICY IF EXISTS "delivery_catalog_items_select_op" ON public.delivery_catalog_items;
+DROP POLICY IF EXISTS "delivery_catalog_items_select_admin" ON public.delivery_catalog_items;
 DROP POLICY IF EXISTS "delivery_catalog_items_write_admin" ON public.delivery_catalog_items;
 DROP POLICY IF EXISTS "delivery_catalog_items_member_access" ON public.delivery_catalog_items;
 DROP POLICY IF EXISTS "delivery_orders_select_op" ON public.delivery_orders;
+DROP POLICY IF EXISTS "delivery_orders_select_admin" ON public.delivery_orders;
 DROP POLICY IF EXISTS "delivery_orders_insert_op" ON public.delivery_orders;
+DROP POLICY IF EXISTS "delivery_orders_insert_admin" ON public.delivery_orders;
 DROP POLICY IF EXISTS "delivery_orders_update_op" ON public.delivery_orders;
 DROP POLICY IF EXISTS "delivery_orders_delete_admin" ON public.delivery_orders;
 DROP POLICY IF EXISTS "delivery_orders_member_access" ON public.delivery_orders;
 DROP POLICY IF EXISTS "delivery_order_items_select_op" ON public.delivery_order_items;
+DROP POLICY IF EXISTS "delivery_order_items_select_admin" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_insert_op" ON public.delivery_order_items;
+DROP POLICY IF EXISTS "delivery_order_items_insert_admin" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_update_op" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_delete_admin" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_member_access" ON public.delivery_order_items;
 
 -- 1. wallet_growth_opportunities: EXCLUSIVO ADMIN / PROPRIETÁRIO (Zero acesso para delivery_staff)
+DROP POLICY IF EXISTS "wallet_growth_opportunities_admin_all" ON public.wallet_growth_opportunities;
 CREATE POLICY "wallet_growth_opportunities_admin_all"
   ON public.wallet_growth_opportunities
   FOR ALL
@@ -494,6 +501,7 @@ CREATE POLICY "wallet_growth_opportunities_admin_all"
   WITH CHECK (public.tem_acesso_admin_workspace(workspace_id));
 
 -- 2. wallet_commercial_experiments: EXCLUSIVO ADMIN / PROPRIETÁRIO (Zero acesso para delivery_staff)
+DROP POLICY IF EXISTS "wallet_commercial_experiments_admin_all" ON public.wallet_commercial_experiments;
 CREATE POLICY "wallet_commercial_experiments_admin_all"
   ON public.wallet_commercial_experiments
   FOR ALL
@@ -510,6 +518,7 @@ CREATE POLICY "delivery_channels_select_admin"
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_channels_write_admin" ON public.delivery_channels;
 CREATE POLICY "delivery_channels_write_admin"
   ON public.delivery_channels
   FOR ALL
@@ -526,6 +535,7 @@ CREATE POLICY "delivery_catalog_items_select_admin"
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_catalog_items_write_admin" ON public.delivery_catalog_items;
 CREATE POLICY "delivery_catalog_items_write_admin"
   ON public.delivery_catalog_items
   FOR ALL
@@ -542,6 +552,7 @@ CREATE POLICY "delivery_orders_select_admin"
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_orders_insert_admin" ON public.delivery_orders;
 CREATE POLICY "delivery_orders_insert_admin"
   ON public.delivery_orders
   FOR INSERT
@@ -551,6 +562,7 @@ CREATE POLICY "delivery_orders_insert_admin"
     OR coalesce(auth.role() = 'service_role', false)
   );
 
+DROP POLICY IF EXISTS "delivery_orders_update_op" ON public.delivery_orders;
 CREATE POLICY "delivery_orders_update_op"
   ON public.delivery_orders
   FOR UPDATE
@@ -558,6 +570,7 @@ CREATE POLICY "delivery_orders_update_op"
   USING (public.tem_acesso_operacional_workspace(workspace_id))
   WITH CHECK (public.tem_acesso_operacional_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_orders_delete_admin" ON public.delivery_orders;
 CREATE POLICY "delivery_orders_delete_admin"
   ON public.delivery_orders
   FOR DELETE
@@ -573,6 +586,7 @@ CREATE POLICY "delivery_order_items_select_admin"
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_order_items_insert_admin" ON public.delivery_order_items;
 CREATE POLICY "delivery_order_items_insert_admin"
   ON public.delivery_order_items
   FOR INSERT
@@ -582,6 +596,7 @@ CREATE POLICY "delivery_order_items_insert_admin"
     OR coalesce(auth.role() = 'service_role', false)
   );
 
+DROP POLICY IF EXISTS "delivery_order_items_update_op" ON public.delivery_order_items;
 CREATE POLICY "delivery_order_items_update_op"
   ON public.delivery_order_items
   FOR UPDATE
@@ -589,6 +604,7 @@ CREATE POLICY "delivery_order_items_update_op"
   USING (public.tem_acesso_operacional_workspace(workspace_id))
   WITH CHECK (public.tem_acesso_operacional_workspace(workspace_id));
 
+DROP POLICY IF EXISTS "delivery_order_items_delete_admin" ON public.delivery_order_items;
 CREATE POLICY "delivery_order_items_delete_admin"
   ON public.delivery_order_items
   FOR DELETE
