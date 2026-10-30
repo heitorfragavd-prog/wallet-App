@@ -16,21 +16,7 @@ DROP VIEW IF EXISTS public.v_delivery_channels_operacional CASCADE;
 DROP VIEW IF EXISTS public.v_delivery_order_items_operacional CASCADE;
 DROP VIEW IF EXISTS public.v_delivery_orders_operacional CASCADE;
 
--- 1. Remoção de Triggers
-DROP TRIGGER IF EXISTS trg_check_delivery_order_dispatch_checklist ON public.delivery_orders;
-DROP TRIGGER IF EXISTS trg_check_delivery_order_item_workspace ON public.delivery_order_items;
-DROP TRIGGER IF EXISTS trg_check_delivery_order_financial_mutation ON public.delivery_orders;
-DROP TRIGGER IF EXISTS trg_check_delivery_order_item_financial_mutation ON public.delivery_order_items;
-
--- 2. Remoção de Funções Auxiliares
-DROP FUNCTION IF EXISTS public.check_delivery_order_dispatch_checklist();
-DROP FUNCTION IF EXISTS public.check_delivery_order_item_workspace();
-DROP FUNCTION IF EXISTS public.check_delivery_order_financial_mutation();
-DROP FUNCTION IF EXISTS public.check_delivery_order_item_financial_mutation();
-DROP FUNCTION IF EXISTS public.tem_acesso_operacional_workspace(uuid);
-DROP FUNCTION IF EXISTS public.tem_acesso_admin_workspace(uuid);
-
--- 3. Remoção de Políticas RLS e Tabelas
+-- 1. Remoção de Tabelas e Políticas (com CASCADE para limpar dependências de RLS)
 DROP POLICY IF EXISTS "delivery_order_items_delete_admin" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_update_op" ON public.delivery_order_items;
 DROP POLICY IF EXISTS "delivery_order_items_insert_op" ON public.delivery_order_items;
@@ -63,7 +49,20 @@ DROP POLICY IF EXISTS "wallet_growth_opportunities_admin_all" ON public.wallet_g
 DROP POLICY IF EXISTS "wallet_growth_opportunities_member_access" ON public.wallet_growth_opportunities;
 DROP TABLE IF EXISTS public.wallet_growth_opportunities CASCADE;
 
--- 4. Restauração das constraints históricas de perfil se necessário
+-- 2. Remoção de Triggers e Funções Auxiliares (CASCADE seguro)
+DROP TRIGGER IF EXISTS trg_check_delivery_order_dispatch_checklist ON public.delivery_orders;
+DROP TRIGGER IF EXISTS trg_check_delivery_order_item_workspace ON public.delivery_order_items;
+DROP TRIGGER IF EXISTS trg_check_delivery_order_financial_mutation ON public.delivery_orders;
+DROP TRIGGER IF EXISTS trg_check_delivery_order_item_financial_mutation ON public.delivery_order_items;
+
+DROP FUNCTION IF EXISTS public.check_delivery_order_dispatch_checklist() CASCADE;
+DROP FUNCTION IF EXISTS public.check_delivery_order_item_workspace() CASCADE;
+DROP FUNCTION IF EXISTS public.check_delivery_order_financial_mutation() CASCADE;
+DROP FUNCTION IF EXISTS public.check_delivery_order_item_financial_mutation() CASCADE;
+DROP FUNCTION IF EXISTS public.tem_acesso_operacional_workspace(uuid) CASCADE;
+DROP FUNCTION IF EXISTS public.tem_acesso_admin_workspace(uuid) CASCADE;
+
+-- 3. Restauração das constraints históricas de perfil se necessário
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profiles_role_check') THEN

@@ -1,6 +1,6 @@
 # Banco de dados
 
-<!-- specsfy:database:updated: 2026-10-30T15:30:00Z - verified_by_user_id references auth.users -->
+<!-- specsfy:database:updated: 2026-10-30T15:38:00Z - rollback cascade order refined -->
 
 Mapa de persistência do sistema. Modelo inicial sugerido para
 **stack ainda não identificado**.
