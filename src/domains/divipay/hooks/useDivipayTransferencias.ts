@@ -76,16 +76,17 @@ async function fetchTransferencias(workspaceId?: string | null): Promise<Divipay
   return localData ?? [];
 }
 
-export function useDivipayTransferencias() {
+export function useDivipayTransferencias(options?: { enabled?: boolean }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? null;
+  const isQueryEnabled = (options?.enabled ?? true) && !!workspaceId;
 
   const { data: transferencias = [], isLoading: loading } = useQuery({
     queryKey: [...DIVIPAY_TRANSFERENCIAS_QUERY_KEY, workspaceId],
     queryFn: () => fetchTransferencias(workspaceId),
-    enabled: !!workspaceId,
+    enabled: isQueryEnabled,
     staleTime: 1000 * 60,
   });
 

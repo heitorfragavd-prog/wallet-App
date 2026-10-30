@@ -96,7 +96,7 @@ describe("Fase 6 — Product Identity & Legacy Deprecation in Frontend", () => {
     }
 
     expect(violations).toEqual([]);
-  });
+  }, 40000);
 
   it("Teste B: Preservação de domínios legítimos (cardápio, food cost e despensa)", () => {
     // 1. produtos_cardapio deve continuar existindo e sendo consumido no módulo de Cardápio

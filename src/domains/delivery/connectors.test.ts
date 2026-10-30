@@ -13,11 +13,23 @@ describe('Wallet Delivery Growth — Conectores de Marketplace', () => {
       expect(unauthCaps.can_sync_menu.status).toBe('awaiting_homologation');
       expect(unauthCaps.can_fetch_reviews.status).toBe('unsupported');
 
-      // Com credenciais
+      // Com credenciais presentes (não homologadas ao vivo)
+      const unverifiedCaps = connector.getCapabilities({
+        clientId: 'client-123',
+        clientSecret: 'secret-456',
+        merchantId: 'merchant-789',
+      });
+      expect(unverifiedCaps.can_fetch_orders.status).toBe('awaiting_homologation');
+      expect(unverifiedCaps.can_accept_orders.status).toBe('awaiting_homologation');
+      expect(unverifiedCaps.can_update_status.status).toBe('awaiting_homologation');
+      expect(unverifiedCaps.can_sync_menu.status).toBe('awaiting_homologation');
+
+      // Com credenciais homologadas
       const authCaps = connector.getCapabilities({
         clientId: 'client-123',
         clientSecret: 'secret-456',
         merchantId: 'merchant-789',
+        isHomologated: true,
       });
       expect(authCaps.can_fetch_orders.status).toBe('available');
       expect(authCaps.can_accept_orders.status).toBe('available');
@@ -78,20 +90,34 @@ describe('Wallet Delivery Growth — Conectores de Marketplace', () => {
       expect(order.commission_amount).toBeGreaterThan(0);
     });
 
-    it('executa teste de conexão validando campos obrigatórios', async () => {
+    it('executa teste de conexão validando campos obrigatórios e não emitindo falso positivo', async () => {
       // Incompleto
       const failed = await connector.testConnection({});
       expect(failed.success).toBe(false);
+      expect(failed.state).toBe('not_configured');
       expect(failed.message).toContain('obrigatórios');
 
-      // Válido
-      const success = await connector.testConnection({
+      // Com credenciais presentes, mas sem homologação ativa (evita falso positivo)
+      const unverified = await connector.testConnection({
         clientId: 'id-test',
         clientSecret: 'secret-test',
         merchantId: 'merchant-test',
       });
+      expect(unverified.success).toBe(false);
+      expect(unverified.isVerifiedLive).toBe(false);
+      expect(unverified.state).toBe('credentials_present_unverified');
+      expect(unverified.merchantName).toBeDefined();
+
+      // Homologado
+      const success = await connector.testConnection({
+        clientId: 'id-test',
+        clientSecret: 'secret-test',
+        merchantId: 'merchant-test',
+        isHomologated: true,
+      });
       expect(success.success).toBe(true);
-      expect(success.merchantName).toBeDefined();
+      expect(success.isVerifiedLive).toBe(true);
+      expect(success.state).toBe('homologated');
     });
   });
 
@@ -103,6 +129,7 @@ describe('Wallet Delivery Growth — Conectores de Marketplace', () => {
         clientId: 'app-99-key',
         clientSecret: 'app-99-secret',
         merchantId: 'shop-99-1',
+        isHomologated: true,
       });
 
       expect(caps.can_fetch_orders.status).toBe('available');

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
 import { Badge } from '@/shared/components/ui/badge';
@@ -11,13 +11,18 @@ import {
   Package,
   Bike,
   CheckCircle,
+  Sparkles,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { DeliveryOrder, DeliveryOrderStatus } from '../types';
 import { KDSOrderCard } from './KDSOrderCard';
 import { ItemChecklistDialog } from './ItemChecklistDialog';
 import { useToast } from '@/shared/hooks/use-toast';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
+import { DeliveryOrderRepository } from '../services/DeliveryOrderRepository';
 
-// Sons sintéticos via Web Audio API (sem dependência de arquivo externo)
+// Sons sintéticos via Web Audio API (sem dependência de arquivo de áudio externo)
 function playKDSAlertChime() {
   try {
     const AudioContextClass =
@@ -45,147 +50,132 @@ function playKDSAlertChime() {
   }
 }
 
+// Pedidos de demonstração usados exclusivamente no modo de teste/treinamento
+const SAMPLE_DEMO_ORDERS: DeliveryOrder[] = [
+  {
+    id: 'demo-1042',
+    workspace_id: 'demo',
+    channel_id: 'ifood_channel',
+    channel_order_id: 'ifood-demo-90812',
+    display_id: '#DEMO-1042',
+    customer_name: 'Carlos M. (Simulação)',
+    customer_phone: '(11) 98765-4321',
+    delivery_address: 'Av. Paulista, 1200 - Apto 42',
+    subtotal: 58.0,
+    discount: 0,
+    delivery_fee: 7.9,
+    commission_amount: 13.34,
+    net_amount: 52.56,
+    status: 'received',
+    payment_method: 'marketplace_online',
+    payment_status: 'paid',
+    notes: 'Caprichar no molho e enviar guardanapos extras, por favor!',
+    created_at: new Date(Date.now() - 8 * 60000).toISOString(),
+    updated_at: new Date().toISOString(),
+    items: [
+      {
+        id: 'demo-it-1',
+        order_id: 'demo-1042',
+        name: 'X-Tudo Especial Rodo Point',
+        quantity: 1,
+        unit_price: 34.0,
+        total_price: 34.0,
+        notes: 'Sem cebola crua',
+      },
+      {
+        id: 'demo-it-2',
+        order_id: 'demo-1042',
+        name: 'Porção Batata Rústica Pequena',
+        quantity: 1,
+        unit_price: 16.0,
+        total_price: 16.0,
+      },
+    ],
+  },
+  {
+    id: 'demo-1043',
+    workspace_id: 'demo',
+    channel_id: '99_channel',
+    channel_order_id: '99-demo-88124',
+    display_id: '#DEMO-1043',
+    customer_name: 'Mariana S. (Simulação)',
+    subtotal: 42.0,
+    discount: 5.0,
+    delivery_fee: 6.0,
+    commission_amount: 8.4,
+    net_amount: 34.6,
+    status: 'preparing',
+    payment_method: 'credit_card',
+    payment_status: 'paid',
+    created_at: new Date(Date.now() - 18 * 60000).toISOString(),
+    updated_at: new Date().toISOString(),
+    items: [
+      {
+        id: 'demo-it-3',
+        order_id: 'demo-1043',
+        name: 'Misto Quente Especial no Pão Francês',
+        quantity: 2,
+        unit_price: 15.0,
+        total_price: 30.0,
+      },
+    ],
+  },
+];
+
 interface KDSOrderBoardProps {
   initialOrders?: DeliveryOrder[];
-  workspaceId?: string;
 }
 
-export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
-  initialOrders,
-  workspaceId = 'default_workspace',
-}) => {
+export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) => {
   const { toast } = useToast();
-  const [orders, setOrders] = useState<DeliveryOrder[]>(() => {
-    if (initialOrders && initialOrders.length > 0) return initialOrders;
-    // Pedidos de demonstração padrão para inicialização da cozinha Rodo Point
-    const now = Date.now();
-    return [
-      {
-        id: 'ord-1042',
-        workspace_id: workspaceId,
-        channel_id: 'ifood_channel',
-        channel_order_id: 'ifood-90812',
-        display_id: '#1042',
-        customer_name: 'Carlos Eduardo M.',
-        customer_phone: '(11) 98765-4321',
-        delivery_address: 'Av. Paulista, 1200 - Apto 42',
-        subtotal: 58.0,
-        discount: 0,
-        delivery_fee: 7.9,
-        commission_amount: 13.34,
-        net_amount: 52.56,
-        status: 'received',
-        payment_method: 'marketplace_online',
-        payment_status: 'paid',
-        notes: 'Caprichar no molho e enviar guardanapos extras, por favor!',
-        created_at: new Date(now - 8 * 60000).toISOString(),
-        updated_at: new Date().toISOString(),
-        items: [
-          {
-            id: 'it-1',
-            order_id: 'ord-1042',
-            name: 'X-Tudo Especial Rodo Point',
-            quantity: 1,
-            unit_price: 34.0,
-            total_price: 34.0,
-            notes: 'Sem cebola crua',
-          },
-          {
-            id: 'it-2',
-            order_id: 'ord-1042',
-            name: 'Porção Batata Rústica Pequena',
-            quantity: 1,
-            unit_price: 16.0,
-            total_price: 16.0,
-          },
-          {
-            id: 'it-3',
-            order_id: 'ord-1042',
-            name: 'Coca-Cola Zero 350ml',
-            quantity: 1,
-            unit_price: 8.0,
-            total_price: 8.0,
-          },
-        ],
-      },
-      {
-        id: 'ord-1043',
-        workspace_id: workspaceId,
-        channel_id: '99_channel',
-        channel_order_id: '99-88124',
-        display_id: '#99-1043',
-        customer_name: 'Mariana Silva',
-        customer_phone: '(11) 97123-9988',
-        delivery_address: 'Rua Bela Cintra, 450',
-        subtotal: 42.0,
-        discount: 5.0,
-        delivery_fee: 6.0,
-        commission_amount: 8.4,
-        net_amount: 34.6,
-        status: 'preparing',
-        payment_method: 'credit_card',
-        payment_status: 'paid',
-        created_at: new Date(now - 18 * 60000).toISOString(),
-        updated_at: new Date().toISOString(),
-        items: [
-          {
-            id: 'it-4',
-            order_id: 'ord-1043',
-            name: 'Misto Quente Especial no Pão Francês',
-            quantity: 2,
-            unit_price: 15.0,
-            total_price: 30.0,
-          },
-          {
-            id: 'it-5',
-            order_id: 'ord-1043',
-            name: 'Suco de Laranja Natural 500ml',
-            quantity: 1,
-            unit_price: 12.0,
-            total_price: 12.0,
-          },
-        ],
-      },
-      {
-        id: 'ord-1044',
-        workspace_id: workspaceId,
-        channel_id: 'direct_channel',
-        channel_order_id: 'dir-5510',
-        display_id: '#DIR-1044',
-        customer_name: 'Roberto Andrade (Balcão)',
-        customer_phone: '(11) 96541-0022',
-        subtotal: 28.0,
-        discount: 0,
-        delivery_fee: 0,
-        commission_amount: 0,
-        net_amount: 28.0,
-        status: 'ready',
-        payment_method: 'pix',
-        payment_status: 'paid',
-        created_at: new Date(now - 28 * 60000).toISOString(), // Atrasado propositalmente para teste
-        updated_at: new Date().toISOString(),
-        items: [
-          {
-            id: 'it-6',
-            order_id: 'ord-1044',
-            name: 'Prato Feito Rodo Point — Bife a Cavalo',
-            quantity: 1,
-            unit_price: 28.0,
-            total_price: 28.0,
-          },
-        ],
-      },
-    ];
-  });
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id || 'default_workspace';
 
+  const [orders, setOrders] = useState<DeliveryOrder[]>(initialOrders || []);
+  const [isLoading, setIsLoading] = useState<boolean>(!initialOrders);
+  const [isDbConfigured, setIsDbConfigured] = useState<boolean>(true);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [selectedChannel, setSelectedChannel] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeChecklistOrder, setActiveChecklistOrder] = useState<DeliveryOrder | null>(null);
 
-  // Manipulador de transição de status
+  // Carrega pedidos reais da persistência do Supabase
+  const loadRealOrders = useCallback(async () => {
+    if (isDemoMode) {
+      setOrders(SAMPLE_DEMO_ORDERS);
+      setIsLoading(false);
+      return;
+    }
+
+    if (!workspaceId) return;
+
+    setIsLoading(true);
+    const result = await DeliveryOrderRepository.listOrders(workspaceId);
+    setIsDbConfigured(result.isConfigured);
+    if (result.data) {
+      setOrders(result.data);
+    }
+    setIsLoading(false);
+  }, [workspaceId, isDemoMode]);
+
+  useEffect(() => {
+    loadRealOrders();
+
+    // Assina atualizações em tempo real se não estiver no modo de demonstração
+    if (!isDemoMode && workspaceId) {
+      const unsubscribe = DeliveryOrderRepository.subscribeToOrders(workspaceId, () => {
+        loadRealOrders();
+        if (soundEnabled) playKDSAlertChime();
+      });
+      return unsubscribe;
+    }
+  }, [loadRealOrders, isDemoMode, workspaceId, soundEnabled]);
+
+  // Manipulador de transição de status persistente
   const handleStatusChange = useCallback(
-    (orderId: string, nextStatus: DeliveryOrderStatus) => {
+    async (orderId: string, nextStatus: DeliveryOrderStatus) => {
+      // 1. Atualização otimista no estado local
       setOrders((prev) =>
         prev.map((ord) => {
           if (ord.id !== orderId) return ord;
@@ -203,21 +193,36 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
         })
       );
 
-      if (soundEnabled) {
-        playKDSAlertChime();
+      if (soundEnabled) playKDSAlertChime();
+
+      // 2. Persistência real no banco de dados se não for modo demo
+      if (!isDemoMode && !orderId.startsWith('demo-')) {
+        const res = await DeliveryOrderRepository.updateOrderStatus(orderId, nextStatus);
+        if (!res.success) {
+          toast({
+            title: 'Aviso de Sincronização',
+            description: `Transição gravada na esteira local (${res.error || 'Aguardando banco'}).`,
+            variant: 'default',
+          });
+          return;
+        }
       }
 
       toast({
         title: 'Status Atualizado',
-        description: `Pedido ${orderId} avançou para ${nextStatus}.`,
+        description: `Pedido avançou para ${nextStatus}.`,
       });
     },
-    [soundEnabled, toast]
+    [soundEnabled, isDemoMode, toast]
   );
 
-  // Confirmação de itens no checklist
+  // Confirmação de itens no checklist com persistência
   const handleConfirmCheckedItems = useCallback(
-    (orderId: string) => {
+    async (orderId: string) => {
+      const targetOrder = orders.find((o) => o.id === orderId);
+      if (!targetOrder) return;
+
+      // Atualização otimista
       setOrders((prev) =>
         prev.map((ord) => {
           if (ord.id !== orderId) return ord;
@@ -225,29 +230,39 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
           return { ...ord, items: updatedItems };
         })
       );
+
+      // Persistência no banco
+      if (!isDemoMode && targetOrder.items) {
+        for (const it of targetOrder.items) {
+          await DeliveryOrderRepository.updateItemVerification(it.id, true);
+        }
+      }
+
       toast({
         title: 'Itens Conferidos',
-        description: 'Todos os itens foram marcados como conferidos pela expedição.',
+        description: 'Todos os itens foram verificados pela expedição.',
       });
     },
-    [toast]
+    [orders, isDemoMode, toast]
   );
 
-  // Adicionar pedido rápido de teste
-  const handleAddQuickOrder = () => {
-    const newId = `#DIR-${Math.floor(1000 + Math.random() * 9000)}`;
+  // Adicionar pedido de balcão com persistência real
+  const handleAddQuickOrder = async () => {
+    const seq = Math.floor(1000 + Math.random() * 9000);
+    const newDisplayId = `#DIR-${seq}`;
+
     const newOrder: DeliveryOrder = {
       id: `ord_${Date.now()}`,
       workspace_id: workspaceId,
       channel_id: 'direct_channel',
       channel_order_id: `manual_${Date.now()}`,
-      display_id: newId,
-      customer_name: 'Cliente Direto Rodo Point',
-      subtotal: 35.0,
+      display_id: newDisplayId,
+      customer_name: 'Cliente Balcão',
+      subtotal: 32.0,
       discount: 0,
-      delivery_fee: 5.0,
+      delivery_fee: 0,
       commission_amount: 0,
-      net_amount: 40.0,
+      net_amount: 32.0,
       status: 'received',
       payment_method: 'pix',
       payment_status: 'paid',
@@ -257,35 +272,40 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
         {
           id: `it_${Date.now()}_1`,
           order_id: `ord_${Date.now()}`,
-          name: 'Hambúrguer Artesanal da Casa',
+          name: 'Lanche Especial Rodo Point',
           quantity: 1,
-          unit_price: 27.0,
-          total_price: 27.0,
+          unit_price: 25.0,
+          total_price: 25.0,
         },
         {
           id: `it_${Date.now()}_2`,
           order_id: `ord_${Date.now()}`,
-          name: 'Refrigerante Lata 350ml',
+          name: 'Bebida Lata 350ml',
           quantity: 1,
-          unit_price: 8.0,
-          total_price: 8.0,
+          unit_price: 7.0,
+          total_price: 7.0,
         },
       ],
     };
 
-    setOrders((prev) => [newOrder, ...prev]);
+    if (isDemoMode) {
+      setOrders((prev) => [newOrder, ...prev]);
+    } else {
+      setOrders((prev) => [newOrder, ...prev]);
+      await DeliveryOrderRepository.createOrder(newOrder);
+    }
+
     if (soundEnabled) playKDSAlertChime();
     toast({
-      title: 'Novo Pedido Recebido!',
-      description: `Pedido ${newId} adicionado à esteira do KDS.`,
+      title: 'Novo Pedido Registrado!',
+      description: `Pedido ${newDisplayId} adicionado à esteira operacional.`,
     });
   };
 
-  // Filtragem
+  // Filtragem de pedidos
   const filteredOrders = useMemo(() => {
     return orders.filter((ord) => {
-      // Filtro de canal
-      if (selectedChannel === 'ifood' && !ord.channel_id.includes('ifood') && !ord.display_id.includes('1042')) {
+      if (selectedChannel === 'ifood' && !ord.channel_id.includes('ifood') && !ord.display_id.includes('ifood')) {
         return false;
       }
       if (selectedChannel === '99food' && !ord.channel_id.includes('99') && !ord.display_id.includes('99')) {
@@ -294,7 +314,6 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
       if (selectedChannel === 'direct' && !ord.channel_id.includes('direct') && !ord.display_id.includes('DIR')) {
         return false;
       }
-      // Filtro de busca
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
         const matchesName = ord.customer_name.toLowerCase().includes(query);
@@ -306,7 +325,6 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
     });
   }, [orders, selectedChannel, searchQuery]);
 
-  // Colunas do KDS
   const receivedOrders = filteredOrders.filter((o) => o.status === 'received' || o.status === 'confirmed');
   const preparingOrders = filteredOrders.filter((o) => o.status === 'preparing');
   const readyOrders = filteredOrders.filter((o) => o.status === 'ready');
@@ -314,6 +332,46 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* Alerta de Modo de Demonstração */}
+      {isDemoMode && (
+        <div className="p-3 bg-amber-500/15 border-2 border-amber-500/40 rounded-lg text-amber-950 dark:text-amber-200 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              <strong>Modo de Demonstração Ativo:</strong> Você está visualizando pedidos simulados de teste. Eles não afetam vendas reais nem relatórios contábeis.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsDemoMode(false)}
+            className="h-7 text-xs border-amber-600 text-amber-900 dark:text-amber-100 font-bold"
+          >
+            Sair do Modo Demo
+          </Button>
+        </div>
+      )}
+
+      {/* Alerta se tabelas ainda não foram migradas */}
+      {!isDbConfigured && !isDemoMode && (
+        <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-blue-900 dark:text-blue-200 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-blue-600 shrink-0" />
+            <span>
+              Tabela de pedidos aguardando migração em produção. O KDS está operando em memória local para permitir testes de interface da cozinha.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsDemoMode(true)}
+            className="h-7 text-xs"
+          >
+            Carregar Dados de Demonstração
+          </Button>
+        </div>
+      )}
+
       {/* Barra de Ferramentas Superior do KDS */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-card border rounded-lg shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
@@ -321,7 +379,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Buscar por #pedido ou nome..."
+              placeholder="Buscar por #pedido ou cliente..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-9 text-xs"
@@ -365,6 +423,31 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Alternador de Modo Demo */}
+          <Button
+            variant={isDemoMode ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={() => setIsDemoMode((prev) => !prev)}
+            className={`h-9 text-xs font-semibold ${isDemoMode ? 'bg-amber-500/20 text-amber-800 dark:text-amber-200 border-amber-400' : ''}`}
+            title="Alternar entre pedidos reais e ambiente de treino"
+          >
+            <Sparkles className="h-3.5 w-3.5 mr-1" />
+            {isDemoMode ? 'Modo Demo (Ativo)' : 'Ativar Modo Demo'}
+          </Button>
+
+          {/* Botão de Atualizar / Sincronizar */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={loadRealOrders}
+            className="h-9 w-9 p-0"
+            title="Recarregar pedidos"
+            disabled={isLoading}
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+
+          {/* Alerta Sonoro */}
           <Button
             variant="outline"
             size="sm"
@@ -389,6 +472,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
             )}
           </Button>
 
+          {/* Pedido Rápido de Balcão */}
           <Button
             variant="default"
             size="sm"
@@ -396,7 +480,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
             className="h-9 text-xs flex items-center gap-1.5 bg-primary"
           >
             <PlusCircle className="h-4 w-4" />
-            <span className="hidden sm:inline">+ Pedido Rápido</span>
+            <span className="hidden sm:inline">+ Pedido Balcão</span>
           </Button>
         </div>
       </div>
@@ -424,7 +508,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
               />
             ))}
             {receivedOrders.length === 0 && (
-              <div className="text-center py-12 text-xs text-muted-foreground">
+              <div className="text-center py-16 text-xs text-muted-foreground">
                 Nenhum novo pedido na fila
               </div>
             )}
@@ -452,7 +536,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
               />
             ))}
             {preparingOrders.length === 0 && (
-              <div className="text-center py-12 text-xs text-muted-foreground">
+              <div className="text-center py-16 text-xs text-muted-foreground">
                 Cozinha livre
               </div>
             )}
@@ -480,8 +564,8 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
               />
             ))}
             {readyOrders.length === 0 && (
-              <div className="text-center py-12 text-xs text-muted-foreground">
-                Nenhum pedido pronto aguardando
+              <div className="text-center py-16 text-xs text-muted-foreground">
+                Nenhum pedido aguardando retirada
               </div>
             )}
           </div>
@@ -508,7 +592,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({
               />
             ))}
             {dispatchedOrders.length === 0 && (
-              <div className="text-center py-12 text-xs text-muted-foreground">
+              <div className="text-center py-16 text-xs text-muted-foreground">
                 Nenhum pedido em rota no momento
               </div>
             )}

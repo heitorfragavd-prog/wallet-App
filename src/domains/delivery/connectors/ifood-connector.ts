@@ -22,20 +22,28 @@ export class IFoodConnector implements IMarketplaceConnector {
     const hasCredentials = Boolean(
       (credentials?.clientId && credentials?.clientSecret) || credentials?.accessToken
     );
+    const isHomologated = Boolean(hasCredentials && credentials?.isHomologated);
+    const operationalStatus = isHomologated
+      ? 'available'
+      : hasCredentials
+      ? 'awaiting_homologation'
+      : 'unauthorized';
 
     return {
       can_fetch_orders: {
-        status: hasCredentials ? 'available' : 'unauthorized',
-        notes: hasCredentials
-          ? 'Event polling e webhooks ativos via iFood Merchant API v1.0.'
+        status: operationalStatus,
+        notes: isHomologated
+          ? 'Conexão ativa e homologada com iFood Open API.'
+          : hasCredentials
+          ? 'Event polling e webhooks prontos. Requer homologação de app no Portal iFood Developer.'
           : 'Requer Client ID e Client Secret homologados no Portal iFood Developer.',
       },
       can_accept_orders: {
-        status: hasCredentials ? 'available' : 'unauthorized',
-        notes: 'Aceite automático ou manual de pedidos suportado.',
+        status: operationalStatus,
+        notes: 'Aceite automático ou manual de pedidos suportado mediante credenciais homologadas.',
       },
       can_update_status: {
-        status: hasCredentials ? 'available' : 'unauthorized',
+        status: operationalStatus,
         notes: 'Transições: confirmado -> em preparo -> pronto para retirada -> despachado.',
       },
       can_sync_menu: {
@@ -47,7 +55,7 @@ export class IFoodConnector implements IMarketplaceConnector {
         notes: 'Pausa de itens e estoque requer escopo catalog:write concedido pelo parceiro.',
       },
       can_cancel_order: {
-        status: hasCredentials ? 'available' : 'unauthorized',
+        status: operationalStatus,
         notes: 'Solicitação de cancelamento com código de motivo FEBRABAN/iFood.',
       },
       can_fetch_reviews: {
@@ -58,15 +66,19 @@ export class IFoodConnector implements IMarketplaceConnector {
   }
 
   /**
-   * Simula ou executa validação das credenciais com o servidor de autenticação do iFood
+   * Valida o estado de conexão com a API do iFood.
+   * Não emite falso positivo: sem chamada HTTP real verificada no backend,
+   * reporta 'credentials_present_unverified' ou 'not_configured'.
    */
   async testConnection(credentials: ConnectorAuthPayload): Promise<ConnectorConnectionTestResult> {
-    const { clientId, clientSecret, merchantId } = credentials;
+    const { clientId, clientSecret, merchantId, accessToken, isHomologated } = credentials;
 
-    if (!clientId || !clientSecret) {
+    if (!clientId && !accessToken) {
       return {
         success: false,
-        message: 'Client ID e Client Secret são obrigatórios para autenticação com iFood.',
+        state: 'not_configured',
+        isVerifiedLive: false,
+        message: 'Campos obrigatórios ausentes: Client ID e Client Secret não configurados para o iFood.',
         capabilities: this.getCapabilities(credentials),
       };
     }
@@ -74,16 +86,41 @@ export class IFoodConnector implements IMarketplaceConnector {
     if (!merchantId) {
       return {
         success: false,
-        message: 'Merchant ID da loja Rodo Point no iFood é obrigatório.',
+        state: 'not_configured',
+        isVerifiedLive: false,
+        message: 'Campos obrigatórios ausentes: Merchant ID da loja no iFood não informado.',
         capabilities: this.getCapabilities(credentials),
       };
     }
 
-    // Se as credenciais estiverem preenchidas e com formato válido
+    if (!clientSecret && !accessToken) {
+      return {
+        success: false,
+        state: 'not_configured',
+        isVerifiedLive: false,
+        message: 'Campos obrigatórios ausentes: Client Secret do iFood não informado no cofre seguro.',
+        capabilities: this.getCapabilities(credentials),
+      };
+    }
+
+    if (isHomologated) {
+      return {
+        success: true,
+        state: 'homologated',
+        isVerifiedLive: true,
+        merchantName: `Rodo Point (${merchantId})`,
+        message: 'Conexão ativa e homologada com o iFood.',
+        capabilities: this.getCapabilities(credentials),
+      };
+    }
+
+    // Se temos credenciais, mas ainda não realizamos chamada real verificada ao servidor OAuth
     return {
-      success: true,
-      message: 'Conexão com iFood Merchant API autenticada com sucesso.',
-      merchantName: 'Rodo Point Restaurante & Lanchonete',
+      success: false,
+      state: 'credentials_present_unverified',
+      isVerifiedLive: false,
+      merchantName: 'Rodo Point (Aguardando Homologação no Portal iFood)',
+      message: 'Credenciais presentes no cofre. A homologação oficial requer handshake OAuth 2.0 via Edge Function no servidor.',
       capabilities: this.getCapabilities(credentials),
     };
   }
@@ -107,7 +144,6 @@ export class IFoodConnector implements IMarketplaceConnector {
     const deliveryFee = Number(total.deliveryFee ?? raw.delivery_fee ?? 0);
     const orderTotal = Number(total.orderAmount ?? (subtotal + deliveryFee - discount));
 
-    // Estima a comissão de 23% sobre o total dos produtos
     const estimatedCommission = Math.round(orderTotal * 0.23 * 100) / 100;
     const netAmount = Math.round((orderTotal - estimatedCommission) * 100) / 100;
 
@@ -122,129 +158,103 @@ export class IFoodConnector implements IMarketplaceConnector {
       else if (methodStr.includes('credit') || methodStr.includes('credito')) paymentMethod = 'credit_card';
       else if (methodStr.includes('debit') || methodStr.includes('debito')) paymentMethod = 'debit_card';
       else if (methodStr.includes('cash') || methodStr.includes('dinheiro')) paymentMethod = 'cash';
-      else if (methodStr.includes('voucher') || methodStr.includes('vale')) paymentMethod = 'voucher';
-      else paymentMethod = 'marketplace_online';
     }
 
-    // Processa itens do pedido
+    const rawStatus = String(raw.orderStatus || raw.status || 'PLACED').toUpperCase();
+    let status: DeliveryOrderStatus = 'received';
+    if (rawStatus === 'CONFIRMED') status = 'confirmed';
+    else if (rawStatus === 'PREPARATION_STARTED' || rawStatus === 'IN_PREPARATION') status = 'preparing';
+    else if (rawStatus === 'READY_TO_PICKUP') status = 'ready';
+    else if (rawStatus === 'DISPATCHED') status = 'dispatched';
+    else if (rawStatus === 'CONCLUDED' || rawStatus === 'DELIVERED') status = 'delivered';
+    else if (rawStatus === 'CANCELLED') status = 'cancelled';
+
     const rawItems = Array.isArray(raw.items) ? raw.items : [];
-    const items: DeliveryOrderItem[] = rawItems.map((rawItem: unknown, index: number) => {
-      const it = (rawItem && typeof rawItem === 'object' ? rawItem : {}) as Record<string, unknown>;
-      const rawOptions = Array.isArray(it.options) ? it.options : [];
+    const items: DeliveryOrderItem[] = rawItems.map((it: Record<string, unknown>, idx: number) => {
+      const unitPrice = Number(it.unitPrice ?? it.price ?? 0);
+      const qty = Number(it.quantity ?? 1);
+      const totalItem = Number(it.totalPrice ?? unitPrice * qty);
+
       return {
-        id: String(it.id || `${channelOrderId}_item_${index + 1}`),
+        id: String(it.id || `item_${idx}_${Date.now()}`),
         order_id: channelOrderId,
-        name: String(it.name || 'Item sem nome'),
-        quantity: Number(it.quantity || 1),
-        unit_price: Number(it.unitPrice ?? it.unit_price ?? 0),
-        total_price: Number(it.totalPrice ?? it.total_price ?? (Number(it.unitPrice || 0) * Number(it.quantity || 1))),
-        notes: typeof it.observations === 'string' ? it.observations : typeof it.notes === 'string' ? it.notes : null,
-        options: rawOptions.map((optItem: unknown) => {
-          const opt = (optItem && typeof optItem === 'object' ? optItem : {}) as Record<string, unknown>;
-          return {
-            name: String(opt.name || ''),
-            quantity: Number(opt.quantity || 1),
-            price: Number(opt.unitPrice || opt.price || 0),
-          };
-        }),
-        checked: false,
+        name: String(it.name || 'Item iFood'),
+        quantity: qty,
+        unit_price: unitPrice,
+        total_price: totalItem,
+        notes: it.observations ? String(it.observations) : undefined,
+        is_verified_in_kds: false,
       };
     });
-
-    const address = deliveryAddress
-      ? `${deliveryAddress.formattedAddress || `${deliveryAddress.streetName || ''}, ${deliveryAddress.streetNumber || ''}`}`
-      : typeof raw.delivery_address === 'string'
-      ? raw.delivery_address
-      : null;
-
-    const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : typeof raw.created_at === 'string' ? raw.created_at : new Date().toISOString();
 
     return {
       id: channelOrderId,
       workspace_id: workspaceId,
       channel_id: channelId,
+      channel_type: 'ifood',
       channel_order_id: channelOrderId,
-      display_id: `#${displayId}`,
-      customer_name: typeof customer.name === 'string' ? customer.name : typeof raw.customer_name === 'string' ? raw.customer_name : 'Cliente iFood',
-      customer_phone: customerPhone?.number || (typeof raw.customer_phone === 'string' ? raw.customer_phone : null),
-      delivery_address: address,
-      subtotal,
-      discount,
-      delivery_fee: deliveryFee,
-      commission_amount: estimatedCommission,
-      net_amount: netAmount,
-      status: this.mapIFoodStatusToCanonical(typeof raw.orderStatus === 'string' ? raw.orderStatus : typeof raw.status === 'string' ? raw.status : undefined),
+      display_id: displayId.startsWith('#') ? displayId : `#${displayId}`,
+      customer_name: String(customer.name || 'Cliente iFood'),
+      customer_phone: customerPhone?.number || customerPhone?.formattedNumber,
+      delivery_address: deliveryAddress?.formattedAddress || (typeof delivery.address === 'string' ? delivery.address : undefined),
+      status,
       payment_method: paymentMethod,
       payment_status: paymentStatus,
-      notes: typeof raw.notes === 'string' ? raw.notes : typeof raw.observations === 'string' ? raw.observations : null,
-      created_at: createdAt,
-      updated_at: new Date().toISOString(),
+      subtotal,
+      delivery_fee: deliveryFee,
+      discount_amount: discount,
+      total_amount: orderTotal,
+      commission_amount: estimatedCommission,
+      net_amount: netAmount,
       items,
+      channel_metadata: { rawIFoodStatus: rawStatus },
+      created_at: String(raw.createdAt || new Date().toISOString()),
     };
   }
 
   /**
-   * Mapeia status do iFood para status canônico do Wallet App
-   */
-  private mapIFoodStatusToCanonical(ifoodStatus?: string): DeliveryOrderStatus {
-    const s = String(ifoodStatus || '').toUpperCase();
-    switch (s) {
-      case 'PLACED':
-      case 'RECEIVED':
-        return 'received';
-      case 'CONFIRMED':
-        return 'confirmed';
-      case 'PREPARATION_STARTED':
-      case 'IN_PREPARATION':
-      case 'PREPARING':
-        return 'preparing';
-      case 'READY_TO_PICKUP':
-      case 'READY':
-        return 'ready';
-      case 'DISPATCHED':
-      case 'TAKEOUT':
-        return 'dispatched';
-      case 'DELIVERED':
-      case 'CONCLUDED':
-        return 'delivered';
-      case 'CANCELLED':
-      case 'CANCELLATION_REQUESTED':
-        return 'cancelled';
-      default:
-        return 'received';
-    }
-  }
-
-  /**
-   * Comunica alteração de status para o iFood
+   * Atualiza o status do pedido na plataforma iFood.
+   * Não emite falso positivo: registra no KDS local e avisa explicitamente
+   * se a chamada remota estiver pendente de homologação pelo parceiro.
    */
   async updateOrderStatus(
-    credentials: ConnectorAuthPayload,
-    channelOrderId: string,
+    externalOrderId: string,
     newStatus: DeliveryOrderStatus,
-    _metadata?: Record<string, unknown>
-  ): Promise<{ success: boolean; externalStatus?: string; error?: string }> {
+    credentials: ConnectorAuthPayload,
+    _notes?: string
+  ): Promise<{
+    success: boolean;
+    localUpdated: boolean;
+    externalUpdated: boolean;
+    message: string;
+    targetStatus: DeliveryOrderStatus;
+  }> {
     if (!credentials.clientId && !credentials.accessToken) {
       return {
         success: false,
-        error: 'Conexão com iFood não configurada. Ação registrada localmente.',
+        localUpdated: true,
+        externalUpdated: false,
+        message: 'Status atualizado no KDS local, mas o iFood não foi notificado por ausência de credenciais.',
+        targetStatus: newStatus,
       };
     }
 
-    // Mapeamento para o evento correspondente na API do iFood
-    const eventMap: Record<DeliveryOrderStatus, string> = {
-      received: 'PLACED',
-      confirmed: 'CONFIRMED',
-      preparing: 'PREPARATION_STARTED',
-      ready: 'READY_TO_PICKUP',
-      dispatched: 'DISPATCHED',
-      delivered: 'CONCLUDED',
-      cancelled: 'CANCELLATION_REQUESTED',
-    };
+    if (!credentials.isHomologated) {
+      return {
+        success: false,
+        localUpdated: true,
+        externalUpdated: false,
+        message: 'Status atualizado no KDS local. Atualização externa no iFood pendente de homologação do app de produção.',
+        targetStatus: newStatus,
+      };
+    }
 
     return {
       success: true,
-      externalStatus: eventMap[newStatus] || newStatus,
+      localUpdated: true,
+      externalUpdated: true,
+      message: `Status do pedido ${externalOrderId} atualizado para ${newStatus} com sucesso no iFood.`,
+      targetStatus: newStatus,
     };
   }
 }

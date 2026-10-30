@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { DashboardLayout } from '@/shared/components/layouts/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/shared/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 import { Badge } from '@/shared/components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '@/shared/components/ui/alert';
 import {
   TrendingUp,
   Percent,
@@ -12,6 +13,8 @@ import {
   DollarSign,
   ShieldCheck,
   BarChart3,
+  Info,
+  Layers,
 } from 'lucide-react';
 import {
   calculateEffectiveWeightedCMV,
@@ -28,156 +31,153 @@ import {
 import { OpportunityCard } from '@/domains/ceo/components/OpportunityCard';
 import { GrowthExperimentCard } from '@/domains/ceo/components/GrowthExperimentCard';
 import { useToast } from '@/shared/hooks/use-toast';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
+import { useFoodCost } from '@/domains/finance/hooks/useFoodCost';
+import { useEyemobileDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
+import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 
 export const WalletCeoPage: React.FC = () => {
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? '';
 
-  // Dados reais/demonstrativos da operação Rodo Point para inicialização do motor analítico
-  const salesRecords: ProductSalesCMVRecord[] = useMemo(
-    () => [
-      {
-        product_id: 'p-1',
-        product_name: 'X-Tudo Especial Rodo Point',
-        quantity_sold: 420,
-        unit_price: 34.0,
-        unit_cost: 11.2,
-        category: 'Lanches',
-      },
-      {
-        product_id: 'p-2',
-        product_name: 'Prato Feito Bife a Cavalo',
-        quantity_sold: 580,
-        unit_price: 28.0,
-        unit_cost: 9.8,
-        category: 'Almoço Executivo',
-      },
-      {
-        product_id: 'p-3',
-        product_name: 'Refrigerante Lata 350ml',
-        quantity_sold: 810,
-        unit_price: 8.0,
-        unit_cost: 2.8,
-        category: 'Bebidas',
-      },
-      {
-        product_id: 'p-4',
-        product_name: 'Porção Batata Frita Rústica',
-        quantity_sold: 310,
-        unit_price: 22.0,
-        unit_cost: 6.1,
-        category: 'Porções',
-      },
-      {
-        product_id: 'p-5',
-        product_name: 'Suco Natural de Laranja 500ml',
-        quantity_sold: 290,
-        unit_price: 12.0,
-        unit_cost: 3.2,
-        category: 'Bebidas',
-      },
-    ],
-    []
-  );
+  // 1. Conexão real com Fichas Técnicas e Custos (Cardápio / Food Cost)
+  const { produtos: produtosFoodCost, summary: _foodCostSummary, loading: foodCostLoading } = useFoodCost();
 
-  const lossEvents: OperationalLossEvent[] = useMemo(
-    () => [
-      {
-        id: 'loss-1',
-        category: 'vencimento',
-        description: 'Vencimento de lote de laticínios (queijo prato fatiado)',
-        cost_amount: 320.0,
-        occurred_at: new Date(Date.now() - 3 * 86400000).toISOString(),
-        product_name: 'Queijo Prato Fatiado 2kg',
-      },
-      {
-        id: 'loss-2',
-        category: 'descarte',
-        description: 'Sobra de óleo vegetal de fritura descartado no prazo de troca',
-        cost_amount: 180.0,
-        occurred_at: new Date(Date.now() - 5 * 86400000).toISOString(),
-      },
-      {
-        id: 'loss-3',
-        category: 'ruptura',
-        description: 'Ruptura de estoque de embalagens térmicas durante o almoço',
-        cost_amount: 450.0,
-        occurred_at: new Date(Date.now() - 7 * 86400000).toISOString(),
-      },
-      {
-        id: 'loss-4',
-        category: 'divergencia_caixa',
-        description: 'Divergência de conferência de troco no fechamento do caixa da tarde',
-        cost_amount: 45.0,
-        occurred_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-      },
-    ],
-    []
-  );
+  // 2. Conexão real com Eyemobile PDV (mês atual)
+  const hoje = new Date();
+  const hojeStr = hoje.toISOString().slice(0, 10);
+  const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
 
-  // Motor analítico do CEO
+  const { data: eyemobileData, isLoading: eyemobileLoading } = useEyemobileDashboard({
+    startDate: inicioMes,
+    endDate: hojeStr,
+  });
+
+  // 3. Persistência real de Oportunidades e Experimentos via CeoRepository
+  const [persistedOpportunities, setPersistedOpportunities] = useState<GrowthOpportunity[]>([]);
+  const [experiments, setExperiments] = useState<CommercialExperiment[]>([]);
+  const [isLoadingPersisted, setIsLoadingPersisted] = useState(false);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    let isMounted = true;
+    setIsLoadingPersisted(true);
+
+    Promise.all([
+      CeoRepository.listOpportunities(workspaceId),
+      CeoRepository.listExperiments(workspaceId),
+    ])
+      .then(([oppsRes, expsRes]) => {
+        if (!isMounted) return;
+        if (oppsRes.data) {
+          setPersistedOpportunities(oppsRes.data);
+        }
+        if (expsRes.data) {
+          setExperiments(expsRes.data);
+        }
+      })
+      .catch((err) => {
+        console.error('Erro ao carregar dados do CEO Repository:', err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingPersisted(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [workspaceId]);
+
+  // 4. Cruzamento dos produtos vendidos (Eyemobile) com as Fichas Técnicas (Food Cost)
+  const { salesRecords, unmappedProductsCount } = useMemo(() => {
+    const topProducts = eyemobileData?.topProducts;
+    if (!topProducts || topProducts.length === 0) {
+      return { salesRecords: [] as ProductSalesCMVRecord[], unmappedProductsCount: 0 };
+    }
+
+    let unmapped = 0;
+    const records: ProductSalesCMVRecord[] = topProducts.map((tp) => {
+      const matched = produtosFoodCost.find(
+        (p) =>
+          (p.nome && tp.product && p.nome.trim().toLowerCase() === tp.product.trim().toLowerCase()) ||
+          p.id === tp.id
+      );
+
+      const hasRecipe = Boolean(matched && matched.qtd_insumos > 0 && matched.custo_total > 0);
+      if (!hasRecipe) {
+        unmapped++;
+      }
+
+      const unitPrice = tp.quantity > 0 ? tp.total / tp.quantity : 0;
+      const unitCost = hasRecipe ? (matched?.custo_total ?? 0) : 0;
+
+      return {
+        product_id: tp.id,
+        product_name: tp.product,
+        quantity_sold: tp.quantity,
+        unit_price: Math.round(unitPrice * 100) / 100,
+        unit_cost: Math.round(unitCost * 100) / 100,
+        category: 'Geral',
+      };
+    });
+
+    return { salesRecords: records, unmappedProductsCount: unmapped };
+  }, [eyemobileData?.topProducts, produtosFoodCost]);
+
+  // 5. Perdas e descartes materiais documentados
+  const lossEvents: OperationalLossEvent[] = useMemo(() => {
+    return [];
+  }, []);
+
+  // 6. Motor analítico do CEO operando sobre dados reais
   const cmvMetrics = useMemo(() => calculateEffectiveWeightedCMV(salesRecords), [salesRecords]);
 
-  const commercialOpportunities = useMemo(
-    () => detectCommercialGrowthOpportunities(salesRecords),
-    [salesRecords]
-  );
+  const dynamicOpportunities = useMemo(() => {
+    const opps: GrowthOpportunity[] = [];
+    if (salesRecords.length > 0) {
+      opps.push(...detectCommercialGrowthOpportunities(salesRecords));
+    }
+    if (lossEvents.length > 0) {
+      opps.push(...detectLossAndWasteOpportunities(lossEvents));
+    }
+    return opps;
+  }, [salesRecords, lossEvents]);
 
-  const lossOpportunities = useMemo(
-    () => detectLossAndWasteOpportunities(lossEvents),
-    [lossEvents]
-  );
+  const allOpportunities = useMemo(() => {
+    const seenTitles = new Set<string>();
+    const combined: GrowthOpportunity[] = [];
 
-  const allOpportunities = useMemo(
-    () => [...commercialOpportunities, ...lossOpportunities],
-    [commercialOpportunities, lossOpportunities]
-  );
+    // Prioriza persistidas
+    for (const opp of persistedOpportunities) {
+      if (!seenTitles.has(opp.title)) {
+        seenTitles.add(opp.title);
+        combined.push(opp);
+      }
+    }
 
-  // Experimentos comerciais
-  const [experiments, setExperiments] = useState<CommercialExperiment[]>([
-    {
-      id: 'exp-1',
-      workspace_id: 'default',
-      title: 'Combo Almoço Completo: PF + Bebida Gelada',
-      hypothesis:
-        'Oferecer o PF Bife a Cavalo + Coca por R$ 32,90 aumentará a taxa de conversão em 18% e o faturamento total em R$ 2.400/mês.',
-      department: 'commercial_growth',
-      target_kpi: 'Faturamento do Almoço',
-      baseline_value: 'R$ 22.680',
-      current_value: 'R$ 24.100',
-      target_value: 'R$ 25.080',
-      start_date: new Date(Date.now() - 10 * 86400000).toISOString(),
-      status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-    {
-      id: 'exp-2',
-      workspace_id: 'default',
-      title: 'Adequação de Markup de 25% no iFood',
-      hypothesis:
-        'Ajustar os preços do cardápio iFood com markup médio de 25% para compensar a taxa da plataforma preservará a margem do balcão sem queda no volume.',
-      department: 'cmv_pricing',
-      target_kpi: 'Margem Líquida Delivery',
-      baseline_value: '19.4%',
-      current_value: '29.8%',
-      target_value: '33.0%',
-      start_date: new Date(Date.now() - 5 * 86400000).toISOString(),
-      status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-  ]);
+    // Incorpora dinâmicas auditáveis
+    for (const opp of dynamicOpportunities) {
+      if (!seenTitles.has(opp.title)) {
+        seenTitles.add(opp.title);
+        combined.push(opp);
+      }
+    }
+
+    return combined;
+  }, [persistedOpportunities, dynamicOpportunities]);
 
   const departmentSummaries = useMemo(
     () => buildCeoDepartmentSummaries(cmvMetrics, allOpportunities, experiments, lossEvents),
     [cmvMetrics, allOpportunities, experiments, lossEvents]
   );
 
-  // Transformar oportunidade em experimento ativo
-  const handleActivateExperiment = (opp: GrowthOpportunity) => {
+  // Transformar oportunidade em experimento ativo no repositório persistente
+  const handleActivateExperiment = async (opp: GrowthOpportunity) => {
     const newExp: CommercialExperiment = {
       id: `exp-${Date.now()}`,
-      workspace_id: 'default',
+      workspace_id: workspaceId || 'default',
       title: `Experimento: ${opp.title}`,
       hypothesis: `Implementação de ${opp.title} para capturar retorno estimado de R$ ${opp.potential_monthly_gain.toFixed(2)}/mês.`,
       department: opp.department,
@@ -192,19 +192,27 @@ export const WalletCeoPage: React.FC = () => {
     };
 
     setExperiments((prev) => [newExp, ...prev]);
+
+    if (workspaceId) {
+      await CeoRepository.saveExperiment(newExp);
+    }
+
     toast({
       title: 'Experimento Comercial Criado!',
       description: `"${opp.title}" foi registrado no Laboratório de Crescimento.`,
     });
   };
 
-  const handleUpdateExperimentStatus = (
+  const handleUpdateExperimentStatus = async (
     expId: string,
     status: CommercialExperiment['status']
   ) => {
     setExperiments((prev) =>
       prev.map((e) => (e.id === expId ? { ...e, status, updated_at: new Date().toISOString() } : e))
     );
+
+    await CeoRepository.updateExperimentStatus(expId, status);
+
     toast({
       title: 'Status do Experimento Atualizado',
       description: `O experimento foi alterado para ${status}.`,
@@ -213,6 +221,9 @@ export const WalletCeoPage: React.FC = () => {
 
   const totalMonthlyGain = allOpportunities.reduce((acc, o) => acc + o.potential_monthly_gain, 0);
   const totalLossAmount = lossEvents.reduce((acc, l) => acc + l.cost_amount, 0);
+
+  const hasSalesData = salesRecords.length > 0;
+  const isDataLoading = eyemobileLoading || foodCostLoading || isLoadingPersisted;
 
   return (
     <DashboardLayout>
@@ -236,7 +247,7 @@ export const WalletCeoPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs font-semibold px-2.5 py-1 bg-primary/5 text-primary border-primary/20">
               <Sparkles className="h-3.5 w-3.5 mr-1 text-primary" />
-              {allOpportunities.length} Oportunidades Ativas
+              {allOpportunities.length} Oportunidades
             </Badge>
             <Badge variant="outline" className="text-xs font-semibold px-2.5 py-1 bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
               <FlaskConical className="h-3.5 w-3.5 mr-1 text-emerald-600" />
@@ -245,13 +256,34 @@ export const WalletCeoPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Alertas de Dados e Integridade */}
+        {!hasSalesData && !isDataLoading && (
+          <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200">
+            <Info className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <AlertTitle className="text-xs font-bold">Dados Operacionais Insuficientes no Período</AlertTitle>
+            <AlertDescription className="text-xs text-amber-800 dark:text-amber-300">
+              Não foram localizadas vendas sincronizadas no Eyemobile PDV para o mês atual. O motor analítico do CEO requer transações reais para ponderar o CMV por volume e projetar oportunidades com confiabilidade.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {hasSalesData && unmappedProductsCount > 0 && (
+          <Alert className="border-blue-500/30 bg-blue-500/10 text-blue-950 dark:text-blue-200">
+            <Layers className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <AlertTitle className="text-xs font-bold">Fichas Técnicas Pendentes ({unmappedProductsCount} produtos)</AlertTitle>
+            <AlertDescription className="text-xs text-blue-900 dark:text-blue-300">
+              Identificamos produtos vendidos sem ficha técnica cadastrada no Cardápio / Food Cost. Para manter o rigor financeiro, esses itens são sinalizados explicitamente para evitar distorção do CMV ponderado real.
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* 4 Indicadores Estratégicos Chave (Top KPI Banners) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Faturamento Mensal Estimado */}
+          {/* Faturamento Mensal Efetivo */}
           <Card className="border shadow-sm">
             <CardHeader className="p-4 pb-1">
               <span className="text-xs font-semibold text-muted-foreground flex items-center justify-between">
-                Receita Operacional Base
+                Receita Operacional dos Produtos
                 <DollarSign className="h-4 w-4 text-primary" />
               </span>
             </CardHeader>
@@ -260,7 +292,7 @@ export const WalletCeoPage: React.FC = () => {
                 R$ {cmvMetrics.total_revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </span>
               <span className="text-[11px] text-muted-foreground block mt-0.5">
-                Volume de {cmvMetrics.items_analyzed} produtos monitorados
+                {hasSalesData ? `${cmvMetrics.items_analyzed} produtos analisados` : 'Aguardando dados de PDV'}
               </span>
             </CardContent>
           </Card>
@@ -279,11 +311,11 @@ export const WalletCeoPage: React.FC = () => {
                   {cmvMetrics.effective_weighted_cmv_percent.toFixed(1)}%
                 </span>
                 <span className="text-xs text-muted-foreground font-semibold">
-                  (Meta: &le; 32%)
+                  (Meta: &le; 38%)
                 </span>
               </div>
-              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold block mt-0.5">
-                Margem bruta saudável preservada
+              <span className="text-[11px] text-muted-foreground block mt-0.5">
+                {cmvMetrics.notes}
               </span>
             </CardContent>
           </Card>
@@ -301,7 +333,7 @@ export const WalletCeoPage: React.FC = () => {
                 R$ {totalLossAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </span>
               <span className="text-[11px] text-muted-foreground block mt-0.5">
-                {lossEvents.length} ocorrências registradas
+                {lossEvents.length === 0 ? 'Nenhum descarte/perda registrado' : `${lossEvents.length} ocorrências registradas`}
               </span>
             </CardContent>
           </Card>
@@ -320,7 +352,7 @@ export const WalletCeoPage: React.FC = () => {
                 <span className="text-xs font-normal">/mês</span>
               </span>
               <span className="text-[11px] text-primary/80 font-medium block mt-0.5">
-                Projetado pelo motor analítico do CEO
+                {allOpportunities.length} alavancas identificadas
               </span>
             </CardContent>
           </Card>
@@ -397,15 +429,23 @@ export const WalletCeoPage: React.FC = () => {
 
           {/* ABA 2: Oportunidades Detectadas */}
           <TabsContent value="opportunities" className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {allOpportunities.map((opp) => (
-                <OpportunityCard
-                  key={opp.id}
-                  opportunity={opp}
-                  onActivateExperiment={handleActivateExperiment}
-                />
-              ))}
-            </div>
+            {allOpportunities.length === 0 ? (
+              <div className="p-8 text-center border rounded-lg bg-card text-muted-foreground">
+                <Sparkles className="h-8 w-8 mx-auto mb-2 text-muted-foreground/60" />
+                <p className="text-sm font-semibold">Nenhuma oportunidade detectada no momento.</p>
+                <p className="text-xs mt-1">Conecte o Eyemobile e cadastre fichas técnicas para gerar recomendações comerciais automáticas.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {allOpportunities.map((opp) => (
+                  <OpportunityCard
+                    key={opp.id}
+                    opportunity={opp}
+                    onActivateExperiment={handleActivateExperiment}
+                  />
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           {/* ABA 3: Laboratório de Experimentos */}
@@ -419,15 +459,23 @@ export const WalletCeoPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {experiments.map((exp) => (
-                <GrowthExperimentCard
-                  key={exp.id}
-                  experiment={exp}
-                  onUpdateStatus={handleUpdateExperimentStatus}
-                />
-              ))}
-            </div>
+            {experiments.length === 0 ? (
+              <div className="p-8 text-center border rounded-lg bg-card text-muted-foreground">
+                <FlaskConical className="h-8 w-8 mx-auto mb-2 text-muted-foreground/60" />
+                <p className="text-sm font-semibold">Nenhum experimento ativo no laboratório.</p>
+                <p className="text-xs mt-1">Navegue até a aba Oportunidades e clique em &ldquo;Ativar Experimento&rdquo; para iniciar um teste científico.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {experiments.map((exp) => (
+                  <GrowthExperimentCard
+                    key={exp.id}
+                    experiment={exp}
+                    onUpdateStatus={handleUpdateExperimentStatus}
+                  />
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           {/* ABA 4: Controle de Perdas & Rupturas */}
@@ -445,31 +493,41 @@ export const WalletCeoPage: React.FC = () => {
                 </div>
               </CardHeader>
               <CardContent className="p-4">
-                <div className="divide-y divide-border">
-                  {lossEvents.map((evt) => (
-                    <div key={evt.id} className="py-3 flex items-start justify-between gap-4 first:pt-0 last:pb-0">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-xs uppercase font-bold">
-                            {evt.category.replace('_', ' ')}
-                          </Badge>
-                          {evt.product_name && (
-                            <span className="font-semibold text-sm">{evt.product_name}</span>
-                          )}
+                {lossEvents.length === 0 ? (
+                  <div className="p-6 text-center text-muted-foreground">
+                    <ShieldCheck className="h-8 w-8 mx-auto mb-2 text-emerald-600/70" />
+                    <p className="text-sm font-semibold text-foreground">Nenhuma perda física ou quebra registrada no período.</p>
+                    <p className="text-xs mt-1 max-w-md mx-auto text-muted-foreground">
+                      O Wallet CEO segue o princípio inegociável de transparência: despesas operacionais só são classificadas como perda diante de fatos materiais comprovados (descarte de perecíveis vencidos, quebra de estoque ou sobra operacional).
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {lossEvents.map((evt) => (
+                      <div key={evt.id} className="py-3 flex items-start justify-between gap-4 first:pt-0 last:pb-0">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="text-xs uppercase font-bold">
+                              {evt.category.replace('_', ' ')}
+                            </Badge>
+                            {evt.product_name && (
+                              <span className="font-semibold text-sm">{evt.product_name}</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">{evt.description}</p>
+                          <span className="text-[11px] text-muted-foreground block">
+                            Data do registro: {new Date(evt.occurred_at).toLocaleDateString('pt-BR')}
+                          </span>
                         </div>
-                        <p className="text-xs text-muted-foreground">{evt.description}</p>
-                        <span className="text-[11px] text-muted-foreground block">
-                          Data do registro: {new Date(evt.occurred_at).toLocaleDateString('pt-BR')}
-                        </span>
+                        <div className="text-right">
+                          <span className="text-base font-extrabold text-red-600 dark:text-red-400">
+                            - R$ {evt.cost_amount.toFixed(2)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <span className="text-base font-extrabold text-red-600 dark:text-red-400">
-                          - R$ {evt.cost_amount.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

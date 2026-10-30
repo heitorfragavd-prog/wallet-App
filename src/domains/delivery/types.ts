@@ -7,6 +7,16 @@ export type DeliveryChannelType = 'ifood' | '99food' | 'direct' | 'whatsapp';
 
 export type DeliveryChannelStatus = 'active' | 'inactive' | 'pending_auth' | 'error';
 
+export type MarketplaceConnectionState =
+  | 'not_configured'
+  | 'credentials_present_unverified'
+  | 'authenticating'
+  | 'authenticated'
+  | 'awaiting_homologation'
+  | 'homologated'
+  | 'disconnected'
+  | 'error';
+
 export type DeliveryOrderStatus =
   | 'received'
   | 'confirmed'

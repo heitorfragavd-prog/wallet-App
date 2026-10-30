@@ -15,7 +15,12 @@ function roundCurrency(val: number): number {
 /**
  * Simula a precificação de um item para um canal de delivery específico.
  * Calcula comissão da plataforma, taxa de pagamento, embalagem, CMV base
- * e indica o preço ideal para preservar a margem líquida da Rodo Point.
+ * e indica o preço ideal para preservar a margem de contribuição da Rodo Point.
+ * 
+ * NOTA METODOLÓGICA:
+ * Os cálculos derivam a Margem de Contribuição unitária (Preço Líquido - CMV - Embalagem - Taxas).
+ * Não representam Lucro Líquido final da empresa, o qual depende do rateio de despesas fixas
+ * (equipe, aluguel, energia, impostos globais e depreciação).
  */
 export function simulateChannelPricing(input: PricingSimulationInput): PricingSimulationResult {
   const {
@@ -47,13 +52,13 @@ export function simulateChannelPricing(input: PricingSimulationInput): PricingSi
     ? roundCurrency((contribution_margin_amount / channel_price) * 100)
     : 0;
 
-  // Margem no balcão (in-store) de referência
+  // Margem de contribuição no balcão (in-store) de referência
   const in_store_margin_amount = roundCurrency(in_store_price - base_cost_cmv);
   const in_store_margin_percent = in_store_price > 0
     ? roundCurrency((in_store_margin_amount / in_store_price) * 100)
     : 0;
 
-  // 1. Preço recomendado para igualar a margem bruta nominal (R$) do balcão
+  // 1. Preço recomendado para igualar a margem de contribuição nominal (R$) do balcão
   const feeRateSum = Math.max(0, channel_commission_rate) + Math.max(0, payment_fee_rate);
   const retainedRate = 1 - feeRateSum;
 
@@ -63,7 +68,7 @@ export function simulateChannelPricing(input: PricingSimulationInput): PricingSi
     recommended_price_to_match_in_store_margin = roundCurrency(neededRevenue / retainedRate);
   }
 
-  // 2. Preço recomendado para atingir a meta percentual de margem líquida (ex: 35%)
+  // 2. Preço recomendado para atingir a meta percentual de margem de contribuição (ex: 35%)
   let recommended_price_to_match_target_margin = recommended_price_to_match_in_store_margin;
   if (target_margin_percent !== undefined && target_margin_percent > 0) {
     const targetRateDecimal = target_margin_percent / 100;
@@ -103,87 +108,133 @@ export function simulateChannelPricing(input: PricingSimulationInput): PricingSi
 }
 
 /**
- * Taxas padrão de mercado para canais de delivery no Brasil
+ * Taxas de referência de mercado (benchmarks) para hipóteses de simulação.
+ * IMPORTANTE: São estimativas de mercado para modelagem e NÃO comprovam contrato real
+ * firmado com o estabelecimento até que sejam configuradas pelo administrador.
  */
 export const DEFAULT_CHANNEL_BENCHMARKS: Record<
   DeliveryChannelType,
-  { commission_rate: number; payment_fee_rate: number; fixed_fee: number; default_packaging: number }
+  {
+    commission_rate: number;
+    payment_fee_rate: number;
+    fixed_fee: number;
+    default_packaging: number;
+    description: string;
+    is_benchmark_hypothesis: boolean;
+  }
 > = {
   ifood: {
-    commission_rate: 0.23, // 23% Plano Entrega Parceira / 12% Entrega Própria
-    payment_fee_rate: 0.032, // 3.2% taxa de pagamento online
+    commission_rate: 0.23, // 23% Hipótese de benchmark (Plano Entrega Parceira padrão)
+    payment_fee_rate: 0.032, // 3.2% Hipótese de pagamento online
     fixed_fee: 0,
     default_packaging: 2.50,
+    description: 'Hipótese padrão de mercado (iFood Entrega Parceira + Pagamento Online)',
+    is_benchmark_hypothesis: true,
   },
   '99food': {
-    commission_rate: 0.20, // 20% médio de mercado
+    commission_rate: 0.20, // 20% Hipótese de benchmark médio
     payment_fee_rate: 0.025,
     fixed_fee: 0,
     default_packaging: 2.50,
+    description: 'Hipótese padrão de mercado (99Food padrão)',
+    is_benchmark_hypothesis: true,
   },
   direct: {
-    commission_rate: 0.0, // Próprio / WhatsApp: 0% de comissão
-    payment_fee_rate: 0.015, // Média Pix (0.99%) ou Cartão na Maquininha (1.9%)
+    commission_rate: 0.0, // Próprio: 0% comissão de marketplace
+    payment_fee_rate: 0.015, // Média taxa de cartão maquininha / Pix
     fixed_fee: 0,
     default_packaging: 2.00,
+    description: 'Canal Direto próprio (sem comissão de terceiros)',
+    is_benchmark_hypothesis: true,
   },
   whatsapp: {
     commission_rate: 0.0,
-    payment_fee_rate: 0.01, // Quase sempre Pix (grátis ou 0.99%)
+    payment_fee_rate: 0.01, // Média Pix direto
     fixed_fee: 0,
     default_packaging: 2.00,
+    description: 'Atendimento via WhatsApp (sem comissão de terceiros)',
+    is_benchmark_hypothesis: true,
   },
 };
 
+export interface ChannelRateConfig {
+  commission_rate?: number;
+  payment_fee_rate?: number;
+  fixed_fee?: number;
+  default_packaging?: number;
+}
+
 /**
- * Compara o mesmo item em todos os canais simultaneamente
+ * Compara o mesmo item em todos os canais simultaneamente, permitindo personalização
+ * das taxas contratuais reais ou uso dos benchmarks de mercado.
  */
 export function compareItemAcrossChannels(
   base_cost_cmv: number,
   in_store_price: number,
   customPackaging?: number,
-  target_margin_percent: number = 35
+  target_margin_percent: number = 35,
+  customRates?: Partial<Record<DeliveryChannelType, ChannelRateConfig>>
 ): ChannelPricingComparison {
   const in_store_margin_amount = roundCurrency(in_store_price - base_cost_cmv);
   const in_store_margin_percent = in_store_price > 0
     ? roundCurrency((in_store_margin_amount / in_store_price) * 100)
     : 0;
 
+  const getRates = (channel: DeliveryChannelType) => {
+    const benchmark = DEFAULT_CHANNEL_BENCHMARKS[channel];
+    const custom = customRates?.[channel];
+    return {
+      commission_rate: custom?.commission_rate !== undefined ? custom.commission_rate : benchmark.commission_rate,
+      payment_fee_rate: custom?.payment_fee_rate !== undefined ? custom.payment_fee_rate : benchmark.payment_fee_rate,
+      fixed_fee: custom?.fixed_fee !== undefined ? custom.fixed_fee : benchmark.fixed_fee,
+      packaging: customPackaging !== undefined ? customPackaging : (custom?.default_packaging ?? benchmark.default_packaging),
+    };
+  };
+
+  const ifoodRates = getRates('ifood');
+  const ninetyNineRates = getRates('99food');
+  const directRates = getRates('direct');
+  const whatsappRates = getRates('whatsapp');
+
   const channels: Record<DeliveryChannelType, PricingSimulationResult> = {
     ifood: simulateChannelPricing({
       base_cost_cmv,
       in_store_price,
       channel_type: 'ifood',
-      channel_commission_rate: DEFAULT_CHANNEL_BENCHMARKS.ifood.commission_rate,
-      payment_fee_rate: DEFAULT_CHANNEL_BENCHMARKS.ifood.payment_fee_rate,
-      packaging_cost: customPackaging ?? DEFAULT_CHANNEL_BENCHMARKS.ifood.default_packaging,
+      channel_commission_rate: ifoodRates.commission_rate,
+      payment_fee_rate: ifoodRates.payment_fee_rate,
+      packaging_cost: ifoodRates.packaging,
+      fixed_order_fee: ifoodRates.fixed_fee,
       target_margin_percent,
     }),
     '99food': simulateChannelPricing({
       base_cost_cmv,
       in_store_price,
       channel_type: '99food',
-      channel_commission_rate: DEFAULT_CHANNEL_BENCHMARKS['99food'].commission_rate,
-      payment_fee_rate: DEFAULT_CHANNEL_BENCHMARKS['99food'].payment_fee_rate,
-      packaging_cost: customPackaging ?? DEFAULT_CHANNEL_BENCHMARKS['99food'].default_packaging,
+      channel_commission_rate: ninetyNineRates.commission_rate,
+      payment_fee_rate: ninetyNineRates.payment_fee_rate,
+      packaging_cost: ninetyNineRates.packaging,
+      fixed_order_fee: ninetyNineRates.fixed_fee,
       target_margin_percent,
     }),
     direct: simulateChannelPricing({
       base_cost_cmv,
       in_store_price,
       channel_type: 'direct',
-      channel_commission_rate: DEFAULT_CHANNEL_BENCHMARKS.direct.commission_rate,
-      payment_fee_rate: DEFAULT_CHANNEL_BENCHMARKS.direct.payment_fee_rate,
-      packaging_cost: customPackaging ?? DEFAULT_CHANNEL_BENCHMARKS.direct.default_packaging,
+      channel_commission_rate: directRates.commission_rate,
+      payment_fee_rate: directRates.payment_fee_rate,
+      packaging_cost: directRates.packaging,
+      fixed_order_fee: directRates.fixed_fee,
       target_margin_percent,
     }),
     whatsapp: simulateChannelPricing({
       base_cost_cmv,
       in_store_price,
       channel_type: 'whatsapp',
-      channel_commission_rate: DEFAULT_CHANNEL_BENCHMARKS.whatsapp.commission_rate,
-      payment_fee_rate: DEFAULT_CHANNEL_BENCHMARKS.whatsapp.payment_fee_rate,
-      packaging_cost: customPackaging ?? DEFAULT_CHANNEL_BENCHMARKS.whatsapp.default_packaging,
+      channel_commission_rate: whatsappRates.commission_rate,
+      payment_fee_rate: whatsappRates.payment_fee_rate,
+      packaging_cost: whatsappRates.packaging,
+      fixed_order_fee: whatsappRates.fixed_fee,
       target_margin_percent,
     }),
   };

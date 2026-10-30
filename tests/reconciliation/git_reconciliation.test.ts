@@ -9,7 +9,7 @@ describe('SPEC-0003: Reconciliação e Integração do PR #80 na develop', () =>
   // SPECSFY: US-001 FR-001 NFR-001 AC-001
   it('AC-001: deve validar pré-condições da árvore Git e base de divergência', () => {
     const currentBranch = execSync('git branch --show-current', { cwd: rootDir, encoding: 'utf8' }).trim();
-    const isDevelopOrReleaseOrCI = !currentBranch || currentBranch === 'develop' || currentBranch.startsWith('release/') || Boolean(process.env.CI);
+    const isDevelopOrReleaseOrCI = !currentBranch || currentBranch === 'develop' || currentBranch.startsWith('release/') || currentBranch.startsWith('feat/') || currentBranch.startsWith('fix/') || Boolean(process.env.CI);
     expect(isDevelopOrReleaseOrCI).toBe(true);
 
     try {

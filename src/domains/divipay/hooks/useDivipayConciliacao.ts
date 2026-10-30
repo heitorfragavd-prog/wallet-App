@@ -107,14 +107,14 @@ export function useDivipayConciliacao() {
  * aparecerem sem precisar abrir a tela de Saques.
  * Montar uma única vez no layout autenticado.
  */
-export function useDivipayConciliacaoAuto() {
-  const { transferencias, loading } = useDivipayTransferencias();
+export function useDivipayConciliacaoAuto(enabled = true) {
+  const { transferencias, loading } = useDivipayTransferencias({ enabled });
   const { conciliar } = useDivipayConciliacao();
   const { activeWorkspace } = useWorkspace();
   const disparou = useRef(false);
 
   useEffect(() => {
-    if (disparou.current || loading || transferencias.length === 0 || !activeWorkspace?.id) return;
+    if (!enabled || disparou.current || loading || transferencias.length === 0 || !activeWorkspace?.id) return;
     const chave = `divipay-conciliacao-auto:${activeWorkspace.id}:${new Date().toISOString().slice(0, 10)}`;
     if (sessionStorage.getItem(chave)) return;
     disparou.current = true;
@@ -124,5 +124,5 @@ export function useDivipayConciliacaoAuto() {
       sessionStorage.removeItem(chave);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferencias, loading, activeWorkspace?.id]);
+  }, [transferencias, loading, activeWorkspace?.id, enabled]);
 }
