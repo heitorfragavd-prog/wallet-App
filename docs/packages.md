@@ -67,7 +67,7 @@
 | Terceiro | desenvolvimento | @testing-library/jest-dom | ^6.9.1 | Custom jest matchers to test the state of the DOM | https://github.com/testing-library/jest-dom | https://github.com/testing-library/jest-dom |
 | Terceiro | desenvolvimento | @testing-library/react | ^16.3.0 | Simple and complete React DOM testing utilities that encourage good testing practices. | https://github.com/testing-library/react-testing-library | https://github.com/testing-library/react-testing-library |
 | Terceiro | desenvolvimento | @types/node | ^22.5.5 | TypeScript definitions for node | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
-| Terceiro | desenvolvimento | @types/pg | ^8.23.1 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | desenvolvimento | @types/pg | ^8.23.1 | TypeScript definitions for pg | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | desenvolvimento | @types/react | ^18.3.3 | TypeScript definitions for react | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | desenvolvimento | @types/react-dom | ^18.3.0 | TypeScript definitions for react-dom | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | desenvolvimento | @vitejs/plugin-react-swc | ^3.5.0 | Speed up your Vite dev server with SWC | https://github.com/vitejs/vite-plugin-react | https://github.com/vitejs/vite-plugin-react |
@@ -79,7 +79,7 @@
 | Terceiro | desenvolvimento | fast-check | ^4.3.0 | Property based testing framework for JavaScript (like QuickCheck) | https://github.com/dubzzz/fast-check | https://github.com/dubzzz/fast-check |
 | Terceiro | desenvolvimento | globals | ^15.9.0 | Global identifiers from different JavaScript environments | sindresorhus/globals | — |
 | Terceiro | desenvolvimento | jsdom | ^27.2.0 | A JavaScript implementation of many web standards | https://github.com/jsdom/jsdom | https://github.com/jsdom/jsdom |
-| Terceiro | desenvolvimento | lovable-tagger | ^1.1.7 | Vite plugins for component tagging and virtual file overrides with HMR support |  | — |
+| Terceiro | desenvolvimento | lovable-tagger | ^1.1.7 | Vite plugins for component tagging and Tailwind config extraction | https://github.com/lovablelabs/lovable | https://github.com/lovablelabs/lovable |
 | Terceiro | desenvolvimento | pg | ^8.23.0 | PostgreSQL client - pure javascript & libpq with the same API | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | desenvolvimento | postcss | ^8.4.47 | Tool for transforming styles with JS plugins | postcss/postcss | — |
 | Terceiro | desenvolvimento | tailwindcss | ^3.4.11 | A utility-first CSS framework for rapidly building custom user interfaces. | https://github.com/tailwindlabs/tailwindcss.git#v3 | https://github.com/tailwindlabs/tailwindcss.git#v3 |
@@ -425,7 +425,7 @@
 | Terceiro | transitiva | dom-accessibility-api | 0.5.16 | Implements https://w3c.github.io/accname/ | https://github.com/eps1lon/dom-accessibility-api | https://github.com/eps1lon/dom-accessibility-api |
 | Terceiro | transitiva | dom-helpers | 5.2.1 | tiny modular DOM lib for ie9+ | https://github.com/react-bootstrap/dom-helpers | https://github.com/react-bootstrap/dom-helpers |
 | Terceiro | transitiva | dompurify | 3.4.13 | DOMPurify is a DOM-only, super-fast, uber-tolerant XSS sanitizer for HTML, MathML and SVG. It runs as JavaScript and works in all modern browsers, as well as in Node.js (via jsdom). DOMPurify is written by security people who have vast background in web attacks and XSS. Fear not. | git://github.com/cure53/DOMPurify | git://github.com/cure53/DOMPurify |
-| Terceiro | transitiva | electron-to-chromium | 1.5.307 | Provides a list of electron-to-chromium version mappings | https://github.com/kilian/electron-to-chromium | https://github.com/kilian/electron-to-chromium |
+| Terceiro | transitiva | electron-to-chromium | 1.5.307 | Provides a list of electron-to-chromium version mappings | https://github.com/Kilian/electron-to-chromium | https://github.com/Kilian/electron-to-chromium |
 | Terceiro | transitiva | embla-carousel | 8.6.0 | A lightweight carousel library with fluid motion and great swipe precision | https://github.com/davidjerleke/embla-carousel | https://github.com/davidjerleke/embla-carousel |
 | Terceiro | transitiva | embla-carousel-react | 8.6.0 | A lightweight carousel library with fluid motion and great swipe precision | https://github.com/davidjerleke/embla-carousel | https://github.com/davidjerleke/embla-carousel |
 | Terceiro | transitiva | embla-carousel-reactive-utils | 8.6.0 | Reactive utilities for Embla Carousel | https://github.com/davidjerleke/embla-carousel | https://github.com/davidjerleke/embla-carousel |
@@ -533,7 +533,7 @@
 | Terceiro | transitiva | lodash | 4.18.1 | Lodash modular utilities. | lodash/lodash | — |
 | Terceiro | transitiva | lodash.merge | 4.6.2 | The Lodash method `_.merge` exported as a module. | lodash/lodash | — |
 | Terceiro | transitiva | loose-envify | 1.4.0 | Fast (and loose) selective `process.env` replacer using js-tokens instead of an AST | git://github.com/zertosh/loose-envify | git://github.com/zertosh/loose-envify |
-| Terceiro | transitiva | lovable-tagger | 1.1.13 | Vite plugins for component tagging and virtual file overrides with HMR support |  | — |
+| Terceiro | transitiva | lovable-tagger | 1.1.13 | Vite plugins for component tagging and Tailwind config extraction | https://github.com/lovablelabs/lovable | https://github.com/lovablelabs/lovable |
 | Terceiro | transitiva | lru-cache | 11.2.6 | A cache object that deletes the least-recently-used items. | ssh://git@github.com/isaacs/node-lru-cache | ssh://git@github.com/isaacs/node-lru-cache |
 | Terceiro | transitiva | lucide-react | 0.462.0 | A Lucide icon library package for React applications | https://github.com/lucide-icons/lucide | https://github.com/lucide-icons/lucide |
 | Terceiro | transitiva | lz-string | 1.5.0 | LZ-based compression algorithm | https://github.com/pieroxy/lz-string | https://github.com/pieroxy/lz-string |
@@ -751,7 +751,7 @@
 | Terceiro | transitiva | zoid | 9.0.63 | Cross domain components. | git://github.com/krakenjs/zoid | git://github.com/krakenjs/zoid |
 | Terceiro | transitiva | @babel/code-frame | 7.29.0 | Generate errors that contain a code frame that point to source locations. | https://github.com/babel/babel | https://github.com/babel/babel |
 | Terceiro | transitiva | @babel/helper-validator-identifier | 7.28.5 | Validate identifier/keywords name | https://github.com/babel/babel | https://github.com/babel/babel |
-| Terceiro | transitiva | @types/pg | 8.23.1 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @types/pg | 8.23.1 | TypeScript definitions for pg | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | Terceiro | transitiva | pg | 8.23.0 | PostgreSQL client - pure javascript & libpq with the same API | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-cloudflare | 1.4.0 | A socket implementation that can run on Cloudflare Workers using native TCP connections. | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-connection-string | 2.14.0 | Functions for dealing with a PostgreSQL connection string | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |

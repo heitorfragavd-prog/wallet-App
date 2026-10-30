@@ -4,8 +4,8 @@
 ## Visão geral
 
 - Frameworks detectados: React.
-- Arquivos de código: 2844.
-- Arquivos de teste: 253.
+- Arquivos de código: 2889.
+- Arquivos de teste: 270.
 
 ## Roteiro
 

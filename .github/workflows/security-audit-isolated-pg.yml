@@ -112,6 +112,12 @@ jobs:
         run: |
           node scripts/test-phase-c-atomic-rollback.cjs
 
+      - name: Run CEO & Delivery Growth Foundation Security Battery (Fase 1.2 Gates A-I)
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          psql -h localhost -U postgres -d postgres -f scripts/test-ceo-delivery-foundation.sql
+
   edge-functions-validation:
     name: Edge Functions Runtime Validation (Deno)
     runs-on: ubuntu-latest

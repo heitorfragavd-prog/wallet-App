@@ -24,6 +24,7 @@ interface WorkspaceContextType {
   loading: boolean;
   createWorkspace: (nome: string, tipo: "PF" | "PJ") => Promise<Workspace | null>;
   refreshWorkspaces: () => Promise<void>;
+  activeWorkspaceRole?: 'admin' | 'member' | 'delivery_staff' | null;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -35,6 +36,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspace, setActiveWorkspaceState] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [activeWorkspaceRole, setActiveWorkspaceRole] = useState<'admin' | 'member' | 'delivery_staff' | null>(null);
 
   const fetchWorkspaces = useCallback(async () => {
     if (!user) {
@@ -109,6 +111,42 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     fetchWorkspaces();
   }, [fetchWorkspaces]);
 
+  useEffect(() => {
+    if (!user || !activeWorkspace) {
+      setActiveWorkspaceRole(null);
+      return;
+    }
+
+    if (activeWorkspace.user_id === user.id) {
+      setActiveWorkspaceRole('admin');
+      return;
+    }
+
+    let isMounted = true;
+    supabase
+      .from('workspace_members')
+      .select('role')
+      .eq('workspace_id', activeWorkspace.id)
+      .eq('user_id', user.id)
+      .eq('active', true)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!isMounted) return;
+        if (data?.role) {
+          setActiveWorkspaceRole(data.role as 'admin' | 'member' | 'delivery_staff');
+        } else {
+          setActiveWorkspaceRole('member');
+        }
+      })
+      .catch(() => {
+        if (isMounted) setActiveWorkspaceRole('member');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, activeWorkspace]);
+
   const setActiveWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceState(workspace);
     if (user) {
@@ -155,6 +193,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         loading,
         createWorkspace,
         refreshWorkspaces: fetchWorkspaces,
+        activeWorkspaceRole,
       }}
     >
       {children}
@@ -172,6 +211,7 @@ export const useWorkspace = () => {
       loading: false,
       createWorkspace: async () => null,
       refreshWorkspaces: async () => {},
+      activeWorkspaceRole: null,
     };
   }
   return context;

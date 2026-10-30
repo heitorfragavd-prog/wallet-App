@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/shared/components/ui/button";
 import {
   Home,
@@ -10,7 +10,6 @@ import {
   PieChart,
   Target,
   Users,
-  Bot,
   ShoppingCart,
   Car,
   LogOut,
@@ -36,6 +35,8 @@ import {
   MonitorPlay,
   Brain,
   Activity,
+  Bike,
+  Crown,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -46,6 +47,7 @@ import { WorkspaceSwitcher } from "@/shared/components/WorkspaceSwitcher";
 import { NotificationsPopover } from "@/shared/components/NotificationsPopover";
 import { PrivacyToggle } from "@/shared/components/PrivacyToggle";
 import { useDivipayConciliacaoAuto } from "@/domains/divipay/hooks/useDivipayConciliacao";
+import { isDeliveryStaffRole } from "@/domains/delivery/delivery-permissions";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -59,14 +61,29 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  const isStaff = isDeliveryStaffRole(profile?.role);
+
   // Conciliação Divipay em background: despesas da carteira sobem sem
   // precisar abrir a tela de Saques (1x por dia por sessão).
-  useDivipayConciliacaoAuto();
+  // Desabilitada para equipe de entrega/cozinha (zero queries financeiras).
+  useDivipayConciliacaoAuto(!isStaff);
+
+  useEffect(() => {
+    if (isStaff) {
+      navigate("/delivery/kds", { replace: true });
+    }
+  }, [isStaff, navigate]);
+
+  if (isStaff) {
+    return null;
+  }
 
   const baseMenuItems = [
     { icon: Home, label: "Dashboard", path: "/dashboard" },
     { icon: Store, label: "Eyemobile PDV", path: "/eyemobile-pdv" },
     { icon: MonitorPlay, label: "Frente de Caixa", path: "/pdv" },
+    { icon: Crown, label: "Wallet CEO", path: "/ceo" },
+    { icon: Bike, label: "Delivery Growth", path: "/delivery" },
     { icon: Landmark, label: "Divipay", path: "/divipay" },
     { icon: Building2, label: "Contas & Cartões", path: "/contas" },
     { icon: TrendingUp, label: "Receitas", path: "/receitas" },
