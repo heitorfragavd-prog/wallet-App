@@ -19,7 +19,7 @@ export interface UserProfile {
   endereco?: string;
   avatar_url?: string;
   organization_name?: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'delivery_staff';
   created_at: string;
   updated_at: string;
 }

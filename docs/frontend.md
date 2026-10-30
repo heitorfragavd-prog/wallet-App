@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Superfícies observadas
 
-- Componentes, páginas ou views: 1408.
+- Componentes, páginas ou views: 1420.
 - Tailwind: detectado.
 - Tokens CSS: --cell-size, --radix-popover-content-transform-origin, ---, --border, --background, --foreground, --card, --card-foreground, --popover, --popover-foreground, --primary, --primary-foreground, --secondary, --secondary-foreground, --muted, --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground, --input, --ring, --radius, --sidebar-background, --sidebar-foreground, --sidebar-primary, --sidebar-primary-foreground, --sidebar-accent, --sidebar-accent-foreground, --sidebar-border, --sidebar-ring, --glass-bg, --glass-border, --particle-primary, --particle-secondary, --particle-accent, --gradient-start, --gradient-end, --kimi-color-border, --tw-ring-color, --color-, --color-border, --color-bg, --radix-navigation-menu-viewport-height, --radix-navigation-menu-viewport-width, --radix-select-trigger-height, --radix-select-trigger-width, --sidebar-width, --sidebar-width-icon, --skeleton-width, --radix-toast-swipe-end-x, --radix-toast-swipe-move-x, --radix-accordion-content-height.
 
@@ -1187,6 +1187,14 @@
 | src\domains\auth\components\profile\UsageProgressBar.tsx |
 | src\domains\auth\components\ProtectedRoute.test.tsx |
 | src\domains\auth\components\ProtectedRoute.tsx |
+| src\domains\ceo\components\GrowthExperimentCard.tsx |
+| src\domains\ceo\components\OpportunityCard.tsx |
+| src\domains\delivery\components\DeliveryMarginSimulator.tsx |
+| src\domains\delivery\components\ItemChecklistDialog.tsx |
+| src\domains\delivery\components\KDSOrderBoard.tsx |
+| src\domains\delivery\components\KDSOrderCard.tsx |
+| src\domains\delivery\DeliveryRoleGuard.test.tsx |
+| src\domains\delivery\DeliveryRoleGuard.tsx |
 | src\domains\divipay\components\ConciliacoesPendentesCard.tsx |
 | src\domains\divipay\components\DivipayCobrancasView.tsx |
 | src\domains\divipay\components\DivipayConfiguracoesView.tsx |
@@ -1318,6 +1326,7 @@
 | src\pages\ConfiguracoesNotificacoes.tsx |
 | src\pages\ContasCartoes.tsx |
 | src\pages\Dashboard.tsx |
+| src\pages\DeliveryKDSPage.tsx |
 | src\pages\Despesas.tsx |
 | src\pages\Dividas.tsx |
 | src\pages\Divipay.tsx |
@@ -1352,6 +1361,8 @@
 | src\pages\Transferencias.tsx |
 | src\pages\Validades.tsx |
 | src\pages\Veiculos.tsx |
+| src\pages\WalletCeoPage.tsx |
+| src\pages\WalletDeliveryPage.tsx |
 | src\pages\WalletIAPage.test.tsx |
 | src\pages\WalletIAPage.tsx |
 | src\shared\components\BankLogoBadge.tsx |
@@ -1413,6 +1424,7 @@
 | src\shared\components\ui\tooltip.tsx |
 | src\shared\components\WhatsAppButton.tsx |
 | src\shared\components\WorkspaceSwitcher.tsx |
+| src\shared\components\__tests__\BankLogoBadge.test.tsx |
 | src\shared\components\__tests__\ErrorBoundary.test.tsx |
 | src\shared\components\__tests__\WorkspaceSwitcher.test.tsx |
 | src\shared\hooks\use-mobile.tsx |

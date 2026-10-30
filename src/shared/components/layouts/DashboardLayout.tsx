@@ -10,7 +10,6 @@ import {
   PieChart,
   Target,
   Users,
-  Bot,
   ShoppingCart,
   Car,
   LogOut,
@@ -36,6 +35,8 @@ import {
   MonitorPlay,
   Brain,
   Activity,
+  Bike,
+  Crown,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -67,6 +68,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: Home, label: "Dashboard", path: "/dashboard" },
     { icon: Store, label: "Eyemobile PDV", path: "/eyemobile-pdv" },
     { icon: MonitorPlay, label: "Frente de Caixa", path: "/pdv" },
+    { icon: Crown, label: "Wallet CEO", path: "/ceo" },
+    { icon: Bike, label: "Delivery Growth", path: "/delivery" },
     { icon: Landmark, label: "Divipay", path: "/divipay" },
     { icon: Building2, label: "Contas & Cartões", path: "/contas" },
     { icon: TrendingUp, label: "Receitas", path: "/receitas" },

@@ -1,3 +1,4 @@
+import { DeliveryRoleGuard } from "./domains/delivery/DeliveryRoleGuard";
 import { Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ProtectedRoute } from "./domains/auth/components/ProtectedRoute";
@@ -63,6 +64,9 @@ const AIMetricsDashboard  = lazyWithRetry(() => import("./pages/AIMetricsDashboa
 const Recibos             = lazyWithRetry(() => import("./pages/Recibos"));
 const ConfiguracoesNotificacoes = lazyWithRetry(() => import("./pages/ConfiguracoesNotificacoes"));
 const PDVPage             = lazyWithRetry(() => import("./pages/PDVPage"));
+const WalletCeoPage       = lazyWithRetry(() => import("./pages/WalletCeoPage"));
+const WalletDeliveryPage  = lazyWithRetry(() => import("./pages/WalletDeliveryPage"));
+const DeliveryKDSPage     = lazyWithRetry(() => import("./pages/DeliveryKDSPage"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -145,6 +149,9 @@ function App() {
                   <Route path="/ia-metrics"    element={<ProtectedRoute><AIMetricsDashboard /></ProtectedRoute>} />
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
+                  <Route path="/ceo"           element={<ProtectedRoute><DeliveryRoleGuard><WalletCeoPage /></DeliveryRoleGuard></ProtectedRoute>} />
+                  <Route path="/delivery"      element={<ProtectedRoute><WalletDeliveryPage /></ProtectedRoute>} />
+                  <Route path="/delivery/kds"  element={<ProtectedRoute><DeliveryKDSPage /></ProtectedRoute>} />
 
                   {/* Rotas administrativas */}
                   <Route path="/admin"                element={<ProtectedRoute requiredRole="admin"><AdminDashboard /></ProtectedRoute>} />

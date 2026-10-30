@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 253.
+- Arquivos de teste: 268.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -161,10 +161,19 @@
 | src\core\security\cross-feature-regression.test.ts |
 | src\core\security\edge-functions-auth.test.ts |
 | src\core\security\gerar-recibo-xss.test.ts |
+| src\core\security\realPostgresBlocker04Homologation.test.ts |
+| src\core\security\realPostgresBlocker05Homologation.test.ts |
+| src\core\security\secAuditBlocker04Webhooks.test.ts |
+| src\core\security\secAuditBlocker05CronNet.test.ts |
+| src\core\security\secAuditMaximumHardening.test.ts |
 | src\core\security\ssrf-protection.test.ts |
 | src\core\security\validar-senha-crypto.test.ts |
 | src\domains\auth\hooks\useAuth.test.ts |
 | src\domains\auth\hooks\useProfile.test.ts |
+| src\domains\ceo\growth-engine.test.ts |
+| src\domains\delivery\connectors.test.ts |
+| src\domains\delivery\DeliveryRoleGuard.test.tsx |
+| src\domains\delivery\pricing-simulator.test.ts |
 | src\domains\finance\hooks\useColaboradorCalculos.test.ts |
 | src\domains\finance\hooks\useComparativoDiario.test.ts |
 | src\domains\finance\hooks\useConciliacao.test.ts |
@@ -180,6 +189,7 @@
 | src\domains\finance\utils\dateHelpers.test.ts |
 | src\domains\finance\__tests__\eyemobile-price-safety.test.ts |
 | src\domains\finance\__tests__\eyemobile-sync-product-identity.test.ts |
+| src\domains\finance\__tests__\eyemobileSyncSecurity.test.ts |
 | src\domains\finance\__tests__\faturaCartaoIsolation.test.ts |
 | src\domains\finance\__tests__\importadorFaturaSeguro.test.ts |
 | src\domains\finance\__tests__\nf-confirmed-equivalence.test.ts |
@@ -188,12 +198,15 @@
 | src\domains\finance\__tests__\product-frontend-identity.test.ts |
 | src\domains\finance\__tests__\product-identity-e2e.test.ts |
 | src\domains\finance\__tests__\produto-equivalencias-schema.test.ts |
+| src\domains\finance\__tests__\sec003CriticalRemediation.test.ts |
 | src\domains\finance\__tests__\workspaceIsolation.test.ts |
 | src\domains\ia\agent-core\action-gateway.test.ts |
 | src\domains\ia\agent-core\auth.test.ts |
+| src\domains\ia\agent-core\boleto-barcode-persistence.test.ts |
 | src\domains\ia\agent-core\boleto-intelligence.test.ts |
 | src\domains\ia\agent-core\boleto-recovery-pipeline.test.ts |
 | src\domains\ia\agent-core\boleto-sellpack-regression.test.ts |
+| src\domains\ia\agent-core\boleto-spal-ocr-recovery.test.ts |
 | src\domains\ia\agent-core\boleto-spal-regression.test.ts |
 | src\domains\ia\agent-core\boleto-validator.test.ts |
 | src\domains\ia\agent-core\buscar-vendas-pdv.test.ts |
@@ -232,6 +245,8 @@
 | src\domains\ia\agent-core\security-hardening.test.ts |
 | src\domains\ia\agent-core\streaming-orchestrator.test.ts |
 | src\domains\ia\agent-core\supabase-adapter.test.ts |
+| src\domains\ia\agent-core\telegram-boleto-blockers.test.ts |
+| src\domains\ia\agent-core\telegram-boleto-flow.test.ts |
 | src\domains\ia\agent-core\telegram-bot-proposta.test.ts |
 | src\domains\ia\agent-core\telegram-channel-adapter.test.ts |
 | src\domains\ia\agent-core\telegram-webhook-auth.test.ts |

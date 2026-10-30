@@ -507,6 +507,12 @@
 | supabase\migrations\20260908122000_add_updated_at_to_alertas_preco_pendentes.sql |
 | supabase\migrations\20260909110000_produto_equivalencias_foundation.sql |
 | supabase\migrations\20260910120000_aplicar_item_nf_estoque_custo.sql |
+| supabase\migrations\20261002061000_isolate_divipay_by_workspace.sql |
+| supabase\migrations\20261010210000_sec003_critical_fixes.sql |
+| supabase\migrations\20261011120000_sec_audit_maximum_hardening.sql |
+| supabase\migrations\20261018170000_sec003_2_blocker04_webhook_idempotency.sql |
+| supabase\migrations\20261018183000_sec003_2_blocker05_cron_resilience.sql |
+| supabase\migrations\20261030010000_wallet_ceo_delivery_foundation.sql |
 | supabase\migrations\21.whatsapp_number_setting.sql |
 | supabase\migrations\22.contact_settings.sql |
 | supabase\migrations\23.planos_manutencao_veiculo.sql |
@@ -580,6 +586,7 @@
 | supabase\migrations\rollback\20260818030000_wallet_ai_action_proposals.down.sql |
 | supabase\migrations\rollback\20260904120000_wallet_ai_action_proposals_columns.down.sql |
 | supabase\migrations\rollback\20260905120000_telegram_processed_updates.down.sql |
+| supabase\migrations\rollback\20261030010000_wallet_ceo_delivery_foundation.down.sql |
 | supabase\ops\rollback_20260908120000_safe_recovery.sql |
 | supabase\tests\aplicar_item_nf_estoque_custo_test.sql |
 | supabase\tests\equipe_centro_rh_financeiro.sql |
