@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS public.delivery_order_items (
   options JSONB DEFAULT '[]'::jsonb,
   observations TEXT,
   is_verified_in_kds BOOLEAN NOT NULL DEFAULT false,
-  verified_by_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  verified_by_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

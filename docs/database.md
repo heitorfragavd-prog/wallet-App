@@ -1,6 +1,6 @@
 # Banco de dados
 
-<!-- specsfy:docs:updated: 2026-10-30T15:25:00Z - tests scenario 8, 9, 13 refined -->
+<!-- specsfy:docs:updated: 2026-10-30T15:30:00Z - verified_by_user_id references auth.users -->
 
 <!-- specsfy:documentator:start -->
 ## Fontes de persistência

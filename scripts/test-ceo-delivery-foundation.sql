@@ -100,10 +100,10 @@ BEGIN
   ON CONFLICT (id) DO NOTHING;
 
   -- Perfis
-  INSERT INTO public.profiles (user_id, name, role) VALUES
-    (v_admin_id, 'Administrador Rodo Point', 'admin'),
-    (v_staff_id, 'Cozinha Expedição', 'delivery_staff'),
-    (v_other_id, 'Usuário de Outro Workspace', 'user')
+  INSERT INTO public.profiles (id, user_id, name, role) VALUES
+    (v_admin_id, v_admin_id, 'Administrador Rodo Point', 'admin'),
+    (v_staff_id, v_staff_id, 'Cozinha Expedição', 'delivery_staff'),
+    (v_other_id, v_other_id, 'Usuário de Outro Workspace', 'user')
   ON CONFLICT (user_id) DO NOTHING;
 
   -- Workspaces
