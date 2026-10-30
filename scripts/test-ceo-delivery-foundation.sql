@@ -288,17 +288,19 @@ DO $$
 DECLARE
   v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
   v_failed BOOLEAN := false;
+  v_rows INTEGER := 0;
 BEGIN
   BEGIN
     UPDATE public.delivery_orders
     SET total_amount = 0.00
     WHERE id = v_ord_id;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;
 
-  IF NOT v_failed THEN
-    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 8]: trigger não bloqueou mutação financeira por delivery_staff!';
+  IF NOT v_failed AND v_rows > 0 THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 8]: delivery_staff conseguiu mutar campos financeiros em delivery_orders!';
   END IF;
 END $$;
 COMMIT;
@@ -312,17 +314,19 @@ DO $$
 DECLARE
   v_it1_id UUID := 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
   v_failed BOOLEAN := false;
+  v_rows INTEGER := 0;
 BEGIN
   BEGIN
     UPDATE public.delivery_order_items
     SET unit_price = 1.00
     WHERE id = v_it1_id;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
   EXCEPTION WHEN OTHERS THEN
     v_failed := true;
   END;
 
-  IF NOT v_failed THEN
-    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 9]: trigger não bloqueou mutação de preço de item por delivery_staff!';
+  IF NOT v_failed AND v_rows > 0 THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 9]: delivery_staff conseguiu mutar preço em delivery_order_items!';
   END IF;
 END $$;
 COMMIT;
@@ -425,6 +429,8 @@ COMMIT;
 
 -- CENÁRIO 13: Bloqueio estrito de despacho para TODOS os caminhos (RPC e PostgREST direto)
 BEGIN;
+
+-- 13.A: Tentativa de despacho via RPC por staff com item pendente
 SET LOCAL request.jwt.claims = '{"sub": "22222222-2222-2222-2222-222222222222", "role": "authenticated"}';
 SET LOCAL ROLE authenticated;
 
@@ -433,11 +439,8 @@ DECLARE
   v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
   v_it2_id UUID := 'ffffffff-ffff-ffff-ffff-ffffffffffff';
   v_failed_rpc BOOLEAN := false;
-  v_failed_direct_dispatch BOOLEAN := false;
-  v_failed_direct_delivered BOOLEAN := false;
+  v_staff_direct_rows INTEGER := 0;
 BEGIN
-  -- O item 1 foi conferido no Cenário 10, mas o item 2 continua pendente (is_verified_in_kds = false)
-
   -- Teste 1: Tentativa de despacho via RPC com item não conferido -> Deve falhar
   BEGIN
     PERFORM public.rpc_atualizar_status_delivery_order(v_ord_id, 'dispatched');
@@ -449,7 +452,28 @@ BEGIN
     RAISE EXCEPTION 'FALHA DE CONTROLE [CENÁRIO 13.1]: rpc permitiu despachar pedido com itens não-conferidos!';
   END IF;
 
-  -- Teste 2: Tentativa de despacho via UPDATE direto na tabela base -> Deve falhar por trigger
+  -- Teste 2: Tentativa de UPDATE direto na tabela base por staff -> Bloqueado por RLS (0 rows afetadas)
+  UPDATE public.delivery_orders
+  SET order_status = 'dispatched'
+  WHERE id = v_ord_id;
+  GET DIAGNOSTICS v_staff_direct_rows = ROW_COUNT;
+
+  IF v_staff_direct_rows > 0 THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.2]: delivery_staff conseguiu contornar a RPC via UPDATE direto na tabela!';
+  END IF;
+END $$;
+
+-- 13.B: Tentativa de UPDATE direto na tabela base por Administrador (com acesso ao registro) -> Bloqueado por Trigger
+SET LOCAL request.jwt.claims = '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+  v_failed_direct_dispatch BOOLEAN := false;
+  v_failed_direct_delivered BOOLEAN := false;
+BEGIN
+  -- Teste 3: Tentativa de despacho via UPDATE direto na tabela base -> Bloqueado pelo trigger
   BEGIN
     UPDATE public.delivery_orders
     SET order_status = 'dispatched'
@@ -459,10 +483,10 @@ BEGIN
   END;
 
   IF NOT v_failed_direct_dispatch THEN
-    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.2]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto de despacho com itens pendentes!';
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.3]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto de despacho com itens pendentes!';
   END IF;
 
-  -- Teste 3: Tentativa de marcar como entregue diretamente sem conferência -> Deve falhar por trigger
+  -- Teste 4: Tentativa de marcar como entregue diretamente sem conferência -> Bloqueado pelo trigger
   BEGIN
     UPDATE public.delivery_orders
     SET order_status = 'delivered'
@@ -472,16 +496,34 @@ BEGIN
   END;
 
   IF NOT v_failed_direct_delivered THEN
-    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.3]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto para entregue com itens pendentes!';
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.4]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto para entregue com itens pendentes!';
   END IF;
+END $$;
 
-  -- Teste 4: Conferência completa dos itens
+-- 13.C: Conferência Completa e Despacho Autorizado via RPC pelo Operador
+SET LOCAL request.jwt.claims = '{"sub": "22222222-2222-2222-2222-222222222222", "role": "authenticated"}';
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+  v_it2_id UUID := 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+BEGIN
+  -- Teste 5: Staff confere o item restante
   PERFORM public.rpc_conferir_item_delivery(v_it2_id, true);
 
-  -- Teste 5: Agora o despacho via RPC é aceito
+  -- Teste 6: Agora o despacho via RPC é aceito
   PERFORM public.rpc_atualizar_status_delivery_order(v_ord_id, 'dispatched');
+END $$;
 
-  -- Teste 6: Atualização direta autorizada após conferência completa
+-- 13.D: Atualização direta após conferência completa autorizada para quem tem acesso
+SET LOCAL request.jwt.claims = '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+BEGIN
   UPDATE public.delivery_orders
   SET order_status = 'delivered'
   WHERE id = v_ord_id;

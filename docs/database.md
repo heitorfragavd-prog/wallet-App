@@ -1,6 +1,6 @@
 # Banco de dados
 
-<!-- specsfy:docs:updated: 2026-10-30T15:20:00Z - grants authenticated on delivery tables -->
+<!-- specsfy:docs:updated: 2026-10-30T15:25:00Z - tests scenario 8, 9, 13 refined -->
 
 <!-- specsfy:documentator:start -->
 ## Fontes de persistência
