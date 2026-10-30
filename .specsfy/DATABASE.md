@@ -1,6 +1,6 @@
 # Banco de dados
 
-<!-- specsfy:database:updated: 2026-10-30T15:38:00Z - rollback cascade order refined -->
+<!-- specsfy:database:updated: 2026-10-30T16:20:00Z - migration idempotency drop policies refined -->
 
 Mapa de persistência do sistema. Modelo inicial sugerido para
 **stack ainda não identificado**.

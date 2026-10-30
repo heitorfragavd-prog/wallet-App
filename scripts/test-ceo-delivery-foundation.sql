@@ -80,7 +80,10 @@ GRANT ALL ON TABLE public.profiles TO authenticated, service_role;
 GRANT ALL ON TABLE public.workspaces TO authenticated, service_role;
 GRANT ALL ON TABLE public.workspace_members TO authenticated, service_role;
 
--- 1. Executa a migration de fundação CEO & Delivery
+-- 1. Executa a migration de fundação CEO & Delivery (Primeira Execução)
+\ir ../supabase/migrations/20261030010000_wallet_ceo_delivery_foundation.sql
+
+-- 1.1 Teste de Idempotência: Executa novamente no mesmo schema para garantir re-execução sem erros
 \ir ../supabase/migrations/20261030010000_wallet_ceo_delivery_foundation.sql
 
 -- 2. Setup dos Atores de Teste

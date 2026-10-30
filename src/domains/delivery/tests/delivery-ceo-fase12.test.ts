@@ -60,6 +60,16 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.check_delivery_order_dispatch_checklist');
     });
 
+    it('migration SQL possui DROP POLICY IF EXISTS para todas as policies garantindo re-execução idempotente', () => {
+      const migrationPath = path.resolve('supabase/migrations/20261030010000_wallet_ceo_delivery_foundation.sql');
+      const sql = fs.readFileSync(migrationPath, 'utf8');
+
+      expect(sql).toContain('DROP POLICY IF EXISTS "delivery_orders_insert_admin" ON public.delivery_orders');
+      expect(sql).toContain('DROP POLICY IF EXISTS "delivery_order_items_insert_admin" ON public.delivery_order_items');
+      expect(sql).toContain('DROP POLICY IF EXISTS "delivery_channels_write_admin" ON public.delivery_channels');
+      expect(sql).toContain('DROP POLICY IF EXISTS "delivery_catalog_items_write_admin" ON public.delivery_catalog_items');
+    });
+
     it('rollback SQL remove todas as views, RPCs e triggers operacionais', () => {
       const rollbackPath = path.resolve('supabase/migrations/rollback/20261030010000_wallet_ceo_delivery_foundation.down.sql');
       expect(fs.existsSync(rollbackPath)).toBe(true);
