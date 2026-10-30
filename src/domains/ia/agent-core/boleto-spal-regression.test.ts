@@ -141,7 +141,8 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         banco: "Banco Itaú S.A.",
         beneficiario: benefRefinado,
         valor: "1562,61", // valor visual corroborado
-        data_vencimento: "2026-08-21", // vencimento visual
+        data_vencimento: "2026-08-21", // vencimento visual (confundido com emissão)
+        data_emissao: "2026-08-21", // data de emissão comprovada
         linha_digitavel: SPAL_LINHA,
       });
 
@@ -312,6 +313,7 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         beneficiario: SPAL_BENEFICIARIO,
         valor: "1.562,61",
         data_vencimento: "2026-08-15",
+        data_emissao: "2026-08-15",
         linha_digitavel: SPAL_LINHA,
       });
       expect(res.valido).toBe(true);

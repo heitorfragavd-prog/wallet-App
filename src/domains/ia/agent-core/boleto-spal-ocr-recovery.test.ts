@@ -238,7 +238,7 @@ describe("WALLET APP — Correção Geral do OCR de Boletos & Caso Real SPAL", (
                     content: JSON.stringify({
                       banco: SPAL_BANCO,
                       beneficiario: SPAL_BENEFICIARIO,
-                      valor: 84.45,
+                      valor: 2076.44,
                       data_vencimento: "2026-10-23",
                       data_emissao: "2026-10-23",
                       linha_digitavel: "34191.09115 54446.822931 83045.790091 6 1619000027644", // OCR incorreto

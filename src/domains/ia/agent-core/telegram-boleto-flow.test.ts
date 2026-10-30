@@ -4,7 +4,6 @@ import {
   handleTelegramDocument,
   handleTelegramCallback,
   handleTelegramTextMessage,
-  formatProposalMessage,
   sanitizeUserFacingErrorMessage,
   clearTelegramAdapterState,
   type TelegramApiClient,
@@ -1143,7 +1142,7 @@ describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () =
                   banco: "Itaú Unibanco (341)",
                   beneficiario: "Telecomunicações Brasileiras S.A.",
                   cnpj_cpf_beneficiario: "00.000.000/0001-91",
-                  data_vencimento: "2026-11-25",
+                  data_vencimento: "2026-11-20",
                   valor: 350.00,
                   linha_digitavel: LINHA_DIGITAVEL_VALIDA,
                   codigo_barras: CODIGO_BARRAS_VALIDO,
@@ -1217,7 +1216,7 @@ describe("Reconhecimento Visual Real de Boletos (Testes Normativos A - G)", () =
               message: {
                 content: JSON.stringify({
                   beneficiario: "Fornecedor Teste",
-                  data_vencimento: "2026-12-10",
+                  data_vencimento: "2026-11-20",
                   valor: 350.00,
                   linha_digitavel: LINHA_DIGITAVEL_VALIDA,
                   codigo_barras: CODIGO_BARRAS_VALIDO,
@@ -1722,7 +1721,7 @@ describe("Recuperação do Pipeline de Boletos — Cenários Críticos e Reconci
                       banco: "Santander",
                       beneficiario: "Fornecedor Alpha",
                       valor: 350.00,
-                      data_vencimento: "2026-12-10",
+                      data_vencimento: "2026-11-20",
                       linha_digitavel: "03399.00102 00000.123", // Incompleta (20 dígitos)
                     }),
                   },

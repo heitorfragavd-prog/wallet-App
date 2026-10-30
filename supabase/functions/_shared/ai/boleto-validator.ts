@@ -815,40 +815,31 @@ export function reconcileBoleto(raw: {
       );
     }
 
-    // 2. Verificação de Coerência de Vencimento por Evidência Comprovada (sem bloqueio cego por ano)
+    // 2. Verificação Estrita de Vencimento Completo (ISO YYYY-MM-DD)
     let temDivergenciaMaterialVencimento = false;
 
     if (vencimentoDerivado) {
       if (dataVisual.iso && dataVisual.iso !== vencimentoDerivado) {
-        const anoDerivado = parseInt(vencimentoDerivado.split("-")[0], 10);
-        const anoVisual = parseInt(dataVisual.iso.split("-")[0], 10);
-        const divergenciaDeAno = Boolean(anoVisual && anoDerivado && anoVisual !== anoDerivado);
+        // Confusão comprovada com data de emissão:
+        // Ocorre quando o OCR confunde a data de emissão com vencimento (ex: visual lido 23/10/2026 == emissão 23/10/2026)
+        // e a linha digitável possui vencimento estritamente posterior (ex: 03/11/2026), com valor nominal 100% corroborado em centavos.
+        const isConfusaoEmissao = Boolean(
+          dataEmissaoVisual.iso &&
+          dataVisual.iso === dataEmissaoVisual.iso &&
+          vencimentoDerivado > dataEmissaoVisual.iso &&
+          !temDivergenciaMaterialValor
+        );
 
-        // Se o documento indica 2026 e a linha deriva 2039 (ou anos discordantes), há divergência comprovada
-        if (divergenciaDeAno) {
+        if (isConfusaoEmissao) {
+          warnings.push(
+            `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pela linha (${normalizeDate(vencimentoDerivado).formattedBr})`
+          );
+        } else {
           temDivergenciaMaterialVencimento = true;
           hasUnresolvedMaterialDivergence = true;
           divergencias.push(
             `divergencia_material_vencimento: vencimento visual impresso (${dataVisual.formattedBr || dataVisual.iso}) difere comprovadamente do vencimento derivado da linha (${normalizeDate(vencimentoDerivado).formattedBr || vencimentoDerivado})`
           );
-        } else {
-          // Dentro do mesmo ano operacional e com valor nominal estritamente corroborado em centavos
-          const isConfusaoEmissao = Boolean(
-            dataEmissaoVisual.iso &&
-            dataVisual.iso === dataEmissaoVisual.iso &&
-            vencimentoDerivado >= dataEmissaoVisual.iso &&
-            !temDivergenciaMaterialValor
-          );
-
-          if (isConfusaoEmissao) {
-            warnings.push(
-              `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pela linha (${normalizeDate(vencimentoDerivado).formattedBr})`
-            );
-          } else {
-            warnings.push(
-              `divergencia_vencimento_ocr: vencimento visual lido (${dataVisual.formattedBr}) difere da data validada pela linha (${normalizeDate(vencimentoDerivado).formattedBr})`
-            );
-          }
         }
       }
     }
@@ -901,19 +892,22 @@ export function reconcileBoleto(raw: {
 
       if (cbVenc) {
         if (dataVisual.iso && dataVisual.iso !== cbVenc) {
-          const anoCb = parseInt(cbVenc.split("-")[0], 10);
-          const anoVisual = parseInt(dataVisual.iso.split("-")[0], 10);
-          const divergenciaDeAno = Boolean(anoVisual && anoCb && anoVisual !== anoCb);
+          const isConfusaoEmissao = Boolean(
+            dataEmissaoVisual.iso &&
+            dataVisual.iso === dataEmissaoVisual.iso &&
+            cbVenc > dataEmissaoVisual.iso &&
+            !cbMaterialDivergence
+          );
 
-          if (divergenciaDeAno) {
+          if (isConfusaoEmissao) {
+            warnings.push(
+              `divergencia_vencimento_ocr: vencimento visual correspondia à data de emissão (${dataVisual.formattedBr}) e foi corrigido para a data validada pelo código de barras (${normalizeDate(cbVenc).formattedBr})`
+            );
+          } else {
             cbMaterialDivergence = true;
             hasUnresolvedMaterialDivergence = true;
             divergencias.push(
               `divergencia_material_vencimento: vencimento visual impresso (${dataVisual.formattedBr || dataVisual.iso}) difere comprovadamente do código de barras (${normalizeDate(cbVenc).formattedBr || cbVenc})`
-            );
-          } else {
-            warnings.push(
-              `divergencia_vencimento_ocr: vencimento visual impresso (${dataVisual.formattedBr}) difere da data validada pelo código de barras (${normalizeDate(cbVenc).formattedBr})`
             );
           }
         }

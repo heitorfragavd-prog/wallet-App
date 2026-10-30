@@ -325,7 +325,7 @@ describe("CRITICAL SAFEGUARD: Boleto Material Divergence & Anti-Hallucination", 
       );
     } catch (err: any) {
       expect(err.status).toBe(400);
-      expect(err.message).toContain("Divergência comprovada de vencimento");
+      expect(err.message).toContain("Divergência de vencimento");
     }
 
     // 3. Proposta explicitamente marcada com flag de divergência material
@@ -452,5 +452,196 @@ describe("CRITICAL SAFEGUARD: Boleto Material Divergence & Anti-Hallucination", 
 
     // 2. DANFE não é afetado pelo validador de boletos
     expect(cleanDigits(ARRECADACAO_CODIGO_44).length).toBe(44);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 10 CENÁRIOS NORMATIVOS DE REGRESSÃO OBRIGATÓRIOS (A - J)
+  // ─────────────────────────────────────────────────────────────────────────────
+  describe("10 Cenários Normativos de Regressão Obrigatórios (A - J)", () => {
+    // Cenário A: OCR inicial correto (R$ 2.076,44), candidato focalizado com valor visual incorreto (R$ 27.644,10) -> candidato rejeitado
+    it("Cenário A: OCR inicial correto (R$ 2.076,44), candidato focalizado com valor visual incorreto (R$ 27.644,10) é rejeitado", () => {
+      const valCorreta = validateLinhaDigitavel(SPAL_LINHA_IMPRESSA_CORRETA);
+      const candIncorreto = {
+        linha_digits: SPAL_LINHA_IMPRESSA_LIMPA,
+        digit_count: 47,
+        valor_visual: 27644.10, // candidato focalizado com leitura visual divergente
+        vencimento_visual: "2026-11-03",
+        linha_raw: SPAL_LINHA_IMPRESSA_CORRETA,
+        provider: "openai" as const,
+        attempt: 1,
+        region: "lower_half" as const,
+        latency_ms: 100,
+      };
+
+      const res = isCandidateCorroborated(candIncorreto, valCorreta, 2076.44, "2026-11-03");
+      expect(res.corroborated).toBe(false);
+      expect(res.reason).toMatch(/divergencia_leituras_visuais|divergencia_material_valor_candidato/);
+    });
+
+    // Cenário B: Candidato focalizado com valor visual igual à linha incorreta (R$ 27.644,10), mas OCR inicial tem R$ 2.076,44 -> rejeitado (anti-autocorroboration)
+    it("Cenário B: Bloqueio estrito de autocorroboração — candidato com valor igual à própria linha errada é rejeitado contra o documento inicial", () => {
+      // Linha de produção falsa que deriva R$ 27.644,10
+      const valFalsa = validateLinhaDigitavel(SPAL_LINHA_PRODUCAO_DERIVADA);
+      expect(valFalsa.valido).toBe(true);
+      expect(valFalsa.valorDerivado).toBe(27644.10);
+
+      // Candidato do mesmo passe tenta autocorroborar com seu próprio valor visual R$ 27.644,10
+      const candFalso = {
+        linha_digits: cleanDigits(SPAL_LINHA_PRODUCAO_DERIVADA),
+        digit_count: 47,
+        valor_visual: 27644.10,
+        vencimento_visual: "2039-05-10",
+        linha_raw: SPAL_LINHA_PRODUCAO_DERIVADA,
+        provider: "gemini" as const,
+        attempt: 1,
+        region: "lower_third" as const,
+        latency_ms: 80,
+      };
+
+      // OCR inicial do documento lera R$ 2.076,44 e 2026-11-03
+      const res = isCandidateCorroborated(candFalso, valFalsa, 2076.44, "2026-11-03");
+      expect(res.corroborated).toBe(false);
+      // NUNCA pode corroborar mesmo que candFalso.valor_visual === valFalsa.valorDerivado
+      expect(res.reason).toMatch(/divergencia_leituras_visuais|divergencia_material_valor_doc_inicial/);
+    });
+
+    // Cenário C: Leitura inicial e tentativa focalizada com datas divergentes (2026-11-03 vs 2026-11-10) -> candidato rejeitado
+    it("Cenário C: Leitura inicial e tentativa focalizada com datas divergentes (2026-11-03 vs 2026-11-10) -> candidato rejeitado", () => {
+      const valCorreta = validateLinhaDigitavel(SPAL_LINHA_IMPRESSA_CORRETA);
+      const candDataDivergente = {
+        linha_digits: SPAL_LINHA_IMPRESSA_LIMPA,
+        digit_count: 47,
+        valor_visual: 2076.44,
+        vencimento_visual: "2026-11-10", // data diferente da leitura inicial
+        linha_raw: SPAL_LINHA_IMPRESSA_CORRETA,
+        provider: "openai" as const,
+        attempt: 1,
+        region: "lower_half" as const,
+        latency_ms: 120,
+      };
+
+      const res = isCandidateCorroborated(candDataDivergente, valCorreta, 2076.44, "2026-11-03");
+      expect(res.corroborated).toBe(false);
+      expect(res.reason).toContain("divergencia_vencimento_leituras");
+    });
+
+    // Cenário D: Duas datas com mesmo ano mas dias ou meses diferentes (2026-11-03 vs 2026-11-10) -> bloqueado como divergência material
+    it("Cenário D: Duas datas no mesmo ano mas dias/meses divergentes (2026-11-03 vs 2026-11-10) são bloqueadas como divergência material sem proposta", () => {
+      // Boleto onde o visual é 2026-11-10, mas a linha deriva 2026-11-03 (mesmo ano, dias diferentes)
+      const input = {
+        banco: SPAL_BANCO,
+        beneficiario: SPAL_BENEFICIARIO,
+        valor: 2076.44,
+        data_vencimento: "2026-11-10", // visual diferente do derivado da linha (2026-11-03)
+        linha_digitavel: SPAL_LINHA_IMPRESSA_CORRETA,
+      };
+
+      const res = reconcileBoleto(input);
+      expect(res.valido).toBe(false);
+      expect(res.status).toBe("requer_revisao");
+      expect(res.evidence?.has_unresolved_material_divergence).toBe(true);
+      expect(res.divergencias.some((d) => d.includes("divergencia_material_vencimento"))).toBe(true);
+    });
+
+    // Cenário E: Caso com confusão de data de emissão: vencimento visual impresso igual à emissão, mas linha tem vencimento posterior no mesmo ano com valor 100% corroborado
+    it("Cenário E: Confusão legítima de emissão é aceita com alerta; sem comprovação de emissão é bloqueada fail-closed", () => {
+      // Caso 1: Comprovada confusão de emissão (data_vencimento == data_emissao visual, linha > emissao, valor 100% corroborado)
+      const inputConfusaoValida = {
+        banco: SPAL_BANCO,
+        beneficiario: SPAL_BENEFICIARIO,
+        valor: 2076.44,
+        data_vencimento: "2026-10-23", // OCR visual leu a emissão como vencimento
+        data_emissao: "2026-10-23", // data de emissão impressa no documento
+        linha_digitavel: SPAL_LINHA_IMPRESSA_CORRETA, // linha deriva 2026-11-03 (> 2026-10-23)
+      };
+
+      const resValido = reconcileBoleto(inputConfusaoValida);
+      expect(resValido.valido).toBe(true);
+      expect(resValido.status).toBe("validado_com_alerta");
+      expect(resValido.dataVencimentoFinal).toBe("2026-11-03");
+      expect(resValido.warnings.some((w) => w.includes("divergencia_vencimento_ocr"))).toBe(true);
+
+      // Caso 2: Não comprovada confusão de emissão (sem data_emissao informada)
+      const inputSemEmissao = {
+        banco: SPAL_BANCO,
+        beneficiario: SPAL_BENEFICIARIO,
+        valor: 2076.44,
+        data_vencimento: "2026-10-23",
+        linha_digitavel: SPAL_LINHA_IMPRESSA_CORRETA,
+      };
+
+      const resInvalido = reconcileBoleto(inputSemEmissao);
+      expect(resInvalido.valido).toBe(false);
+      expect(resInvalido.status).toBe("requer_revisao");
+      expect(resInvalido.evidence?.has_unresolved_material_divergence).toBe(true);
+    });
+
+    // Cenário F: Caso SPAL com dados corretos (R$ 2.076,44, 2026-11-03) -> validado normalmente
+    it("Cenário F: Caso SPAL com dados corretos (R$ 2.076,44, 2026-11-03) -> validado normalmente", () => {
+      const res = reconcileBoleto({
+        banco: SPAL_BANCO,
+        beneficiario: SPAL_BENEFICIARIO,
+        valor: 2076.44,
+        data_vencimento: "2026-11-03",
+        linha_digitavel: SPAL_LINHA_IMPRESSA_CORRETA,
+      });
+
+      expect(res.valido).toBe(true);
+      expect(res.status).toBe("validado");
+      expect(res.valorFinal).toBe(2076.44);
+      expect(res.dataVencimentoFinal).toBe("2026-11-03");
+      expect(res.codigoBarrasFinal).toBe(SPAL_BARCODE_CANONICO_44);
+    });
+
+    // Cenário G: Caso SPAL com dados da v150 (R$ 27.644,10, 2039-05-10) -> bloqueado
+    it("Cenário G: Caso SPAL com dados da v150 (R$ 27.644,10, 2039-05-10) em face do documento original é bloqueado", () => {
+      const res = reconcileBoleto({
+        banco: SPAL_BANCO,
+        beneficiario: SPAL_BENEFICIARIO,
+        valor: 2076.44,
+        data_vencimento: "2026-11-03",
+        linha_digitavel: SPAL_LINHA_PRODUCAO_DERIVADA, // R$ 27.644,10 e 2039-05-10
+      });
+
+      expect(res.valido).toBe(false);
+      expect(res.status).toBe("requer_revisao");
+      expect(res.evidence?.has_unresolved_material_divergence).toBe(true);
+      expect(res.divergencias.some((d) => d.includes("divergencia_material_valor"))).toBe(true);
+      expect(res.divergencias.some((d) => d.includes("divergencia_material_vencimento"))).toBe(true);
+    });
+
+    // Cenário H: Regressão Xodó Foods -> aceito com 44 dígitos canônicos
+    it("Cenário H: Regressão Xodó Foods (R$ 658,14, 2026-10-30) aceito com 44 dígitos canônicos", () => {
+      const res = reconcileBoleto({
+        banco: "Banco Itaú S.A.",
+        beneficiario: XODO_BENEFICIARIO,
+        valor: 658.14,
+        data_vencimento: "2026-10-30",
+        linha_digitavel: XODO_LINHA_47,
+      });
+
+      expect(res.valido).toBe(true);
+      expect(res.status).toBe("validado");
+      expect(res.valorFinal).toBe(658.14);
+      expect(res.dataVencimentoFinal).toBe("2026-10-30");
+      expect(res.codigoBarrasFinal).toBe(XODO_BARCODE_CANONICO_44);
+      expect(res.codigoBarrasFinal).toHaveLength(44);
+    });
+
+    // Cenário I: Boletos de arrecadação (48 dígitos) -> preservados
+    it("Cenário I: Boletos de arrecadação (48 dígitos, Módulo 10/11) continuam válidos com 44 dígitos derivados", () => {
+      const val = validateLinhaDigitavel(ARRECADACAO_LINHA_48);
+      expect(val.valido).toBe(true);
+      expect(val.tipo).toBe("arrecadacao");
+      expect(val.codigoBarrasDerivado).toBe(ARRECADACAO_CODIGO_44);
+      expect(val.codigoBarrasDerivado).toHaveLength(44);
+    });
+
+    // Cenário J: DANFE -> preservado
+    it("Cenário J: Pipeline e parsing de DANFE continuam íntegros e isolados sem interferência de boletos", () => {
+      const chaveDanfe = "35260100000000000001550010001234561000000180";
+      expect(chaveDanfe).toHaveLength(44);
+      expect(cleanDigits(chaveDanfe)).toBe(chaveDanfe);
+    });
   });
 });

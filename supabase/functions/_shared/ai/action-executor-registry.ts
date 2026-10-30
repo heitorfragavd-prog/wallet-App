@@ -5,6 +5,7 @@ import {
   cleanDigits,
   validateLinhaDigitavel,
   validateCodigoBarras,
+  normalizeDate,
 } from "./boleto-validator.ts";
 
 export type ActionExecutionHandler = (
@@ -204,15 +205,14 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
           }
         }
 
-        // Verificação de divergência comprovada de vencimento (ano discordante)
+        // Verificação estrita de vencimento derivado da linha (ISO YYYY-MM-DD)
         if (validacaoLinha.dataVencimentoDerivada) {
-          const anoProposta = parseInt(dataVencimento.split("-")[0], 10);
-          const anoLinha = parseInt(validacaoLinha.dataVencimentoDerivada.split("-")[0], 10);
-          if (anoProposta && anoLinha && anoProposta !== anoLinha) {
+          const dataVencIso = normalizeDate(dataVencimento).iso || dataVencimento;
+          if (dataVencIso !== validacaoLinha.dataVencimentoDerivada) {
             throw new ActionGatewayError(
               "WALLET_AI_ACTION_INVALID",
               400,
-              `Divergência comprovada de vencimento: data da proposta (${dataVencimento}) difere do vencimento da linha digitável (${validacaoLinha.dataVencimentoDerivada}).`,
+              `Divergência de vencimento: data da proposta (${dataVencimento}) difere do vencimento derivado da linha digitável (${validacaoLinha.dataVencimentoDerivada}).`,
             );
           }
         }
@@ -278,14 +278,14 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
           );
         }
       }
+      // Verificação estrita de vencimento derivado do código de barras (ISO YYYY-MM-DD)
       if (validacaoCb.dataVencimentoDerivada) {
-        const anoProposta = parseInt(dataVencimento.split("-")[0], 10);
-        const anoCb = parseInt(validacaoCb.dataVencimentoDerivada.split("-")[0], 10);
-        if (anoProposta && anoCb && anoProposta !== anoCb) {
+        const dataVencIso = normalizeDate(dataVencimento).iso || dataVencimento;
+        if (dataVencIso !== validacaoCb.dataVencimentoDerivada) {
           throw new ActionGatewayError(
             "WALLET_AI_ACTION_INVALID",
             400,
-            `Divergência comprovada de vencimento: data da proposta (${dataVencimento}) difere do vencimento do código de barras (${validacaoCb.dataVencimentoDerivada}).`,
+            `Divergência de vencimento: data da proposta (${dataVencimento}) difere do vencimento derivado do código de barras (${validacaoCb.dataVencimentoDerivada}).`,
           );
         }
       }

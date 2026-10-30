@@ -467,6 +467,7 @@ export interface RecoverBoletoLineOptions {
   regionCandidates?: RegionCandidate[];
   docVisualValor?: number | null;
   docVisualVencimento?: string | null;
+  docVisualEmissao?: string | null;
 }
 
 export interface RecoverBoletoLineResult {
@@ -759,46 +760,104 @@ async function executeFocusedLineAttempt(params: {
  */
 /**
  * Verifica se um candidato de linha digitável ou código de barras é corroborado pelas evidências visuais do documento.
- * Bloqueia estritamente falsos positivos matemáticos (ex: código de barras com DV 1 aleatório mas valor/data conflitantes).
+ * Bloqueia estritamente autocorroboração de OCR e falsos positivos matemáticos (ex: código de barras com DV 1 aleatório mas valor/data conflitantes).
  */
 export function isCandidateCorroborated(
   candidate: FocusedBoletoLineCandidate,
   valRes: ValidatedLinhaDigitavel,
   docVisualValor?: number | null,
-  docVisualVencimento?: string | null
+  docVisualVencimento?: string | null,
+  docVisualEmissao?: string | null
 ): { corroborated: boolean; reason?: string } {
   if (!valRes.valido) {
     return { corroborated: false, reason: "febraban_dv_invalid" };
   }
 
-  // 1. Verificação Estrita de Valor Nominal em CENTAVOS INTEIROS (sem tolerância genérica)
-  const visualValor = candidate.valor_visual && candidate.valor_visual > 0
-    ? candidate.valor_visual
-    : (docVisualValor && docVisualValor > 0 ? docVisualValor : null);
+  const derivadoCentavos = valRes.valorDerivado && valRes.valorDerivado > 0
+    ? Math.round(valRes.valorDerivado * 100)
+    : null;
 
-  if (visualValor !== null && valRes.valorDerivado && valRes.valorDerivado > 0) {
-    const visualCentavos = Math.round(visualValor * 100);
-    const derivadoCentavos = Math.round(valRes.valorDerivado * 100);
-    if (visualCentavos !== derivadoCentavos) {
+  const docCentavos = docVisualValor && docVisualValor > 0
+    ? Math.round(docVisualValor * 100)
+    : null;
+
+  const candCentavos = candidate.valor_visual && candidate.valor_visual > 0
+    ? Math.round(candidate.valor_visual * 100)
+    : null;
+
+  // 1. Verificação Independente de Valores Nominais em CENTAVOS INTEIROS (sem tolerância solta)
+  // Regra Anti-Autocorroboração: leituras visuais do documento e da tentativa focalizada devem coincidir
+  if (docCentavos !== null && candCentavos !== null && docCentavos !== candCentavos) {
+    return {
+      corroborated: false,
+      reason: `divergencia_leituras_visuais: doc=${(docCentavos / 100).toFixed(2)} candidato=${(candCentavos / 100).toFixed(2)}`,
+    };
+  }
+
+  if (docCentavos !== null && derivadoCentavos !== null && docCentavos !== derivadoCentavos) {
+    return {
+      corroborated: false,
+      reason: `divergencia_material_valor_doc_inicial: doc=${(docCentavos / 100).toFixed(2)} derivado=${(derivadoCentavos / 100).toFixed(2)}`,
+    };
+  }
+
+  if (candCentavos !== null && derivadoCentavos !== null && candCentavos !== derivadoCentavos) {
+    return {
+      corroborated: false,
+      reason: `divergencia_material_valor_candidato: candidato=${(candCentavos / 100).toFixed(2)} derivado=${(derivadoCentavos / 100).toFixed(2)}`,
+    };
+  }
+
+  // 2. Verificação Independente de Vencimento Completo (ISO YYYY-MM-DD)
+  const derivadoVenc = valRes.dataVencimentoDerivada;
+  const docVenc = docVisualVencimento ? normalizeDate(docVisualVencimento).iso : null;
+  const candVenc = candidate.vencimento_visual ? normalizeDate(candidate.vencimento_visual).iso : null;
+  const emissaoIso = docVisualEmissao ? normalizeDate(docVisualEmissao).iso : null;
+
+  // Se ambas as leituras visuais têm data, devem coincidir (a menos que a inicial fosse comprovada data de emissão)
+  if (docVenc && candVenc && docVenc !== candVenc) {
+    const isDocConfusaoEmissao = Boolean(
+      emissaoIso &&
+      docVenc === emissaoIso &&
+      candVenc > emissaoIso &&
+      (derivadoVenc ? candVenc === derivadoVenc : true)
+    );
+    if (!isDocConfusaoEmissao) {
       return {
         corroborated: false,
-        reason: `divergencia_material_valor: visual=${(visualCentavos / 100).toFixed(2)} derivado=${(derivadoCentavos / 100).toFixed(2)}`,
+        reason: `divergencia_vencimento_leituras: doc=${docVenc} candidato=${candVenc}`,
       };
     }
   }
 
-  // 2. Verificação de Vencimento por Evidência Comprovada de Divergência Temporal (ano discordante)
-  const visualVenc = candidate.vencimento_visual
-    ? normalizeDate(candidate.vencimento_visual).iso
-    : (docVisualVencimento ? normalizeDate(docVisualVencimento).iso : null);
-
-  if (valRes.dataVencimentoDerivada && visualVenc) {
-    const anoVisual = parseInt(visualVenc.split("-")[0], 10);
-    const anoDerivado = parseInt(valRes.dataVencimentoDerivada.split("-")[0], 10);
-    if (anoVisual && anoDerivado && anoVisual !== anoDerivado) {
+  // Comparação docVisualVencimento vs derivadoVenc
+  if (docVenc && derivadoVenc && docVenc !== derivadoVenc) {
+    const isConfusaoEmissao = Boolean(
+      emissaoIso &&
+      docVenc === emissaoIso &&
+      derivadoVenc > emissaoIso &&
+      (docCentavos === null || derivadoCentavos === null || docCentavos === derivadoCentavos)
+    );
+    if (!isConfusaoEmissao) {
       return {
         corroborated: false,
-        reason: `divergencia_comprovada_vencimento: visual=${visualVenc} derivado=${valRes.dataVencimentoDerivada}`,
+        reason: `divergencia_vencimento_doc_inicial: doc=${docVenc} derivado=${derivadoVenc}`,
+      };
+    }
+  }
+
+  // Comparação candidate.vencimento_visual vs derivadoVenc
+  if (candVenc && derivadoVenc && candVenc !== derivadoVenc) {
+    const isConfusaoEmissao = Boolean(
+      emissaoIso &&
+      candVenc === emissaoIso &&
+      derivadoVenc > emissaoIso &&
+      (candCentavos === null || derivadoCentavos === null || candCentavos === derivadoCentavos)
+    );
+    if (!isConfusaoEmissao) {
+      return {
+        corroborated: false,
+        reason: `divergencia_vencimento_candidato: candidato=${candVenc} derivado=${derivadoVenc}`,
       };
     }
   }
@@ -879,7 +938,8 @@ export async function recoverBoletoLineWithFailover(
                     candidate,
                     derivedValRes,
                     options.docVisualValor,
-                    options.docVisualVencimento
+                    options.docVisualVencimento,
+                    options.docVisualEmissao
                   );
                   if (check.corroborated) {
                     valRes = derivedValRes;
@@ -913,7 +973,8 @@ export async function recoverBoletoLineWithFailover(
             candidate,
             valRes,
             options.docVisualValor,
-            options.docVisualVencimento
+            options.docVisualVencimento,
+            options.docVisualEmissao
           );
 
           if (corroboration.corroborated) {
@@ -983,7 +1044,8 @@ export async function recoverBoletoLineWithFailover(
                     candidate,
                     derivedValRes,
                     options.docVisualValor,
-                    options.docVisualVencimento
+                    options.docVisualVencimento,
+                    options.docVisualEmissao
                   );
                   if (check.corroborated) {
                     valRes = derivedValRes;
@@ -1017,7 +1079,8 @@ export async function recoverBoletoLineWithFailover(
             candidate,
             valRes,
             options.docVisualValor,
-            options.docVisualVencimento
+            options.docVisualVencimento,
+            options.docVisualEmissao
           );
 
           if (corroboration.corroborated) {
@@ -1218,6 +1281,7 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
       const regionCandidates = await buildBoletoRegionCandidates(cleanB64);
       const docVisualValor = dados.valor ? parseBoletoAmount(dados.valor) : null;
       const docVisualVencimento = dados.data_vencimento ? String(dados.data_vencimento) : null;
+      const docVisualEmissao = dados.data_emissao ? String(dados.data_emissao) : null;
 
       const recovery = await recoverBoletoLineWithFailover({
         base64: cleanB64,
@@ -1230,16 +1294,22 @@ export async function processBoletoDocument(input: ProcessBoletoInput): Promise<
         regionCandidates,
         docVisualValor,
         docVisualVencimento,
+        docVisualEmissao,
       });
 
       if (recovery.recovered && recovery.validationResult?.valido) {
         console.log(`[BOLETO_PROCESS] Linha recuperada com sucesso via failover focalizado!`);
         dados.linha_digitavel = recovery.validationResult.linhaLimpa || recovery.successfulCandidate?.linha_digits || dados.linha_digitavel;
         dados.codigo_barras = recovery.validationResult.codigoBarrasDerivado || recovery.successfulCandidate?.codigo_barras || dados.codigo_barras;
-        if (recovery.successfulCandidate?.valor_visual && recovery.successfulCandidate.valor_visual > 0) {
+        if ((!dados.valor || parseBoletoAmount(dados.valor) <= 0) && recovery.successfulCandidate?.valor_visual && recovery.successfulCandidate.valor_visual > 0) {
           dados.valor = recovery.successfulCandidate.valor_visual;
         }
-        if (recovery.successfulCandidate?.vencimento_visual) {
+        const isEmissaoConfusion = Boolean(
+          dados.data_emissao &&
+          dados.data_vencimento &&
+          normalizeDate(dados.data_vencimento).iso === normalizeDate(dados.data_emissao).iso
+        );
+        if ((!dados.data_vencimento || isEmissaoConfusion) && recovery.successfulCandidate?.vencimento_visual) {
           dados.data_vencimento = recovery.successfulCandidate.vencimento_visual;
         }
         validacao = reconcileBoleto(dados);
