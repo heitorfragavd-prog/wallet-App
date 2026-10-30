@@ -17,11 +17,13 @@ DROP VIEW IF EXISTS public.v_delivery_order_items_operacional CASCADE;
 DROP VIEW IF EXISTS public.v_delivery_orders_operacional CASCADE;
 
 -- 1. Remoção de Triggers
+DROP TRIGGER IF EXISTS trg_check_delivery_order_dispatch_checklist ON public.delivery_orders;
 DROP TRIGGER IF EXISTS trg_check_delivery_order_item_workspace ON public.delivery_order_items;
 DROP TRIGGER IF EXISTS trg_check_delivery_order_financial_mutation ON public.delivery_orders;
 DROP TRIGGER IF EXISTS trg_check_delivery_order_item_financial_mutation ON public.delivery_order_items;
 
 -- 2. Remoção de Funções Auxiliares
+DROP FUNCTION IF EXISTS public.check_delivery_order_dispatch_checklist();
 DROP FUNCTION IF EXISTS public.check_delivery_order_item_workspace();
 DROP FUNCTION IF EXISTS public.check_delivery_order_financial_mutation();
 DROP FUNCTION IF EXISTS public.check_delivery_order_item_financial_mutation();

@@ -1,5 +1,7 @@
 # Banco de dados
 
+<!-- specsfy:docs:updated: 2026-10-30T15:00:00Z - trg_check_delivery_order_dispatch_checklist -->
+
 <!-- specsfy:documentator:start -->
 ## Fontes de persistência
 

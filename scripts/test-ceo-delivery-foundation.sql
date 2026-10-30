@@ -423,7 +423,7 @@ BEGIN
 END $$;
 COMMIT;
 
--- CENÁRIO 13: Bloqueio de Despacho se houver itens pendentes de conferência
+-- CENÁRIO 13: Bloqueio estrito de despacho para TODOS os caminhos (RPC e PostgREST direto)
 BEGIN;
 SET LOCAL request.jwt.claims = '{"sub": "22222222-2222-2222-2222-222222222222", "role": "authenticated"}';
 SET LOCAL ROLE authenticated;
@@ -432,24 +432,59 @@ DO $$
 DECLARE
   v_ord_id UUID := 'dddddddd-dddd-dddd-dddd-dddddddddddd';
   v_it2_id UUID := 'ffffffff-ffff-ffff-ffff-ffffffffffff';
-  v_failed BOOLEAN := false;
+  v_failed_rpc BOOLEAN := false;
+  v_failed_direct_dispatch BOOLEAN := false;
+  v_failed_direct_delivered BOOLEAN := false;
 BEGIN
   -- O item 1 foi conferido no Cenário 10, mas o item 2 continua pendente (is_verified_in_kds = false)
+
+  -- Teste 1: Tentativa de despacho via RPC com item não conferido -> Deve falhar
   BEGIN
     PERFORM public.rpc_atualizar_status_delivery_order(v_ord_id, 'dispatched');
   EXCEPTION WHEN OTHERS THEN
-    v_failed := true;
+    v_failed_rpc := true;
   END;
 
-  IF NOT v_failed THEN
-    RAISE EXCEPTION 'FALHA DE CONTROLE [CENÁRIO 13]: rpc permitiu despachar pedido com itens não-conferidos!';
+  IF NOT v_failed_rpc THEN
+    RAISE EXCEPTION 'FALHA DE CONTROLE [CENÁRIO 13.1]: rpc permitiu despachar pedido com itens não-conferidos!';
   END IF;
 
-  -- Confere o item restante
+  -- Teste 2: Tentativa de despacho via UPDATE direto na tabela base -> Deve falhar por trigger
+  BEGIN
+    UPDATE public.delivery_orders
+    SET order_status = 'dispatched'
+    WHERE id = v_ord_id;
+  EXCEPTION WHEN OTHERS THEN
+    v_failed_direct_dispatch := true;
+  END;
+
+  IF NOT v_failed_direct_dispatch THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.2]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto de despacho com itens pendentes!';
+  END IF;
+
+  -- Teste 3: Tentativa de marcar como entregue diretamente sem conferência -> Deve falhar por trigger
+  BEGIN
+    UPDATE public.delivery_orders
+    SET order_status = 'delivered'
+    WHERE id = v_ord_id;
+  EXCEPTION WHEN OTHERS THEN
+    v_failed_direct_delivered := true;
+  END;
+
+  IF NOT v_failed_direct_delivered THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 13.3]: trigger trg_check_delivery_order_dispatch_checklist não bloqueou UPDATE direto para entregue com itens pendentes!';
+  END IF;
+
+  -- Teste 4: Conferência completa dos itens
   PERFORM public.rpc_conferir_item_delivery(v_it2_id, true);
 
-  -- Agora o despacho deve ser aceito
+  -- Teste 5: Agora o despacho via RPC é aceito
   PERFORM public.rpc_atualizar_status_delivery_order(v_ord_id, 'dispatched');
+
+  -- Teste 6: Atualização direta autorizada após conferência completa
+  UPDATE public.delivery_orders
+  SET order_status = 'delivered'
+  WHERE id = v_ord_id;
 END $$;
 COMMIT;
 

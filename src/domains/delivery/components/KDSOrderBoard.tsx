@@ -127,8 +127,9 @@ interface KDSOrderBoardProps {
 
 export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) => {
   const { toast } = useToast();
-  const { activeWorkspace } = useWorkspace();
+  const { activeWorkspace, activeWorkspaceRole } = useWorkspace();
   const workspaceId = activeWorkspace?.id || 'default_workspace';
+  const isStaff = activeWorkspaceRole === 'delivery_staff';
 
   const [orders, setOrders] = useState<DeliveryOrder[]>(initialOrders || []);
   const [isLoading, setIsLoading] = useState<boolean>(!initialOrders);
@@ -139,7 +140,7 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeChecklistOrder, setActiveChecklistOrder] = useState<DeliveryOrder | null>(null);
 
-  // Carrega pedidos reais da persistência do Supabase
+  // Carrega pedidos reais da persistência do Supabase via view operacional
   const loadRealOrders = useCallback(async () => {
     if (isDemoMode) {
       setOrders(SAMPLE_DEMO_ORDERS);
@@ -150,13 +151,16 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
     if (!workspaceId) return;
 
     setIsLoading(true);
-    const result = await DeliveryOrderRepository.listOrders(workspaceId);
+    const result = await DeliveryOrderRepository.listOrders(workspaceId, {
+      isStaff,
+      operationalOnly: true,
+    });
     setIsDbConfigured(result.isConfigured);
     if (result.data) {
       setOrders(result.data);
     }
     setIsLoading(false);
-  }, [workspaceId, isDemoMode]);
+  }, [workspaceId, isDemoMode, isStaff]);
 
   useEffect(() => {
     loadRealOrders();

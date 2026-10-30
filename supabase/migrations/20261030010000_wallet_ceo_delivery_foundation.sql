@@ -367,7 +367,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Para operadores de delivery: só permite atualizar is_verified_in_kds
+  -- Se for delivery_staff/operador: só permite atualizar is_verified_in_kds
   IF NEW.unit_price <> OLD.unit_price
      OR NEW.total_price <> OLD.total_price
      OR NEW.estimated_unit_cost <> OLD.estimated_unit_cost
@@ -379,6 +379,17 @@ BEGIN
     RAISE EXCEPTION 'Acesso negado: operador de delivery só tem permissão para conferir itens no KDS.';
   END IF;
 
+  -- Se estiver alterando is_verified_in_kds, registra operador e timestamp automaticamente
+  IF NEW.is_verified_in_kds IS DISTINCT FROM OLD.is_verified_in_kds THEN
+    IF NEW.is_verified_in_kds = true THEN
+      NEW.verified_by_user_id := coalesce(auth.uid(), NEW.verified_by_user_id);
+      NEW.verified_at := clock_timestamp();
+    ELSE
+      NEW.verified_by_user_id := NULL;
+      NEW.verified_at := NULL;
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -388,6 +399,48 @@ CREATE TRIGGER trg_check_delivery_order_item_financial_mutation
 BEFORE UPDATE ON public.delivery_order_items
 FOR EACH ROW
 EXECUTE FUNCTION public.check_delivery_order_item_financial_mutation();
+
+-- D. Impede despacho ou marcação como entregue de pedidos com itens pendentes de conferência (qualquer canal/RPC/PostgREST)
+CREATE OR REPLACE FUNCTION public.check_delivery_order_dispatch_checklist()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_unverified_count integer;
+BEGIN
+  -- Se o status está sendo alterado para 'dispatched' ou 'delivered'
+  IF NEW.order_status IN ('dispatched', 'despachado', 'delivered', 'entregue') 
+     AND (OLD.order_status IS NULL OR OLD.order_status NOT IN ('dispatched', 'despachado', 'delivered', 'entregue'))
+  THEN
+    SELECT count(*)
+    INTO v_unverified_count
+    FROM public.delivery_order_items
+    WHERE order_id = NEW.id
+      AND is_verified_in_kds = false;
+
+    IF v_unverified_count > 0 THEN
+      RAISE EXCEPTION 'Não é permitido despachar pedido com itens pendentes de conferência (itens não conferidos: %)', v_unverified_count;
+    END IF;
+
+    IF NEW.order_status IN ('dispatched', 'despachado') AND NEW.dispatched_at IS NULL THEN
+      NEW.dispatched_at := clock_timestamp();
+    END IF;
+    IF NEW.order_status IN ('delivered', 'entregue') AND NEW.delivered_at IS NULL THEN
+      NEW.delivered_at := clock_timestamp();
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_check_delivery_order_dispatch_checklist ON public.delivery_orders;
+CREATE TRIGGER trg_check_delivery_order_dispatch_checklist
+BEFORE INSERT OR UPDATE OF order_status ON public.delivery_orders
+FOR EACH ROW
+EXECUTE FUNCTION public.check_delivery_order_dispatch_checklist();
 
 
 -- ==============================================================================

@@ -1,5 +1,7 @@
 # Banco de dados
 
+<!-- specsfy:database:updated: 2026-10-30T15:00:00Z - trg_check_delivery_order_dispatch_checklist -->
+
 Mapa de persistência do sistema. Modelo inicial sugerido para
 **stack ainda não identificado**.
 

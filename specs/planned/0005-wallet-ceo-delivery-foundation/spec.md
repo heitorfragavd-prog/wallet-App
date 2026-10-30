@@ -56,6 +56,12 @@ Uma fundação vertical completa e funcional contendo:
 3. `public.v_delivery_channels_operacional`: Expõe estado e nome dos canais, omitindo tokens, credenciais e taxas contratuais.
 4. `public.v_delivery_catalog_operacional`: Expõe disponibilidade de itens, omitindo custos e margens de produto.
 
+#### Triggers de Integridade, Rastreabilidade e Bloqueio de Despacho
+1. `public.trg_check_delivery_order_dispatch_checklist`: Trigger `BEFORE INSERT OR UPDATE OF order_status ON public.delivery_orders` que impede qualquer alteração de status para `'dispatched'` ou `'delivered'` se houver itens com `is_verified_in_kds = false`, garantindo o bloqueio tanto via RPC quanto via UPDATE direto no banco/PostgREST.
+2. `public.trg_check_delivery_order_financial_mutation`: Trigger `BEFORE UPDATE ON public.delivery_orders` que bloqueia alterações em campos financeiros por usuários sem perfil de administrador.
+3. `public.trg_check_delivery_order_item_financial_mutation`: Trigger `BEFORE UPDATE ON public.delivery_order_items` que restringe operadores a alterar apenas `is_verified_in_kds`, carimbando automaticamente `verified_by_user_id` e `verified_at`.
+4. `public.trg_check_delivery_order_item_workspace`: Trigger `BEFORE INSERT OR UPDATE ON public.delivery_order_items` que assegura consistência de workspace entre cabeçalho e itens.
+
 #### RPCs Atômicas e Seguras (Security Definer)
 1. `public.rpc_listar_pedidos_kds(p_workspace_id uuid)`: Retorna lista de pedidos ativos e itens conferidos sem vazamento financeiro.
 2. `public.rpc_criar_delivery_order_atomico(p_order jsonb, p_items jsonb)`: Inserção atômica de pedido e itens com idempotência por `(workspace_id, channel_name, external_order_id)`.

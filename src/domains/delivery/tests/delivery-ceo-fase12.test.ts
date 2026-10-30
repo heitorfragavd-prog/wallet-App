@@ -52,9 +52,13 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.rpc_conferir_item_delivery');
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.rpc_atualizar_status_delivery_order');
       expect(sql).toContain('CREATE OR REPLACE FUNCTION public.rpc_listar_pedidos_kds');
+
+      // 4. Trigger de bloqueio de despacho para pedidos com itens pendentes
+      expect(sql).toContain('CREATE TRIGGER trg_check_delivery_order_dispatch_checklist');
+      expect(sql).toContain('CREATE OR REPLACE FUNCTION public.check_delivery_order_dispatch_checklist');
     });
 
-    it('rollback SQL remove todas as views e RPCs operacionais', () => {
+    it('rollback SQL remove todas as views, RPCs e triggers operacionais', () => {
       const rollbackPath = path.resolve('supabase/migrations/rollback/20261030010000_wallet_ceo_delivery_foundation.down.sql');
       expect(fs.existsSync(rollbackPath)).toBe(true);
       const sql = fs.readFileSync(rollbackPath, 'utf8');
@@ -65,6 +69,8 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       expect(sql).toContain('DROP FUNCTION IF EXISTS public.rpc_criar_delivery_order_atomico');
       expect(sql).toContain('DROP FUNCTION IF EXISTS public.rpc_listar_pedidos_kds');
       expect(sql).toContain('DROP VIEW IF EXISTS public.v_delivery_orders_operacional');
+      expect(sql).toContain('DROP TRIGGER IF EXISTS trg_check_delivery_order_dispatch_checklist');
+      expect(sql).toContain('DROP FUNCTION IF EXISTS public.check_delivery_order_dispatch_checklist');
     });
   });
 
@@ -127,6 +133,56 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       });
     });
 
+    it('listOrders com { isStaff: true } consulta DIRETAMENTE v_delivery_orders_operacional sem consultar delivery_orders', async () => {
+      const mockOpSelect = vi.fn();
+      const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
+
+      const mockOpEq = vi.fn().mockReturnValue({
+        order: vi.fn().mockResolvedValue({
+          data: [
+            {
+              id: 'ord-staff-direct',
+              workspace_id: 'ws-rodo-point',
+              channel_name: 'direto',
+              display_id: '#KDS-01',
+              customer_name: 'Cliente Balcão',
+              order_status: 'preparing',
+            },
+          ],
+          error: null,
+        }),
+      });
+      mockOpSelect.mockReturnValue({ eq: mockOpEq });
+
+      const mockItemsSelect = vi.fn().mockReturnValue({
+        in: vi.fn().mockResolvedValue({
+          data: [
+            { id: 'it-staff-1', order_id: 'ord-staff-direct', product_name: 'Pastel de Carne', quantity: 2, is_verified_in_kds: false },
+          ],
+          error: null,
+        }),
+      });
+
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'v_delivery_orders_operacional') return { select: mockOpSelect };
+        if (table === 'v_delivery_order_items_operacional') return { select: mockItemsSelect };
+        if (table === 'delivery_orders') {
+          throw new Error('VIOLAÇÃO: delivery_orders não deve ser consultada por funcionários operacionais!');
+        }
+        return { select: vi.fn() };
+      });
+
+      const res = await DeliveryOrderRepository.listOrders('ws-rodo-point', { isStaff: true });
+      expect(res.data).toHaveLength(1);
+      expect(res.data[0].id).toBe('ord-staff-direct');
+      expect(res.data[0].subtotal).toBe(0);
+      expect(res.data[0].commission_amount).toBe(0);
+      expect(res.data[0].net_amount).toBe(0);
+      expect(res.data[0].items?.[0].unit_price).toBe(0);
+      expect(res.data[0].items?.[0].total_price).toBe(0);
+      expect(res.data[0].items?.[0].checked).toBe(false);
+    });
+
     it('listOrders faz fallback automático para v_delivery_orders_operacional se receber 42501 (RLS restriction)', async () => {
       const mockSelect = vi.fn();
       const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
@@ -182,6 +238,85 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.2 (Gates A a
       expect(res.data[0].subtotal).toBe(0); // Zero vazamento financeiro
       expect(res.data[0].items?.[0].unit_price).toBe(0); // Zero vazamento de preço
       expect(res.data[0].items?.[0].checked).toBe(true);
+    });
+
+    it('createOrder falha atomicamente e NUNCA executa inserção sequencial se a RPC atômica falhar', async () => {
+      const mockRpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
+      const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
+
+      // Simula erro na execução da RPC (ex: falha ao gravar itens em transação)
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: { code: '23503', message: 'Foreign key violation em item' },
+      });
+
+      const mockInsert = vi.fn();
+      mockFrom.mockReturnValue({ insert: mockInsert });
+
+      const res = await DeliveryOrderRepository.createOrder({
+        id: 'ord-atomic-fail',
+        workspace_id: 'ws-atomic-test',
+        channel_id: 'ifood-test',
+        channel_order_id: 'ext-fail-99',
+        display_id: '#FAIL-99',
+        customer_name: 'Cliente Falha Atômica',
+        subtotal: 50.0,
+        discount: 0,
+        delivery_fee: 5.0,
+        commission_amount: 10.0,
+        net_amount: 45.0,
+        status: 'received',
+        payment_method: 'marketplace_online',
+        payment_status: 'paid',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        items: [
+          {
+            id: 'it-fail-1',
+            order_id: 'ord-atomic-fail',
+            name: 'Item Inválido',
+            quantity: 1,
+            unit_price: 50.0,
+            total_price: 50.0,
+          },
+        ],
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Foreign key violation');
+      // Confirma que NENHUM cabeçalho foi inserido separadamente via insert() direto
+      expect(mockInsert).not.toHaveBeenCalled();
+    });
+
+    it('createOrder preserva idempotência retornando erro explícito quando o pedido já foi importado', async () => {
+      const mockRpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
+      mockRpc.mockResolvedValueOnce({
+        data: { success: true, is_duplicate: true, message: 'Pedido já importado neste canal.' },
+        error: null,
+      });
+
+      const res = await DeliveryOrderRepository.createOrder({
+        id: 'ord-dup-1',
+        workspace_id: 'ws-rodo',
+        channel_id: 'ifood-dup',
+        channel_order_id: 'ext-dup-100',
+        display_id: '#DUP-100',
+        customer_name: 'Cliente Duplicado',
+        subtotal: 30,
+        discount: 0,
+        delivery_fee: 0,
+        commission_amount: 0,
+        net_amount: 30,
+        status: 'received',
+        payment_method: 'marketplace_online',
+        payment_status: 'paid',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        items: [],
+      });
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Pedido já importado');
     });
   });
 
