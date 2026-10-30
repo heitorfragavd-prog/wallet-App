@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS public.wallet_commercial_experiments (
   observed_results JSONB DEFAULT '{}'::jsonb,
   measured_financial_impact NUMERIC(12, 2) DEFAULT 0.00,
   decision TEXT CHECK (decision IN ('manter', 'ampliar', 'ajustar', 'interromper', 'pendente')) DEFAULT 'pendente',
+  decision_rationale TEXT,
   status TEXT NOT NULL DEFAULT 'planejado' CHECK (status IN ('planejado', 'planned', 'em_andamento', 'active', 'concluido', 'completed', 'cancelado', 'cancelled')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -222,6 +223,8 @@ CREATE TABLE IF NOT EXISTS public.delivery_orders (
   cancelled_at TIMESTAMPTZ,
   cancellation_reason TEXT,
   notes TEXT,
+  kds_notes TEXT,
+  is_demo BOOLEAN NOT NULL DEFAULT false,
   raw_payload JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -245,6 +248,8 @@ CREATE TABLE IF NOT EXISTS public.delivery_order_items (
   options JSONB DEFAULT '[]'::jsonb,
   observations TEXT,
   is_verified_in_kds BOOLEAN NOT NULL DEFAULT false,
+  verified_by_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -434,12 +439,14 @@ CREATE POLICY "wallet_commercial_experiments_admin_all"
   USING (public.tem_acesso_admin_workspace(workspace_id))
   WITH CHECK (public.tem_acesso_admin_workspace(workspace_id));
 
--- 3. delivery_channels: Leitura para equipe operacional; Escrita/Deleção exclusiva admin
-CREATE POLICY "delivery_channels_select_op"
+-- 3. delivery_channels: TABELA BASE EXCLUSIVA ADMIN (Zero vazamento de credenciais e taxas contratuais)
+DROP POLICY IF EXISTS "delivery_channels_select_op" ON public.delivery_channels;
+DROP POLICY IF EXISTS "delivery_channels_select_admin" ON public.delivery_channels;
+CREATE POLICY "delivery_channels_select_admin"
   ON public.delivery_channels
   FOR SELECT
   TO authenticated
-  USING (public.tem_acesso_operacional_workspace(workspace_id));
+  USING (public.tem_acesso_admin_workspace(workspace_id));
 
 CREATE POLICY "delivery_channels_write_admin"
   ON public.delivery_channels
@@ -448,12 +455,14 @@ CREATE POLICY "delivery_channels_write_admin"
   USING (public.tem_acesso_admin_workspace(workspace_id))
   WITH CHECK (public.tem_acesso_admin_workspace(workspace_id));
 
--- 4. delivery_catalog_items: Leitura para equipe operacional; Modificação de preços/custos exclusiva admin
-CREATE POLICY "delivery_catalog_items_select_op"
+-- 4. delivery_catalog_items: TABELA BASE EXCLUSIVA ADMIN (Zero vazamento de CMV e margens de produto)
+DROP POLICY IF EXISTS "delivery_catalog_items_select_op" ON public.delivery_catalog_items;
+DROP POLICY IF EXISTS "delivery_catalog_items_select_admin" ON public.delivery_catalog_items;
+CREATE POLICY "delivery_catalog_items_select_admin"
   ON public.delivery_catalog_items
   FOR SELECT
   TO authenticated
-  USING (public.tem_acesso_operacional_workspace(workspace_id));
+  USING (public.tem_acesso_admin_workspace(workspace_id));
 
 CREATE POLICY "delivery_catalog_items_write_admin"
   ON public.delivery_catalog_items
@@ -462,14 +471,16 @@ CREATE POLICY "delivery_catalog_items_write_admin"
   USING (public.tem_acesso_admin_workspace(workspace_id))
   WITH CHECK (public.tem_acesso_admin_workspace(workspace_id));
 
--- 5. delivery_orders: Leitura operacional; Inserção por admin/integrador; Atualização operacional (protegida por trigger); Deleção exclusiva admin
-CREATE POLICY "delivery_orders_select_op"
+-- 5. delivery_orders: TABELA BASE EXCLUSIVA ADMIN (Zero vazamento de repasses, CMV e subtotal)
+DROP POLICY IF EXISTS "delivery_orders_select_op" ON public.delivery_orders;
+DROP POLICY IF EXISTS "delivery_orders_select_admin" ON public.delivery_orders;
+CREATE POLICY "delivery_orders_select_admin"
   ON public.delivery_orders
   FOR SELECT
   TO authenticated
-  USING (public.tem_acesso_operacional_workspace(workspace_id));
+  USING (public.tem_acesso_admin_workspace(workspace_id));
 
-CREATE POLICY "delivery_orders_insert_op"
+CREATE POLICY "delivery_orders_insert_admin"
   ON public.delivery_orders
   FOR INSERT
   TO authenticated
@@ -491,14 +502,16 @@ CREATE POLICY "delivery_orders_delete_admin"
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
 
--- 6. delivery_order_items: Leitura operacional; Conferência operacional no KDS (protegida por trigger); Deleção exclusiva admin
-CREATE POLICY "delivery_order_items_select_op"
+-- 6. delivery_order_items: TABELA BASE EXCLUSIVA ADMIN (Zero vazamento de preços unitários e CMV)
+DROP POLICY IF EXISTS "delivery_order_items_select_op" ON public.delivery_order_items;
+DROP POLICY IF EXISTS "delivery_order_items_select_admin" ON public.delivery_order_items;
+CREATE POLICY "delivery_order_items_select_admin"
   ON public.delivery_order_items
   FOR SELECT
   TO authenticated
-  USING (public.tem_acesso_operacional_workspace(workspace_id));
+  USING (public.tem_acesso_admin_workspace(workspace_id));
 
-CREATE POLICY "delivery_order_items_insert_op"
+CREATE POLICY "delivery_order_items_insert_admin"
   ON public.delivery_order_items
   FOR INSERT
   TO authenticated
@@ -519,5 +532,515 @@ CREATE POLICY "delivery_order_items_delete_admin"
   FOR DELETE
   TO authenticated
   USING (public.tem_acesso_admin_workspace(workspace_id));
+
+
+-- ==============================================================================
+-- 10. VIEWS OPERACIONAIS DEDICADAS (SECURITY BARRIER — ZERO DADOS FINANCEIROS)
+-- ==============================================================================
+
+-- A. View Operacional de Pedidos KDS (Oculta subtotal, taxas, repasses, CMV e payloads)
+DROP VIEW IF EXISTS public.v_delivery_orders_operacional CASCADE;
+CREATE VIEW public.v_delivery_orders_operacional
+WITH (security_barrier = true) AS
+SELECT
+  id,
+  workspace_id,
+  channel_id,
+  channel_name,
+  external_order_id,
+  display_id,
+  customer_name,
+  customer_phone,
+  delivery_address,
+  order_status,
+  order_type,
+  payment_method,
+  payment_status,
+  estimated_prep_time_minutes,
+  placed_at,
+  preparation_started_at,
+  prepared_at,
+  dispatched_at,
+  delivered_at,
+  cancelled_at,
+  cancellation_reason,
+  notes,
+  kds_notes,
+  is_demo,
+  created_at,
+  updated_at
+FROM public.delivery_orders
+WHERE public.tem_acesso_operacional_workspace(workspace_id);
+
+GRANT SELECT ON public.v_delivery_orders_operacional TO authenticated, service_role;
+
+-- B. View Operacional de Itens de Pedido KDS (Oculta unit_price, total_price e estimated_unit_cost)
+DROP VIEW IF EXISTS public.v_delivery_order_items_operacional CASCADE;
+CREATE VIEW public.v_delivery_order_items_operacional
+WITH (security_barrier = true) AS
+SELECT
+  id,
+  order_id,
+  workspace_id,
+  product_name,
+  quantity,
+  options,
+  observations,
+  is_verified_in_kds,
+  verified_by_user_id,
+  verified_at,
+  created_at
+FROM public.delivery_order_items
+WHERE public.tem_acesso_operacional_workspace(workspace_id);
+
+GRANT SELECT ON public.v_delivery_order_items_operacional TO authenticated, service_role;
+
+-- C. View Operacional de Canais (Oculta config/chaves secretas, comissões contratuais e taxas)
+DROP VIEW IF EXISTS public.v_delivery_channels_operacional CASCADE;
+CREATE VIEW public.v_delivery_channels_operacional
+WITH (security_barrier = true) AS
+SELECT
+  id,
+  workspace_id,
+  channel_name,
+  display_name,
+  is_active,
+  status,
+  connection_state,
+  auto_accept_orders,
+  created_at,
+  updated_at
+FROM public.delivery_channels
+WHERE public.tem_acesso_operacional_workspace(workspace_id);
+
+GRANT SELECT ON public.v_delivery_channels_operacional TO authenticated, service_role;
+
+-- D. View Operacional de Cardápio/Catálogo (Oculta in_store_price, channel_price, unit_cost_cmv e margens)
+DROP VIEW IF EXISTS public.v_delivery_catalog_operacional CASCADE;
+CREATE VIEW public.v_delivery_catalog_operacional
+WITH (security_barrier = true) AS
+SELECT
+  id,
+  workspace_id,
+  channel_id,
+  product_name,
+  category,
+  is_available,
+  created_at,
+  updated_at
+FROM public.delivery_catalog_items
+WHERE public.tem_acesso_operacional_workspace(workspace_id);
+
+GRANT SELECT ON public.v_delivery_catalog_operacional TO authenticated, service_role;
+
+
+-- ==============================================================================
+-- 11. RPCS TRANSACIONAIS ATÔMICAS E SEGURAS (OPERACIONAL & INTEGRADOR)
+-- ==============================================================================
+
+-- A. rpc_listar_pedidos_kds: Lista pedidos operacionais ativos e itens conferidos sem vazamento financeiro
+CREATE OR REPLACE FUNCTION public.rpc_listar_pedidos_kds(p_workspace_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF NOT public.tem_acesso_operacional_workspace(p_workspace_id) THEN
+    RAISE EXCEPTION 'Acesso negado ao workspace %', p_workspace_id;
+  END IF;
+
+  SELECT coalesce(jsonb_agg(o_row ORDER BY o_row->>'placed_at' DESC), '[]'::jsonb)
+  INTO v_result
+  FROM (
+    SELECT
+      jsonb_build_object(
+        'id', o.id,
+        'workspace_id', o.workspace_id,
+        'channel_id', o.channel_id,
+        'channel_name', o.channel_name,
+        'external_order_id', o.external_order_id,
+        'display_id', o.display_id,
+        'customer_name', o.customer_name,
+        'customer_phone', o.customer_phone,
+        'delivery_address', o.delivery_address,
+        'order_status', o.order_status,
+        'order_type', o.order_type,
+        'payment_method', o.payment_method,
+        'payment_status', o.payment_status,
+        'estimated_prep_time_minutes', o.estimated_prep_time_minutes,
+        'placed_at', o.placed_at,
+        'preparation_started_at', o.preparation_started_at,
+        'prepared_at', o.prepared_at,
+        'dispatched_at', o.dispatched_at,
+        'delivered_at', o.delivered_at,
+        'cancelled_at', o.cancelled_at,
+        'cancellation_reason', o.cancellation_reason,
+        'notes', o.notes,
+        'kds_notes', o.kds_notes,
+        'is_demo', o.is_demo,
+        'created_at', o.created_at,
+        'updated_at', o.updated_at,
+        'delivery_order_items', coalesce((
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'id', i.id,
+              'order_id', i.order_id,
+              'workspace_id', i.workspace_id,
+              'product_name', i.product_name,
+              'quantity', i.quantity,
+              'options', i.options,
+              'observations', i.observations,
+              'is_verified_in_kds', i.is_verified_in_kds,
+              'verified_by_user_id', i.verified_by_user_id,
+              'verified_at', i.verified_at,
+              'created_at', i.created_at
+            )
+            ORDER BY i.created_at ASC
+          )
+          FROM public.delivery_order_items i
+          WHERE i.order_id = o.id
+        ), '[]'::jsonb)
+      ) AS o_row
+    FROM public.delivery_orders o
+    WHERE o.workspace_id = p_workspace_id
+      AND o.order_status NOT IN ('delivered', 'cancelled')
+  ) sub;
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.rpc_listar_pedidos_kds(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_listar_pedidos_kds(uuid) TO authenticated, service_role;
+
+-- B. rpc_criar_delivery_order_atomico: Criação atômica em transação única com idempotência por canal
+CREATE OR REPLACE FUNCTION public.rpc_criar_delivery_order_atomico(
+  p_order jsonb,
+  p_items jsonb DEFAULT '[]'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_workspace_id uuid;
+  v_channel_id uuid;
+  v_channel_name text;
+  v_external_order_id text;
+  v_order_id uuid;
+  v_existing_order_id uuid;
+  v_item jsonb;
+BEGIN
+  v_workspace_id := (p_order->>'workspace_id')::uuid;
+  IF v_workspace_id IS NULL THEN
+    RAISE EXCEPTION 'workspace_id obrigatório para criar pedido.';
+  END IF;
+
+  -- Valida privilégio de administrador ou service_role
+  IF NOT (coalesce(auth.role() = 'service_role', false) OR public.tem_acesso_admin_workspace(v_workspace_id)) THEN
+    RAISE EXCEPTION 'Acesso negado: criação de pedidos requer privilégio de administrador ou integrador.';
+  END IF;
+
+  v_channel_name := coalesce(p_order->>'channel_name', 'direto');
+  v_external_order_id := coalesce(p_order->>'external_order_id', p_order->>'channel_order_id', 'ext-' || gen_random_uuid()::text);
+
+  -- Resolução de channel_id
+  IF p_order->>'channel_id' IS NOT NULL AND (p_order->>'channel_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_channel_id := (p_order->>'channel_id')::uuid;
+  ELSE
+    SELECT id INTO v_channel_id
+    FROM public.delivery_channels
+    WHERE workspace_id = v_workspace_id AND channel_name = v_channel_name
+    LIMIT 1;
+  END IF;
+
+  -- Prevenção de duplicidade por canal (Idempotência)
+  SELECT id INTO v_existing_order_id
+  FROM public.delivery_orders
+  WHERE workspace_id = v_workspace_id
+    AND channel_name = v_channel_name
+    AND external_order_id = v_external_order_id;
+
+  IF v_existing_order_id IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'is_duplicate', true,
+      'order_id', v_existing_order_id,
+      'message', 'Pedido já existente (idempotência preservada).'
+    );
+  END IF;
+
+  -- ID canônico UUID
+  IF p_order->>'id' IS NOT NULL AND (p_order->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_order_id := (p_order->>'id')::uuid;
+  ELSE
+    v_order_id := gen_random_uuid();
+  END IF;
+
+  -- Inserção atômica do cabeçalho
+  INSERT INTO public.delivery_orders (
+    id,
+    workspace_id,
+    channel_id,
+    channel_name,
+    external_order_id,
+    display_id,
+    customer_name,
+    customer_phone,
+    delivery_address,
+    order_status,
+    order_type,
+    payment_method,
+    payment_status,
+    subtotal,
+    delivery_fee,
+    marketplace_discount,
+    store_discount,
+    commission_amount,
+    total_amount,
+    estimated_net_payout,
+    estimated_cmv,
+    estimated_margin,
+    notes,
+    kds_notes,
+    is_demo,
+    placed_at
+  ) VALUES (
+    v_order_id,
+    v_workspace_id,
+    v_channel_id,
+    v_channel_name,
+    v_external_order_id,
+    coalesce(p_order->>'display_id', '#' || right(v_external_order_id, 4)),
+    coalesce(p_order->>'customer_name', 'Cliente'),
+    p_order->>'customer_phone',
+    p_order->>'delivery_address',
+    coalesce(p_order->>'order_status', p_order->>'status', 'received'),
+    coalesce(p_order->>'order_type', 'delivery'),
+    coalesce(p_order->>'payment_method', 'marketplace_online'),
+    coalesce(p_order->>'payment_status', 'paid'),
+    coalesce((p_order->>'subtotal')::numeric, 0.00),
+    coalesce((p_order->>'delivery_fee')::numeric, 0.00),
+    coalesce((p_order->>'marketplace_discount')::numeric, 0.00),
+    coalesce((p_order->>'store_discount')::numeric, coalesce((p_order->>'discount')::numeric, 0.00)),
+    coalesce((p_order->>'commission_amount')::numeric, 0.00),
+    coalesce((p_order->>'total_amount')::numeric, 0.00),
+    coalesce((p_order->>'estimated_net_payout')::numeric, coalesce((p_order->>'net_amount')::numeric, 0.00)),
+    coalesce((p_order->>'estimated_cmv')::numeric, 0.00),
+    coalesce((p_order->>'estimated_margin')::numeric, 0.00),
+    p_order->>'notes',
+    p_order->>'kds_notes',
+    coalesce((p_order->>'is_demo')::boolean, false),
+    coalesce((p_order->>'placed_at')::timestamptz, (p_order->>'created_at')::timestamptz, now())
+  );
+
+  -- Inserção atômica dos itens
+  IF p_items IS NOT NULL AND jsonb_array_length(p_items) > 0 THEN
+    FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
+    LOOP
+      INSERT INTO public.delivery_order_items (
+        id,
+        order_id,
+        workspace_id,
+        product_name,
+        quantity,
+        unit_price,
+        total_price,
+        estimated_unit_cost,
+        options,
+        observations,
+        is_verified_in_kds
+      ) VALUES (
+        CASE
+          WHEN (v_item->>'id') IS NOT NULL AND (v_item->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            THEN (v_item->>'id')::uuid
+          ELSE gen_random_uuid()
+        END,
+        v_order_id,
+        v_workspace_id,
+        coalesce(v_item->>'product_name', v_item->>'name', 'Item'),
+        coalesce((v_item->>'quantity')::numeric, 1.000),
+        coalesce((v_item->>'unit_price')::numeric, 0.00),
+        coalesce((v_item->>'total_price')::numeric, 0.00),
+        coalesce((v_item->>'estimated_unit_cost')::numeric, 0.00),
+        coalesce(v_item->'options', '[]'::jsonb),
+        coalesce(v_item->>'observations', v_item->>'notes'),
+        coalesce((v_item->>'is_verified_in_kds')::boolean, coalesce((v_item->>'checked')::boolean, false))
+      );
+    END LOOP;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'is_duplicate', false,
+    'order_id', v_order_id
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.rpc_criar_delivery_order_atomico(jsonb, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_criar_delivery_order_atomico(jsonb, jsonb) TO authenticated, service_role;
+
+-- C. rpc_conferir_item_delivery: Registro de operador e timestamp na conferência do KDS
+CREATE OR REPLACE FUNCTION public.rpc_conferir_item_delivery(
+  p_item_id uuid,
+  p_is_verified boolean
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_workspace_id uuid;
+  v_order_id uuid;
+  v_rows_updated integer;
+BEGIN
+  SELECT workspace_id, order_id INTO v_workspace_id, v_order_id
+  FROM public.delivery_order_items
+  WHERE id = p_item_id;
+
+  IF v_workspace_id IS NULL THEN
+    RAISE EXCEPTION 'Item de pedido % não encontrado.', p_item_id;
+  END IF;
+
+  IF NOT public.tem_acesso_operacional_workspace(v_workspace_id) THEN
+    RAISE EXCEPTION 'Acesso negado: operador não possui autorização no workspace %', v_workspace_id;
+  END IF;
+
+  UPDATE public.delivery_order_items
+  SET
+    is_verified_in_kds = p_is_verified,
+    verified_by_user_id = CASE WHEN p_is_verified THEN auth.uid() ELSE NULL END,
+    verified_at = CASE WHEN p_is_verified THEN now() ELSE NULL END
+  WHERE id = p_item_id;
+
+  GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
+
+  IF v_rows_updated <> 1 THEN
+    RAISE EXCEPTION 'Falha ao atualizar conferência do item % (linhas afetadas: %)', p_item_id, v_rows_updated;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'item_id', p_item_id,
+    'order_id', v_order_id,
+    'is_verified', p_is_verified,
+    'verified_by_user_id', CASE WHEN p_is_verified THEN auth.uid() ELSE NULL END,
+    'verified_at', CASE WHEN p_is_verified THEN now() ELSE NULL END
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.rpc_conferir_item_delivery(uuid, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_conferir_item_delivery(uuid, boolean) TO authenticated, service_role;
+
+-- D. rpc_atualizar_status_delivery_order: Transição de status KDS com bloqueio de despacho de itens não-conferidos
+CREATE OR REPLACE FUNCTION public.rpc_atualizar_status_delivery_order(
+  p_order_id uuid,
+  p_novo_status text,
+  p_kds_notes text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_workspace_id uuid;
+  v_current_status text;
+  v_unverified_count integer;
+  v_rows_updated integer;
+  v_now timestamptz := now();
+BEGIN
+  SELECT workspace_id, order_status INTO v_workspace_id, v_current_status
+  FROM public.delivery_orders
+  WHERE id = p_order_id;
+
+  IF v_workspace_id IS NULL THEN
+    RAISE EXCEPTION 'Pedido % não encontrado.', p_order_id;
+  END IF;
+
+  IF NOT public.tem_acesso_operacional_workspace(v_workspace_id) THEN
+    RAISE EXCEPTION 'Acesso negado: operador não possui permissão no workspace %', v_workspace_id;
+  END IF;
+
+  -- Bloqueio de Despacho (Gate E): Se o novo status for 'dispatched' ou 'delivered', exige conferência total
+  IF p_novo_status IN ('dispatched', 'despachado', 'delivered', 'entregue') THEN
+    SELECT count(*) INTO v_unverified_count
+    FROM public.delivery_order_items
+    WHERE order_id = p_order_id
+      AND is_verified_in_kds = false;
+
+    IF v_unverified_count > 0 THEN
+      RAISE EXCEPTION 'Bloqueio de Expedição: pedido % possui % item(ns) pendente(s) de conferência.', p_order_id, v_unverified_count;
+    END IF;
+  END IF;
+
+  UPDATE public.delivery_orders
+  SET
+    order_status = p_novo_status,
+    kds_notes = coalesce(p_kds_notes, kds_notes),
+    updated_at = v_now,
+    preparation_started_at = CASE
+      WHEN p_novo_status IN ('preparing', 'preparando') AND preparation_started_at IS NULL THEN v_now
+      ELSE preparation_started_at
+    END,
+    prepared_at = CASE
+      WHEN p_novo_status IN ('ready', 'pronto') AND prepared_at IS NULL THEN v_now
+      ELSE prepared_at
+    END,
+    dispatched_at = CASE
+      WHEN p_novo_status IN ('dispatched', 'despachado') AND dispatched_at IS NULL THEN v_now
+      ELSE dispatched_at
+    END,
+    delivered_at = CASE
+      WHEN p_novo_status IN ('delivered', 'entregue') AND delivered_at IS NULL THEN v_now
+      ELSE delivered_at
+    END,
+    cancelled_at = CASE
+      WHEN p_novo_status IN ('cancelled', 'cancelado') AND cancelled_at IS NULL THEN v_now
+      ELSE cancelled_at
+    END
+  WHERE id = p_order_id;
+
+  GET DIAGNOSTICS v_rows_updated = ROW_COUNT;
+
+  IF v_rows_updated <> 1 THEN
+    RAISE EXCEPTION 'Falha ao atualizar pedido % (linhas afetadas: %)', p_order_id, v_rows_updated;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'order_id', p_order_id,
+    'previous_status', v_current_status,
+    'new_status', p_novo_status,
+    'updated_at', v_now
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.rpc_atualizar_status_delivery_order(uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_atualizar_status_delivery_order(uuid, text, text) TO authenticated, service_role;
+
+-- E. rpc_despachar_pedido_kds: Helper de despacho com verificação prévia
+CREATE OR REPLACE FUNCTION public.rpc_despachar_pedido_kds(p_order_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RETURN public.rpc_atualizar_status_delivery_order(p_order_id, 'dispatched', NULL);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.rpc_despachar_pedido_kds(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rpc_despachar_pedido_kds(uuid) TO authenticated, service_role;
 
 COMMIT;

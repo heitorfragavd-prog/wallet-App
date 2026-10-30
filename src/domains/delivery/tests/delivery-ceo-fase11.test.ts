@@ -54,7 +54,7 @@ describe('Wallet CEO & Delivery Growth — Bateria de Testes FASE 1.1 (Requisito
 
     it('permite apenas rotas operacionais de KDS e delivery', () => {
       expect(isRouteAllowedForDeliveryStaff('/delivery/kds')).toBe(true);
-      expect(isRouteAllowedForDeliveryStaff('/delivery')).toBe(true);
+      expect(isRouteAllowedForDeliveryStaff('/delivery')).toBe(false);
       expect(isRouteAllowedForDeliveryStaff('/perfil')).toBe(true);
 
       // Todas as rotas financeiras são estritamente bloqueadas

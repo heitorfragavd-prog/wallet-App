@@ -67,6 +67,9 @@ export interface DeliveryOrderItem {
   notes?: string | null;
   options?: Array<{ name: string; quantity: number; price: number }>;
   checked?: boolean; // Para o checklist do KDS
+  is_verified_in_kds?: boolean;
+  verified_by_user_id?: string | null;
+  verified_at?: string | null;
   created_at?: string;
 }
 
@@ -88,6 +91,8 @@ export interface DeliveryOrder {
   payment_method: DeliveryPaymentMethod;
   payment_status: DeliveryPaymentStatus;
   notes?: string | null;
+  kds_notes?: string | null;
+  is_demo?: boolean;
   preparation_started_at?: string | null;
   ready_at?: string | null;
   dispatched_at?: string | null;

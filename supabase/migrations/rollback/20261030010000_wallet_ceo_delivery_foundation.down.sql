@@ -4,6 +4,18 @@
 
 BEGIN;
 
+-- 0. Remoção de RPCs e Views Operacionais
+DROP FUNCTION IF EXISTS public.rpc_despachar_pedido_kds(uuid);
+DROP FUNCTION IF EXISTS public.rpc_atualizar_status_delivery_order(uuid, text, text);
+DROP FUNCTION IF EXISTS public.rpc_conferir_item_delivery(uuid, boolean);
+DROP FUNCTION IF EXISTS public.rpc_criar_delivery_order_atomico(jsonb, jsonb);
+DROP FUNCTION IF EXISTS public.rpc_listar_pedidos_kds(uuid);
+
+DROP VIEW IF EXISTS public.v_delivery_catalog_operacional CASCADE;
+DROP VIEW IF EXISTS public.v_delivery_channels_operacional CASCADE;
+DROP VIEW IF EXISTS public.v_delivery_order_items_operacional CASCADE;
+DROP VIEW IF EXISTS public.v_delivery_orders_operacional CASCADE;
+
 -- 1. Remoção de Triggers
 DROP TRIGGER IF EXISTS trg_check_delivery_order_item_workspace ON public.delivery_order_items;
 DROP TRIGGER IF EXISTS trg_check_delivery_order_financial_mutation ON public.delivery_orders;

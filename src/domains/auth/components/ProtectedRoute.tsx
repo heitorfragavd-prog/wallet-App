@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
 import { useProfile } from "@/domains/auth/hooks/useProfile";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { logger } from "@/core/logging/LoggerService";
 import {
   isDeliveryStaffRole,
@@ -32,6 +33,7 @@ export const ProtectedRoute = ({
 }: ProtectedRouteProps) => {
   const { user, loading: authLoading } = useAuth();
   const { profile, loading: profileLoading, error: profileError } = useProfile();
+  const { activeWorkspaceRole } = useWorkspace();
   const location = useLocation();
   const navigate = useNavigate();
   
@@ -67,7 +69,7 @@ export const ProtectedRoute = ({
     }
 
     // Delivery staff isolation guard: delivery staff can only access operational routes
-    const isStaff = isDeliveryStaffRole(profile?.role);
+    const isStaff = isDeliveryStaffRole(profile?.role) || isDeliveryStaffRole(activeWorkspaceRole);
     if (isStaff && !isRouteAllowedForDeliveryStaff(location.pathname)) {
       logger.warn('ProtectedRoute', 'delivery_staff attempted to access non-delivery route, redirecting to /delivery/kds', {
         pathname: location.pathname,
@@ -121,7 +123,7 @@ export const ProtectedRoute = ({
       userRole: profile?.role,
     });
     setAuthorizationComplete(true);
-  }, [user, profile, requiredRole, isLoading, profileError, navigate, fallbackPath, location.pathname]);
+  }, [user, profile, activeWorkspaceRole, requiredRole, isLoading, profileError, navigate, fallbackPath, location.pathname]);
 
   // Show loading state while checking authorization
   if (isLoading || !authorizationComplete) {

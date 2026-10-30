@@ -29,7 +29,7 @@ O sistema proporciona:
 - **Simulador de Margem & Markup:** Cálculo exato de comissão da plataforma, tarifas de pagamento online e embalagem, indicando o preço ideal para preservar o lucro nominal.
 - **KDS Operacional em Tempo Real:** Visualização tipo Kanban (Novos, Em Preparo, Prontos, Despachados) com cronômetro de atraso, alerta sonoro via Web Audio API e modal de checklist de conferência.
 - **Isolamento de Papéis (`delivery_staff`):** Proteção estrutural no frontend via `DeliveryLayout` (zero queries financeiras) e `ProtectedRoute`/`DeliveryRoleGuard`, além de restrições rígidas no banco de dados e triggers.
-- **Fundação Operacional FASE 1.1:** KDS persistente conectado a `DeliveryOrderRepository`, Wallet CEO operando com dados reais de `useEyemobileDashboard` e `useFoodCost`, conectores de marketplace sem falsos positivos (`credentials_present_unverified`) e simulador com taxas contratuais customizáveis baseadas em margem de contribuição.
+- **Fundação Operacional FASE 1.2:** Views operacionais dedicadas com security_barrier, RPCs atômicas (criação atômica, conferência com registro de operador e timestamp, atualização de status e bloqueio estrito de despacho para pedidos com itens pendentes de conferência), isolamento estrutural absoluto de `delivery_staff` via RLS restrito a admin e views operacionais sem campos financeiros/custos/CMV, conferência auditada (`verified_by_user_id`, `verified_at`) e KDS com simulação exclusivamente em memória (`is_demo: true`, sem injeção de pedidos fictícios no banco de produção).
 
 ## Limites
 

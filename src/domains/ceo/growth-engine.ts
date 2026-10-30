@@ -30,6 +30,8 @@ export interface WeightedCMVResult {
   contribution_margin_percent: number; // Ex: 67.50 para 67.5%
   catalog_simple_average_cost: number;
   items_analyzed: number;
+  coverage_percent?: number;
+  is_partial_coverage?: boolean;
   is_cmv_healthy: boolean;
   notes: string;
 }
@@ -37,8 +39,12 @@ export interface WeightedCMVResult {
 /**
  * Calcula o CMV Efetivo Ponderado pelas quantidades reais vendidas,
  * eliminando o viés da média simples aritmética dos custos unitários de catálogo.
+ * Suporta cálculo de cobertura percentual sobre a receita total de produtos.
  */
-export function calculateEffectiveWeightedCMV(items: ProductSaleInput[]): WeightedCMVResult {
+export function calculateEffectiveWeightedCMV(
+  items: ProductSaleInput[],
+  totalRevenueContext?: number
+): WeightedCMVResult {
   if (!items || items.length === 0) {
     return {
       total_revenue: 0,
@@ -51,6 +57,8 @@ export function calculateEffectiveWeightedCMV(items: ProductSaleInput[]): Weight
       contribution_margin_percent: 0,
       catalog_simple_average_cost: 0,
       items_analyzed: 0,
+      coverage_percent: 0,
+      is_partial_coverage: false,
       is_cmv_healthy: true,
       notes: 'Dados insuficientes para cálculo de CMV.',
     };
@@ -84,6 +92,8 @@ export function calculateEffectiveWeightedCMV(items: ProductSaleInput[]): Weight
       contribution_margin_percent: 0,
       catalog_simple_average_cost: catalogSimpleAvg,
       items_analyzed: items.length,
+      coverage_percent: 0,
+      is_partial_coverage: false,
       is_cmv_healthy: false,
       notes: 'Sem receita registrada no período informado.',
     };
@@ -93,6 +103,18 @@ export function calculateEffectiveWeightedCMV(items: ProductSaleInput[]): Weight
   const marginAmount = Math.round((totalRevenue - totalCost) * 100) / 100;
   const marginPercent = Math.round((100 - cmvPercent) * 100) / 100;
   const isHealthy = cmvPercent <= 38.0; // Padrão alimentício Rodo Point: CMV alvo <= 38%
+
+  const coveragePercent =
+    totalRevenueContext && totalRevenueContext > 0
+      ? Math.min(100, Math.round((totalRevenue / totalRevenueContext) * 100))
+      : 100;
+  const isPartial = coveragePercent < 100;
+
+  const notesText = isPartial
+    ? `CMV ponderado parcial com cobertura de ${coveragePercent}% da receita dos itens. Itens sem ficha cadastrada foram excluídos para não distorcer o custo real.`
+    : isHealthy
+    ? 'CMV efetivo dentro dos parâmetros de sustentabilidade da Rodo Point.'
+    : 'CMV efetivo acima do teto de 38%; requer revisão de mix ou reajuste de insumos.';
 
   return {
     total_revenue: Math.round(totalRevenue * 100) / 100,
@@ -105,10 +127,10 @@ export function calculateEffectiveWeightedCMV(items: ProductSaleInput[]): Weight
     contribution_margin_percent: marginPercent,
     catalog_simple_average_cost: catalogSimpleAvg,
     items_analyzed: items.length,
+    coverage_percent: coveragePercent,
+    is_partial_coverage: isPartial,
     is_cmv_healthy: isHealthy,
-    notes: isHealthy
-      ? 'CMV efetivo dentro dos parâmetros de sustentabilidade da Rodo Point.'
-      : 'CMV efetivo acima do teto de 38%; requer revisão de mix ou reajuste de insumos.',
+    notes: notesText,
   };
 }
 

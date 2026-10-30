@@ -92,6 +92,101 @@ export class DeliveryOrderRepository {
         if (error.code === '42P01' || error.message?.includes('does not exist')) {
           return { data: [], isConfigured: false, error: 'Tabela delivery_orders não migrada no banco de dados.' };
         }
+
+        // Se o erro for de permissão (ex: delivery_staff sem acesso à tabela base com dados financeiros),
+        // consulta a view operacional protegida v_delivery_orders_operacional
+        if (error.code === '42501' || error.message?.includes('permission denied') || error.message?.includes('violates row-level security')) {
+          const { data: opOrders, error: opErr } = await supabase
+            .from('v_delivery_orders_operacional')
+            .select(`
+              id,
+              workspace_id,
+              channel_id,
+              channel_name,
+              external_order_id,
+              display_id,
+              customer_name,
+              customer_phone,
+              delivery_address,
+              order_status,
+              order_type,
+              payment_method,
+              payment_status,
+              notes,
+              kds_notes,
+              preparation_started_at,
+              prepared_at,
+              dispatched_at,
+              delivered_at,
+              cancelled_at,
+              cancellation_reason,
+              placed_at,
+              created_at,
+              updated_at
+            `)
+            .eq('workspace_id', workspaceId)
+            .order('placed_at', { ascending: false });
+
+          if (opErr) {
+            return { data: [], isConfigured: true, error: opErr.message };
+          }
+
+          const orderIds = (opOrders || []).map((o: Record<string, unknown>) => String(o.id));
+          const { data: opItems } = await supabase
+            .from('v_delivery_order_items_operacional')
+            .select('id, order_id, product_name, quantity, observations, is_verified_in_kds')
+            .in('order_id', orderIds.length > 0 ? orderIds : ['00000000-0000-0000-0000-000000000000']);
+
+          const itemsByOrderId: Record<string, DeliveryOrderItem[]> = {};
+          (opItems || []).forEach((it: Record<string, unknown>) => {
+            const ordId = String(it.order_id);
+            if (!itemsByOrderId[ordId]) itemsByOrderId[ordId] = [];
+            itemsByOrderId[ordId].push({
+              id: String(it.id),
+              order_id: ordId,
+              name: String(it.product_name || 'Item'),
+              quantity: Number(it.quantity || 1),
+              unit_price: 0,
+              total_price: 0,
+              notes: it.observations ? String(it.observations) : null,
+              checked: Boolean(it.is_verified_in_kds),
+              is_verified_in_kds: Boolean(it.is_verified_in_kds),
+            });
+          });
+
+          const mappedOpOrders: DeliveryOrder[] = (opOrders || []).map((raw: Record<string, unknown>) => ({
+            id: String(raw.id),
+            workspace_id: String(raw.workspace_id),
+            channel_id: String(raw.channel_id || raw.channel_name || 'direto'),
+            channel_order_id: String(raw.external_order_id || ''),
+            display_id: String(raw.display_id || ''),
+            customer_name: String(raw.customer_name || 'Cliente'),
+            customer_phone: raw.customer_phone ? String(raw.customer_phone) : null,
+            delivery_address: raw.delivery_address ? String(raw.delivery_address) : null,
+            subtotal: 0,
+            discount: 0,
+            delivery_fee: 0,
+            commission_amount: 0,
+            net_amount: 0,
+            status: mapDbStatusToDomain(String(raw.order_status || '')),
+            payment_method: 'marketplace_online',
+            payment_status: 'paid',
+            notes: raw.notes ? String(raw.notes) : null,
+            kds_notes: raw.kds_notes ? String(raw.kds_notes) : null,
+            preparation_started_at: raw.preparation_started_at ? String(raw.preparation_started_at) : null,
+            ready_at: raw.prepared_at ? String(raw.prepared_at) : null,
+            dispatched_at: raw.dispatched_at ? String(raw.dispatched_at) : null,
+            delivered_at: raw.delivered_at ? String(raw.delivered_at) : null,
+            cancelled_at: raw.cancelled_at ? String(raw.cancelled_at) : null,
+            cancellation_reason: raw.cancellation_reason ? String(raw.cancellation_reason) : null,
+            created_at: String(raw.placed_at || raw.created_at || new Date().toISOString()),
+            updated_at: String(raw.updated_at || new Date().toISOString()),
+            items: itemsByOrderId[String(raw.id)] || [],
+          }));
+
+          return { data: mappedOpOrders, isConfigured: true };
+        }
+
         return { data: [], isConfigured: true, error: error.message };
       }
 
@@ -159,6 +254,29 @@ export class DeliveryOrderRepository {
     kdsNotes?: string
   ): Promise<OrderMutationResult> {
     try {
+      // 1. Tenta executar via RPC atômica que valida conferência de itens no despacho
+      if (typeof supabase.rpc === 'function') {
+        const { error: rpcErr } = await supabase.rpc('rpc_atualizar_status_delivery_order', {
+          p_order_id: orderId,
+          p_novo_status: mapDomainStatusToDb(nextStatus),
+          p_kds_notes: kdsNotes || null,
+        });
+
+        if (!rpcErr) {
+          return { success: true };
+        }
+
+        // Se o erro for de validação de negócio (ex: Bloqueio de Expedição), propaga diretamente
+        if (rpcErr.message && rpcErr.message.includes('Bloqueio de Expedição')) {
+          return { success: false, error: rpcErr.message };
+        }
+        // Se a função não existir (42883) ou não for mockada, faz fallback para update direto
+        if (rpcErr.code !== '42883') {
+          return { success: false, error: rpcErr.message };
+        }
+      }
+
+      // 2. Fallback direto para tabela base (protegido por trigger no banco)
       const now = new Date().toISOString();
       const updates: Record<string, unknown> = {
         order_status: mapDomainStatusToDb(nextStatus),
@@ -208,9 +326,26 @@ export class DeliveryOrderRepository {
     isVerified: boolean
   ): Promise<OrderMutationResult> {
     try {
+      if (typeof supabase.rpc === 'function') {
+        const { error: rpcErr } = await supabase.rpc('rpc_conferir_item_delivery', {
+          p_item_id: itemId,
+          p_is_verified: isVerified,
+        });
+
+        if (!rpcErr) {
+          return { success: true };
+        }
+        if (rpcErr.code !== '42883') {
+          return { success: false, error: rpcErr.message };
+        }
+      }
+
       const { error } = await supabase
         .from('delivery_order_items')
-        .update({ is_verified_in_kds: isVerified })
+        .update({
+          is_verified_in_kds: isVerified,
+          verified_at: isVerified ? new Date().toISOString() : null,
+        })
         .eq('id', itemId);
 
       if (error) {
@@ -228,14 +363,20 @@ export class DeliveryOrderRepository {
    */
   static async createOrder(order: DeliveryOrder): Promise<OrderMutationResult> {
     try {
-      const orderInsert: Record<string, unknown> = {
-        id: order.id.startsWith('ord-') ? undefined : order.id,
+      const isUuid = (val?: string) =>
+        Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
+
+      const channelName = order.channel_id.includes('ifood')
+        ? 'ifood'
+        : order.channel_id.includes('99')
+        ? '99food'
+        : 'direto';
+
+      const orderPayload = {
+        id: isUuid(order.id) ? order.id : undefined,
         workspace_id: order.workspace_id,
-        channel_name: order.channel_id.includes('ifood')
-          ? 'ifood'
-          : order.channel_id.includes('99')
-          ? '99food'
-          : 'direto',
+        channel_id: isUuid(order.channel_id) ? order.channel_id : undefined,
+        channel_name: channelName,
         external_order_id: order.channel_order_id,
         display_id: order.display_id,
         customer_name: order.customer_name,
@@ -250,12 +391,45 @@ export class DeliveryOrderRepository {
         total_amount: order.subtotal + order.delivery_fee - order.discount,
         estimated_net_payout: order.net_amount,
         notes: order.notes,
+        kds_notes: order.kds_notes,
+        is_demo: Boolean(order.is_demo),
         placed_at: order.created_at,
       };
 
+      const itemsPayload = (order.items || []).map((it) => ({
+        id: isUuid(it.id) ? it.id : undefined,
+        product_name: it.name,
+        quantity: it.quantity,
+        unit_price: it.unit_price,
+        total_price: it.total_price,
+        observations: it.notes,
+        is_verified_in_kds: Boolean(it.checked),
+        options: it.options || [],
+      }));
+
+      // Tenta via RPC atômica
+      if (typeof supabase.rpc === 'function') {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('rpc_criar_delivery_order_atomico', {
+          p_order: orderPayload,
+          p_items: itemsPayload,
+        });
+
+        if (!rpcErr && rpcData) {
+          const res = rpcData as { success: boolean; is_duplicate?: boolean; message?: string };
+          if (res.is_duplicate) {
+            return { success: false, error: res.message || 'Pedido duplicado.' };
+          }
+          return { success: true };
+        }
+        if (rpcErr && rpcErr.code !== '42883') {
+          return { success: false, error: rpcErr.message };
+        }
+      }
+
+      // Fallback para insert sequencial
       const { data: createdOrder, error: orderErr } = await supabase
         .from('delivery_orders')
-        .insert(orderInsert)
+        .insert(orderPayload)
         .select('id')
         .single();
 
@@ -265,6 +439,7 @@ export class DeliveryOrderRepository {
 
       if (order.items && order.items.length > 0) {
         const itemsInsert = order.items.map((it) => ({
+          id: isUuid(it.id) ? it.id : undefined,
           order_id: createdOrder.id,
           workspace_id: order.workspace_id,
           product_name: it.name,

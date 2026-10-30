@@ -91,29 +91,48 @@ export const WalletCeoPage: React.FC = () => {
   }, [workspaceId]);
 
   // 4. Cruzamento dos produtos vendidos (Eyemobile) com as Fichas Técnicas (Food Cost)
-  const { salesRecords, unmappedProductsCount } = useMemo(() => {
+  // Gate G: Vinculação por ID canônico prioritário e cálculo de cobertura auditável de CMV
+  const {
+    allSalesRecords,
+    mappedSalesRecords,
+    unmappedProductsCount,
+    recipeCoveragePercent,
+    topProductsCount,
+  } = useMemo(() => {
     const topProducts = eyemobileData?.topProducts;
     if (!topProducts || topProducts.length === 0) {
-      return { salesRecords: [] as ProductSalesCMVRecord[], unmappedProductsCount: 0 };
+      return {
+        allSalesRecords: [] as ProductSalesCMVRecord[],
+        mappedSalesRecords: [] as ProductSalesCMVRecord[],
+        unmappedProductsCount: 0,
+        recipeCoveragePercent: 0,
+        topProductsCount: 0,
+      };
     }
 
     let unmapped = 0;
-    const records: ProductSalesCMVRecord[] = topProducts.map((tp) => {
+    let totalRevenueAll = 0;
+    let totalRevenueMapped = 0;
+
+    const allRecords: ProductSalesCMVRecord[] = [];
+    const mappedRecords: ProductSalesCMVRecord[] = [];
+
+    topProducts.forEach((tp) => {
+      // 1. Prioridade absoluta para ID canônico; 2. Nome exato padronizado
       const matched = produtosFoodCost.find(
         (p) =>
-          (p.nome && tp.product && p.nome.trim().toLowerCase() === tp.product.trim().toLowerCase()) ||
-          p.id === tp.id
+          (p.id && tp.id && p.id === tp.id) ||
+          (p.nome && tp.product && p.nome.trim().toLowerCase() === tp.product.trim().toLowerCase())
       );
 
       const hasRecipe = Boolean(matched && matched.qtd_insumos > 0 && matched.custo_total > 0);
-      if (!hasRecipe) {
-        unmapped++;
-      }
-
       const unitPrice = tp.quantity > 0 ? tp.total / tp.quantity : 0;
       const unitCost = hasRecipe ? (matched?.custo_total ?? 0) : 0;
+      const itemRevenue = tp.total || tp.quantity * unitPrice;
 
-      return {
+      totalRevenueAll += itemRevenue;
+
+      const record: ProductSalesCMVRecord = {
         product_id: tp.id,
         product_name: tp.product,
         quantity_sold: tp.quantity,
@@ -121,18 +140,44 @@ export const WalletCeoPage: React.FC = () => {
         unit_cost: Math.round(unitCost * 100) / 100,
         category: 'Geral',
       };
+
+      allRecords.push(record);
+
+      if (hasRecipe) {
+        totalRevenueMapped += itemRevenue;
+        mappedRecords.push(record);
+      } else {
+        unmapped++;
+      }
     });
 
-    return { salesRecords: records, unmappedProductsCount: unmapped };
+    const coverage = totalRevenueAll > 0 ? Math.round((totalRevenueMapped / totalRevenueAll) * 100) : 0;
+
+    return {
+      allSalesRecords: allRecords,
+      mappedSalesRecords: mappedRecords,
+      unmappedProductsCount: unmapped,
+      recipeCoveragePercent: coverage,
+      topProductsCount: topProducts.length,
+    };
   }, [eyemobileData?.topProducts, produtosFoodCost]);
+
+  const salesRecords = allSalesRecords;
 
   // 5. Perdas e descartes materiais documentados
   const lossEvents: OperationalLossEvent[] = useMemo(() => {
     return [];
   }, []);
 
-  // 6. Motor analítico do CEO operando sobre dados reais
-  const cmvMetrics = useMemo(() => calculateEffectiveWeightedCMV(salesRecords), [salesRecords]);
+  // 6. Motor analítico do CEO operando sobre dados reais (Gate G: CMV Ponderado com Cobertura)
+  const cmvMetrics = useMemo(
+    () =>
+      calculateEffectiveWeightedCMV(
+        mappedSalesRecords.length > 0 ? mappedSalesRecords : allSalesRecords,
+        allSalesRecords.reduce((acc, r) => acc + r.quantity_sold * r.unit_price, 0)
+      ),
+    [mappedSalesRecords, allSalesRecords]
+  );
 
   const dynamicOpportunities = useMemo(() => {
     const opps: GrowthOpportunity[] = [];
@@ -173,11 +218,21 @@ export const WalletCeoPage: React.FC = () => {
     [cmvMetrics, allOpportunities, experiments, lossEvents]
   );
 
-  // Transformar oportunidade em experimento ativo no repositório persistente
+  // Gate F: Transformar oportunidade em experimento ativo com persistência no banco em primeiro lugar
   const handleActivateExperiment = async (opp: GrowthOpportunity) => {
-    const newExp: CommercialExperiment = {
-      id: `exp-${Date.now()}`,
-      workspace_id: workspaceId || 'default',
+    if (!workspaceId) {
+      toast({
+        title: 'Workspace não identificado',
+        description: 'Selecione um workspace ativo para criar experimentos.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Chamada prévia ao repositório garantindo integridade e geração do UUID canônico
+    const res = await CeoRepository.saveExperiment({
+      workspace_id: workspaceId,
+      opportunity_id: opp.id.startsWith('opp-') ? undefined : opp.id,
       title: `Experimento: ${opp.title}`,
       hypothesis: `Implementação de ${opp.title} para capturar retorno estimado de R$ ${opp.potential_monthly_gain.toFixed(2)}/mês.`,
       department: opp.department,
@@ -185,17 +240,22 @@ export const WalletCeoPage: React.FC = () => {
       baseline_value: '0',
       current_value: 'Em medição',
       target_value: `+R$ ${opp.potential_monthly_gain.toFixed(0)}`,
-      start_date: new Date().toISOString(),
+      start_date: new Date().toISOString().slice(0, 10),
       status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+      responsible_person: 'Gestão Rodo Point',
+    });
 
-    setExperiments((prev) => [newExp, ...prev]);
-
-    if (workspaceId) {
-      await CeoRepository.saveExperiment(newExp);
+    if (!res.success || !res.data) {
+      toast({
+        title: 'Erro ao Criar Experimento',
+        description: res.error || 'Não foi possível gravar o experimento no banco de dados.',
+        variant: 'destructive',
+      });
+      return;
     }
+
+    // Atualiza estado do React exclusivamente com os dados persistidos e ID real do banco
+    setExperiments((prev) => [res.data!, ...prev]);
 
     toast({
       title: 'Experimento Comercial Criado!',
@@ -205,13 +265,28 @@ export const WalletCeoPage: React.FC = () => {
 
   const handleUpdateExperimentStatus = async (
     expId: string,
-    status: CommercialExperiment['status']
+    status: CommercialExperiment['status'],
+    decisionRationale?: string
   ) => {
+    const previousExperiments = experiments;
+
     setExperiments((prev) =>
-      prev.map((e) => (e.id === expId ? { ...e, status, updated_at: new Date().toISOString() } : e))
+      prev.map((e) => (e.id === expId ? { ...e, status, decision_rationale: decisionRationale, updated_at: new Date().toISOString() } : e))
     );
 
-    await CeoRepository.updateExperimentStatus(expId, status);
+    const res = await CeoRepository.updateExperimentStatus(expId, status, {
+      rationale: decisionRationale,
+    });
+
+    if (!res.success) {
+      setExperiments(previousExperiments);
+      toast({
+        title: 'Erro ao Atualizar Experimento',
+        description: res.error || 'Não foi possível salvar o status no servidor.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     toast({
       title: 'Status do Experimento Atualizado',
@@ -270,9 +345,11 @@ export const WalletCeoPage: React.FC = () => {
         {hasSalesData && unmappedProductsCount > 0 && (
           <Alert className="border-blue-500/30 bg-blue-500/10 text-blue-950 dark:text-blue-200">
             <Layers className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            <AlertTitle className="text-xs font-bold">Fichas Técnicas Pendentes ({unmappedProductsCount} produtos)</AlertTitle>
+            <AlertTitle className="text-xs font-bold">
+              Fichas Técnicas Pendentes ({unmappedProductsCount} de {topProductsCount} produtos)
+            </AlertTitle>
             <AlertDescription className="text-xs text-blue-900 dark:text-blue-300">
-              Identificamos produtos vendidos sem ficha técnica cadastrada no Cardápio / Food Cost. Para manter o rigor financeiro, esses itens são sinalizados explicitamente para evitar distorção do CMV ponderado real.
+              {recipeCoveragePercent}% da receita dos Top {topProductsCount} produtos analisados possui ficha de insumos calculada. Os itens sem ficha cadastrada foram excluídos da ponderação de custos para evitar diluição artificial do CMV real.
             </AlertDescription>
           </Alert>
         )}
@@ -283,7 +360,7 @@ export const WalletCeoPage: React.FC = () => {
           <Card className="border shadow-sm">
             <CardHeader className="p-4 pb-1">
               <span className="text-xs font-semibold text-muted-foreground flex items-center justify-between">
-                Receita Operacional dos Produtos
+                Receita Analisada (Top {topProductsCount} Produtos)
                 <DollarSign className="h-4 w-4 text-primary" />
               </span>
             </CardHeader>
@@ -292,16 +369,18 @@ export const WalletCeoPage: React.FC = () => {
                 R$ {cmvMetrics.total_revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </span>
               <span className="text-[11px] text-muted-foreground block mt-0.5">
-                {hasSalesData ? `${cmvMetrics.items_analyzed} produtos analisados` : 'Aguardando dados de PDV'}
+                {hasSalesData ? `${cmvMetrics.items_analyzed} produtos com custo ponderado` : 'Aguardando dados de PDV'}
               </span>
             </CardContent>
           </Card>
 
-          {/* CMV Médio Efetivo Ponderado (com indicador de saúde) */}
+          {/* CMV Médio Efetivo Ponderado (com indicador de saúde e cobertura) */}
           <Card className="border shadow-sm">
             <CardHeader className="p-4 pb-1">
               <span className="text-xs font-semibold text-muted-foreground flex items-center justify-between">
-                CMV Efetivo Ponderado
+                {cmvMetrics.is_partial_coverage
+                  ? `CMV Ponderado Parcial (${cmvMetrics.coverage_percent}% Cobertura)`
+                  : 'CMV Efetivo Ponderado'}
                 <Percent className="h-4 w-4 text-emerald-600" />
               </span>
             </CardHeader>

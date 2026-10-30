@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -16,7 +16,7 @@ interface ItemChecklistDialogProps {
   order: DeliveryOrder | null;
   isOpen: boolean;
   onClose: () => void;
-  onConfirmChecked: (orderId: string) => void;
+  onConfirmChecked: (orderId: string, checkedMap?: Record<string, boolean>) => void;
 }
 
 export const ItemChecklistDialog: React.FC<ItemChecklistDialogProps> = ({
@@ -25,13 +25,16 @@ export const ItemChecklistDialog: React.FC<ItemChecklistDialogProps> = ({
   onClose,
   onConfirmChecked,
 }) => {
-  const [checkedMap, setCheckedMap] = useState<Record<string, boolean>>(() => {
+  const [checkedMap, setCheckedMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!order) return;
     const initial: Record<string, boolean> = {};
-    order?.items?.forEach((item) => {
-      initial[item.id] = !!item.checked;
+    order.items?.forEach((item) => {
+      initial[item.id] = Boolean(item.checked || item.is_verified_in_kds);
     });
-    return initial;
-  });
+    setCheckedMap(initial);
+  }, [order]);
 
   if (!order) return null;
 
@@ -56,7 +59,7 @@ export const ItemChecklistDialog: React.FC<ItemChecklistDialogProps> = ({
   };
 
   const handleConfirm = () => {
-    onConfirmChecked(order.id);
+    onConfirmChecked(order.id, checkedMap);
     onClose();
   };
 

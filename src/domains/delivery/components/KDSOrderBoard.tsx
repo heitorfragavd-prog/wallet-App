@@ -6,7 +6,6 @@ import {
   Volume2,
   VolumeX,
   Search,
-  PlusCircle,
   ChefHat,
   Package,
   Bike,
@@ -172,9 +171,30 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
     }
   }, [loadRealOrders, isDemoMode, workspaceId, soundEnabled]);
 
-  // Manipulador de transição de status persistente
+  // Manipulador de transição de status persistente com bloqueio de expedição e reversão
   const handleStatusChange = useCallback(
     async (orderId: string, nextStatus: DeliveryOrderStatus) => {
+      const targetOrder = orders.find((ord) => ord.id === orderId);
+      if (!targetOrder) return;
+
+      // Gate E: Bloqueio de Despacho se houver itens obrigatórios pendentes de conferência
+      if (nextStatus === 'dispatched' || nextStatus === 'delivered') {
+        const unverifiedItems = (targetOrder.items || []).filter(
+          (it) => !it.checked && !it.is_verified_in_kds
+        );
+        if (unverifiedItems.length > 0) {
+          toast({
+            title: 'Bloqueio de Expedição',
+            description: `Não é possível despachar o pedido: ${unverifiedItems.length} item(ns) ainda pendente(s) de conferência na cozinha.`,
+            variant: 'destructive',
+          });
+          setActiveChecklistOrder(targetOrder);
+          return;
+        }
+      }
+
+      const previousOrders = orders;
+
       // 1. Atualização otimista no estado local
       setOrders((prev) =>
         prev.map((ord) => {
@@ -199,10 +219,12 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
       if (!isDemoMode && !orderId.startsWith('demo-')) {
         const res = await DeliveryOrderRepository.updateOrderStatus(orderId, nextStatus);
         if (!res.success) {
+          // Reversão do estado otimista em falha (Gate D & E)
+          setOrders(previousOrders);
           toast({
-            title: 'Aviso de Sincronização',
-            description: `Transição gravada na esteira local (${res.error || 'Aguardando banco'}).`,
-            variant: 'default',
+            title: 'Falha na Transição de Status',
+            description: res.error || 'Não foi possível persistir a atualização de status no banco de dados.',
+            variant: 'destructive',
           });
           return;
         }
@@ -213,92 +235,123 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
         description: `Pedido avançou para ${nextStatus}.`,
       });
     },
-    [soundEnabled, isDemoMode, toast]
+    [orders, soundEnabled, isDemoMode, toast]
   );
 
-  // Confirmação de itens no checklist com persistência
+  // Confirmação de itens no checklist com persistência e reversão
   const handleConfirmCheckedItems = useCallback(
-    async (orderId: string) => {
+    async (orderId: string, checkedMap?: Record<string, boolean>) => {
       const targetOrder = orders.find((o) => o.id === orderId);
       if (!targetOrder) return;
 
-      // Atualização otimista
+      const previousOrders = orders;
+
+      // Atualização com o mapa de conferência real (Gate E)
+      const updatedItems = targetOrder.items?.map((it) => {
+        const isChecked = checkedMap ? Boolean(checkedMap[it.id]) : true;
+        return {
+          ...it,
+          checked: isChecked,
+          is_verified_in_kds: isChecked,
+        };
+      });
+
       setOrders((prev) =>
-        prev.map((ord) => {
-          if (ord.id !== orderId) return ord;
-          const updatedItems = ord.items?.map((it) => ({ ...it, checked: true }));
-          return { ...ord, items: updatedItems };
-        })
+        prev.map((ord) => (ord.id === orderId ? { ...ord, items: updatedItems } : ord))
       );
 
-      // Persistência no banco
-      if (!isDemoMode && targetOrder.items) {
-        for (const it of targetOrder.items) {
-          await DeliveryOrderRepository.updateItemVerification(it.id, true);
+      // Persistência no banco com verificação de erro
+      if (!isDemoMode && !orderId.startsWith('demo-') && updatedItems) {
+        try {
+          for (const it of updatedItems) {
+            const res = await DeliveryOrderRepository.updateItemVerification(it.id, Boolean(it.checked));
+            if (!res.success) {
+              setOrders(previousOrders);
+              toast({
+                title: 'Erro na Conferência',
+                description: res.error || 'Falha ao salvar conferência do item.',
+                variant: 'destructive',
+              });
+              return;
+            }
+          }
+        } catch {
+          setOrders(previousOrders);
+          toast({
+            title: 'Erro na Conferência',
+            description: 'Falha na comunicação com o servidor ao salvar conferência.',
+            variant: 'destructive',
+          });
+          return;
         }
       }
 
+      const allChecked = updatedItems?.every((it) => it.checked);
       toast({
-        title: 'Itens Conferidos',
-        description: 'Todos os itens foram verificados pela expedição.',
+        title: allChecked ? 'Itens Conferidos' : 'Conferência Parcial Salva',
+        description: allChecked
+          ? 'Todos os itens foram verificados pela expedição.'
+          : 'Conferência parcial registrada. Finalize os itens restantes antes do despacho.',
       });
     },
     [orders, isDemoMode, toast]
   );
 
-  // Adicionar pedido de balcão com persistência real
-  const handleAddQuickOrder = async () => {
+  // Gate C: Adicionar pedido de teste EXCLUSIVAMENTE em modo demonstração (nunca persiste em produção)
+  const handleAddDemoOrder = () => {
+    if (!isDemoMode) return;
+
     const seq = Math.floor(1000 + Math.random() * 9000);
-    const newDisplayId = `#DIR-${seq}`;
+    const newDisplayId = `#DEMO-${seq}`;
 
     const newOrder: DeliveryOrder = {
-      id: `ord_${Date.now()}`,
+      id: `demo-${Date.now()}`,
       workspace_id: workspaceId,
-      channel_id: 'direct_channel',
-      channel_order_id: `manual_${Date.now()}`,
+      channel_id: 'demo_channel',
+      channel_order_id: `demo_${Date.now()}`,
       display_id: newDisplayId,
-      customer_name: 'Cliente Balcão',
-      subtotal: 32.0,
+      customer_name: 'Cliente Simulado Demo',
+      subtotal: 35.0,
       discount: 0,
-      delivery_fee: 0,
+      delivery_fee: 5.0,
       commission_amount: 0,
-      net_amount: 32.0,
+      net_amount: 40.0,
       status: 'received',
       payment_method: 'pix',
       payment_status: 'paid',
+      is_demo: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       items: [
         {
-          id: `it_${Date.now()}_1`,
-          order_id: `ord_${Date.now()}`,
-          name: 'Lanche Especial Rodo Point',
+          id: `demo_it_${Date.now()}_1`,
+          order_id: `demo-${Date.now()}`,
+          name: 'Item Simulado de Cozinha',
           quantity: 1,
-          unit_price: 25.0,
-          total_price: 25.0,
+          unit_price: 28.0,
+          total_price: 28.0,
+          checked: false,
+          is_verified_in_kds: false,
         },
         {
-          id: `it_${Date.now()}_2`,
-          order_id: `ord_${Date.now()}`,
-          name: 'Bebida Lata 350ml',
+          id: `demo_it_${Date.now()}_2`,
+          order_id: `demo-${Date.now()}`,
+          name: 'Bebida Simulada 350ml',
           quantity: 1,
           unit_price: 7.0,
           total_price: 7.0,
+          checked: false,
+          is_verified_in_kds: false,
         },
       ],
     };
 
-    if (isDemoMode) {
-      setOrders((prev) => [newOrder, ...prev]);
-    } else {
-      setOrders((prev) => [newOrder, ...prev]);
-      await DeliveryOrderRepository.createOrder(newOrder);
-    }
+    setOrders((prev) => [newOrder, ...prev]);
 
     if (soundEnabled) playKDSAlertChime();
     toast({
-      title: 'Novo Pedido Registrado!',
-      description: `Pedido ${newDisplayId} adicionado à esteira operacional.`,
+      title: 'Pedido Demo Injetado',
+      description: `Pedido ${newDisplayId} gerado em memória de demonstração.`,
     });
   };
 
@@ -472,16 +525,18 @@ export const KDSOrderBoard: React.FC<KDSOrderBoardProps> = ({ initialOrders }) =
             )}
           </Button>
 
-          {/* Pedido Rápido de Balcão */}
-          <Button
-            variant="default"
-            size="sm"
-            onClick={handleAddQuickOrder}
-            className="h-9 text-xs flex items-center gap-1.5 bg-primary"
-          >
-            <PlusCircle className="h-4 w-4" />
-            <span className="hidden sm:inline">+ Pedido Balcão</span>
-          </Button>
+          {/* Simulação de Pedido Exclusiva em Modo Demo (Gate C) */}
+          {isDemoMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleAddDemoOrder}
+              className="h-9 text-xs flex items-center gap-1.5 border-amber-500 text-amber-700 dark:text-amber-300 font-bold hover:bg-amber-50 dark:hover:bg-amber-950/20"
+            >
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              <span className="hidden sm:inline">+ Simular Pedido Demo</span>
+            </Button>
+          )}
         </div>
       </div>
 

@@ -1,8 +1,13 @@
 import React, { useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useProfile } from '@/domains/auth/hooks/useProfile';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useToast } from '@/shared/hooks/use-toast';
-import { isDeliveryStaffRole, RESTRICTED_FINANCIAL_ROUTES } from './delivery-permissions';
+import {
+  isDeliveryStaffRole,
+  isRouteAllowedForDeliveryStaff,
+  RESTRICTED_FINANCIAL_ROUTES,
+} from './delivery-permissions';
 
 interface DeliveryRoleGuardProps {
   children: React.ReactNode;
@@ -19,6 +24,7 @@ export const DeliveryRoleGuard: React.FC<DeliveryRoleGuardProps> = ({
   fallbackPath = '/delivery/kds',
 }) => {
   const { profile, loading } = useProfile();
+  const { activeWorkspaceRole } = useWorkspace();
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
@@ -26,10 +32,12 @@ export const DeliveryRoleGuard: React.FC<DeliveryRoleGuardProps> = ({
   useEffect(() => {
     if (loading || !profile) return;
 
-    if (isDeliveryStaffRole(profile.role)) {
-      const isRestricted = RESTRICTED_FINANCIAL_ROUTES.some((prefix) =>
-        location.pathname.startsWith(prefix)
-      );
+    const isStaff = isDeliveryStaffRole(profile?.role) || isDeliveryStaffRole(activeWorkspaceRole);
+    if (isStaff) {
+      const isRestricted =
+        !isRouteAllowedForDeliveryStaff(location.pathname) &&
+        (RESTRICTED_FINANCIAL_ROUTES.some((prefix) => location.pathname.startsWith(prefix)) ||
+          location.pathname === '/delivery');
 
       if (isRestricted) {
         toast({
@@ -41,7 +49,7 @@ export const DeliveryRoleGuard: React.FC<DeliveryRoleGuardProps> = ({
         navigate(fallbackPath, { replace: true });
       }
     }
-  }, [profile, loading, location.pathname, navigate, fallbackPath, toast]);
+  }, [profile, loading, activeWorkspaceRole, location.pathname, navigate, fallbackPath, toast]);
 
   if (loading) {
     return (
@@ -52,10 +60,12 @@ export const DeliveryRoleGuard: React.FC<DeliveryRoleGuardProps> = ({
   }
 
   // Se o usuário for delivery_staff tentando ver página restrita, não renderiza o conteúdo
-  if (profile && isDeliveryStaffRole(profile.role)) {
-    const isRestricted = RESTRICTED_FINANCIAL_ROUTES.some((prefix) =>
-      location.pathname.startsWith(prefix)
-    );
+  const isStaff = isDeliveryStaffRole(profile?.role) || isDeliveryStaffRole(activeWorkspaceRole);
+  if (isStaff) {
+    const isRestricted =
+      !isRouteAllowedForDeliveryStaff(location.pathname) &&
+      (RESTRICTED_FINANCIAL_ROUTES.some((prefix) => location.pathname.startsWith(prefix)) ||
+        location.pathname === '/delivery');
     if (isRestricted) {
       return null;
     }

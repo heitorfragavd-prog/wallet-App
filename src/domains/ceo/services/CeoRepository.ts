@@ -155,6 +155,7 @@ export class CeoRepository {
           observed_results: d.observed_results as CommercialExperiment['observed_results'],
           measured_financial_impact: Number(d.measured_financial_impact || 0),
           decision: d.decision as CommercialExperiment['decision'],
+          decision_rationale: d.decision_rationale ? String(d.decision_rationale) : undefined,
           status: d.status as CommercialExperiment['status'],
           created_at: String(d.created_at || new Date().toISOString()),
           updated_at: String(d.updated_at || new Date().toISOString()),
@@ -190,6 +191,7 @@ export class CeoRepository {
         responsible_person: exp.responsible_person || 'Gestão Rodo Point',
         status: exp.status || 'planejado',
         decision: exp.decision || 'pendente',
+        decision_rationale: exp.decision_rationale || null,
       };
 
       const { data, error } = await supabase
@@ -220,6 +222,7 @@ export class CeoRepository {
           end_date: data.end_date,
           responsible_person: data.responsible_person,
           decision: data.decision,
+          decision_rationale: data.decision_rationale,
           status: data.status,
           created_at: data.created_at,
           updated_at: data.updated_at,

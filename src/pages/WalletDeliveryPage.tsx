@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { DeliveryRoleGuard } from '@/domains/delivery/DeliveryRoleGuard';
 import { DeliveryMarginSimulator } from '@/domains/delivery/components/DeliveryMarginSimulator';
 import { IFoodConnector } from '@/domains/delivery/connectors/ifood-connector';
 import { NinetyNineConnector } from '@/domains/delivery/connectors/ninety-nine-connector';
@@ -40,7 +41,8 @@ export const WalletDeliveryPage: React.FC = () => {
   };
 
   return (
-    <DashboardLayout>
+    <DeliveryRoleGuard fallbackPath="/delivery/kds">
+      <DashboardLayout>
       <div className="space-y-6 pb-12">
         {/* Cabeçalho da Central Delivery */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-4">
@@ -263,7 +265,8 @@ export const WalletDeliveryPage: React.FC = () => {
           </TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
+      </DashboardLayout>
+    </DeliveryRoleGuard>
   );
 };
 

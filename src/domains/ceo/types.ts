@@ -105,6 +105,7 @@ export interface CommercialExperiment {
   };
   measured_financial_impact?: number;
   decision?: ExperimentDecision;
+  decision_rationale?: string;
   status: ExperimentStatus;
   created_at: string;
   updated_at: string;

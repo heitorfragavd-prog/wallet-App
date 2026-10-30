@@ -4,12 +4,12 @@
 
 export const ALLOWED_DELIVERY_STAFF_ROUTES = [
   '/delivery/kds',
-  '/delivery',
   '/perfil',
   '/login',
 ];
 
 export const RESTRICTED_FINANCIAL_ROUTES = [
+  '/delivery',
   '/dashboard',
   '/receitas',
   '/despesas',

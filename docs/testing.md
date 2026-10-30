@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 269.
+- Arquivos de teste: 270.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -175,6 +175,7 @@
 | src\domains\delivery\DeliveryRoleGuard.test.tsx |
 | src\domains\delivery\pricing-simulator.test.ts |
 | src\domains\delivery\tests\delivery-ceo-fase11.test.ts |
+| src\domains\delivery\tests\delivery-ceo-fase12.test.ts |
 | src\domains\finance\hooks\useColaboradorCalculos.test.ts |
 | src\domains\finance\hooks\useComparativoDiario.test.ts |
 | src\domains\finance\hooks\useConciliacao.test.ts |
