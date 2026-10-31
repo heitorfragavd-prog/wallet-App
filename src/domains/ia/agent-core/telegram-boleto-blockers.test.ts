@@ -23,8 +23,8 @@ describe("PR #103 — Validação e Testes Obrigatórios dos Bloqueadores e Reco
   const TEST_USER_ID = "user-blockers-test-01";
   const TEST_CHAT_ID = 99887766;
 
-  // Linha bancária válida (Santander - 47 dígitos, fator 9876 -> vencimento derivado, valor 350.00)
-  const LINHA_VALIDA_COM_VENCIMENTO = "03399.00102 00000.123455 00000.000000 1 98760000035000";
+  // Linha bancária válida (Santander - 47 dígitos, fator 1631 -> vencimento 2026-11-15, valor 350.00)
+  const LINHA_VALIDA_COM_VENCIMENTO = "03399.00102 00000.123455 00000.000000 5 16310000035000";
 
   // Linha de arrecadação válida (48 dígitos, sem fator de vencimento)
   const LINHA_ARRECADACAO_SEM_VENCIMENTO = "846700000017435000240208240123456784901234567898";
@@ -466,7 +466,7 @@ describe("PR #103 — Validação e Testes Obrigatórios dos Bloqueadores e Reco
     expect(pipelineRes.actionProposal).toBeDefined();
     expect(pipelineRes.actionProposal?.payload.beneficiario).toBe("Companhia Elétrica de Minas Gerais");
     expect(pipelineRes.actionProposal?.payload.valor).toBe(350.00);
-    expect(pipelineRes.actionProposal?.payload.data_vencimento).toBe("2049-06-12");
+    expect(pipelineRes.actionProposal?.payload.data_vencimento).toBe("2026-11-15");
   });
 
   // 11. Regressão de notas fiscais DANFE

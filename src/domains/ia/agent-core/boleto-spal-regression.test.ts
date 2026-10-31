@@ -71,21 +71,19 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
       };
 
       const res = reconcileBoleto(inputComprimido);
-      expect(res.valido).toBe(true);
-      expect(res.status).toBe("validado_com_alerta");
-      expect(res.valorFinal).toBe(1562.61);
-      expect(res.valorSource).toBe("febraban_linha");
-      expect(res.dataVencimentoFinal).toBe("2026-08-28");
-      expect(res.vencimentoSource).toBe("febraban_linha");
+      expect(res.valido).toBe(false);
+      expect(res.status).toBe("requer_revisao");
+      expect(res.evidence?.has_unresolved_material_divergence).toBe(true);
+      expect(res.valorSource).toBe("ocr_visual");
+      expect(res.dataVencimentoFinal).toBe("2026-08-21");
+      expect(res.vencimentoSource).toBe("ocr_visual");
 
-      expect(res.warnings).toHaveLength(2);
-      expect(res.warnings.some((w) => w.includes("divergencia_valor_ocr"))).toBe(true);
-      expect(res.warnings.some((w) => w.includes("divergencia_vencimento_ocr"))).toBe(true);
+      expect(res.divergencias.some((d) => d.includes("divergencia_material_valor"))).toBe(true);
 
       const msg = formatBoletoMessage(inputComprimido, res);
-      expect(msg).toContain("R$ 1.562,61");
-      expect(msg).toContain("28/08/2026");
-      expect(msg).toContain("A leitura visual apresentou leve divergência");
+      expect(msg).toContain("R$ 562,61");
+      expect(msg).toContain("21/08/2026");
+      expect(msg).toContain("Requer Revisão");
     });
 
     it("Beneficiário SPAL: Reconhece literalmente 'SPAL INDUSTRIA BRASILEIRA DE' e não alucina 'SPAIPA'", () => {
@@ -142,8 +140,9 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
       const res = reconcileBoleto({
         banco: "Banco Itaú S.A.",
         beneficiario: benefRefinado,
-        valor: "562,61", // valor visual
-        data_vencimento: "2026-08-21", // vencimento visual
+        valor: "1562,61", // valor visual corroborado
+        data_vencimento: "2026-08-21", // vencimento visual (confundido com emissão)
+        data_emissao: "2026-08-21", // data de emissão comprovada
         linha_digitavel: SPAL_LINHA,
       });
 
@@ -303,10 +302,9 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         data_vencimento: "2026-08-28",
         linha_digitavel: SPAL_LINHA,
       });
-      expect(res.valido).toBe(true);
-      expect(res.status).toBe("validado_com_alerta");
-      expect(res.valorFinal).toBe(1562.61);
-      expect(res.warnings.some((w) => w.includes("divergencia_valor_ocr"))).toBe(true);
+      expect(res.valido).toBe(false);
+      expect(res.status).toBe("requer_revisao");
+      expect(res.evidence?.has_unresolved_material_divergence).toBe(true);
     });
 
     it("3: linha válida + data visual divergente -> validado_com_alerta", () => {
@@ -315,6 +313,7 @@ describe("Regressão SPAL & Matriz Determinística FEBRABAN", () => {
         beneficiario: SPAL_BENEFICIARIO,
         valor: "1.562,61",
         data_vencimento: "2026-08-15",
+        data_emissao: "2026-08-15",
         linha_digitavel: SPAL_LINHA,
       });
       expect(res.valido).toBe(true);

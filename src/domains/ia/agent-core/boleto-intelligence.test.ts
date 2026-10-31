@@ -175,7 +175,7 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
       expect(msg).toContain("*Posso preparar este boleto para cadastro.*");
     });
 
-    it("Divergência entre valor impresso e linha digitável válida resulta em validado_com_alerta com valor da linha", () => {
+    it("Divergência material entre valor impresso e linha digitável válida bloqueia fail-closed com requer_revisao", () => {
       const dadosComDivergencia = {
         banco: "Itaú",
         beneficiario: "Fornecedor X",
@@ -184,15 +184,10 @@ describe("Document Intelligence — Boleto na Wallet IA (Etapa 2.2A)", () => {
       };
 
       const validacao = reconcileBoleto(dadosComDivergencia);
-      expect(validacao.status).toBe("validado_com_alerta");
-      expect(validacao.valido).toBe(true);
-      expect(validacao.valorFinal).toBe(1250.00); // Valor da linha é autoritativo!
-      expect(validacao.warnings.some((w) => w.includes("divergencia_valor_ocr"))).toBe(true);
-
-      const msg = formatBoletoMessage(dadosComDivergencia, validacao);
-      expect(msg).toContain("📄 **Boleto Identificado e Validado**");
-      expect(msg).toContain("A leitura visual apresentou leve divergência decorrente de compressão da imagem");
-      expect(msg).toContain("🔒 *Nenhuma conta ou despesa foi cadastrada ainda.*");
+      expect(validacao.status).toBe("requer_revisao");
+      expect(validacao.valido).toBe(false);
+      expect(validacao.evidence?.has_unresolved_material_divergence).toBe(true);
+      expect(validacao.divergencias.some((d) => d.includes("divergencia_material_valor"))).toBe(true);
     });
   });
 

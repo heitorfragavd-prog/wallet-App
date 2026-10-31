@@ -653,18 +653,27 @@ export async function processDocumentPipeline(
       // Hierarquia: 1. Linha FEBRABAN íntegra (fator de vencimento) 2. Data visual validada no calendário
       const dataVencimentoResolvida = validacao?.dataVencimentoFinal || normalizeDate(dados.data_vencimento).iso;
 
+      const hasMaterialDivergence = Boolean(validacao?.evidence?.has_unresolved_material_divergence);
+      const isFebrabanValid = validacao?.valido === true && validacao?.status !== "requer_revisao" && !hasMaterialDivergence;
+
       const hasMinimumBoletoData = Boolean(
         dados.beneficiario &&
         dataVencimentoResolvida &&
         (dados.linha_digitavel || dados.codigo_barras)
       );
-      const isFebrabanValid = validacao?.valido === true;
 
       const errors: string[] = [];
       const warnings: string[] = validacao?.divergencias ? [...validacao.divergencias] : [];
 
       if (!isFebrabanValid) {
-        errors.push(validacao?.erro || "Validação FEBRABAN do código de barras / linha digitável falhou.");
+        if (hasMaterialDivergence) {
+          errors.push(
+            validacao?.motivo ||
+            "Divergência material irreconciliável entre dados visuais do documento e a linha digitável."
+          );
+        } else {
+          errors.push(validacao?.erro || "Validação FEBRABAN do código de barras / linha digitável falhou.");
+        }
       }
       if (numValor <= 0) {
         errors.push("Valor do boleto deve ser maior que zero.");
@@ -681,8 +690,8 @@ export async function processDocumentPipeline(
         if (!dados.linha_digitavel && !dados.codigo_barras) errors.push("Código de barras ou linha digitável ausente.");
       }
 
-      // Gate 3: Validação FEBRABAN + Dados Mínimos + Valor Positivo Fail-Closed
-      if (!isFebrabanValid || numValor <= 0 || !hasMinimumBoletoData) {
+      // Gate 3: Validação FEBRABAN + Salvaguarda de Divergência Material + Dados Mínimos + Valor Positivo Fail-Closed
+      if (!isFebrabanValid || numValor <= 0 || !hasMinimumBoletoData || hasMaterialDivergence) {
         const durationMs = Date.now() - startTime;
         return {
           success: false,

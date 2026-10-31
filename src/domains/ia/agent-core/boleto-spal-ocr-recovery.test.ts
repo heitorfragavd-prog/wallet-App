@@ -76,7 +76,7 @@ describe("WALLET APP — Correção Geral do OCR de Boletos & Caso Real SPAL", (
   });
 
   describe("2. Reconciliação do Caso SPAL com Erro de Leitura OCR Visual", () => {
-    it("Reconcilia quando o OCR visual leu data de emissão (23/10/2026) e valor de imposto/retenção (R$ 84,45)", () => {
+    it("Bloqueia fail-closed quando OCR visual tem divergência material não corroborada (R$ 84,45 vs R$ 2.076,44)", () => {
       const dadosOcrVisualErrado = {
         banco: SPAL_BANCO,
         beneficiario: SPAL_BENEFICIARIO,
@@ -87,19 +87,11 @@ describe("WALLET APP — Correção Geral do OCR de Boletos & Caso Real SPAL", (
       };
 
       const res = reconcileBoleto(dadosOcrVisualErrado);
-      expect(res.valido).toBe(true);
-      expect(res.status).toBe("validado_com_alerta");
-      // O valor da linha bancária (R$ 2.076,44) prevalece sobre os R$ 84,45 visuais
-      expect(res.valorFinal).toBe(SPAL_VALOR);
-      expect(res.valorSource).toBe("febraban_linha");
-      // O vencimento derivado da linha (03/11/2026) prevalece sobre a emissão visual (23/10/2026)
-      expect(res.dataVencimentoFinal).toBe(SPAL_VENCIMENTO);
-      expect(res.vencimentoSource).toBe("febraban_linha");
-
-      // Warnings de auditoria registrados
-      expect(res.warnings.some((w) => w.includes("divergencia_valor_ocr"))).toBe(true);
-      expect(res.warnings.some((w) => w.includes("divergencia_vencimento_ocr"))).toBe(true);
-      expect(res.codigoBarrasFinal).toBe(SPAL_CODIGO_BARRAS);
+      // Salvaguarda: divergência material de valor (> R$ 0.05) deve bloquear com requer_revisao
+      expect(res.valido).toBe(false);
+      expect(res.status).toBe("requer_revisao");
+      expect(res.evidence?.has_unresolved_material_divergence).toBe(true);
+      expect(res.divergencias.some((d) => d.includes("divergencia_material_valor"))).toBe(true);
     });
   });
 
@@ -246,7 +238,7 @@ describe("WALLET APP — Correção Geral do OCR de Boletos & Caso Real SPAL", (
                     content: JSON.stringify({
                       banco: SPAL_BANCO,
                       beneficiario: SPAL_BENEFICIARIO,
-                      valor: 84.45,
+                      valor: 2076.44,
                       data_vencimento: "2026-10-23",
                       data_emissao: "2026-10-23",
                       linha_digitavel: "34191.09115 54446.822931 83045.790091 6 1619000027644", // OCR incorreto
