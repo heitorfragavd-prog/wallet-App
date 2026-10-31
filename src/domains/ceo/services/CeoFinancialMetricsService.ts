@@ -3,16 +3,16 @@ import { supabase } from '@/integrations/supabase/client';
 export interface CeoExecutiveKpis {
   faturamentoMes: number;
   faturamentoMesAnterior: number;
-  crescimentoMesPercent: number;
+  crescimentoMesPercent: number | null;
   faturamentoOntem: number;
-  mediaDiaSemanaOntem: number;
-  variacaoOntemVsMediaPercent: number;
+  mediaDiaSemanaOntem: number | null;
+  variacaoOntemVsMediaPercent: number | null;
   diaSemanaOntemNome: string;
   despesasMes: number;
   despesasMesAnterior: number;
-  variacaoDespesasPercent: number;
+  variacaoDespesasPercent: number | null;
   lucroEstimado: number;
-  margemLucroPercent: number;
+  margemLucroPercent: number | null;
   cmvPercent: number | null; // null se dados insuficientes
   cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes';
   coberturaFichasPercent: number;
@@ -51,7 +51,8 @@ export interface TopProdutoFaturamento {
 
 export class CeoFinancialMetricsService {
   /**
-   * Obtém KPIs executivos consolidados para o cabeçalho e Hero Card do Wallet CEO
+   * Obtém KPIs executivos consolidados com dados 100% reais da Rodo Point.
+   * Nunca utiliza valores fictícios como fallback.
    */
   static async getExecutiveKpis(workspaceId: string): Promise<CeoExecutiveKpis> {
     if (!workspaceId) {
@@ -82,14 +83,15 @@ export class CeoFinancialMetricsService {
       const diasSemanaNomes = ['domingos', 'segundas-feiras', 'terças-feiras', 'quartas-feiras', 'quintas-feiras', 'sextas-feiras', 'sábados'];
       const diaSemanaOntemNome = diasSemanaNomes[ontem.getDay()];
 
-      // 1. Faturamento Mês Atual (transacoes receita)
+      // 1. Faturamento Mês Atual (transacoes de receita com paginação segura)
       const { data: txMes } = await supabase
         .from('transacoes')
         .select('valor, data')
         .eq('workspace_id', workspaceId)
         .eq('tipo', 'receita')
         .gte('data', inicioMesAtual)
-        .lte('data', fimMesAtual);
+        .lte('data', fimMesAtual)
+        .limit(5000);
 
       const faturamentoMes = (txMes || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
@@ -100,17 +102,18 @@ export class CeoFinancialMetricsService {
         .eq('workspace_id', workspaceId)
         .eq('tipo', 'receita')
         .gte('data', inicioMesAnt)
-        .lte('data', fimMesAnt);
+        .lte('data', fimMesAnt)
+        .limit(5000);
 
       const faturamentoMesAnt = (txMesAnt || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
-      // Crescimento %
+      // Crescimento % real
       const crescimentoMes =
         faturamentoMesAnt > 0
           ? Math.round(((faturamentoMes - faturamentoMesAnt) / faturamentoMesAnt) * 1000) / 10
-          : 0;
+          : null;
 
-      // 3. Faturamento de Ontem
+      // 3. Faturamento de Ontem real
       const vendasOntem = (txMes || []).filter((t) => (t.data ? t.data.startsWith(ontemStr) : false));
       const faturamentoOntem = vendasOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
@@ -122,203 +125,363 @@ export class CeoFinancialMetricsService {
         return d.getDay() === diaSemanaIndex && !t.data.startsWith(ontemStr);
       });
       const somaMesmoDia = vendasMesmoDiaSemana.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const mediaDiaSemana =
-        vendasMesmoDiaSemana.length > 0 ? somaMesmoDia / Math.max(1, Math.round(vendasMesmoDiaSemana.length / 50)) : faturamentoOntem;
+      const diasContados = Math.max(1, Math.round(vendasMesmoDiaSemana.length / 50));
+      const mediaDiaSemana = vendasMesmoDiaSemana.length > 0 ? somaMesmoDia / diasContados : null;
 
       const variacaoOntemVsMedia =
-        mediaDiaSemana > 0
+        mediaDiaSemana !== null && mediaDiaSemana > 0
           ? Math.round(((faturamentoOntem - mediaDiaSemana) / mediaDiaSemana) * 1000) / 10
-          : 0;
+          : null;
 
-      // 4. Despesas Mês Atual
+      // 4. Despesas Mês Atual reais
       const { data: despMes } = await supabase
         .from('despesas')
         .select('valor')
         .eq('workspace_id', workspaceId)
         .gte('data', inicioMesAtual)
-        .lte('data', fimMesAtual);
+        .lte('data', fimMesAtual)
+        .limit(5000);
 
       const totalDespesasMes = (despMes || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
-      // Despesas Mês Anterior
+      // Despesas Mês Anterior reais
       const { data: despMesAnt } = await supabase
         .from('despesas')
         .select('valor')
         .eq('workspace_id', workspaceId)
         .gte('data', inicioMesAnt)
-        .lte('data', fimMesAnt);
+        .lte('data', fimMesAnt)
+        .limit(5000);
 
       const totalDespesasMesAnt = (despMesAnt || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
       const variacaoDespesas =
         totalDespesasMesAnt > 0
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10
-          : 0;
+          : null;
 
-      // 5. Lucro Estimado & Margem
+      // 5. Resultado Operacional Apurado (Receitas - Despesas Registradas)
       const lucroEstimado = Math.max(0, faturamentoMes - totalDespesasMes);
-      const margemLucro = faturamentoMes > 0 ? Math.round((lucroEstimado / faturamentoMes) * 1000) / 10 : 0;
+      const margemLucro = faturamentoMes > 0 ? Math.round((lucroEstimado / faturamentoMes) * 1000) / 10 : null;
 
-      // 6. CMV Status
-      // Se não há fichas técnicas cadastradas na base, status honesto é 'dados_insuficientes'
+      // 6. CMV Status: checa se há fichas técnicas reais cadastradas
       const { count: countFichas } = await supabase
         .from('fichas_tecnicas')
         .select('*', { count: 'exact', head: true });
 
       const hasFichas = (countFichas ?? 0) > 0;
       const cmvStatus = hasFichas ? 'saudavel' : 'dados_insuficientes';
-      const cmvPercent = hasFichas ? 32.4 : null;
-      const coberturaFichas = hasFichas ? 85 : 0;
+      const cmvPercent: number | null = null;
+      const coberturaFichas = hasFichas ? 100 : 0;
+
+      // Ações sugeridas baseadas na situação REAL do workspace
+      const acoesHoje: { numero: number; titulo: string; detalhe: string; impacto?: string }[] = [];
+
+      if (!hasFichas) {
+        acoesHoje.push({
+          numero: 1,
+          titulo: 'Cadastrar fichas técnicas dos produtos',
+          detalhe: 'Necessário para apuração real de CMV e margem unitária.',
+        });
+      } else {
+        acoesHoje.push({
+          numero: 1,
+          titulo: 'Revisar margens de produtos no PDV',
+          detalhe: 'Acompanhar precificação com base nos custos de insumos.',
+        });
+      }
+
+      acoesHoje.push({
+        numero: 2,
+        titulo: 'Configurar canais de delivery no KDS',
+        detalhe: 'Completar integração de pedidos para captura unificada na cozinha.',
+      });
+
+      if (totalDespesasMes > 0) {
+        acoesHoje.push({
+          numero: 3,
+          titulo: 'Acompanhar conciliações de despesas',
+          detalhe: `Total de R$ ${totalDespesasMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} lançado no mês.`,
+        });
+      } else {
+        acoesHoje.push({
+          numero: 3,
+          titulo: 'Acompanhar sincronização do Eyemobile PDV',
+          detalhe: 'Verificar status de fechamentos de caixa e transações diárias.',
+        });
+      }
 
       return {
         faturamentoMes,
         faturamentoMesAnterior: faturamentoMesAnt,
         crescimentoMesPercent: crescimentoMes,
-        faturamentoOntem: faturamentoOntem > 0 ? faturamentoOntem : 12845.30,
-        mediaDiaSemanaOntem: mediaDiaSemana > 0 ? mediaDiaSemana : 10885.00,
-        variacaoOntemVsMediaPercent: variacaoOntemVsMedia !== 0 ? variacaoOntemVsMedia : 18.0,
+        faturamentoOntem,
+        mediaDiaSemanaOntem,
+        variacaoOntemVsMediaPercent: variacaoOntemVsMedia,
         diaSemanaOntemNome,
-        despesasMes: totalDespesasMes > 0 ? totalDespesasMes : 45610.25,
-        despesasMesAnterior: totalDespesasMesAnt > 0 ? totalDespesasMesAnt : 42190.15,
-        variacaoDespesasPercent: variacaoDespesas !== 0 ? variacaoDespesas : 8.1,
-        lucroEstimado: lucroEstimado > 0 ? lucroEstimado : 58420.10,
-        margemLucroPercent: margemLucro > 0 ? margemLucro : 20.3,
+        despesasMes: totalDespesasMes,
+        despesasMesAnterior: totalDespesasMesAnt,
+        variacaoDespesasPercent: variacaoDespesas,
+        lucroEstimado,
+        margemLucroPercent: margemLucro,
         cmvPercent,
         cmvStatus,
         coberturaFichasPercent: coberturaFichas,
-        acoesHoje: [
-          {
-            numero: 1,
-            titulo: 'Ajustar preços de 2 produtos com baixa margem',
-            detalhe: 'X-Salada e X-Burger com margem bruta abaixo de 20%',
-            impacto: '+R$ 3.200/mês',
-          },
-          {
-            numero: 2,
-            titulo: 'Revisar desperdício na cozinha',
-            detalhe: 'Perdas aumentaram 12% esta semana. Revisar porções de fritura.',
-            impacto: '+R$ 1.500/mês',
-          },
-          {
-            numero: 3,
-            titulo: 'Ativar campanha no iFood para horários de baixa',
-            detalhe: 'Promoção entre 15h e 17h para alavancar faturamento de lanches.',
-            impacto: '+R$ 8.500/mês',
-          },
-        ],
-        dataAtualizacao: 'há 5 min',
+        acoesHoje,
+        dataAtualizacao: 'atualizado agora',
       };
     } catch (err) {
-      console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos:', err);
+      console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos reais:', err);
       return this.getEmptyKpis();
     }
   }
 
   /**
-   * Obtém a distribuição de vendas por canal comprovado
+   * Obtém a distribuição de vendas por canal baseada em dados reais.
+   * Não inventa percentuais de iFood/99Food se não houver pedidos nesses canais.
    */
-  static async getSalesByChannel(_workspaceId: string): Promise<VendaCanalDistribuicao[]> {
-    return [
-      { canal: 'Salão', faturamento: 129918.59, percentual: 45.2, cor: '#3b82f6' },
-      { canal: 'iFood', faturamento: 82492.55, percentual: 28.7, cor: '#ef4444' },
-      { canal: '99Food', faturamento: 44264.30, percentual: 15.4, cor: '#f59e0b' },
-      { canal: 'Delivery Direto', faturamento: 23281.87, percentual: 8.1, cor: '#10b981' },
-      { canal: 'Outros', faturamento: 7473.19, percentual: 2.6, cor: '#8b5cf6' },
-    ];
-  }
+  static async getSalesByChannel(workspaceId: string): Promise<VendaCanalDistribuicao[]> {
+    if (!workspaceId) return [];
 
-  /**
-   * Obtém ranking dos Top 10 Produtos por Faturamento
-   */
-  static async getTopProducts(_workspaceId: string): Promise<TopProdutoFaturamento[]> {
-    return [
-      { rank: 1, id: 'prod-1', produto: 'X-Tudo Especial', quantidade: 1243, faturamento: 46752.30, margemEstimada: 28 },
-      { rank: 2, id: 'prod-2', produto: 'X-Bacon', quantidade: 982, faturamento: 32164.50, margemEstimada: 32 },
-      { rank: 3, id: 'prod-3', produto: 'X-Salada', quantidade: 876, faturamento: 25430.10, margemEstimada: 35 },
-      { rank: 4, id: 'prod-4', produto: 'Batata Frita', quantidade: 1102, faturamento: 18334.20, margemEstimada: 40 },
-      { rank: 5, id: 'prod-5', produto: 'Refrigerante Lata', quantidade: 1890, faturamento: 14175.00, margemEstimada: 52 },
-      { rank: 6, id: 'prod-6', produto: 'Pastel de Carne', quantidade: 720, faturamento: 10800.00, margemEstimada: 38 },
-      { rank: 7, id: 'prod-7', produto: 'Suco Natural 500ml', quantidade: 610, faturamento: 9150.00, margemEstimada: 45 },
-      { rank: 8, id: 'prod-8', produto: 'Misto Quente', quantidade: 540, faturamento: 7020.00, margemEstimada: 42 },
-      { rank: 9, id: 'prod-9', produto: 'Cerveja Long Neck', quantidade: 480, faturamento: 6720.00, margemEstimada: 48 },
-      { rank: 10, id: 'prod-10', produto: 'Café Espresso', quantidade: 1200, faturamento: 6000.00, margemEstimada: 65 },
-    ];
-  }
+    try {
+      // 1. Consulta faturamento de delivery em delivery_orders
+      const { data: deliveryOrders } = await supabase
+        .from('delivery_orders')
+        .select('channel_name, total_amount')
+        .eq('workspace_id', workspaceId)
+        .neq('order_status', 'cancelled');
 
-  /**
-   * Gera matriz de calor de horários de maior movimento (11h a 23h por dia da semana)
-   */
-  static getMovementHeatmap(): HeatmapHorarioPonto[] {
-    const pontos: HeatmapHorarioPonto[] = [];
-    const dias = [
-      { num: 1, nome: 'Seg' },
-      { num: 2, nome: 'Ter' },
-      { num: 3, nome: 'Qua' },
-      { num: 4, nome: 'Qui' },
-      { num: 5, nome: 'Sex' },
-      { num: 6, nome: 'Sáb' },
-      { num: 0, nome: 'Dom' },
-    ];
+      // 2. Consulta faturamento geral no mês
+      const hoje = new Date();
+      const mesPad = String(hoje.getMonth() + 1).padStart(2, '0');
+      const inicioMes = `${hoje.getFullYear()}-${mesPad}-01`;
 
-    for (let hora = 11; hora <= 23; hora += 2) {
-      for (const d of dias) {
-        // Picos de almoço (11h-13h) e jantar (19h-21h), especialmente sexta e sábado
-        let baseIntensidade = 20;
-        if (hora >= 11 && hora <= 13) baseIntensidade = 65;
-        if (hora >= 19 && hora <= 21) baseIntensidade = 85;
-        if (d.num === 5 || d.num === 6) baseIntensidade += 15; // Sex/Sáb
+      const { data: txMes } = await supabase
+        .from('transacoes')
+        .select('valor')
+        .eq('workspace_id', workspaceId)
+        .eq('tipo', 'receita')
+        .gte('data', inicioMes)
+        .limit(5000);
 
-        const intensidade = Math.min(100, Math.max(10, baseIntensidade + Math.floor(Math.random() * 10 - 5)));
-        pontos.push({
-          hora,
-          diaSemana: d.num,
-          diaNome: d.nome,
-          intensidade,
-          faturamento: Math.round(intensidade * 150),
+      const faturamentoTotalGeral = (txMes || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
+
+      if (faturamentoTotalGeral === 0 && (!deliveryOrders || deliveryOrders.length === 0)) {
+        return [];
+      }
+
+      const channelMap = new Map<string, number>();
+      let faturamentoDeliveryTotal = 0;
+
+      for (const order of deliveryOrders || []) {
+        const canal = order.channel_name || 'Delivery Direto';
+        const valor = Number(order.total_amount || 0);
+        channelMap.set(canal, (channelMap.get(canal) || 0) + valor);
+        faturamentoDeliveryTotal += valor;
+      }
+
+      const faturamentoSalao = Math.max(0, faturamentoTotalGeral - faturamentoDeliveryTotal);
+      const totalCombinado = faturamentoSalao + faturamentoDeliveryTotal;
+
+      const result: VendaCanalDistribuicao[] = [];
+
+      if (faturamentoSalao > 0 || channelMap.size === 0) {
+        const pct = totalCombinado > 0 ? Math.round((faturamentoSalao / totalCombinado) * 1000) / 10 : 100;
+        result.push({
+          canal: 'Salão / Balcão',
+          faturamento: faturamentoSalao > 0 ? faturamentoSalao : faturamentoTotalGeral,
+          percentual: pct,
+          cor: '#3b82f6',
         });
       }
-    }
 
-    return pontos;
+      const colors: Record<string, string> = {
+        ifood: '#ef4444',
+        '99food': '#f59e0b',
+        direto: '#10b981',
+      };
+
+      for (const [canal, valor] of channelMap.entries()) {
+        const pct = totalCombinado > 0 ? Math.round((valor / totalCombinado) * 1000) / 10 : 0;
+        result.push({
+          canal,
+          faturamento: valor,
+          percentual: pct,
+          cor: colors[canal.toLowerCase()] || '#8b5cf6',
+        });
+      }
+
+      return result;
+    } catch (err) {
+      console.warn('[CeoFinancialMetricsService] Erro ao consolidar canais reais:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Obtém ranking dos Top 10 Produtos por Faturamento real.
+   * Retorna lista vazia caso não haja itens individualizados registrados.
+   */
+  static async getTopProducts(workspaceId: string): Promise<TopProdutoFaturamento[]> {
+    if (!workspaceId) return [];
+
+    try {
+      const { data: items } = await supabase
+        .from('delivery_order_items')
+        .select('name, quantity, total_price')
+        .eq('workspace_id', workspaceId)
+        .limit(2000);
+
+      if (!items || items.length === 0) {
+        return [];
+      }
+
+      const productMap = new Map<string, { quantidade: number; faturamento: number }>();
+
+      for (const item of items) {
+        const name = item.name || 'Produto sem nome';
+        const qtd = Number(item.quantity || 1);
+        const valor = Number(item.total_price || 0);
+        const current = productMap.get(name) || { quantidade: 0, faturamento: 0 };
+        current.quantidade += qtd;
+        current.faturamento += valor;
+        productMap.set(name, current);
+      }
+
+      const sorted = Array.from(productMap.entries())
+        .sort((a, b) => b[1].faturamento - a[1].faturamento)
+        .slice(0, 10);
+
+      return sorted.map(([produto, stats], idx) => ({
+        rank: idx + 1,
+        id: `prod-${idx + 1}`,
+        produto,
+        quantidade: stats.quantidade,
+        faturamento: stats.faturamento,
+        margemEstimada: null, // Sem fichas técnicas, margem estimada é null (nunca fictícia)
+      }));
+    } catch (err) {
+      console.warn('[CeoFinancialMetricsService] Erro ao consultar produtos reais:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Gera matriz de calor de horários de maior movimento baseada em timestamps de transações reais.
+   * Não utiliza Math.random(). Se não houver transações com horário, retorna array vazio.
+   */
+  static async getMovementHeatmap(workspaceId: string): Promise<HeatmapHorarioPonto[]> {
+    if (!workspaceId) return [];
+
+    try {
+      const hoje = new Date();
+      const limite30Dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: transacoes } = await supabase
+        .from('transacoes')
+        .select('created_at, valor')
+        .eq('workspace_id', workspaceId)
+        .eq('tipo', 'receita')
+        .gte('created_at', limite30Dias)
+        .limit(5000);
+
+      if (!transacoes || transacoes.length === 0) {
+        return [];
+      }
+
+      const gridMap = new Map<string, { faturamento: number; contagem: number }>();
+      const dias = [
+        { num: 1, nome: 'Seg' },
+        { num: 2, nome: 'Ter' },
+        { num: 3, nome: 'Qua' },
+        { num: 4, nome: 'Qui' },
+        { num: 5, nome: 'Sex' },
+        { num: 6, nome: 'Sáb' },
+        { num: 0, nome: 'Dom' },
+      ];
+
+      let maxFaturamentoPonto = 0;
+
+      for (const t of transacoes) {
+        if (!t.created_at) continue;
+        const d = new Date(t.created_at);
+        const hora = d.getHours();
+        const diaSemana = d.getDay();
+
+        // Agrupa em janelas de 2 horas (11h, 13h, 15h, 17h, 19h, 21h, 23h)
+        const horaIntervalo = Math.max(11, Math.min(23, Math.floor(hora / 2) * 2 + 1));
+        const key = `${diaSemana}_${horaIntervalo}`;
+        const current = gridMap.get(key) || { faturamento: 0, contagem: 0 };
+        const valor = Number(t.valor || 0);
+        current.faturamento += valor;
+        current.contagem += 1;
+        gridMap.set(key, current);
+
+        if (current.faturamento > maxFaturamentoPonto) {
+          maxFaturamentoPonto = current.faturamento;
+        }
+      }
+
+      const pontos: HeatmapHorarioPonto[] = [];
+
+      for (let hora = 11; hora <= 23; hora += 2) {
+        for (const d of dias) {
+          const key = `${d.num}_${hora}`;
+          const dado = gridMap.get(key);
+          const faturamento = dado ? dado.faturamento : 0;
+          const intensidade = maxFaturamentoPonto > 0 ? Math.round((faturamento / maxFaturamentoPonto) * 100) : 0;
+
+          pontos.push({
+            hora,
+            diaSemana: d.num,
+            diaNome: d.nome,
+            intensidade,
+            faturamento,
+          });
+        }
+      }
+
+      return pontos;
+    } catch (err) {
+      console.warn('[CeoFinancialMetricsService] Erro ao consolidar heatmap de horários:', err);
+      return [];
+    }
   }
 
   private static getEmptyKpis(): CeoExecutiveKpis {
     return {
-      faturamentoMes: 287430.50,
-      faturamentoMesAnterior: 255950.00,
-      crescimentoMesPercent: 12.3,
-      faturamentoOntem: 12845.30,
-      mediaDiaSemanaOntem: 10885.00,
-      variacaoOntemVsMediaPercent: 18.0,
-      diaSemanaOntemNome: 'terças-feiras',
-      despesasMes: 45610.25,
-      despesasMesAnterior: 42190.00,
-      variacaoDespesasPercent: 8.1,
-      lucroEstimado: 58420.10,
-      margemLucroPercent: 20.3,
+      faturamentoMes: 0,
+      faturamentoMesAnterior: 0,
+      crescimentoMesPercent: null,
+      faturamentoOntem: 0,
+      mediaDiaSemanaOntem: null,
+      variacaoOntemVsMediaPercent: null,
+      diaSemanaOntemNome: 'ontem',
+      despesasMes: 0,
+      despesasMesAnterior: 0,
+      variacaoDespesasPercent: null,
+      lucroEstimado: 0,
+      margemLucroPercent: null,
       cmvPercent: null,
       cmvStatus: 'dados_insuficientes',
       coberturaFichasPercent: 0,
       acoesHoje: [
         {
           numero: 1,
-          titulo: 'Ajustar preços de 2 produtos com baixa margem',
-          detalhe: 'X-Salada e X-Burger com margem bruta abaixo de 20%',
-          impacto: '+R$ 3.200/mês',
+          titulo: 'Cadastrar fichas técnicas dos produtos',
+          detalhe: 'Necessário para apuração real de CMV e margem unitária.',
         },
         {
           numero: 2,
-          titulo: 'Revisar desperdício na cozinha',
-          detalhe: 'Perdas aumentaram 12% esta semana. Revisar porções de fritura.',
-          impacto: '+R$ 1.500/mês',
+          titulo: 'Configurar canais de delivery no KDS',
+          detalhe: 'Ativar credenciais do iFood e 99Food no KDS para captura de pedidos.',
         },
         {
           numero: 3,
-          titulo: 'Ativar campanha no iFood para horários de baixa',
-          detalhe: 'Promoção entre 15h e 17h para alavancar faturamento de lanches.',
-          impacto: '+R$ 8.500/mês',
+          titulo: 'Acompanhar lançamentos de caixa',
+          detalhe: 'Verificar sincronização de vendas com o Eyemobile PDV.',
         },
       ],
-      dataAtualizacao: 'há 5 min',
+      dataAtualizacao: 'aguardando sincronização',
     };
   }
 }

@@ -98,57 +98,67 @@ const telemetryLogger = {
     metadata?: Record<string, unknown>;
   }) => {
     try {
-      await rawSupabaseClient.from("wallet_ai_telemetry").insert({
+      const toolCalls = typeof telemetry.metadata?.toolCallsCount === "number" ? telemetry.metadata.toolCallsCount : 0;
+      const provider = typeof telemetry.metadata?.provider === "string" ? telemetry.metadata.provider : (telemetry.model.startsWith("gemini") ? "gemini" : "openai");
+      const correlationId = typeof telemetry.metadata?.correlationId === "string" ? telemetry.metadata.correlationId : null;
+
+      const { error } = await rawSupabaseClient.from("wallet_ai_telemetry").insert({
         workspace_id: telemetry.workspaceId,
-        user_id: telemetry.userId,
+        user_id: telemetry.userId || null,
         conversation_id: telemetry.conversationId || null,
         channel: telemetry.channel || "web",
         model: telemetry.model,
+        provider,
         prompt_tokens: telemetry.promptTokens,
         completion_tokens: telemetry.completionTokens,
         total_tokens: telemetry.totalTokens,
         estimated_cost_usd: telemetry.estimatedCostUsd,
         duration_ms: telemetry.durationMs,
+        tool_calls_count: toolCalls,
         complexity_level: telemetry.complexityLevel,
         department: telemetry.department,
-        status: telemetry.status,
+        status: telemetry.status || "success",
+        correlation_id: correlationId,
         metadata: telemetry.metadata || {},
       });
+
+      if (error) {
+        console.error("[wallet-ai-orchestrator] Erro ao registrar telemetria de IA:", error);
+      }
     } catch (err) {
-      console.warn("[wallet-ai-orchestrator] Falha ao registrar telemetria de IA:", err);
+      console.error("[wallet-ai-orchestrator] Exceção ao registrar telemetria de IA:", err);
     }
   },
   checkBudget: async (workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }> => {
     try {
-      const { data } = await rawSupabaseClient
+      const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-10"
+      const { data, error } = await rawSupabaseClient
         .from("v_wallet_ai_monthly_usage")
-        .select("*")
+        .select("workspace_id, month_reference, total_cost_usd, monthly_budget_usd, budget_consumed_percent, hard_limit_active")
         .eq("workspace_id", workspaceId)
+        .eq("month_reference", currentMonth)
         .maybeSingle();
 
+      if (error) {
+        console.warn("[wallet-ai-orchestrator] Erro ao consultar v_wallet_ai_monthly_usage:", error);
+        return { hardLimitExceeded: false };
+      }
+
       if (data) {
-        const usage = data as {
-          hard_limit_enabled?: boolean;
-          monthly_budget_usd?: number;
-          current_month_cost_usd?: number;
-          percent_consumed?: number;
-        };
-        if (
-          usage.hard_limit_enabled &&
-          typeof usage.monthly_budget_usd === "number" &&
-          typeof usage.current_month_cost_usd === "number" &&
-          usage.current_month_cost_usd >= usage.monthly_budget_usd
-        ) {
+        const totalCost = Number(data.total_cost_usd || 0);
+        const monthlyBudget = Number(data.monthly_budget_usd || 10);
+        const percentConsumed = Number(data.budget_consumed_percent || 0);
+        const isHardLimit = Boolean(data.hard_limit_active);
+
+        if (isHardLimit && totalCost >= monthlyBudget) {
           return { hardLimitExceeded: true };
         }
-        if (typeof usage.percent_consumed === "number") {
-          if (usage.percent_consumed >= 100) return { hardLimitExceeded: false, alertTriggered: "100%" };
-          if (usage.percent_consumed >= 80) return { hardLimitExceeded: false, alertTriggered: "80%" };
-          if (usage.percent_consumed >= 50) return { hardLimitExceeded: false, alertTriggered: "50%" };
-        }
+        if (percentConsumed >= 100) return { hardLimitExceeded: false, alertTriggered: "100%" };
+        if (percentConsumed >= 80) return { hardLimitExceeded: false, alertTriggered: "80%" };
+        if (percentConsumed >= 50) return { hardLimitExceeded: false, alertTriggered: "50%" };
       }
-    } catch {
-      // Fail-safe
+    } catch (err) {
+      console.warn("[wallet-ai-orchestrator] Exceção ao verificar orçamento:", err);
     }
     return { hardLimitExceeded: false };
   },

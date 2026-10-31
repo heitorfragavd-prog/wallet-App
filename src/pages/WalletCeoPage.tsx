@@ -279,7 +279,7 @@ export const WalletCeoPage: React.FC = () => {
             {/* Status Pill com animação */}
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Dados atualizados há 5 min</span>
+              <span>{executiveKpis.dataAtualizacao || 'atualizado agora'}</span>
             </div>
           </div>
         </div>

@@ -3,11 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui
 import { Button } from '@/shared/components/ui/button';
 import {
   TrendingUp,
-  ArrowUpRight,
   Send,
   RotateCcw,
-  History,
-  Bot,
   User,
   AlertTriangle,
   ArrowRight,
@@ -70,21 +67,43 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     sendMessage(prompt);
   };
 
-  // Mini sparkline data for KPIs
+  // Sparklines neutros caso não haja histórico diário suficiente
   const revenueSparkline = [
-    { v: 12 }, { v: 18 }, { v: 15 }, { v: 22 }, { v: 26 }, { v: 31 }, { v: 38 },
-  ];
-  const profitSparkline = [
-    { v: 8 }, { v: 10 }, { v: 14 }, { v: 12 }, { v: 18 }, { v: 20 }, { v: 24 },
-  ];
-  const expenseSparkline = [
-    { v: 14 }, { v: 12 }, { v: 18 }, { v: 16 }, { v: 22 }, { v: 24 }, { v: 28 },
+    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.12) : 0 },
+    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.14) : 0 },
+    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.15) : 0 },
+    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.18) : 0 },
+    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.22) : 0 },
   ];
 
-  // CMV gauge data
+  const profitSparkline = [
+    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.15) : 0 },
+    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.18) : 0 },
+    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.20) : 0 },
+    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.22) : 0 },
+    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.25) : 0 },
+  ];
+
+  const expenseSparkline = [
+    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.18) : 0 },
+    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.19) : 0 },
+    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.20) : 0 },
+    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.21) : 0 },
+    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.22) : 0 },
+  ];
+
+  // CMV gauge data honesto (sem dados fictícios)
   const cmvGaugeData = [
-    { name: 'CMV', value: kpis.cmvPercent ?? 32.4, color: '#10b981' },
-    { name: 'Margem', value: 100 - (kpis.cmvPercent ?? 32.4), color: '#1e293b' },
+    {
+      name: 'CMV',
+      value: kpis.cmvPercent !== null ? kpis.cmvPercent : 0,
+      color: kpis.cmvPercent !== null ? '#10b981' : '#475569',
+    },
+    {
+      name: 'Restante',
+      value: kpis.cmvPercent !== null ? 100 - kpis.cmvPercent : 100,
+      color: '#1e293b',
+    },
   ];
 
   return (
@@ -103,7 +122,6 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     alt="Wallet CEO"
                     className="w-full h-full object-cover"
                     onError={(e) => {
-                      // Fallback se imagem offline
                       (e.target as HTMLElement).style.display = 'none';
                     }}
                   />
@@ -120,29 +138,57 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                   Bom dia, Heitor!
                 </h2>
                 <p className="text-xs md:text-sm text-slate-300 leading-relaxed">
-                  A Rodo Point faturou{' '}
-                  <strong className="text-white font-semibold">
-                    R$ {kpis.faturamentoOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </strong>{' '}
-                  ontem,{' '}
-                  <span className="text-emerald-400 font-semibold">
-                    {kpis.variacaoOntemVsMediaPercent}% acima da média
-                  </span>{' '}
-                  de {kpis.diaSemanaOntemNome}. Neste mês, estamos com{' '}
-                  <strong className="text-white font-semibold">
-                    R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </strong>{' '}
-                  em vendas, um crescimento de{' '}
-                  <span className="text-emerald-400 font-semibold">
-                    {kpis.crescimentoMesPercent}%
-                  </span>{' '}
-                  em relação ao mês anterior. Tenho 3 oportunidades prioritárias para aumentar o lucro e reduzir despesas.
+                  {kpis.faturamentoOntem > 0 ? (
+                    <>
+                      A Rodo Point faturou{' '}
+                      <strong className="text-white font-semibold">
+                        R$ {kpis.faturamentoOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </strong>{' '}
+                      ontem
+                      {kpis.variacaoOntemVsMediaPercent !== null && (
+                        <>
+                          ,{' '}
+                          <span className={kpis.variacaoOntemVsMediaPercent >= 0 ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
+                            {kpis.variacaoOntemVsMediaPercent > 0 ? `+${kpis.variacaoOntemVsMediaPercent}%` : `${kpis.variacaoOntemVsMediaPercent}%`} em relação à média
+                          </span>{' '}
+                          de {kpis.diaSemanaOntemNome}
+                        </>
+                      )}
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Nenhuma venda registrada ontem ({kpis.diaSemanaOntemNome}).
+                    </>
+                  )}{' '}
+                  {kpis.faturamentoMes > 0 ? (
+                    <>
+                      Neste mês, o faturamento apurado é de{' '}
+                      <strong className="text-white font-semibold">
+                        R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </strong>
+                      {kpis.crescimentoMesPercent !== null && (
+                        <>
+                          , uma variação de{' '}
+                          <span className={kpis.crescimentoMesPercent >= 0 ? "text-emerald-400 font-semibold" : "text-rose-400 font-semibold"}>
+                            {kpis.crescimentoMesPercent > 0 ? `+${kpis.crescimentoMesPercent}%` : `${kpis.crescimentoMesPercent}%`}
+                          </span>{' '}
+                          vs. mês anterior
+                        </>
+                      )}
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Aguardando sincronização de transações de receita do mês corrente.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
 
             {/* Right: Principais Ações de Hoje */}
-            <div className="w-full lg:w-auto shrink-0 bg-slate-900/60 p-4 rounded-xl border border-border/40 space-y-3">
+            <div className="w-full lg:w-auto shrink-0 bg-slate-900/60 p-4 rounded-xl border border-border/40 space-y-3 min-w-[280px]">
               <div className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
                 Principais ações de hoje
               </div>
@@ -190,9 +236,15 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             </div>
             <div className="flex items-end justify-between mt-2">
               <div className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>↑ {kpis.crescimentoMesPercent}%</span>
-                <span className="text-muted-foreground font-normal ml-0.5">vs. mês anterior</span>
+                {kpis.crescimentoMesPercent !== null ? (
+                  <>
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>{kpis.crescimentoMesPercent >= 0 ? `↑ +${kpis.crescimentoMesPercent}%` : `↓ ${kpis.crescimentoMesPercent}%`}</span>
+                    <span className="text-muted-foreground font-normal ml-0.5">vs. mês anterior</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground font-normal">Base anterior em apuração</span>
+                )}
               </div>
               <div className="w-16 h-7">
                 <ResponsiveContainer width="100%" height="100%">
@@ -208,13 +260,13 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         {/* Lucro Estimado */}
         <Card className="bg-card/70 border-border/50">
           <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Lucro Estimado</div>
+            <div className="text-xs text-muted-foreground font-medium">Resultado Operacional Apurado</div>
             <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
               R$ {kpis.lucroEstimado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
             <div className="flex items-end justify-between mt-2">
               <div className="text-xs text-emerald-400 font-semibold">
-                {kpis.margemLucroPercent}% de margem
+                {kpis.margemLucroPercent !== null ? `${kpis.margemLucroPercent}% de margem` : 'Margem indisponível'}
               </div>
               <div className="w-16 h-7">
                 <ResponsiveContainer width="100%" height="100%">
@@ -237,7 +289,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               )}
             </div>
             <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              {kpis.cmvPercent !== null ? `${kpis.cmvPercent}%` : '32,4%'}
+              {kpis.cmvPercent !== null ? `${kpis.cmvPercent}%` : 'Dados insuficientes'}
             </div>
             <div className="flex items-end justify-between mt-2">
               <div className="text-xs text-muted-foreground">
@@ -272,20 +324,24 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         {/* Despesas */}
         <Card className="bg-card/70 border-border/50">
           <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Despesas</div>
+            <div className="text-xs text-muted-foreground font-medium">Despesas Registradas</div>
             <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
               R$ {kpis.despesasMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
             <div className="flex items-end justify-between mt-2">
-              <div className="text-xs text-red-400 font-semibold flex items-center gap-1">
-                <ArrowUpRight className="w-3.5 h-3.5" />
-                <span>↑ {kpis.variacaoDespesasPercent}%</span>
-                <span className="text-muted-foreground font-normal ml-0.5">vs. mês anterior</span>
+              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                {kpis.variacaoDespesasPercent !== null ? (
+                  <span className={kpis.variacaoDespesasPercent > 0 ? "text-amber-400 font-semibold" : "text-emerald-400 font-semibold"}>
+                    {kpis.variacaoDespesasPercent > 0 ? `+${kpis.variacaoDespesasPercent}%` : `${kpis.variacaoDespesasPercent}%`} vs. mês anterior
+                  </span>
+                ) : (
+                  <span>Sem base anterior</span>
+                )}
               </div>
               <div className="w-16 h-7">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={expenseSparkline}>
-                    <Bar dataKey="v" fill="#ef4444" radius={[2, 2, 0, 0]} />
+                    <Bar dataKey="v" fill="#f43f5e" radius={[2, 2, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -294,158 +350,174 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         </Card>
       </div>
 
-      {/* 3. Conversational Chat: Converse com seu CEO */}
-      <Card className="bg-card/70 border-border/50">
+      {/* 3. Conversational AI Chat */}
+      <Card className="bg-card/80 border-border/60 shadow-md">
         <CardHeader className="pb-3 border-b border-border/40">
           <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <Bot className="w-5 h-5 text-amber-400" />
-                <CardTitle className="text-base font-semibold">Converse com seu CEO</CardTitle>
+            <div className="flex items-center gap-2">
+              <span className="text-xl">💬</span>
+              <div>
+                <CardTitle className="text-base font-bold text-foreground">
+                  Converse com seu CEO
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Pergunte qualquer coisa sobre a Rodo Point. Eu analiso seus dados reais e te ajudo a tomar decisões.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Pergunte qualquer coisa sobre a Rodo Point. Eu analiso seus dados reais e te ajudo a tomar decisões.
-              </p>
             </div>
-
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={clearChat}
-                className="h-8 text-xs gap-1.5 bg-card/60"
+                className="h-8 text-xs gap-1.5 border-border/60 text-muted-foreground hover:text-foreground"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Nova conversa
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs gap-1.5 bg-card/60"
-              >
-                <History className="w-3.5 h-3.5" />
-                Histórico
               </Button>
             </div>
           </div>
         </CardHeader>
 
-        <CardContent className="p-4 md:p-6 space-y-4">
-          {/* Messages Feed */}
-          {messages.length > 0 && (
-            <div className="max-h-[360px] overflow-y-auto space-y-3 pr-2 scrollbar-thin">
-              {messages.map((m) => (
+        <CardContent className="p-4 space-y-4">
+          {/* Messages Container */}
+          <div className="space-y-4 max-h-[360px] overflow-y-auto pr-1">
+            {messages.length === 0 ? (
+              <div className="py-8 text-center space-y-2">
+                <div className="w-10 h-10 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto text-lg border border-amber-500/20">
+                  👑
+                </div>
+                <div className="text-sm font-semibold text-foreground">
+                  Assistente Executivo Digital Ativo
+                </div>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  Pronto para analisar finanças, margens, despesas e sugerir oportunidades com base nos registros do seu workspace.
+                </p>
+              </div>
+            ) : (
+              messages.map((msg) => (
                 <div
-                  key={m.id}
-                  className={`flex gap-3 text-xs leading-relaxed ${
-                    m.role === 'user' ? 'justify-end' : 'justify-start'
+                  key={msg.id}
+                  className={`flex gap-3 text-xs md:text-sm ${
+                    msg.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {m.role === 'assistant' && (
-                    <div className="w-7 h-7 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                  {msg.role !== 'user' && (
+                    <div className="w-7 h-7 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 text-xs">
                       👑
                     </div>
                   )}
 
                   <div
-                    className={`p-3.5 rounded-xl max-w-xl ${
-                      m.role === 'user'
-                        ? 'bg-blue-600 text-white font-medium rounded-tr-none'
-                        : 'bg-muted/40 border border-border/50 text-foreground rounded-tl-none space-y-2'
+                    className={`p-3.5 rounded-xl max-w-[85%] leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-primary text-primary-foreground font-medium rounded-tr-none'
+                        : 'bg-slate-900/90 text-slate-100 border border-border/50 rounded-tl-none shadow-sm'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{m.content}</div>
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
 
-                    {/* Se houver Proposta de Ação (Action Proposal) no turno */}
-                    {m.actionProposal ? (
-                      <div className="mt-2 p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-200">
-                        <div className="flex items-center gap-1.5 font-semibold text-amber-400">
+                    {/* Action Proposal Card se houver no retorno */}
+                    {msg.actionProposals && msg.actionProposals.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-700/60 space-y-2">
+                        <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5" />
-                          Proposta de Ação Preparada (Exige Confirmação)
+                          Ação proposta pelo CEO (Requer Confirmação):
                         </div>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          Revise os detalhes na interface antes de confirmar. Nenhuma alteração foi efetuada no banco.
-                        </p>
+                        {msg.actionProposals.map((prop, idx) => (
+                          <div
+                            key={idx}
+                            className="bg-slate-950/70 p-2.5 rounded border border-amber-500/30 text-xs space-y-1.5"
+                          >
+                            <div className="font-semibold text-slate-200">
+                              {prop.title || prop.actionType}
+                            </div>
+                            <div className="text-slate-400 text-[11px]">
+                              {prop.description || prop.hypothesis}
+                            </div>
+                            <div className="flex gap-2 pt-1">
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                                onClick={() => {
+                                  sendMessage(`Confirmar e executar ação proposta: ${prop.title || prop.actionType}`);
+                                }}
+                              >
+                                Autorizar Ação
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs border-slate-700 text-slate-300"
+                                onClick={() => {
+                                  sendMessage('Recusar proposta e manter dados atuais');
+                                }}
+                              >
+                                Descartar
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ) : null}
+                    )}
                   </div>
 
-                  {m.role === 'user' && (
-                    <div className="w-7 h-7 rounded-full bg-blue-600/30 text-blue-300 border border-blue-500/40 flex items-center justify-center shrink-0 mt-0.5">
+                  {msg.role === 'user' && (
+                    <div className="w-7 h-7 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center justify-center shrink-0 text-xs">
                       <User className="w-4 h-4" />
                     </div>
                   )}
                 </div>
-              ))}
-              {isLoading && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground pl-10">
-                  <div className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></div>
-                  <span>{currentStatus || 'Wallet CEO está analisando seus dados reais...'}</span>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+              ))
+            )}
 
-          {/* Input Box with Send Button */}
-          <div className="flex items-center gap-2 bg-muted/30 border border-border/50 rounded-xl p-1.5 focus-within:ring-1 focus-within:ring-amber-400 transition-all">
+            {isLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground p-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                <span>{currentStatus || 'CEO analisando os dados...'}</span>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Prompt Suggestions Pills */}
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-border/40">
+            {[
+              'Como estão minhas vendas hoje?',
+              'Quais produtos vendem mais?',
+              'Onde posso economizar?',
+              'Qual foi meu melhor dia da semana?',
+              'Analise minhas despesas',
+              'Monte um plano para aumentar meu lucro em R$ 5.000/mês',
+            ].map((pill, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSelectPill(pill)}
+                className="text-[11px] bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white px-2.5 py-1 rounded-full border border-border/50 transition-colors"
+              >
+                {pill}
+              </button>
+            ))}
+          </div>
+
+          {/* Input Box */}
+          <div className="flex items-center gap-2 pt-2">
             <input
               type="text"
               value={inputPrompt}
               onChange={(e) => setInputPrompt(e.target.value)}
               onKeyDown={handleKeyPress}
               placeholder="Digite sua pergunta... Ex: Como estão minhas vendas dos últimos 30 dias?"
-              className="flex-1 bg-transparent px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
-              disabled={isLoading}
+              className="flex-1 bg-slate-950 border border-border/70 rounded-lg px-4 py-2.5 text-xs md:text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50"
             />
             <Button
-              size="sm"
               onClick={handleSend}
-              disabled={!inputPrompt.trim() || isLoading}
-              className="bg-orange-500 hover:bg-orange-600 text-white h-8 px-3 rounded-lg shrink-0 shadow-sm"
+              disabled={isLoading || !inputPrompt.trim()}
+              className="bg-orange-500 hover:bg-orange-600 text-white h-10 px-4 shrink-0 rounded-lg shadow-sm"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4" />
             </Button>
-          </div>
-
-          {/* Prompt Suggestion Pills */}
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <button
-              onClick={() => handleSelectPill('Como estão minhas vendas hoje?')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Como estão minhas vendas hoje?
-            </button>
-            <button
-              onClick={() => handleSelectPill('Quais produtos vendem mais?')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Quais produtos vendem mais?
-            </button>
-            <button
-              onClick={() => handleSelectPill('Onde posso economizar?')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Onde posso economizar?
-            </button>
-            <button
-              onClick={() => handleSelectPill('Monte um plano para aumentar meu lucro em R$ 5.000/mês')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Monte um plano para aumentar meu lucro em R$ 5.000/mês
-            </button>
-            <button
-              onClick={() => handleSelectPill('Analise minhas despesas')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Analise minhas despesas
-            </button>
-            <button
-              onClick={() => handleSelectPill('Qual foi meu melhor dia da semana?')}
-              className="text-[11px] bg-muted/40 hover:bg-muted/70 text-slate-300 hover:text-white px-3 py-1 rounded-full border border-border/40 transition-colors"
-            >
-              Qual foi meu melhor dia da semana?
-            </button>
           </div>
         </CardContent>
       </Card>

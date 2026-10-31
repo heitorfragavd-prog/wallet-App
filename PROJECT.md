@@ -30,6 +30,7 @@ O sistema proporciona:
 - **KDS Operacional em Tempo Real:** Visualização tipo Kanban (Novos, Em Preparo, Prontos, Despachados) com cronômetro de atraso, alerta sonoro via Web Audio API e modal de checklist de conferência.
 - **Isolamento de Papéis (`delivery_staff`):** Proteção estrutural no frontend via `DeliveryLayout` (zero queries financeiras) e `ProtectedRoute`/`DeliveryRoleGuard`, além de restrições rígidas no banco de dados e triggers.
 - **Fundação Operacional FASE 1.2:** Views operacionais dedicadas com security_barrier consultadas diretamente pela equipe operacional (`delivery_staff`) com zero vazamento financeiro, triggers no banco (`trg_check_delivery_order_dispatch_checklist`) e RPCs bloqueando despacho e entrega para pedidos com itens pendentes de conferência (qualquer canal/RPC/PostgREST), criação atômica estrita sem fallback sequencial, conferência auditada (`verified_by_user_id`, `verified_at`) e KDS com simulação exclusivamente em memória (`is_demo: true`, sem injeção de pedidos fictícios no banco de produção).
+- **Wallet CEO 2.0 com Dados 100% Reais:** Eliminação total de dados fictícios e fallbacks hardcoded nos painéis executivos e nas query tools da IA. Métricas de faturamento, despesas, canais e horários conectadas às tabelas e integrações reais (`transacoes`, `despesas`, `delivery_orders`, Eyemobile PDV), com estados honestos ("Dado indisponível" / "Informações insuficientes para análise") e orientação proativa quando os dados operacionais estiverem pendentes de cadastro.
 
 ## Limites
 

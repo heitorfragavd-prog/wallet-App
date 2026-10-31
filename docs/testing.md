@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 270.
+- Arquivos de teste: 271.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -212,6 +212,7 @@
 | src\domains\ia\agent-core\boleto-spal-regression.test.ts |
 | src\domains\ia\agent-core\boleto-validator.test.ts |
 | src\domains\ia\agent-core\buscar-vendas-pdv.test.ts |
+| src\domains\ia\agent-core\ceo-query-tools-audit.test.ts |
 | src\domains\ia\agent-core\conversation-migration-security.test.ts |
 | src\domains\ia\agent-core\cost-observability.test.ts |
 | src\domains\ia\agent-core\danfe-brasnorte-regression.test.ts |
