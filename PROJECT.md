@@ -42,3 +42,4 @@ O sistema proporciona:
 - **Frontend:** React 18, TypeScript, Tailwind CSS, Lucide Icons, Vite.
 - **Backend & Dados:** Supabase, PostgreSQL com Row Level Security (RLS), Edge Functions em Deno.
 - **Metodologia:** Specsfy/2.0 com TDD/BDD e Quality Gates automatizados no GitHub Actions.
+- **Wallet CEO 2.0 (Diretoria Executiva com IA Avançada):** Cérebro executivo conversacional unificado (Web `/ceo` e Telegram `@wallet_bot`), roteamento automático entre 7 departamentos, política de seleção de modelos por complexidade (Nível 1, 2, 3), telemetria com controle orçamentário ($10 USD/mês), persistência canônica e reprodução fiel dos 6 painéis executivos de alta fidelidade visual.

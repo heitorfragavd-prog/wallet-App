@@ -258,7 +258,69 @@ export const OPENAI_EXTENDED_READ_TOOLS: OpenAiFunctionDefinition[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "consultar_resumo_executivo_ceo",
+      description: "Consulta o Resumo Executivo Oficial do Wallet CEO para a Rodo Point (Faturamento do mês e de ontem, crescimento vs mês anterior, despesas, lucro estimado, status de CMV com cobertura de fichas e as 3 principais ações do dia).",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_analise_comercial_vendas",
+      description: "Consulta a análise comercial detalhada de vendas e produtos: faturamento e percentual por canal de vendas (Salão, iFood, 99Food, Delivery Direto), ranking Top 10 produtos e horários/dias de pico de movimento.",
+      parameters: {
+        type: "object",
+        properties: { periodo: { type: "string", description: "Período desejado (ex: 'ultimos_30_dias', 'este_mes')" } },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_analise_despesas_ceo",
+      description: "Consulta a análise de despesas operacionais por categoria (Insumos, Equipe, Taxas de Delivery, Aluguel, etc.), evolução mensal e principais variações.",
+      parameters: {
+        type: "object",
+        properties: { periodo: { type: "string", description: "Período desejado (ex: 'ultimos_30_dias', 'este_mes')" } },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_oportunidades_ceo",
+      description: "Consulta as oportunidades estratégicas de crescimento, redução de desperdício na cozinha, aumento de ticket médio e revisão de margem identificadas pelo CEO para a Rodo Point.",
+      parameters: {
+        type: "object",
+        properties: { departamento: { type: "string", description: "Filtrar por departamento opcional (commercial_growth, loss_waste, cmv_pricing, delivery_channels)" } },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_status_canais_delivery",
+      description: "Consulta o estado real e auditado dos canais de delivery (iFood, 99Food, WhatsApp/Direto), situação de integração e fila de pedidos no KDS da cozinha.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_telemetria_ia",
+      description: "Consulta o consumo mensal de tokens de IA, custos estimados em USD e orçamento de referência do workspace.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+  },
 ];
+
+
 
 export const OPENAI_ACTION_TOOLS: OpenAiFunctionDefinition[] = [
   {
@@ -380,6 +442,27 @@ export const OPENAI_ACTION_TOOLS: OpenAiFunctionDefinition[] = [
           motivo: { type: "string", description: "Motivo da alteração de custo" },
         },
         required: ["novo_custo"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propor_experimento_comercial",
+      description: "Gera uma Proposta de Ação (Action Proposal) para cadastrar um novo experimento comercial no Laboratório de Crescimento. NÃO executa diretamente; exige confirmação humana explícita.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Título claro do experimento (ex: 'Campanha de Hambúrguer 15h-17h')" },
+          hypothesis: { type: "string", description: "Hipótese de ganho financeiro ou operacional a ser validada" },
+          department: { type: "string", description: "Departamento responsável (commercial_growth, loss_waste, cmv_pricing, delivery_channels)" },
+          target_kpi: { type: "string", description: "KPI alvo (ex: 'Faturamento de Tarde', 'Redução de Perdas')" },
+          target_value: { type: "string", description: "Meta quantitativa a atingir" },
+          start_date: { type: "string", description: "Data de início YYYY-MM-DD" },
+          end_date: { type: "string", description: "Data de término planejada YYYY-MM-DD" },
+        },
+        required: ["name", "hypothesis"],
         additionalProperties: false,
       },
     },

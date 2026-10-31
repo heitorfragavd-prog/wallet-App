@@ -56,6 +56,11 @@ function generateProposalSummary(actionType: string, args: Record<string, unknow
       const custo = typeof args.novo_custo === "number" ? args.novo_custo.toFixed(2) : String(args.novo_custo ?? "0");
       return `Atualizar custo de "${prod}" para R$ ${custo}`;
     }
+    case "propor_experimento_comercial": {
+      const dep = args.department ? `[${args.department}] ` : "";
+      const nome = args.name ? `"${args.name}"` : "novo experimento";
+      return `Propor experimento comercial ${dep}${nome}`;
+    }
     default:
       return `Operação ${actionType}`;
   }

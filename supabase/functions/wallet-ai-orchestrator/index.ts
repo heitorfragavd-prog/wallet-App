@@ -80,6 +80,80 @@ const auditLogger = {
   },
 };
 
+const telemetryLogger = {
+  logTelemetry: async (telemetry: {
+    workspaceId: string;
+    userId: string;
+    conversationId?: string;
+    channel?: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+    durationMs: number;
+    complexityLevel: number;
+    department: string;
+    status: string;
+    metadata?: Record<string, unknown>;
+  }) => {
+    try {
+      await rawSupabaseClient.from("wallet_ai_telemetry").insert({
+        workspace_id: telemetry.workspaceId,
+        user_id: telemetry.userId,
+        conversation_id: telemetry.conversationId || null,
+        channel: telemetry.channel || "web",
+        model: telemetry.model,
+        prompt_tokens: telemetry.promptTokens,
+        completion_tokens: telemetry.completionTokens,
+        total_tokens: telemetry.totalTokens,
+        estimated_cost_usd: telemetry.estimatedCostUsd,
+        duration_ms: telemetry.durationMs,
+        complexity_level: telemetry.complexityLevel,
+        department: telemetry.department,
+        status: telemetry.status,
+        metadata: telemetry.metadata || {},
+      });
+    } catch (err) {
+      console.warn("[wallet-ai-orchestrator] Falha ao registrar telemetria de IA:", err);
+    }
+  },
+  checkBudget: async (workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }> => {
+    try {
+      const { data } = await rawSupabaseClient
+        .from("v_wallet_ai_monthly_usage")
+        .select("*")
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+
+      if (data) {
+        const usage = data as {
+          hard_limit_enabled?: boolean;
+          monthly_budget_usd?: number;
+          current_month_cost_usd?: number;
+          percent_consumed?: number;
+        };
+        if (
+          usage.hard_limit_enabled &&
+          typeof usage.monthly_budget_usd === "number" &&
+          typeof usage.current_month_cost_usd === "number" &&
+          usage.current_month_cost_usd >= usage.monthly_budget_usd
+        ) {
+          return { hardLimitExceeded: true };
+        }
+        if (typeof usage.percent_consumed === "number") {
+          if (usage.percent_consumed >= 100) return { hardLimitExceeded: false, alertTriggered: "100%" };
+          if (usage.percent_consumed >= 80) return { hardLimitExceeded: false, alertTriggered: "80%" };
+          if (usage.percent_consumed >= 50) return { hardLimitExceeded: false, alertTriggered: "50%" };
+        }
+      }
+    } catch {
+      // Fail-safe
+    }
+    return { hardLimitExceeded: false };
+  },
+};
+
 const findDuplicateFn = async (
   _ctx: AiExecutionContext,
   params: {
@@ -197,6 +271,7 @@ Deno.serve(async (req: Request) => {
     findDuplicateFn,
     saveProposalFn,
     eyemobileLiveClientFactory,
+    telemetryLogger,
   });
 });
 

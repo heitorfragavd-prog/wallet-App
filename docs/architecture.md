@@ -90,7 +90,7 @@ Ao implementar uma nova funcionalidade ou refatoração, siga a árvore de decis
 
 | Tipo | Quantidade |
 | --- | --- |
-| Código | 2889 |
+| Código | 2913 |
 | Testes | 270 |
 
 ## Diagramas

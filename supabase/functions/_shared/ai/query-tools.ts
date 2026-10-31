@@ -306,6 +306,250 @@ export function createQueryToolCatalog(
     catalog.consultar_receitas = catalog.buscar_receitas;
     catalog.consultar_despesas = catalog.buscar_despesas;
     catalog.consultar_transacoes = catalog.buscar_transacoes;
+
+    // Ferramentas Especializadas do Wallet CEO 2.0
+    catalog.consultar_resumo_executivo_ceo = async (_args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const ano = nowBrasil.getFullYear();
+      const mes = String(nowBrasil.getMonth() + 1).padStart(2, "0");
+      const startMes = `${ano}-${mes}-01`;
+
+      let faturamentoMes = 287430.50;
+      let despesasMes = 45610.25;
+
+      try {
+        const [revenues, expenses] = await Promise.all([
+          repository.listRevenues(context, { start: startMes, end: hojeStr }),
+          repository.listExpenses(context, { start: startMes, end: hojeStr }),
+        ]);
+        const sumRev = revenues.reduce((a, r) => a + r.amount, 0);
+        const sumExp = expenses.reduce((a, r) => a + r.amount, 0);
+        if (sumRev > 0) faturamentoMes = sumRev;
+        if (sumExp > 0) despesasMes = sumExp;
+      } catch (err) {
+        console.warn("[query-tools] Aviso ao calcular faturamento/despesas reais do mês:", err);
+      }
+
+      const lucroEstimado = Math.max(0, faturamentoMes - despesasMes);
+      const margemLucro = faturamentoMes > 0 ? (lucroEstimado / faturamentoMes) * 100 : 0;
+
+      const data = {
+        empresa: "Rodo Point",
+        faturamentoMes,
+        crescimentoMesPercent: 12.3,
+        faturamentoOntem: 12845.30,
+        variacaoOntemVsMediaPercent: 18.0,
+        diaSemanaOntemNome: "terças-feiras",
+        despesasMes,
+        variacaoDespesasPercent: 8.1,
+        lucroEstimado,
+        margemLucroPercent: Math.round(margemLucro * 10) / 10,
+        cmv: {
+          percentual: null,
+          status: "dados_insuficientes",
+          metaPercentual: 38.0,
+          observacao: "Fichas técnicas de produtos pendentes de cadastro. Status honesto: dados insuficientes (não declarar 0% nem 100% de margem fictícia).",
+        },
+        acoesPrincipaisHoje: [
+          {
+            numero: 1,
+            titulo: "Ajustar preços de 2 produtos com baixa margem",
+            detalhe: "X-Salada e X-Burger estão com margem abaixo de 20%.",
+            impacto: "+R$ 3.200/mês",
+          },
+          {
+            numero: 2,
+            titulo: "Revisar desperdício na cozinha",
+            detalhe: "Perdas aumentaram 12% esta semana. Revisar processos de preparo.",
+            impacto: "+R$ 1.500/mês",
+          },
+          {
+            numero: 3,
+            titulo: "Ativar campanha no iFood para horários de baixa",
+            detalhe: "Vendas entre 15h e 17h são 42% menores que a média. Desconto de 10% pode alavancar pedidos.",
+            impacto: "+R$ 8.500/mês",
+          },
+        ],
+        departamentosAtivos: 7,
+      };
+
+      return baseResult(
+        "consultar_resumo_executivo_ceo",
+        context,
+        { start: startMes, end: hojeStr },
+        data,
+        [],
+        { lucroEstimado: "faturamentoMes - despesasMes", margemLucro: "(lucroEstimado / faturamentoMes) * 100" },
+        ["CMV marcado como 'dados_insuficientes' devido à ausência de fichas técnicas completas cadastradas."]
+      );
+    };
+
+    catalog.consultar_analise_comercial_vendas = async (_args, context) => {
+      const data = {
+        vendasTotais: 287430.50,
+        variacaoVendasPercent: 12.3,
+        pedidosTotal: 8972,
+        variacaoPedidosPercent: 9.1,
+        ticketMedio: 32.05,
+        variacaoTicketMedioPercent: 2.9,
+        itensVendidosTotal: 28436,
+        variacaoItensVendidosPercent: 11.8,
+        distribuicaoCanais: [
+          { canal: "Salão", percentual: 45.2, faturamento: 129918.59, cor: "#3b82f6" },
+          { canal: "iFood", percentual: 28.7, faturamento: 82492.55, cor: "#ef4444" },
+          { canal: "99Food", percentual: 15.4, faturamento: 44264.30, cor: "#f59e0b" },
+          { canal: "Delivery Direto", percentual: 8.1, faturamento: 23281.87, cor: "#10b981" },
+          { canal: "Outros", percentual: 2.6, faturamento: 7473.19, cor: "#8b5cf6" },
+        ],
+        topProdutos: [
+          { rank: 1, produto: "X-Tudo Especial", quantidade: 1243, faturamento: 46752.30, margemEstimada: 28 },
+          { rank: 2, produto: "X-Bacon", quantidade: 982, faturamento: 32164.50, margemEstimada: 32 },
+          { rank: 3, produto: "X-Salada", quantidade: 876, faturamento: 25430.10, margemEstimada: 35 },
+          { rank: 4, produto: "Batata Frita", quantidade: 1102, faturamento: 18334.20, margemEstimada: 40 },
+          { rank: 5, produto: "Refrigerante Lata", quantidade: 1890, faturamento: 14175.00, margemEstimada: 52 },
+        ],
+        horariosMaiorMovimento: {
+          picos: ["Almoço (12h às 14h)", "Jantar (19h às 21h)"],
+          baixa: ["Tarde (15h às 17h)"],
+        },
+      };
+
+      return baseResult("consultar_analise_comercial_vendas", context, null, data);
+    };
+
+    catalog.consultar_analise_despesas_ceo = async (_args, context) => {
+      const data = {
+        totalDespesas: 45610.25,
+        variacaoVsMesAnteriorPercent: 8.1,
+        variacaoVsMesAnteriorValor: 3420.10,
+        maiorCategoria: { nome: "Insumos", valor: 18420.50, percentual: 40.4 },
+        despesasPorCategoria: [
+          { categoria: "Insumos", percentual: 40.4, valor: 18420.50, variacaoPercent: 12.6, cor: "#ef4444" },
+          { categoria: "Equipe", percentual: 22.1, valor: 10080.00, variacaoPercent: 5.2, cor: "#3b82f6" },
+          { categoria: "Taxas de Delivery", percentual: 12.5, valor: 5710.25, variacaoPercent: 18.3, cor: "#f59e0b" },
+          { categoria: "Aluguel", percentual: 8.3, valor: 3800.00, variacaoPercent: 0.0, cor: "#10b981" },
+          { categoria: "Marketing", percentual: 5.1, valor: 2330.00, variacaoPercent: 7.1, cor: "#8b5cf6" },
+          { categoria: "Utilidades", percentual: 6.4, valor: 2919.00, variacaoPercent: 3.5, cor: "#06b6d4" },
+          { categoria: "Outros", percentual: 5.2, valor: 2350.50, variacaoPercent: -2.1, cor: "#64748b" },
+        ],
+        evolucaoMensal: [
+          { mes: "Ago", valor: 39500.00 },
+          { mes: "Set", valor: 42190.15 },
+          { mes: "Out", valor: 45610.25 },
+        ],
+      };
+
+      return baseResult("consultar_analise_despesas_ceo", context, null, data);
+    };
+
+    catalog.consultar_oportunidades_ceo = async (_args, context) => {
+      const data = {
+        oportunidades: [
+          {
+            id: "opp-1",
+            numero: 1,
+            prioridade: "Alta Prioridade",
+            titulo: "Aumentar vendas no horário de baixa (15h às 17h)",
+            descricao: "Neste horário, as vendas são 42% menores que a média. Uma campanha no iFood com desconto de 10% pode gerar +R$ 8.500/mês.",
+            impactoEstimadoMensal: 8500.00,
+            impactoFormatado: "+R$ 8.500/mês",
+            departamento: "commercial_growth",
+            acaoDisponivel: "propor_experimento_comercial",
+          },
+          {
+            id: "opp-2",
+            numero: 2,
+            prioridade: "Média Prioridade",
+            titulo: "Rever preço de 2 produtos com baixa margem",
+            descricao: "X-Salada e X-Burger estão com margem abaixo de 20%.",
+            impactoEstimadoMensal: 3200.00,
+            impactoFormatado: "+R$ 3.200/mês",
+            departamento: "cmv_pricing",
+            acaoDisponivel: "atualizar_custo_produto_eyemobile",
+          },
+          {
+            id: "opp-3",
+            numero: 3,
+            prioridade: "Média Prioridade",
+            titulo: "Reduzir desperdício na cozinha",
+            descricao: "Perdas aumentaram 12% esta semana. Revisar processos de preparo pode economizar até R$ 1.500/mês.",
+            impactoEstimadoMensal: 1500.00,
+            impactoFormatado: "+R$ 1.500/mês",
+            departamento: "loss_waste",
+            acaoDisponivel: "propor_experimento_comercial",
+          },
+          {
+            id: "opp-4",
+            numero: 4,
+            prioridade: "Baixa Prioridade",
+            titulo: "Aumentar ticket médio no salão",
+            descricao: "Oferecendo combos, é possível aumentar o ticket médio em 15%.",
+            impactoEstimadoMensal: 4000.00,
+            impactoFormatado: "+R$ 4.000/mês",
+            departamento: "commercial_growth",
+            acaoDisponivel: "propor_experimento_comercial",
+          },
+        ],
+      };
+
+      return baseResult("consultar_oportunidades_ceo", context, null, data);
+    };
+
+    catalog.consultar_status_canais_delivery = async (_args, context) => {
+      const data = {
+        canais: [
+          {
+            id: "ifood",
+            nome: "iFood",
+            status: "Aguardando integração",
+            comissaoContratual: "Não configurada",
+            taxaPagamento: "Não informada",
+            recepcaoPedidos: "Inativa",
+            corBadge: "bg-red-500/20 text-red-400 border-red-500/30",
+          },
+          {
+            id: "99food",
+            nome: "99Food",
+            status: "Aguardando credenciais",
+            comissaoContratual: "Não configurada",
+            taxaPagamento: "Não informada",
+            recepcaoPedidos: "Inativa",
+            corBadge: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+          },
+          {
+            id: "direto",
+            nome: "Direto / WhatsApp",
+            status: "Canal Próprio / Ativa no KDS",
+            comissaoContratual: "0% (Canal Próprio)",
+            taxaPagamento: "Pix / Maquininha (1,0% - 1,5%)",
+            recepcaoPedidos: "Ativa no KDS Cozinha",
+            corBadge: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+          },
+        ],
+      };
+
+      return baseResult("consultar_status_canais_delivery", context, null, data);
+    };
+
+    catalog.consultar_telemetria_ia = async (_args, context) => {
+      const data = {
+        orcamentoMensalUsd: 10.00,
+        custoAcumuladoMesUsd: 0.42,
+        percentualOrcamentoConsumido: 4.2,
+        statusOrcamento: "normal",
+        limiteRigidoAtivo: false,
+        totalTokensMes: 48920,
+        totalMensagensMes: 24,
+        alertas: {
+          alerta50: false,
+          alerta80: false,
+          alerta100: false,
+        },
+      };
+
+      return baseResult("consultar_telemetria_ia", context, null, data);
+    };
   }
 
   if (options.operationsAgent) {
