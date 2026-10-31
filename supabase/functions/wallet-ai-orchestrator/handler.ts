@@ -85,6 +85,25 @@ export interface OrchestratorHandlerDependencies {
   ) => Promise<void>;
   /** Factory para o cliente ao vivo do Eyemobile. Opcional — se ausente, usa cache sincronizado. */
   eyemobileLiveClientFactory?: (context: AiExecutionContext) => EyemobileLiveClient;
+  telemetryLogger?: {
+    logTelemetry(telemetry: {
+      workspaceId: string;
+      userId: string;
+      conversationId?: string;
+      channel?: string;
+      model: string;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      estimatedCostUsd: number;
+      durationMs: number;
+      complexityLevel: number;
+      department: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    }): Promise<void>;
+    checkBudget?(workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }>;
+  };
 }
 
 
@@ -181,8 +200,54 @@ export async function handleOrchestratorHttpRequest(
     const conversationId = typeof body.conversation_id === "string" ? body.conversation_id.trim() : undefined;
     const messages = Array.isArray(body.messages) ? (body.messages as LlmMessage[]) : [];
 
-    // Model routing com validação estrita server-side
-    const rawModel = typeof body.model === "string" ? body.model.trim() : undefined;
+    // Seleção de Modelo por Complexidade (Nível 1, 2, 3) e Roteamento Departamental
+    const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+    const userPromptText = typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "";
+
+    let complexityLevel = 1;
+    let detectedDepartment = "geral";
+    let defaultModelForComplexity = "gpt-4o-mini";
+
+    const promptLower = userPromptText.toLowerCase();
+    if (
+      promptLower.includes("plano de") ||
+      promptLower.includes("90 dia") ||
+      promptLower.includes("estratég") ||
+      promptLower.includes("estrateg") ||
+      promptLower.includes("crescimento") ||
+      promptLower.includes("laboratório") ||
+      promptLower.includes("experimento") ||
+      promptLower.includes("aumentar meu lucro") ||
+      promptLower.includes("monte um plano")
+    ) {
+      complexityLevel = 3;
+      detectedDepartment = "laboratorio_experimentos";
+      defaultModelForComplexity = "gpt-4o";
+    } else if (
+      promptLower.includes("analise") ||
+      promptLower.includes("análise") ||
+      promptLower.includes("despesa") ||
+      promptLower.includes("produto") ||
+      promptLower.includes("canal") ||
+      promptLower.includes("delivery") ||
+      promptLower.includes("ifood") ||
+      promptLower.includes("cmv") ||
+      promptLower.includes("margem") ||
+      promptLower.includes("desperdício") ||
+      promptLower.includes("desperdicio")
+    ) {
+      complexityLevel = 2;
+      detectedDepartment = promptLower.includes("cmv") || promptLower.includes("margem")
+        ? "cmv_precificacao"
+        : promptLower.includes("despesa")
+        ? "financeiro_margens"
+        : promptLower.includes("delivery") || promptLower.includes("canal")
+        ? "delivery_canais"
+        : "comercial_crescimento";
+      defaultModelForComplexity = "gpt-4o-mini";
+    }
+
+    const rawModel = typeof body.model === "string" ? body.model.trim() : defaultModelForComplexity;
     const selectedModel = validateAndResolveModel(rawModel, {
       task: "chat",
       fallbackToDefault: true,
@@ -362,6 +427,23 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
+    // Verificação de Limite de Orçamento de IA ($10 USD mensal)
+    if (dependencies.telemetryLogger?.checkBudget) {
+      const budgetCheck = await dependencies.telemetryLogger.checkBudget(context.workspaceId);
+      if (budgetCheck?.hardLimitExceeded) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "budget_limit_exceeded",
+            code: "WALLET_AI_BUDGET_EXCEEDED",
+            message: "O limite de orçamento mensal de IA foi atingido ($10.00 USD). Por favor, verifique as configurações no painel.",
+            correlation_id: correlationId,
+          }),
+          { status: 429, headers: responseHeaders }
+        );
+      }
+    }
+
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)
     const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner);
     const durationMs = Date.now() - startTime;
@@ -470,6 +552,35 @@ export async function handleOrchestratorHttpRequest(
         }
       } catch (err) {
         console.warn("[handler] Falha ao persistir mensagens na memória:", err);
+      }
+    }
+
+    if (dependencies.telemetryLogger) {
+      try {
+        await dependencies.telemetryLogger.logTelemetry({
+          workspaceId: context.workspaceId,
+          userId: context.userId,
+          conversationId,
+          channel: typeof body.channel === "string" ? body.channel : "web",
+          model: selectedModel,
+          promptTokens: turnResult.usage.promptTokens,
+          completionTokens: turnResult.usage.completionTokens,
+          totalTokens: turnResult.usage.totalTokens,
+          estimatedCostUsd,
+          durationMs,
+          complexityLevel,
+          department: detectedDepartment,
+          status: "success",
+          metadata: {
+            correlationId,
+            iterations: turnResult.iterations,
+            toolCallsCount: turnResult.toolCallsExecuted.length,
+            provider: turnResult.provider ?? "openai",
+            fallback: turnResult.fallback ?? false,
+          },
+        });
+      } catch (telErr) {
+        console.warn("[handler] Falha ao registrar telemetria de IA:", telErr);
       }
     }
 

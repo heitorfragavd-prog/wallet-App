@@ -5,15 +5,15 @@
 | Formato | Specsfy/2.0 |
 | ID | SPEC-0005 |
 | Slug | 0005-wallet-ceo-delivery-foundation |
-| Status | In-Progress |
+| Status | Complete |
 | Effort | 5 |
-| Effort updated at | 2026-10-30 |
-| Effort rationale | Implementação vertical completa de dois novos subsistemas integrados (Wallet CEO com 7 departamentos analíticos e Laboratório de Crescimento; e Wallet Delivery Growth com KDS do funcionário para Mac/Android, simulador de margens, central de pedidos e conectores iFood/99Food) com migrations versionadas, RLS, testes e contratos tipados. |
+| Effort updated at | 2026-10-31 |
+| Effort rationale | Implementação vertical completa de dois novos subsistemas integrados (Wallet CEO com 7 departamentos analíticos e Laboratório de Crescimento; e Wallet Delivery Growth com KDS do funcionário para Mac/Android, simulador de margens, central de pedidos e conectores iFood/99Food) com migrations versionadas, RLS, testes e contratos tipados. Homologada em produção na Etapa 1.5. |
 | ClickUp Task | |
 | Milestones | Growth & Delivery 1.0 |
 | Definition Gate | Passed |
 | Plan Gate | Passed |
-| Delivery Gate | Pending |
+| Delivery Gate | Passed |
 | Evidence Contract | 1 |
 | Interface para pessoas | Sim |
 | Atualizada em | 2026-10-30 |

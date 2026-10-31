@@ -33,6 +33,7 @@ export interface WeightedCMVResult {
   coverage_percent?: number;
   is_partial_coverage?: boolean;
   is_cmv_healthy: boolean;
+  has_sufficient_data: boolean;
   notes: string;
 }
 
@@ -59,8 +60,9 @@ export function calculateEffectiveWeightedCMV(
       items_analyzed: 0,
       coverage_percent: 0,
       is_partial_coverage: false,
-      is_cmv_healthy: true,
-      notes: 'Dados insuficientes para cálculo de CMV.',
+      is_cmv_healthy: false,
+      has_sufficient_data: false,
+      notes: 'Dados insuficientes para cálculo de CMV. Cadastre fichas técnicas para apuração real.',
     };
   }
 
@@ -95,6 +97,7 @@ export function calculateEffectiveWeightedCMV(
       coverage_percent: 0,
       is_partial_coverage: false,
       is_cmv_healthy: false,
+      has_sufficient_data: false,
       notes: 'Sem receita registrada no período informado.',
     };
   }
@@ -130,6 +133,7 @@ export function calculateEffectiveWeightedCMV(
     coverage_percent: coveragePercent,
     is_partial_coverage: isPartial,
     is_cmv_healthy: isHealthy,
+    has_sufficient_data: true,
     notes: notesText,
   };
 }
@@ -473,6 +477,12 @@ export function detectLossAndWasteOpportunities(
   return opportunities;
 }
 
+export interface CeoDepartmentOptions {
+  realRevenue?: number;
+  realExpenses?: number;
+  deliveryChannelsConfigured?: boolean;
+}
+
 /**
  * Constrói o resumo consolidado dos 7 departamentos do Wallet CEO.
  */
@@ -480,14 +490,15 @@ export function buildCeoDepartmentSummaries(
   arg1: WeightedCMVResult | GrowthOpportunity[],
   arg2?: GrowthOpportunity[] | WeightedCMVResult,
   arg3?: CommercialExperiment[] | number,
-  arg4?: LossItemAnalysis[]
+  arg4?: LossItemAnalysis[],
+  options?: CeoDepartmentOptions
 ): CeoDepartmentSummary[] {
   let cmvMetrics: WeightedCMVResult;
   let opportunities: GrowthOpportunity[] = [];
   let experiments: CommercialExperiment[] = [];
   let lossEvents: LossItemAnalysis[] = [];
 
-  // Detecta se foi chamado com (cmvMetrics, opportunities, experiments, lossEvents)
+  // Detecta se foi chamado com (cmvMetrics, opportunities, experiments, lossEvents, options)
   if (arg1 && typeof arg1 === 'object' && !Array.isArray(arg1) && ('total_revenue' in arg1 || 'effective_weighted_cmv_percent' in arg1)) {
     cmvMetrics = arg1 as WeightedCMVResult;
     opportunities = Array.isArray(arg2) ? arg2 : [];
@@ -507,7 +518,8 @@ export function buildCeoDepartmentSummaries(
       contribution_margin_percent: 0,
       catalog_simple_average_cost: 0,
       items_analyzed: 0,
-      is_cmv_healthy: true,
+      is_cmv_healthy: false,
+      has_sufficient_data: false,
       notes: '',
     };
     lossEvents = typeof arg3 === 'number' ? [{ category: 'descarte', total_loss_value: arg3 }] : [];
@@ -535,48 +547,71 @@ export function buildCeoDepartmentSummaries(
     const count = opps.length;
 
     let score = 88;
-    let status: 'optimal' | 'attention' | 'critical' = 'optimal';
+    let status: 'optimal' | 'attention' | 'critical' | 'dados_insuficientes' = 'optimal';
     const metrics: { label: string; value: string | number }[] = [];
     const recommendations: string[] = [];
     const highlights: string[] = [];
 
     if (id === 'cmv_pricing' || id === 'profitability') {
-      const cmv = cmvMetrics.effective_weighted_cmv_percent || cmvMetrics.effective_cmv_percent || 0;
-      metrics.push({ label: 'CMV Ponderado', value: `${cmv.toFixed(1)}%` });
-      metrics.push({ label: 'Margem Bruta', value: `${(100 - cmv).toFixed(1)}%` });
+      const hasValidItems = (cmvMetrics.items_analyzed ?? 0) > 0 && cmvMetrics.total_revenue > 0 && cmvMetrics.has_sufficient_data !== false;
 
-      if (cmv > 38) {
-        status = 'critical';
-        score = 60;
-        recommendations.push('Revisar ficha técnica e aplicar markup em itens com CMV > 40%.');
-        highlights.push(`CMV efetivo em ${cmv.toFixed(1)}% acima do teto de 38%`);
-      } else if (cmv > 32) {
-        status = 'attention';
-        score = 75;
-        recommendations.push('Monitore o custo de insumos de carne e laticínios.');
-        highlights.push(`CMV em atenção (${cmv.toFixed(1)}%)`);
+      if (!hasValidItems) {
+        status = 'dados_insuficientes';
+        score = 50;
+        metrics.push({ label: 'CMV Ponderado', value: 'Dados insuficientes' });
+        metrics.push({ label: 'Fichas Cadastradas', value: '0 vinculadas' });
+        recommendations.push('Cadastrar fichas técnicas e insumos para habilitar apuração real de CMV.');
+        highlights.push('Aguardando cadastro de fichas técnicas para apuração');
       } else {
-        recommendations.push('Margem bruta saudável. Manter acompanhamento de compras.');
-        highlights.push(`CMV saudável em ${cmv.toFixed(1)}%`);
+        const cmv = cmvMetrics.effective_weighted_cmv_percent || cmvMetrics.effective_cmv_percent || 0;
+        metrics.push({ label: 'CMV Ponderado', value: `${cmv.toFixed(1)}%` });
+        metrics.push({ label: 'Margem Bruta', value: `${(100 - cmv).toFixed(1)}%` });
+
+        if (cmv > 38) {
+          status = 'critical';
+          score = 60;
+          recommendations.push('Revisar ficha técnica e aplicar markup em itens com CMV > 40%.');
+          highlights.push(`CMV efetivo em ${cmv.toFixed(1)}% acima do teto de 38%`);
+        } else if (cmv > 32) {
+          status = 'attention';
+          score = 75;
+          recommendations.push('Monitore o custo de insumos de carne e laticínios.');
+          highlights.push(`CMV em atenção (${cmv.toFixed(1)}%)`);
+        } else {
+          recommendations.push('Margem bruta saudável. Manter acompanhamento de compras.');
+          highlights.push(`CMV saudável em ${cmv.toFixed(1)}%`);
+        }
       }
     } else if (id === 'loss_waste' || id === 'operations_loss') {
-      metrics.push({ label: 'Perdas Registradas', value: `R$ ${totalLoss.toFixed(2)}` });
-      metrics.push({ label: 'Ocorrências', value: lossEvents.length });
-
-      if (totalLoss > 500) {
+      if (lossEvents.length === 0) {
         status = 'attention';
         score = 70;
-        recommendations.push('Ajustar lotes de fritura e conferência de validade FIFO.');
-        highlights.push(`Perdas acumuladas de R$ ${totalLoss.toFixed(2)}`);
+        metrics.push({ label: 'Perdas Registradas', value: 'R$ 0,00' });
+        metrics.push({ label: 'Status', value: 'Sem registros' });
+        recommendations.push('Registrar quebras e descartes no fechamento de turno para mapear desperdício.');
+        highlights.push('Nenhuma perda documentada no período');
       } else {
-        recommendations.push('Desperdício sob controle operacional.');
-        highlights.push('Perdas dentro da tolerância aceitável');
+        metrics.push({ label: 'Perdas Registradas', value: `R$ ${totalLoss.toFixed(2)}` });
+        metrics.push({ label: 'Ocorrências', value: lossEvents.length });
+
+        if (totalLoss > 500) {
+          status = 'attention';
+          score = 70;
+          recommendations.push('Ajustar lotes de fritura e conferência de validade FIFO.');
+          highlights.push(`Perdas acumuladas de R$ ${totalLoss.toFixed(2)}`);
+        } else {
+          recommendations.push('Desperdício sob controle operacional.');
+          highlights.push('Perdas dentro da tolerância aceitável');
+        }
       }
     } else if (id === 'delivery_channels') {
-      metrics.push({ label: 'Canais Integrados', value: 'iFood, 99Food, Direto' });
-      metrics.push({ label: 'Status KDS', value: 'Ativo' });
-      recommendations.push('Aplicar simulador de margem para evitar vazamento em taxas.');
-      highlights.push('Conectores de delivery em operação');
+      const isConfigured = options?.deliveryChannelsConfigured ?? false;
+      metrics.push({ label: 'Canais Integrados', value: isConfigured ? 'iFood, 99Food, Direto' : 'Direto (KDS Ativo)' });
+      metrics.push({ label: 'Status Marketplaces', value: isConfigured ? 'Conectado' : 'Aguardando credenciais' });
+      recommendations.push(isConfigured ? 'Aplicar simulador de margem para evitar vazamento em taxas.' : 'Configurar credenciais oficiais para recebimento de pedidos automáticos.');
+      highlights.push(isConfigured ? 'Conectores de delivery em operação' : 'Marketplaces aguardando homologação');
+      status = isConfigured ? 'optimal' : 'attention';
+      score = isConfigured ? 90 : 70;
     } else if (id === 'growth_lab' || id === 'strategy_lab') {
       const activeCount = experiments.filter(e => e.status === 'active' || e.status === 'em_andamento').length;
       metrics.push({ label: 'Experimentos Ativos', value: activeCount });
@@ -595,10 +630,27 @@ export function buildCeoDepartmentSummaries(
       highlights.push('Perfil de entrega isolado com sucesso');
     } else {
       // finance_margins / finance
-      metrics.push({ label: 'Faturamento Base', value: `R$ ${cmvMetrics.total_revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
-      metrics.push({ label: 'Margem Contribuição', value: `R$ ${cmvMetrics.gross_margin_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
-      recommendations.push('Preservar fluxo de caixa positivo para compras à vista.');
-      highlights.push('Balanço financeiro saudável');
+      const baseRevenue = (options?.realRevenue && options.realRevenue > 0) ? options.realRevenue : cmvMetrics.total_revenue;
+      const baseExpenses = options?.realExpenses ?? 0;
+
+      if (baseRevenue <= 0) {
+        status = 'dados_insuficientes';
+        score = 50;
+        metrics.push({ label: 'Faturamento Base', value: 'R$ 0,00' });
+        metrics.push({ label: 'Status', value: 'Sem transações no período' });
+        recommendations.push('Importar ou registrar vendas do período para apuração.');
+        highlights.push('Aguardando dados de faturamento');
+      } else {
+        metrics.push({ label: 'Faturamento Base', value: `R$ ${baseRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+        if (baseExpenses > 0) {
+          metrics.push({ label: 'Despesas Registradas', value: `R$ ${baseExpenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+          metrics.push({ label: 'Resultado Operacional', value: `R$ ${(baseRevenue - baseExpenses).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+        } else {
+          metrics.push({ label: 'Margem Contribuição', value: `R$ ${cmvMetrics.gross_margin_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+        }
+        recommendations.push('Preservar fluxo de caixa positivo para compras à vista.');
+        highlights.push('Balanço financeiro saudável');
+      }
     }
 
     return {

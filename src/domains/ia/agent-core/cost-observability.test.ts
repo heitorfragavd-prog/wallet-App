@@ -253,7 +253,8 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
 
     it("deve manter exatamente os 13 Action Types canônicos", () => {
       const actionKeys = Object.keys(CANONICAL_ACTIONS);
-      expect(actionKeys).toHaveLength(13);
+      expect(actionKeys).toHaveLength(14);
+      expect(actionKeys).toContain("propor_experimento_comercial");
       expect(actionKeys).toContain("atualizar_custo_produto_eyemobile");
       expect(actionKeys).toContain("deletar_transacao");
       expect(CANONICAL_ACTIONS.deletar_transacao.blocked).toBe(true);

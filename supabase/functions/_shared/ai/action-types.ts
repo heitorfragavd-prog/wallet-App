@@ -246,6 +246,26 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
     ],
     requiredFields: ["novo_custo"],
   },
+  propor_experimento_comercial: {
+    actionType: "propor_experimento_comercial",
+    riskLevel: "MEDIUM",
+    executionPolicy: "proposal_only",
+    requiresConfirmation: true,
+    reversible: true,
+    auditCategory: "growth_experiment_mutation",
+    allowedFields: [
+      "name",
+      "hypothesis",
+      "department",
+      "target_kpi",
+      "target_value",
+      "start_date",
+      "end_date",
+      "actions",
+      "expected_impact",
+    ],
+    requiredFields: ["name", "hypothesis"],
+  },
 };
 
 /**
