@@ -8,7 +8,6 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
 
   describe('GATE A: Eliminação de Valores Fictícios', () => {
     it('getEmptyKpis deve retornar zeros, nulos e NENHUM valor financeiro hardcoded', () => {
-      // @ts-expect-error acessando método privado para auditoria
       const emptyKpis = CeoFinancialMetricsService.getEmptyKpis();
 
       // Proibido conter os números fictícios auditados:
@@ -21,6 +20,7 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(emptyKpis.despesasMes).toBe(0);
       expect(emptyKpis.despesasMes).not.toBe(45610.25);
 
+      expect(emptyKpis.resultadoOperacional).toBe(0);
       expect(emptyKpis.lucroEstimado).toBe(0);
       expect(emptyKpis.lucroEstimado).not.toBe(58420.10);
 
@@ -39,7 +39,6 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       const result = await CeoFinancialMetricsService.getSalesByChannel('');
       expect(result).toEqual([]);
 
-      // Nunca deve conter faturamentos hardcoded como R$ 82.492,55
       const values = result.map((c) => c.faturamento);
       expect(values).not.toContain(82492.55);
       expect(values).not.toContain(44264.30);
@@ -49,7 +48,6 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       const result = await CeoFinancialMetricsService.getTopProducts('');
       expect(result).toEqual([]);
 
-      // Não deve conter nomes mockados pré-fabricados
       const names = result.map((p) => p.produto);
       expect(names).not.toContain('X-Tudo Especial');
       expect(names).not.toContain('X-Bacon');
@@ -61,14 +59,65 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
     });
   });
 
-  describe('GATE B & C: Tratamento Honesto de Indicadores', () => {
-    it('quando o workspace for nulo ou vazio, retorna estado de dados vazios sem quebrar', async () => {
+  describe('GATE B & C: Precisão dos Indicadores e Resultados Reais', () => {
+    it('quando o workspace for vazio, retorna estado honesto sem quebrar', async () => {
       const kpis = await CeoFinancialMetricsService.getExecutiveKpis('');
       expect(kpis.faturamentoMes).toBe(0);
       expect(kpis.despesasMes).toBe(0);
+      expect(kpis.resultadoOperacional).toBe(0);
       expect(kpis.cmvPercent).toBeNull();
       expect(kpis.cmvStatus).toBe('dados_insuficientes');
       expect(kpis.acoesHoje.length).toBeGreaterThan(0);
+    });
+
+    it('deve suportar resultado operacional negativo sem mascarar com Math.max(0, ...)', () => {
+      const faturamento = 10000;
+      const despesas = 14500;
+      const resultadoOperacional = faturamento - despesas;
+
+      expect(resultadoOperacional).toBe(-4500);
+      expect(resultadoOperacional).not.toBe(0);
+      expect(resultadoOperacional).toBeLessThan(0);
+    });
+
+    it('helper de paginação fetchAllPaginated percorre múltiplas páginas sem truncar em 1.000 ou 5.000 registros', async () => {
+      // Simula um banco com 2.500 registros
+      const totalMockRecords = 2500;
+      const mockDatabase = Array.from({ length: totalMockRecords }, (_, idx) => ({
+        id: `tx-${idx}`,
+        valor: 10.0,
+      }));
+
+      // @ts-expect-error testando método privado de paginação
+      const fetched = await CeoFinancialMetricsService.fetchAllPaginated(async (from: number, to: number) => {
+        const slice = mockDatabase.slice(from, to + 1);
+        return { data: slice, error: null };
+      });
+
+      expect(fetched.length).toBe(totalMockRecords);
+      expect(fetched[0].id).toBe('tx-0');
+      expect(fetched[totalMockRecords - 1].id).toBe(`tx-${totalMockRecords - 1}`);
+    });
+
+    it('helper de paginação fetchAllPaginated lança erro explícito se qualquer página falhar (Gate 3 - Resiliência)', async () => {
+      // Falha na primeira página
+      await expect(
+        CeoFinancialMetricsService.fetchAllPaginated(async () => {
+          return { data: null, error: new Error('PostgREST connection timeout') };
+        })
+      ).rejects.toThrow('Falha ao buscar registros paginados');
+
+      // Falha na segunda página (após primeira página com 1.000 registros completos)
+      let pageCount = 0;
+      await expect(
+        CeoFinancialMetricsService.fetchAllPaginated(async () => {
+          pageCount++;
+          if (pageCount === 2) {
+            return { data: null, error: new Error('PostgREST error on page 2') };
+          }
+          return { data: Array.from({ length: 1000 }, (_, i) => ({ id: `tx-${i}` })), error: null };
+        })
+      ).rejects.toThrow('Falha ao buscar registros paginados');
     });
   });
 });

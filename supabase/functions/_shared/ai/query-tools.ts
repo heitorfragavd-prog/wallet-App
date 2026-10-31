@@ -37,6 +37,31 @@ export interface FinancialQueryRepository {
    * (que incluem Pix/Cartão líquidos, manuais etc.).
    */
   listSalesPDV(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
+  getAiTelemetryUsage?(context: AiExecutionContext): Promise<{
+    orcamentoMensalUsd: number;
+    custoAcumuladoMesUsd: number;
+    percentualOrcamentoConsumido: number;
+    statusOrcamento: string;
+    limiteRigidoAtivo: boolean;
+    totalTokensMes: number;
+    totalRequisicoesMes: number;
+    alertas: {
+      alerta50: boolean;
+      alerta80: boolean;
+      alerta100: boolean;
+    };
+  } | null>;
+  getDeliveryChannelsStatus?(context: AiExecutionContext): Promise<{
+    canais: Array<{
+      id: string;
+      nome: string;
+      status: string;
+      comissaoContratual: string;
+      taxaPagamento: string;
+      recepcaoPedidos: string;
+      corBadge: string;
+    }>;
+  } | null>;
 }
 
 
@@ -600,13 +625,28 @@ export function createQueryToolCatalog(
     };
 
     catalog.consultar_status_canais_delivery = async (_args, context) => {
+      if (repository.getDeliveryChannelsStatus) {
+        try {
+          const channels = await repository.getDeliveryChannelsStatus(context);
+          if (channels) {
+            return baseResult("consultar_status_canais_delivery", context, null, {
+              workspaceId: context.workspaceId,
+              canais: channels.canais,
+              dataAtualizacao: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.warn("[query-tools] Falha ao consultar status de canais de delivery:", err);
+        }
+      }
+
       const data = {
         workspaceId: context.workspaceId,
         canais: [
           {
             id: "ifood",
             nome: "iFood",
-            status: "Aguardando integração",
+            status: "Não conectado / Aguardando homologação",
             comissaoContratual: "Não configurada",
             taxaPagamento: "Não informada",
             recepcaoPedidos: "Inativa",
@@ -615,7 +655,7 @@ export function createQueryToolCatalog(
           {
             id: "99food",
             nome: "99Food",
-            status: "Aguardando credenciais",
+            status: "Não conectado / Aguardando homologação",
             comissaoContratual: "Não configurada",
             taxaPagamento: "Não informada",
             recepcaoPedidos: "Inativa",
@@ -624,7 +664,7 @@ export function createQueryToolCatalog(
           {
             id: "direto",
             nome: "Direto / WhatsApp",
-            status: "Canal Próprio / Ativa no KDS",
+            status: "Ativo / Canal Próprio",
             comissaoContratual: "0% (Canal Próprio)",
             taxaPagamento: "Pix / Maquininha (1,0% - 1,5%)",
             recepcaoPedidos: "Ativa no KDS Cozinha",
@@ -638,12 +678,27 @@ export function createQueryToolCatalog(
     };
 
     catalog.consultar_telemetria_ia = async (_args, context) => {
+      if (repository.getAiTelemetryUsage) {
+        try {
+          const usage = await repository.getAiTelemetryUsage(context);
+          if (usage) {
+            return baseResult("consultar_telemetria_ia", context, null, {
+              workspaceId: context.workspaceId,
+              ...usage,
+              dataAtualizacao: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.warn("[query-tools] Falha ao consultar telemetria real:", err);
+        }
+      }
+
       const data = {
         workspaceId: context.workspaceId,
         orcamentoMensalUsd: 10.00,
         custoAcumuladoMesUsd: 0.00,
         percentualOrcamentoConsumido: 0.0,
-        statusOrcamento: "normal",
+        statusOrcamento: "indisponivel",
         limiteRigidoAtivo: false,
         totalTokensMes: 0,
         totalRequisicoesMes: 0,
@@ -652,6 +707,7 @@ export function createQueryToolCatalog(
           alerta80: false,
           alerta100: false,
         },
+        observacao: "Telemetria do workspace aguardando sincronização de requisições.",
         dataAtualizacao: new Date().toISOString(),
       };
 

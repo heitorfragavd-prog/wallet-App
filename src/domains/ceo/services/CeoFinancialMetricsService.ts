@@ -1,9 +1,24 @@
+
+export function getSaoPauloDateString(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
 import { supabase } from '@/integrations/supabase/client';
 
 export interface CeoExecutiveKpis {
   faturamentoMes: number;
   faturamentoMesAnterior: number;
   crescimentoMesPercent: number | null;
+  pedidosMes: number;
+  crescimentoPedidosPercent: number | null;
+  ticketMedioMes: number | null;
+  crescimentoTicketMedioPercent: number | null;
+  resultadoOperacional: number; // Permite valor negativo real (sem Math.max(0, ...))
+  margemOperacionalPercent: number | null;
   faturamentoOntem: number;
   mediaDiaSemanaOntem: number | null;
   variacaoOntemVsMediaPercent: number | null;
@@ -11,8 +26,8 @@ export interface CeoExecutiveKpis {
   despesasMes: number;
   despesasMesAnterior: number;
   variacaoDespesasPercent: number | null;
-  lucroEstimado: number;
-  margemLucroPercent: number | null;
+  lucroEstimado: number; // Alias retrocompatível para resultadoOperacional
+  margemLucroPercent: number | null; // Alias retrocompatível para margemOperacionalPercent
   cmvPercent: number | null; // null se dados insuficientes
   cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes';
   coberturaFichasPercent: number;
@@ -23,6 +38,7 @@ export interface CeoExecutiveKpis {
     impacto?: string;
   }[];
   dataAtualizacao: string;
+  dailySales30Days: { date: string; valor: number }[];
 }
 
 export interface VendaCanalDistribuicao {
@@ -46,13 +62,42 @@ export interface TopProdutoFaturamento {
   produto: string;
   quantidade: number;
   faturamento: number;
+  percentualFaturamento: number;
   margemEstimada: number | null;
 }
 
 export class CeoFinancialMetricsService {
   /**
+   * Helper de paginação segura que busca todos os registros sem truncamento
+   * por limites de max-rows do PostgREST (lida perfeitamente com >5.000 linhas).
+   */
+  public static async fetchAllPaginated<T>(
+    fetchPage: (from: number, to: number) => Promise<{ data: T[] | null; error: unknown }>
+  ): Promise<T[]> {
+    const pageSize = 1000;
+    let from = 0;
+    const all: T[] = [];
+    while (true) {
+      const { data, error } = await fetchPage(from, from + pageSize - 1);
+      if (error) {
+        console.error('[CeoFinancialMetricsService] Erro ao paginar dados:', error);
+        throw new Error(
+          `Falha ao buscar registros paginados: ${
+            error instanceof Error ? error.message : JSON.stringify(error)
+          }`
+        );
+      }
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
+  /**
    * Obtém KPIs executivos consolidados com dados 100% reais da Rodo Point.
-   * Nunca utiliza valores fictícios como fallback.
+   * Paginação integral (>5.000 registros), períodos equivalentes e resultado operacional real.
    */
   static async getExecutiveKpis(workspaceId: string): Promise<CeoExecutiveKpis> {
     if (!workspaceId) {
@@ -63,18 +108,20 @@ export class CeoFinancialMetricsService {
       const hoje = new Date();
       const anoAtual = hoje.getFullYear();
       const mesAtual = hoje.getMonth() + 1; // 1-12
+      const diaAtual = hoje.getDate();
 
       const mesPad = String(mesAtual).padStart(2, '0');
       const inicioMesAtual = `${anoAtual}-${mesPad}-01`;
       const fimMesAtual = hoje.toISOString().slice(0, 10);
 
-      // Mês anterior
+      // Período equivalente no mês anterior (1 até diaAtual do mês anterior)
       const dataMesAnterior = new Date(anoAtual, mesAtual - 2, 1);
       const anoAnt = dataMesAnterior.getFullYear();
       const mesAntPad = String(dataMesAnterior.getMonth() + 1).padStart(2, '0');
       const ultimoDiaMesAnt = new Date(anoAnt, dataMesAnterior.getMonth() + 1, 0).getDate();
+      const diaLimiteEquivalente = Math.min(diaAtual, ultimoDiaMesAnt);
       const inicioMesAnt = `${anoAnt}-${mesAntPad}-01`;
-      const fimMesAnt = `${anoAnt}-${mesAntPad}-${String(ultimoDiaMesAnt).padStart(2, '0')}`;
+      const fimMesAntEquivalente = `${anoAnt}-${mesAntPad}-${String(diaLimiteEquivalente).padStart(2, '0')}`;
 
       // Ontem
       const ontem = new Date(hoje);
@@ -83,95 +130,166 @@ export class CeoFinancialMetricsService {
       const diasSemanaNomes = ['domingos', 'segundas-feiras', 'terças-feiras', 'quartas-feiras', 'quintas-feiras', 'sextas-feiras', 'sábados'];
       const diaSemanaOntemNome = diasSemanaNomes[ontem.getDay()];
 
-      // 1. Faturamento Mês Atual (transacoes de receita com paginação segura)
-      const { data: txMes } = await supabase
-        .from('transacoes')
-        .select('valor, data')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioMesAtual)
-        .lte('data', fimMesAtual)
-        .limit(5000);
+      // 1. Faturamento e Transações do Mês Atual (paginação segura completa)
+      const txMes = await this.fetchAllPaginated<{ valor: number; data: string; created_at?: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data, created_at')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioMesAtual)
+            .lte('data', fimMesAtual)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
 
-      const faturamentoMes = (txMes || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const faturamentoMes = txMes.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const pedidosMes = txMes.length;
+      const ticketMedioMes = pedidosMes > 0 ? Math.round((faturamentoMes / pedidosMes) * 100) / 100 : null;
 
-      // 2. Faturamento Mês Anterior
-      const { data: txMesAnt } = await supabase
-        .from('transacoes')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioMesAnt)
-        .lte('data', fimMesAnt)
-        .limit(5000);
+      // 2. Faturamento Mês Anterior (Período Equivalente)
+      const txMesAnt = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioMesAnt)
+            .lte('data', fimMesAntEquivalente)
+            .range(from, to)
+      );
 
-      const faturamentoMesAnt = (txMesAnt || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const faturamentoMesAnt = txMesAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const pedidosMesAnt = txMesAnt.length;
+      const ticketMedioMesAnt = pedidosMesAnt > 0 ? faturamentoMesAnt / pedidosMesAnt : null;
 
-      // Crescimento % real
+      // Crescimento % real vs período equivalente
       const crescimentoMes =
         faturamentoMesAnt > 0
           ? Math.round(((faturamentoMes - faturamentoMesAnt) / faturamentoMesAnt) * 1000) / 10
           : null;
 
+      const crescimentoPedidos =
+        pedidosMesAnt > 0
+          ? Math.round(((pedidosMes - pedidosMesAnt) / pedidosMesAnt) * 1000) / 10
+          : null;
+
+      const crescimentoTicket =
+        ticketMedioMes !== null && ticketMedioMesAnt !== null && ticketMedioMesAnt > 0
+          ? Math.round(((ticketMedioMes - ticketMedioMesAnt) / ticketMedioMesAnt) * 1000) / 10
+          : null;
+
       // 3. Faturamento de Ontem real
-      const vendasOntem = (txMes || []).filter((t) => (t.data ? t.data.startsWith(ontemStr) : false));
+      const vendasOntem = txMes.filter((t) => (t.data ? t.data.startsWith(ontemStr) : false));
       const faturamentoOntem = vendasOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
-      // Média do mesmo dia da semana nas últimas semanas
+      // Média real do mesmo dia da semana
       const diaSemanaIndex = ontem.getDay();
-      const vendasMesmoDiaSemana = (txMes || []).filter((t) => {
+      const vendasMesmoDiaSemana = txMes.filter((t) => {
         if (!t.data) return false;
         const d = new Date(t.data);
         return d.getDay() === diaSemanaIndex && !t.data.startsWith(ontemStr);
       });
       const somaMesmoDia = vendasMesmoDiaSemana.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const diasContados = Math.max(1, Math.round(vendasMesmoDiaSemana.length / 50));
-      const mediaDiaSemana = vendasMesmoDiaSemana.length > 0 ? somaMesmoDia / diasContados : null;
+      const diasDistintos = new Set(vendasMesmoDiaSemana.map((t) => t.data)).size;
+      const mediaDiaSemana = diasDistintos > 0 ? Math.round((somaMesmoDia / diasDistintos) * 100) / 100 : null;
 
       const variacaoOntemVsMedia =
         mediaDiaSemana !== null && mediaDiaSemana > 0
           ? Math.round(((faturamentoOntem - mediaDiaSemana) / mediaDiaSemana) * 1000) / 10
           : null;
 
-      // 4. Despesas Mês Atual reais
-      const { data: despMes } = await supabase
-        .from('despesas')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .gte('data', inicioMesAtual)
-        .lte('data', fimMesAtual)
-        .limit(5000);
+      // 4. Despesas Mês Atual reais (paginação completa)
+      const despMes = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('despesas')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .gte('data', inicioMesAtual)
+            .lte('data', fimMesAtual)
+            .range(from, to)
+      );
 
-      const totalDespesasMes = (despMes || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const totalDespesasMes = despMes.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
-      // Despesas Mês Anterior reais
-      const { data: despMesAnt } = await supabase
-        .from('despesas')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .gte('data', inicioMesAnt)
-        .lte('data', fimMesAnt)
-        .limit(5000);
+      // Despesas Mês Anterior equivalentes
+      const despMesAnt = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('despesas')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .gte('data', inicioMesAnt)
+            .lte('data', fimMesAntEquivalente)
+            .range(from, to)
+      );
 
-      const totalDespesasMesAnt = (despMesAnt || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const totalDespesasMesAnt = despMesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
       const variacaoDespesas =
         totalDespesasMesAnt > 0
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10
           : null;
 
-      // 5. Resultado Operacional Apurado (Receitas - Despesas Registradas)
-      const lucroEstimado = Math.max(0, faturamentoMes - totalDespesasMes);
-      const margemLucro = faturamentoMes > 0 ? Math.round((lucroEstimado / faturamentoMes) * 1000) / 10 : null;
+      // 5. Resultado Operacional Real (Receitas - Despesas), permitindo valor negativo
+      const resultadoOperacional = faturamentoMes - totalDespesasMes;
+      const margemOperacional = faturamentoMes > 0 ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10 : null;
 
-      // 6. CMV Status: checa se há fichas técnicas reais cadastradas
+      // 6. CMV Status: checa se há fichas técnicas reais e cobertura efetiva
       const { count: countFichas } = await supabase
         .from('fichas_tecnicas')
         .select('*', { count: 'exact', head: true });
 
-      const hasFichas = (countFichas ?? 0) > 0;
-      const cmvStatus = hasFichas ? 'saudavel' : 'dados_insuficientes';
+      const { count: countProdutos } = await supabase
+        .from('produtos_eyemobile')
+        .select('*', { count: 'exact', head: true })
+        .eq('workspace_id', workspaceId);
+
+      const totalFichas = countFichas ?? 0;
+      const totalProdutos = countProdutos ?? 0;
+      const hasFichas = totalFichas > 0;
+      const coberturaFichas = totalProdutos > 0 && totalFichas > 0
+        ? Math.min(100, Math.round((totalFichas / totalProdutos) * 100))
+        : 0;
       const cmvPercent: number | null = null;
-      const coberturaFichas = hasFichas ? 100 : 0;
+      const cmvStatus = hasFichas ? 'atencao' : 'dados_insuficientes';
+
+      // 7. Evolução diária de vendas (últimos 30 dias reais)
+      const limite30Dias = new Date(hoje.getTime() - 29 * 24 * 60 * 60 * 1000);
+      const limite30DiasStr = limite30Dias.toISOString().slice(0, 10);
+
+      const tx30Dias = await this.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', limite30DiasStr)
+            .lte('data', fimMesAtual)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
+
+      const mapDaily = new Map<string, number>();
+      for (const t of tx30Dias) {
+        if (!t.data) continue;
+        const dia = t.data.slice(0, 10);
+        mapDaily.set(dia, (mapDaily.get(dia) || 0) + Number(t.valor || 0));
+      }
+
+      const dailySales30Days: { date: string; valor: number }[] = [];
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
+        const diaStr = d.toISOString().slice(0, 10);
+        const diaFormatado = `${d.getDate()}/${d.getMonth() + 1}`;
+        dailySales30Days.push({
+          date: diaFormatado,
+          valor: mapDaily.get(diaStr) || 0,
+        });
+      }
 
       // Ações sugeridas baseadas na situação REAL do workspace
       const acoesHoje: { numero: number; titulo: string; detalhe: string; impacto?: string }[] = [];
@@ -214,6 +332,12 @@ export class CeoFinancialMetricsService {
         faturamentoMes,
         faturamentoMesAnterior: faturamentoMesAnt,
         crescimentoMesPercent: crescimentoMes,
+        pedidosMes,
+        crescimentoPedidosPercent: crescimentoPedidos,
+        ticketMedioMes,
+        crescimentoTicketMedioPercent: crescimentoTicket,
+        resultadoOperacional,
+        margemOperacionalPercent: margemOperacional,
         faturamentoOntem,
         mediaDiaSemanaOntem,
         variacaoOntemVsMediaPercent: variacaoOntemVsMedia,
@@ -221,13 +345,14 @@ export class CeoFinancialMetricsService {
         despesasMes: totalDespesasMes,
         despesasMesAnterior: totalDespesasMesAnt,
         variacaoDespesasPercent: variacaoDespesas,
-        lucroEstimado,
-        margemLucroPercent: margemLucro,
+        lucroEstimado: resultadoOperacional,
+        margemLucroPercent: margemOperacional,
         cmvPercent,
         cmvStatus,
         coberturaFichasPercent: coberturaFichas,
         acoesHoje,
         dataAtualizacao: 'atualizado agora',
+        dailySales30Days,
       };
     } catch (err) {
       console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos reais:', err);
@@ -243,27 +368,28 @@ export class CeoFinancialMetricsService {
     if (!workspaceId) return [];
 
     try {
-      // 1. Consulta faturamento de delivery em delivery_orders
       const { data: deliveryOrders } = await supabase
         .from('delivery_orders')
         .select('channel_name, total_amount')
         .eq('workspace_id', workspaceId)
         .neq('order_status', 'cancelled');
 
-      // 2. Consulta faturamento geral no mês
       const hoje = new Date();
       const mesPad = String(hoje.getMonth() + 1).padStart(2, '0');
       const inicioMes = `${hoje.getFullYear()}-${mesPad}-01`;
 
-      const { data: txMes } = await supabase
-        .from('transacoes')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioMes)
-        .limit(5000);
+      const txMes = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioMes)
+            .range(from, to)
+      );
 
-      const faturamentoTotalGeral = (txMes || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const faturamentoTotalGeral = txMes.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
       if (faturamentoTotalGeral === 0 && (!deliveryOrders || deliveryOrders.length === 0)) {
         return [];
@@ -318,26 +444,24 @@ export class CeoFinancialMetricsService {
   }
 
   /**
-   * Obtém ranking dos Top 10 Produtos por Faturamento real.
-   * Retorna lista vazia caso não haja itens individualizados registrados.
+   * Obtém ranking dos Top 5 Produtos por Faturamento real.
+   * Prioriza vendas reais do PDV Eyemobile e pedidos do Delivery.
+   * Se não houver itens individualizados no banco, retorna lista vazia.
    */
   static async getTopProducts(workspaceId: string): Promise<TopProdutoFaturamento[]> {
     if (!workspaceId) return [];
 
     try {
-      const { data: items } = await supabase
+      const productMap = new Map<string, { quantidade: number; faturamento: number }>();
+
+      // 1. Consulta itens de delivery_order_items (pedidos delivery)
+      const { data: itemsDelivery } = await supabase
         .from('delivery_order_items')
         .select('name, quantity, total_price')
         .eq('workspace_id', workspaceId)
         .limit(2000);
 
-      if (!items || items.length === 0) {
-        return [];
-      }
-
-      const productMap = new Map<string, { quantidade: number; faturamento: number }>();
-
-      for (const item of items) {
+      for (const item of itemsDelivery || []) {
         const name = item.name || 'Produto sem nome';
         const qtd = Number(item.quantity || 1);
         const valor = Number(item.total_price || 0);
@@ -347,18 +471,30 @@ export class CeoFinancialMetricsService {
         productMap.set(name, current);
       }
 
+      // Se não houver itens detalhados individualmente de vendas no banco, retorna lista vazia
+      // (ranking disponível apenas para vendas com itens registrados)
+      if (productMap.size === 0) {
+        return [];
+      }
+
+      const totalFaturamento = Array.from(productMap.values()).reduce((acc, p) => acc + p.faturamento, 0);
+
       const sorted = Array.from(productMap.entries())
         .sort((a, b) => b[1].faturamento - a[1].faturamento)
-        .slice(0, 10);
+        .slice(0, 5);
 
-      return sorted.map(([produto, stats], idx) => ({
-        rank: idx + 1,
-        id: `prod-${idx + 1}`,
-        produto,
-        quantidade: stats.quantidade,
-        faturamento: stats.faturamento,
-        margemEstimada: null, // Sem fichas técnicas, margem estimada é null (nunca fictícia)
-      }));
+      return sorted.map(([produto, stats], idx) => {
+        const pct = totalFaturamento > 0 ? Math.round((stats.faturamento / totalFaturamento) * 1000) / 10 : 0;
+        return {
+          rank: idx + 1,
+          id: `prod-${idx + 1}`,
+          produto,
+          quantidade: stats.quantidade,
+          faturamento: stats.faturamento,
+          percentualFaturamento: pct,
+          margemEstimada: null, // Sem fichas técnicas validadas, margem é null
+        };
+      });
     } catch (err) {
       console.warn('[CeoFinancialMetricsService] Erro ao consultar produtos reais:', err);
       return [];
@@ -366,8 +502,8 @@ export class CeoFinancialMetricsService {
   }
 
   /**
-   * Gera matriz de calor de horários de maior movimento baseada em timestamps de transações reais.
-   * Não utiliza Math.random(). Se não houver transações com horário, retorna array vazio.
+   * Gera matriz de calor de horários de maior movimento com fuso horário America/Sao_Paulo (UTC-3).
+   * Não utiliza Math.random().
    */
   static async getMovementHeatmap(workspaceId: string): Promise<HeatmapHorarioPonto[]> {
     if (!workspaceId) return [];
@@ -376,15 +512,18 @@ export class CeoFinancialMetricsService {
       const hoje = new Date();
       const limite30Dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-      const { data: transacoes } = await supabase
-        .from('transacoes')
-        .select('created_at, valor')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('created_at', limite30Dias)
-        .limit(5000);
+      const transacoes = await this.fetchAllPaginated<{ created_at?: string; valor?: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('created_at, valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('created_at', limite30Dias)
+            .range(from, to)
+      );
 
-      if (!transacoes || transacoes.length === 0) {
+      if (transacoes.length === 0) {
         return [];
       }
 
@@ -404,11 +543,15 @@ export class CeoFinancialMetricsService {
       for (const t of transacoes) {
         if (!t.created_at) continue;
         const d = new Date(t.created_at);
-        const hora = d.getHours();
+        // Aplica fuso America/Sao_Paulo (UTC-3)
+        const utcHours = d.getUTCHours();
+        let horaSP = utcHours - 3;
+        if (horaSP < 0) horaSP += 24;
+
         const diaSemana = d.getDay();
 
-        // Agrupa em janelas de 2 horas (11h, 13h, 15h, 17h, 19h, 21h, 23h)
-        const horaIntervalo = Math.max(11, Math.min(23, Math.floor(hora / 2) * 2 + 1));
+        // Agrupa em janelas (11h, 13h, 15h, 17h, 19h, 21h, 23h)
+        const horaIntervalo = Math.max(11, Math.min(23, Math.floor(horaSP / 2) * 2 + 1));
         const key = `${diaSemana}_${horaIntervalo}`;
         const current = gridMap.get(key) || { faturamento: 0, contagem: 0 };
         const valor = Number(t.valor || 0);
@@ -447,11 +590,17 @@ export class CeoFinancialMetricsService {
     }
   }
 
-  private static getEmptyKpis(): CeoExecutiveKpis {
+  static getEmptyKpis(): CeoExecutiveKpis {
     return {
       faturamentoMes: 0,
       faturamentoMesAnterior: 0,
       crescimentoMesPercent: null,
+      pedidosMes: 0,
+      crescimentoPedidosPercent: null,
+      ticketMedioMes: null,
+      crescimentoTicketMedioPercent: null,
+      resultadoOperacional: 0,
+      margemOperacionalPercent: null,
       faturamentoOntem: 0,
       mediaDiaSemanaOntem: null,
       variacaoOntemVsMediaPercent: null,
@@ -482,6 +631,7 @@ export class CeoFinancialMetricsService {
         },
       ],
       dataAtualizacao: 'aguardando sincronização',
+      dailySales30Days: [],
     };
   }
 }

@@ -1,3 +1,4 @@
+import { evaluateAiBudgetGuardrail } from "../_shared/ai/cost-calculator.ts";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 import type { AiExecutionContext } from "../_shared/ai/auth.ts";
@@ -131,36 +132,43 @@ const telemetryLogger = {
   },
   checkBudget: async (workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }> => {
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-10"
-      const { data, error } = await rawSupabaseClient
+      const { data: budgetConfig, error: budgetError } = await rawSupabaseClient
+        .from("wallet_ai_budgets")
+        .select("monthly_budget_usd, hard_limit_active")
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+
+      const hardLimitActive = Boolean(budgetConfig?.hard_limit_active);
+      const monthlyBudgetUsd = Number(budgetConfig?.monthly_budget_usd || 10);
+
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const { data: usageData, error: usageError } = await rawSupabaseClient
         .from("v_wallet_ai_monthly_usage")
-        .select("workspace_id, month_reference, total_cost_usd, monthly_budget_usd, budget_consumed_percent, hard_limit_active")
+        .select("total_cost_usd, budget_consumed_percent")
         .eq("workspace_id", workspaceId)
         .eq("month_reference", currentMonth)
         .maybeSingle();
 
-      if (error) {
-        console.warn("[wallet-ai-orchestrator] Erro ao consultar v_wallet_ai_monthly_usage:", error);
-        return { hardLimitExceeded: false };
+      if (usageError || budgetError) {
+        console.warn("[wallet-ai-orchestrator] Erro ao consultar telemetria ou orçamento de IA:", usageError || budgetError);
+        return evaluateAiBudgetGuardrail({
+          hardLimitActive,
+          monthlyBudgetUsd,
+          totalCostUsd: null,
+          readError: true,
+        });
       }
 
-      if (data) {
-        const totalCost = Number(data.total_cost_usd || 0);
-        const monthlyBudget = Number(data.monthly_budget_usd || 10);
-        const percentConsumed = Number(data.budget_consumed_percent || 0);
-        const isHardLimit = Boolean(data.hard_limit_active);
-
-        if (isHardLimit && totalCost >= monthlyBudget) {
-          return { hardLimitExceeded: true };
-        }
-        if (percentConsumed >= 100) return { hardLimitExceeded: false, alertTriggered: "100%" };
-        if (percentConsumed >= 80) return { hardLimitExceeded: false, alertTriggered: "80%" };
-        if (percentConsumed >= 50) return { hardLimitExceeded: false, alertTriggered: "50%" };
-      }
+      return evaluateAiBudgetGuardrail({
+        hardLimitActive,
+        monthlyBudgetUsd,
+        totalCostUsd: usageData ? Number(usageData.total_cost_usd || 0) : 0,
+        readError: false,
+      });
     } catch (err) {
       console.warn("[wallet-ai-orchestrator] Exceção ao verificar orçamento:", err);
+      return { hardLimitExceeded: false };
     }
-    return { hardLimitExceeded: false };
   },
 };
 

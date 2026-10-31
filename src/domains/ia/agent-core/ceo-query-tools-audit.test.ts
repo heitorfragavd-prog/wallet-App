@@ -25,7 +25,8 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     const catalog = createQueryToolCatalog(repo, { extended: true });
 
     const result = await catalog.consultar_resumo_executivo_ceo({}, mockContext);
-    const data = result.data as any;
+    const data = result.data as Record<string, unknown>;
+    const cmv = data.cmv as Record<string, unknown>;
 
     expect(data.faturamentoMes).toBe(0);
     expect(data.faturamentoMes).not.toBe(287430.50);
@@ -36,9 +37,9 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     expect(data.despesasMes).toBe(0);
     expect(data.despesasMes).not.toBe(45610.25);
 
-    expect(data.cmv.percentual).toBeNull();
-    expect(data.cmv.percentual).not.toBe(32.4);
-    expect(data.cmv.status).toBe('dados_insuficientes');
+    expect(cmv.percentual).toBeNull();
+    expect(cmv.percentual).not.toBe(32.4);
+    expect(cmv.status).toBe('dados_insuficientes');
 
     expect(data.workspaceId).toBe(mockContext.workspaceId);
     expect(data.status).toBe('sem_registros_no_periodo');
@@ -54,7 +55,7 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     const catalog = createQueryToolCatalog(repo, { extended: true });
 
     const result = await catalog.consultar_analise_comercial_vendas({}, mockContext);
-    const data = result.data as any;
+    const data = result.data as Record<string, unknown>;
 
     expect(data.vendasTotais).toBe(80.0);
     expect(data.vendasTotais).not.toBe(287430.50);
@@ -72,12 +73,13 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     const catalog = createQueryToolCatalog(repo, { extended: true });
 
     const result = await catalog.consultar_analise_despesas_ceo({}, mockContext);
-    const data = result.data as any;
+    const data = result.data as Record<string, unknown>;
+    const maiorCategoria = data.maiorCategoria as Record<string, unknown> | undefined;
 
     expect(data.totalDespesas).toBe(200.0);
     expect(data.totalDespesas).not.toBe(45610.25);
-    expect(data.maiorCategoria?.nome).toBe('Insumos');
-    expect(data.maiorCategoria?.valor).toBe(200.0);
+    expect(maiorCategoria?.nome).toBe('Insumos');
+    expect(maiorCategoria?.valor).toBe(200.0);
   });
 
   it('consultar_telemetria_ia não deve conter valores mockados de 48920 tokens ou $0.42 USD', async () => {
@@ -85,7 +87,7 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     const catalog = createQueryToolCatalog(repo, { extended: true });
 
     const result = await catalog.consultar_telemetria_ia({}, mockContext);
-    const data = result.data as any;
+    const data = result.data as Record<string, unknown>;
 
     expect(data.totalTokensMes).toBe(0);
     expect(data.totalTokensMes).not.toBe(48920);
@@ -101,10 +103,11 @@ describe('Auditoria de Ferramentas de IA do Wallet CEO 2.0 (Zero Dados Fictício
     const catalog = createQueryToolCatalog(repo, { extended: true });
 
     const result = await catalog.consultar_oportunidades_ceo({}, mockContext);
-    const data = result.data as any;
+    const data = result.data as Record<string, unknown>;
+    const orientacoes = data.orientacoesEstruturantes as unknown[];
 
     expect(data.oportunidades).toEqual([]);
     expect(data.status).toBe('dados_insuficientes');
-    expect(data.orientacoesEstruturantes.length).toBeGreaterThan(0);
+    expect(orientacoes.length).toBeGreaterThan(0);
   });
 });

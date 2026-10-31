@@ -449,7 +449,6 @@
 | .worktrees\equipe-rescisao-transporte\supabase\migrations\RLS_VERIFICATION_REPORT.md |
 | .worktrees\equipe-rescisao-transporte\supabase\tests\equipe_centro_rh_financeiro.sql |
 | .worktrees\equipe-rescisao-transporte\tests\supabase-equipe\supabase\migrations\20260817000000_legacy_equipe_baseline.sql |
-| scratch\test-migration-telemetry.js |
 | scripts\apply-phase-c-enforcement.sql |
 | scripts\test-ceo-delivery-foundation.sql |
 | scripts\test-isolated-pg-security.sql |

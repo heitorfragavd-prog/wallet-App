@@ -1,26 +1,36 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
 import {
   TrendingUp,
+  TrendingDown,
   Send,
   RotateCcw,
   User,
   AlertTriangle,
-  ArrowRight,
+  Bot,
+  ShoppingBag,
+  CheckCircle2,
+  XCircle,
+  Plus,
+  History,
+  X,
+  MessageSquare,
+  Clock,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
-  BarChart,
-  Bar,
   LineChart,
   Line,
-  PieChart,
-  Pie,
-  Cell,
+  XAxis,
+  YAxis,
+  Tooltip,
 } from 'recharts';
-import { useWalletIA } from '@/domains/ia/hooks/useWalletIA';
+import { useWalletIA, type WalletIAMessage } from '@/domains/ia/hooks/useWalletIA';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/shared/hooks/use-toast';
+import { useAuth } from '@/domains/auth/hooks/useAuth';
 
 interface CeoOverviewTabProps {
   workspaceId: string;
@@ -28,17 +38,56 @@ interface CeoOverviewTabProps {
   onNavigateToPlan?: () => void;
 }
 
+interface ConversationItem {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   workspaceId,
   kpis,
-  onNavigateToPlan,
 }) => {
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [inputPrompt, setInputPrompt] = useState('');
+  const [processingProposalId, setProcessingProposalId] = useState<string | null>(null);
+  const [confirmedProposals, setConfirmedProposals] = useState<Record<string, 'confirmed' | 'cancelled' | 'executed'>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Hook central de IA
-  const { messages, isLoading, currentStatus, sendMessage, clearChat } = useWalletIA({
+  // Estados de persistência canônica do chat (Gate 1)
+  const [conversaId, setConversaId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Hook central de IA com conversaId conectado
+  const { messages, isLoading, sendMessage, clearChat, loadHistory } = useWalletIA({
     workspaceId,
+    conversaId: conversaId || undefined,
+    onMessagePersist: async (msg, targetId) => {
+      if (!workspaceId || !user?.id || !targetId) return;
+      try {
+        if (msg.routeUsed === 'FAST_QUERY' || msg.isError) {
+          await supabase.from('wallet_ai_messages').insert({
+            conversation_id: targetId,
+            workspace_id: workspaceId,
+            user_id: user.id,
+            role: msg.role,
+            content: msg.content,
+          });
+        }
+        await supabase
+          .from('wallet_ai_conversations')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', targetId)
+          .eq('workspace_id', workspaceId)
+          .eq('user_id', user.id);
+      } catch (err) {
+        console.warn('[CeoOverviewTab] Falha ao persistir mensagem no histórico:', err);
+      }
+    },
   });
 
   const scrollToBottom = () => {
@@ -50,6 +99,143 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
       scrollToBottom();
     }
   }, [messages]);
+
+  // Carrega mensagens de uma conversa específica (Gate 1)
+  const loadConversationMessages = useCallback(async (convId: string) => {
+    if (!convId || !workspaceId || !user?.id) return;
+    setLoadingHistory(true);
+    try {
+      const { data, error } = await supabase
+        .from('wallet_ai_messages')
+        .select('id, role, content, created_at, tool_calls')
+        .eq('conversation_id', convId)
+        .eq('workspace_id', workspaceId)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('[CeoOverviewTab] Erro ao carregar mensagens:', error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const loaded: WalletIAMessage[] = data.map((m) => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content || '',
+          createdAt: new Date(m.created_at),
+        }));
+        loadHistory(loaded);
+      } else {
+        loadHistory([]);
+      }
+    } catch (err) {
+      console.error('[CeoOverviewTab] Erro ao recuperar histórico:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [workspaceId, user?.id, loadHistory]);
+
+  // Inicializa a lista de conversas e seleciona a mais recente
+  const initConversations = useCallback(async () => {
+    if (!workspaceId || !user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('wallet_ai_conversations')
+        .select('id, title, created_at, updated_at')
+        .eq('workspace_id', workspaceId)
+        .eq('user_id', user.id)
+        .eq('is_archived', false)
+        .order('updated_at', { ascending: false })
+        .limit(20);
+
+      if (error) {
+        console.warn('[CeoOverviewTab] Erro ao buscar conversas:', error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        setConversations(data);
+        const mostRecent = data[0];
+        setConversaId(mostRecent.id);
+        await loadConversationMessages(mostRecent.id);
+      } else {
+        // Criar conversa inicial associada ao usuário e workspace
+        const { data: newConv, error: createErr } = await supabase
+          .from('wallet_ai_conversations')
+          .insert({
+            workspace_id: workspaceId,
+            user_id: user.id,
+            title: 'Conversa com CEO',
+          })
+          .select('id, title, created_at, updated_at')
+          .single();
+
+        if (createErr) {
+          console.warn('[CeoOverviewTab] Erro ao inicializar conversa:', createErr);
+        } else if (newConv) {
+          setConversations([newConv]);
+          setConversaId(newConv.id);
+          loadHistory([]);
+        }
+      }
+    } catch (err) {
+      console.error('[CeoOverviewTab] Falha ao inicializar conversas:', err);
+    }
+  }, [workspaceId, user?.id, loadConversationMessages, loadHistory]);
+
+  useEffect(() => {
+    initConversations();
+  }, [initConversations]);
+
+  // Cria uma nova conversa real
+  const handleNewConversation = async () => {
+    if (!workspaceId || !user?.id) return;
+    try {
+      const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date());
+
+      const { data, error } = await supabase
+        .from('wallet_ai_conversations')
+        .insert({
+          workspace_id: workspaceId,
+          user_id: user.id,
+          title: `Conversa ${dataFormatada}`,
+        })
+        .select('id, title, created_at, updated_at')
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setConversations((prev) => [data, ...prev]);
+        setConversaId(data.id);
+        clearChat();
+        toast({
+          title: 'Nova Conversa',
+          description: 'Nova sessão iniciada com seu Diretor Executivo.',
+        });
+      }
+    } catch (err) {
+      console.error('[CeoOverviewTab] Erro ao criar nova conversa:', err);
+      toast({
+        title: 'Erro',
+        description: 'Não foi possível iniciar uma nova conversa.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  // Alterna para uma conversa anterior
+  const handleSelectConversation = async (convId: string) => {
+    setConversaId(convId);
+    setShowHistoryModal(false);
+    await loadConversationMessages(convId);
+  };
 
   const handleSend = () => {
     if (!inputPrompt.trim() || isLoading) return;
@@ -67,460 +253,571 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     sendMessage(prompt);
   };
 
-  // Sparklines neutros caso não haja histórico diário suficiente
-  const revenueSparkline = [
-    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.12) : 0 },
-    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.14) : 0 },
-    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.15) : 0 },
-    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.18) : 0 },
-    { v: kpis.faturamentoMes > 0 ? Math.round(kpis.faturamentoMes * 0.22) : 0 },
-  ];
+  /**
+   * Confirmação canônica de proposta de ação por ID canônico (Gate 2).
+   * Valida status anterior = 'prepared' -> transiciona para 'confirmed'.
+   * Se a query falhar ou afetar 0 linhas, NÃO assume sucesso.
+   */
+  const handleConfirmProposal = async (proposalId: string) => {
+    if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
+    setProcessingProposalId(proposalId);
 
-  const profitSparkline = [
-    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.15) : 0 },
-    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.18) : 0 },
-    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.20) : 0 },
-    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.22) : 0 },
-    { v: kpis.lucroEstimado > 0 ? Math.round(kpis.lucroEstimado * 0.25) : 0 },
-  ];
+    try {
+      const { data, error } = await supabase
+        .from('wallet_ai_action_proposals')
+        .update({
+          status: 'confirmed',
+          confirmed_by_user_id: user.id,
+          confirmed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', proposalId)
+        .eq('workspace_id', workspaceId)
+        .eq('status', 'prepared')
+        .select('id, status')
+        .maybeSingle();
 
-  const expenseSparkline = [
-    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.18) : 0 },
-    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.19) : 0 },
-    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.20) : 0 },
-    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.21) : 0 },
-    { v: kpis.despesasMes > 0 ? Math.round(kpis.despesasMes * 0.22) : 0 },
-  ];
+      if (error) {
+        throw error;
+      }
 
-  // CMV gauge data honesto (sem dados fictícios)
-  const cmvGaugeData = [
-    {
-      name: 'CMV',
-      value: kpis.cmvPercent !== null ? kpis.cmvPercent : 0,
-      color: kpis.cmvPercent !== null ? '#10b981' : '#475569',
-    },
-    {
-      name: 'Restante',
-      value: kpis.cmvPercent !== null ? 100 - kpis.cmvPercent : 100,
-      color: '#1e293b',
-    },
-  ];
+      if (!data) {
+        toast({
+          title: 'Ação Não Disponível',
+          description: 'A proposta já foi processada, cancelada ou não está mais pendente de aprovação.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'confirmed' }));
+
+      toast({
+        title: 'Ação Autorizada com Sucesso',
+        description: 'A proposta foi confirmada de forma canônica e registrada no sistema.',
+      });
+    } catch (err) {
+      console.error('[CeoOverviewTab] Falha ao processar autorização:', err);
+      toast({
+        title: 'Falha na Autorização',
+        description: 'Não foi possível confirmar a proposta no momento. Verifique suas permissões.',
+        variant: 'destructive',
+      });
+    } finally {
+      setProcessingProposalId(null);
+    }
+  };
+
+  /**
+   * Descarte canônico de proposta de ação por ID (Gate 2).
+   * Transiciona de 'prepared' ou 'confirmed' para 'cancelled'.
+   */
+  const handleCancelProposal = async (proposalId: string) => {
+    if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
+    setProcessingProposalId(proposalId);
+
+    try {
+      const { data, error } = await supabase
+        .from('wallet_ai_action_proposals')
+        .update({
+          status: 'cancelled',
+          cancelled_by_user_id: user.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', proposalId)
+        .eq('workspace_id', workspaceId)
+        .in('status', ['prepared', 'confirmed'])
+        .select('id, status')
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data) {
+        toast({
+          title: 'Ação Não Disponível',
+          description: 'A proposta já foi cancelada ou não foi encontrada no workspace.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'cancelled' }));
+
+      toast({
+        title: 'Proposta Descartada',
+        description: 'A proposta foi recusada e arquivada sem alterar dados financeiros.',
+      });
+    } catch (err) {
+      console.error('[CeoOverviewTab] Falha ao descartar proposta:', err);
+      toast({
+        title: 'Falha ao Descartar',
+        description: 'Não foi possível arquivar a proposta no momento.',
+        variant: 'destructive',
+      });
+    } finally {
+      setProcessingProposalId(null);
+    }
+  };
+
+  const isPositiveMargin = kpis.resultadoOperacional >= 0;
 
   return (
     <div className="space-y-6">
-      {/* 1. Hero Card: CEO Greeting & Daily Actions */}
+      {/* 1. Hero Card: Saudação Executiva com Resumo Diário */}
       <Card className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border-border/60 shadow-lg overflow-hidden">
         <CardContent className="p-6 md:p-8">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-8">
-            {/* Left: Avatar + Narrative */}
-            <div className="flex items-start gap-5 max-w-2xl">
-              {/* Executive Avatar Container */}
-              <div className="relative shrink-0">
-                <div className="w-20 h-20 md:w-24 md:h-24 rounded-full overflow-hidden border-2 border-amber-500/40 shadow-md bg-slate-800 flex items-center justify-center">
-                  <img
-                    src="https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=256&h=256&q=80"
-                    alt="Wallet CEO"
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
-                  <div className="absolute inset-0 flex items-center justify-center text-amber-400 font-bold text-2xl pointer-events-none bg-slate-850">
-                    👑
-                  </div>
-                </div>
-                <div className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-emerald-500 border-2 border-slate-950 shadow-sm" title="Online"></div>
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 pb-6 border-b border-border/40">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xl md:text-2xl">👑</span>
+                <h1 className="text-xl md:text-2xl font-bold tracking-tight text-foreground">
+                  Boa tarde, Heitor!
+                </h1>
               </div>
+              <p className="text-xs md:text-sm text-slate-400 max-w-2xl leading-relaxed">
+                {kpis.faturamentoOntem > 0 ? (
+                  <>
+                    A Rodo Point faturou{' '}
+                    <strong className="text-foreground">
+                      R$ {kpis.faturamentoOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </strong>{' '}
+                    ontem
+                    {kpis.variacaoOntemVsMedia !== null && (
+                      <span className={kpis.variacaoOntemVsMedia >= 0 ? ' text-emerald-400' : ' text-rose-400'}>
+                        {' '}({kpis.variacaoOntemVsMedia >= 0 ? '+' : ''}{kpis.variacaoOntemVsMedia}% vs média das {kpis.diaSemanaOntemNome})
+                      </span>
+                    )}. Neste mês acumulamos{' '}
+                    <strong className="text-foreground">
+                      R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </strong>{' '}
+                    em vendas
+                    {kpis.crescimentoMes !== null && (
+                      <span className={kpis.crescimentoMes >= 0 ? ' text-emerald-400' : ' text-rose-400'}>
+                        {' '}({kpis.crescimentoMes >= 0 ? '+' : ''}{kpis.crescimentoMes}% vs período anterior)
+                      </span>
+                    )}.
+                  </>
+                ) : (
+                  <>Aqui está o resumo executivo da sua operação com dados 100% reais apurados.</>
+                )}
+              </p>
+            </div>
 
-              {/* Text Narrative */}
-              <div className="space-y-2">
-                <h2 className="text-xl md:text-2xl font-bold text-foreground tracking-tight">
-                  Bom dia, Heitor!
-                </h2>
-                <p className="text-xs md:text-sm text-slate-300 leading-relaxed">
-                  {kpis.faturamentoOntem > 0 ? (
-                    <>
-                      A Rodo Point faturou{' '}
-                      <strong className="text-white font-semibold">
-                        R$ {kpis.faturamentoOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </strong>{' '}
-                      ontem
-                      {kpis.variacaoOntemVsMediaPercent !== null && (
-                        <>
-                          ,{' '}
-                          <span className={kpis.variacaoOntemVsMediaPercent >= 0 ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
-                            {kpis.variacaoOntemVsMediaPercent > 0 ? `+${kpis.variacaoOntemVsMediaPercent}%` : `${kpis.variacaoOntemVsMediaPercent}%`} em relação à média
-                          </span>{' '}
-                          de {kpis.diaSemanaOntemNome}
-                        </>
-                      )}
-                      .
-                    </>
-                  ) : (
-                    <>
-                      Nenhuma venda registrada ontem ({kpis.diaSemanaOntemNome}).
-                    </>
-                  )}{' '}
-                  {kpis.faturamentoMes > 0 ? (
-                    <>
-                      Neste mês, o faturamento apurado é de{' '}
-                      <strong className="text-white font-semibold">
-                        R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </strong>
-                      {kpis.crescimentoMesPercent !== null && (
-                        <>
-                          , uma variação de{' '}
-                          <span className={kpis.crescimentoMesPercent >= 0 ? "text-emerald-400 font-semibold" : "text-rose-400 font-semibold"}>
-                            {kpis.crescimentoMesPercent > 0 ? `+${kpis.crescimentoMesPercent}%` : `${kpis.crescimentoMesPercent}%`}
-                          </span>{' '}
-                          vs. mês anterior
-                        </>
-                      )}
-                      .
-                    </>
-                  ) : (
-                    <>
-                      Aguardando sincronização de transações de receita do mês corrente.
-                    </>
-                  )}
-                </p>
+            {/* Status Live */}
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full self-start md:self-auto shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-xs font-semibold text-emerald-400">
+                Dados atualizados com o banco
+              </span>
+            </div>
+          </div>
+
+          {/* 4 Cards Principais de Indicadores Executivos */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-6">
+            {/* Card 1: Faturamento (Mês) */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
+              <div className="text-xs text-muted-foreground font-medium">Faturamento (Mês)</div>
+              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </div>
+              <div className="mt-2 text-xs flex items-center gap-1 font-medium">
+                {kpis.crescimentoMes !== null ? (
+                  <span className={kpis.crescimentoMes >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {kpis.crescimentoMes >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {kpis.crescimentoMes >= 0 ? '+' : ''}{kpis.crescimentoMes}% vs mês anterior
+                  </span>
+                ) : (
+                  <span className="text-slate-500">Sem base comparativa anterior</span>
+                )}
               </div>
             </div>
 
-            {/* Right: Principais Ações de Hoje */}
-            <div className="w-full lg:w-auto shrink-0 bg-slate-900/60 p-4 rounded-xl border border-border/40 space-y-3 min-w-[280px]">
-              <div className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
-                Principais ações de hoje
+            {/* Card 2: Pedidos */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
+              <div className="text-xs text-muted-foreground font-medium">Pedidos</div>
+              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                {kpis.pedidosMes.toLocaleString('pt-BR')}
               </div>
-
-              <div className="space-y-2">
-                {kpis.acoesHoje.map((acao) => (
-                  <div key={acao.numero} className="flex items-start gap-2.5 text-xs">
-                    <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5 ${
-                        acao.numero === 3
-                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                          : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      }`}
-                    >
-                      {acao.numero}
-                    </span>
-                    <span className="text-slate-300 leading-tight">
-                      {acao.titulo}
-                    </span>
-                  </div>
-                ))}
+              <div className="mt-2 text-xs flex items-center gap-1 font-medium">
+                {kpis.crescimentoPedidos !== null ? (
+                  <span className={kpis.crescimentoPedidos >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {kpis.crescimentoPedidos >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {kpis.crescimentoPedidos >= 0 ? '+' : ''}{kpis.crescimentoPedidos}% vs mês anterior
+                  </span>
+                ) : (
+                  <span className="text-slate-500">Período equivalente</span>
+                )}
               </div>
+            </div>
 
-              <Button
-                size="sm"
-                onClick={onNavigateToPlan}
-                className="w-full mt-2 bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs h-8 gap-1.5 shadow-sm"
-              >
-                Ver plano completo
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Button>
+            {/* Card 3: Ticket Médio */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
+              <div className="text-xs text-muted-foreground font-medium">Ticket Médio</div>
+              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                {kpis.ticketMedioMes !== null
+                  ? `R$ ${kpis.ticketMedioMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                  : 'Aguardando dados'}
+              </div>
+              <div className="mt-2 text-xs flex items-center gap-1 font-medium">
+                {kpis.crescimentoTicket !== null ? (
+                  <span className={kpis.crescimentoTicket >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {kpis.crescimentoTicket >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {kpis.crescimentoTicket >= 0 ? '+' : ''}{kpis.crescimentoTicket}% vs mês anterior
+                  </span>
+                ) : (
+                  <span className="text-slate-500">Média por pedido</span>
+                )}
+              </div>
+            </div>
+
+            {/* Card 4: Resultado Operacional Real (sem Math.max artificial) */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
+              <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
+              <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                R$ {kpis.resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </div>
+              <div className="mt-2 text-xs flex items-center gap-1 font-medium">
+                {kpis.margemOperacional !== null ? (
+                  <span className={isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}>
+                    Margem: {kpis.margemOperacional}%
+                  </span>
+                ) : (
+                  <span className="text-slate-500">Receitas vs Despesas reais</span>
+                )}
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* 2. 4 Metric KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Faturamento (Mês) */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Faturamento (Mês)</div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-end justify-between mt-2">
-              <div className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                {kpis.crescimentoMesPercent !== null ? (
-                  <>
-                    <TrendingUp className="w-3.5 h-3.5" />
-                    <span>{kpis.crescimentoMesPercent >= 0 ? `↑ +${kpis.crescimentoMesPercent}%` : `↓ ${kpis.crescimentoMesPercent}%`}</span>
-                    <span className="text-muted-foreground font-normal ml-0.5">vs. mês anterior</span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground font-normal">Base anterior em apuração</span>
-                )}
-              </div>
-              <div className="w-16 h-7">
+      {/* 2. Grid Central: Evolução de Vendas (30 dias) + Converse com seu CEO */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left: Gráfico Real de Evolução de Vendas (30 dias) */}
+        <Card className="bg-card/70 border-border/50 flex flex-col">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+              <span>Evolução de Vendas (30 dias)</span>
+              <span className="text-xs font-normal text-emerald-400 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                Vendas diárias reais
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4 flex-1 flex flex-col justify-center">
+            {kpis.dailySales30Days && kpis.dailySales30Days.some((d) => d.valor > 0) ? (
+              <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={revenueSparkline}>
-                    <Bar dataKey="v" fill="#38bdf8" radius={[2, 2, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Lucro Estimado */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Resultado Operacional Apurado</div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              R$ {kpis.lucroEstimado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-end justify-between mt-2">
-              <div className="text-xs text-emerald-400 font-semibold">
-                {kpis.margemLucroPercent !== null ? `${kpis.margemLucroPercent}% de margem` : 'Margem indisponível'}
-              </div>
-              <div className="w-16 h-7">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={profitSparkline}>
-                    <Line type="monotone" dataKey="v" stroke="#10b981" strokeWidth={2} dot={false} />
+                  <LineChart data={kpis.dailySales30Days}>
+                    <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} interval={4} />
+                    <YAxis
+                      stroke="#64748b"
+                      fontSize={10}
+                      tickLine={false}
+                      tickFormatter={(v) => `R$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
+                      formatter={(value: number) => [`R$ ${value.toFixed(2)}`, 'Vendas']}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="valor"
+                      stroke="#10b981"
+                      strokeWidth={2.5}
+                      dot={{ r: 2.5, fill: '#10b981' }}
+                      activeDot={{ r: 5 }}
+                      name="Vendas"
+                    />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            ) : (
+              <div className="h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
+                <ShoppingBag className="w-8 h-8 text-slate-600 mb-1" />
+                <span>Nenhuma venda registrada nos últimos 30 dias.</span>
+                <span className="text-[11px] text-slate-500">As vendas sincronizadas pelo Eyemobile ou KDS aparecerão aqui.</span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* CMV */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium flex items-center justify-between">
-              <span>CMV</span>
-              {kpis.cmvStatus === 'dados_insuficientes' && (
-                <span className="text-[10px] text-amber-400 font-medium">Fichas pendentes</span>
-              )}
-            </div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              {kpis.cmvPercent !== null ? `${kpis.cmvPercent}%` : 'Dados insuficientes'}
-            </div>
-            <div className="flex items-end justify-between mt-2">
-              <div className="text-xs text-muted-foreground">
-                {kpis.cmvStatus === 'dados_insuficientes' ? (
-                  <span className="text-amber-400 font-medium">Cadastre fichas técnicas</span>
-                ) : (
-                  <span className="text-emerald-400 font-medium">Dentro da meta (≤ 38%)</span>
-                )}
-              </div>
-              <div className="w-10 h-10 relative shrink-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={cmvGaugeData}
-                      dataKey="value"
-                      innerRadius={11}
-                      outerRadius={16}
-                      startAngle={90}
-                      endAngle={-270}
-                    >
-                      {cmvGaugeData.map((entry, index) => (
-                        <Cell key={`gauge-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Despesas */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Despesas Registradas</div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              R$ {kpis.despesasMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-end justify-between mt-2">
-              <div className="text-xs text-muted-foreground flex items-center gap-1">
-                {kpis.variacaoDespesasPercent !== null ? (
-                  <span className={kpis.variacaoDespesasPercent > 0 ? "text-amber-400 font-semibold" : "text-emerald-400 font-semibold"}>
-                    {kpis.variacaoDespesasPercent > 0 ? `+${kpis.variacaoDespesasPercent}%` : `${kpis.variacaoDespesasPercent}%`} vs. mês anterior
-                  </span>
-                ) : (
-                  <span>Sem base anterior</span>
-                )}
-              </div>
-              <div className="w-16 h-7">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={expenseSparkline}>
-                    <Bar dataKey="v" fill="#f43f5e" radius={[2, 2, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 3. Conversational AI Chat */}
-      <Card className="bg-card/80 border-border/60 shadow-md">
-        <CardHeader className="pb-3 border-b border-border/40">
-          <div className="flex items-center justify-between">
+        {/* Right: Converse com seu CEO (Chat Proeminente Integrado com Histórico Real) */}
+        <Card className="bg-card/70 border-border/50 flex flex-col h-[400px] md:h-[420px]">
+          <CardHeader className="pb-3 border-b border-border/40 flex flex-row items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="text-xl">💬</span>
-              <div>
-                <CardTitle className="text-base font-bold text-foreground">
-                  Converse com seu CEO
-                </CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  Pergunte qualquer coisa sobre a Rodo Point. Eu analiso seus dados reais e te ajudo a tomar decisões.
-                </p>
-              </div>
+              <span className="text-amber-400">✨</span>
+              <CardTitle className="text-sm font-semibold text-foreground">
+                Converse com seu CEO
+              </CardTitle>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={clearChat}
-                className="h-8 text-xs gap-1.5 border-border/60 text-muted-foreground hover:text-foreground"
+                onClick={handleNewConversation}
+                className="h-7 text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1"
+                title="Criar nova conversa sem apagar o histórico"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <Plus className="w-3 h-3 text-amber-400" />
                 Nova conversa
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowHistoryModal(true)}
+                className="h-7 text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1"
+                title="Selecionar conversa anterior"
+              >
+                <History className="w-3 h-3 text-sky-400" />
+                Histórico
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearChat}
+                className="h-7 text-xs text-muted-foreground hover:text-foreground p-1.5"
+                title="Limpar tela"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </Button>
             </div>
-          </div>
-        </CardHeader>
+          </CardHeader>
 
-        <CardContent className="p-4 space-y-4">
-          {/* Messages Container */}
-          <div className="space-y-4 max-h-[360px] overflow-y-auto pr-1">
-            {messages.length === 0 ? (
-              <div className="py-8 text-center space-y-2">
-                <div className="w-10 h-10 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto text-lg border border-amber-500/20">
-                  👑
-                </div>
-                <div className="text-sm font-semibold text-foreground">
-                  Assistente Executivo Digital Ativo
-                </div>
-                <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                  Pronto para analisar finanças, margens, despesas e sugerir oportunidades com base nos registros do seu workspace.
+          {/* Área de Mensagens com Scroll */}
+          <CardContent className="flex-1 overflow-y-auto p-4 space-y-3">
+            {loadingHistory ? (
+              <div className="h-full flex items-center justify-center text-xs text-slate-400">
+                <Clock className="w-4 h-4 mr-2 animate-spin text-amber-400" />
+                Carregando histórico...
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-4 text-xs text-muted-foreground space-y-2">
+                <Bot className="w-8 h-8 text-amber-400/80" />
+                <p className="font-medium text-foreground">Olá, Heitor! Sou seu Diretor Executivo Digital.</p>
+                <p className="max-w-xs text-[11px] text-slate-400">
+                  Pergunte qualquer coisa sobre a Rodo Point. Eu analiso seus dados reais de faturamento, despesas, PDV e canais para ajudar você a tomar decisões.
                 </p>
               </div>
             ) : (
-              messages.map((msg) => (
+              messages.map((msg, index) => (
                 <div
-                  key={msg.id}
-                  className={`flex gap-3 text-xs md:text-sm ${
-                    msg.role === 'user' ? 'justify-end' : 'justify-start'
-                  }`}
+                  key={index}
+                  className={`flex gap-2.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  {msg.role !== 'user' && (
-                    <div className="w-7 h-7 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 text-xs">
+                  {msg.role === 'assistant' && (
+                    <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 text-xs">
                       👑
                     </div>
                   )}
 
                   <div
-                    className={`p-3.5 rounded-xl max-w-[85%] leading-relaxed ${
+                    className={`max-w-[85%] rounded-lg p-3 text-xs leading-relaxed ${
                       msg.role === 'user'
-                        ? 'bg-primary text-primary-foreground font-medium rounded-tr-none'
-                        : 'bg-slate-900/90 text-slate-100 border border-border/50 rounded-tl-none shadow-sm'
+                        ? 'bg-amber-500 text-slate-950 font-medium'
+                        : 'bg-slate-900 border border-border/50 text-slate-200'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    <div className="whitespace-pre-line">{msg.content}</div>
 
-                    {/* Action Proposal Card se houver no retorno */}
-                    {msg.actionProposals && msg.actionProposals.length > 0 && (
+                    {/* Propostas de Ação Canônicas */}
+                    {msg.actionProposal && (
                       <div className="mt-3 pt-3 border-t border-slate-700/60 space-y-2">
                         <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5" />
                           Ação proposta pelo CEO (Requer Confirmação):
                         </div>
-                        {msg.actionProposals.map((prop, idx) => (
-                          <div
-                            key={idx}
-                            className="bg-slate-950/70 p-2.5 rounded border border-amber-500/30 text-xs space-y-1.5"
-                          >
-                            <div className="font-semibold text-slate-200">
-                              {prop.title || prop.actionType}
+                        {(() => {
+                          const prop = msg.actionProposal as {
+                            id: string;
+                            actionType?: string;
+                            title?: string;
+                            description?: string;
+                            hypothesis?: string;
+                            status?: string;
+                          };
+                          const proposalStatus = confirmedProposals[prop.id] || prop.status || 'prepared';
+                          return (
+                            <div className="bg-slate-950/70 p-2.5 rounded border border-amber-500/30 text-xs space-y-1.5">
+                              <div className="font-semibold text-slate-200">
+                                {prop.title || prop.actionType}
+                              </div>
+                              <div className="text-slate-400 text-[11px]">
+                                {prop.description || prop.hypothesis}
+                              </div>
+                              <div className="flex gap-2 pt-1">
+                                {proposalStatus === 'confirmed' || proposalStatus === 'executed' ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Autorizado canonicamente
+                                  </span>
+                                ) : proposalStatus === 'cancelled' ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-semibold">
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    Descartado
+                                  </span>
+                                ) : (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      disabled={processingProposalId === prop.id}
+                                      className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                                      onClick={() => handleConfirmProposal(prop.id)}
+                                    >
+                                      {processingProposalId === prop.id ? 'Autorizando...' : 'Autorizar Ação'}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={processingProposalId === prop.id}
+                                      className="h-7 text-xs border-slate-700 text-slate-300"
+                                      onClick={() => handleCancelProposal(prop.id)}
+                                    >
+                                      Descartar
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
                             </div>
-                            <div className="text-slate-400 text-[11px]">
-                              {prop.description || prop.hypothesis}
-                            </div>
-                            <div className="flex gap-2 pt-1">
-                              <Button
-                                size="sm"
-                                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                                onClick={() => {
-                                  sendMessage(`Confirmar e executar ação proposta: ${prop.title || prop.actionType}`);
-                                }}
-                              >
-                                Autorizar Ação
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs border-slate-700 text-slate-300"
-                                onClick={() => {
-                                  sendMessage('Recusar proposta e manter dados atuais');
-                                }}
-                              >
-                                Descartar
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
 
                   {msg.role === 'user' && (
-                    <div className="w-7 h-7 rounded-full bg-primary/20 text-primary border border-primary/30 flex items-center justify-center shrink-0 text-xs">
-                      <User className="w-4 h-4" />
+                    <div className="w-6 h-6 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center shrink-0 text-xs">
+                      <User className="w-3.5 h-3.5" />
                     </div>
                   )}
                 </div>
               ))
             )}
-
-            {isLoading && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground p-2">
-                <div className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                <span>{currentStatus || 'CEO analisando os dados...'}</span>
-              </div>
-            )}
             <div ref={messagesEndRef} />
+          </CardContent>
+
+          {/* Quick Pills Conforme a Imagem de Referência */}
+          <div className="px-4 py-2 border-t border-border/30 bg-slate-950/40 flex flex-wrap gap-1.5 shrink-0">
+            <button
+              onClick={() => handleSelectPill('Quanto vendemos ontem?')}
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+            >
+              Vendas de ontem
+            </button>
+            <button
+              onClick={() => handleSelectPill('Quais foram os 5 produtos mais vendidos neste mês?')}
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+            >
+              Top 5 produtos
+            </button>
+            <button
+              onClick={() => handleSelectPill('Como estão as despesas deste mês por categoria?')}
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+            >
+              Despesas do mês
+            </button>
+            <button
+              onClick={() => handleSelectPill('Monte um plano de crescimento para aumentar o lucro')}
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+            >
+              Plano de crescimento
+            </button>
           </div>
 
-          {/* Prompt Suggestions Pills */}
-          <div className="flex flex-wrap gap-2 pt-2 border-t border-border/40">
-            {[
-              'Como estão minhas vendas hoje?',
-              'Quais produtos vendem mais?',
-              'Onde posso economizar?',
-              'Qual foi meu melhor dia da semana?',
-              'Analise minhas despesas',
-              'Monte um plano para aumentar meu lucro em R$ 5.000/mês',
-            ].map((pill, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => handleSelectPill(pill)}
-                className="text-[11px] bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white px-2.5 py-1 rounded-full border border-border/50 transition-colors"
-              >
-                {pill}
-              </button>
-            ))}
-          </div>
-
-          {/* Input Box */}
-          <div className="flex items-center gap-2 pt-2">
+          {/* Input de Pergunta com Botão Laranja */}
+          <div className="p-3 border-t border-border/40 bg-card/90 flex items-center gap-2">
             <input
               type="text"
               value={inputPrompt}
               onChange={(e) => setInputPrompt(e.target.value)}
               onKeyDown={handleKeyPress}
               placeholder="Digite sua pergunta... Ex: Como estão minhas vendas dos últimos 30 dias?"
-              className="flex-1 bg-slate-950 border border-border/70 rounded-lg px-4 py-2.5 text-xs md:text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+              disabled={isLoading}
             />
             <Button
+              size="sm"
               onClick={handleSend}
-              disabled={isLoading || !inputPrompt.trim()}
-              className="bg-orange-500 hover:bg-orange-600 text-white h-10 px-4 shrink-0 rounded-lg shadow-sm"
+              disabled={!inputPrompt.trim() || isLoading}
+              className="h-8 w-8 p-0 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold shrink-0 rounded-lg"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-3.5 h-3.5" />
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </Card>
+      </div>
+
+      {/* Modal Canônico de Histórico de Conversas (Gate 1) */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <Card className="w-full max-w-md bg-slate-900 border-border shadow-2xl">
+            <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-border/50">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-sky-400" />
+                <CardTitle className="text-sm font-bold text-foreground">
+                  Histórico de Conversas do CEO
+                </CardTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowHistoryModal(false)}
+                className="h-7 w-7 p-0"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-4 space-y-2 max-h-80 overflow-y-auto">
+              {conversations.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-400">
+                  Nenhuma conversa encontrada neste workspace.
+                </div>
+              ) : (
+                conversations.map((conv) => {
+                  const isActive = conv.id === conversaId;
+                  const dataFormatada = new Intl.DateTimeFormat('pt-BR', {
+                    timeZone: 'America/Sao_Paulo',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }).format(new Date(conv.updated_at || conv.created_at));
+
+                  return (
+                    <div
+                      key={conv.id}
+                      onClick={() => handleSelectConversation(conv.id)}
+                      className={`p-3 rounded-lg border text-xs cursor-pointer transition-colors flex items-center justify-between ${
+                        isActive
+                          ? 'bg-amber-500/10 border-amber-500/50 text-amber-300'
+                          : 'bg-slate-950/50 border-slate-800 hover:border-slate-700 text-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-0.5">
+                        <div className="font-semibold flex items-center gap-1.5">
+                          <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
+                          {conv.title}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          Última interação: {dataFormatada}
+                        </div>
+                      </div>
+                      {isActive && (
+                        <span className="text-[10px] font-bold text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded">
+                          Ativa
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 };
+export default CeoOverviewTab;

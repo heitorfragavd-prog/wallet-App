@@ -237,6 +237,7 @@ export function useWalletIA(options: UseWalletIAOptions) {
 
           const response = await client.sendMessage({
             workspaceId,
+            conversationId: conversaId,
             messages: [
               ...historyForAgent,
               {

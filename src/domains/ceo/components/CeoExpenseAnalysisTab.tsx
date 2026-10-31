@@ -1,18 +1,19 @@
+import { getSaoPauloDateString } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select';
 import { Button } from '@/shared/components/ui/button';
-import { RefreshCw, AlertCircle, Receipt } from 'lucide-react';
+import { RefreshCw, Receipt, TrendingUp, TrendingDown } from 'lucide-react';
 import {
   ResponsiveContainer,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
   PieChart,
   Pie,
   Cell,
-  ComposedChart,
+  LineChart,
+  Line,
 } from 'recharts';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -25,11 +26,11 @@ interface ExpenseCategoryItem {
   amount: number;
   value: number; // percentual
   color: string;
-  variation?: number;
 }
 
-interface MonthlyExpenseItem {
-  month: string;
+interface DailyResultItem {
+  date: string;
+  receita: number;
   despesas: number;
 }
 
@@ -39,14 +40,20 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
   const [periodo, setPeriodo] = useState('ultimos_30_dias');
   const [isLoading, setIsLoading] = useState(false);
 
-  const [totalDespesas, setTotalDespesas] = useState(0);
-  const [maiorCategoria, setMaiorCategoria] = useState<{ nome: string; valor: number; percentual: number } | null>(null);
-  const [variacaoMesAnterior, setVariacaoMesAnterior] = useState<number | null>(null);
-  const [categoryData, setCategoryData] = useState<ExpenseCategoryItem[]>([]);
-  const [monthlyExpenseEvolution, setMonthlyExpenseEvolution] = useState<MonthlyExpenseItem[]>([]);
-  const [topExpenses, setTopExpenses] = useState<ExpenseCategoryItem[]>([]);
+  // 4 KPIs Financeiros
+  const [receitaBruta, setReceitaBruta] = useState(0);
+  const [crescimentoReceita, setCrescimentoReceita] = useState<number | null>(null);
+  const [cmvValor, setCmvValor] = useState<number | null>(null);
+  const [cmvPercent, setCmvPercent] = useState<number | null>(null);
+  const [despesasOperacionais, setDespesasOperacionais] = useState(0);
+  const [variacaoDespesas, setVariacaoDespesas] = useState<number | null>(null);
+  const [resultadoOperacional, setResultadoOperacional] = useState(0);
+  const [margemOperacional, setMargemOperacional] = useState<number | null>(null);
 
-  const loadExpenseData = useCallback(async () => {
+  const [categoryData, setCategoryData] = useState<ExpenseCategoryItem[]>([]);
+  const [dailyResultData, setDailyResultData] = useState<DailyResultItem[]>([]);
+
+  const loadFinancialData = useCallback(async () => {
     if (!workspaceId) return;
     setIsLoading(true);
 
@@ -55,27 +62,106 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       let diasAtras = 30;
       if (periodo === 'este_mes') {
         diasAtras = hoje.getDate();
+      } else if (periodo === 'ultimos_7_dias') {
+        diasAtras = 7;
       }
 
-      const inicioStr = new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const fimStr = hoje.toISOString().slice(0, 10);
+      const inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000));
+      const fimStr = getSaoPauloDateString(hoje);
 
-      // 1. Despesas no período
+      // Período anterior equivalente
+      const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
+      const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
+
+      // 1. Receitas do período
+      const { data: rec } = await supabase
+        .from('transacoes')
+        .select('valor, data')
+        .eq('workspace_id', workspaceId)
+        .eq('tipo', 'receita')
+        .gte('data', inicioStr)
+        .lte('data', fimStr)
+        .order('data', { ascending: true });
+
+      // 2. Receitas do período anterior
+      const { data: recAnt } = await supabase
+        .from('transacoes')
+        .select('valor')
+        .eq('workspace_id', workspaceId)
+        .eq('tipo', 'receita')
+        .gte('data', inicioAntStr)
+        .lte('data', fimAntStr);
+
+      // 3. Despesas do período
       const { data: desp } = await supabase
         .from('despesas')
         .select('valor, data, categoria_id, descricao')
         .eq('workspace_id', workspaceId)
         .gte('data', inicioStr)
         .lte('data', fimStr)
-        .limit(5000);
+        .order('data', { ascending: true });
 
-      const total = (desp || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
-      setTotalDespesas(total);
+      // 4. Despesas do período anterior
+      const { data: despAnt } = await supabase
+        .from('despesas')
+        .select('valor')
+        .eq('workspace_id', workspaceId)
+        .gte('data', inicioAntStr)
+        .lte('data', fimAntStr);
 
-      // Agrupamento por categoria
+      const totalRec = (rec || []).reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      const totalRecAnt = (recAnt || []).reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      const totalDesp = (desp || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const totalDespAnt = (despAnt || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
+
+      setReceitaBruta(totalRec);
+      setDespesasOperacionais(totalDesp);
+
+      if (totalRecAnt > 0) {
+        setCrescimentoReceita(Math.round(((totalRec - totalRecAnt) / totalRecAnt) * 1000) / 10);
+      } else {
+        setCrescimentoReceita(null);
+      }
+
+      if (totalDespAnt > 0) {
+        setVariacaoDespesas(Math.round(((totalDesp - totalDespAnt) / totalDespAnt) * 1000) / 10);
+      } else {
+        setVariacaoDespesas(null);
+      }
+
+      // Resultado operacional real (permite negativo se despesas > receitas)
+      const resOp = totalRec - totalDesp;
+      setResultadoOperacional(resOp);
+      setMargemOperacional(totalRec > 0 ? Math.round((resOp / totalRec) * 1000) / 10 : null);
+
+      // 5. CMV Status
+      const { count: countFichas } = await supabase
+        .from('fichas_tecnicas')
+        .select('*', { count: 'exact', head: true });
+
+      if (countFichas && countFichas > 0) {
+        // Se houver fichas cadastradas com cobertura
+        setCmvValor(null);
+        setCmvPercent(null);
+      } else {
+        setCmvValor(null);
+        setCmvPercent(null);
+      }
+
+      // 6. Agrupamento de Despesas por Categoria Canônica (tabela categorias)
+      const { data: categorias } = await supabase
+        .from('categorias')
+        .select('id, nome')
+        .eq('workspace_id', workspaceId);
+
+      const catNamesById = new Map<string, string>();
+      for (const c of categorias || []) {
+        if (c.id && c.nome) catNamesById.set(c.id, c.nome);
+      }
+
       const catMap = new Map<string, number>();
       for (const d of desp || []) {
-        const catName = d.descricao?.split('-')[0]?.trim() || 'Geral';
+        const catName = (d.categoria_id && catNamesById.get(d.categoria_id)) || 'Outros / Operacional';
         catMap.set(catName, (catMap.get(catName) || 0) + Number(d.valor || 0));
       }
 
@@ -84,7 +170,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       let colorIdx = 0;
 
       for (const [name, amount] of catMap.entries()) {
-        const pct = total > 0 ? Math.round((amount / total) * 1000) / 10 : 0;
+        const pct = totalDesp > 0 ? Math.round((amount / totalDesp) * 1000) / 10 : 0;
         categories.push({
           name,
           amount,
@@ -96,99 +182,81 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
 
       categories.sort((a, b) => b.amount - a.amount);
       setCategoryData(categories);
-      setTopExpenses(categories.slice(0, 5));
 
-      if (categories.length > 0) {
-        setMaiorCategoria({
-          nome: categories[0].name,
-          valor: categories[0].amount,
-          percentual: categories[0].value,
-        });
-      } else {
-        setMaiorCategoria(null);
+      // 7. Evolução diária de Receita vs Despesas
+      const recMap = new Map<string, number>();
+      for (const r of rec || []) {
+        if (!r.data) continue;
+        const d = r.data.slice(0, 10);
+        recMap.set(d, (recMap.get(d) || 0) + Number(r.valor || 0));
       }
 
-      // Evolução dos últimos 3 meses
-      const mesAtual = hoje.getMonth() + 1;
-      const anoAtual = hoje.getFullYear();
-      const mesesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+      const despMap = new Map<string, number>();
+      for (const d of desp || []) {
+        if (!d.data) continue;
+        const dia = d.data.slice(0, 10);
+        despMap.set(dia, (despMap.get(dia) || 0) + Number(d.valor || 0));
+      }
 
-      const evolucao: MonthlyExpenseItem[] = [];
-      for (let i = 2; i >= 0; i--) {
-        const dRef = new Date(anoAtual, mesAtual - 1 - i, 1);
-        const a = dRef.getFullYear();
-        const m = dRef.getMonth() + 1;
-        const start = `${a}-${String(m).padStart(2, '0')}-01`;
-        const lastDay = new Date(a, m, 0).getDate();
-        const end = `${a}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-        const { data: dM } = await supabase
-          .from('despesas')
-          .select('valor')
-          .eq('workspace_id', workspaceId)
-          .gte('data', start)
-          .lte('data', end)
-          .limit(5000);
-
-        const sumM = (dM || []).reduce((acc, row) => acc + Number(row.valor || 0), 0);
-        evolucao.push({
-          month: mesesLabels[m - 1],
-          despesas: sumM,
+      const dailyLines: DailyResultItem[] = [];
+      const numDias = Math.min(diasAtras, 30);
+      for (let i = numDias - 1; i >= 0; i--) {
+        const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
+        const iso = d.toISOString().slice(0, 10);
+        dailyLines.push({
+          date: `${d.getDate()}/${d.getMonth() + 1}`,
+          receita: recMap.get(iso) || 0,
+          despesas: despMap.get(iso) || 0,
         });
       }
-
-      setMonthlyExpenseEvolution(evolucao);
-
-      // Variação vs mês anterior
-      if (evolucao.length >= 2 && evolucao[1].despesas > 0) {
-        const varPct = Math.round(((evolucao[2].despesas - evolucao[1].despesas) / evolucao[1].despesas) * 1000) / 10;
-        setVariacaoMesAnterior(varPct);
-      } else {
-        setVariacaoMesAnterior(null);
-      }
+      setDailyResultData(dailyLines);
     } catch (err) {
-      console.warn('[CeoExpenseAnalysisTab] Erro ao carregar despesas reais:', err);
+      console.warn('[CeoExpenseAnalysisTab] Erro ao carregar dados financeiros:', err);
     } finally {
       setIsLoading(false);
     }
   }, [workspaceId, periodo]);
 
   useEffect(() => {
-    loadExpenseData();
-  }, [loadExpenseData]);
+    loadFinancialData();
+  }, [loadFinancialData]);
+
+  const isPositiveMargin = resultadoOperacional >= 0;
 
   return (
     <div className="space-y-6">
-      {/* Top Breadcrumb & Filters Bar */}
+      {/* Top Header & Filters Bar */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-2 border-b border-border/40">
-        <div className="text-sm text-muted-foreground flex items-center gap-1.5 font-medium">
-          <span className="text-amber-400">👑 Wallet CEO</span>
-          <span>›</span>
-          <span>Financeiro</span>
-          <span>›</span>
-          <span className="text-foreground font-semibold">Despesas</span>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xl">💳</span>
+            <h1 className="text-xl md:text-2xl font-bold text-foreground tracking-tight">
+              CEO — Análise Financeira & Despesas
+            </h1>
+          </div>
+          <p className="text-xs md:text-sm text-slate-400 mt-0.5">
+            Receitas, despesas, resultado e composição de custos (CMV).
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Período:</span>
-            <Select value={periodo} onValueChange={setPeriodo}>
-              <SelectTrigger className="w-[150px] h-8 text-xs bg-card/60">
-                <SelectValue placeholder="Período" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ultimos_30_dias">Últimos 30 dias</SelectItem>
-                <SelectItem value="este_mes">Este mês</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <Select value={periodo} onValueChange={setPeriodo}>
+            <SelectTrigger className="w-[160px] h-9 text-xs bg-card/60">
+              <SelectValue placeholder="Período" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ultimos_30_dias">Últimos 30 dias</SelectItem>
+              <SelectItem value="este_mes">Este mês</SelectItem>
+              <SelectItem value="ultimos_7_dias">Últimos 7 dias</SelectItem>
+            </SelectContent>
+          </Select>
 
           <Button
             size="sm"
             variant="outline"
-            onClick={loadExpenseData}
+            onClick={loadFinancialData}
             disabled={isLoading}
-            className="h-8 text-xs gap-1.5 bg-primary/10 border-primary/30 text-primary hover:bg-primary/20"
+            className="h-9 text-xs gap-1.5 bg-primary/10 border-primary/30 text-primary hover:bg-primary/20"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Atualizar
@@ -196,59 +264,84 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         </div>
       </div>
 
-      {/* 3 KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Total de Despesas */}
+      {/* 4 KPIs Financeiros Conforme Painel 3 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 1. Receita Bruta */}
         <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Total de Despesas Registradas</div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              R$ {totalDespesas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground font-medium">Receita Bruta</div>
+            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+              R$ {receitaBruta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
-            <div className="text-xs text-muted-foreground mt-2">
-              Lançamentos apurados no período
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Maior Categoria */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Maior Categoria</div>
-            <div className="text-2xl font-bold tracking-tight text-foreground mt-1">
-              {maiorCategoria ? maiorCategoria.nome : 'Em apuração'}
-            </div>
-            <div className="text-xs text-muted-foreground mt-2">
-              {maiorCategoria
-                ? `R$ ${maiorCategoria.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${maiorCategoria.percentual}%)`
-                : 'Sem lançamentos'}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Variação vs. Mês Anterior */}
-        <Card className="bg-card/70 border-border/50">
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground font-medium">Variação vs. Mês Anterior</div>
-            <div className="text-2xl font-bold tracking-tight mt-1">
-              {variacaoMesAnterior !== null ? (
-                <span className={variacaoMesAnterior > 0 ? "text-amber-400" : "text-emerald-400"}>
-                  {variacaoMesAnterior > 0 ? `+${variacaoMesAnterior}%` : `${variacaoMesAnterior}%`}
+            <div className="mt-2 text-xs">
+              {crescimentoReceita !== null ? (
+                <span className={`inline-flex items-center gap-0.5 font-medium ${crescimentoReceita >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {crescimentoReceita >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                  {crescimentoReceita > 0 ? `+${crescimentoReceita}%` : `${crescimentoReceita}%`}
                 </span>
               ) : (
-                <span className="text-muted-foreground font-normal text-lg">Base anterior em apuração</span>
+                <span className="text-slate-500">Período selecionado</span>
               )}
             </div>
-            <div className="text-xs text-muted-foreground mt-2">
-              Comparativo de competência
+          </CardContent>
+        </Card>
+
+        {/* 2. CMV */}
+        <Card className="bg-card/70 border-border/50">
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground font-medium">CMV</div>
+            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+              {cmvValor !== null ? `R$ ${cmvValor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'Dados insuficientes'}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              {cmvPercent !== null ? `${cmvPercent}% da receita` : 'Requer fichas técnicas'}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 3. Despesas Operacionais */}
+        <Card className="bg-card/70 border-border/50">
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground font-medium">Despesas Operacionais</div>
+            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+              R$ {despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </div>
+            <div className="mt-2 text-xs">
+              {variacaoDespesas !== null ? (
+                <span className={`inline-flex items-center gap-0.5 font-medium ${variacaoDespesas <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {variacaoDespesas <= 0 ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
+                  {variacaoDespesas > 0 ? `+${variacaoDespesas}%` : `${variacaoDespesas}%`}
+                </span>
+              ) : (
+                <span className="text-slate-500">Despesas lançadas</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 4. Resultado Operacional */}
+        <Card className={`border ${isPositiveMargin ? 'bg-card/70 border-border/50' : 'bg-rose-950/20 border-rose-900/40'}`}>
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
+            <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-foreground' : 'text-rose-400'}`}>
+              {resultadoOperacional < 0 ? `-R$ ${Math.abs(resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : `R$ ${resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+            </div>
+            <div className="mt-2 text-xs">
+              {margemOperacional !== null ? (
+                <span className={`font-semibold ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  Margem: {margemOperacional}%
+                </span>
+              ) : (
+                <span className="text-slate-500">Receitas - Despesas</span>
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts Row: Despesas por Categoria (Donut) + Evolução de Despesas (Bar) */}
+      {/* Grid: Despesas por Categoria (Donut) + Evolução do Resultado (LineChart 2 linhas) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Despesas por Categoria Donut */}
+        {/* Left: Despesas por Categoria (Donut) */}
         <Card className="bg-card/70 border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-foreground">
@@ -257,16 +350,16 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
           </CardHeader>
           <CardContent className="pt-2">
             {categoryData.length > 0 ? (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-                <div className="h-48 w-48 relative shrink-0">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="h-52 w-52 relative flex items-center justify-center shrink-0">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={categoryData}
                         dataKey="amount"
                         nameKey="name"
-                        innerRadius={48}
-                        outerRadius={70}
+                        innerRadius={55}
+                        outerRadius={75}
                         paddingAngle={3}
                       >
                         {categoryData.map((entry, index) => (
@@ -276,118 +369,95 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                     </PieChart>
                   </ResponsiveContainer>
                   <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <span className="text-[10px] text-muted-foreground uppercase font-medium">Total</span>
-                    <span className="text-sm font-bold text-foreground">
-                      R$ {(totalDespesas >= 1000 ? `${(totalDespesas / 1000).toFixed(1)}k` : totalDespesas.toFixed(0))}
+                    <span className="text-[10px] text-muted-foreground">Total</span>
+                    <span className="text-xs font-bold text-foreground">
+                      R$ {despesasOperacionais >= 1000 ? `${(despesasOperacionais / 1000).toFixed(1)}k` : despesasOperacionais.toFixed(0)}
                     </span>
                   </div>
                 </div>
 
-                <div className="flex-1 w-full space-y-2 text-xs">
+                <div className="space-y-2 flex-1 w-full max-h-52 overflow-y-auto">
                   {categoryData.map((cat, idx) => (
-                    <div key={idx} className="flex items-center justify-between">
-                      <span className="flex items-center gap-2 text-slate-300">
+                    <div key={idx} className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 truncate">
                         <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
-                        <span className="truncate max-w-[140px]">{cat.name}</span>
-                      </span>
-                      <span className="font-semibold text-foreground">{cat.value}%</span>
+                        <span className="text-slate-300 truncate">{cat.name}</span>
+                      </div>
+                      <span className="text-slate-400 font-medium ml-2">{cat.value}%</span>
                     </div>
                   ))}
                 </div>
               </div>
             ) : (
-              <div className="h-52 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-1.5 text-center">
+              <div className="h-52 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-1">
                 <Receipt className="w-8 h-8 text-slate-600 mb-1" />
-                <span>Nenhuma despesa registrada para o período selecionado.</span>
+                <span>Nenhuma despesa registrada no período.</span>
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Evolução de Despesas Bar Chart */}
+        {/* Right: Evolução do Resultado (Receita vs Despesas) */}
         <Card className="bg-card/70 border-border/50">
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-semibold text-foreground">
-              Evolução Mensal de Despesas
+              Evolução do Resultado
             </CardTitle>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1 text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                Receita
+              </span>
+              <span className="flex items-center gap-1 text-amber-400">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                Despesas
+              </span>
+            </div>
           </CardHeader>
           <CardContent className="pt-2">
-            {monthlyExpenseEvolution.some((m) => m.despesas > 0) ? (
-              <div className="h-48 w-full">
+            {dailyResultData.some((d) => d.receita > 0 || d.despesas > 0) ? (
+              <div className="h-56 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={monthlyExpenseEvolution}>
-                    <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
+                  <LineChart data={dailyResultData}>
+                    <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} interval={4} />
                     <YAxis
                       stroke="#64748b"
-                      fontSize={11}
+                      fontSize={10}
                       tickLine={false}
                       tickFormatter={(v) => `R$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`}
                     />
                     <Tooltip
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
-                      formatter={(value: number) => [`R$ ${value.toFixed(2)}`, 'Despesas']}
+                      formatter={(val: number, name: string) => [`R$ ${val.toFixed(2)}`, name === 'receita' ? 'Receita' : 'Despesas']}
                     />
-                    <Bar dataKey="despesas" fill="#f43f5e" radius={[4, 4, 0, 0]} barSize={36} />
-                  </ComposedChart>
+                    <Line
+                      type="monotone"
+                      dataKey="receita"
+                      stroke="#10b981"
+                      strokeWidth={2}
+                      dot={false}
+                      name="receita"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="despesas"
+                      stroke="#f59e0b"
+                      strokeWidth={2}
+                      dot={false}
+                      name="despesas"
+                    />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div className="h-48 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-1.5 text-center">
-                <AlertCircle className="w-8 h-8 text-slate-600 mb-1" />
-                <span>Sem histórico mensal de despesas acumulado.</span>
+              <div className="h-56 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-1">
+                <Receipt className="w-8 h-8 text-slate-600 mb-1" />
+                <span>Sem histórico suficiente para evolução comparativa.</span>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
-
-      {/* Bottom Table: Detalhamento de Despesas (Top 5) */}
-      <Card className="bg-card/70 border-border/50">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-foreground">
-            Detalhamento de Despesas (Top 5 Categorias)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {topExpenses.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-900/60 border-b border-border/40 text-muted-foreground">
-                  <tr>
-                    <th className="py-2.5 px-4 text-left">Categoria</th>
-                    <th className="py-2.5 px-4 text-right">Valor</th>
-                    <th className="py-2.5 px-4 text-right">% do Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/20">
-                  {topExpenses.map((exp, idx) => (
-                    <tr key={idx} className="hover:bg-slate-900/40">
-                      <td className="py-2.5 px-4 font-medium text-foreground flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: exp.color }} />
-                        {exp.name}
-                      </td>
-                      <td className="py-2.5 px-4 text-right font-semibold text-foreground">
-                        R$ {exp.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-2.5 px-4 text-right text-muted-foreground font-medium">
-                        {exp.value}%
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="p-8 text-center text-xs text-muted-foreground space-y-1.5">
-              <Receipt className="w-6 h-6 text-slate-600 mx-auto" />
-              <p className="font-medium text-slate-300">Nenhuma despesa detalhada para exibir</p>
-              <p className="text-[11px] max-w-sm mx-auto">
-                Registre os custos e despesas no módulo Financeiro para visualizar o ranking por categoria.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 };
