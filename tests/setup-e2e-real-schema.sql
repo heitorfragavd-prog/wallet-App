@@ -345,4 +345,116 @@ CREATE TABLE IF NOT EXISTS public.wallet_ai_audit_events (
 ALTER TABLE public.wallet_ai_audit_events ENABLE ROW LEVEL SECURITY;
 GRANT ALL ON public.wallet_ai_audit_events TO service_role;
 
+-- Wallet AI Tables and Views for Homologation
+CREATE TABLE IF NOT EXISTS public.wallet_ai_conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  title TEXT NOT NULL DEFAULT 'Nova Conversa',
+  summary TEXT,
+  is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+ALTER TABLE public.wallet_ai_conversations ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_conversations TO authenticated, service_role;
 
+CREATE TABLE IF NOT EXISTS public.wallet_ai_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES public.wallet_ai_conversations(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+  content TEXT,
+  tool_calls JSONB,
+  tool_results JSONB,
+  sources JSONB,
+  tokens_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+ALTER TABLE public.wallet_ai_messages ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_messages TO authenticated, service_role;
+
+CREATE TABLE IF NOT EXISTS public.wallet_ai_action_proposals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  action_type TEXT NOT NULL,
+  action_version TEXT NOT NULL DEFAULT 'v1',
+  summary TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  previous_state JSONB,
+  idempotency_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('prepared', 'confirmed', 'executed', 'cancelled', 'expired')) DEFAULT 'prepared',
+  expires_at TIMESTAMPTZ NOT NULL,
+  confirmed_at TIMESTAMPTZ,
+  executed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+ALTER TABLE public.wallet_ai_action_proposals ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_action_proposals TO authenticated, service_role;
+
+CREATE TABLE IF NOT EXISTS public.wallet_ai_telemetry (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  conversation_id UUID,
+  channel TEXT NOT NULL DEFAULT 'web',
+  model TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd NUMERIC(10, 6) DEFAULT 0.000000,
+  tool_calls_count INTEGER DEFAULT 0,
+  duration_ms INTEGER DEFAULT 0,
+  complexity_level INTEGER DEFAULT 1,
+  department TEXT,
+  status TEXT NOT NULL DEFAULT 'success',
+  error_code TEXT,
+  correlation_id TEXT,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.wallet_ai_telemetry ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_telemetry TO authenticated, service_role;
+
+CREATE TABLE IF NOT EXISTS public.wallet_ai_budgets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL UNIQUE REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  monthly_budget_usd NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
+  alert_50_sent BOOLEAN NOT NULL DEFAULT false,
+  alert_80_sent BOOLEAN NOT NULL DEFAULT false,
+  alert_100_sent BOOLEAN NOT NULL DEFAULT false,
+  hard_limit_active BOOLEAN NOT NULL DEFAULT false,
+  allow_advanced_models BOOLEAN NOT NULL DEFAULT true,
+  last_alert_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.wallet_ai_budgets ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON public.wallet_ai_budgets TO authenticated, service_role;
+
+CREATE OR REPLACE VIEW public.v_wallet_ai_monthly_usage
+AS
+SELECT
+  t.workspace_id,
+  to_char(t.created_at, 'YYYY-MM') AS month_reference,
+  count(*)::integer AS total_requests,
+  sum(t.prompt_tokens)::bigint AS sum_prompt_tokens,
+  sum(t.completion_tokens)::bigint AS sum_completion_tokens,
+  sum(t.total_tokens)::bigint AS sum_total_tokens,
+  coalesce(sum(t.estimated_cost_usd), 0.000000)::numeric(10, 4) AS total_cost_usd,
+  coalesce(b.monthly_budget_usd, 10.00)::numeric(10, 2) AS monthly_budget_usd,
+  CASE
+    WHEN coalesce(b.monthly_budget_usd, 10.00) > 0
+    THEN round((coalesce(sum(t.estimated_cost_usd), 0) / coalesce(b.monthly_budget_usd, 10.00)) * 100, 1)
+    ELSE 0.0
+  END AS budget_consumed_percent,
+  coalesce(b.hard_limit_active, false) AS hard_limit_active,
+  coalesce(b.allow_advanced_models, true) AS allow_advanced_models
+FROM public.wallet_ai_telemetry t
+LEFT JOIN public.wallet_ai_budgets b ON b.workspace_id = t.workspace_id
+GROUP BY t.workspace_id, to_char(t.created_at, 'YYYY-MM'), b.monthly_budget_usd, b.hard_limit_active, b.allow_advanced_models;
+
+GRANT SELECT ON public.v_wallet_ai_monthly_usage TO authenticated, service_role;

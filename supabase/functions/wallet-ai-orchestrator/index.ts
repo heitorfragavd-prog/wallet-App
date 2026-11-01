@@ -143,20 +143,36 @@ const telemetryLogger = {
       // Distinção 4: Erro ao consultar a configuração do orçamento
       // Política conservadora: não assumir hard limit inativo em caso de falha de leitura (fail-closed)
       if (budgetError) {
-        console.warn("[wallet-ai-orchestrator] Erro ao consultar orçamento de IA:", budgetError);
-        return evaluateAiBudgetGuardrail({
-          hardLimitActive: false,
-          monthlyBudgetUsd: 10,
-          totalCostUsd: null,
-          configReadError: true,
-        });
+        const isTableMissing =
+          budgetError.code === "42P01" ||
+          budgetError.code === "PGRST205" ||
+          (typeof budgetError.message === "string" &&
+            (budgetError.message.includes("does not exist") ||
+              budgetError.message.includes("Could not find the 'wallet_ai_budgets' table")));
+
+        if (isTableMissing) {
+          console.warn(
+            "[wallet-ai-orchestrator] Tabela wallet_ai_budgets ausente no schema atual, operando com padrão de novo workspace:",
+            budgetError.message,
+          );
+          hardLimitActive = false;
+          monthlyBudgetUsd = 10;
+        } else {
+          console.warn("[wallet-ai-orchestrator] Erro ao consultar orçamento de IA:", budgetError);
+          return evaluateAiBudgetGuardrail({
+            hardLimitActive: false,
+            monthlyBudgetUsd: 10,
+            totalCostUsd: null,
+            configReadError: true,
+          });
+        }
       }
 
       // Distinção 1 e 2: Configuração lida com sucesso (ativado ou desativado)
       if (budgetConfig) {
         hardLimitActive = Boolean(budgetConfig.hard_limit_active);
         monthlyBudgetUsd = Number(budgetConfig.monthly_budget_usd || 10);
-      } else {
+      } else if (!budgetError) {
         // Distinção 3: Nenhuma configuração cadastrada (workspace novo/padrão)
         hardLimitActive = false;
         monthlyBudgetUsd = 10;
@@ -171,6 +187,26 @@ const telemetryLogger = {
         .maybeSingle();
 
       if (usageError) {
+        const isViewMissing =
+          usageError.code === "42P01" ||
+          usageError.code === "PGRST205" ||
+          (typeof usageError.message === "string" &&
+            (usageError.message.includes("does not exist") ||
+              usageError.message.includes("Could not find the 'v_wallet_ai_monthly_usage'")));
+
+        if (isViewMissing) {
+          console.warn(
+            "[wallet-ai-orchestrator] View v_wallet_ai_monthly_usage ausente no schema atual, consumo considerado zero:",
+            usageError.message,
+          );
+          return evaluateAiBudgetGuardrail({
+            hardLimitActive,
+            monthlyBudgetUsd,
+            totalCostUsd: 0,
+            readError: false,
+          });
+        }
+
         console.warn("[wallet-ai-orchestrator] Erro ao consultar telemetria de IA:", usageError);
         return evaluateAiBudgetGuardrail({
           hardLimitActive,
