@@ -1,9 +1,11 @@
 import {
   AiAuthorizationError,
   authorizeAiRequest,
+  canRoleAccessFinancialData,
   type AiExecutionContext,
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
+import { FINANCIAL_TOOLS, type QueryToolCatalog } from "../_shared/ai/query-tools.ts";
 import {
   DEFAULT_SUMMARY_MODEL,
   validateAndResolveModel,
@@ -395,23 +397,57 @@ export async function handleOrchestratorHttpRequest(
         );
       }
 
-      const cancelled = await dependencies.proposalRepo.cancelProposalAtomically(proposalId, context);
-      if (!cancelled) {
+      const userRole = context.role || (dependencies.authDeps.getUserRole
+        ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+        : "member");
+
+      const cancelResult = await dependencies.proposalRepo.cancelProposalAtomically(
+        proposalId,
+        context,
+        userRole,
+      );
+
+      if (!cancelResult.success) {
+        const httpStatus =
+          cancelResult.code === "WALLET_AI_ACTION_ALREADY_PROCESSED"
+            ? 409
+            : cancelResult.code === "WALLET_AI_ACTION_INVALID"
+            ? 404
+            : 403;
         return new Response(
           JSON.stringify({
             success: false,
-            error: "Proposta não encontrada ou não está mais pendente de confirmação.",
-            code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+            error: cancelResult.error || "Falha ao descartar proposta de ação.",
+            code: cancelResult.code || "WALLET_AI_ACTION_FORBIDDEN",
             correlation_id: correlationId,
           }),
-          { status: 409, headers: responseHeaders },
+          { status: httpStatus, headers: responseHeaders },
         );
+      }
+
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "cancel_proposal",
+          durationMs: Date.now() - startTime,
+          status: "success",
+          recordsCount: 1,
+          metadata: {
+            proposal_id: proposalId,
+            action_type: cancelResult.proposal?.actionType,
+            risk_level: cancelResult.proposal?.riskLevel,
+            cancelled_by: context.userId,
+            user_role: userRole,
+          },
+        });
       }
 
       return new Response(
         JSON.stringify({
           success: true,
           status: "cancelled",
+          proposal: cancelResult.proposal,
           correlation_id: correlationId,
         }),
         { status: 200, headers: responseHeaders },
@@ -536,9 +572,45 @@ export async function handleOrchestratorHttpRequest(
       correlationId,
     );
 
+    const userRole = context.role || (dependencies.authDeps.getUserRole
+      ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+      : "member");
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
+      const financialTerms = [
+        "faturamento", "lucro", "despesa", "saldo", "dre", "margem",
+        "custo", "investimento", "receita", "cmv", "venda"
+      ];
+      const hasFinancialTerms = financialTerms.some((term) => promptText.includes(term));
+      if (hasFinancialTerms) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_financial_access",
+            code: "WALLET_AI_FORBIDDEN",
+            message: `O papel '${userRole}' não possui autorização para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+    }
+
     const repository = dependencies.repoFactory(context);
     const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
-    const catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
+    let catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const safeCatalog: QueryToolCatalog = {};
+      for (const [toolName, handler] of Object.entries(catalog)) {
+        if (!FINANCIAL_TOOLS.has(toolName)) {
+          safeCatalog[toolName] = handler;
+        }
+      }
+      catalog = safeCatalog;
+    }
+
     const runner = dependencies.runnerFactory(selectedModel);
 
     // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico

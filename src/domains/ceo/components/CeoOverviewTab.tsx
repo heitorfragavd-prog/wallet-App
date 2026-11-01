@@ -255,65 +255,32 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   };
 
   /**
-   * Confirmação canônica de proposta de ação por ID canônico (Gate 1).
-   * Utiliza gateway canônico no backend com fallback local estrito.
-   * Valida status 'prepared' -> 'confirmed' e preserva esquema de colunas reais.
+   * Confirmação canônica de proposta de ação por ID canônico (Gate 1 e Gate A).
+   * Utiliza exclusivamente o gateway canônico no backend (Edge Function).
+   * Sem fallback de atualização direta no frontend para garantir conformidade e RBAC.
    */
   const handleConfirmProposal = async (proposalId: string) => {
     if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
     setProcessingProposalId(proposalId);
 
     try {
-      let confirmed = false;
-      try {
-        const client = new WalletAiOrchestratorClient({
-          baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
-          getAccessToken: async () => {
-            const { data } = await supabase.auth.getSession();
-            return data.session?.access_token ?? null;
-          },
-        });
-        const res = await client.confirmProposal({ workspaceId, proposalId });
-        if (res.success) {
-          confirmed = true;
-        }
-      } catch (backendErr: unknown) {
-        // Se for erro de validação ou permissão (400-499), propaga erro sem fallback
-        const errorStatus = (backendErr as { status?: number })?.status;
-        if (errorStatus && errorStatus >= 400 && errorStatus < 500) {
-          throw backendErr;
-        }
-        // Fallback local caso o orchestrator esteja offline: atualiza estritamente as colunas canônicas
-        const { data, error } = await supabase
-          .from('wallet_ai_action_proposals')
-          .update({
-            status: 'confirmed',
-            confirmed_at: new Date().toISOString(),
-          })
-          .eq('id', proposalId)
-          .eq('workspace_id', workspaceId)
-          .eq('status', 'prepared')
-          .select('id, status')
-          .maybeSingle();
+      const client = new WalletAiOrchestratorClient({
+        baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
+        getAccessToken: async () => {
+          const { data } = await supabase.auth.getSession();
+          return data.session?.access_token ?? null;
+        },
+      });
 
-        if (error) throw error;
-        if (!data) {
-          toast({
-            title: 'Ação Não Disponível',
-            description: 'A proposta já foi processada, cancelada ou não está mais pendente de aprovação.',
-            variant: 'destructive',
-          });
-          return;
-        }
-        confirmed = true;
-      }
-
-      if (confirmed) {
+      const res = await client.confirmProposal({ workspaceId, proposalId });
+      if (res.success) {
         setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'confirmed' }));
         toast({
           title: 'Ação Autorizada com Sucesso',
-          description: 'A proposta foi confirmada de forma canônica e registrada no sistema (status: confirmado).',
+          description: 'A proposta foi confirmada de forma canônica no backend (status: confirmado).',
         });
+      } else {
+        throw new Error(res.error || 'Falha ao autorizar a proposta no backend.');
       }
     } catch (err: unknown) {
       console.error('[CeoOverviewTab] Falha ao processar autorização:', err);
@@ -329,67 +296,38 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   };
 
   /**
-   * Descarte canônico de proposta de ação por ID (Gate 1).
-   * Transiciona de 'prepared' para 'cancelled' utilizando colunas canônicas reais.
+   * Descarte canônico de proposta de ação por ID (Gate 1 e Gate A).
+   * Utiliza exclusivamente o gateway canônico no backend com RBAC.
+   * Sem fallback de atualização direta no frontend.
    */
   const handleCancelProposal = async (proposalId: string) => {
     if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
     setProcessingProposalId(proposalId);
 
     try {
-      let cancelled = false;
-      try {
-        const client = new WalletAiOrchestratorClient({
-          baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
-          getAccessToken: async () => {
-            const { data } = await supabase.auth.getSession();
-            return data.session?.access_token ?? null;
-          },
-        });
-        const res = await client.cancelProposal({ workspaceId, proposalId });
-        if (res.success) {
-          cancelled = true;
-        }
-      } catch (backendErr: unknown) {
-        const errorStatus = (backendErr as { status?: number })?.status;
-        if (errorStatus && errorStatus >= 400 && errorStatus < 500) {
-          throw backendErr;
-        }
-        const { data, error } = await supabase
-          .from('wallet_ai_action_proposals')
-          .update({
-            status: 'cancelled',
-          })
-          .eq('id', proposalId)
-          .eq('workspace_id', workspaceId)
-          .eq('status', 'prepared')
-          .select('id, status')
-          .maybeSingle();
+      const client = new WalletAiOrchestratorClient({
+        baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
+        getAccessToken: async () => {
+          const { data } = await supabase.auth.getSession();
+          return data.session?.access_token ?? null;
+        },
+      });
 
-        if (error) throw error;
-        if (!data) {
-          toast({
-            title: 'Ação Não Disponível',
-            description: 'A proposta já foi cancelada ou não foi encontrada no workspace.',
-            variant: 'destructive',
-          });
-          return;
-        }
-        cancelled = true;
-      }
-
-      if (cancelled) {
+      const res = await client.cancelProposal({ workspaceId, proposalId });
+      if (res.success) {
         setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'cancelled' }));
         toast({
           title: 'Proposta Descartada',
           description: 'A proposta foi recusada e arquivada sem alterar dados financeiros.',
         });
+      } else {
+        throw new Error(res.error || 'Falha ao descartar a proposta no backend.');
       }
     } catch (err: unknown) {
       console.error('[CeoOverviewTab] Falha ao descartar proposta:', err);
-      const msg = err instanceof Error ? err.message : 'Não foi possível arquivar a proposta no momento.';
+      const msg = err instanceof Error ? err.message : 'Não foi possível descartar a proposta no momento. Verifique suas permissões.';
       toast({
-        title: 'Falha ao Descartar',
+        title: 'Falha no Descarte',
         description: msg,
         variant: 'destructive',
       });

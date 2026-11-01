@@ -286,6 +286,19 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
   });
 
   describe("7. AI Budget Fail-Safe Guardrail (GATE 5)", () => {
+    it("deve acionar FAIL-CLOSED conservador quando ocorrer erro de leitura da CONFIGURAÇÃO do orçamento (GATE D)", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: false, // Mesmo que o valor inicial seja false antes de ler o banco
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: null,
+        configReadError: true,
+      });
+
+      expect(result.hardLimitExceeded).toBe(true);
+      expect(result.isReadError).toBe(true);
+      expect(result.failClosedReason).toBe("budget_config_read_error_fail_closed");
+    });
+
     it("deve acionar FAIL-CLOSED quando ocorrer erro de leitura com hard limit ativo", () => {
       const result = evaluateAiBudgetGuardrail({
         hardLimitActive: true,

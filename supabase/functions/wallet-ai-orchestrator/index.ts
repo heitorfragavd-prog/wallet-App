@@ -140,19 +140,26 @@ const telemetryLogger = {
         .eq("workspace_id", workspaceId)
         .maybeSingle();
 
-      if (budgetConfig) {
-        hardLimitActive = Boolean(budgetConfig.hard_limit_active);
-        monthlyBudgetUsd = Number(budgetConfig.monthly_budget_usd || 10);
-      }
-
+      // Distinção 4: Erro ao consultar a configuração do orçamento
+      // Política conservadora: não assumir hard limit inativo em caso de falha de leitura (fail-closed)
       if (budgetError) {
         console.warn("[wallet-ai-orchestrator] Erro ao consultar orçamento de IA:", budgetError);
         return evaluateAiBudgetGuardrail({
-          hardLimitActive,
-          monthlyBudgetUsd,
+          hardLimitActive: false,
+          monthlyBudgetUsd: 10,
           totalCostUsd: null,
-          readError: true,
+          configReadError: true,
         });
+      }
+
+      // Distinção 1 e 2: Configuração lida com sucesso (ativado ou desativado)
+      if (budgetConfig) {
+        hardLimitActive = Boolean(budgetConfig.hard_limit_active);
+        monthlyBudgetUsd = Number(budgetConfig.monthly_budget_usd || 10);
+      } else {
+        // Distinção 3: Nenhuma configuração cadastrada (workspace novo/padrão)
+        hardLimitActive = false;
+        monthlyBudgetUsd = 10;
       }
 
       const currentMonth = new Date().toISOString().slice(0, 7);
@@ -182,10 +189,10 @@ const telemetryLogger = {
     } catch (err) {
       console.warn("[wallet-ai-orchestrator] Exceção ao verificar orçamento:", err);
       return evaluateAiBudgetGuardrail({
-        hardLimitActive,
-        monthlyBudgetUsd,
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10,
         totalCostUsd: null,
-        readError: true,
+        configReadError: true,
       });
     }
   },

@@ -119,6 +119,7 @@ export interface BudgetEvaluationInput {
   monthlyBudgetUsd: number;
   totalCostUsd: number | null;
   readError?: boolean;
+  configReadError?: boolean;
 }
 
 export interface BudgetEvaluationResult {
@@ -131,13 +132,24 @@ export interface BudgetEvaluationResult {
 /**
  * Avaliação determinística e fail-safe de limite e orçamento de IA.
  * Regras:
- * 1. Se houver erro de leitura e hard limit estiver ativo -> FAIL-CLOSED (hardLimitExceeded: true).
- * 2. Se houver erro de leitura e hard limit inativo -> FAIL-OPEN (não bloqueia o workspace).
- * 3. Ausência de telemetria no mês (null) -> consumo zero, não bloqueia.
- * 4. Hard limit ativo e custo >= orçamento -> hardLimitExceeded: true.
- * 5. Sem hard limit ativo -> hardLimitExceeded: false com disparos de alertas informativos.
+ * 1. Se houver erro de leitura na CONFIGURAÇÃO do orçamento -> FAIL-CLOSED (hardLimitExceeded: true),
+ *    pois não se pode assumir que o limite rígido está desativado quando o estado é desconhecido.
+ * 2. Se a configuração foi lida e houver erro de leitura no CONSUMO e hard limit ativo -> FAIL-CLOSED.
+ * 3. Se a configuração foi lida e houver erro de leitura no CONSUMO e hard limit inativo -> FAIL-OPEN.
+ * 4. Nenhuma configuração cadastrada (workspace novo) -> hard limit inativo por padrão.
+ * 5. Ausência de telemetria no mês (null) -> consumo zero, não bloqueia.
+ * 6. Hard limit ativo e custo >= orçamento -> hardLimitExceeded: true.
+ * 7. Sem hard limit ativo -> hardLimitExceeded: false com disparos de alertas informativos.
  */
 export function evaluateAiBudgetGuardrail(input: BudgetEvaluationInput): BudgetEvaluationResult {
+  if (input.configReadError) {
+    return {
+      hardLimitExceeded: true,
+      isReadError: true,
+      failClosedReason: 'budget_config_read_error_fail_closed',
+    };
+  }
+
   if (input.readError) {
     if (input.hardLimitActive) {
       return {

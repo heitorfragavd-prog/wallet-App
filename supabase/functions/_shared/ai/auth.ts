@@ -19,6 +19,29 @@ export interface AiExecutionContext {
   readonly accessToken: string;
   readonly conversationId?: string;
   readonly correlationId?: string;
+  readonly role?: string;
+}
+
+/**
+ * Validação de autorização RBAC para dados e ferramentas financeiras.
+ * Papéis estritamente operacionais (delivery_staff, operacional, cozinha, etc.)
+ * NÃO possuem autorização para consultar dados financeiros (faturamento, despesas,
+ * saldos, lucros, margens, CMV, DRE e receitas).
+ */
+export function canRoleAccessFinancialData(role?: string): boolean {
+  if (!role) return true;
+  const normalized = role.toLowerCase().trim();
+  if (
+    normalized === "delivery_staff" ||
+    normalized === "operacional" ||
+    normalized === "cozinha" ||
+    normalized === "atendimento" ||
+    normalized === "motoboy" ||
+    normalized === "entregador"
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export type AiAuthorizationErrorCode =
@@ -105,11 +128,20 @@ export async function authorizeAiRequest(
     }
   }
 
-  return Object.freeze({
+  const result: Record<string, unknown> = {
     userId: user.id,
     workspaceId: workspace.id,
     accessToken,
-    conversationId,
-    correlationId,
-  });
+  };
+  if (conversationId) {
+    result.conversationId = conversationId;
+  }
+  if (correlationId) {
+    result.correlationId = correlationId;
+  }
+  if (dependencies.getUserRole) {
+    result.role = await dependencies.getUserRole(workspace.id, user.id);
+  }
+
+  return Object.freeze(result as unknown as AiExecutionContext);
 }

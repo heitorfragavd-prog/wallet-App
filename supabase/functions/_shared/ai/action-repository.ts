@@ -57,7 +57,11 @@ export interface IActionProposalRepository {
     userRole?: string,
   ): Promise<{ success: boolean; proposal?: ActionProposal; code?: ActionErrorCode; error?: string }>;
   executeProposalAtomically(id: string): Promise<boolean>;
-  cancelProposalAtomically(id: string, context: AiExecutionContext): Promise<boolean>;
+  cancelProposalAtomically(
+    id: string,
+    context: AiExecutionContext,
+    userRole?: string,
+  ): Promise<{ success: boolean; proposal?: ActionProposal; code?: ActionErrorCode; error?: string }>;
 }
 
 export class SupabaseActionProposalRepository implements IActionProposalRepository {
@@ -140,6 +144,14 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
         success: false,
         code: "WALLET_AI_ACTION_FORBIDDEN",
         error: "Papel de somente leitura (viewer) não possui permissão para confirmar ações financeiras.",
+      };
+    }
+
+    if (userRole === "delivery_staff" || userRole === "operacional" || userRole === "cozinha") {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Funcionário operacional sem permissão financeira não pode autorizar propostas de ação.",
       };
     }
 
@@ -246,7 +258,76 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
     return !error && !!data;
   }
 
-  async cancelProposalAtomically(id: string, context: AiExecutionContext): Promise<boolean> {
+  async cancelProposalAtomically(
+    id: string,
+    context: AiExecutionContext,
+    userRole?: string,
+  ): Promise<{ success: boolean; proposal?: ActionProposal; code?: ActionErrorCode; error?: string }> {
+    // 1. RBAC check
+    if (userRole === "viewer" || userRole === "leitor") {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Papel de somente leitura (viewer) não possui permissão para descartar propostas.",
+      };
+    }
+
+    if (userRole === "delivery_staff" || userRole === "operacional" || userRole === "cozinha") {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Funcionário operacional sem permissão financeira não pode cancelar propostas financeiras.",
+      };
+    }
+
+    const currentProposal = await this.getProposal(id);
+    if (!currentProposal) {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_INVALID",
+        error: `Proposta não encontrada: ${id}`,
+      };
+    }
+
+    // 2. Cross-tenant check: strict workspace isolation
+    if (currentProposal.workspaceId !== context.workspaceId) {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Ação não autorizada para o workspace autenticado.",
+      };
+    }
+
+    // 3. Proposta já executada não pode ser cancelada
+    if (currentProposal.status === "executed") {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+        error: "Proposta já executada não pode ser cancelada.",
+      };
+    }
+
+    if (currentProposal.status === "cancelled") {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+        error: "A proposta já foi descartada anteriormente.",
+      };
+    }
+
+    // 4. RBAC Cancellation policy:
+    // - owner & admin: podem descartar qualquer proposta do workspace
+    // - member: somente suas próprias propostas
+    const isElevated = userRole === "owner" || userRole === "admin";
+    if (!isElevated && currentProposal.userId !== context.userId) {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_FORBIDDEN",
+        error: "Membros sem privilégios de administrador só podem cancelar suas próprias propostas de ação.",
+      };
+    }
+
+    // 5. Transição atômica condicionada contra concorrência
     const { data, error } = await this.client
       .from("wallet_ai_action_proposals")
       .update({
@@ -258,6 +339,17 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
       .select()
       .maybeSingle();
 
-    return !error && !!data;
+    if (error || !data) {
+      return {
+        success: false,
+        code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+        error: "A proposta já foi processada ou descartada concorrentemente por outra requisição.",
+      };
+    }
+
+    return {
+      success: true,
+      proposal: mapRowToProposal(data as ProposalRow),
+    };
   }
 }

@@ -1803,11 +1803,13 @@ export async function handleTelegramCallback(
     }
 
     try {
-      const cancelled = typeof deps.proposalRepo.cancelProposalAtomically === "function"
+      const cancelResult = typeof deps.proposalRepo.cancelProposalAtomically === "function"
         ? await deps.proposalRepo.cancelProposalAtomically(proposalId, context)
         : (await deps.proposalRepo.updateStatus(proposalId, "cancelled"), true);
 
-      if (!cancelled) {
+      const isCancelled = typeof cancelResult === "boolean" ? cancelResult : Boolean(cancelResult?.success);
+
+      if (!isCancelled) {
         return {
           answerText: "Esta proposta já foi cancelada ou processada concorrentemente.",
           removeKeyboard: true,
