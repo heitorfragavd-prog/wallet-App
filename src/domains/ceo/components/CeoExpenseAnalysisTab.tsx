@@ -1,4 +1,4 @@
-import { getSaoPauloDateString } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { getSaoPauloDateString, CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select';
@@ -73,46 +73,67 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
       const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
 
-      // 1. Receitas do período
-      const { data: rec } = await supabase
-        .from('transacoes')
-        .select('valor, data')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioStr)
-        .lte('data', fimStr)
-        .order('data', { ascending: true });
+      // 1. Receitas do período com paginação integral
+      const rec = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioStr)
+            .lte('data', `${fimStr}T23:59:59.999Z`)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
 
       // 2. Receitas do período anterior
-      const { data: recAnt } = await supabase
-        .from('transacoes')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioAntStr)
-        .lte('data', fimAntStr);
+      const recAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioAntStr)
+            .lte('data', `${fimAntStr}T23:59:59.999Z`)
+            .range(from, to)
+      );
 
-      // 3. Despesas do período
-      const { data: desp } = await supabase
-        .from('despesas')
-        .select('valor, data, categoria_id, descricao')
-        .eq('workspace_id', workspaceId)
-        .gte('data', inicioStr)
-        .lte('data', fimStr)
-        .order('data', { ascending: true });
+      // 3. Despesas do período com paginação integral
+      const desp = await CeoFinancialMetricsService.fetchAllPaginated<{
+        valor: number;
+        data: string;
+        categoria_id?: string | null;
+        descricao?: string | null;
+      }>(
+        (from, to) =>
+          supabase
+            .from('despesas')
+            .select('valor, data, categoria_id, descricao')
+            .eq('workspace_id', workspaceId)
+            .gte('data', inicioStr)
+            .lte('data', `${fimStr}T23:59:59.999Z`)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
 
       // 4. Despesas do período anterior
-      const { data: despAnt } = await supabase
-        .from('despesas')
-        .select('valor')
-        .eq('workspace_id', workspaceId)
-        .gte('data', inicioAntStr)
-        .lte('data', fimAntStr);
+      const despAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('despesas')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .gte('data', inicioAntStr)
+            .lte('data', `${fimAntStr}T23:59:59.999Z`)
+            .range(from, to)
+      );
 
-      const totalRec = (rec || []).reduce((acc, r) => acc + Number(r.valor || 0), 0);
-      const totalRecAnt = (recAnt || []).reduce((acc, r) => acc + Number(r.valor || 0), 0);
-      const totalDesp = (desp || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
-      const totalDespAnt = (despAnt || []).reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      const totalRecAnt = recAnt.reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      const totalDesp = desp.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const totalDespAnt = despAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
       setReceitaBruta(totalRec);
       setDespesasOperacionais(totalDesp);

@@ -10,6 +10,7 @@ export interface AuthorizationDependencies {
   getUser(accessToken: string): Promise<AuthenticatedUser | null>;
   findOwnedWorkspace(workspaceId: string, userId: string): Promise<OwnedWorkspace | null>;
   verifyConversationOwnership?(conversationId: string, workspaceId: string, userId: string): Promise<boolean>;
+  getUserRole?(workspaceId: string, userId: string): Promise<string>;
 }
 
 export interface AiExecutionContext {

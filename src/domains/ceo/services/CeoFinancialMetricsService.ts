@@ -7,6 +7,36 @@ export function getSaoPauloDateString(d: Date = new Date()): string {
     day: '2-digit',
   }).format(d);
 }
+
+export function getSaoPauloParts(d: Date = new Date()): {
+  year: number;
+  month: number;
+  day: number;
+  dayOfWeek: number;
+  dateString: string;
+} {
+  const dateString = getSaoPauloDateString(d); // "YYYY-MM-DD"
+  const [yearStr, monthStr, dayStr] = dateString.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  const noonUtc = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const dayOfWeek = noonUtc.getUTCDay();
+  return { year, month, day, dayOfWeek, dateString };
+}
+
+export function getSaoPauloYesterday(referenceDate: Date = new Date()): {
+  year: number;
+  month: number;
+  day: number;
+  dayOfWeek: number;
+  dateString: string;
+} {
+  const todayParts = getSaoPauloParts(referenceDate);
+  const todayNoon = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day, 12, 0, 0));
+  const yesterdayNoon = new Date(todayNoon.getTime() - 24 * 60 * 60 * 1000);
+  return getSaoPauloParts(yesterdayNoon);
+}
 import { supabase } from '@/integrations/supabase/client';
 
 export interface CeoExecutiveKpis {
@@ -39,6 +69,8 @@ export interface CeoExecutiveKpis {
   }[];
   dataAtualizacao: string;
   dailySales30Days: { date: string; valor: number }[];
+  dadosIndisponiveis?: boolean;
+  erroMensagem?: string;
 }
 
 export interface VendaCanalDistribuicao {
@@ -99,36 +131,38 @@ export class CeoFinancialMetricsService {
    * Obtém KPIs executivos consolidados com dados 100% reais da Rodo Point.
    * Paginação integral (>5.000 registros), períodos equivalentes e resultado operacional real.
    */
-  static async getExecutiveKpis(workspaceId: string): Promise<CeoExecutiveKpis> {
+  static async getExecutiveKpis(
+    workspaceId: string,
+    referenceDate: Date = new Date()
+  ): Promise<CeoExecutiveKpis> {
     if (!workspaceId) {
       return this.getEmptyKpis();
     }
 
     try {
-      const hoje = new Date();
-      const anoAtual = hoje.getFullYear();
-      const mesAtual = hoje.getMonth() + 1; // 1-12
-      const diaAtual = hoje.getDate();
+      const todayParts = getSaoPauloParts(referenceDate);
+      const yesterdayParts = getSaoPauloYesterday(referenceDate);
+
+      const anoAtual = todayParts.year;
+      const mesAtual = todayParts.month;
+      const diaAtual = todayParts.day;
 
       const mesPad = String(mesAtual).padStart(2, '0');
       const inicioMesAtual = `${anoAtual}-${mesPad}-01`;
-      const fimMesAtual = hoje.toISOString().slice(0, 10);
+      const fimMesAtual = todayParts.dateString;
 
       // Período equivalente no mês anterior (1 até diaAtual do mês anterior)
-      const dataMesAnterior = new Date(anoAtual, mesAtual - 2, 1);
-      const anoAnt = dataMesAnterior.getFullYear();
-      const mesAntPad = String(dataMesAnterior.getMonth() + 1).padStart(2, '0');
-      const ultimoDiaMesAnt = new Date(anoAnt, dataMesAnterior.getMonth() + 1, 0).getDate();
-      const diaLimiteEquivalente = Math.min(diaAtual, ultimoDiaMesAnt);
-      const inicioMesAnt = `${anoAnt}-${mesAntPad}-01`;
-      const fimMesAntEquivalente = `${anoAnt}-${mesAntPad}-${String(diaLimiteEquivalente).padStart(2, '0')}`;
+      const priorMonthNoon = new Date(Date.UTC(anoAtual, mesAtual - 2, 1, 12, 0, 0));
+      const priorParts = getSaoPauloParts(priorMonthNoon);
+      const daysInPriorMonth = new Date(Date.UTC(priorParts.year, priorParts.month, 0)).getUTCDate();
+      const diaLimiteEquivalente = Math.min(diaAtual, daysInPriorMonth);
+      const inicioMesAnt = `${priorParts.year}-${String(priorParts.month).padStart(2, '0')}-01`;
+      const fimMesAntEquivalente = `${priorParts.year}-${String(priorParts.month).padStart(2, '0')}-${String(diaLimiteEquivalente).padStart(2, '0')}`;
 
-      // Ontem
-      const ontem = new Date(hoje);
-      ontem.setDate(hoje.getDate() - 1);
-      const ontemStr = ontem.toISOString().slice(0, 10);
+      // Ontem em fuso horário America/Sao_Paulo (independente de mês/ano)
+      const ontemStr = yesterdayParts.dateString;
       const diasSemanaNomes = ['domingos', 'segundas-feiras', 'terças-feiras', 'quartas-feiras', 'quintas-feiras', 'sextas-feiras', 'sábados'];
-      const diaSemanaOntemNome = diasSemanaNomes[ontem.getDay()];
+      const diaSemanaOntemNome = diasSemanaNomes[yesterdayParts.dayOfWeek];
 
       // 1. Faturamento e Transações do Mês Atual (paginação segura completa)
       const txMes = await this.fetchAllPaginated<{ valor: number; data: string; created_at?: string }>(
@@ -139,7 +173,7 @@ export class CeoFinancialMetricsService {
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioMesAtual)
-            .lte('data', fimMesAtual)
+            .lte('data', `${fimMesAtual}T23:59:59.999Z`)
             .order('data', { ascending: true })
             .range(from, to)
       );
@@ -157,7 +191,7 @@ export class CeoFinancialMetricsService {
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioMesAnt)
-            .lte('data', fimMesAntEquivalente)
+            .lte('data', `${fimMesAntEquivalente}T23:59:59.999Z`)
             .range(from, to)
       );
 
@@ -181,19 +215,51 @@ export class CeoFinancialMetricsService {
           ? Math.round(((ticketMedioMes - ticketMedioMesAnt) / ticketMedioMesAnt) * 1000) / 10
           : null;
 
-      // 3. Faturamento de Ontem real
-      const vendasOntem = txMes.filter((t) => (t.data ? t.data.startsWith(ontemStr) : false));
-      const faturamentoOntem = vendasOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      // 3. Faturamento de Ontem real (Consulta dedicada independente do mês — resolve virada de mês/ano)
+      const txOntem = await this.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', ontemStr)
+            .lte('data', `${ontemStr}T23:59:59.999Z`)
+            .range(from, to)
+      );
+      const faturamentoOntem = txOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
-      // Média real do mesmo dia da semana
-      const diaSemanaIndex = ontem.getDay();
-      const vendasMesmoDiaSemana = txMes.filter((t) => {
+      // Média real do mesmo dia da semana nas últimas 4 semanas (28 dias antes de ontem)
+      const date28DaysAgo = new Date(
+        Date.UTC(yesterdayParts.year, yesterdayParts.month - 1, yesterdayParts.day, 12, 0, 0).getTime() -
+          28 * 24 * 60 * 60 * 1000
+      );
+      const inicioHistoricoStr = getSaoPauloDateString(date28DaysAgo);
+
+      const txHistoricoSemana = await this.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioHistoricoStr)
+            .lte('data', `${ontemStr}T23:59:59.999Z`)
+            .range(from, to)
+      );
+
+      const diaSemanaIndex = yesterdayParts.dayOfWeek;
+      const vendasMesmoDiaSemana = txHistoricoSemana.filter((t) => {
         if (!t.data) return false;
-        const d = new Date(t.data);
-        return d.getDay() === diaSemanaIndex && !t.data.startsWith(ontemStr);
+        const dStr = t.data.slice(0, 10);
+        if (dStr === ontemStr) return false;
+        const [y, m, d] = dStr.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+        return dt.getUTCDay() === diaSemanaIndex;
       });
+
       const somaMesmoDia = vendasMesmoDiaSemana.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const diasDistintos = new Set(vendasMesmoDiaSemana.map((t) => t.data)).size;
+      const diasDistintos = new Set(vendasMesmoDiaSemana.map((t) => t.data.slice(0, 10))).size;
       const mediaDiaSemana = diasDistintos > 0 ? Math.round((somaMesmoDia / diasDistintos) * 100) / 100 : null;
 
       const variacaoOntemVsMedia =
@@ -354,9 +420,15 @@ export class CeoFinancialMetricsService {
         dataAtualizacao: 'atualizado agora',
         dailySales30Days,
       };
-    } catch (err) {
+    } catch (err: unknown) {
       console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos reais:', err);
-      return this.getEmptyKpis();
+      const empty = this.getEmptyKpis();
+      return {
+        ...empty,
+        dadosIndisponiveis: true,
+        erroMensagem: err instanceof Error ? err.message : 'Falha na consulta ao banco de dados',
+        dataAtualizacao: 'dados indisponíveis no momento',
+      };
     }
   }
 

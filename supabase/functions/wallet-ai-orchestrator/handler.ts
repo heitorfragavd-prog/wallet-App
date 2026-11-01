@@ -40,6 +40,7 @@ import {
   type ProcessDocumentPipelineResult,
 } from "../_shared/ai/document-pipeline.ts";
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
+import type { IActionProposalRepository } from "../_shared/ai/action-repository.ts";
 import type { EyemobileLiveClient } from "../wallet-ai-query/supabase-adapter.ts";
 
 export interface AuditEventLogger {
@@ -61,6 +62,7 @@ export interface OrchestratorHandlerDependencies {
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
   conversationRepo?: ConversationRepository;
+  proposalRepo?: IActionProposalRepository;
   summarizerRunner?: SummarizerRunner;
   documentPipelineRunner?: (
     input: ProcessDocumentPipelineInput,
@@ -262,6 +264,157 @@ export async function handleOrchestratorHttpRequest(
           correlation_id: correlationId,
         }),
         { status: 400, headers: responseHeaders },
+      );
+    }
+
+    // ─── GATEWAY CANÔNICO DE PROPOSTAS DE AÇÃO (Gate 1) ───
+    if (body.action === "confirm_proposal" || body.action === "confirm_action") {
+      const proposalId = typeof body.proposal_id === "string" ? body.proposal_id.trim() : "";
+      if (!proposalId) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_proposal_id",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+
+      if (!dependencies.proposalRepo) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "action_repository_unavailable",
+            code: "WALLET_AI_ACTION_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      const userRole = dependencies.authDeps.getUserRole
+        ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+        : "member";
+
+      const confirmResult = await dependencies.proposalRepo.confirmProposalAtomically(
+        proposalId,
+        context,
+        userRole,
+      );
+
+      if (!confirmResult.success || !confirmResult.proposal) {
+        const httpStatus =
+          confirmResult.code === "WALLET_AI_ACTION_ALREADY_PROCESSED"
+            ? 409
+            : confirmResult.code === "WALLET_AI_ACTION_EXPIRED"
+            ? 410
+            : confirmResult.code === "WALLET_AI_ACTION_INVALID"
+            ? 404
+            : 403;
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: confirmResult.error || "Falha na confirmação da proposta de ação.",
+            code: confirmResult.code || "WALLET_AI_ACTION_FORBIDDEN",
+            correlation_id: correlationId,
+          }),
+          { status: httpStatus, headers: responseHeaders },
+        );
+      }
+
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "confirm_proposal",
+          durationMs: Date.now() - startTime,
+          status: "success",
+          recordsCount: 1,
+          metadata: {
+            proposal_id: confirmResult.proposal.id,
+            action_type: confirmResult.proposal.actionType,
+            risk_level: confirmResult.proposal.riskLevel,
+            confirmed_by: context.userId,
+            user_role: userRole,
+          },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          status: "confirmed",
+          proposal: confirmResult.proposal,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
+      );
+    }
+
+    if (body.action === "cancel_proposal" || body.action === "cancel_action") {
+      const proposalId = typeof body.proposal_id === "string" ? body.proposal_id.trim() : "";
+      if (!proposalId) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_proposal_id",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+
+      if (!dependencies.proposalRepo) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "action_repository_unavailable",
+            code: "WALLET_AI_ACTION_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      const cancelled = await dependencies.proposalRepo.cancelProposalAtomically(proposalId, context);
+      if (!cancelled) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Proposta não encontrada ou não está mais pendente de confirmação.",
+            code: "WALLET_AI_ACTION_ALREADY_PROCESSED",
+            correlation_id: correlationId,
+          }),
+          { status: 409, headers: responseHeaders },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          status: "cancelled",
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
       );
     }
 

@@ -131,6 +131,8 @@ const telemetryLogger = {
     }
   },
   checkBudget: async (workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }> => {
+    let hardLimitActive = false;
+    let monthlyBudgetUsd = 10;
     try {
       const { data: budgetConfig, error: budgetError } = await rawSupabaseClient
         .from("wallet_ai_budgets")
@@ -138,8 +140,20 @@ const telemetryLogger = {
         .eq("workspace_id", workspaceId)
         .maybeSingle();
 
-      const hardLimitActive = Boolean(budgetConfig?.hard_limit_active);
-      const monthlyBudgetUsd = Number(budgetConfig?.monthly_budget_usd || 10);
+      if (budgetConfig) {
+        hardLimitActive = Boolean(budgetConfig.hard_limit_active);
+        monthlyBudgetUsd = Number(budgetConfig.monthly_budget_usd || 10);
+      }
+
+      if (budgetError) {
+        console.warn("[wallet-ai-orchestrator] Erro ao consultar orçamento de IA:", budgetError);
+        return evaluateAiBudgetGuardrail({
+          hardLimitActive,
+          monthlyBudgetUsd,
+          totalCostUsd: null,
+          readError: true,
+        });
+      }
 
       const currentMonth = new Date().toISOString().slice(0, 7);
       const { data: usageData, error: usageError } = await rawSupabaseClient
@@ -149,8 +163,8 @@ const telemetryLogger = {
         .eq("month_reference", currentMonth)
         .maybeSingle();
 
-      if (usageError || budgetError) {
-        console.warn("[wallet-ai-orchestrator] Erro ao consultar telemetria ou orçamento de IA:", usageError || budgetError);
+      if (usageError) {
+        console.warn("[wallet-ai-orchestrator] Erro ao consultar telemetria de IA:", usageError);
         return evaluateAiBudgetGuardrail({
           hardLimitActive,
           monthlyBudgetUsd,
@@ -167,7 +181,12 @@ const telemetryLogger = {
       });
     } catch (err) {
       console.warn("[wallet-ai-orchestrator] Exceção ao verificar orçamento:", err);
-      return { hardLimitExceeded: false };
+      return evaluateAiBudgetGuardrail({
+        hardLimitActive,
+        monthlyBudgetUsd,
+        totalCostUsd: null,
+        readError: true,
+      });
     }
   },
 };
@@ -282,6 +301,7 @@ Deno.serve(async (req: Request) => {
     runnerFactory,
     auditLogger,
     conversationRepo,
+    proposalRepo,
     documentPipelineRunner: processDocumentPipeline,
     geminiApiKey,
     geminiApiKeyBackup,

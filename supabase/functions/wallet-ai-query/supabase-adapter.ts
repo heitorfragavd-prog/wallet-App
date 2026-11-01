@@ -248,6 +248,26 @@ export function createSupabaseAuthorizationDependencies(
         .maybeSingle();
       return legacyData !== null;
     },
+    async getUserRole(workspaceId, userId) {
+      const { data: ownerData } = await client
+        .from("workspaces")
+        .select("id")
+        .eq("id", workspaceId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (ownerData) return "owner";
+
+      const { data: memberData } = await client
+        .from("workspace_members")
+        .select("role")
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .eq("active", true)
+        .maybeSingle();
+      if (memberData && memberData.role) return String(memberData.role);
+
+      return "member";
+    },
   };
 }
 

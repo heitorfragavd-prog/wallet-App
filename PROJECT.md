@@ -45,3 +45,4 @@ O sistema proporciona:
 - **Backend & Dados:** Supabase, PostgreSQL com Row Level Security (RLS), Edge Functions em Deno.
 - **Metodologia:** Specsfy/2.0 com TDD/BDD e Quality Gates automatizados no GitHub Actions.
 - **Wallet CEO 2.0 (Diretoria Executiva com IA Avançada):** Cérebro executivo conversacional unificado (Web `/ceo` e Telegram `@wallet_bot`), roteamento automático entre 7 departamentos, política de seleção de modelos por complexidade (Nível 1, 2, 3), telemetria com controle orçamentário ($10 USD/mês), persistência canônica e reprodução fiel dos 6 painéis executivos de alta fidelidade visual.
+- **Wallet CEO 2.0 — Estabilização Final e Fechamento Técnico (PR #108):** Gateway canônico de autorização de ações atômicas, histórico real e isolamento por workspace/usuário no chat executivo, cálculo resiliente de faturamento e médias na virada de mês/ano em America/Sao_Paulo, fail-safe no controle orçamentário de IA e preservação da privacidade.

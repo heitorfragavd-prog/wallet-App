@@ -27,6 +27,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { useWalletIA, type WalletIAMessage } from '@/domains/ia/hooks/useWalletIA';
+import { WalletAiOrchestratorClient } from '@/domains/ia/services/WalletAiOrchestratorClient';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/shared/hooks/use-toast';
@@ -254,53 +255,72 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   };
 
   /**
-   * Confirmação canônica de proposta de ação por ID canônico (Gate 2).
-   * Valida status anterior = 'prepared' -> transiciona para 'confirmed'.
-   * Se a query falhar ou afetar 0 linhas, NÃO assume sucesso.
+   * Confirmação canônica de proposta de ação por ID canônico (Gate 1).
+   * Utiliza gateway canônico no backend com fallback local estrito.
+   * Valida status 'prepared' -> 'confirmed' e preserva esquema de colunas reais.
    */
   const handleConfirmProposal = async (proposalId: string) => {
     if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
     setProcessingProposalId(proposalId);
 
     try {
-      const { data, error } = await supabase
-        .from('wallet_ai_action_proposals')
-        .update({
-          status: 'confirmed',
-          confirmed_by_user_id: user.id,
-          confirmed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', proposalId)
-        .eq('workspace_id', workspaceId)
-        .eq('status', 'prepared')
-        .select('id, status')
-        .maybeSingle();
-
-      if (error) {
-        throw error;
-      }
-
-      if (!data) {
-        toast({
-          title: 'Ação Não Disponível',
-          description: 'A proposta já foi processada, cancelada ou não está mais pendente de aprovação.',
-          variant: 'destructive',
+      let confirmed = false;
+      try {
+        const client = new WalletAiOrchestratorClient({
+          baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
+          getAccessToken: async () => {
+            const { data } = await supabase.auth.getSession();
+            return data.session?.access_token ?? null;
+          },
         });
-        return;
+        const res = await client.confirmProposal({ workspaceId, proposalId });
+        if (res.success) {
+          confirmed = true;
+        }
+      } catch (backendErr: unknown) {
+        // Se for erro de validação ou permissão (400-499), propaga erro sem fallback
+        const errorStatus = (backendErr as { status?: number })?.status;
+        if (errorStatus && errorStatus >= 400 && errorStatus < 500) {
+          throw backendErr;
+        }
+        // Fallback local caso o orchestrator esteja offline: atualiza estritamente as colunas canônicas
+        const { data, error } = await supabase
+          .from('wallet_ai_action_proposals')
+          .update({
+            status: 'confirmed',
+            confirmed_at: new Date().toISOString(),
+          })
+          .eq('id', proposalId)
+          .eq('workspace_id', workspaceId)
+          .eq('status', 'prepared')
+          .select('id, status')
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) {
+          toast({
+            title: 'Ação Não Disponível',
+            description: 'A proposta já foi processada, cancelada ou não está mais pendente de aprovação.',
+            variant: 'destructive',
+          });
+          return;
+        }
+        confirmed = true;
       }
 
-      setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'confirmed' }));
-
-      toast({
-        title: 'Ação Autorizada com Sucesso',
-        description: 'A proposta foi confirmada de forma canônica e registrada no sistema.',
-      });
-    } catch (err) {
+      if (confirmed) {
+        setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'confirmed' }));
+        toast({
+          title: 'Ação Autorizada com Sucesso',
+          description: 'A proposta foi confirmada de forma canônica e registrada no sistema (status: confirmado).',
+        });
+      }
+    } catch (err: unknown) {
       console.error('[CeoOverviewTab] Falha ao processar autorização:', err);
+      const msg = err instanceof Error ? err.message : 'Não foi possível confirmar a proposta no momento. Verifique suas permissões.';
       toast({
         title: 'Falha na Autorização',
-        description: 'Não foi possível confirmar a proposta no momento. Verifique suas permissões.',
+        description: msg,
         variant: 'destructive',
       });
     } finally {
@@ -309,51 +329,68 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   };
 
   /**
-   * Descarte canônico de proposta de ação por ID (Gate 2).
-   * Transiciona de 'prepared' ou 'confirmed' para 'cancelled'.
+   * Descarte canônico de proposta de ação por ID (Gate 1).
+   * Transiciona de 'prepared' para 'cancelled' utilizando colunas canônicas reais.
    */
   const handleCancelProposal = async (proposalId: string) => {
     if (!proposalId || !workspaceId || !user?.id || processingProposalId) return;
     setProcessingProposalId(proposalId);
 
     try {
-      const { data, error } = await supabase
-        .from('wallet_ai_action_proposals')
-        .update({
-          status: 'cancelled',
-          cancelled_by_user_id: user.id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', proposalId)
-        .eq('workspace_id', workspaceId)
-        .in('status', ['prepared', 'confirmed'])
-        .select('id, status')
-        .maybeSingle();
-
-      if (error) {
-        throw error;
-      }
-
-      if (!data) {
-        toast({
-          title: 'Ação Não Disponível',
-          description: 'A proposta já foi cancelada ou não foi encontrada no workspace.',
-          variant: 'destructive',
+      let cancelled = false;
+      try {
+        const client = new WalletAiOrchestratorClient({
+          baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
+          getAccessToken: async () => {
+            const { data } = await supabase.auth.getSession();
+            return data.session?.access_token ?? null;
+          },
         });
-        return;
+        const res = await client.cancelProposal({ workspaceId, proposalId });
+        if (res.success) {
+          cancelled = true;
+        }
+      } catch (backendErr: unknown) {
+        const errorStatus = (backendErr as { status?: number })?.status;
+        if (errorStatus && errorStatus >= 400 && errorStatus < 500) {
+          throw backendErr;
+        }
+        const { data, error } = await supabase
+          .from('wallet_ai_action_proposals')
+          .update({
+            status: 'cancelled',
+          })
+          .eq('id', proposalId)
+          .eq('workspace_id', workspaceId)
+          .eq('status', 'prepared')
+          .select('id, status')
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) {
+          toast({
+            title: 'Ação Não Disponível',
+            description: 'A proposta já foi cancelada ou não foi encontrada no workspace.',
+            variant: 'destructive',
+          });
+          return;
+        }
+        cancelled = true;
       }
 
-      setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'cancelled' }));
-
-      toast({
-        title: 'Proposta Descartada',
-        description: 'A proposta foi recusada e arquivada sem alterar dados financeiros.',
-      });
-    } catch (err) {
+      if (cancelled) {
+        setConfirmedProposals((prev) => ({ ...prev, [proposalId]: 'cancelled' }));
+        toast({
+          title: 'Proposta Descartada',
+          description: 'A proposta foi recusada e arquivada sem alterar dados financeiros.',
+        });
+      }
+    } catch (err: unknown) {
       console.error('[CeoOverviewTab] Falha ao descartar proposta:', err);
+      const msg = err instanceof Error ? err.message : 'Não foi possível arquivar a proposta no momento.';
       toast({
         title: 'Falha ao Descartar',
-        description: 'Não foi possível arquivar a proposta no momento.',
+        description: msg,
         variant: 'destructive',
       });
     } finally {
@@ -365,6 +402,16 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {kpis.dadosIndisponiveis && (
+        <div className="bg-amber-950/40 border border-amber-600/40 text-amber-200 px-4 py-3 rounded-lg text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>
+            <strong>Aviso de Observabilidade:</strong> Indicadores consolidados temporariamente indisponíveis para este workspace.
+            {kpis.erroMensagem ? ` (${kpis.erroMensagem})` : ''} Exibindo valores confirmados disponíveis.
+          </span>
+        </div>
+      )}
+
       {/* 1. Hero Card: Saudação Executiva com Resumo Diário */}
       <Card className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border-border/60 shadow-lg overflow-hidden">
         <CardContent className="p-6 md:p-8">
@@ -647,15 +694,25 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                                 {prop.description || prop.hypothesis}
                               </div>
                               <div className="flex gap-2 pt-1">
-                                {proposalStatus === 'confirmed' || proposalStatus === 'executed' ? (
+                                {proposalStatus === 'confirmed' ? (
                                   <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
                                     <CheckCircle2 className="w-3.5 h-3.5" />
-                                    Autorizado canonicamente
+                                    Confirmado (Aguardando execução)
+                                  </span>
+                                ) : proposalStatus === 'executed' ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-sky-400 font-semibold">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Executado
                                   </span>
                                 ) : proposalStatus === 'cancelled' ? (
                                   <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-semibold">
                                     <XCircle className="w-3.5 h-3.5" />
                                     Descartado
+                                  </span>
+                                ) : proposalStatus === 'expired' ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-amber-500 font-semibold">
+                                    <Clock className="w-3.5 h-3.5" />
+                                    Expirado
                                   </span>
                                 ) : (
                                   <>

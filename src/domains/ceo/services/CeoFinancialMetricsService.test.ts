@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CeoFinancialMetricsService } from './CeoFinancialMetricsService';
+import {
+  CeoFinancialMetricsService,
+  getSaoPauloParts,
+  getSaoPauloYesterday,
+} from './CeoFinancialMetricsService';
 
 describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
   beforeEach(() => {
@@ -118,6 +122,59 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
           return { data: Array.from({ length: 1000 }, (_, i) => ({ id: `tx-${i}` })), error: null };
         })
       ).rejects.toThrow('Falha ao buscar registros paginados');
+    });
+
+    describe('GATE 3: Virada de Mês e de Ano em America/Sao_Paulo', () => {
+      it('getSaoPauloParts e getSaoPauloYesterday calculam virada de mês perfeitamente (01/11/2026 -> 31/10/2026)', () => {
+        // Criando data em 01/11/2026 12:00 BRT
+        const nov1 = new Date('2026-11-01T15:00:00Z');
+        const today = getSaoPauloParts(nov1);
+        expect(today.dateString).toBe('2026-11-01');
+        expect(today.year).toBe(2026);
+        expect(today.month).toBe(11);
+        expect(today.day).toBe(1);
+
+        const yesterday = getSaoPauloYesterday(nov1);
+        expect(yesterday.dateString).toBe('2026-10-31');
+        expect(yesterday.year).toBe(2026);
+        expect(yesterday.month).toBe(10);
+        expect(yesterday.day).toBe(31);
+        expect(yesterday.dayOfWeek).toBe(6); // Sábado
+      });
+
+      it('getSaoPauloParts e getSaoPauloYesterday calculam virada de ano perfeitamente (01/01/2027 -> 31/12/2026)', () => {
+        // Criando data em 01/01/2027 12:00 BRT
+        const jan1 = new Date('2027-01-01T15:00:00Z');
+        const today = getSaoPauloParts(jan1);
+        expect(today.dateString).toBe('2027-01-01');
+        expect(today.year).toBe(2027);
+        expect(today.month).toBe(1);
+
+        const yesterday = getSaoPauloYesterday(jan1);
+        expect(yesterday.dateString).toBe('2026-12-31');
+        expect(yesterday.year).toBe(2026);
+        expect(yesterday.month).toBe(12);
+        expect(yesterday.day).toBe(31);
+      });
+
+      it('virada de fevereiro para março em ano não-bissexto (01/03/2026 -> 28/02/2026)', () => {
+        const mar1 = new Date('2026-03-01T15:00:00Z');
+        const yesterday = getSaoPauloYesterday(mar1);
+        expect(yesterday.dateString).toBe('2026-02-28');
+        expect(yesterday.month).toBe(2);
+        expect(yesterday.day).toBe(28);
+      });
+
+      it('quando getExecutiveKpis encontra falha de banco, sinaliza dadosIndisponiveis sem fingir R$ 0,00 como real', async () => {
+        vi.spyOn(CeoFinancialMetricsService, 'fetchAllPaginated').mockRejectedValueOnce(
+          new Error('Simulated Database Down')
+        );
+
+        const kpis = await CeoFinancialMetricsService.getExecutiveKpis('test-ws-id');
+        expect(kpis.dadosIndisponiveis).toBe(true);
+        expect(kpis.erroMensagem).toContain('Simulated Database Down');
+        expect(kpis.dataAtualizacao).toBe('dados indisponíveis no momento');
+      });
     });
   });
 });

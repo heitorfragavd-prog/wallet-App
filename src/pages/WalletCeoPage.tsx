@@ -33,6 +33,8 @@ import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTa
 import {
   CeoFinancialMetricsService,
   CeoExecutiveKpis,
+  getSaoPauloDateString,
+  getSaoPauloParts,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
@@ -56,10 +58,11 @@ export const WalletCeoPage: React.FC = () => {
   // 1. Conexão real com Fichas Técnicas e Custos (Cardápio / Food Cost)
   const { produtos: produtosFoodCost } = useFoodCost();
 
-  // 2. Conexão real com Eyemobile PDV (mês atual)
+  // 2. Conexão real com Eyemobile PDV (mês atual em fuso horário America/Sao_Paulo)
   const hoje = new Date();
-  const hojeStr = hoje.toISOString().slice(0, 10);
-  const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
+  const hojeStr = getSaoPauloDateString(hoje);
+  const todayParts = getSaoPauloParts(hoje);
+  const inicioMes = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-01`;
 
   const { data: eyemobileData } = useEyemobileDashboard({
     startDate: inicioMes,

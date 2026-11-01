@@ -58,36 +58,44 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         diasAtras = 7;
       }
 
-      const inicioStr = new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const fimStr = hoje.toISOString().slice(0, 10);
+      const fimStr = getSaoPauloDateString(hoje);
+      const inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000));
 
       // Período anterior equivalente real (sem multiplicadores arbitrários)
-      const inicioAntStr = new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const fimAntStr = new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
+      const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
 
-      // 1. Transações reais deste período
-      const { data: tx } = await supabase
-        .from('transacoes')
-        .select('valor, data')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioStr)
-        .lte('data', fimStr)
-        .order('data', { ascending: true });
+      // 1. Transações reais deste período com paginação integral segura
+      const tx = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioStr)
+            .lte('data', `${fimStr}T23:59:59.999Z`)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
 
       // 2. Transações reais do período anterior equivalente
-      const { data: txAnt } = await supabase
-        .from('transacoes')
-        .select('valor, data')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', inicioAntStr)
-        .lte('data', fimAntStr);
+      const txAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioAntStr)
+            .lte('data', `${fimAntStr}T23:59:59.999Z`)
+            .range(from, to)
+      );
 
-      const total = (tx || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const count = (tx || []).length;
-      const totalAnt = (txAnt || []).reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const countAnt = (txAnt || []).length;
+      const total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const count = tx.length;
+      const totalAnt = txAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const countAnt = txAnt.length;
 
       setVendasTotais(total);
       setPedidosTotal(count);
