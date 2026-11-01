@@ -10,6 +10,7 @@ export interface AuthorizationDependencies {
   getUser(accessToken: string): Promise<AuthenticatedUser | null>;
   findOwnedWorkspace(workspaceId: string, userId: string): Promise<OwnedWorkspace | null>;
   verifyConversationOwnership?(conversationId: string, workspaceId: string, userId: string): Promise<boolean>;
+  getUserRole?(workspaceId: string, userId: string): Promise<string>;
 }
 
 export interface AiExecutionContext {
@@ -18,6 +19,32 @@ export interface AiExecutionContext {
   readonly accessToken: string;
   readonly conversationId?: string;
   readonly correlationId?: string;
+  readonly role?: string;
+}
+
+/**
+ * Lista explícita de papéis com autorização para dados e ferramentas financeiras.
+ * Apenas papéis de gestão e administração (owner, proprietario, admin, administrador, gestor, financeiro)
+ * possuem autorização para visualizar faturamento, despesas, saldos, lucros, margens, CMV, DRE e receitas.
+ */
+export const FINANCIAL_AUTHORIZED_ROLES = new Set([
+  "owner",
+  "proprietario",
+  "admin",
+  "administrador",
+  "gestor",
+  "financeiro",
+]);
+
+/**
+ * Validação de autorização RBAC para dados e ferramentas financeiras com lista explícita.
+ * Nega acesso caso o papel esteja ausente, inválido ou não autorizado (whitelist estrita).
+ */
+export function canRoleAccessFinancialData(role?: string): boolean {
+  if (!role || typeof role !== "string") return false;
+  const normalized = role.toLowerCase().trim();
+  if (!normalized) return false;
+  return FINANCIAL_AUTHORIZED_ROLES.has(normalized);
 }
 
 export type AiAuthorizationErrorCode =
@@ -104,11 +131,25 @@ export async function authorizeAiRequest(
     }
   }
 
-  return Object.freeze({
+  const result: Record<string, unknown> = {
     userId: user.id,
     workspaceId: workspace.id,
     accessToken,
-    conversationId,
-    correlationId,
-  });
+  };
+  if (conversationId) {
+    result.conversationId = conversationId;
+  }
+  if (correlationId) {
+    result.correlationId = correlationId;
+  }
+  if (dependencies.getUserRole) {
+    result.role = await dependencies.getUserRole(workspace.id, user.id);
+  } else if (
+    (workspace as Record<string, unknown>).owner_id === user.id ||
+    (workspace as Record<string, unknown>).user_id === user.id
+  ) {
+    result.role = "owner";
+  }
+
+  return Object.freeze(result as unknown as AiExecutionContext);
 }

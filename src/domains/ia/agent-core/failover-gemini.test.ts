@@ -25,6 +25,7 @@ import { handleOrchestratorHttpRequest } from "../../../../supabase/functions/wa
 const validContext: AiExecutionContext = {
   userId: "user-test-uuid",
   workspaceId: "ws-test-uuid",
+  role: "owner",
 };
 
 function createMockRepository(): FinancialQueryRepository {

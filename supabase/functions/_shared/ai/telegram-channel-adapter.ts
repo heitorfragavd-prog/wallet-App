@@ -1525,7 +1525,13 @@ export async function handleTelegramTextMessage(
   const runner = deps.runnerFactory();
 
   let conversationId: string | undefined;
-  let turnMessages: LlmMessage[] = [{ role: "user", content: text }];
+  let normalizedPrompt = text.trim();
+  if (normalizedPrompt.toLowerCase() === "/ceo") {
+    normalizedPrompt = "Apresente o resumo executivo oficial do Wallet CEO 2.0 para a Rodo Point com faturamento, despesas, margem, ações prioritárias de hoje e status dos departamentos.";
+  } else if (normalizedPrompt.toLowerCase().startsWith("/ceo ")) {
+    normalizedPrompt = normalizedPrompt.slice(5).trim();
+  }
+  let turnMessages: LlmMessage[] = [{ role: "user", content: normalizedPrompt }];
 
   if (deps.conversationRepo) {
     try {
@@ -1797,11 +1803,13 @@ export async function handleTelegramCallback(
     }
 
     try {
-      const cancelled = typeof deps.proposalRepo.cancelProposalAtomically === "function"
+      const cancelResult = typeof deps.proposalRepo.cancelProposalAtomically === "function"
         ? await deps.proposalRepo.cancelProposalAtomically(proposalId, context)
         : (await deps.proposalRepo.updateStatus(proposalId, "cancelled"), true);
 
-      if (!cancelled) {
+      const isCancelled = typeof cancelResult === "boolean" ? cancelResult : Boolean(cancelResult?.success);
+
+      if (!isCancelled) {
         return {
           answerText: "Esta proposta já foi cancelada ou processada concorrentemente.",
           removeKeyboard: true,

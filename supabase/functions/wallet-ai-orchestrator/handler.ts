@@ -1,9 +1,11 @@
 import {
   AiAuthorizationError,
   authorizeAiRequest,
+  canRoleAccessFinancialData,
   type AiExecutionContext,
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
+import { FINANCIAL_TOOLS, type QueryToolCatalog } from "../_shared/ai/query-tools.ts";
 import {
   DEFAULT_SUMMARY_MODEL,
   validateAndResolveModel,
@@ -40,6 +42,7 @@ import {
   type ProcessDocumentPipelineResult,
 } from "../_shared/ai/document-pipeline.ts";
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
+import type { IActionProposalRepository } from "../_shared/ai/action-repository.ts";
 import type { EyemobileLiveClient } from "../wallet-ai-query/supabase-adapter.ts";
 
 export interface AuditEventLogger {
@@ -61,6 +64,7 @@ export interface OrchestratorHandlerDependencies {
   runnerFactory: (model?: string) => LlmRunner;
   auditLogger?: AuditEventLogger;
   conversationRepo?: ConversationRepository;
+  proposalRepo?: IActionProposalRepository;
   summarizerRunner?: SummarizerRunner;
   documentPipelineRunner?: (
     input: ProcessDocumentPipelineInput,
@@ -85,6 +89,25 @@ export interface OrchestratorHandlerDependencies {
   ) => Promise<void>;
   /** Factory para o cliente ao vivo do Eyemobile. Opcional — se ausente, usa cache sincronizado. */
   eyemobileLiveClientFactory?: (context: AiExecutionContext) => EyemobileLiveClient;
+  telemetryLogger?: {
+    logTelemetry(telemetry: {
+      workspaceId: string;
+      userId: string;
+      conversationId?: string;
+      channel?: string;
+      model: string;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      estimatedCostUsd: number;
+      durationMs: number;
+      complexityLevel: number;
+      department: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    }): Promise<void>;
+    checkBudget?(workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }>;
+  };
 }
 
 
@@ -181,8 +204,54 @@ export async function handleOrchestratorHttpRequest(
     const conversationId = typeof body.conversation_id === "string" ? body.conversation_id.trim() : undefined;
     const messages = Array.isArray(body.messages) ? (body.messages as LlmMessage[]) : [];
 
-    // Model routing com validação estrita server-side
-    const rawModel = typeof body.model === "string" ? body.model.trim() : undefined;
+    // Seleção de Modelo por Complexidade (Nível 1, 2, 3) e Roteamento Departamental
+    const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+    const userPromptText = typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "";
+
+    let complexityLevel = 1;
+    let detectedDepartment = "geral";
+    let defaultModelForComplexity = "gpt-4o-mini";
+
+    const promptLower = userPromptText.toLowerCase();
+    if (
+      promptLower.includes("plano de") ||
+      promptLower.includes("90 dia") ||
+      promptLower.includes("estratég") ||
+      promptLower.includes("estrateg") ||
+      promptLower.includes("crescimento") ||
+      promptLower.includes("laboratório") ||
+      promptLower.includes("experimento") ||
+      promptLower.includes("aumentar meu lucro") ||
+      promptLower.includes("monte um plano")
+    ) {
+      complexityLevel = 3;
+      detectedDepartment = "laboratorio_experimentos";
+      defaultModelForComplexity = "gpt-4o";
+    } else if (
+      promptLower.includes("analise") ||
+      promptLower.includes("análise") ||
+      promptLower.includes("despesa") ||
+      promptLower.includes("produto") ||
+      promptLower.includes("canal") ||
+      promptLower.includes("delivery") ||
+      promptLower.includes("ifood") ||
+      promptLower.includes("cmv") ||
+      promptLower.includes("margem") ||
+      promptLower.includes("desperdício") ||
+      promptLower.includes("desperdicio")
+    ) {
+      complexityLevel = 2;
+      detectedDepartment = promptLower.includes("cmv") || promptLower.includes("margem")
+        ? "cmv_precificacao"
+        : promptLower.includes("despesa")
+        ? "financeiro_margens"
+        : promptLower.includes("delivery") || promptLower.includes("canal")
+        ? "delivery_canais"
+        : "comercial_crescimento";
+      defaultModelForComplexity = "gpt-4o-mini";
+    }
+
+    const rawModel = typeof body.model === "string" ? body.model.trim() : defaultModelForComplexity;
     const selectedModel = validateAndResolveModel(rawModel, {
       task: "chat",
       fallbackToDefault: true,
@@ -197,6 +266,191 @@ export async function handleOrchestratorHttpRequest(
           correlation_id: correlationId,
         }),
         { status: 400, headers: responseHeaders },
+      );
+    }
+
+    // ─── GATEWAY CANÔNICO DE PROPOSTAS DE AÇÃO (Gate 1) ───
+    if (body.action === "confirm_proposal" || body.action === "confirm_action") {
+      const proposalId = typeof body.proposal_id === "string" ? body.proposal_id.trim() : "";
+      if (!proposalId) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_proposal_id",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+
+      if (!dependencies.proposalRepo) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "action_repository_unavailable",
+            code: "WALLET_AI_ACTION_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      const userRole = context.role || (dependencies.authDeps.getUserRole
+        ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+        : "owner");
+
+      const confirmResult = await dependencies.proposalRepo.confirmProposalAtomically(
+        proposalId,
+        context,
+        userRole,
+      );
+
+      if (!confirmResult.success || !confirmResult.proposal) {
+        const httpStatus =
+          confirmResult.code === "WALLET_AI_ACTION_ALREADY_PROCESSED"
+            ? 409
+            : confirmResult.code === "WALLET_AI_ACTION_EXPIRED"
+            ? 410
+            : confirmResult.code === "WALLET_AI_ACTION_INVALID"
+            ? 404
+            : 403;
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: confirmResult.error || "Falha na confirmação da proposta de ação.",
+            code: confirmResult.code || "WALLET_AI_ACTION_FORBIDDEN",
+            correlation_id: correlationId,
+          }),
+          { status: httpStatus, headers: responseHeaders },
+        );
+      }
+
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "confirm_proposal",
+          durationMs: Date.now() - startTime,
+          status: "success",
+          recordsCount: 1,
+          metadata: {
+            proposal_id: confirmResult.proposal.id,
+            action_type: confirmResult.proposal.actionType,
+            risk_level: confirmResult.proposal.riskLevel,
+            confirmed_by: context.userId,
+            user_role: userRole,
+          },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          status: "confirmed",
+          proposal: confirmResult.proposal,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
+      );
+    }
+
+    if (body.action === "cancel_proposal" || body.action === "cancel_action") {
+      const proposalId = typeof body.proposal_id === "string" ? body.proposal_id.trim() : "";
+      if (!proposalId) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_proposal_id",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+
+      if (!dependencies.proposalRepo) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "action_repository_unavailable",
+            code: "WALLET_AI_ACTION_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      const userRole = context.role || (dependencies.authDeps.getUserRole
+        ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+        : "owner");
+
+      const cancelResult = await dependencies.proposalRepo.cancelProposalAtomically(
+        proposalId,
+        context,
+        userRole,
+      );
+
+      if (!cancelResult.success) {
+        const httpStatus =
+          cancelResult.code === "WALLET_AI_ACTION_ALREADY_PROCESSED"
+            ? 409
+            : cancelResult.code === "WALLET_AI_ACTION_INVALID"
+            ? 404
+            : 403;
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: cancelResult.error || "Falha ao descartar proposta de ação.",
+            code: cancelResult.code || "WALLET_AI_ACTION_FORBIDDEN",
+            correlation_id: correlationId,
+          }),
+          { status: httpStatus, headers: responseHeaders },
+        );
+      }
+
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "cancel_proposal",
+          durationMs: Date.now() - startTime,
+          status: "success",
+          recordsCount: 1,
+          metadata: {
+            proposal_id: proposalId,
+            action_type: cancelResult.proposal?.actionType,
+            risk_level: cancelResult.proposal?.riskLevel,
+            cancelled_by: context.userId,
+            user_role: userRole,
+          },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          status: "cancelled",
+          proposal: cancelResult.proposal,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
       );
     }
 
@@ -318,9 +572,45 @@ export async function handleOrchestratorHttpRequest(
       correlationId,
     );
 
+    const userRole = context.role || (dependencies.authDeps.getUserRole
+      ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
+      : "owner");
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
+      const financialTerms = [
+        "faturamento", "lucro", "despesa", "saldo", "dre", "margem",
+        "custo", "investimento", "receita", "cmv", "venda"
+      ];
+      const hasFinancialTerms = financialTerms.some((term) => promptText.includes(term));
+      if (hasFinancialTerms) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_financial_access",
+            code: "WALLET_AI_FORBIDDEN",
+            message: `O papel '${userRole}' não possui autorização para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+    }
+
     const repository = dependencies.repoFactory(context);
     const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
-    const catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
+    let catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const safeCatalog: QueryToolCatalog = {};
+      for (const [toolName, handler] of Object.entries(catalog)) {
+        if (!FINANCIAL_TOOLS.has(toolName)) {
+          safeCatalog[toolName] = handler;
+        }
+      }
+      catalog = safeCatalog;
+    }
+
     const runner = dependencies.runnerFactory(selectedModel);
 
     // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico
@@ -359,6 +649,23 @@ export async function handleOrchestratorHttpRequest(
         }
       } catch (err) {
         console.warn("[handler] Falha ao carregar memória canônica:", err);
+      }
+    }
+
+    // Verificação de Limite de Orçamento de IA ($10 USD mensal)
+    if (dependencies.telemetryLogger?.checkBudget) {
+      const budgetCheck = await dependencies.telemetryLogger.checkBudget(context.workspaceId);
+      if (budgetCheck?.hardLimitExceeded) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "budget_limit_exceeded",
+            code: "WALLET_AI_BUDGET_EXCEEDED",
+            message: "O limite de orçamento mensal de IA foi atingido ($10.00 USD). Por favor, verifique as configurações no painel.",
+            correlation_id: correlationId,
+          }),
+          { status: 429, headers: responseHeaders }
+        );
       }
     }
 
@@ -470,6 +777,35 @@ export async function handleOrchestratorHttpRequest(
         }
       } catch (err) {
         console.warn("[handler] Falha ao persistir mensagens na memória:", err);
+      }
+    }
+
+    if (dependencies.telemetryLogger) {
+      try {
+        await dependencies.telemetryLogger.logTelemetry({
+          workspaceId: context.workspaceId,
+          userId: context.userId,
+          conversationId,
+          channel: typeof body.channel === "string" ? body.channel : "web",
+          model: selectedModel,
+          promptTokens: turnResult.usage.promptTokens,
+          completionTokens: turnResult.usage.completionTokens,
+          totalTokens: turnResult.usage.totalTokens,
+          estimatedCostUsd,
+          durationMs,
+          complexityLevel,
+          department: detectedDepartment,
+          status: "success",
+          metadata: {
+            correlationId,
+            iterations: turnResult.iterations,
+            toolCallsCount: turnResult.toolCallsExecuted.length,
+            provider: turnResult.provider ?? "openai",
+            fallback: turnResult.fallback ?? false,
+          },
+        });
+      } catch (telErr) {
+        console.warn("[handler] Falha ao registrar telemetria de IA:", telErr);
       }
     }
 

@@ -182,4 +182,80 @@ export class WalletAiOrchestratorClient {
       correlationId: json.correlation_id || response.headers?.get?.("x-correlation-id") || correlationId,
     };
   }
+
+  async confirmProposal(params: {
+    workspaceId: string;
+    proposalId: string;
+    correlationId?: string;
+  }): Promise<{ success: boolean; status: string; proposal?: ActionProposal }> {
+    const token = await this.getAccessToken();
+    if (!token) {
+      throw new WalletAiOrchestratorError(
+        "WALLET_AI_AUTH_ERROR",
+        "Sessão de usuário não encontrada para autenticar a requisição.",
+      );
+    }
+    const correlationId = params.correlationId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    const response = await this.fetchImpl(this.baseUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({
+        action: "confirm_proposal",
+        workspace_id: params.workspaceId,
+        proposal_id: params.proposalId,
+        correlation_id: correlationId,
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json.success === false) {
+      throw new WalletAiOrchestratorError(
+        json.code ?? "WALLET_AI_ACTION_ERROR",
+        json.error ?? "Falha ao autorizar proposta de ação.",
+        response.status,
+      );
+    }
+    return json;
+  }
+
+  async cancelProposal(params: {
+    workspaceId: string;
+    proposalId: string;
+    correlationId?: string;
+  }): Promise<{ success: boolean; status: string }> {
+    const token = await this.getAccessToken();
+    if (!token) {
+      throw new WalletAiOrchestratorError(
+        "WALLET_AI_AUTH_ERROR",
+        "Sessão de usuário não encontrada para autenticar a requisição.",
+      );
+    }
+    const correlationId = params.correlationId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    const response = await this.fetchImpl(this.baseUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-Correlation-Id": correlationId,
+      },
+      body: JSON.stringify({
+        action: "cancel_proposal",
+        workspace_id: params.workspaceId,
+        proposal_id: params.proposalId,
+        correlation_id: correlationId,
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json.success === false) {
+      throw new WalletAiOrchestratorError(
+        json.code ?? "WALLET_AI_ACTION_ERROR",
+        json.error ?? "Falha ao descartar proposta de ação.",
+        response.status,
+      );
+    }
+    return json;
+  }
 }

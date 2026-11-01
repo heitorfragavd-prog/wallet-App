@@ -169,8 +169,34 @@ describe('Wallet CEO — Motor Analítico de Crescimento & CMV', () => {
       summaries.forEach((s) => {
         expect(s.metrics.length).toBeGreaterThan(0);
         expect(s.recommendations.length).toBeGreaterThan(0);
-        expect(['optimal', 'attention', 'critical']).toContain(s.status);
+        expect(['optimal', 'attention', 'critical', 'dados_insuficientes']).toContain(s.status);
       });
+    });
+
+    it('marca cmv_pricing como dados_insuficientes de forma honesta quando não houver fichas ou itens analisados', () => {
+      const emptyCmv = calculateEffectiveWeightedCMV([]);
+      expect(emptyCmv.has_sufficient_data).toBe(false);
+      expect(emptyCmv.is_cmv_healthy).toBe(false);
+
+      const summaries = buildCeoDepartmentSummaries(emptyCmv, [], [], []);
+      const cmvDept = summaries.find((s) => s.department === 'cmv_pricing');
+      expect(cmvDept).toBeDefined();
+      expect(cmvDept?.status).toBe('dados_insuficientes');
+      expect(cmvDept?.metrics?.find((m) => m.label === 'CMV Ponderado')?.value).toBe('Dados insuficientes');
+    });
+
+    it('utiliza o faturamento real do workspace e reflete despesas operacionais no departamento finance_margins', () => {
+      const emptyCmv = calculateEffectiveWeightedCMV([]);
+      const summaries = buildCeoDepartmentSummaries(emptyCmv, [], [], [], {
+        realRevenue: 287430.50,
+        realExpenses: 45610.25,
+      });
+
+      const finDept = summaries.find((s) => s.department === 'finance_margins');
+      expect(finDept).toBeDefined();
+      expect(finDept?.status).toBe('optimal');
+      expect(finDept?.metrics?.find((m) => m.label === 'Faturamento Base')?.value).toContain('287.430,50');
+      expect(finDept?.metrics?.find((m) => m.label === 'Resultado Operacional')?.value).toContain('241.820,25');
     });
   });
 });

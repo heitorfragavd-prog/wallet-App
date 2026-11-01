@@ -113,3 +113,77 @@ export function createCostTelemetryRecord(params: {
     cost_status: isKnown ? "known" : "unknown",
   };
 }
+
+export interface BudgetEvaluationInput {
+  hardLimitActive: boolean;
+  monthlyBudgetUsd: number;
+  totalCostUsd: number | null;
+  readError?: boolean;
+  configReadError?: boolean;
+}
+
+export interface BudgetEvaluationResult {
+  hardLimitExceeded: boolean;
+  alertTriggered?: '50%' | '80%' | '100%';
+  failClosedReason?: string;
+  isReadError?: boolean;
+}
+
+/**
+ * Avaliação determinística e fail-safe de limite e orçamento de IA.
+ * Regras:
+ * 1. Se houver erro de leitura na CONFIGURAÇÃO do orçamento -> FAIL-CLOSED (hardLimitExceeded: true),
+ *    pois não se pode assumir que o limite rígido está desativado quando o estado é desconhecido.
+ * 2. Se a configuração foi lida e houver erro de leitura no CONSUMO e hard limit ativo -> FAIL-CLOSED.
+ * 3. Se a configuração foi lida e houver erro de leitura no CONSUMO e hard limit inativo -> FAIL-OPEN.
+ * 4. Nenhuma configuração cadastrada (workspace novo) -> hard limit inativo por padrão.
+ * 5. Ausência de telemetria no mês (null) -> consumo zero, não bloqueia.
+ * 6. Hard limit ativo e custo >= orçamento -> hardLimitExceeded: true.
+ * 7. Sem hard limit ativo -> hardLimitExceeded: false com disparos de alertas informativos.
+ */
+export function evaluateAiBudgetGuardrail(input: BudgetEvaluationInput): BudgetEvaluationResult {
+  if (input.configReadError) {
+    return {
+      hardLimitExceeded: true,
+      isReadError: true,
+      failClosedReason: 'budget_config_read_error_fail_closed',
+    };
+  }
+
+  if (input.readError) {
+    if (input.hardLimitActive) {
+      return {
+        hardLimitExceeded: true,
+        isReadError: true,
+        failClosedReason: 'telemetry_read_error_with_active_hard_limit',
+      };
+    }
+    return {
+      hardLimitExceeded: false,
+      isReadError: true,
+    };
+  }
+
+  const currentCost = input.totalCostUsd ?? 0;
+  const budget = input.monthlyBudgetUsd > 0 ? input.monthlyBudgetUsd : 10;
+
+  if (input.hardLimitActive && currentCost >= budget) {
+    return {
+      hardLimitExceeded: true,
+    };
+  }
+
+  const percentConsumed = budget > 0 ? (currentCost / budget) * 100 : 0;
+  if (percentConsumed >= 100) {
+    return { hardLimitExceeded: false, alertTriggered: '100%' };
+  }
+  if (percentConsumed >= 80) {
+    return { hardLimitExceeded: false, alertTriggered: '80%' };
+  }
+  if (percentConsumed >= 50) {
+    return { hardLimitExceeded: false, alertTriggered: '50%' };
+  }
+
+  return { hardLimitExceeded: false };
+}
+

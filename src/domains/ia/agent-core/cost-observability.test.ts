@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   calculateEstimatedCost,
   createCostTelemetryRecord,
+  evaluateAiBudgetGuardrail,
 } from "../../../../supabase/functions/_shared/ai/cost-calculator";
 import {
   ALLOWED_MODELS,
@@ -253,7 +254,8 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
 
     it("deve manter exatamente os 13 Action Types canônicos", () => {
       const actionKeys = Object.keys(CANONICAL_ACTIONS);
-      expect(actionKeys).toHaveLength(13);
+      expect(actionKeys).toHaveLength(14);
+      expect(actionKeys).toContain("propor_experimento_comercial");
       expect(actionKeys).toContain("atualizar_custo_produto_eyemobile");
       expect(actionKeys).toContain("deletar_transacao");
       expect(CANONICAL_ACTIONS.deletar_transacao.blocked).toBe(true);
@@ -280,6 +282,109 @@ describe("ETAPA 9.6 - Cost Telemetry, Observability & Guardrails", () => {
       expect(mockContext.correlationId).toBe("corr-12345");
       expect(mockContext.conversationId).toBe("conv-67890");
       expect(result.finalMessage.content).toBe("Resposta rápida");
+    });
+  });
+
+  describe("7. AI Budget Fail-Safe Guardrail (GATE 5)", () => {
+    it("deve acionar FAIL-CLOSED conservador quando ocorrer erro de leitura da CONFIGURAÇÃO do orçamento (GATE D)", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: false, // Mesmo que o valor inicial seja false antes de ler o banco
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: null,
+        configReadError: true,
+      });
+
+      expect(result.hardLimitExceeded).toBe(true);
+      expect(result.isReadError).toBe(true);
+      expect(result.failClosedReason).toBe("budget_config_read_error_fail_closed");
+    });
+
+    it("deve acionar FAIL-CLOSED quando ocorrer erro de leitura com hard limit ativo", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: true,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: null,
+        readError: true,
+      });
+
+      expect(result.hardLimitExceeded).toBe(true);
+      expect(result.isReadError).toBe(true);
+      expect(result.failClosedReason).toBe("telemetry_read_error_with_active_hard_limit");
+    });
+
+    it("deve operar FAIL-OPEN quando ocorrer erro de leitura sem hard limit ativo (não bloqueia workspace)", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: null,
+        readError: true,
+      });
+
+      expect(result.hardLimitExceeded).toBe(false);
+      expect(result.isReadError).toBe(true);
+    });
+
+    it("deve considerar consumo zero na ausência de telemetria no mês (não erro)", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: true,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: null,
+        readError: false,
+      });
+
+      expect(result.hardLimitExceeded).toBe(false);
+      expect(result.isReadError).toBeUndefined();
+    });
+
+    it("deve bloquear execução quando hard limit estiver ativo e custo exceder orçamento", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: true,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: 10.05,
+        readError: false,
+      });
+
+      expect(result.hardLimitExceeded).toBe(true);
+    });
+
+    it("deve liberar execução quando hard limit estiver ativo e custo estiver abaixo do orçamento", () => {
+      const result = evaluateAiBudgetGuardrail({
+        hardLimitActive: true,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: 4.5,
+        readError: false,
+      });
+
+      expect(result.hardLimitExceeded).toBe(false);
+    });
+
+    it("deve disparar apenas alertas informativos quando orçamento for atingido sem hard limit ativo", () => {
+      const res50 = evaluateAiBudgetGuardrail({
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: 5.5,
+        readError: false,
+      });
+      expect(res50.hardLimitExceeded).toBe(false);
+      expect(res50.alertTriggered).toBe("50%");
+
+      const res80 = evaluateAiBudgetGuardrail({
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: 8.5,
+        readError: false,
+      });
+      expect(res80.hardLimitExceeded).toBe(false);
+      expect(res80.alertTriggered).toBe("80%");
+
+      const res100 = evaluateAiBudgetGuardrail({
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10.0,
+        totalCostUsd: 12.0,
+        readError: false,
+      });
+      expect(res100.hardLimitExceeded).toBe(false);
+      expect(res100.alertTriggered).toBe("100%");
     });
   });
 });

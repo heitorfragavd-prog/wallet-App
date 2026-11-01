@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Superfícies observadas
 
-- Componentes, páginas ou views: 1421.
+- Componentes, páginas ou views: 1425.
 - Tailwind: detectado.
 - Tokens CSS: --cell-size, --radix-popover-content-transform-origin, ---, --border, --background, --foreground, --card, --card-foreground, --popover, --popover-foreground, --primary, --primary-foreground, --secondary, --secondary-foreground, --muted, --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground, --input, --ring, --radius, --sidebar-background, --sidebar-foreground, --sidebar-primary, --sidebar-primary-foreground, --sidebar-accent, --sidebar-accent-foreground, --sidebar-border, --sidebar-ring, --glass-bg, --glass-border, --particle-primary, --particle-secondary, --particle-accent, --gradient-start, --gradient-end, --kimi-color-border, --tw-ring-color, --color-, --color-border, --color-bg, --radix-navigation-menu-viewport-height, --radix-navigation-menu-viewport-width, --radix-select-trigger-height, --radix-select-trigger-width, --sidebar-width, --sidebar-width-icon, --skeleton-width, --radix-toast-swipe-end-x, --radix-toast-swipe-move-x, --radix-accordion-content-height.
 
@@ -1187,6 +1187,10 @@
 | src\domains\auth\components\profile\UsageProgressBar.tsx |
 | src\domains\auth\components\ProtectedRoute.test.tsx |
 | src\domains\auth\components\ProtectedRoute.tsx |
+| src\domains\ceo\components\CeoCommercialAnalysisTab.tsx |
+| src\domains\ceo\components\CeoExpenseAnalysisTab.tsx |
+| src\domains\ceo\components\CeoOpportunitiesTab.tsx |
+| src\domains\ceo\components\CeoOverviewTab.tsx |
 | src\domains\ceo\components\GrowthExperimentCard.tsx |
 | src\domains\ceo\components\OpportunityCard.tsx |
 | src\domains\delivery\components\DeliveryLayout.tsx |

@@ -8,6 +8,7 @@ const mockContext: AiExecutionContext = {
   userId: "user-123",
   workspaceId: "workspace-abc",
   accessToken: "token-xyz",
+  role: "owner",
 };
 
 describe("OpenAI Financial Tools Definitions", () => {

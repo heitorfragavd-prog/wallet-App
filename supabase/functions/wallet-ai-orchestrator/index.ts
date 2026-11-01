@@ -1,3 +1,4 @@
+import { evaluateAiBudgetGuardrail } from "../_shared/ai/cost-calculator.ts";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 import type { AiExecutionContext } from "../_shared/ai/auth.ts";
@@ -76,6 +77,123 @@ const auditLogger = {
       await writeSupabaseAiAudit(adminClient, event);
     } catch (err) {
       console.warn("[wallet-ai-orchestrator] Falha ao registrar log de auditoria:", err);
+    }
+  },
+};
+
+const telemetryLogger = {
+  logTelemetry: async (telemetry: {
+    workspaceId: string;
+    userId: string;
+    conversationId?: string;
+    channel?: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+    durationMs: number;
+    complexityLevel: number;
+    department: string;
+    status: string;
+    metadata?: Record<string, unknown>;
+  }) => {
+    try {
+      const toolCalls = typeof telemetry.metadata?.toolCallsCount === "number" ? telemetry.metadata.toolCallsCount : 0;
+      const provider = typeof telemetry.metadata?.provider === "string" ? telemetry.metadata.provider : (telemetry.model.startsWith("gemini") ? "gemini" : "openai");
+      const correlationId = typeof telemetry.metadata?.correlationId === "string" ? telemetry.metadata.correlationId : null;
+
+      const { error } = await rawSupabaseClient.from("wallet_ai_telemetry").insert({
+        workspace_id: telemetry.workspaceId,
+        user_id: telemetry.userId || null,
+        conversation_id: telemetry.conversationId || null,
+        channel: telemetry.channel || "web",
+        model: telemetry.model,
+        provider,
+        prompt_tokens: telemetry.promptTokens,
+        completion_tokens: telemetry.completionTokens,
+        total_tokens: telemetry.totalTokens,
+        estimated_cost_usd: telemetry.estimatedCostUsd,
+        duration_ms: telemetry.durationMs,
+        tool_calls_count: toolCalls,
+        complexity_level: telemetry.complexityLevel,
+        department: telemetry.department,
+        status: telemetry.status || "success",
+        correlation_id: correlationId,
+        metadata: telemetry.metadata || {},
+      });
+
+      if (error) {
+        console.error("[wallet-ai-orchestrator] Erro ao registrar telemetria de IA:", error);
+      }
+    } catch (err) {
+      console.error("[wallet-ai-orchestrator] Exceção ao registrar telemetria de IA:", err);
+    }
+  },
+  checkBudget: async (workspaceId: string): Promise<{ hardLimitExceeded: boolean; alertTriggered?: string }> => {
+    let hardLimitActive = false;
+    let monthlyBudgetUsd = 10;
+    try {
+      const { data: budgetConfig, error: budgetError } = await rawSupabaseClient
+        .from("wallet_ai_budgets")
+        .select("monthly_budget_usd, hard_limit_active")
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+
+      // Distinção 4: Erro ao consultar a configuração do orçamento
+      // Política estrita fail-closed: não assumir hard limit inativo nem presumir zero se a tabela estiver ausente ou com erro
+      if (budgetError) {
+        console.warn("[wallet-ai-orchestrator] Erro ou ausência na tabela de orçamentos de IA (aplicando fail-closed):", budgetError);
+        return evaluateAiBudgetGuardrail({
+          hardLimitActive: false,
+          monthlyBudgetUsd: 10,
+          totalCostUsd: null,
+          configReadError: true,
+        });
+      }
+
+      // Distinção 1 e 2: Configuração lida com sucesso (ativado ou desativado)
+      if (budgetConfig) {
+        hardLimitActive = Boolean(budgetConfig.hard_limit_active);
+        monthlyBudgetUsd = Number(budgetConfig.monthly_budget_usd || 10);
+      } else {
+        // Distinção 3: Nenhuma configuração cadastrada (workspace novo/padrão)
+        hardLimitActive = false;
+        monthlyBudgetUsd = 10;
+      }
+
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const { data: usageData, error: usageError } = await rawSupabaseClient
+        .from("v_wallet_ai_monthly_usage")
+        .select("total_cost_usd, budget_consumed_percent")
+        .eq("workspace_id", workspaceId)
+        .eq("month_reference", currentMonth)
+        .maybeSingle();
+
+      if (usageError) {
+        console.warn("[wallet-ai-orchestrator] Erro ou ausência na view de telemetria de consumo de IA:", usageError);
+        return evaluateAiBudgetGuardrail({
+          hardLimitActive,
+          monthlyBudgetUsd,
+          totalCostUsd: null,
+          readError: true,
+        });
+      }
+
+      return evaluateAiBudgetGuardrail({
+        hardLimitActive,
+        monthlyBudgetUsd,
+        totalCostUsd: usageData ? Number(usageData.total_cost_usd || 0) : 0,
+        readError: false,
+      });
+    } catch (err) {
+      console.warn("[wallet-ai-orchestrator] Exceção ao verificar orçamento:", err);
+      return evaluateAiBudgetGuardrail({
+        hardLimitActive: false,
+        monthlyBudgetUsd: 10,
+        totalCostUsd: null,
+        configReadError: true,
+      });
     }
   },
 };
@@ -190,6 +308,7 @@ Deno.serve(async (req: Request) => {
     runnerFactory,
     auditLogger,
     conversationRepo,
+    proposalRepo,
     documentPipelineRunner: processDocumentPipeline,
     geminiApiKey,
     geminiApiKeyBackup,
@@ -197,6 +316,7 @@ Deno.serve(async (req: Request) => {
     findDuplicateFn,
     saveProposalFn,
     eyemobileLiveClientFactory,
+    telemetryLogger,
   });
 });
 
