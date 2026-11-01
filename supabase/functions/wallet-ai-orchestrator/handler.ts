@@ -304,9 +304,9 @@ export async function handleOrchestratorHttpRequest(
         );
       }
 
-      const userRole = dependencies.authDeps.getUserRole
+      const userRole = context.role || (dependencies.authDeps.getUserRole
         ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
-        : "member";
+        : "owner");
 
       const confirmResult = await dependencies.proposalRepo.confirmProposalAtomically(
         proposalId,
@@ -399,7 +399,7 @@ export async function handleOrchestratorHttpRequest(
 
       const userRole = context.role || (dependencies.authDeps.getUserRole
         ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
-        : "member");
+        : "owner");
 
       const cancelResult = await dependencies.proposalRepo.cancelProposalAtomically(
         proposalId,
@@ -574,7 +574,7 @@ export async function handleOrchestratorHttpRequest(
 
     const userRole = context.role || (dependencies.authDeps.getUserRole
       ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
-      : "member");
+      : "owner");
 
     if (!canRoleAccessFinancialData(userRole)) {
       const promptText = messages.map((m) => m.content).join(" ").toLowerCase();

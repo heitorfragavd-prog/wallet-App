@@ -417,6 +417,7 @@ export function createQueryToolCatalog(
           receitasFinanceirasDisponiveis: null,
           vendasBrutasEyemobile: null,
           repassesLiquidos: null,
+          repassesLiquidosExplicacao: "Informações financeiras indisponíveis para este período devido a instabilidade na consulta.",
           diferencaConciliacao: null,
           despesasMes: null,
           faturamentoOntem: null,
@@ -435,12 +436,31 @@ export function createQueryToolCatalog(
       const despesasMesAnt = expensesMesAnt.reduce((a, e) => a + e.amount, 0);
       const faturamentoOntem = revenuesOntem.reduce((a, r) => a + r.amount, 0);
 
-      // 2. Repasses líquidos apurados de adquirentes/gateways
+      // 2. Repasses líquidos apurados exclusivamente através de identificadores, fontes e tipos canônicos verificáveis
+      // Regra estrita: NUNCA classificar por palavras encontradas na descrição. Não confundir vendas brutas Eyemobile com liquidação Divipay.
       const repasses = revenuesMes.filter((r) => {
-        const desc = r.description.toLowerCase();
-        return desc.includes("repasse") || desc.includes("divipay") || desc.includes("stone") || desc.includes("cielo") || desc.includes("pagseguro");
+        const anyRecord = r as unknown as Record<string, unknown>;
+        return (
+          anyRecord.source === "repasse" ||
+          anyRecord.source === "settlement" ||
+          anyRecord.source === "divipay_settlement" ||
+          anyRecord.sourceType === "repasse" ||
+          anyRecord.canonicalType === "repasse" ||
+          (typeof r.deduplicationKey === "string" && (
+            r.deduplicationKey.startsWith("repasse:") ||
+            r.deduplicationKey.startsWith("settlement:") ||
+            r.deduplicationKey.startsWith("divipay_settlement:")
+          ))
+        );
       });
-      const repassesLiquidos = repasses.length > 0 ? repasses.reduce((a, r) => a + r.amount, 0) : null;
+
+      const repassesLiquidos = repasses.length > 0
+        ? Math.round(repasses.reduce((a, r) => a + r.amount, 0) * 100) / 100
+        : null;
+
+      const repassesLiquidosExplicacao = repassesLiquidos !== null
+        ? "Repasses líquidos apurados exclusivamente a partir de fontes e tipos canônicos verificáveis de liquidação."
+        : "Informações insuficientes para apuração de repasses líquidos: ausência de registros com fonte ou identificador canônico verificável de liquidação no período.";
 
       // 3. Diferença de conciliação quando ambas as fontes existem
       let diferencaConciliacao: number | null = null;
@@ -448,15 +468,21 @@ export function createQueryToolCatalog(
         diferencaConciliacao = Math.round(Math.abs(vendasBrutasEyemobile - receitasFinanceirasDisponiveis) * 100) / 100;
       }
 
-      // 4. Média do dia da semana nas últimas 4 semanas (28 dias)
+      // 4. Média diária do mesmo dia da semana nas últimas 4 semanas (28 dias)
+      // Agrupa o faturamento por data comparável válida e divide pela quantidade de dias válidos, e NÃO pela quantidade de transações
       let mediaDiaSemanaOntem: number | null = null;
       const transacoesMesmoDia = transactions28.filter((t) => {
+        if (t.kind !== "income") return false;
         const d = new Date(t.occurredOn + "T12:00:00Z");
-        return d.getUTCDay() === diaSemanaOntemIdx && t.kind === "income";
+        return d.getUTCDay() === diaSemanaOntemIdx;
       });
+
       if (transacoesMesmoDia.length > 0) {
         const somaMesmoDia = transacoesMesmoDia.reduce((a, t) => a + t.amount, 0);
-        mediaDiaSemanaOntem = Math.round((somaMesmoDia / transacoesMesmoDia.length) * 100) / 100;
+        const diasValidosDistintos = new Set(transacoesMesmoDia.map((t) => t.occurredOn.slice(0, 10))).size;
+        mediaDiaSemanaOntem = diasValidosDistintos > 0
+          ? Math.round((somaMesmoDia / diasValidosDistintos) * 100) / 100
+          : null;
       }
 
       const variacaoOntemVsMediaPercent = (mediaDiaSemanaOntem && mediaDiaSemanaOntem > 0)
@@ -519,8 +545,9 @@ export function createQueryToolCatalog(
         receitasFinanceirasDisponiveis,
         vendasBrutasEyemobile,
         repassesLiquidos,
+        repassesLiquidosExplicacao,
         diferencaConciliacao,
-        observacaoContabil: "Vendas brutas Eyemobile representam o volume transacionado no caixa/PDV. Receitas financeiras disponíveis representam valores liquidados nas contas da empresa.",
+        observacaoContabil: "Vendas brutas Eyemobile representam o volume transacionado no caixa/PDV. Receitas financeiras disponíveis representam valores liquidados nas contas da empresa. Liquidações Divipay e repasses exigem identificadores canônicos verificáveis.",
         faturamentoMesAnterior: faturamentoMesAnt,
         crescimentoMesPercent,
         faturamentoOntem,
@@ -920,11 +947,11 @@ export async function executeQueryTool(
   if (!handler) throw new Error("tool_not_allowed");
 
   if (FINANCIAL_TOOLS.has(tool)) {
-    if (context.role && !canRoleAccessFinancialData(context.role)) {
+    if (!canRoleAccessFinancialData(context.role)) {
       throw new AiAuthorizationError(
         "WALLET_AI_FORBIDDEN",
         403,
-        `Papel '${context.role}' não possui permissão para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
+        `Papel '${context.role || "ausente"}' não possui permissão para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
       );
     }
   }

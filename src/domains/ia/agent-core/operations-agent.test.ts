@@ -32,6 +32,7 @@ describe("Operations Agent — Suíte Canônica (Etapa 9.5B)", () => {
     userId: TEST_USER,
     workspaceId: TEST_WORKSPACE,
     userRole: "admin",
+    role: "admin",
     channel: "web",
     correlationId: "corr_op_test_123",
   };
@@ -424,6 +425,7 @@ describe("Operations Agent — Suíte Canônica (Etapa 9.5B)", () => {
         userId: TEST_USER,
         workspaceId: TEST_WORKSPACE,
         userRole: "admin",
+    role: "admin",
       };
 
       const res = await handleTelegramTextMessage(
@@ -500,6 +502,7 @@ describe("Operations Agent — Suíte Canônica (Etapa 9.5B)", () => {
         userId: TEST_USER,
         workspaceId: TEST_WORKSPACE,
         userRole: "admin",
+    role: "admin",
       };
 
       const res = await handleTelegramTextMessage(

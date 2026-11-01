@@ -12,6 +12,7 @@ const mockContext: AiExecutionContext = {
   userId: "user-test",
   workspaceId: "workspace-test",
   accessToken: "token-test",
+  role: "owner",
 };
 
 describe("Orchestrator Core", () => {

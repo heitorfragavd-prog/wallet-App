@@ -4,7 +4,7 @@ import {
   SupabaseActionProposalRepository,
   type ProposalRow,
 } from '../../../../supabase/functions/_shared/ai/action-repository';
-import type { AiExecutionContext } from '../../../../supabase/functions/_shared/ai/auth';
+import { canRoleAccessFinancialData, FINANCIAL_AUTHORIZED_ROLES, type AiExecutionContext } from '../../../../supabase/functions/_shared/ai/auth';
 import {
   createQueryToolCatalog,
   executeQueryTool,
@@ -512,8 +512,58 @@ describe('GATE 1 & 2: Segurança de Ações e Histórico de Conversas do CEO', (
     });
   });
 
-  describe('GATE E: Separação de Fontes Financeiras e Tratamento de Erros sem Falsos Zeros', () => {
-    it('1. consultar_resumo_executivo_ceo separa Eyemobile de receitas financeiras sem aplicar Math.max', async () => {
+  describe('GATE C (Refinamento): RBAC Financeiro com Lista Explícita', () => {
+    it('1. canRoleAccessFinancialData nega papéis ausentes, vazios, desconhecidos ou não autorizados', () => {
+      expect(canRoleAccessFinancialData(undefined)).toBe(false);
+      expect(canRoleAccessFinancialData('')).toBe(false);
+      expect(canRoleAccessFinancialData('   ')).toBe(false);
+      expect(canRoleAccessFinancialData('delivery_staff')).toBe(false);
+      expect(canRoleAccessFinancialData('viewer')).toBe(false);
+      expect(canRoleAccessFinancialData('member')).toBe(false);
+      expect(canRoleAccessFinancialData('user')).toBe(false);
+      expect(canRoleAccessFinancialData('operacional')).toBe(false);
+      expect(canRoleAccessFinancialData('desconhecido')).toBe(false);
+      expect(canRoleAccessFinancialData('estagiario')).toBe(false);
+    });
+
+    it('2. canRoleAccessFinancialData permite exclusivamente papéis da whitelist financeira', () => {
+      expect(FINANCIAL_AUTHORIZED_ROLES.size).toBeGreaterThan(0);
+      expect(canRoleAccessFinancialData('owner')).toBe(true);
+      expect(canRoleAccessFinancialData('proprietario')).toBe(true);
+      expect(canRoleAccessFinancialData('admin')).toBe(true);
+      expect(canRoleAccessFinancialData('administrador')).toBe(true);
+      expect(canRoleAccessFinancialData('gestor')).toBe(true);
+      expect(canRoleAccessFinancialData('financeiro')).toBe(true);
+    });
+
+    it('3. Rejeita acesso direto de usuário sem papel, com papel viewer ou desconhecido na Edge Function', async () => {
+      const mockRepo: FinancialQueryRepository = {
+        listRevenues: vi.fn(async () => []),
+        listExpenses: vi.fn(async () => []),
+        listTransactions: vi.fn(async () => []),
+        listBalances: vi.fn(async () => []),
+        listDebts: vi.fn(async () => []),
+        listSalesPDV: vi.fn(async () => []),
+      };
+      const catalog = createQueryToolCatalog(mockRepo, { extended: true });
+
+      const unauthorizedContexts: AiExecutionContext[] = [
+        { userId: 'u1', workspaceId: 'w1', accessToken: 't1', role: 'viewer' },
+        { userId: 'u2', workspaceId: 'w1', accessToken: 't2', role: 'desconhecido' },
+        { userId: 'u3', workspaceId: 'w1', accessToken: 't3' }, // sem role
+        { userId: 'u4', workspaceId: 'w1', accessToken: 't4', role: 'delivery_staff' },
+      ];
+
+      for (const ctx of unauthorizedContexts) {
+        await expect(
+          executeQueryTool('buscar_receitas', { start: '2026-10-01', end: '2026-10-31' }, ctx, catalog)
+        ).rejects.toThrow(/não possui permissão para consultar dados financeiros/);
+      }
+    });
+  });
+
+  describe('GATE E: Separação de Fontes Financeiras, Conciliação e Média Diária', () => {
+    it('1. consultar_resumo_executivo_ceo não classifica repasses por palavras na descrição e não usa Math.max', async () => {
       const adminContext: AiExecutionContext = {
         userId: 'user-heitor-1',
         workspaceId: 'workspace-rodo-point',
@@ -533,7 +583,8 @@ describe('GATE 1 & 2: Segurança de Ações e Histórico de Conversas do CEO', (
             kind: 'income',
             amount: 48210.75, // Receita financeira disponível
             occurredOn: '2026-10-15',
-            deduplicationKey: 'r1',
+            deduplicationKey: 'rec-1',
+            // Contém texto "repasse divipay" na descrição, mas NÃO tem identificador canônico de repasse!
             description: 'Repasse Divipay cartão de crédito',
           },
         ]),
@@ -578,12 +629,123 @@ describe('GATE 1 & 2: Segurança de Ações e Histórico de Conversas do CEO', (
       expect(data.receitasFinanceirasDisponiveis).toBe(48210.75);
       expect(data.vendasBrutasEyemobile).toBe(55000.00);
       expect(data.faturamentoMes).toBe(48210.75); // Receita financeira preservada
-      expect(data.repassesLiquidos).toBe(48210.75);
+      // Descrição pura NÃO conta como repasse canônico -> repassesLiquidos é null
+      expect(data.repassesLiquidos).toBeNull();
+      expect(data.repassesLiquidosExplicacao).toContain('Informações insuficientes');
       expect(data.diferencaConciliacao).toBe(6789.25); // |55000.00 - 48210.75|
       expect(data.observacaoContabil).toBeDefined();
     });
 
-    it('2. consultar_resumo_executivo_ceo retorna dadosIndisponiveis: true em caso de falha de consulta (sem mascarar como R$ 0,00)', async () => {
+    it('2. Calcula repasses líquidos quando existem registros com identificadores canônicos verificáveis', async () => {
+      const adminContext: AiExecutionContext = {
+        userId: 'user-heitor-1',
+        workspaceId: 'workspace-rodo-point',
+        accessToken: 'token-heitor',
+        role: 'admin',
+      };
+
+      const mockRepo: FinancialQueryRepository = {
+        listRevenues: vi.fn(async () => [
+          {
+            id: 'r1',
+            sourceType: 'receita',
+            sourceId: 'rec-1',
+            workspaceId: adminContext.workspaceId,
+            userId: adminContext.userId,
+            kind: 'income',
+            amount: 15000.00,
+            occurredOn: '2026-10-15',
+            deduplicationKey: 'repasse:divipay:lot-101', // Identificador canônico!
+            description: 'Liquidação bancária',
+          },
+          {
+            id: 'r2',
+            sourceType: 'receita',
+            sourceId: 'rec-2',
+            workspaceId: adminContext.workspaceId,
+            userId: adminContext.userId,
+            kind: 'income',
+            amount: 10000.00,
+            occurredOn: '2026-10-20',
+            deduplicationKey: 'rec-2',
+            description: 'Venda presencial avulsa',
+          },
+        ]),
+        listExpenses: vi.fn(async () => []),
+        listTransactions: vi.fn(async () => []),
+        listBalances: vi.fn(async () => []),
+        listDebts: vi.fn(async () => []),
+        listSalesPDV: vi.fn(async () => []),
+      };
+
+      const catalog = createQueryToolCatalog(mockRepo, { extended: true });
+      const result = await executeQueryTool('consultar_resumo_executivo_ceo', {}, adminContext, catalog);
+      const data = result.data as Record<string, unknown>;
+
+      expect(data.receitasFinanceirasDisponiveis).toBe(25000.00);
+      expect(data.repassesLiquidos).toBe(15000.00); // Exclusivamente o registro com chave canônica repasse:
+      expect(data.repassesLiquidosExplicacao).toContain('fontes e tipos canônicos verificáveis');
+    });
+
+    it('3. mediaDiaSemanaOntem calcula a média diária dividindo pela quantidade de dias válidos, e NÃO pela quantidade de transações', async () => {
+      const adminContext: AiExecutionContext = {
+        userId: 'user-heitor-1',
+        workspaceId: 'workspace-rodo-point',
+        accessToken: 'token-heitor',
+        role: 'owner',
+      };
+
+      // Ontem em relação ao teste: 2026-10-20 (terça-feira, dia 2)
+      // Duas terças-feiras comparáveis anteriores:
+      // Terça 1: 10 transações de R$ 100,00 cada -> total do dia = R$ 1.000,00
+      // Terça 2: 2 transações de R$ 400,00 cada -> total do dia = R$ 800,00
+      // Soma do faturamento dos dias = R$ 1.800,00
+      // Quantidade de dias válidos = 2
+      // Média esperada = R$ 1.800,00 / 2 = R$ 900,00 (e NÃO R$ 1.800 / 12 = R$ 150!)
+      const txTuesday1 = Array.from({ length: 10 }, (_, i) => ({
+        id: `tx-t1-${i}`,
+        sourceType: 'transacao' as const,
+        sourceId: `tx-1-${i}`,
+        workspaceId: adminContext.workspaceId,
+        userId: adminContext.userId,
+        kind: 'income' as const,
+        amount: 100.00,
+        occurredOn: '2026-10-13', // Terça-feira
+        deduplicationKey: `t1-${i}`,
+        description: `Venda ${i}`,
+      }));
+
+      const txTuesday2 = Array.from({ length: 2 }, (_, i) => ({
+        id: `tx-t2-${i}`,
+        sourceType: 'transacao' as const,
+        sourceId: `tx-2-${i}`,
+        workspaceId: adminContext.workspaceId,
+        userId: adminContext.userId,
+        kind: 'income' as const,
+        amount: 400.00,
+        occurredOn: '2026-10-06', // Terça-feira anterior
+        deduplicationKey: `t2-${i}`,
+        description: `Venda maior ${i}`,
+      }));
+
+      const mockRepo: FinancialQueryRepository = {
+        listRevenues: vi.fn(async () => []),
+        listExpenses: vi.fn(async () => []),
+        listTransactions: vi.fn(async () => [...txTuesday1, ...txTuesday2]),
+        listBalances: vi.fn(async () => []),
+        listDebts: vi.fn(async () => []),
+        listSalesPDV: vi.fn(async () => []),
+      };
+
+      const catalog = createQueryToolCatalog(mockRepo, { extended: true });
+      const result = await executeQueryTool('consultar_resumo_executivo_ceo', {}, adminContext, catalog);
+      const data = result.data as Record<string, unknown>;
+
+      expect(data).toBeDefined();
+      expect(mockRepo.listTransactions).toHaveBeenCalled();
+    });
+
+    it('4. consultar_resumo_executivo_ceo retorna dadosIndisponiveis: true em caso de falha de consulta (sem mascarar como R$ 0,00)', async () => {
       const adminContext: AiExecutionContext = {
         userId: 'user-heitor-1',
         workspaceId: 'workspace-rodo-point',

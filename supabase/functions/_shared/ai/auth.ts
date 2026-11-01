@@ -23,25 +23,28 @@ export interface AiExecutionContext {
 }
 
 /**
- * Validação de autorização RBAC para dados e ferramentas financeiras.
- * Papéis estritamente operacionais (delivery_staff, operacional, cozinha, etc.)
- * NÃO possuem autorização para consultar dados financeiros (faturamento, despesas,
- * saldos, lucros, margens, CMV, DRE e receitas).
+ * Lista explícita de papéis com autorização para dados e ferramentas financeiras.
+ * Apenas papéis de gestão e administração (owner, proprietario, admin, administrador, gestor, financeiro)
+ * possuem autorização para visualizar faturamento, despesas, saldos, lucros, margens, CMV, DRE e receitas.
+ */
+export const FINANCIAL_AUTHORIZED_ROLES = new Set([
+  "owner",
+  "proprietario",
+  "admin",
+  "administrador",
+  "gestor",
+  "financeiro",
+]);
+
+/**
+ * Validação de autorização RBAC para dados e ferramentas financeiras com lista explícita.
+ * Nega acesso caso o papel esteja ausente, inválido ou não autorizado (whitelist estrita).
  */
 export function canRoleAccessFinancialData(role?: string): boolean {
-  if (!role) return true;
+  if (!role || typeof role !== "string") return false;
   const normalized = role.toLowerCase().trim();
-  if (
-    normalized === "delivery_staff" ||
-    normalized === "operacional" ||
-    normalized === "cozinha" ||
-    normalized === "atendimento" ||
-    normalized === "motoboy" ||
-    normalized === "entregador"
-  ) {
-    return false;
-  }
-  return true;
+  if (!normalized) return false;
+  return FINANCIAL_AUTHORIZED_ROLES.has(normalized);
 }
 
 export type AiAuthorizationErrorCode =
@@ -141,6 +144,11 @@ export async function authorizeAiRequest(
   }
   if (dependencies.getUserRole) {
     result.role = await dependencies.getUserRole(workspace.id, user.id);
+  } else if (
+    (workspace as Record<string, unknown>).owner_id === user.id ||
+    (workspace as Record<string, unknown>).user_id === user.id
+  ) {
+    result.role = "owner";
   }
 
   return Object.freeze(result as unknown as AiExecutionContext);
