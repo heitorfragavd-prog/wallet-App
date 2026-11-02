@@ -20,7 +20,7 @@ export interface EyemobileStore {
   name: string;
 }
 
-interface DashboardFilters {
+export interface DashboardFilters {
   startDate: string;
   endDate: string;
   storeId?: string;
@@ -132,7 +132,7 @@ async function buildLocalFallbackDashboard(
   };
 }
 
-async function fetchLiveDashboard(
+export async function fetchLiveDashboard(
   filters: DashboardFilters,
   workspaceId?: string,
 ): Promise<EyemobileDashboardResult> {

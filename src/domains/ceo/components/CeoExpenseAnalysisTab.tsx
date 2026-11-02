@@ -97,6 +97,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .eq('tipo', 'receita')
             .gte('data', inicioAntStr)
             .lte('data', `${fimAntStr}T23:59:59.999Z`)
+            .order('data', { ascending: true })
             .range(from, to)
       );
 
@@ -151,9 +152,9 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       }
 
       // Resultado operacional real (permite negativo se despesas > receitas)
-      const resOp = totalRec - totalDesp;
+      const resOp = totalDesp > 0 ? totalRec - totalDesp : totalRec;
       setResultadoOperacional(resOp);
-      setMargemOperacional(totalRec > 0 ? Math.round((resOp / totalRec) * 1000) / 10 : null);
+      setMargemOperacional(totalRec > 0 && totalDesp > 0 ? Math.round((resOp / totalRec) * 1000) / 10 : null);
 
       // 5. CMV Status
       const { count: countFichas } = await supabase
@@ -172,8 +173,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       // 6. Agrupamento de Despesas por Categoria Canônica (tabela categorias)
       const { data: categorias } = await supabase
         .from('categorias')
-        .select('id, nome')
-        .eq('workspace_id', workspaceId);
+        .select('id, nome');
 
       const catNamesById = new Map<string, string>();
       for (const c of categorias || []) {
@@ -352,6 +352,8 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                 <span className={`font-semibold ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
                   Margem: {margemOperacional}%
                 </span>
+              ) : despesasOperacionais === 0 ? (
+                <span className="text-slate-500">Aguardando lançamento de despesas</span>
               ) : (
                 <span className="text-slate-500">Receitas - Despesas</span>
               )}
