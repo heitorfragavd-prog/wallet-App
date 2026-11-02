@@ -10,7 +10,7 @@
  * 3. Formato Canônico Versionado: "v1:<key_id>:<base64_iv>:<base64_ciphertext_tag>"
  * 4. Suporte a Rotação de Chaves: Identificador de chave (keyId) no cabeçalho permite descriptografia com chaves anteriores e re-cifragem com a chave ativa.
  * 5. Fail-Closed: Qualquer adulteração de bytes ou ausência de chave lança erro genérico sem expor dados confidenciais.
- * 6. Entropia Comprovada: Verificação matemática de entropia de Shannon e diversidade de caracteres na chave mestre.
+ * 6. Validação Criptográfica de 256 bits: Exigência de chave gerada com fonte criptograficamente segura em formato verificável (Hex 64 chars = 256 bits, Base64 = 32 bytes exatos, ou binário >= 32 bytes com diversidade de bytes).
  */
 
 function toBase64(bytes: Uint8Array): string {
@@ -38,56 +38,76 @@ function fromBase64(b64: string): Uint8Array {
 }
 
 /**
- * Calcula a entropia de Shannon (em bits por caractere) de uma string.
+ * Valida se uma chave mestre atende a requisitos criptográficos rígidos e verificáveis:
+ * - Formato Hexadecimal de 64 caracteres (256 bits exatos); OU
+ * - Formato Base64 decodificável em exatamente 32 bytes (256 bits); OU
+ * - Material binário de no mínimo 32 bytes (256 bits) com diversidade estrita de bytes.
+ * Não utiliza aproximações heurísticas frágeis como prova de entropia.
  */
-export function calculateShannonEntropy(str: string): number {
-  if (!str || str.length === 0) return 0;
-  const len = str.length;
-  const frequencies = new Map<string, number>();
-  for (const char of str) {
-    frequencies.set(char, (frequencies.get(char) || 0) + 1);
+export function validateMasterVaultKey(key?: string | null): {
+  valid: boolean;
+  reason?: string;
+  format?: "hex" | "base64" | "raw_bytes";
+  decodedBytes?: Uint8Array;
+} {
+  if (!key || typeof key !== "string") {
+    return { valid: false, reason: "MARKETPLACE_VAULT_KEY ausente ou formato inválido" };
   }
-  let entropy = 0;
-  for (const count of frequencies.values()) {
-    const p = count / len;
-    entropy -= p * Math.log2(p);
+  const trimmed = key.trim();
+
+  // 1. Verificação de formato Hexadecimal (64 caracteres hex = exatamente 32 bytes / 256 bits)
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    const bytes = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) {
+      bytes[i] = parseInt(trimmed.slice(i * 2, i * 2 + 2), 16);
+    }
+    const uniqueBytes = new Set(bytes).size;
+    if (uniqueBytes < 8) {
+      return { valid: false, reason: "Chave hexadecimal possui entropia nula ou bytes repetidos/triviais" };
+    }
+    return { valid: true, format: "hex", decodedBytes: bytes };
   }
-  return entropy;
+
+  // 2. Verificação de formato Base64 (representando exatamente 32 bytes / 256 bits)
+  if (/^[A-Za-z0-9+/]{42,43}={0,2}$|^[A-Za-z0-9_-]{42,43}={0,2}$/.test(trimmed)) {
+    try {
+      const decoded = fromBase64(trimmed);
+      if (decoded.length === 32) {
+        const uniqueBytes = new Set(decoded).size;
+        if (uniqueBytes < 8) {
+          return { valid: false, reason: "Chave base64 possui bytes repetidos ou nulos" };
+        }
+        return { valid: true, format: "base64", decodedBytes: decoded };
+      }
+    } catch {
+      // Ignora erro de base64 e cai na validação de bytes UTF-8
+    }
+  }
+
+  // 3. Verificação de decodificação direta de bytes (mínimo de 32 bytes criptográficos)
+  const utf8Bytes = new TextEncoder().encode(trimmed);
+  if (utf8Bytes.length < 32) {
+    return {
+      valid: false,
+      reason: `MARKETPLACE_VAULT_KEY possui apenas ${utf8Bytes.length} bytes (mínimo exigido: 32 bytes / 256 bits)`,
+    };
+  }
+
+  const uniqueBytes = new Set(utf8Bytes).size;
+  if (uniqueBytes < 12) {
+    return {
+      valid: false,
+      reason: `MARKETPLACE_VAULT_KEY possui baixa diversidade de caracteres (${uniqueBytes} únicos, mínimo exigido: 12)`,
+    };
+  }
+
+  return { valid: true, format: "raw_bytes", decodedBytes: utf8Bytes };
 }
 
 /**
- * Valida se uma chave mestre atende a requisitos criptográficos rígidos:
- * - Mínimo 32 caracteres (equivalente a 256 bits);
- * - Mínimo 12 caracteres distintos;
- * - Entropia de Shannon >= 3.2 bits/char (elimina padrões triviais e repetições).
+ * Alias retrocompatível para validateMasterVaultKey.
  */
-export function validateVaultKeyEntropy(key?: string | null): { valid: boolean; reason?: string } {
-  if (!key || typeof key !== "string") {
-    return { valid: false, reason: "MARKETPLACE_VAULT_KEY ausente ou inválida" };
-  }
-  const trimmed = key.trim();
-  if (trimmed.length < 32) {
-    return {
-      valid: false,
-      reason: `MARKETPLACE_VAULT_KEY possui apenas ${trimmed.length} caracteres (mínimo exigido: 32 caracteres / 256 bits)`,
-    };
-  }
-  const uniqueChars = new Set(trimmed).size;
-  if (uniqueChars < 12) {
-    return {
-      valid: false,
-      reason: `MARKETPLACE_VAULT_KEY possui baixa diversidade de caracteres (${uniqueChars} únicos, mínimo exigido: 12)`,
-    };
-  }
-  const entropy = calculateShannonEntropy(trimmed);
-  if (entropy < 3.2) {
-    return {
-      valid: false,
-      reason: `MARKETPLACE_VAULT_KEY possui entropia de Shannon insuficiente (${entropy.toFixed(2)} bits/char, mínimo exigido: 3.2)`,
-    };
-  }
-  return { valid: true };
-}
+export const validateVaultKeyEntropy = validateMasterVaultKey;
 
 /**
  * Deriva uma CryptoKey AES-256-GCM a partir de um segredo mestre usando HKDF-SHA256.
@@ -96,13 +116,13 @@ export async function deriveVaultKey(
   masterSecret: string,
   keyId = "v1"
 ): Promise<CryptoKey> {
-  const validation = validateVaultKeyEntropy(masterSecret);
+  const validation = validateMasterVaultKey(masterSecret);
   if (!validation.valid) {
     throw new Error(`Master secret validation failed: ${validation.reason}`);
   }
 
+  const rawKeyData = validation.decodedBytes || new TextEncoder().encode(masterSecret.trim());
   const enc = new TextEncoder();
-  const rawKeyData = enc.encode(masterSecret.trim());
   const salt = enc.encode(`wallet-delivery-vault-salt-${keyId}`);
   const info = enc.encode("delivery-marketplace-credentials-aes-256-gcm");
 

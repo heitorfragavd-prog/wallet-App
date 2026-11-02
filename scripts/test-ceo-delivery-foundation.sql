@@ -552,6 +552,164 @@ BEGIN
 END $$;
 COMMIT;
 
+-- =========================================================================
+-- CENÁRIO 14.B: BATERIA MANDATÓRIA DE PRIVILÉGIOS MÍNIMOS E COFRE SEGURO
+-- Valida que:
+-- 1. Usuário autenticado NÃO pode gravar ciphertext arbitrário no cofre
+-- 2. Administrador NÃO pode forçar 'homologated' via RPC direta (exclusiva de service_role)
+-- 3. Funcionário NÃO consegue acessar credenciais de outro workspace
+-- 4. Edge Function autorizada (service_role) opera normalmente
+-- =========================================================================
+BEGIN;
+
+-- 1. Executa a migration do cofre de delivery
+\ir ../supabase/migrations/20261102150000_delivery_marketplace_vault.sql
+
+-- 2. Testes com Usuário Administrador Autenticado (deve ser bloqueado de executar RPCs diretas)
+SET LOCAL request.jwt.claims = '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_caught_table_block BOOLEAN := false;
+  v_caught_save_rpc_block BOOLEAN := false;
+  v_caught_test_rpc_block BOOLEAN := false;
+  v_caught_disc_rpc_block BOOLEAN := false;
+  v_caught_meta_rpc_block BOOLEAN := false;
+  v_ws1_id UUID := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+BEGIN
+  -- Teste 1: Bloqueio de inserção direta na tabela de cofre por usuário authenticated
+  BEGIN
+    INSERT INTO public.delivery_channel_secrets (
+      workspace_id, channel_name, merchant_id, client_id, client_secret_encrypted
+    ) VALUES (
+      v_ws1_id, 'ifood', 'm-test', 'c-test', 'ciphertext-injetado-arbitrariamente'
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_table_block := true;
+  END;
+
+  IF NOT v_caught_table_block THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.1]: authenticated conseguiu gravar diretamente no cofre delivery_channel_secrets!';
+  END IF;
+
+  -- Teste 2: Bloqueio de chamada direta a save_delivery_channel_vault_atomic
+  BEGIN
+    PERFORM public.save_delivery_channel_vault_atomic(
+      v_ws1_id, 'ifood', 'm-test', 'c-test', 'v1', 'ciphertext-arbitrario'
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_save_rpc_block := true;
+  END;
+
+  IF NOT v_caught_save_rpc_block THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.2]: authenticated conseguiu executar save_delivery_channel_vault_atomic sem permissão!';
+  END IF;
+
+  -- Teste 3: Bloqueio de forçar homologação via record_delivery_channel_test_atomic
+  BEGIN
+    PERFORM public.record_delivery_channel_test_atomic(
+      v_ws1_id, 'ifood', 'homologated', true, 200, 100, 'Forcado manualmente', 'OK'
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_test_rpc_block := true;
+  END;
+
+  IF NOT v_caught_test_rpc_block THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.3]: authenticated conseguiu forçar status homologated via record_delivery_channel_test_atomic!';
+  END IF;
+
+  -- Teste 4: Bloqueio de desconexão via RPC direta
+  BEGIN
+    PERFORM public.disconnect_delivery_marketplace(v_ws1_id, 'ifood');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_disc_rpc_block := true;
+  END;
+
+  IF NOT v_caught_disc_rpc_block THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.4]: authenticated conseguiu invocar disconnect_delivery_marketplace diretamente!';
+  END IF;
+
+  -- Teste 5: Bloqueio de leitura de metadata via RPC direta
+  BEGIN
+    PERFORM public.get_delivery_channel_metadata(v_ws1_id, 'ifood');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_caught_meta_rpc_block := true;
+  END;
+
+  IF NOT v_caught_meta_rpc_block THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.5]: authenticated conseguiu invocar get_delivery_channel_metadata diretamente!';
+  END IF;
+END $$;
+
+-- 3. Teste de Isolamento entre Workspaces (Usuário de Outro Workspace)
+SET LOCAL request.jwt.claims = '{"sub": "33333333-3333-3333-3333-333333333333", "role": "authenticated"}';
+SET LOCAL ROLE authenticated;
+
+DO $$
+DECLARE
+  v_count INTEGER;
+  v_ws1_id UUID := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+BEGIN
+  -- Usuário alheio tenta ler canais do workspace 1
+  SELECT count(*) INTO v_count FROM public.delivery_channels WHERE workspace_id = v_ws1_id;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'FALHA DE ISOLAMENTO [CENÁRIO 14.B.6]: usuário acessou canais de workspace alheio!';
+  END IF;
+END $$;
+
+-- 4. Teste de Operação Normal e Autorizada via service_role (Edge Function)
+SET LOCAL request.jwt.claims = '{"role": "service_role"}';
+SET LOCAL ROLE service_role;
+
+DO $$
+DECLARE
+  v_ws1_id UUID := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  v_save_res JSONB;
+  v_test_res JSONB;
+  v_channel_record RECORD;
+BEGIN
+  -- 4.1: Edge function salva credenciais com segurança atômica
+  v_save_res := public.save_delivery_channel_vault_atomic(
+    v_ws1_id, 'ifood', 'm-ifood-1', 'client-ifood-1', 'v1', 'v1:v1:iv:cipher123'
+  );
+  IF (v_save_res->>'success')::boolean IS NOT TRUE THEN
+    RAISE EXCEPTION 'FALHA OPERACIONAL [CENÁRIO 14.B.7]: service_role falhou ao salvar credenciais atômicas!';
+  END IF;
+
+  -- 4.2: Edge function registra teste de loja fechada (homologado porém auto-aceite bloqueado)
+  v_test_res := public.record_delivery_channel_test_atomic(
+    v_ws1_id, 'ifood', 'homologated', true, 200, 150, 'Loja fora de expediente', 'CLOSED'
+  );
+  IF (v_test_res->>'success')::boolean IS NOT TRUE THEN
+    RAISE EXCEPTION 'FALHA OPERACIONAL [CENÁRIO 14.B.8]: service_role falhou ao registrar teste atômico!';
+  END IF;
+
+  SELECT auto_accept_orders, connection_state INTO v_channel_record
+  FROM public.delivery_channels
+  WHERE workspace_id = v_ws1_id AND channel_name = 'ifood';
+
+  IF v_channel_record.connection_state <> 'homologated' THEN
+    RAISE EXCEPTION 'FALHA DE ESTADO [CENÁRIO 14.B.9]: connection_state deveria ser homologated!';
+  END IF;
+
+  IF v_channel_record.auto_accept_orders IS TRUE THEN
+    RAISE EXCEPTION 'FALHA DE REGRA DE NEGÓCIO [CENÁRIO 14.B.10]: auto_accept_orders não pode ficar ativo quando loja está CLOSED!';
+  END IF;
+
+  -- 4.3: Edge function desconecta canal atomicamente
+  PERFORM public.disconnect_delivery_marketplace(v_ws1_id, 'ifood');
+
+  IF EXISTS (SELECT 1 FROM public.delivery_channel_secrets WHERE workspace_id = v_ws1_id AND channel_name = 'ifood') THEN
+    RAISE EXCEPTION 'FALHA DE PURGA [CENÁRIO 14.B.11]: segredo ainda existe no cofre após desconexão!';
+  END IF;
+END $$;
+
+-- 5. Rollback da migration de delivery
+\ir ../supabase/migrations/rollback/20261102150000_delivery_marketplace_vault.down.sql
+
+COMMIT;
+
 -- CENÁRIO 15: Execução limpa do rollback
 \ir ../supabase/migrations/rollback/20261030010000_wallet_ceo_delivery_foundation.down.sql
 

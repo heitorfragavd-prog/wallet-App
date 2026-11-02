@@ -2,7 +2,7 @@
 -- MIGRATION: 20261102150000_delivery_marketplace_vault.sql
 -- Submódulo: Delivery Marketplaces (iFood / 99Food)
 -- Cofre Seguro de Credenciais, Zero Exposição no Frontend, Handshake OAuth Oficial
--- e Operações Transacionais Atômicas (save, test, disconnect)
+-- e Operações Transacionais Atômicas Exclusivas do Servidor (service_role)
 -- ==============================================================================
 
 BEGIN;
@@ -35,10 +35,11 @@ CREATE INDEX IF NOT EXISTS idx_delivery_channel_secrets_workspace
 -- 2. POLÍTICA RLS ABSOLUTA: BLOQUEIO TOTAL DIRETO PARA ANON E AUTHENTICATED
 ALTER TABLE public.delivery_channel_secrets ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.delivery_channel_secrets FROM public, anon, authenticated;
+REVOKE ALL ON public.delivery_channel_secrets FROM PUBLIC, anon, authenticated;
 GRANT ALL ON public.delivery_channel_secrets TO service_role;
 
 -- 3. RPC: OBTER METADATA SANITIZADA DO CANAL (SEM EXPOR SEGREDO)
+-- GATE 1: Restrita exclusivamente a service_role (Edge Functions autorizadas)
 CREATE OR REPLACE FUNCTION public.get_delivery_channel_metadata(
   p_workspace_id UUID,
   p_channel_name TEXT
@@ -56,11 +57,6 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  -- Valida acesso de administrador no workspace
-  IF NOT public.tem_acesso_admin_workspace(p_workspace_id) THEN
-    RAISE EXCEPTION 'Acesso negado: apenas administradores do workspace podem visualizar credenciais.';
-  END IF;
-
   RETURN QUERY
   SELECT
     s.channel_name,
@@ -78,9 +74,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.get_delivery_channel_metadata(UUID, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.get_delivery_channel_metadata(UUID, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_delivery_channel_metadata(UUID, TEXT) TO service_role;
 
 -- 4. RPC TRANSACIONAL ATÔMICA: SALVAMENTO SEGURO DE CREDENCIAIS E ESTADO DO CANAL
+-- GATE 1: Restrita exclusivamente a service_role (Edge Functions autorizadas)
 CREATE OR REPLACE FUNCTION public.save_delivery_channel_vault_atomic(
   p_workspace_id UUID,
   p_channel_name TEXT,
@@ -100,10 +98,6 @@ DECLARE
   v_client_preview TEXT;
   v_log_entry JSONB;
 BEGIN
-  IF NOT public.tem_acesso_admin_workspace(p_workspace_id) THEN
-    RAISE EXCEPTION 'Acesso negado: apenas administradores do workspace podem salvar credenciais no cofre.';
-  END IF;
-
   v_display_name := CASE WHEN p_channel_name = 'ifood' THEN 'iFood Marketplace' ELSE '99Food Restaurante' END;
   v_client_preview := CASE
     WHEN length(p_client_id) <= 8 THEN '********'
@@ -202,9 +196,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.save_delivery_channel_vault_atomic(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.save_delivery_channel_vault_atomic(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.save_delivery_channel_vault_atomic(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO service_role;
 
 -- 5. RPC TRANSACIONAL ATÔMICA: REGISTRAR RESULTADO DE TESTE DE CONEXÃO
+-- GATE 1 & GATE 2: Restrita a service_role; auto-aceite bloqueado se loja fechada/pausada
 CREATE OR REPLACE FUNCTION public.record_delivery_channel_test_atomic(
   p_workspace_id UUID,
   p_channel_name TEXT,
@@ -226,14 +222,10 @@ DECLARE
   v_status TEXT;
   v_auto_accept_allowed BOOLEAN;
 BEGIN
-  IF NOT public.tem_acesso_admin_workspace(p_workspace_id) THEN
-    RAISE EXCEPTION 'Acesso negado: apenas administradores do workspace podem registrar testes de canais.';
-  END IF;
-
   v_status := CASE WHEN p_is_success THEN 'active' ELSE 'pending_auth' END;
   
-  -- auto_accept só pode permanecer ativo se for homologado
-  v_auto_accept_allowed := (p_connection_state = 'homologated');
+  -- GATE 2: auto_accept SÓ pode permanecer ativo se for homologado E loja aberta operacionalmente (OK)
+  v_auto_accept_allowed := (p_connection_state = 'homologated' AND upper(coalesce(p_operational_status, 'OK')) = 'OK');
 
   v_test_log := jsonb_build_object(
     'id', 'test-' || floor(extract(epoch from v_tested_at) * 1000)::text,
@@ -272,9 +264,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT) TO service_role;
 
 -- 6. RPC TRANSACIONAL ATÔMICA: DESCONECTAR MARKETPLACE E PURGAR CREDENCIAIS
+-- GATE 1: Restrita exclusivamente a service_role (Edge Functions autorizadas)
 CREATE OR REPLACE FUNCTION public.disconnect_delivery_marketplace(
   p_workspace_id UUID,
   p_channel_name TEXT
@@ -285,10 +279,6 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF NOT public.tem_acesso_admin_workspace(p_workspace_id) THEN
-    RAISE EXCEPTION 'Acesso negado: apenas administradores do workspace podem desconectar marketplaces.';
-  END IF;
-
   -- Remove credenciais com segurança no cofre
   DELETE FROM public.delivery_channel_secrets
   WHERE workspace_id = p_workspace_id
@@ -325,6 +315,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.disconnect_delivery_marketplace(UUID, TEXT) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.disconnect_delivery_marketplace(UUID, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.disconnect_delivery_marketplace(UUID, TEXT) TO service_role;
 
 COMMIT;

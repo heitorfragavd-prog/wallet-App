@@ -344,16 +344,8 @@ export class MarketplaceIntegrationService {
       });
 
       if (edgeError || !edgeData?.success) {
-        // Tenta RPC autorizada no banco caso a Edge Function não esteja disponível
-        const { error: rpcErr } = await supabase.rpc('disconnect_delivery_marketplace', {
-          p_workspace_id: workspaceId,
-          p_channel_name: channelName,
-        });
-
-        if (rpcErr) {
-          const msg = edgeError?.message || rpcErr.message || 'Falha ao desconectar canal.';
-          return { success: false, message: msg, error: msg };
-        }
+        const msg = edgeError?.message || edgeData?.error || 'Falha ao desconectar canal no servidor.';
+        return { success: false, message: msg, error: msg };
       }
 
       return {

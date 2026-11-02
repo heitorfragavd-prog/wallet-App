@@ -3,7 +3,7 @@ import {
   encryptVaultSecret,
   decryptVaultSecret,
   rotateVaultSecret,
-  calculateShannonEntropy,
+  validateMasterVaultKey,
   validateVaultKeyEntropy,
 } from '../../../../supabase/functions/_shared/vault-crypto';
 import { MarketplaceIntegrationService } from './MarketplaceIntegrationService';
@@ -22,7 +22,10 @@ vi.mock('@/integrations/supabase/client', () => ({
   },
 }));
 
-describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptografia e Integridade (Gates A a D & Missão 2)', () => {
+describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptografia e Integridade (Gates 1 a 4)', () => {
+  // Chaves de teste sintéticas criptograficamente fortes (formato verificável de 256 bits)
+  const masterKeyHex64 = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  const masterKeyBase64 = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
   const masterKeyV1 = 'super-secret-master-encryption-key-for-wallet-2026';
   const masterKeyV2 = 'rotated-super-secret-master-encryption-key-2027';
   const syntheticSecret = 'prod-ifood-secret-oauth-9988-test-live-key-xyz!@#';
@@ -104,10 +107,10 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     await expect(decryptVaultSecret(rotatedV2, masterKeyV1)).rejects.toThrow();
   });
 
-  // Teste 7: Revogação / purga de credenciais (disconnectChannel)
-  it('7. Revogação e purga: desconectar canal elimina credenciais do cofre', async () => {
+  // Teste 7: Revogação / purga de credenciais e privilégios mínimos (GATE 1)
+  it('7. Revogação e purga: desconectar canal invoca exclusivamente a Edge Function sem fallback direto para RPC no cliente', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
-      data: { success: true, message: 'Credenciais purgadas' },
+      data: { success: true, message: 'Credenciais purgadas via service_role' },
       error: null,
     });
 
@@ -122,6 +125,23 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
         channel_name: 'ifood',
       },
     });
+
+    // GATE 1: Cliente NUNCA tenta chamar supabase.rpc('disconnect_delivery_marketplace')
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  // Teste 7.B: Fail-closed no cliente se a Edge Function falhar ao desconectar (GATE 1)
+  it('7.B. Fail-closed: se a Edge Function de desconexão falhar, retorna erro sem contornar permissões via RPC', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: { success: false, error: 'Erro interno no cofre' },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.disconnectChannel('ws-secure-99', 'ifood');
+
+    expect(res.success).toBe(false);
+    expect(res.message).toContain('Erro interno no cofre');
+    expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
   // Teste 8: Tentativa de acesso cruzado de workspaces (IDOR / isolamento RBAC)
@@ -228,7 +248,7 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(res.message).toContain('Falha ao persistir no cofre');
   });
 
-  // Teste 12: Gate B - Alterar credenciais invalida homologação anterior e bloqueia auto-aceite
+  // Teste 12: Invalidação de homologação ao alterar credenciais
   it('12. Invalidação de homologação: atualizar credenciais reseta o estado para credentials_saved e desativa auto-aceite', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: {
@@ -253,14 +273,14 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(res.state).not.toBe('homologated');
   });
 
-  // Teste 13: Ponto 1 (Missão 2) — Homologação oficial preservada mesmo com loja fechada ou pausada
+  // Teste 13: GATE 2 — Homologação oficial preservada mesmo com loja fechada ou pausada
   it('13. HTTP 200 com loja fechada/pausada: homologação concedida com separação estrita de status operacional (CLOSED/PAUSED)', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: {
         success: true,
         state: 'homologated',
         operational_status: 'CLOSED',
-        message: 'Conexão e aplicativo homologados no iFood. Loja autorizada, atualmente fechada/pausada operacionalmente (CLOSED).',
+        message: 'Homologação comprovada preservada no iFood. Loja atualmente fechada/pausada operacionalmente (CLOSED).',
       },
       error: null,
     });
@@ -271,13 +291,13 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
       merchantId: 'm-closed',
     });
 
-    // Ponto 1: Loja fechada NÃO perde homologação da aplicação
+    // GATE 2: Loja fechada NÃO perde homologação da aplicação
     expect(res.success).toBe(true);
     expect(res.state).toBe('homologated');
     expect(res.message).toContain('fechada/pausada operacionalmente');
   });
 
-  // Teste 14: Gate D - Não assume taxas contratuais fictícias (retorna 0 para canais sem taxa registrada)
+  // Teste 14: Taxas e comissões não configuradas retornam 0 sem presumir estimativas contratuais fictícias
   it('14. Taxas e comissões não configuradas retornam 0 sem presumir estimativas contratuais fictícias', async () => {
     const mockRows = [
       {
@@ -305,46 +325,53 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     const integrations = await MarketplaceIntegrationService.getIntegrations('ws-1');
     const ifood = integrations.find((i) => i.channel_name === 'ifood')!;
 
-    // Não deve assumir 0.23 (23%) como fato contratual comprovado
     expect(ifood.commission_rate).toBe(0);
     expect(ifood.payment_fee_rate).toBe(0);
     expect(ifood.fixed_fee).toBe(0);
   });
 
-  // Teste 15: Ponto 3 (Missão 2) — Validação matemática de entropia criptográfica da MARKETPLACE_VAULT_KEY
-  it('15. Entropia criptográfica: rejeita chaves fracas, curtas ou repetitivas e aprova chaves de alta entropia', () => {
-    // Chave curta (< 32 chars)
+  // Teste 15: GATE 3 — Validação de chave criptográfica de 256 bits verificável (Hex 64 ou Base64 32 bytes)
+  it('15. Validação de formato criptográfico da MARKETPLACE_VAULT_KEY (formato verificável de 256 bits)', async () => {
+    // 15.1: Chave Hexadecimal de 64 caracteres (256 bits exatos)
+    const vHex = validateMasterVaultKey(masterKeyHex64);
+    expect(vHex.valid).toBe(true);
+    expect(vHex.format).toBe('hex');
+
+    // Cifragem e decifragem com chave Hex 64
+    const encHex = await encryptVaultSecret(syntheticSecret, masterKeyHex64);
+    const decHex = await decryptVaultSecret(encHex, masterKeyHex64);
+    expect(decHex).toBe(syntheticSecret);
+
+    // 15.2: Chave Base64 representando 32 bytes (256 bits exatos)
+    const vB64 = validateMasterVaultKey(masterKeyBase64);
+    expect(vB64.valid).toBe(true);
+    expect(vB64.format).toBe('base64');
+
+    // Cifragem e decifragem com chave Base64 32 bytes
+    const encB64 = await encryptVaultSecret(syntheticSecret, masterKeyBase64);
+    const decB64 = await decryptVaultSecret(encB64, masterKeyBase64);
+    expect(decB64).toBe(syntheticSecret);
+
+    // 15.3: Chave Hexadecimal com bytes repetidos/nulos (rejeitada)
+    const badHex = '0000000000000000000000000000000000000000000000000000000000000000';
+    const vBadHex = validateMasterVaultKey(badHex);
+    expect(vBadHex.valid).toBe(false);
+    expect(vBadHex.reason).toContain('bytes repetidos/triviais');
+
+    // 15.4: Chave curta (< 32 bytes)
     const shortKey = 'short-key-123';
     const vShort = validateVaultKeyEntropy(shortKey);
     expect(vShort.valid).toBe(false);
-    expect(vShort.reason).toContain('apenas 13 caracteres');
+    expect(vShort.reason).toContain('apenas 13 bytes');
 
-    // Chave longa repetitiva (32 caracteres iguais, entropia = 0)
+    // 15.5: Chave com 32 caracteres porém repetitiva (baixa diversidade)
     const repeatedKey = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const vRep = validateVaultKeyEntropy(repeatedKey);
     expect(vRep.valid).toBe(false);
     expect(vRep.reason).toContain('baixa diversidade');
-
-    // Chave com padrão repetitivo (baixa diversidade)
-    const lowDivKey = '12341234123412341234123412341234';
-    const vLowDiv = validateVaultKeyEntropy(lowDivKey);
-    expect(vLowDiv.valid).toBe(false);
-    expect(vLowDiv.reason).toContain('baixa diversidade');
-
-    // Chave com 12 caracteres distintos porém com viés de repetição (entropia de Shannon < 3.2 bits/char)
-    const lowEntropyKey = 'abcdefghijklabcdefghijklaaaaaaaaaa';
-    const vLow = validateVaultKeyEntropy(lowEntropyKey);
-    expect(vLow.valid).toBe(false);
-    expect(vLow.reason).toContain('entropia de Shannon insuficiente');
-
-    // Chave criptograficamente forte (entropia >= 3.2 bits/char)
-    const strongKey = 'v1_prod_vault_key_AES256GCM_Wallet2026_x89#$kL!';
-    const vStrong = validateVaultKeyEntropy(strongKey);
-    expect(vStrong.valid).toBe(true);
-    expect(calculateShannonEntropy(strongKey)).toBeGreaterThan(3.5);
   });
 
-  // Teste 16: Ponto 2 (Missão 2) — Escopos ausentes no token OAuth tratados estritamente como insufficient_scopes
+  // Teste 16: GATE 2 — Escopos ausentes no token OAuth tratados estritamente como insufficient_scopes
   it('16. Escopos ausentes no token OAuth são tratados estritamente como insufficient_scopes (sem presunção)', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: {
@@ -365,7 +392,7 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(res.message).toContain('insufficient_scopes');
   });
 
-  // Teste 17: Ponto 2 (Missão 2) — Teste com credenciais temporárias é executado como simulação (dry-run)
+  // Teste 17: GATE 1 & GATE 2 — Testes com credenciais temporárias são executados como simulação (dry-run)
   it('17. Testes com credenciais temporárias são executados como dry-run sem alterar estado persistente do canal', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: {

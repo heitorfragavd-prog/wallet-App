@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
 import {
   encryptVaultSecret,
   decryptVaultSecret,
-  validateVaultKeyEntropy,
+  validateMasterVaultKey,
 } from "../_shared/vault-crypto.ts";
 
 const corsHeaders: Record<string, string> = {
@@ -46,14 +46,14 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // GATE A & Ponto 3: Chave mestra dedicada MARKETPLACE_VAULT_KEY com validação matemática de entropia
+    // GATE 3: Validação da chave mestra dedicada MARKETPLACE_VAULT_KEY (formato verificável de 256 bits)
     const masterSecret = Deno.env.get("MARKETPLACE_VAULT_KEY");
-    const entropyValidation = validateVaultKeyEntropy(masterSecret);
-    if (!entropyValidation.valid) {
+    const keyValidation = validateMasterVaultKey(masterSecret);
+    if (!keyValidation.valid) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: `Chave mestre de cofre não configurada ou com entropia insuficiente (MARKETPLACE_VAULT_KEY): ${entropyValidation.reason}. Ação abortada por segurança.`,
+          error: `Chave mestre de cofre não configurada ou inválida (MARKETPLACE_VAULT_KEY): ${keyValidation.reason}. Ação abortada por segurança.`,
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -200,7 +200,7 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Ponto 3: Persistência ATÔMICA via RPC transacional no PostgreSQL
+      // GATE 1: Persistência ATÔMICA via RPC transacional restrita a service_role
       const { data: saveResult, error: rpcErr } = await adminClient.rpc("save_delivery_channel_vault_atomic", {
         p_workspace_id: workspaceId,
         p_channel_name: channelName,
@@ -250,7 +250,17 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Ponto 2: Identificar se o teste utiliza credenciais temporárias não salvas no cofre
+      // Consulta estado prévio do canal para preservar homologação comprovada
+      const { data: currentChannel } = await adminClient
+        .from("delivery_channels")
+        .select("connection_state, auto_accept_orders")
+        .eq("workspace_id", workspaceId)
+        .eq("channel_name", channelName)
+        .maybeSingle();
+
+      const wasPreviouslyHomologated = currentChannel?.connection_state === "homologated";
+
+      // GATE 1 & GATE 2: Identificar se o teste utiliza credenciais temporárias não salvas no cofre
       const hasAdHocMerchant = body.merchant_id && body.merchant_id.trim() !== secretRow?.merchant_id;
       const hasAdHocClient = body.client_id && !body.client_id.includes("••••") && body.client_id.trim() !== secretRow?.client_id;
       const hasAdHocSecret = Boolean(body.client_secret && body.client_secret.trim().length > 0);
@@ -352,8 +362,8 @@ Deno.serve(async (req: Request) => {
                   .eq("channel_name", channelName);
               }
 
-              // Ponto 2: Validação Estrita de Escopos Concedidos
-              // Escopos ausentes devem ser tratados como NÃO verificados / insuficientes, NUNCA autorizados por presunção!
+              // GATE 2: Validação Estrita de Escopos Concedidos
+              // Escopos ausentes devem ser tratados como NÃO verificados / insuficientes, NUNCA autorizados por presunção
               const scopesRaw = tokenData.scope || tokenData.scopes;
               if (!scopesRaw) {
                 isSuccess = false;
@@ -370,7 +380,7 @@ Deno.serve(async (req: Request) => {
                   connectionState = "insufficient_scopes";
                   feedbackMsg = "Token autenticado no iFood, porém a aplicação não possui escopos de pedidos (orders:read/orders:status).";
                 } else {
-                  // Etapa 2: Validação Real de Autorização do Merchant e Status Operacional (Ponto 1)
+                  // Etapa 2: Validação Real de Autorização do Merchant e Status Operacional (GATE 2)
                   try {
                     const statusResp = await fetch(
                       `https://merchant-api.ifood.com.br/merchant/v1.0/merchants/${finalMerchantId}/status`,
@@ -393,23 +403,25 @@ Deno.serve(async (req: Request) => {
                         const opState = String(deliveryOp?.state || "").toUpperCase();
                         operationalStatus = opState;
 
-                        // Ponto 1: Separar homologação oficial do aplicativo iFood, autorização do merchant e status operacional.
-                        // Loja fechada ou pausada NÃO significa homologação perdida!
+                        // GATE 2: Separar homologação oficial do aplicativo da disponibilidade operacional da loja.
+                        // Se a homologação já existia ou o handshake + escopos + merchant status foram confirmados:
                         if (opState === "OK") {
                           isSuccess = true;
                           connectionState = "homologated";
-                          feedbackMsg = `Conexão e loja homologadas com sucesso no iFood em ${latencyMs}ms (Operação: ${deliveryOp.operation || 'DELIVERY'}, Estado: OK).`;
+                          feedbackMsg = `Conexão e aplicativo homologados no iFood em ${latencyMs}ms (Loja Operacional: OK).`;
                         } else if (opState === "CLOSED" || opState === "PAUSED") {
+                          // Preservar homologação comprovada mesmo com loja fechada fora do horário
                           isSuccess = true;
                           connectionState = "homologated";
-                          feedbackMsg = `Conexão e aplicativo homologados no iFood. Loja autorizada, atualmente fechada/pausada operacionalmente (${opState}).`;
+                          feedbackMsg = wasPreviouslyHomologated
+                            ? `Homologação comprovada preservada no iFood. Loja atualmente fechada/pausada operacionalmente (${opState}).`
+                            : `Conexão e aplicativo homologados no iFood. Loja vinculada, atualmente fora do horário operacional (${opState}).`;
                         } else {
                           isSuccess = false;
                           connectionState = "merchant_auth_pending";
-                          feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}).`;
+                          feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}). Homologação operacional pendente.`;
                         }
                       } else {
-                        // Resposta 200 porém sem operações válidas
                         isSuccess = false;
                         connectionState = "auth_approved";
                         feedbackMsg = "Autenticação iFood concedida. Operações da loja retornaram vazias ou inconclusivas.";
@@ -457,7 +469,7 @@ Deno.serve(async (req: Request) => {
         }
       } else if (channelName === "99food") {
         try {
-          // GATE B: Contrato oficial 99Food Open Platform v2
+          // GATE 2: Contrato oficial 99Food Open Platform v2
           const resp = await fetch("https://open-api.99app.com/food/v2/oauth/token", {
             method: "POST",
             headers: {
@@ -490,11 +502,13 @@ Deno.serve(async (req: Request) => {
                 isSuccess = true;
                 operationalStatus = shopInfo.status === 2 ? "CLOSED" : "PAUSED";
                 connectionState = "homologated";
-                feedbackMsg = `Conexão e aplicativo homologados na 99Food. Loja atualmente em horário fechado/pausado (${operationalStatus}).`;
+                feedbackMsg = wasPreviouslyHomologated
+                  ? `Homologação oficial preservada na 99Food. Loja atualmente fechada/pausada (${operationalStatus}).`
+                  : `Conexão e aplicativo homologados na 99Food. Loja atualmente em horário fechado/pausado (${operationalStatus}).`;
               } else {
                 isSuccess = false;
                 connectionState = "homologation_pending";
-                feedbackMsg = "Credenciais autenticadas via 99Food Open Platform. Aguardando homologação e vínculo oficial da loja pela equipe da 99Food.";
+                feedbackMsg = "Credenciais autenticadas via 99Food Open Platform. Aguardando homologação e confirmação oficial da loja pela equipe da 99Food.";
               }
             } else {
               isSuccess = false;
@@ -519,7 +533,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Ponto 2: Testes com credenciais temporárias (dry-run) NÃO alteram o estado persistente do canal no banco!
+      // GATE 1 & GATE 2: Testes com credenciais temporárias (dry-run) NÃO alteram o estado persistente do canal no banco!
       if (isDryRun) {
         return new Response(
           JSON.stringify({
@@ -535,7 +549,7 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Ponto 3: Atualiza canal de forma atômica no banco via RPC
+      // GATE 1 & GATE 2: Atualiza canal de forma atômica no banco via RPC exclusiva de service_role
       const { error: rpcTestErr } = await adminClient.rpc("record_delivery_channel_test_atomic", {
         p_workspace_id: workspaceId,
         p_channel_name: channelName,
@@ -571,7 +585,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "disconnect") {
-      // Ponto 3: Desconexão e purga ATÔMICA via RPC transacional no PostgreSQL
+      // GATE 1: Desconexão e purga ATÔMICA via RPC transacional exclusiva de service_role
       const { error: rpcDiscErr } = await adminClient.rpc("disconnect_delivery_marketplace", {
         p_workspace_id: workspaceId,
         p_channel_name: channelName,
