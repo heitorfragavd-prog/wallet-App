@@ -517,6 +517,7 @@
 | supabase\migrations\20261018183000_sec003_2_blocker05_cron_resilience.sql |
 | supabase\migrations\20261030010000_wallet_ceo_delivery_foundation.sql |
 | supabase\migrations\20261031120000_wallet_ceo_ai_telemetry_budgets.sql |
+| supabase\migrations\20261102140000_delivery_marketplace_vault.sql |
 | supabase\migrations\21.whatsapp_number_setting.sql |
 | supabase\migrations\22.contact_settings.sql |
 | supabase\migrations\23.planos_manutencao_veiculo.sql |

@@ -43,3 +43,15 @@ export function formatShortDate(value: string): string {
   const [, month, day] = value.split("-");
   return `${day}/${month}`;
 }
+
+export function previousMonday(start?: string): string {
+  const current = start ?? currentMonday();
+  const date = new Date(`${current}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 7);
+  return isoDate(date);
+}
+
+export function formatPeriodLabel(start: string, end: string): string {
+  return `${formatShortDate(start)} a ${formatShortDate(end)}`;
+}
+
