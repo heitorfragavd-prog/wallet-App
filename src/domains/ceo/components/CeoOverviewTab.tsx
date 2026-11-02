@@ -336,7 +336,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     }
   };
 
-  const isPositiveMargin = kpis.resultadoOperacional >= 0;
+  const isPositiveMargin = kpis.despesasMes === 0 ? true : kpis.resultadoOperacional >= 0;
 
   return (
     <div className="space-y-6">
@@ -470,7 +470,11 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
               <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
               <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                R$ {kpis.resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                {kpis.despesasMes === 0 ? (
+                  <span className="text-sm font-normal text-slate-400">Não apurado</span>
+                ) : (
+                  `R$ ${kpis.resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                )}
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
                 {(kpis.margemOperacionalPercent != null || (kpis as unknown as { margemOperacional?: number }).margemOperacional != null) ? (

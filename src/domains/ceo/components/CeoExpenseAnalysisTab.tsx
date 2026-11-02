@@ -49,7 +49,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
   const [cmvPercent, setCmvPercent] = useState<number | null>(null);
   const [despesasOperacionais, setDespesasOperacionais] = useState(0);
   const [variacaoDespesas, setVariacaoDespesas] = useState<number | null>(null);
-  const [resultadoOperacional, setResultadoOperacional] = useState(0);
+  const [resultadoOperacional, setResultadoOperacional] = useState<number | null>(null);
   const [margemOperacional, setMargemOperacional] = useState<number | null>(null);
 
   const [categoryData, setCategoryData] = useState<ExpenseCategoryItem[]>([]);
@@ -151,9 +151,10 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       setReceitaBruta(totalRec);
       setDespesasOperacionais(totalDesp);
 
-      if (totalRecAnt > 0) {
+      if (!isEyeOrigin && totalRecAnt > 0) {
         setCrescimentoReceita(Math.round(((totalRec - totalRecAnt) / totalRecAnt) * 1000) / 10);
       } else {
+        // Se a origem atual for Eyemobile e o anterior for transacoes, não misturar
         setCrescimentoReceita(null);
       }
 
@@ -164,9 +165,10 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       }
 
       // Resultado operacional real (permite negativo se despesas > receitas)
-      const resOp = totalDesp > 0 ? totalRec - totalDesp : totalRec;
+      // Se não houver despesas operacionais cadastradas, o resultado fica como não apurado
+      const resOp = totalDesp > 0 ? totalRec - totalDesp : null;
       setResultadoOperacional(resOp);
-      setMargemOperacional(totalRec > 0 && totalDesp > 0 ? Math.round((resOp / totalRec) * 1000) / 10 : null);
+      setMargemOperacional(totalRec > 0 && totalDesp > 0 && resOp !== null ? Math.round((resOp / totalRec) * 1000) / 10 : null);
 
       // 5. CMV Status
       const { count: countFichas } = await supabase
@@ -254,7 +256,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
     loadFinancialData();
   }, [loadFinancialData]);
 
-  const isPositiveMargin = resultadoOperacional >= 0;
+  const isPositiveMargin = resultadoOperacional === null || resultadoOperacional >= 0;
 
   return (
     <div className="space-y-6">
@@ -361,7 +363,13 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
             <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-foreground' : 'text-rose-400'}`}>
-              {resultadoOperacional < 0 ? `-R$ ${Math.abs(resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : `R$ ${resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+              {resultadoOperacional !== null ? (
+                resultadoOperacional < 0
+                  ? `-R$ ${Math.abs(resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                  : `R$ ${resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+              ) : (
+                <span className="text-sm font-normal text-slate-400">Não apurado</span>
+              )}
             </div>
             <div className="mt-2 text-xs">
               {margemOperacional !== null ? (

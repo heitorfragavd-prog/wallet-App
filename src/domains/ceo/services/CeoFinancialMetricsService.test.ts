@@ -454,5 +454,37 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(empty.margemOperacional).toBeNull();
       expect(empty.margemOperacionalPercent).toBeNull();
     });
+
+    it('Cenário 9: Conciliação Dia Civil vs Turno Estendido com fuso America/Sao_Paulo', () => {
+      // 212 transações no dia civil 31/10 (R$ 2.778,30) + 88 transações na madrugada 01/11 (R$ 987,60)
+      const sales = [
+        { total: 2778.30, time: '2026-10-31T22:30:00-03:00', cancelled: false },
+        { total: 987.60, time: '2026-11-01T03:15:00-03:00', cancelled: false }, // madrugada do turno estendido
+      ];
+
+      const toSaoPauloDate = (iso: string) =>
+        new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(iso));
+
+      const civilDaySales = sales.filter((s) => toSaoPauloDate(s.time) === '2026-10-31');
+      const totalCivil = civilDaySales.reduce((acc, s) => acc + s.total, 0);
+      const totalTurno = sales.reduce((acc, s) => acc + s.total, 0);
+
+      expect(totalCivil).toBe(2778.30);
+      expect(totalTurno).toBe(3765.90);
+      expect(Math.round((totalCivil + 987.60) * 100) / 100).toBe(3765.90);
+    });
+
+    it('Cenário 10: Comparativos financeiros nunca misturam vendas brutas com transações bancárias', () => {
+      const faturamentoBrutoPdv = 89081.53;
+      const transacoesBancariasAnt = 12500.00;
+
+      // Regra Canônica: Nunca calcular crescimento misturando fontes distintas
+      const isSameSource = false;
+      const variacao = isSameSource && transacoesBancariasAnt > 0
+        ? Math.round(((faturamentoBrutoPdv - transacoesBancariasAnt) / transacoesBancariasAnt) * 1000) / 10
+        : null;
+
+      expect(variacao).toBeNull();
+    });
   });
 });

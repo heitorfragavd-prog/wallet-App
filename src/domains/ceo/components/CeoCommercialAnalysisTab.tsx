@@ -43,7 +43,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
   const [crescimentoPedidos, setCrescimentoPedidos] = useState<number | null>(null);
   const [ticketMedio, setTicketMedio] = useState<number | null>(null);
   const [crescimentoTicket, setCrescimentoTicket] = useState<number | null>(null);
-  const [itensVendidos, setItensVendidos] = useState<number>(0);
+  const [itensVendidos, setItensVendidos] = useState<number | null>(null);
   const [crescimentoItens, setCrescimentoItens] = useState<number | null>(null);
 
   const [dailySalesData, setDailySalesData] = useState<DailySaleBar[]>([]);
@@ -110,32 +110,33 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           }));
         }
 
-        // Distribuição diária a partir das vendas reais Eyemobile
-        if (Array.isArray(eyemobileData.sales)) {
-          for (const s of eyemobileData.sales as Record<string, unknown>[]) {
-            if (s.cancelled || s.completed === false) continue;
-            const timeStr = String(s.time || s.created_at || s.createdAt || s.date || '');
-            if (!timeStr) continue;
-            const d = getSaoPauloDateString(new Date(timeStr));
-            dayMap.set(d, (dayMap.get(d) || 0) + Number(s.total || s.amount || 0));
+        // Distribuição diária canônica a partir das vendas reais Eyemobile
+        if (eyemobileData.dailySales && Array.isArray(eyemobileData.dailySales)) {
+          for (const d of eyemobileData.dailySales) {
+            dayMap.set(d.date, d.total);
           }
         }
 
-        // Comparação rápida com período anterior via transações
-        try {
-          const { data: txAntData } = await supabase
-            .from('transacoes')
-            .select('valor')
-            .eq('workspace_id', workspaceId)
-            .eq('tipo', 'receita')
-            .gte('data', inicioAntStr)
-            .lte('data', `${fimAntStr}T23:59:59.999Z`);
-          if (txAntData && txAntData.length > 0) {
-            totalAnt = txAntData.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-            countAnt = txAntData.length;
+        // Comparação com período anterior: estritamente da mesma fonte (Eyemobile PDV)
+        // NUNCA misturar vendas brutas de PDV com transações bancárias da Wallet.
+        if (periodo === 'ultimos_7_dias') {
+          try {
+            const eyemobileAntData = await fetchLiveDashboard(
+              { startDate: inicioAntStr, endDate: fimAntStr },
+              workspaceId
+            ).catch(() => null);
+            if (eyemobileAntData?.configured && (eyemobileAntData.kpis.totalRevenue > 0 || eyemobileAntData.kpis.totalTransactions > 0)) {
+              totalAnt = eyemobileAntData.kpis.totalRevenue;
+              countAnt = eyemobileAntData.kpis.totalTransactions;
+            }
+          } catch {
+            totalAnt = 0;
+            countAnt = 0;
           }
-        } catch {
-          // Comparação opcional
+        } else {
+          // Para períodos de 30 dias / mês, evita consultas pesadas duplicadas
+          totalAnt = 0;
+          countAnt = 0;
         }
       } else {
         // Fallback local: Transações reais deste período com paginação integral segura
@@ -219,12 +220,20 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
       setDailySalesData(dailyBars);
 
-      // 4. Itens vendidos reais
-      const sumTopItems = topProdsList.reduce((acc, p) => acc + (p.quantidade || 0), 0);
-      setItensVendidos(sumTopItems > 0 ? sumTopItems : count);
+      // 4. Itens vendidos reais calculados sobre todas as vendas do período
+      const totalItems = eyemobileData?.kpis?.totalItemsSold;
+      if (typeof totalItems === 'number' && totalItems > 0) {
+        setItensVendidos(totalItems);
+      } else if (eyemobileData?.configured) {
+        // Sem detalhamento por item no payload de vendas
+        setItensVendidos(null);
+      } else {
+        // Fallback local: sem detalhamento por item
+        setItensVendidos(null);
+      }
       setCrescimentoItens(null);
 
-      // 5. Top 5 Produtos reais
+      // 5. Top 5 Produtos reais (exclusivamente classificação de produtos)
       setTopProducts(topProdsList.slice(0, 5));
     } catch (err: unknown) {
       console.warn('[CeoCommercialAnalysisTab] Erro ao carregar dados comerciais:', err);
@@ -363,13 +372,17 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Itens Vendidos</div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-              {itensVendidos.toLocaleString('pt-BR')}
+              {itensVendidos !== null ? (
+                itensVendidos.toLocaleString('pt-BR')
+              ) : (
+                <span className="text-sm font-normal text-slate-400">Dados insuficientes</span>
+              )}
             </div>
             <div className="mt-2 text-xs">
               {crescimentoItens !== null ? (
                 <span className="text-emerald-400 font-medium">+{crescimentoItens}%</span>
               ) : (
-                <span className="text-slate-500">Itens apurados</span>
+                <span className="text-slate-500">Unidades comercializadas</span>
               )}
             </div>
           </CardContent>

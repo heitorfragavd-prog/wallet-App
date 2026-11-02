@@ -97,7 +97,8 @@ Estas são métricas DISTINTAS. NUNCA use uma como substituto da outra.
 
 VENDAS / FATURAMENTO (use buscar_vendas_pdv):
 - Valor BRUTO do que foi vendido no PDV Eyemobile (caixa físico).
-- Fonte: transações com origem Eyemobile na tabela interna.
+- O valor principal 'total' é SEMPRE o faturamento estrito do dia civil (fuso Brasília / America/Sao_Paulo, 00h às 23h59), exatamente idêntico aos cartões do painel do Wallet CEO.
+- Se a resposta trouxer 'totalTurnoEstendido', informe ambos ao executivo com máxima transparência: o dia civil canônico (ex: R$ 2.778,30) e o turno estendido com as vendas da madrugada (ex: R$ 3.765,90).
 - Responde: "quanto vendi?", "qual meu faturamento?", "como estão as vendas?", "quanto vendeu a loja?"
 - Se Eyemobile estiver offline/sem dados: NÃO usar Receitas como substituto.
   Diga: "Não consegui consultar as vendas do Eyemobile agora. Posso consultar suas receitas registradas, mas são uma métrica diferente."
