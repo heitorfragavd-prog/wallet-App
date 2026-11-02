@@ -561,4 +561,28 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(ninetyNine.scopes).not.toContain('orders:read');
     expect(ninetyNine.scopes).not.toContain('orders:status');
   });
+
+  // Teste 23: Requisito 4 — Indicadores editáveis em delivery_channels.config não bastam para conceder homologação
+  it('23. Requisito 4: Indicadores em config (ex: is_officially_homologated) são ignorados; homologação requer evidência confiável do servidor', async () => {
+    // Simula tentativa de burlar a homologação injetando flag no config do canal
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: true,
+        state: 'merchant_authorized',
+        operational_status: 'OK',
+        message: 'Loja vinculada e autorizada no iFood em 110ms (Estado Operacional: OK). Homologação oficial do aplicativo pendente de aprovação pela equipe do iFood Developer.',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: 'ifood',
+    });
+
+    // Sem evidência no cofre seguro do servidor, o estado NUNCA é promovido a homologated
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('merchant_authorized');
+    expect(res.state).not.toBe('homologated');
+  });
 });

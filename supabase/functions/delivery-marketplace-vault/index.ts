@@ -232,7 +232,7 @@ Deno.serve(async (req: Request) => {
       // 1. Busca credenciais diretamente do cofre secreto
       const { data: secretRow, error: fetchSecretErr } = await adminClient
         .from("delivery_channel_secrets")
-        .select("merchant_id, client_id, client_secret_encrypted")
+        .select("merchant_id, client_id, client_secret_encrypted, metadata")
         .eq("workspace_id", workspaceId)
         .eq("channel_name", channelName)
         .maybeSingle();
@@ -250,25 +250,22 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Consulta estado prévio do canal para preservar homologação comprovada
+      // Consulta estado prévio do canal
       const { data: currentChannel } = await adminClient
         .from("delivery_channels")
-        .select("connection_state, auto_accept_orders, config")
+        .select("connection_state, auto_accept_orders")
         .eq("workspace_id", workspaceId)
         .eq("channel_name", channelName)
         .maybeSingle();
 
-      const currentConfig = (currentChannel?.config && typeof currentChannel.config === "object"
-        ? currentChannel.config
+      // REQUISITO 4: Indicadores editáveis em delivery_channels.config NÃO são aceitos como prova de homologação.
+      // Homologação oficial requer evidência confiável exclusiva do servidor no cofre seguro (delivery_channel_secrets.metadata).
+      const secretMetadata = (secretRow?.metadata && typeof secretRow.metadata === "object"
+        ? secretRow.metadata
         : {}) as Record<string, unknown>;
 
-      const officialHomologation = currentConfig.official_homologation && typeof currentConfig.official_homologation === "object"
-        ? (currentConfig.official_homologation as Record<string, unknown>)
-        : null;
-
-      // Homologação prévia SOMENTE é preservada se existir evidência confiável explícita de aprovação oficial
       const hasReliableHomologationEvidence = Boolean(
-        (officialHomologation?.approved === true || currentConfig.is_officially_homologated === true) &&
+        secretMetadata.official_homologation_approved === true &&
         currentChannel?.connection_state === "homologated"
       );
 
