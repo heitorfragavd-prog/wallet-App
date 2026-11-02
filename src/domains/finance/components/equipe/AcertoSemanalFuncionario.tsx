@@ -117,12 +117,12 @@ export function AcertoSemanalFuncionario({
   );
 
   // Estado da Semana Anterior (Ajuste)
-  // Seg a Sáb receberam antecipação por padrão se houver histórico ou na inicialização padrão
+  // Sem histórico persistido, nenhum dia é presumido com antecipação ou gasto
   const [inputsAnterior, setInputsAnterior] = useState<DiaAnteriorInput[]>(() =>
-    daysAnterior.map((_, index) => ({
-      recebeuAntecipacao: index < 6,
-      uberAntecipado: index < 6 ? uberBase : 0,
-      uberReal: index < 6 ? String(uberBase) : "",
+    daysAnterior.map(() => ({
+      recebeuAntecipacao: false,
+      uberAntecipado: 0,
+      uberReal: "",
       meta: "",
     }))
   );
@@ -269,6 +269,18 @@ export function AcertoSemanalFuncionario({
         }
         return next;
       })
+    );
+    setFeedback(null);
+  };
+
+  const confirmarSegundaSabadoManual = () => {
+    if (isJaPago || isProcessando) return;
+    setInputsAnterior((curr) =>
+      curr.map((item, index) => ({
+        ...item,
+        recebeuAntecipacao: index < 6,
+        uberAntecipado: index < 6 ? uberBase : 0,
+      }))
     );
     setFeedback(null);
   };
@@ -584,15 +596,27 @@ export function AcertoSemanalFuncionario({
 
           {/* Banner de Rastreabilidade Histórica */}
           {!hasHistoricoAnterior ? (
-            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 text-xs text-slate-300">
-              <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-semibold text-white">Sem histórico anterior gravado: </span>
-                <span>
-                  Nenhum acerto semanal foi registrado na semana anterior ({periodoAnteriorLabel}).
-                  Marque manualmente os dias em que houve antecipação ou informe gastos elegíveis de Uber do próprio bolso.
-                </span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 text-xs text-slate-300">
+              <div className="flex items-start gap-2.5">
+                <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold text-white">Sem histórico anterior gravado: </span>
+                  <span>
+                    Nenhum acerto semanal foi registrado na semana anterior ({periodoAnteriorLabel}).
+                    Marque manualmente os dias em que houve antecipação ou confirme o padrão.
+                  </span>
+                </div>
               </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isJaPago || isProcessando}
+                onClick={confirmarSegundaSabadoManual}
+                className="shrink-0 text-xs border-amber-500/40 text-amber-300 hover:bg-amber-500/10 h-7"
+              >
+                Confirmar Seg a Sáb (R$ 12)
+              </Button>
             </div>
           ) : (
             <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-xs text-emerald-300">
@@ -652,9 +676,29 @@ export function AcertoSemanalFuncionario({
                         </div>
                       </td>
 
-                      {/* Uber Antecipado */}
-                      <td className="py-2.5 px-3 text-center text-slate-300">
-                        {input.recebeuAntecipacao ? money.format(input.uberAntecipado) : "—"}
+                      {/* Uber Antecipado (Visualização e Edição Manual) */}
+                      <td className="py-2.5 px-3 text-center">
+                        {input.recebeuAntecipacao ? (
+                          <div className="flex justify-center">
+                            <Input
+                              aria-label={`Uber antecipado de ${day.label}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              disabled={isJaPago || isProcessando}
+                              value={input.uberAntecipado || ""}
+                              placeholder="12,00"
+                              onChange={(e) =>
+                                updateAnterior(index, {
+                                  uberAntecipado: parseFloat(e.target.value) || 0,
+                                })
+                              }
+                              className="h-8 w-20 bg-[#070D1F]/80 border-[#1E2942] text-center font-medium text-white rounded-lg focus:border-amber-500 text-xs"
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
                       </td>
 
                       {/* Uber Real Utilizado */}
