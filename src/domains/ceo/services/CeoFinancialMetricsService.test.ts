@@ -5,9 +5,91 @@ import {
   getSaoPauloYesterday,
 } from './CeoFinancialMetricsService';
 
+interface MockRow {
+  [key: string]: unknown;
+}
+
+interface MockQueryBuilder {
+  select: (_cols?: string, _opts?: { count?: string; head?: boolean }) => MockQueryBuilder;
+  eq: (col: string, val: unknown) => MockQueryBuilder;
+  neq: (col: string, val: unknown) => MockQueryBuilder;
+  gte: (col: string, val: unknown) => MockQueryBuilder;
+  lte: (col: string, val: unknown) => MockQueryBuilder;
+  order: () => MockQueryBuilder;
+  range: (from: number, to: number) => Promise<{ data: MockRow[]; error: unknown }>;
+  then: (resolve: (val: { data: MockRow[]; count: number; error: unknown }) => void) => void;
+}
+
+const mockFrom = vi.fn();
+
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    from: (...args: unknown[]) => mockFrom(...args),
+  },
+}));
+
+let mockDatabase: Record<string, MockRow[]> = {
+  transacoes: [],
+  despesas: [],
+  fichas_tecnicas: [],
+  produtos_eyemobile: [],
+  delivery_orders: [],
+};
+
+function setupDefaultMockSupabase(db: Partial<typeof mockDatabase> = {}) {
+  mockDatabase = {
+    transacoes: [],
+    despesas: [],
+    fichas_tecnicas: [],
+    produtos_eyemobile: [],
+    delivery_orders: [],
+    ...db,
+  };
+
+  mockFrom.mockImplementation((table: string) => {
+    let currentRows = [...(mockDatabase[table] || [])];
+
+    const builder = {} as MockQueryBuilder;
+    builder.select = vi.fn().mockImplementation(() => builder);
+    builder.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
+      currentRows = currentRows.filter((r) => r[col] === val);
+      return builder;
+    });
+    builder.neq = vi.fn().mockImplementation((col: string, val: unknown) => {
+      currentRows = currentRows.filter((r) => r[col] !== val);
+      return builder;
+    });
+    builder.gte = vi.fn().mockImplementation((col: string, val: unknown) => {
+      currentRows = currentRows.filter((r) => String(r[col] || '') >= String(val));
+      return builder;
+    });
+    builder.lte = vi.fn().mockImplementation((col: string, val: unknown) => {
+      currentRows = currentRows.filter((r) => String(r[col] || '') <= String(val));
+      return builder;
+    });
+    builder.order = vi.fn().mockReturnValue(builder);
+    builder.range = vi.fn().mockImplementation((from: number, to: number) => {
+      return Promise.resolve({
+        data: currentRows.slice(from, to + 1),
+        error: null,
+      });
+    });
+    builder.then = (resolve: (val: { data: MockRow[]; count: number; error: unknown }) => void) => {
+      resolve({
+        data: currentRows,
+        count: currentRows.length,
+        error: null,
+      });
+    };
+
+    return builder;
+  });
+}
+
 describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setupDefaultMockSupabase();
   });
 
   describe('GATE A: Eliminação de Valores Fictícios', () => {
@@ -85,16 +167,15 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
     });
 
     it('helper de paginação fetchAllPaginated percorre múltiplas páginas sem truncar em 1.000 ou 5.000 registros', async () => {
-      // Simula um banco com 2.500 registros
       const totalMockRecords = 2500;
-      const mockDatabase = Array.from({ length: totalMockRecords }, (_, idx) => ({
+      const mockDb = Array.from({ length: totalMockRecords }, (_, idx) => ({
         id: `tx-${idx}`,
         valor: 10.0,
       }));
 
       // @ts-expect-error testando método privado de paginação
       const fetched = await CeoFinancialMetricsService.fetchAllPaginated(async (from: number, to: number) => {
-        const slice = mockDatabase.slice(from, to + 1);
+        const slice = mockDb.slice(from, to + 1);
         return { data: slice, error: null };
       });
 
@@ -104,14 +185,12 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
     });
 
     it('helper de paginação fetchAllPaginated lança erro explícito se qualquer página falhar (Gate 3 - Resiliência)', async () => {
-      // Falha na primeira página
       await expect(
         CeoFinancialMetricsService.fetchAllPaginated(async () => {
           return { data: null, error: new Error('PostgREST connection timeout') };
         })
       ).rejects.toThrow('Falha ao buscar registros paginados');
 
-      // Falha na segunda página (após primeira página com 1.000 registros completos)
       let pageCount = 0;
       await expect(
         CeoFinancialMetricsService.fetchAllPaginated(async () => {
@@ -126,7 +205,6 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
 
     describe('GATE 3: Virada de Mês e de Ano em America/Sao_Paulo', () => {
       it('getSaoPauloParts e getSaoPauloYesterday calculam virada de mês perfeitamente (01/11/2026 -> 31/10/2026)', () => {
-        // Criando data em 01/11/2026 12:00 BRT
         const nov1 = new Date('2026-11-01T15:00:00Z');
         const today = getSaoPauloParts(nov1);
         expect(today.dateString).toBe('2026-11-01');
@@ -143,7 +221,6 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       });
 
       it('getSaoPauloParts e getSaoPauloYesterday calculam virada de ano perfeitamente (01/01/2027 -> 31/12/2026)', () => {
-        // Criando data em 01/01/2027 12:00 BRT
         const jan1 = new Date('2027-01-01T15:00:00Z');
         const today = getSaoPauloParts(jan1);
         expect(today.dateString).toBe('2027-01-01');
@@ -175,6 +252,172 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
         expect(kpis.erroMensagem).toContain('Simulated Database Down');
         expect(kpis.dataAtualizacao).toBe('dados indisponíveis no momento');
       });
+    });
+  });
+
+  describe('HOTFIX REGRESSION: getExecutiveKpis cálculo completo da janela histórica e resiliência de datas', () => {
+    const wsId = '2af415b6-76aa-4134-8133-a9b405671c1c';
+
+    it('Cenário 1: 01/11/2026 — executa getExecutiveKpis completo sem erro de Date.UTC(...).getTime', async () => {
+      const refDate = new Date('2026-11-01T15:00:00Z'); // 01/11/2026 12:00 BRT
+      // Ontem: 31/10/2026 (Sábado). Sábados anteriores nas 4 semanas: 24/10, 17/10, 10/10, 03/10
+      setupDefaultMockSupabase({
+        transacoes: [
+          // Ontem (31/10)
+          { id: 'tx-1', valor: 3765.90, data: '2026-10-31T18:00:00Z', tipo: 'receita', workspace_id: wsId },
+          // Sábado 24/10
+          { id: 'tx-2', valor: 3500.00, data: '2026-10-24T18:00:00Z', tipo: 'receita', workspace_id: wsId },
+          // Sábado 17/10
+          { id: 'tx-3', valor: 3800.00, data: '2026-10-17T18:00:00Z', tipo: 'receita', workspace_id: wsId },
+          // Sábado 10/10
+          { id: 'tx-4', valor: 3900.00, data: '2026-10-10T18:00:00Z', tipo: 'receita', workspace_id: wsId },
+          // Sábado 03/10
+          { id: 'tx-5', valor: 3600.00, data: '2026-10-03T18:00:00Z', tipo: 'receita', workspace_id: wsId },
+          // Vendas do mês atual (01/11)
+          { id: 'tx-6', valor: 1200.00, data: '2026-11-01T14:00:00Z', tipo: 'receita', workspace_id: wsId },
+        ],
+        despesas: [
+          { id: 'desp-1', valor: 500.00, data: '2026-11-01', workspace_id: wsId },
+        ],
+        fichas_tecnicas: [{ id: 'ficha-1' }],
+        produtos_eyemobile: [{ id: 'prod-1', workspace_id: wsId }],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      // Não pode haver flag de dadosIndisponiveis nem erro de Date.UTC
+      expect(kpis.dadosIndisponiveis).toBeFalsy();
+      expect(kpis.erroMensagem).toBeUndefined();
+      expect(kpis.dataAtualizacao).toBe('atualizado agora');
+
+      // Faturamento de ontem (31/10)
+      expect(kpis.faturamentoOntem).toBe(3765.90);
+      expect(kpis.diaSemanaOntemNome).toBe('sábados');
+
+      // Média dos 4 sábados anteriores: (3500 + 3800 + 3900 + 3600) / 4 = 14800 / 4 = 3700.00
+      expect(kpis.mediaDiaSemanaOntem).toBe(3700);
+
+      // Variação %: ((3765.90 - 3700) / 3700) * 100 = +1.8%
+      expect(kpis.variacaoOntemVsMediaPercent).toBe(1.8);
+
+      // Faturamento do mês (novembro: 1200) e despesas (500)
+      expect(kpis.faturamentoMes).toBe(1200);
+      expect(kpis.despesasMes).toBe(500);
+      expect(kpis.resultadoOperacional).toBe(700);
+
+      // Array de 30 dias calculado com sucesso
+      expect(kpis.dailySales30Days.length).toBe(30);
+    });
+
+    it('Cenário 2: 01/01/2027 — virada de ano calcula janela histórica e não lança exceção', async () => {
+      const refDate = new Date('2027-01-01T15:00:00Z'); // 01/01/2027 12:00 BRT
+      // Ontem: 31/12/2026 (Quinta-feira). Janela de 28 dias volta a 03/12/2026
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-ano-1', valor: 2500.00, data: '2026-12-31T20:00:00Z', tipo: 'receita', workspace_id: wsId },
+          { id: 'tx-ano-2', valor: 2000.00, data: '2026-12-24T20:00:00Z', tipo: 'receita', workspace_id: wsId },
+          { id: 'tx-ano-3', valor: 2200.00, data: '2026-12-17T20:00:00Z', tipo: 'receita', workspace_id: wsId },
+          { id: 'tx-ano-4', valor: 100.00, data: '2027-01-01T10:00:00Z', tipo: 'receita', workspace_id: wsId },
+        ],
+        despesas: [],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      expect(kpis.dadosIndisponiveis).toBeFalsy();
+      expect(kpis.faturamentoOntem).toBe(2500);
+      expect(kpis.diaSemanaOntemNome).toBe('quintas-feiras');
+      expect(kpis.faturamentoMes).toBe(100);
+      expect(kpis.dailySales30Days.length).toBe(30);
+    });
+
+    it('Cenário 3: Fevereiro de ano bissexto (2028-02-29 e 2028-03-01) — robustez de calendário', async () => {
+      // Teste em 2028-03-01 -> Ontem é 2028-02-29 (dia bissexto)
+      const refDateMar1 = new Date('2028-03-01T15:00:00Z');
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-leap-1', valor: 4500.00, data: '2028-02-29T19:00:00Z', tipo: 'receita', workspace_id: wsId },
+        ],
+      });
+
+      const kpisMar1 = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDateMar1);
+      expect(kpisMar1.dadosIndisponiveis).toBeFalsy();
+      expect(kpisMar1.faturamentoOntem).toBe(4500.00);
+
+      // Teste em 2028-02-29 -> Ontem é 2028-02-28
+      const refDateFeb29 = new Date('2028-02-29T15:00:00Z');
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-leap-2', valor: 3100.00, data: '2028-02-28T19:00:00Z', tipo: 'receita', workspace_id: wsId },
+        ],
+      });
+
+      const kpisFeb29 = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDateFeb29);
+      expect(kpisFeb29.dadosIndisponiveis).toBeFalsy();
+      expect(kpisFeb29.faturamentoOntem).toBe(3100.00);
+    });
+
+    it('Cenário 4: Períodos com diferentes quantidades de transações (0 vs grande volume de 1.500)', async () => {
+      const refDate = new Date('2026-11-01T15:00:00Z');
+
+      // Volume alto com 1.500 transações paginadas
+      const highVolumeTx = Array.from({ length: 1500 }, (_, i) => ({
+        id: `tx-vol-${i}`,
+        valor: 10.0,
+        data: '2026-11-01T12:00:00Z',
+        tipo: 'receita',
+        workspace_id: wsId,
+      }));
+
+      setupDefaultMockSupabase({
+        transacoes: highVolumeTx,
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      expect(kpis.dadosIndisponiveis).toBeFalsy();
+      expect(kpis.faturamentoMes).toBe(15000);
+      expect(kpis.pedidosMes).toBe(1500);
+      expect(kpis.ticketMedioMes).toBe(10);
+    });
+
+    it('Cenário 5: Histórico vazio — retorna zeros e nulos sem lançar nenhuma exceção', async () => {
+      const refDate = new Date('2026-11-01T15:00:00Z');
+      setupDefaultMockSupabase({
+        transacoes: [],
+        despesas: [],
+        fichas_tecnicas: [],
+        produtos_eyemobile: [],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      expect(kpis.dadosIndisponiveis).toBeFalsy();
+      expect(kpis.faturamentoMes).toBe(0);
+      expect(kpis.faturamentoOntem).toBe(0);
+      expect(kpis.mediaDiaSemanaOntem).toBeNull();
+      expect(kpis.variacaoOntemVsMediaPercent).toBeNull();
+      expect(kpis.despesasMes).toBe(0);
+      expect(kpis.resultadoOperacional).toBe(0);
+      expect(kpis.cmvStatus).toBe('dados_insuficientes');
+      expect(kpis.dailySales30Days.length).toBe(30);
+    });
+
+    it('Cenário 6: Falha de consulta — captura erro com resiliência e sinaliza dadosIndisponiveis', async () => {
+      mockFrom.mockImplementation(() => {
+        return {
+          select: () => {
+            throw new Error('Database network disconnected');
+          },
+        };
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId);
+
+      expect(kpis.dadosIndisponiveis).toBe(true);
+      expect(kpis.erroMensagem).toContain('Database network disconnected');
+      expect(kpis.dataAtualizacao).toBe('dados indisponíveis no momento');
+      expect(kpis.faturamentoMes).toBe(0);
     });
   });
 });

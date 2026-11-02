@@ -140,8 +140,9 @@ export class CeoFinancialMetricsService {
     }
 
     try {
-      const todayParts = getSaoPauloParts(referenceDate);
-      const yesterdayParts = getSaoPauloYesterday(referenceDate);
+      const hoje = referenceDate;
+      const todayParts = getSaoPauloParts(hoje);
+      const yesterdayParts = getSaoPauloYesterday(hoje);
 
       const anoAtual = todayParts.year;
       const mesAtual = todayParts.month;
@@ -230,10 +231,8 @@ export class CeoFinancialMetricsService {
       const faturamentoOntem = txOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
       // Média real do mesmo dia da semana nas últimas 4 semanas (28 dias antes de ontem)
-      const date28DaysAgo = new Date(
-        Date.UTC(yesterdayParts.year, yesterdayParts.month - 1, yesterdayParts.day, 12, 0, 0).getTime() -
-          28 * 24 * 60 * 60 * 1000
-      );
+      const yesterdayNoonMs = Date.UTC(yesterdayParts.year, yesterdayParts.month - 1, yesterdayParts.day, 12, 0, 0);
+      const date28DaysAgo = new Date(yesterdayNoonMs - 28 * 24 * 60 * 60 * 1000);
       const inicioHistoricoStr = getSaoPauloDateString(date28DaysAgo);
 
       const txHistoricoSemana = await this.fetchAllPaginated<{ valor: number; data: string }>(
@@ -349,8 +348,9 @@ export class CeoFinancialMetricsService {
       const dailySales30Days: { date: string; valor: number }[] = [];
       for (let i = 29; i >= 0; i--) {
         const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
-        const diaStr = d.toISOString().slice(0, 10);
-        const diaFormatado = `${d.getDate()}/${d.getMonth() + 1}`;
+        const diaStr = getSaoPauloDateString(d);
+        const parts = diaStr.split('-');
+        const diaFormatado = `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}`;
         dailySales30Days.push({
           date: diaFormatado,
           valor: mapDaily.get(diaStr) || 0,
@@ -405,7 +405,7 @@ export class CeoFinancialMetricsService {
         resultadoOperacional,
         margemOperacionalPercent: margemOperacional,
         faturamentoOntem,
-        mediaDiaSemanaOntem,
+        mediaDiaSemanaOntem: mediaDiaSemana,
         variacaoOntemVsMediaPercent: variacaoOntemVsMedia,
         diaSemanaOntemNome,
         despesasMes: totalDespesasMes,
