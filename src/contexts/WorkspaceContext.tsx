@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/domains/auth/hooks/useAuth";
 
@@ -37,6 +37,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [activeWorkspace, setActiveWorkspaceState] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeWorkspaceRole, setActiveWorkspaceRole] = useState<'admin' | 'member' | 'delivery_staff' | null>(null);
+  const roleCacheRef = useRef<Map<string, 'admin' | 'member' | 'delivery_staff'>>(new Map());
 
   const fetchWorkspaces = useCallback(async () => {
     if (!user) {
@@ -117,8 +118,16 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return;
     }
 
+    const cacheKey = `${activeWorkspace.id}_${user.id}`;
+
     if (activeWorkspace.user_id === user.id) {
       setActiveWorkspaceRole('admin');
+      roleCacheRef.current.set(cacheKey, 'admin');
+      return;
+    }
+
+    if (roleCacheRef.current.has(cacheKey)) {
+      setActiveWorkspaceRole(roleCacheRef.current.get(cacheKey)!);
       return;
     }
 
@@ -132,11 +141,9 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       .maybeSingle()
       .then(({ data }) => {
         if (!isMounted) return;
-        if (data?.role) {
-          setActiveWorkspaceRole(data.role as 'admin' | 'member' | 'delivery_staff');
-        } else {
-          setActiveWorkspaceRole('member');
-        }
+        const role = (data?.role as 'admin' | 'member' | 'delivery_staff') || 'member';
+        roleCacheRef.current.set(cacheKey, role);
+        setActiveWorkspaceRole(role);
       })
       .catch(() => {
         if (isMounted) setActiveWorkspaceRole('member');
