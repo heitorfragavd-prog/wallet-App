@@ -560,12 +560,11 @@ COMMIT;
 -- 3. Funcionário NÃO consegue acessar credenciais de outro workspace
 -- 4. Edge Function autorizada (service_role) opera normalmente
 -- =========================================================================
-BEGIN;
-
 -- 1. Executa a migration do cofre de delivery
 \ir ../supabase/migrations/20261102150000_delivery_marketplace_vault.sql
 
 -- 2. Testes com Usuário Administrador Autenticado (deve ser bloqueado de executar RPCs diretas)
+BEGIN;
 SET LOCAL request.jwt.claims = '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
 SET LOCAL ROLE authenticated;
 
@@ -641,8 +640,10 @@ BEGIN
     RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.5]: authenticated conseguiu invocar get_delivery_channel_metadata diretamente!';
   END IF;
 END $$;
+COMMIT;
 
 -- 3. Teste de Isolamento entre Workspaces (Usuário de Outro Workspace)
+BEGIN;
 SET LOCAL request.jwt.claims = '{"sub": "33333333-3333-3333-3333-333333333333", "role": "authenticated"}';
 SET LOCAL ROLE authenticated;
 
@@ -657,8 +658,10 @@ BEGIN
     RAISE EXCEPTION 'FALHA DE ISOLAMENTO [CENÁRIO 14.B.6]: usuário acessou canais de workspace alheio!';
   END IF;
 END $$;
+COMMIT;
 
 -- 4. Teste de Operação Normal e Autorizada via service_role (Edge Function)
+BEGIN;
 SET LOCAL request.jwt.claims = '{"role": "service_role"}';
 SET LOCAL ROLE service_role;
 
@@ -704,11 +707,10 @@ BEGIN
     RAISE EXCEPTION 'FALHA DE PURGA [CENÁRIO 14.B.11]: segredo ainda existe no cofre após desconexão!';
   END IF;
 END $$;
+COMMIT;
 
 -- 5. Rollback da migration de delivery
 \ir ../supabase/migrations/rollback/20261102150000_delivery_marketplace_vault.down.sql
-
-COMMIT;
 
 -- CENÁRIO 15: Execução limpa do rollback
 \ir ../supabase/migrations/rollback/20261030010000_wallet_ceo_delivery_foundation.down.sql
