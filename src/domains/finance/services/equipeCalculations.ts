@@ -24,6 +24,59 @@ export type DiaAcertoFuncionario = {
   metaCentavos: number;
 };
 
+
+export type DiaSemanaAtualAntecipacao = {
+  data: string;
+  label: string;
+  previsaoTrabalho: boolean;
+  uberFixoCentavos?: number;
+  passagemCentavos?: number;
+};
+
+export type DiaSemanaAnteriorAjuste = {
+  data: string;
+  label: string;
+  recebeuAntecipacao: boolean;
+  uberAntecipadoCentavos?: number;
+  uberRealCentavos: number;
+  metaCentavos?: number;
+};
+
+export type AcertoSemanalTransporteInput = {
+  semanaAtual: DiaSemanaAtualAntecipacao[];
+  semanaAnterior: DiaSemanaAnteriorAjuste[];
+  valorPassagemPadraoCentavos?: number;
+  uberBasePadraoCentavos?: number;
+};
+
+export type DiferencaDiariaUber = {
+  data: string;
+  label: string;
+  recebeuAntecipacao: boolean;
+  uberAntecipadoCentavos: number;
+  uberRealCentavos: number;
+  diferencaCentavos: number;
+};
+
+export type AcertoSemanalTransporteCalculado = {
+  // Seção A: Transporte antecipado — semana atual
+  diasPrevistosAtual: number;
+  uberAntecipadoCentavos: number;
+  passagensAntecipadasCentavos: number;
+  totalAntecipacaoCentavos: number;
+
+  // Seção B: Ajuste de Uber — semana anterior
+  diasComAntecipacaoAnterior: number;
+  uberAntecipadoTotalAnteriorCentavos: number;
+  uberRealTotalAnteriorCentavos: number;
+  diferencasDiarias: DiferencaDiariaUber[];
+  saldoAjusteUberCentavos: number;
+  totalMetasCentavos: number;
+
+  // Seção C: Total a transferir
+  totalTransferenciaCentavos: number;
+};
+
 export type DiaAcertoFolguista = {
   trabalhou: boolean;
   diariaCentavos: number;
@@ -200,6 +253,91 @@ export function calcularAcertoFuncionario(dias: DiaAcertoFuncionario[]) {
       totalCentavos: 0,
     },
   );
+}
+
+
+export function calcularAcertoSemanalTransporte(
+  input: AcertoSemanalTransporteInput,
+): AcertoSemanalTransporteCalculado {
+  const uberFixoPadrao = input.uberBasePadraoCentavos ?? 1200; // R$ 12,00
+  const passagemPadrao = input.valorPassagemPadraoCentavos ?? 625; // R$ 6,25
+
+  // Seção A: Semana Atual (Antecipação)
+  let diasPrevistosAtual = 0;
+  let uberAntecipadoCentavos = 0;
+  let passagensAntecipadasCentavos = 0;
+
+  for (const dia of input.semanaAtual) {
+    if (dia.previsaoTrabalho) {
+      diasPrevistosAtual += 1;
+      const uber = dia.uberFixoCentavos ?? uberFixoPadrao;
+      const passagem = dia.passagemCentavos ?? passagemPadrao;
+      uberAntecipadoCentavos += uber;
+      passagensAntecipadasCentavos += passagem;
+    }
+  }
+
+  const totalAntecipacaoCentavos = uberAntecipadoCentavos + passagensAntecipadasCentavos;
+
+  // Seção B: Semana Anterior (Ajuste do Uber utilizado)
+  let diasComAntecipacaoAnterior = 0;
+  let uberAntecipadoTotalAnteriorCentavos = 0;
+  let uberRealTotalAnteriorCentavos = 0;
+  let saldoAjusteUberCentavos = 0;
+  let totalMetasCentavos = 0;
+
+  const diferencasDiarias: DiferencaDiariaUber[] = input.semanaAnterior.map((dia) => {
+    const uberReal = Math.round(Number(dia.uberRealCentavos) || 0);
+    const meta = Math.round(Number(dia.metaCentavos) || 0);
+    totalMetasCentavos += meta;
+
+    if (dia.recebeuAntecipacao) {
+      diasComAntecipacaoAnterior += 1;
+      const uberAntecipado = Math.round(dia.uberAntecipadoCentavos ?? uberFixoPadrao);
+      const diferenca = uberReal - uberAntecipado;
+
+      uberAntecipadoTotalAnteriorCentavos += uberAntecipado;
+      uberRealTotalAnteriorCentavos += uberReal;
+      saldoAjusteUberCentavos += diferenca;
+
+      return {
+        data: dia.data,
+        label: dia.label,
+        recebeuAntecipacao: true,
+        uberAntecipadoCentavos: uberAntecipado,
+        uberRealCentavos: uberReal,
+        diferencaCentavos: diferenca,
+      };
+    }
+
+    return {
+      data: dia.data,
+      label: dia.label,
+      recebeuAntecipacao: false,
+      uberAntecipadoCentavos: 0,
+      uberRealCentavos: uberReal,
+      diferencaCentavos: 0,
+    };
+  });
+
+  // Seção C: Total a transferir
+  const totalTransferenciaCentavos = totalAntecipacaoCentavos + saldoAjusteUberCentavos + totalMetasCentavos;
+
+  return {
+    diasPrevistosAtual,
+    uberAntecipadoCentavos,
+    passagensAntecipadasCentavos,
+    totalAntecipacaoCentavos,
+
+    diasComAntecipacaoAnterior,
+    uberAntecipadoTotalAnteriorCentavos,
+    uberRealTotalAnteriorCentavos,
+    diferencasDiarias,
+    saldoAjusteUberCentavos,
+    totalMetasCentavos,
+
+    totalTransferenciaCentavos,
+  };
 }
 
 export function calcularAcertoFolguista(dias: DiaAcertoFolguista[]) {

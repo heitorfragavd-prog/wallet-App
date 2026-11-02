@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calcularAcertoFolguista,
   calcularAcertoFuncionario,
+  calcularAcertoSemanalTransporte,
   calcularCustoColaborador,
   calcularFimExperiencia,
   centavosParaDecimal,
@@ -270,5 +271,168 @@ describe('equipeCalculations', () => {
       salarioCentavos: 162_100,
       diasTrabalhoMes: 26,
     }).inssEmpresaCentavos).toBe(32_420);
+  });
+
+  describe('calcularAcertoSemanalTransporte (Regra de Negocio Oficial)', () => {
+    const semanaAtualPadrao = [
+      { data: '2026-11-02', label: 'Segunda', previsaoTrabalho: true },
+      { data: '2026-11-03', label: 'Terça', previsaoTrabalho: true },
+      { data: '2026-11-04', label: 'Quarta', previsaoTrabalho: true },
+      { data: '2026-11-05', label: 'Quinta', previsaoTrabalho: true },
+      { data: '2026-11-06', label: 'Sexta', previsaoTrabalho: true },
+      { data: '2026-11-07', label: 'Sábado', previsaoTrabalho: true },
+      { data: '2026-11-08', label: 'Domingo', previsaoTrabalho: false },
+    ];
+
+    it('Cenário 1: Seis dias de antecipação: R$ 109,50', () => {
+      const semanaAnteriorSemDiferenca = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior: semanaAnteriorSemDiferenca,
+      });
+
+      expect(res.diasPrevistosAtual).toBe(6);
+      expect(res.uberAntecipadoCentavos).toBe(7200); // 6 * 12,00
+      expect(res.passagensAntecipadasCentavos).toBe(3750); // 6 * 6,25
+      expect(res.totalAntecipacaoCentavos).toBe(10950); // R$ 109,50
+      expect(res.saldoAjusteUberCentavos).toBe(0);
+      expect(res.totalTransferenciaCentavos).toBe(10950); // R$ 109,50
+    });
+
+    it('Cenário 2: Uber anterior de R$ 11,98 em um dia e R$ 12,00 nos demais: R$ 109,48', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1198 }, // -0.02
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.totalAntecipacaoCentavos).toBe(10950);
+      expect(res.saldoAjusteUberCentavos).toBe(-2); // -R$ 0,02
+      expect(res.totalTransferenciaCentavos).toBe(10948); // R$ 109,48
+      expect(centavosParaDecimal(res.totalTransferenciaCentavos)).toBe(109.48);
+    });
+
+    it('Cenário 3: Uber anterior de R$ 15,00 em um dia e R$ 12,00 nos demais: R$ 112,50', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1500 }, // +3.00
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.totalAntecipacaoCentavos).toBe(10950);
+      expect(res.saldoAjusteUberCentavos).toBe(300); // +R$ 3,00
+      expect(res.totalTransferenciaCentavos).toBe(11250); // R$ 112,50
+      expect(centavosParaDecimal(res.totalTransferenciaCentavos)).toBe(112.5);
+    });
+
+    it('Cenário 4: Vários ajustes positivos e negativos na mesma semana', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1500 }, // +3.00
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1198 }, // -0.02
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1150 }, // -0.50
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 }, // 0
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1400 }, // +2.00
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1000 }, // -2.00
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      // Saldo esperado: +3.00 - 0.02 - 0.50 + 0 + 2.00 - 2.00 = +2.48 (+248 centavos)
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.saldoAjusteUberCentavos).toBe(248);
+      expect(res.totalTransferenciaCentavos).toBe(10950 + 248); // 11198 = R$ 111,98
+      expect(centavosParaDecimal(res.totalTransferenciaCentavos)).toBe(111.98);
+    });
+
+    it('Cenário 5: Ausência de trabalho e dias sem direito à antecipação não criam diferença artificial', () => {
+      const semanaAtual = [
+        { data: '2026-11-02', label: 'Segunda', previsaoTrabalho: true },
+        { data: '2026-11-03', label: 'Terça', previsaoTrabalho: true },
+        { data: '2026-11-04', label: 'Quarta', previsaoTrabalho: false }, // folga planejada
+        { data: '2026-11-05', label: 'Quinta', previsaoTrabalho: true },
+        { data: '2026-11-06', label: 'Sexta', previsaoTrabalho: true },
+        { data: '2026-11-07', label: 'Sábado', previsaoTrabalho: false }, // folga planejada
+        { data: '2026-11-08', label: 'Domingo', previsaoTrabalho: false },
+      ]; // 4 dias previstos = 4 * 18,25 = 73,00
+
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: false, uberRealCentavos: 0 }, // não recebeu, diferença = 0
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: false, uberRealCentavos: 0 }, // não recebeu, diferença = 0
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({ semanaAtual, semanaAnterior });
+      expect(res.diasPrevistosAtual).toBe(4);
+      expect(res.totalAntecipacaoCentavos).toBe(7300); // 4 * 1825 = 73,00
+      expect(res.saldoAjusteUberCentavos).toBe(0);
+      expect(res.totalTransferenciaCentavos).toBe(7300);
+    });
+
+    it('Cenário 6: Semana anterior sem histórico ou vazia', () => {
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior: [],
+      });
+
+      expect(res.diasPrevistosAtual).toBe(6);
+      expect(res.totalAntecipacaoCentavos).toBe(10950);
+      expect(res.saldoAjusteUberCentavos).toBe(0);
+      expect(res.totalTransferenciaCentavos).toBe(10950);
+    });
+
+    it('inclui metas/bônus sem alterar critérios de transporte', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 1200, metaCentavos: 2000 },
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200, metaCentavos: 1500 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.totalAntecipacaoCentavos).toBe(10950);
+      expect(res.totalMetasCentavos).toBe(3500); // R$ 35,00
+      expect(res.totalTransferenciaCentavos).toBe(10950 + 3500); // R$ 144,50
+    });
   });
 });
