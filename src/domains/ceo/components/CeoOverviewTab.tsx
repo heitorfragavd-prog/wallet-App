@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
 import {
@@ -17,6 +17,8 @@ import {
   X,
   MessageSquare,
   Clock,
+  Sparkles,
+  ChevronRight,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -29,6 +31,7 @@ import {
 import { useWalletIA, type WalletIAMessage } from '@/domains/ia/hooks/useWalletIA';
 import { WalletAiOrchestratorClient } from '@/domains/ia/services/WalletAiOrchestratorClient';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useAuth } from '@/domains/auth/hooks/useAuth';
@@ -55,7 +58,14 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   const [inputPrompt, setInputPrompt] = useState('');
   const [processingProposalId, setProcessingProposalId] = useState<string | null>(null);
   const [confirmedProposals, setConfirmedProposals] = useState<Record<string, 'confirmed' | 'cancelled' | 'executed'>>({});
+  const [briefingExpanded, setBriefingExpanded] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Motor analítico do CEO gerando o briefing quantitativo com citações canônicas (Gate 4)
+  const briefing = useMemo(
+    () => CeoIntelligenceEngine.generateExecutiveBriefing(kpis),
+    [kpis]
+  );
 
   // Estados de persistência canônica do chat (Gate 1)
   const [conversaId, setConversaId] = useState<string | null>(null);
@@ -490,6 +500,94 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             </div>
           </div>
         </CardContent>
+      </Card>
+
+      {/* 1.1 Briefing Executivo Quantitativo do CEO com Fontes e Metodologia (Gate 4) */}
+      <Card className="bg-slate-900/80 border-border/60 shadow-md">
+        <CardHeader className="pb-3 border-b border-border/40 flex flex-row items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
+                Briefing Executivo Quantitativo
+                <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                  {briefing.periodLabel}
+                </span>
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground">
+                {briefing.calculationCriteria} | Fontes: {briefing.sources.join(', ')}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {onNavigateToPlan && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onNavigateToPlan}
+                className="h-7 text-xs border-amber-500/30 hover:border-amber-500/60 text-amber-400 gap-1 hidden sm:flex"
+              >
+                Ver Oportunidades
+                <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setBriefingExpanded((prev) => !prev)}
+              className="h-7 text-xs text-slate-400 hover:text-slate-200"
+            >
+              {briefingExpanded ? 'Recolher' : 'Expandir'}
+            </Button>
+          </div>
+        </CardHeader>
+
+        {briefingExpanded && (
+          <CardContent className="pt-4 space-y-4">
+            {/* Headline */}
+            <div className="text-xs md:text-sm font-medium text-slate-200 bg-slate-950/50 p-3 rounded-lg border border-border/40">
+              📢 {briefing.headline}
+            </div>
+
+            {/* Grid de Insights Quantitativos */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {briefing.keyInsights.map((insight, idx) => (
+                <div
+                  key={idx}
+                  className="bg-slate-950/40 p-3 rounded-lg border border-border/40 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                    <span>{insight.title}</span>
+                    <span className="text-foreground font-bold">{insight.valueFormatted}</span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-snug">
+                    {insight.description}
+                  </p>
+                  <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
+                    {insight.sourceCitation}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Alertas de Qualidade de Dados */}
+            {briefing.dataQualityAlerts.length > 0 && (
+              <div className="space-y-1.5 pt-2">
+                {briefing.dataQualityAlerts.map((alert, idx) => (
+                  <div
+                    key={idx}
+                    className="text-[11px] bg-amber-500/10 border border-amber-500/20 text-amber-300 px-3 py-2 rounded-md flex items-center gap-2"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>{alert}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       {/* 2. Grid Central: Evolução de Vendas (30 dias) + Converse com seu CEO */}

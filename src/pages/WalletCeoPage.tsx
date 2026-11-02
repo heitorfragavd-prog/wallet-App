@@ -429,6 +429,7 @@ export const WalletCeoPage: React.FC = () => {
             <CeoOpportunitiesTab
               workspaceId={workspaceId}
               experiments={experiments}
+              kpis={executiveKpis}
               onExperimentCreated={loadRepositoryData}
             />
           </TabsContent>
