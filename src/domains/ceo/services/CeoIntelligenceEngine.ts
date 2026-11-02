@@ -245,27 +245,34 @@ export class CeoIntelligenceEngine {
     );
 
     if (cafeProd && salgadoProd) {
-      const estimatedGain = Math.round(cafeProd.faturamento * 0.12);
       opps.push({
         id: "opp-combo-cafe-salgado",
         workspace_id: workspaceId,
         department: "comercial",
         title: "Combo Expresso & Salgado Rodo Point",
-        problem_description: `Venda separada de ${cafeProd.produto} e ${salgadoProd.produto} reduz o ticket médio no turno matinal.`,
-        description: `Criar combo matinal com desconto de 5% induzindo a compra casada de café + salgado.`,
+        problem_description: `Venda não casada de ${cafeProd.produto} (R$ ${cafeProd.faturamento.toFixed(2)}) e ${salgadoProd.produto} (R$ ${salgadoProd.faturamento.toFixed(2)}).`,
+        description: `Testar oferta casada (${cafeProd.produto} + ${salgadoProd.produto}) para elevar o ticket médio no turno matinal.`,
         hypothesis:
-          "Oferecer combo café + salgado na tela do PDV aumenta a taxa de anexação de 22% para 38% entre 06h e 10h.",
+          "Oferecer combo café + salgado na tela do PDV ou no balcão pode incentivar compra casada entre clientes que consomem apenas um dos itens.",
         recommended_action:
-          "Cadastrar produto combo no cardápio do Eyemobile e treinar atendentes para sugestão ativa no caixa.",
-        estimated_financial_impact: estimatedGain,
-        potential_monthly_gain: estimatedGain,
-        confidence_score: 0.88,
+          "Cadastrar produto combo experimental no Eyemobile PDV com preço integrado e orientar equipe para oferta ativa.",
+        estimated_financial_impact: null,
+        potential_monthly_gain: null,
+        confidence_score: 0.70,
         status: "identificada",
+        nature: "hipotese_comercial",
+        simulation_premises:
+          "Hipótese de conversão cruzada entre itens líderes matinais observados no PDV. Ganho líquido real depende da adesão e fichas técnicas.",
+        calculation_limitations:
+          "Sem fichas técnicas cadastradas, o ganho financeiro líquido não é projetado para evitar valores arbitrários.",
+        formula_or_criteria: `Volumes observados no período: ${cafeProd.quantidade} un de ${cafeProd.produto} e ${salgadoProd.quantidade} un de ${salgadoProd.produto}.`,
         evidence_data: {
           source: "eyemobile_items",
           has_sufficient_data: true,
           cafe_sales: cafeProd.faturamento,
           salgado_sales: salgadoProd.faturamento,
+          cafe_quantity: cafeProd.quantidade,
+          salgado_quantity: salgadoProd.quantidade,
         },
       });
     }
@@ -287,24 +294,29 @@ export class CeoIntelligenceEngine {
       const bevRatio = bevTotal / totalRev;
 
       if (bevRatio < 0.25) {
-        const potentialGain = Math.round(totalRev * 0.04);
         opps.push({
           id: "opp-bebidas-lunch",
           workspace_id: workspaceId,
           department: "comercial",
           title: "Potencialização de Bebidas Geladas no Almoço",
-          problem_description: `Apenas ${(bevRatio * 100).toFixed(1)}% do faturamento atual provém de bebidas, abaixo do benchmark rodoviário (30%).`,
-          description: "Posicionar refrigeradores visíveis próximos ao balcão e oferecer upgrade de combo.",
-          hypothesis: "Perguntar 'Deseja uma bebida bem gelada?' aumenta o ticket médio em R$ 4,50 por cliente.",
-          recommended_action: "Incentivar venda sugestiva de refrigerantes e sucos naturais nos turnos das 11h às 14h.",
-          estimated_financial_impact: potentialGain,
-          potential_monthly_gain: potentialGain,
-          confidence_score: 0.82,
+          problem_description: `Bebidas representam ${(bevRatio * 100).toFixed(1)}% do faturamento de vendas no período (R$ ${bevTotal.toFixed(2)} de R$ ${totalRev.toFixed(2)}).`,
+          description: "Posicionar refrigeradores visíveis próximos ao balcão e oferecer sugestivamente bebida no momento do pedido.",
+          hypothesis: "Oferecer sugestivamente opção de bebida bem gelada durante o atendimento eleva a proporção de pedidos com itens agregados.",
+          recommended_action: "Incentivar venda sugestiva de refrigerantes, sucos e água no caixa e certificar posicionamento dos expositores.",
+          estimated_financial_impact: null,
+          potential_monthly_gain: null,
+          confidence_score: 0.65,
           status: "identificada",
+          nature: "hipotese_comercial",
+          simulation_premises: "Venda sugestiva por impulso em momentos de refeição.",
+          calculation_limitations: "Impacto financeiro condicionado à elasticidade de demanda e margem unitária por tipo de bebida.",
+          formula_or_criteria: `Proporção apurada: faturamento de bebidas (R$ ${bevTotal.toFixed(2)}) / faturamento total (R$ ${totalRev.toFixed(2)}) = ${(bevRatio * 100).toFixed(1)}%.`,
           evidence_data: {
             source: "eyemobile_categories",
             has_sufficient_data: true,
             beverage_ratio: bevRatio,
+            beverage_revenue: bevTotal,
+            total_revenue: totalRev,
           },
         });
       }
@@ -320,23 +332,29 @@ export class CeoIntelligenceEngine {
       const allHoursTotal = salesByHour.reduce((acc, h) => acc + h.frontCashier + h.otherOrigins, 0);
 
       if (allHoursTotal > 0 && afternoonTotal / allHoursTotal < 0.15) {
+        const afternoonPct = Math.round((afternoonTotal / allHoursTotal) * 100);
         opps.push({
           id: "opp-happy-hour-viagem",
           workspace_id: workspaceId,
           department: "comercial",
           title: "Promoção Parada da Tarde (14h às 17h)",
-          problem_description: "Horário entre 14h e 17h concentra menos de 15% do movimento do dia.",
-          description: "Oferta especial de lanche da tarde (Bolo + Café) para passageiros e motoristas.",
-          hypothesis: "Divulgar oferta da tarde atrai paradas de ônibus e passageiros que normalmente não consumiriam.",
-          recommended_action: "Exibir cartaz 'Parada do Café da Tarde' na entrada da conveniência.",
-          estimated_financial_impact: 1200,
-          potential_monthly_gain: 1200,
-          confidence_score: 0.75,
+          problem_description: `O horário entre 14h e 17h concentra ${afternoonPct}% das vendas do período (R$ ${afternoonTotal.toFixed(2)} de R$ ${allHoursTotal.toFixed(2)}).`,
+          description: "Oferta especial de lanche da tarde para atrair consumo no período de menor fluxo de clientes.",
+          hypothesis: "Divulgar opções de lanche vespertino atrai paradas de ônibus e clientes em trânsito com consumo imediato.",
+          recommended_action: "Exibir comunicação visual de lanche da tarde na entrada e balcão durante a faixa das 14h às 17h.",
+          estimated_financial_impact: null,
+          potential_monthly_gain: null,
+          confidence_score: 0.60,
           status: "identificada",
+          nature: "hipotese_comercial",
+          simulation_premises: "Estímulo de consumo em horários com capacidade ociosa de atendimento.",
+          calculation_limitations: "Sem contagem de fluxo externo de passageiros, o ganho financeiro adicional não é pré-calculado.",
+          formula_or_criteria: `Vendas entre 14h e 17h: R$ ${afternoonTotal.toFixed(2)} (${afternoonPct}% do total).`,
           evidence_data: {
             source: "eyemobile_hourly",
             has_sufficient_data: true,
-            afternoon_percentage: Math.round((afternoonTotal / allHoursTotal) * 100),
+            afternoon_percentage: afternoonPct,
+            afternoon_total: afternoonTotal,
           },
         });
       }
@@ -345,25 +363,31 @@ export class CeoIntelligenceEngine {
     // 4. Estoque Crítico
     if (criticalStock.length > 0) {
       const topCritical = criticalStock[0];
+      const suggestedReplenishment = Math.max(0, topCritical.minStock * 2 - topCritical.stock);
       opps.push({
         id: `opp-ruptura-${topCritical.id}`,
         workspace_id: workspaceId,
         department: "estoque",
         title: `Prevenção de Ruptura: ${topCritical.product}`,
-        problem_description: `Estoque atual de ${topCritical.stock} unidades atingiu o mínimo de segurança (${topCritical.minStock}).`,
-        description: "Risco de ruptura de estoque impedindo vendas de produto de alta rotatividade.",
-        hypothesis: "Emitir ordem de reposição emergencial evita perda de faturamento por desabastecimento.",
-        recommended_action: `Solicitar reposição de 50 unidades de ${topCritical.product} ao fornecedor homologado.`,
-        estimated_financial_impact: 850,
-        potential_monthly_gain: 850,
-        confidence_score: 0.95,
+        problem_description: `Estoque atual de ${topCritical.stock} unidades atingiu nível de atenção (mínimo de segurança: ${topCritical.minStock} unidades).`,
+        description: `Risco de desabastecimento de ${topCritical.product} com potencial perda de vendas na conveniência.`,
+        hypothesis: "Realizar reposição preventiva antes do esgotamento garante disponibilidade contínua e preserva o faturamento do item.",
+        recommended_action: `Realizar conferência física do estoque e providenciar reposição sugerida de ${suggestedReplenishment} unidades [fórmula: max(0, minStock * 2 - saldoAtual)], calibrando conforme o giro diário conferido em loja.`,
+        estimated_financial_impact: null,
+        potential_monthly_gain: null,
+        confidence_score: 0.90,
         status: "identificada",
+        nature: "fato_observado",
+        simulation_premises: "Parâmetros de estoque mínimo e reposição preventiva de segurança.",
+        calculation_limitations: "Impacto financeiro de eventual ruptura varia de acordo com o giro diário médio e lead time do fornecedor.",
+        formula_or_criteria: `Fórmula de reposição: max(0, ${topCritical.minStock} * 2 - ${topCritical.stock}) = ${suggestedReplenishment} unidades.`,
         evidence_data: {
           source: "estoque_real",
           has_sufficient_data: true,
           product_id: topCritical.id,
           stock: topCritical.stock,
           min_stock: topCritical.minStock,
+          suggested_replenishment: suggestedReplenishment,
         },
       });
     }
@@ -375,14 +399,18 @@ export class CeoIntelligenceEngine {
         workspace_id: workspaceId,
         department: "financeiro",
         title: "Implantação de Fichas Técnicas dos 5 Principais Produtos",
-        problem_description: "A ausência de fichas técnicas impede o cálculo real da margem de contribuição dos pratos.",
-        description: "Mapear insumos e custos unitários para calcular CMV real e eliminar desperdícios.",
-        hypothesis: "Aferir fichas técnicas reduz perdas ocultas em 3% sobre o custo dos produtos vendidos.",
-        recommended_action: "Cadastrar ficha técnica dos 5 salgados e lanches líderes no módulo Fichas Técnicas.",
-        estimated_financial_impact: 1500,
-        potential_monthly_gain: 1500,
+        problem_description: "Ausência de fichas técnicas cadastradas impede o cálculo contábil do CMV real e da margem de contribuição dos produtos.",
+        description: "Estruturar receitas e custos de insumos para viabilizar controle de margens e auditoria de desperdícios.",
+        hypothesis: "O cadastro sistemático de fichas técnicas permite apuração exata do custo dos pratos e sustentação de decisões de preço.",
+        recommended_action: "Cadastrar fichas técnicas e custos de insumos dos 5 produtos de maior giro no módulo de Fichas Técnicas.",
+        estimated_financial_impact: null,
+        potential_monthly_gain: null,
         confidence_score: 0.85,
         status: "identificada",
+        nature: "fato_observado",
+        simulation_premises: "Governança de custos e controle de estoques de insumos.",
+        calculation_limitations: "Sem fichas técnicas homologadas, o ganho financeiro em reais não pode ser estimado com rigor contábil.",
+        formula_or_criteria: "Cobertura de fichas técnicas: 0%. Status de CMV: dados insuficientes.",
         evidence_data: {
           source: "fichas_tecnicas_audit",
           has_sufficient_data: false,
@@ -392,23 +420,32 @@ export class CeoIntelligenceEngine {
 
     // 6. Prevenção de Inconsistências Financeiras
     if (consolidationReport && consolidationReport.registrosPendentes > 0) {
+      const avoidedAmount = consolidationReport.duplicidadesEvitadasValor || 0;
       opps.push({
         id: "opp-conciliacao-pendente",
         workspace_id: workspaceId,
         department: "financeiro",
         title: "Conciliação Bancária de Despesas Pendentes",
-        problem_description: `Existem ${consolidationReport.registrosPendentes} despesas manuais com valor e data coincidentes com extrato bancário.`,
-        description: "Vincular pagamentos bancários às contas a pagar para manter o DRE perfeitamente auditável.",
-        hypothesis: "Conciliar os lançamentos evita duplicidade de despesas e alinha DRE gerencial ao fluxo de caixa.",
-        recommended_action: "Revisar tela de Conciliação Financeira e confirmar os pares sugeridos.",
-        estimated_financial_impact: consolidationReport.duplicidadesEvitadasValor || 500,
-        potential_monthly_gain: consolidationReport.duplicidadesEvitadasValor || 500,
-        confidence_score: 0.9,
+        problem_description: `Identificados ${consolidationReport.registrosPendentes} lançamentos com valor e data coincidentes entre obrigações manuais e extratos bancários aguardando conciliação.`,
+        description: "Vincular saídas bancárias às despesas registradas para assegurar conformidade do DRE com o fluxo de caixa.",
+        hypothesis: "A conciliação tempestiva elimina riscos de duplicidade contábil e mantém a rastreabilidade financeira auditável.",
+        recommended_action: "Revisar a fila de conciliação bancária no módulo financeiro e validar os lançamentos correspondentes.",
+        estimated_financial_impact: avoidedAmount > 0 ? avoidedAmount : null,
+        potential_monthly_gain: avoidedAmount > 0 ? avoidedAmount : null,
+        confidence_score: 0.90,
         status: "identificada",
+        nature: "fato_observado",
+        simulation_premises: "Rastreabilidade contábil estrita entre faturas, despesas e liquidações bancárias.",
+        calculation_limitations:
+          avoidedAmount > 0
+            ? `Valor de duplicidades evitadas já comprovado de R$ ${avoidedAmount.toFixed(2)}. As pendências remanescentes não alteram o caixa.`
+            : "Os lançamentos pendentes não impactam o caixa até sua confirmação e classificação.",
+        formula_or_criteria: `Relatório de consolidação financeira: ${consolidationReport.registrosPendentes} pendências e ${consolidationReport.duplicidadesConfirmadas} duplicidades prevenidas.`,
         evidence_data: {
           source: "financial_consolidation",
           has_sufficient_data: true,
           pending_count: consolidationReport.registrosPendentes,
+          avoided_amount: avoidedAmount,
         },
       });
     }
@@ -420,19 +457,27 @@ export class CeoIntelligenceEngine {
    * 4.3 — Plano de Ação Estruturado com Gateway de Autorização
    */
   public static createActionProposal(opp: GrowthOpportunity): StructuredActionProposal {
+    const isHighPriority =
+      (opp.estimated_financial_impact != null && opp.estimated_financial_impact > 1000) ||
+      opp.nature === "fato_observado";
+
+    const indicador = opp.estimated_financial_impact != null
+      ? `Impacto financeiro auditado de +R$ ${opp.estimated_financial_impact.toFixed(2)}/mês`
+      : `Validação qualitativa e operacional da hipótese (${opp.nature || "em análise"})`;
+
     return {
       id: `act-${opp.id}-${Date.now()}`,
       oportunidadeId: opp.id,
       titulo: opp.title,
       objetivo: opp.description || opp.problem_description,
-      evidencia: `Dados auditados via ${opp.evidence_data?.source || "banco de dados"} com score de confiança ${(opp.confidence_score * 100).toFixed(0)}%.`,
-      justificativa: opp.hypothesis || "Aumento comprovado de eficiência e margem da operação.",
-      prioridade: (opp.estimated_financial_impact || 0) > 1000 ? "alta" : "media",
+      evidencia: `Dados auditados via ${opp.evidence_data?.source || "banco de dados"} com score de confiança ${(opp.confidence_score * 100).toFixed(0)}% (${opp.nature || "análise"}).`,
+      justificativa: opp.hypothesis || "Aumento comprovado de eficiência e governança da operação.",
+      prioridade: isHighPriority ? "alta" : "media",
       responsavel: "Gerência Operacional Rodo Point",
       prazoSugerido: "15 dias corridos",
-      indicadorSucesso: `Impacto financeiro estimado de +R$ ${(opp.estimated_financial_impact || 0).toFixed(2)}/mês`,
+      indicadorSucesso: indicador,
       riscoEstimado: "baixo",
-      mitigacaoRisco: "Teste piloto sem alteração no preço dos produtos regulares.",
+      mitigacaoRisco: opp.calculation_limitations || "Teste piloto controlado sem alteração estrutural no preço de tabela.",
       statusAprovacao: "aguardando_aprovacao",
       requerAprovacaoProprietario: true,
     };

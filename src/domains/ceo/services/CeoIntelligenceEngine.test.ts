@@ -113,7 +113,7 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
     ).toBe(true);
   });
 
-  it("4.2 — Identifica oportunidade de Combo Café + Salgado quando ambos têm vendas ativas", () => {
+  it("4.2 — Identifica oportunidade de Combo Café + Salgado como hipótese comercial fundamentada sem números arbitrários", () => {
     const opps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
       kpis: mockKpis,
       topProducts: [
@@ -141,11 +141,16 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
     const comboOpp = opps.find((o) => o.id === "opp-combo-cafe-salgado");
     expect(comboOpp).toBeDefined();
     expect(comboOpp?.title).toContain("Combo Expresso & Salgado");
-    expect(comboOpp?.estimated_financial_impact).toBeGreaterThan(0);
-    expect(comboOpp?.hypothesis).toContain("aumenta a taxa de anexação");
+    expect(comboOpp?.nature).toBe("hipotese_comercial");
+    // Sem ficha técnica, impacto financeiro não é inventado
+    expect(comboOpp?.estimated_financial_impact).toBeNull();
+    expect(comboOpp?.simulation_premises).toBeDefined();
+    expect(comboOpp?.calculation_limitations).toContain("Sem fichas técnicas");
+    expect(comboOpp?.evidence_data.cafe_sales).toBe(3500);
+    expect(comboOpp?.evidence_data.salgado_sales).toBe(4200);
   });
 
-  it("4.2.b — Identifica oportunidade de venda adicional de bebidas quando a taxa está abaixo de 25%", () => {
+  it("4.2.b — Identifica oportunidade de venda adicional de bebidas com classificação de hipótese comercial", () => {
     const opps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
       kpis: mockKpis,
       topProducts: [
@@ -154,7 +159,7 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
           id: "p-refrig",
           produto: "Refrigerante Lata",
           quantidade: 200,
-          faturamento: 1400, // 1400 / 25400 = ~5.5% (muito abaixo de 25%)
+          faturamento: 1400, // 1400 / 25400 = ~5.5% (abaixo de 25%)
           percentualFaturamento: 5.5,
           margemEstimada: null,
         },
@@ -164,9 +169,12 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
     const drinkOpp = opps.find((o) => o.id === "opp-bebidas-lunch");
     expect(drinkOpp).toBeDefined();
     expect(drinkOpp?.title).toContain("Bebidas Geladas");
+    expect(drinkOpp?.nature).toBe("hipotese_comercial");
+    expect(drinkOpp?.estimated_financial_impact).toBeNull();
+    expect(drinkOpp?.problem_description).toContain("5.5%");
   });
 
-  it("4.2.c — Identifica risco de ruptura quando há item no estoque crítico", () => {
+  it("4.2.c — Identifica risco de ruptura com fórmula de reposição max(0, minStock*2 - stock) sem quantidade fixa", () => {
     const opps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
       kpis: mockKpis,
       criticalStock: [
@@ -182,7 +190,28 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
     const stockOpp = opps.find((o) => o.id.includes("opp-ruptura-"));
     expect(stockOpp).toBeDefined();
     expect(stockOpp?.department).toBe("estoque");
+    expect(stockOpp?.nature).toBe("fato_observado");
     expect(stockOpp?.title).toContain("Água Mineral 500ml");
+    // Fórmula: max(0, 20*2 - 3) = 37 unidades
+    expect(stockOpp?.formula_or_criteria).toContain("37 unidades");
+    expect(stockOpp?.recommended_action).toContain("37 unidades");
+    expect(stockOpp?.recommended_action).not.toContain("50 unidades");
+    expect(stockOpp?.estimated_financial_impact).toBeNull();
+  });
+
+  it("4.2.d — Identifica oportunidade de CMV sem inventar ganho financeiro arbitrário", () => {
+    const opps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
+      kpis: {
+        ...mockKpis,
+        cmvStatus: "dados_insuficientes",
+      },
+    });
+
+    const cmvOpp = opps.find((o) => o.id === "opp-cmv-fichas-tecnicas");
+    expect(cmvOpp).toBeDefined();
+    expect(cmvOpp?.nature).toBe("fato_observado");
+    expect(cmvOpp?.estimated_financial_impact).toBeNull();
+    expect(cmvOpp?.calculation_limitations).toContain("Sem fichas técnicas homologadas");
   });
 
   it("4.3 — Cria proposta de Plano de Ação Estruturado com aprovação obrigatória do proprietário", () => {
@@ -193,11 +222,12 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
       title: "Combo Promocional Manhã",
       problem_description: "Vendas separadas reduzem ticket",
       description: "Oferta casada café + salgado",
-      hypothesis: "Aumenta ticket em R$ 3,00",
+      hypothesis: "Aumenta compra casada",
       recommended_action: "Cadastrar combo no PDV",
-      estimated_financial_impact: 1200,
-      potential_monthly_gain: 1200,
-      confidence_score: 0.85,
+      estimated_financial_impact: null,
+      potential_monthly_gain: null,
+      confidence_score: 0.70,
+      nature: "hipotese_comercial" as const,
       status: "identificada" as const,
       evidence_data: { source: "eyemobile_items", has_sufficient_data: true },
       created_at: new Date().toISOString(),
@@ -209,9 +239,9 @@ describe("CeoIntelligenceEngine — Gate 4: CEO Inteligente (Briefing, Recomenda
     expect(action.id).toContain("act-opp-combo-test");
     expect(action.requerAprovacaoProprietario).toBe(true);
     expect(action.statusAprovacao).toBe("aguardando_aprovacao");
-    expect(action.prioridade).toBe("alta");
     expect(action.responsavel).toBeTruthy();
     expect(action.prazoSugerido).toBeTruthy();
+    expect(action.indicadorSucesso).toContain("Validação qualitativa");
   });
 
   it("4.4 — Avalia ciclo de vida de experimento comercial determinístico", () => {

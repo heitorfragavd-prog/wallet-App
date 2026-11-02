@@ -49,6 +49,13 @@ export type ExperimentDecision =
   | 'interromper'
   | 'pendente';
 
+export type OpportunityNature =
+  | 'fato_observado'
+  | 'hipotese_comercial'
+  | 'simulacao_parametrizada'
+  | 'impacto_calculado'
+  | 'impacto_nao_estimado';
+
 export interface GrowthOpportunity {
   id: string;
   workspace_id: string;
@@ -58,23 +65,28 @@ export interface GrowthOpportunity {
   description?: string; // alias conveniente
   hypothesis: string;
   recommended_action: string;
-  estimated_financial_impact: number;
-  potential_monthly_gain: number; // alias para exibição
+  estimated_financial_impact: number | null;
+  potential_monthly_gain?: number | null; // alias para exibição
   confidence_score: number; // 0.00 a 1.00
   type?: OpportunityType;
   impact_level?: 'high' | 'medium' | 'low';
   effort_level?: 'easy' | 'moderate' | 'complex';
   status: OpportunityStatus;
+  nature?: OpportunityNature;
+  simulation_premises?: string;
+  calculation_limitations?: string;
+  formula_or_criteria?: string;
   evidence_data: {
     source: string;
     sample_period?: string;
     metrics?: Record<string, number | string>;
     data_quality_notes?: string;
     has_sufficient_data: boolean;
+    [key: string]: unknown;
   };
   limitations_notes?: string;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface CommercialExperiment {
