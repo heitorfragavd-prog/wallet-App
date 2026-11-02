@@ -416,11 +416,12 @@ export const WalletCeoPage: React.FC = () => {
               </button>
             </div>
 
-            {activeAnalysisSubTab === 'comercial' ? (
+            <div className={activeAnalysisSubTab === 'comercial' ? 'block' : 'hidden'}>
               <CeoCommercialAnalysisTab workspaceId={workspaceId} />
-            ) : (
+            </div>
+            <div className={activeAnalysisSubTab === 'despesas' ? 'block' : 'hidden'}>
               <CeoExpenseAnalysisTab workspaceId={workspaceId} />
-            )}
+            </div>
           </TabsContent>
 
           {/* ABA 3: Oportunidades & Plano de Crescimento (Painel 4) */}

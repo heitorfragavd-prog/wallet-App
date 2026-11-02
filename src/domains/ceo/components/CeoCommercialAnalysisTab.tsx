@@ -77,11 +77,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
       const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
 
-      // 1. Consulta Eyemobile PDV em tempo real para o período
-      const [eyemobileData, eyemobileAntData] = await Promise.all([
-        fetchLiveDashboard({ startDate: inicioStr, endDate: fimStr }, workspaceId).catch(() => null),
-        fetchLiveDashboard({ startDate: inicioAntStr, endDate: fimAntStr }, workspaceId).catch(() => null),
-      ]);
+      // 1. Consulta Eyemobile PDV em tempo real para o período selecionado
+      const eyemobileData = await fetchLiveDashboard(
+        { startDate: inicioStr, endDate: fimStr },
+        workspaceId
+      ).catch(() => null);
 
       let total = 0;
       let count = 0;
@@ -96,11 +96,6 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       ) {
         total = eyemobileData.kpis.totalRevenue;
         count = eyemobileData.kpis.totalTransactions;
-
-        if (eyemobileAntData?.configured) {
-          totalAnt = eyemobileAntData.kpis.totalRevenue;
-          countAnt = eyemobileAntData.kpis.totalTransactions;
-        }
 
         // Top products do Eyemobile com faturamento real
         if (eyemobileData.topProducts && eyemobileData.topProducts.length > 0) {
@@ -124,6 +119,23 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
             const d = getSaoPauloDateString(new Date(timeStr));
             dayMap.set(d, (dayMap.get(d) || 0) + Number(s.total || s.amount || 0));
           }
+        }
+
+        // Comparação rápida com período anterior via transações
+        try {
+          const { data: txAntData } = await supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', inicioAntStr)
+            .lte('data', `${fimAntStr}T23:59:59.999Z`);
+          if (txAntData && txAntData.length > 0) {
+            totalAnt = txAntData.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+            countAnt = txAntData.length;
+          }
+        } catch {
+          // Comparação opcional
         }
       } else {
         // Fallback local: Transações reais deste período com paginação integral segura
