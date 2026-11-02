@@ -369,18 +369,18 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                       R$ {kpis.faturamentoOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </strong>{' '}
                     ontem
-                    {kpis.variacaoOntemVsMedia !== null && (
-                      <span className={kpis.variacaoOntemVsMedia >= 0 ? ' text-emerald-400' : ' text-rose-400'}>
-                        {' '}({kpis.variacaoOntemVsMedia >= 0 ? '+' : ''}{kpis.variacaoOntemVsMedia}% vs média das {kpis.diaSemanaOntemNome})
+                    {(kpis.variacaoOntemVsMediaPercent != null || (kpis as unknown as { variacaoOntemVsMedia?: number }).variacaoOntemVsMedia != null) && (
+                      <span className={((kpis.variacaoOntemVsMediaPercent ?? (kpis as unknown as { variacaoOntemVsMedia?: number }).variacaoOntemVsMedia ?? 0) >= 0) ? ' text-emerald-400' : ' text-rose-400'}>
+                        {' '}({((kpis.variacaoOntemVsMediaPercent ?? (kpis as unknown as { variacaoOntemVsMedia?: number }).variacaoOntemVsMedia ?? 0) >= 0) ? '+' : ''}{kpis.variacaoOntemVsMediaPercent ?? (kpis as unknown as { variacaoOntemVsMedia?: number }).variacaoOntemVsMedia}% vs média das {kpis.diaSemanaOntemNome})
                       </span>
                     )}. Neste mês acumulamos{' '}
                     <strong className="text-foreground">
                       R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </strong>{' '}
                     em vendas
-                    {kpis.crescimentoMes !== null && (
-                      <span className={kpis.crescimentoMes >= 0 ? ' text-emerald-400' : ' text-rose-400'}>
-                        {' '}({kpis.crescimentoMes >= 0 ? '+' : ''}{kpis.crescimentoMes}% vs período anterior)
+                    {(kpis.crescimentoMesPercent != null || (kpis as unknown as { crescimentoMes?: number }).crescimentoMes != null) && (
+                      <span className={((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? ' text-emerald-400' : ' text-rose-400'}>
+                        {' '}({((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes}% vs período anterior)
                       </span>
                     )}.
                   </>
@@ -391,12 +391,21 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             </div>
 
             {/* Status Live */}
-            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full self-start md:self-auto shrink-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-semibold text-emerald-400">
-                Dados atualizados com o banco
-              </span>
-            </div>
+            {kpis.dadosIndisponiveis ? (
+              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full self-start md:self-auto shrink-0">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span className="text-xs font-semibold text-amber-400">
+                  {kpis.erroMensagem || 'Dados temporariamente indisponíveis'}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full self-start md:self-auto shrink-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-xs font-semibold text-emerald-400">
+                  Dados atualizados com o banco
+                </span>
+              </div>
+            )}
           </div>
 
           {/* 4 Cards Principais de Indicadores Executivos */}
@@ -408,10 +417,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                 R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
-                {kpis.crescimentoMes !== null ? (
-                  <span className={kpis.crescimentoMes >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
-                    {kpis.crescimentoMes >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                    {kpis.crescimentoMes >= 0 ? '+' : ''}{kpis.crescimentoMes}% vs mês anterior
+                {(kpis.crescimentoMesPercent != null || (kpis as unknown as { crescimentoMes?: number }).crescimentoMes != null) ? (
+                  <span className={((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes}% vs mês anterior
                   </span>
                 ) : (
                   <span className="text-slate-500">Sem base comparativa anterior</span>
@@ -426,10 +435,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                 {kpis.pedidosMes.toLocaleString('pt-BR')}
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
-                {kpis.crescimentoPedidos !== null ? (
-                  <span className={kpis.crescimentoPedidos >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
-                    {kpis.crescimentoPedidos >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                    {kpis.crescimentoPedidos >= 0 ? '+' : ''}{kpis.crescimentoPedidos}% vs mês anterior
+                {(kpis.crescimentoPedidosPercent != null || (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos != null) ? (
+                  <span className={((kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos ?? 0) >= 0) ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {((kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos ?? 0) >= 0) ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {((kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos}% vs mês anterior
                   </span>
                 ) : (
                   <span className="text-slate-500">Período equivalente</span>
@@ -446,10 +455,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                   : 'Aguardando dados'}
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
-                {kpis.crescimentoTicket !== null ? (
-                  <span className={kpis.crescimentoTicket >= 0 ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
-                    {kpis.crescimentoTicket >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                    {kpis.crescimentoTicket >= 0 ? '+' : ''}{kpis.crescimentoTicket}% vs mês anterior
+                {(kpis.crescimentoTicketMedioPercent != null || (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket != null) ? (
+                  <span className={((kpis.crescimentoTicketMedioPercent ?? (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket ?? 0) >= 0) ? 'text-emerald-400 flex items-center gap-0.5' : 'text-rose-400 flex items-center gap-0.5'}>
+                    {((kpis.crescimentoTicketMedioPercent ?? (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket ?? 0) >= 0) ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                    {((kpis.crescimentoTicketMedioPercent ?? (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoTicketMedioPercent ?? (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket}% vs mês anterior
                   </span>
                 ) : (
                   <span className="text-slate-500">Média por pedido</span>
@@ -464,10 +473,12 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                 R$ {kpis.resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
-                {kpis.margemOperacional !== null ? (
+                {(kpis.margemOperacionalPercent != null || (kpis as unknown as { margemOperacional?: number }).margemOperacional != null) ? (
                   <span className={isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}>
-                    Margem: {kpis.margemOperacional}%
+                    Margem: {kpis.margemOperacionalPercent ?? (kpis as unknown as { margemOperacional?: number }).margemOperacional}%
                   </span>
+                ) : kpis.despesasMes === 0 ? (
+                  <span className="text-slate-500">Aguardando lançamento de despesas</span>
                 ) : (
                   <span className="text-slate-500">Receitas vs Despesas reais</span>
                 )}

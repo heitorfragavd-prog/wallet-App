@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select';
 import { Button } from '@/shared/components/ui/button';
-import { RefreshCw, ShoppingBag, TrendingUp, TrendingDown, Package } from 'lucide-react';
+import { RefreshCw, ShoppingBag, TrendingUp, TrendingDown, Package, AlertCircle } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -15,7 +15,10 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   CeoFinancialMetricsService,
   TopProdutoFaturamento,
+  getSaoPauloDateString,
+  getSaoPauloParts,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 
 interface CeoCommercialAnalysisTabProps {
   workspaceId: string;
@@ -31,6 +34,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 }) => {
   const [periodo, setPeriodo] = useState('ultimos_30_dias');
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Estados de dados reais
   const [vendasTotais, setVendasTotais] = useState<number>(0);
@@ -48,54 +52,121 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
   const loadData = useCallback(async () => {
     if (!workspaceId) return;
     setIsLoading(true);
+    setErrorMessage(null);
 
     try {
       const hoje = new Date();
       let diasAtras = 30;
+      let inicioStr = '';
+
       if (periodo === 'este_mes') {
-        diasAtras = hoje.getDate();
+        const parts = getSaoPauloParts(hoje);
+        diasAtras = parts.day;
+        inicioStr = `${parts.year}-${String(parts.month).padStart(2, '0')}-01`;
       } else if (periodo === 'ultimos_7_dias') {
         diasAtras = 7;
+        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
+      } else {
+        diasAtras = 30;
+        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
       }
 
       const fimStr = getSaoPauloDateString(hoje);
-      const inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000));
 
       // Período anterior equivalente real (sem multiplicadores arbitrários)
       const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
       const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
 
-      // 1. Transações reais deste período com paginação integral segura
-      const tx = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
-        (from, to) =>
-          supabase
-            .from('transacoes')
-            .select('valor, data')
-            .eq('workspace_id', workspaceId)
-            .eq('tipo', 'receita')
-            .gte('data', inicioStr)
-            .lte('data', `${fimStr}T23:59:59.999Z`)
-            .order('data', { ascending: true })
-            .range(from, to)
-      );
+      // 1. Consulta Eyemobile PDV em tempo real para o período
+      const [eyemobileData, eyemobileAntData] = await Promise.all([
+        fetchLiveDashboard({ startDate: inicioStr, endDate: fimStr }, workspaceId).catch(() => null),
+        fetchLiveDashboard({ startDate: inicioAntStr, endDate: fimAntStr }, workspaceId).catch(() => null),
+      ]);
 
-      // 2. Transações reais do período anterior equivalente
-      const txAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
-        (from, to) =>
-          supabase
-            .from('transacoes')
-            .select('valor, data')
-            .eq('workspace_id', workspaceId)
-            .eq('tipo', 'receita')
-            .gte('data', inicioAntStr)
-            .lte('data', `${fimAntStr}T23:59:59.999Z`)
-            .range(from, to)
-      );
+      let total = 0;
+      let count = 0;
+      let totalAnt = 0;
+      let countAnt = 0;
+      let topProdsList: TopProdutoFaturamento[] = [];
+      const dayMap = new Map<string, number>();
 
-      const total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const count = tx.length;
-      const totalAnt = txAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-      const countAnt = txAnt.length;
+      if (
+        eyemobileData?.configured &&
+        (eyemobileData.kpis.totalRevenue > 0 || eyemobileData.kpis.totalTransactions > 0)
+      ) {
+        total = eyemobileData.kpis.totalRevenue;
+        count = eyemobileData.kpis.totalTransactions;
+
+        if (eyemobileAntData?.configured) {
+          totalAnt = eyemobileAntData.kpis.totalRevenue;
+          countAnt = eyemobileAntData.kpis.totalTransactions;
+        }
+
+        // Top products do Eyemobile com faturamento real
+        if (eyemobileData.topProducts && eyemobileData.topProducts.length > 0) {
+          topProdsList = eyemobileData.topProducts.map((p, idx) => ({
+            rank: idx + 1,
+            id: p.id,
+            produto: p.product,
+            quantidade: p.quantity,
+            faturamento: p.total,
+            percentualFaturamento: total > 0 ? Math.round((p.total / total) * 1000) / 10 : 0,
+            margemEstimada: null,
+          }));
+        }
+
+        // Distribuição diária a partir das vendas reais Eyemobile
+        if (Array.isArray(eyemobileData.sales)) {
+          for (const s of eyemobileData.sales as Record<string, unknown>[]) {
+            if (s.cancelled || s.completed === false) continue;
+            const timeStr = String(s.time || s.created_at || s.createdAt || s.date || '');
+            if (!timeStr) continue;
+            const d = getSaoPauloDateString(new Date(timeStr));
+            dayMap.set(d, (dayMap.get(d) || 0) + Number(s.total || s.amount || 0));
+          }
+        }
+      } else {
+        // Fallback local: Transações reais deste período com paginação integral segura
+        const tx = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+          (from, to) =>
+            supabase
+              .from('transacoes')
+              .select('valor, data')
+              .eq('workspace_id', workspaceId)
+              .eq('tipo', 'receita')
+              .gte('data', inicioStr)
+              .lte('data', `${fimStr}T23:59:59.999Z`)
+              .order('data', { ascending: true })
+              .range(from, to)
+        );
+
+        const txAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+          (from, to) =>
+            supabase
+              .from('transacoes')
+              .select('valor, data')
+              .eq('workspace_id', workspaceId)
+              .eq('tipo', 'receita')
+              .gte('data', inicioAntStr)
+              .lte('data', `${fimAntStr}T23:59:59.999Z`)
+              .order('data', { ascending: true })
+              .range(from, to)
+        );
+
+        total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+        count = tx.length;
+        totalAnt = txAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+        countAnt = txAnt.length;
+
+        for (const t of tx || []) {
+          if (!t.data) continue;
+          const d = t.data.slice(0, 10);
+          dayMap.set(d, (dayMap.get(d) || 0) + Number(t.valor || 0));
+        }
+
+        const prods = await CeoFinancialMetricsService.getTopProducts(workspaceId);
+        topProdsList = prods;
+      }
 
       setVendasTotais(total);
       setPedidosTotal(count);
@@ -122,40 +193,30 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
 
       // 3. Vendas por dia (BarChart real)
-      const dayMap = new Map<string, number>();
-      for (const t of tx || []) {
-        if (!t.data) continue;
-        const d = t.data.slice(0, 10);
-        dayMap.set(d, (dayMap.get(d) || 0) + Number(t.valor || 0));
-      }
-
       const dailyBars: DailySaleBar[] = [];
       const numDias = Math.min(diasAtras, 30);
       for (let i = numDias - 1; i >= 0; i--) {
         const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
-        const iso = d.toISOString().slice(0, 10);
+        const iso = getSaoPauloDateString(d);
+        const parts = iso.split('-');
+        const dayLabel = `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}`;
         dailyBars.push({
-          dayLabel: `${d.getDate()}`,
+          dayLabel,
           faturamento: dayMap.get(iso) || 0,
         });
       }
       setDailySalesData(dailyBars);
 
-      // 4. Itens vendidos reais (somando quantidades em delivery_order_items ou total de transações)
-      const { data: orderItems } = await supabase
-        .from('delivery_order_items')
-        .select('quantity')
-        .eq('workspace_id', workspaceId);
-
-      const totalItens = (orderItems || []).reduce((acc, it) => acc + Number(it.quantity || 1), 0);
-      setItensVendidos(totalItens > 0 ? totalItens : count);
-      setCrescimentoItens(null); // Sem histórico inflado
+      // 4. Itens vendidos reais
+      const sumTopItems = topProdsList.reduce((acc, p) => acc + (p.quantidade || 0), 0);
+      setItensVendidos(sumTopItems > 0 ? sumTopItems : count);
+      setCrescimentoItens(null);
 
       // 5. Top 5 Produtos reais
-      const prods = await CeoFinancialMetricsService.getTopProducts(workspaceId);
-      setTopProducts(prods.slice(0, 5));
-    } catch (err) {
+      setTopProducts(topProdsList.slice(0, 5));
+    } catch (err: unknown) {
       console.warn('[CeoCommercialAnalysisTab] Erro ao carregar dados comerciais:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Falha na consulta');
     } finally {
       setIsLoading(false);
     }
@@ -205,6 +266,23 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           </Button>
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="flex items-center justify-between p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>Falha ao consultar indicadores comerciais: {errorMessage}</span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={loadData}
+            className="h-7 text-xs text-rose-400 hover:bg-rose-500/20"
+          >
+            Tentar novamente
+          </Button>
+        </div>
+      )}
 
       {/* 4 KPIs Cards Comerciais Conforme Referência */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

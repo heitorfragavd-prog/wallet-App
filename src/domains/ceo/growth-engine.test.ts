@@ -53,6 +53,36 @@ describe('Wallet CEO — Motor Analítico de Crescimento & CMV', () => {
       expect(result.total_cost).toBe(0);
       expect(result.effective_weighted_cmv_percent).toBe(0);
       expect(result.gross_margin_percent).toBe(0);
+      expect(result.has_sufficient_data).toBe(false);
+    });
+
+    it('identifica dados insuficientes quando todos os itens possuem custo unitário zero (sem fichas técnicas)', () => {
+      const salesWithoutCost: ProductSalesCMVRecord[] = [
+        {
+          product_id: 'p-1',
+          product_name: 'X-Burguer Sem Ficha',
+          quantity_sold: 50,
+          unit_price: 20.0,
+          unit_cost: 0, // Custo não cadastrado
+          category: 'Lanches',
+        },
+        {
+          product_id: 'p-2',
+          product_name: 'Refrigerante Sem Custo',
+          quantity_sold: 30,
+          unit_price: 6.0,
+          unit_cost: 0, // Custo não cadastrado
+          category: 'Bebidas',
+        },
+      ];
+
+      const result = calculateEffectiveWeightedCMV(salesWithoutCost);
+      expect(result.total_revenue).toBe(1180);
+      expect(result.total_cost).toBe(0);
+      // NUNCA deve assumir CMV saudável de 0.0% com margem 100%!
+      expect(result.has_sufficient_data).toBe(false);
+      expect(result.is_cmv_healthy).toBe(false);
+      expect(result.notes).toContain('Dados insuficientes para cálculo de CMV');
     });
   });
 
@@ -197,6 +227,53 @@ describe('Wallet CEO — Motor Analítico de Crescimento & CMV', () => {
       expect(finDept?.status).toBe('optimal');
       expect(finDept?.metrics?.find((m) => m.label === 'Faturamento Base')?.value).toContain('287.430,50');
       expect(finDept?.metrics?.find((m) => m.label === 'Resultado Operacional')?.value).toContain('241.820,25');
+    });
+
+    it('indica atenção e não inventa margem de 100% no finance_margins quando despesas não foram lançadas', () => {
+      const emptyCmv = calculateEffectiveWeightedCMV([]);
+      const summaries = buildCeoDepartmentSummaries(emptyCmv, [], [], [], {
+        realRevenue: 5000.0,
+        realExpenses: 0,
+      });
+
+      const finDept = summaries.find((s) => s.department === 'finance_margins');
+      expect(finDept).toBeDefined();
+      expect(finDept?.status).toBe('attention');
+      expect(finDept?.metrics?.find((m) => m.label === 'Despesas Registradas')?.value).toBe('Sem despesas no mês');
+      expect(finDept?.metrics?.find((m) => m.label === 'Resultado Operacional')?.value).toBe('Aguardando despesas');
+    });
+
+    it('classifica delivery_channels como atenção e aguardando credenciais quando deliveryChannelsConfigured é falso', () => {
+      const emptyCmv = calculateEffectiveWeightedCMV([]);
+      const summaries = buildCeoDepartmentSummaries(emptyCmv, [], [], [], {
+        deliveryChannelsConfigured: false,
+      });
+
+      const deliveryDept = summaries.find((s) => s.department === 'delivery_channels');
+      expect(deliveryDept).toBeDefined();
+      expect(deliveryDept?.status).toBe('attention');
+      expect(deliveryDept?.metrics?.find((m) => m.label === 'Status Marketplaces')?.value).toBe('Aguardando credenciais');
+      expect(deliveryDept?.metrics?.find((m) => m.label === 'Canais Integrados')?.value).toBe('Direto (KDS Ativo)');
+    });
+
+    it('classifica cmv_pricing como dados_insuficientes quando itens vendidos não possuem custos cadastrados', () => {
+      const uncostedSales: ProductSalesCMVRecord[] = [
+        {
+          product_id: 'p-1',
+          product_name: 'Produto Teste',
+          quantity_sold: 10,
+          unit_price: 15.0,
+          unit_cost: 0,
+          category: 'Geral',
+        },
+      ];
+      const cmvWithoutCost = calculateEffectiveWeightedCMV(uncostedSales);
+      const summaries = buildCeoDepartmentSummaries(cmvWithoutCost, [], [], []);
+
+      const cmvDept = summaries.find((s) => s.department === 'cmv_pricing');
+      expect(cmvDept).toBeDefined();
+      expect(cmvDept?.status).toBe('dados_insuficientes');
+      expect(cmvDept?.metrics?.find((m) => m.label === 'CMV Ponderado')?.value).toBe('Dados insuficientes');
     });
   });
 });

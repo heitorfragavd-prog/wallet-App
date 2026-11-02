@@ -35,12 +35,14 @@ import {
   CeoExecutiveKpis,
   getSaoPauloDateString,
   getSaoPauloParts,
+  getSaoPauloYesterday,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useFoodCost } from '@/domains/finance/hooks/useFoodCost';
-import { useEyemobileDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
+import { useEyemobileDashboard, fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
+import { supabase } from '@/integrations/supabase/client';
 
 export const WalletCeoPage: React.FC = () => {
   const { toast } = useToast();
@@ -54,12 +56,13 @@ export const WalletCeoPage: React.FC = () => {
   const [executiveKpis, setExecutiveKpis] = useState<CeoExecutiveKpis>(() =>
     CeoFinancialMetricsService.getEmptyKpis()
   );
+  const [deliveryChannelsConfigured, setDeliveryChannelsConfigured] = useState(false);
 
   // 1. Conexão real com Fichas Técnicas e Custos (Cardápio / Food Cost)
   const { produtos: produtosFoodCost } = useFoodCost();
 
   // 2. Conexão real com Eyemobile PDV (mês atual em fuso horário America/Sao_Paulo)
-  const hoje = new Date();
+  const hoje = useMemo(() => new Date(), []);
   const hojeStr = getSaoPauloDateString(hoje);
   const todayParts = getSaoPauloParts(hoje);
   const inicioMes = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-01`;
@@ -76,12 +79,76 @@ export const WalletCeoPage: React.FC = () => {
   const loadExecutiveData = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(workspaceId);
-      setExecutiveKpis(kpis);
+      const yesterdayParts = getSaoPauloYesterday(hoje);
+      const ontemStr = yesterdayParts.dateString;
+
+      const [kpis, yesterdayEyemobile, channelsRes] = await Promise.all([
+        CeoFinancialMetricsService.getExecutiveKpis(workspaceId),
+        fetchLiveDashboard({ startDate: ontemStr, endDate: ontemStr }, workspaceId).catch(() => null),
+        supabase
+          .from('delivery_channels')
+          .select('id, is_active, status, connection_state')
+          .eq('workspace_id', workspaceId)
+          .eq('is_active', true),
+      ]);
+
+      const hasActiveHomologated = (channelsRes.data || []).some(
+        (c) => c.status === 'active' || c.connection_state === 'homologated'
+      );
+      setDeliveryChannelsConfigured(hasActiveHomologated);
+
+      const mergedKpis: CeoExecutiveKpis = { ...kpis };
+
+      // Se Eyemobile de ontem estiver disponível e configurado, reconcilia vendas brutas PDV
+      if (
+        yesterdayEyemobile?.configured &&
+        (yesterdayEyemobile.kpis.totalRevenue > 0 || yesterdayEyemobile.kpis.totalTransactions > 0)
+      ) {
+        mergedKpis.faturamentoOntem = yesterdayEyemobile.kpis.totalRevenue;
+        if (mergedKpis.mediaDiaSemanaOntem && mergedKpis.mediaDiaSemanaOntem > 0) {
+          const varPct =
+            Math.round(
+              ((mergedKpis.faturamentoOntem - mergedKpis.mediaDiaSemanaOntem) /
+                mergedKpis.mediaDiaSemanaOntem) *
+                1000
+            ) / 10;
+          mergedKpis.variacaoOntemVsMedia = varPct;
+          mergedKpis.variacaoOntemVsMediaPercent = varPct;
+        }
+      }
+
+      setExecutiveKpis(mergedKpis);
     } catch (err) {
       console.warn('[WalletCeoPage] Erro ao carregar KPIs executivos:', err);
     }
-  }, [workspaceId]);
+  }, [workspaceId, hoje]);
+
+  // Reconcilia dados do mês do Eyemobile PDV quando carregados
+  useEffect(() => {
+    if (
+      eyemobileData?.configured &&
+      (eyemobileData.kpis.totalRevenue > 0 || eyemobileData.kpis.totalTransactions > 0)
+    ) {
+      setExecutiveKpis((prev) => {
+        const rev = eyemobileData.kpis.totalRevenue;
+        const txs = eyemobileData.kpis.totalTransactions;
+        const avg = eyemobileData.kpis.averageTicket;
+        const despesas = prev.despesasMes;
+        const resOp = despesas > 0 ? rev - despesas : rev;
+        const margem = despesas > 0 && rev > 0 ? Math.round((resOp / rev) * 1000) / 10 : null;
+
+        return {
+          ...prev,
+          faturamentoMes: rev,
+          pedidosMes: txs,
+          ticketMedioMes: avg,
+          resultadoOperacional: resOp,
+          margemOperacional: margem,
+          margemOperacionalPercent: margem,
+        };
+      });
+    }
+  }, [eyemobileData]);
 
   const loadRepositoryData = useCallback(async () => {
     if (!workspaceId) return;
@@ -216,9 +283,9 @@ export const WalletCeoPage: React.FC = () => {
       buildCeoDepartmentSummaries(cmvMetrics, allOpportunities, experiments, lossEvents, {
         realRevenue: executiveKpis.faturamentoMes > 0 ? executiveKpis.faturamentoMes : undefined,
         realExpenses: executiveKpis.despesasMes > 0 ? executiveKpis.despesasMes : undefined,
-        deliveryChannelsConfigured: true,
+        deliveryChannelsConfigured,
       }),
-    [cmvMetrics, allOpportunities, experiments, lossEvents, executiveKpis]
+    [cmvMetrics, allOpportunities, experiments, lossEvents, executiveKpis, deliveryChannelsConfigured]
   );
 
   const handleUpdateExperimentStatus = async (

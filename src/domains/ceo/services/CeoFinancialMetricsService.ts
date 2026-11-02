@@ -43,15 +43,20 @@ export interface CeoExecutiveKpis {
   faturamentoMes: number;
   faturamentoMesAnterior: number;
   crescimentoMesPercent: number | null;
+  crescimentoMes?: number | null;
   pedidosMes: number;
   crescimentoPedidosPercent: number | null;
+  crescimentoPedidos?: number | null;
   ticketMedioMes: number | null;
   crescimentoTicketMedioPercent: number | null;
+  crescimentoTicket?: number | null;
   resultadoOperacional: number; // Permite valor negativo real (sem Math.max(0, ...))
   margemOperacionalPercent: number | null;
+  margemOperacional?: number | null;
   faturamentoOntem: number;
   mediaDiaSemanaOntem: number | null;
   variacaoOntemVsMediaPercent: number | null;
+  variacaoOntemVsMedia?: number | null;
   diaSemanaOntemNome: string;
   despesasMes: number;
   despesasMesAnterior: number;
@@ -300,7 +305,9 @@ export class CeoFinancialMetricsService {
 
       // 5. Resultado Operacional Real (Receitas - Despesas), permitindo valor negativo
       const resultadoOperacional = faturamentoMes - totalDespesasMes;
-      const margemOperacional = faturamentoMes > 0 ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10 : null;
+      const margemOperacional = (faturamentoMes > 0 && totalDespesasMes > 0)
+        ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
+        : null;
 
       // 6. CMV Status: checa se há fichas técnicas reais e cobertura efetiva
       const { count: countFichas } = await supabase
@@ -397,15 +404,20 @@ export class CeoFinancialMetricsService {
       return {
         faturamentoMes,
         faturamentoMesAnterior: faturamentoMesAnt,
+        crescimentoMes,
         crescimentoMesPercent: crescimentoMes,
         pedidosMes,
+        crescimentoPedidos,
         crescimentoPedidosPercent: crescimentoPedidos,
         ticketMedioMes,
+        crescimentoTicket,
         crescimentoTicketMedioPercent: crescimentoTicket,
         resultadoOperacional,
+        margemOperacional,
         margemOperacionalPercent: margemOperacional,
         faturamentoOntem,
         mediaDiaSemanaOntem: mediaDiaSemana,
+        variacaoOntemVsMedia,
         variacaoOntemVsMediaPercent: variacaoOntemVsMedia,
         diaSemanaOntemNome,
         despesasMes: totalDespesasMes,
@@ -666,15 +678,20 @@ export class CeoFinancialMetricsService {
     return {
       faturamentoMes: 0,
       faturamentoMesAnterior: 0,
+      crescimentoMes: null,
       crescimentoMesPercent: null,
       pedidosMes: 0,
+      crescimentoPedidos: null,
       crescimentoPedidosPercent: null,
       ticketMedioMes: null,
+      crescimentoTicket: null,
       crescimentoTicketMedioPercent: null,
       resultadoOperacional: 0,
+      margemOperacional: null,
       margemOperacionalPercent: null,
       faturamentoOntem: 0,
       mediaDiaSemanaOntem: null,
+      variacaoOntemVsMedia: null,
       variacaoOntemVsMediaPercent: null,
       diaSemanaOntemNome: 'ontem',
       despesasMes: 0,

@@ -419,5 +419,40 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(kpis.dataAtualizacao).toBe('dados indisponíveis no momento');
       expect(kpis.faturamentoMes).toBe(0);
     });
+
+    it('Cenário 7: Despesas zeradas no mês — não exibe margem operacional artificial de 100%', async () => {
+      const refDate = new Date('2026-11-01T15:00:00Z');
+      setupDefaultMockSupabase({
+        transacoes: [
+          { valor: 3500, data: '2026-11-01T14:00:00Z', tipo: 'receita', workspace_id: wsId },
+        ],
+        despesas: [], // Nenhuma despesa lançada
+        fichas_tecnicas: [],
+        produtos_eyemobile: [],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      expect(kpis.faturamentoMes).toBe(3500);
+      expect(kpis.despesasMes).toBe(0);
+      expect(kpis.resultadoOperacional).toBe(3500);
+      // Sem despesas, margemOperacional deve ser null para evitar falso 100%
+      expect(kpis.margemOperacional).toBeNull();
+      expect(kpis.margemOperacionalPercent).toBeNull();
+    });
+
+    it('Cenário 8: Suporta aliases canônicos para todas as propriedades de variação percentual', async () => {
+      const empty = CeoFinancialMetricsService.getEmptyKpis();
+      expect(empty.crescimentoMes).toBeNull();
+      expect(empty.crescimentoMesPercent).toBeNull();
+      expect(empty.crescimentoPedidos).toBeNull();
+      expect(empty.crescimentoPedidosPercent).toBeNull();
+      expect(empty.crescimentoTicket).toBeNull();
+      expect(empty.crescimentoTicketMedioPercent).toBeNull();
+      expect(empty.variacaoOntemVsMedia).toBeNull();
+      expect(empty.variacaoOntemVsMediaPercent).toBeNull();
+      expect(empty.margemOperacional).toBeNull();
+      expect(empty.margemOperacionalPercent).toBeNull();
+    });
   });
 });

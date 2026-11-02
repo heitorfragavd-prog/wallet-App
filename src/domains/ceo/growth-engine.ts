@@ -69,6 +69,7 @@ export function calculateEffectiveWeightedCMV(
   let totalRevenue = 0;
   let totalCost = 0;
   let sumCatalogCost = 0;
+  let itemsWithCost = 0;
 
   for (const item of items) {
     const qty = Number(item.quantity_sold) || 0;
@@ -78,6 +79,9 @@ export function calculateEffectiveWeightedCMV(
     totalRevenue += qty * price;
     totalCost += qty * cost;
     sumCatalogCost += cost;
+    if (cost > 0) {
+      itemsWithCost++;
+    }
   }
 
   const catalogSimpleAvg = Math.round((sumCatalogCost / items.length) * 100) / 100;
@@ -99,6 +103,26 @@ export function calculateEffectiveWeightedCMV(
       is_cmv_healthy: false,
       has_sufficient_data: false,
       notes: 'Sem receita registrada no período informado.',
+    };
+  }
+
+  if (itemsWithCost === 0 || totalCost <= 0) {
+    return {
+      total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_cost: 0,
+      total_cmv_cost: 0,
+      effective_weighted_cmv_percent: 0,
+      effective_cmv_percent: 0,
+      gross_margin_amount: Math.round(totalRevenue * 100) / 100,
+      gross_margin_percent: 0,
+      contribution_margin_percent: 0,
+      catalog_simple_average_cost: catalogSimpleAvg,
+      items_analyzed: items.length,
+      coverage_percent: 0,
+      is_partial_coverage: false,
+      is_cmv_healthy: false,
+      has_sufficient_data: false,
+      notes: 'Dados insuficientes para cálculo de CMV. Nenhum produto com custo ou ficha técnica vinculada.',
     };
   }
 
@@ -553,12 +577,17 @@ export function buildCeoDepartmentSummaries(
     const highlights: string[] = [];
 
     if (id === 'cmv_pricing' || id === 'profitability') {
-      const hasValidItems = (cmvMetrics.items_analyzed ?? 0) > 0 && cmvMetrics.total_revenue > 0 && cmvMetrics.has_sufficient_data !== false;
+      const hasValidItems =
+        (cmvMetrics.items_analyzed ?? 0) > 0 &&
+        cmvMetrics.total_revenue > 0 &&
+        (cmvMetrics.total_cost ?? 0) > 0 &&
+        cmvMetrics.has_sufficient_data !== false;
 
       if (!hasValidItems) {
         status = 'dados_insuficientes';
         score = 50;
         metrics.push({ label: 'CMV Ponderado', value: 'Dados insuficientes' });
+        metrics.push({ label: 'Margem Bruta', value: 'Não apurada' });
         metrics.push({ label: 'Fichas Cadastradas', value: '0 vinculadas' });
         recommendations.push('Cadastrar fichas técnicas e insumos para habilitar apuração real de CMV.');
         highlights.push('Aguardando cadastro de fichas técnicas para apuração');
@@ -617,12 +646,14 @@ export function buildCeoDepartmentSummaries(
       metrics.push({ label: 'Experimentos Ativos', value: activeCount });
       metrics.push({ label: 'Oportunidades em Fila', value: opportunities.length });
       recommendations.push('Ativar testes com hipótese clara e medição de ticket médio.');
-      highlights.push(`${activeCount} experimento(s) em andamento`);
+      highlights.push(activeCount > 0 ? `${activeCount} experimento(s) em andamento` : 'Nenhum experimento ativo no momento');
+      status = activeCount > 0 ? 'optimal' : 'attention';
     } else if (id === 'commercial_growth') {
-      metrics.push({ label: 'Oportunidades', value: count });
-      metrics.push({ label: 'Potencial Mensal', value: `R$ ${opps.reduce((a, b) => a + b.potential_monthly_gain, 0).toFixed(0)}` });
-      recommendations.push('Promover combos de salgados + bebidas no balcão.');
-      highlights.push(`${count} oportunidade(s) de crescimento identificada(s)`);
+      metrics.push({ label: 'Oportunidades', value: count > 0 ? count : '0 cadastradas' });
+      metrics.push({ label: 'Potencial Mensal', value: count > 0 ? `R$ ${opps.reduce((a, b) => a + b.potential_monthly_gain, 0).toFixed(0)}` : 'Aguardando base' });
+      recommendations.push(count > 0 ? 'Promover combos de salgados + bebidas no balcão.' : 'Mapear produtos de alto giro para criar combos promocionais.');
+      highlights.push(count > 0 ? `${count} oportunidade(s) de crescimento identificada(s)` : 'Nenhuma oportunidade cadastrada');
+      status = count > 0 ? 'optimal' : 'attention';
     } else if (id === 'staff_productivity' || id === 'people_productivity') {
       metrics.push({ label: 'Equipe Operacional', value: 'KDS & Atendimento' });
       metrics.push({ label: 'Isolamento Financeiro', value: 'delivery_staff protegido' });
@@ -645,11 +676,16 @@ export function buildCeoDepartmentSummaries(
         if (baseExpenses > 0) {
           metrics.push({ label: 'Despesas Registradas', value: `R$ ${baseExpenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
           metrics.push({ label: 'Resultado Operacional', value: `R$ ${(baseRevenue - baseExpenses).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+          recommendations.push('Preservar fluxo de caixa positivo para compras à vista.');
+          highlights.push('Balanço financeiro apurado com sucesso');
+          status = 'optimal';
         } else {
-          metrics.push({ label: 'Margem Contribuição', value: `R$ ${cmvMetrics.gross_margin_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` });
+          metrics.push({ label: 'Despesas Registradas', value: 'Sem despesas no mês' });
+          metrics.push({ label: 'Resultado Operacional', value: 'Aguardando despesas' });
+          recommendations.push('Lançar despesas operacionais para apuração do resultado líquido real.');
+          highlights.push('Aguardando conciliação de despesas do período');
+          status = 'attention';
         }
-        recommendations.push('Preservar fluxo de caixa positivo para compras à vista.');
-        highlights.push('Balanço financeiro saudável');
       }
     }
 
