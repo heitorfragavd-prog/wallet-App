@@ -59,6 +59,8 @@ describe('useEquipeAcertos', () => {
       p_periodo_inicio: '2026-08-17',
       p_periodo_fim: '2026-08-23',
       p_itens: [{ natureza: 'diaria', descricao: 'Segunda', valor: 100, escala_id: 'escala-1' }],
+      p_ajustes_diarios: [],
+      p_detalhes: {},
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['equipe-acertos'] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['equipe-resumo'] });

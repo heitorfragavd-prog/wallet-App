@@ -44,6 +44,28 @@ export type EquipePagamento = {
   paid_at: string | null;
 };
 
+export type EquipeAcertoDetalhes = {
+  origem: string;
+  versao?: string;
+  data_geracao?: string;
+  semana_atual?: Array<{
+    date: string;
+    dayName: string;
+    previsaoTrabalho: boolean;
+    uberFixo: number;
+    passagem: number;
+  }>;
+  semana_anterior?: Array<{
+    date: string;
+    dayName: string;
+    recebeuAntecipacao: boolean;
+    uberAntecipado: number;
+    uberReal: number | null;
+    meta: number | null;
+  }>;
+  [key: string]: unknown;
+};
+
 export type EquipeAcerto = {
   id: string;
   workspace_id: string;
@@ -56,10 +78,40 @@ export type EquipeAcerto = {
   valor_total: number;
   pix_chave_snapshot: string | null;
   despesa_id: string | null;
+  detalhes?: EquipeAcertoDetalhes | null;
   created_at: string;
   updated_at: string;
   colaborador_acerto_itens: EquipeAcertoItem[];
   colaborador_pagamentos: EquipePagamento[];
+};
+
+export type EquipeAjuste = {
+  id: string;
+  workspace_id: string;
+  colaborador_id: string;
+  acerto_id: string | null;
+  data_gasto: string | null;
+  periodo_referencia_inicio: string | null;
+  periodo_referencia_fim: string | null;
+  natureza: string;
+  descricao: string;
+  valor_antecipado: number;
+  valor_real: number;
+  diferenca: number;
+  valor: number;
+  status: string;
+  created_at: string;
+};
+
+export type AjusteDiarioInput = {
+  colaborador_id: string;
+  data_gasto: string;
+  periodo_referencia_inicio: string;
+  periodo_referencia_fim: string;
+  valor_antecipado: number;
+  valor_real: number;
+  diferenca: number;
+  status?: string;
 };
 
 export type GerarAcertoInput = {
@@ -67,6 +119,8 @@ export type GerarAcertoInput = {
   periodoInicio: string;
   periodoFim: string;
   itens: AcertoItemInput[];
+  ajustesDiarios?: AjusteDiarioInput[];
+  detalhes?: EquipeAcertoDetalhes;
 };
 
 type ConfirmarPagamentoInput = {
@@ -103,9 +157,25 @@ export function useEquipeAcertos(colaboradorId: string | null) {
     enabled: Boolean(colaboradorId),
   });
 
+  const queryAjustes = useQuery({
+    queryKey: ['equipe-ajustes', colaboradorId],
+    queryFn: async () => {
+      if (!colaboradorId) return [];
+      const { data, error } = await supabase
+        .from('colaborador_ajustes' as never)
+        .select('*')
+        .eq('colaborador_id', colaboradorId)
+        .order('data_gasto', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as unknown as EquipeAjuste[];
+    },
+    enabled: Boolean(colaboradorId),
+  });
+
   const invalidateEquipe = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['equipe-acertos'] }),
+      queryClient.invalidateQueries({ queryKey: ['equipe-ajustes'] }),
       queryClient.invalidateQueries({ queryKey: ['equipe-resumo'] }),
       queryClient.invalidateQueries({ queryKey: ['colaborador_escalas'] }),
       queryClient.invalidateQueries({ queryKey: ['despesas'] }),
@@ -114,12 +184,15 @@ export function useEquipeAcertos(colaboradorId: string | null) {
   };
 
   const gerarAcerto = useMutation({
-    mutationFn: (input: GerarAcertoInput) => callRpc<string>('gerar_acerto_semanal', {
-      p_colaborador_id: input.colaboradorId,
-      p_periodo_inicio: input.periodoInicio,
-      p_periodo_fim: input.periodoFim,
-      p_itens: input.itens,
-    }),
+    mutationFn: (input: GerarAcertoInput) =>
+      callRpc<string>('gerar_acerto_semanal', {
+        p_colaborador_id: input.colaboradorId,
+        p_periodo_inicio: input.periodoInicio,
+        p_periodo_fim: input.periodoFim,
+        p_itens: input.itens,
+        p_ajustes_diarios: input.ajustesDiarios ?? [],
+        p_detalhes: input.detalhes ?? {},
+      }),
     onSuccess: invalidateEquipe,
   });
 
@@ -133,15 +206,16 @@ export function useEquipeAcertos(colaboradorId: string | null) {
   });
 
   const confirmarPagamento = useMutation({
-    mutationFn: (input: ConfirmarPagamentoInput) => callRpc<string>('confirmar_pagamento_acerto', {
-      p_acerto_id: input.acertoId,
-      p_divipay_external_id: input.divipayExternalId,
-      p_pagamento_id: input.pagamentoId,
-      p_origem: input.origem,
-      p_valor: input.valor,
-      p_taxa: input.taxa,
-      p_comprovante_url: input.comprovanteUrl ?? null,
-    }),
+    mutationFn: (input: ConfirmarPagamentoInput) =>
+      callRpc<string>('confirmar_pagamento_acerto', {
+        p_acerto_id: input.acertoId,
+        p_divipay_external_id: input.divipayExternalId,
+        p_pagamento_id: input.pagamentoId,
+        p_origem: input.origem,
+        p_valor: input.valor,
+        p_taxa: input.taxa,
+        p_comprovante_url: input.comprovanteUrl ?? null,
+      }),
     onSuccess: invalidateEquipe,
   });
 
@@ -165,6 +239,10 @@ export function useEquipeAcertos(colaboradorId: string | null) {
 
   return {
     ...query,
+    data: query.data ?? [],
+    acertos: query.data ?? [],
+    ajustes: queryAjustes.data ?? [],
+    isLoading: query.isLoading || queryAjustes.isLoading,
     gerarAcerto,
     iniciarPagamento,
     confirmarPagamento,
@@ -172,4 +250,3 @@ export function useEquipeAcertos(colaboradorId: string | null) {
     cancelarEscala,
   };
 }
-
