@@ -42,6 +42,8 @@ export type EyemobileSalesSource = "eyemobile_live" | "eyemobile_sync_cache";
 
 export interface EyemobileSalesResult {
   total: number;
+  totalTurnoEstendido?: number;
+  transacoesCount?: number;
   source: EyemobileSalesSource;
   stale: boolean;
   warning?: string;
@@ -61,6 +63,17 @@ export interface EyemobileLiveClient {
     end: string,
   ): Promise<EyemobileSalesResult>;
 }
+
+const toSaoPauloDate = (iso: string): string => {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso.split("T")[0] || "";
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(d);
+  } catch {
+    return iso.split("T")[0] || "";
+  }
+};
 
 /**
  * Cria um EyemobileLiveClient usando o adminClient do Supabase.
@@ -105,14 +118,40 @@ export function createEyemobileLiveClient(client: SupabaseClientLike): Eyemobile
                 return { total: totalRevenue, source: "eyemobile_live", stale: false, period };
               }
 
-              // configured=true mas sem kpis → tenta extrair via buildEyemobileDashboard
-              // O DASHBOARD retorna `sales[]` diretamente; soma os totais
-              const sales = Array.isArray(response.sales) ? response.sales : [];
+              // O DASHBOARD retorna `sales[]` diretamente; aplica o mesmo filtro canônico
+              // do painel (fuso America/Sao_Paulo e período start a end)
+              const sales = Array.isArray(response.sales) ? (response.sales as Array<Record<string, unknown>>) : [];
               if (sales.length > 0) {
-                const total = (sales as Array<Record<string, unknown>>)
-                  .filter((s) => !s.cancelled && s.completed !== false)
-                  .reduce((sum, s) => sum + (Number(s.total ?? s.amount ?? s.value ?? 0)), 0);
-                return { total, source: "eyemobile_live", stale: false, period };
+                const validSales = sales.filter((s) => !s.cancelled && s.completed !== false);
+
+                // 1. Vendas estritamente no dia civil canônico (America/Sao_Paulo)
+                const civilSales = validSales.filter((s) => {
+                  const timeStr = String(s.time || s.created_at || s.createdAt || s.date || "");
+                  const d = toSaoPauloDate(timeStr);
+                  return Boolean(d && d >= start && d <= end);
+                });
+
+                const totalCivil = civilSales.reduce(
+                  (sum, s) => sum + Number(s.total ?? s.amount ?? s.value ?? 0),
+                  0
+                );
+                const roundedCivil = Math.round(totalCivil * 100) / 100;
+
+                // 2. Vendas do turno operacional estendido (inclui madrugada seguinte retornada na mesma sessão)
+                const totalTurno = validSales.reduce(
+                  (sum, s) => sum + Number(s.total ?? s.amount ?? s.value ?? 0),
+                  0
+                );
+                const roundedTurno = Math.round(totalTurno * 100) / 100;
+
+                return {
+                  total: roundedCivil,
+                  totalTurnoEstendido: roundedTurno !== roundedCivil ? roundedTurno : undefined,
+                  transacoesCount: civilSales.length,
+                  source: "eyemobile_live",
+                  stale: false,
+                  period,
+                };
               }
 
               // Eyemobile respondeu mas sem vendas para o período → total real é 0

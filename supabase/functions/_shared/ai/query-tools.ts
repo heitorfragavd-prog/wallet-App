@@ -189,13 +189,33 @@ export function createQueryToolCatalog(
           );
           const warnings: string[] = [];
           if (result.stale && result.warning) warnings.push(result.warning);
+          const dataPayload: Record<string, unknown> = {
+            total: result.total,
+            faturamentoDiaCivil: result.total,
+            quantidadeTransacoes: result.transacoesCount ?? null,
+            source: result.source,
+            stale: result.stale,
+          };
+          if (typeof result.totalTurnoEstendido === "number" && result.totalTurnoEstendido !== result.total) {
+            dataPayload.totalTurnoEstendido = result.totalTurnoEstendido;
+            dataPayload.observacaoTurno = `Faturamento no dia civil (00h às 23h59 fuso Brasília): R$ ${result.total.toFixed(2)}. Turno estendido com fechamento de madrugada: R$ ${result.totalTurnoEstendido.toFixed(2)}.`;
+          }
+
+          const formulas: Record<string, string> = {
+            totalBrutoDiaCivil: "faturamento bruto do PDV Eyemobile no dia civil (fuso America/Sao_Paulo), idêntico ao painel",
+            source: result.source,
+          };
+          if (dataPayload.totalTurnoEstendido) {
+            formulas.totalTurnoEstendido = "faturamento acumulado do turno estendido incluindo a madrugada seguinte";
+          }
+
           return baseResult(
             "buscar_vendas_pdv",
             context,
             period,
-            { total: result.total, source: result.source, stale: result.stale },
+            dataPayload,
             [],
-            { totalBruto: "faturamento bruto do PDV Eyemobile no período", source: result.source },
+            formulas,
             warnings,
           );
         } catch (err: unknown) {

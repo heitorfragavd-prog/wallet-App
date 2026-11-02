@@ -6,13 +6,21 @@ export interface EyemobileApiPayload {
   endDate?: string;
 }
 
+export interface EyemobileDailySale {
+  date: string;
+  total: number;
+  transactions: number;
+}
+
 export interface EyemobileDashboardData {
   kpis: {
     totalRevenue: number;
     totalTransactions: number;
     averageTicket: number;
     frontCashierRevenue: number;
+    totalItemsSold?: number | null;
   };
+  dailySales: EyemobileDailySale[];
   salesByHour: { hour: string; frontCashier: number; otherOrigins: number }[];
   payments: { name: string; value: number; percentage: number }[];
   topProducts: { id: string; product: string; quantity: number; total: number }[];
@@ -102,6 +110,9 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
   const paymentTotals = new Map<string, number>();
   const productTotals = new Map<string, { id: string; product: string; quantity: number; total: number }>();
   const deviceTotals = new Map<string, { name: string; transactions: number; total: number }>();
+  const dailyTotals = new Map<string, { date: string; total: number; transactions: number }>();
+  let totalItemsSold = 0;
+  let hasItemDetails = false;
   const hourly = Array.from({ length: 19 }, (_, index) => ({ hour: `${String(index + 5).padStart(2, "0")}h`, frontCashier: 0, otherOrigins: 0 }));
   let totalRevenue = 0;
   let frontCashierRevenue = 0;
@@ -114,6 +125,13 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
     if (frontCashier) frontCashierRevenue += total;
 
     const createdAt = saleTime(sale);
+    const localDate = toLocalDate(createdAt);
+    const dateKey = localDate || (payload.startDate ? toLocalDate(payload.startDate) : "outros");
+    const dayEntry = dailyTotals.get(dateKey) ?? { date: dateKey, total: 0, transactions: 0 };
+    dayEntry.total = Math.round((dayEntry.total + total) * 100) / 100;
+    dayEntry.transactions += 1;
+    dailyTotals.set(dateKey, dayEntry);
+
     const hour = parseHour(createdAt);
 
     if (Number.isFinite(hour) && hour >= 5 && hour <= 23) {
@@ -144,11 +162,16 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
       }
     });
 
-    unwrapList(sale.items ?? sale.products ?? sale.transaction_items).forEach((item) => {
+    const saleItems = unwrapList(sale.items ?? sale.products ?? sale.transaction_items);
+    if (saleItems.length > 0) {
+      hasItemDetails = true;
+    }
+    saleItems.forEach((item) => {
       const product = toRecord(item);
       const id = String(product.product_id ?? product.id ?? product.sku ?? "Sem ID");
       const name = firstText(product.product_name, product.name, product.description, "Produto sem nome");
       const quantity = toNumber(product.quantity ?? product.qtd ?? product.amount ?? 1) || 1;
+      totalItemsSold += quantity;
       const itemTotal = toNumber(product.total ?? product.total_value ?? product.value) || toNumber(product.unit_price ?? product.price) * quantity;
       const current = productTotals.get(id) ?? { id, product: name, quantity: 0, total: 0 };
       current.quantity += quantity;
@@ -170,13 +193,19 @@ export function buildEyemobileDashboard(payload: EyemobileApiPayload): Eyemobile
     };
   }).filter((product) => product.stock <= product.minStock);
 
+  const dailySales = Array.from(dailyTotals.values()).sort((a, b) => a.date.localeCompare(b.date));
+  totalRevenue = Math.round(totalRevenue * 100) / 100;
+  frontCashierRevenue = Math.round(frontCashierRevenue * 100) / 100;
+
   return {
     kpis: {
       totalRevenue,
       totalTransactions: sales.length,
-      averageTicket: sales.length > 0 ? totalRevenue / sales.length : 0,
+      averageTicket: sales.length > 0 ? Math.round((totalRevenue / sales.length) * 100) / 100 : 0,
       frontCashierRevenue,
+      totalItemsSold: hasItemDetails ? totalItemsSold : null,
     },
+    dailySales,
     salesByHour: hourly,
     payments: Array.from(paymentTotals, ([name, value]) => ({ name, value, percentage: totalRevenue > 0 ? (value / totalRevenue) * 100 : 0 })).sort((a, b) => b.value - a.value),
     topProducts: Array.from(productTotals.values()).sort((a, b) => b.quantity - a.quantity).slice(0, 10),
