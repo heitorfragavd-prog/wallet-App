@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AcertoSemanalFuncionario } from "./AcertoSemanalFuncionario";
 
-let mockAcertosData: any[] = [];
+let mockAcertosData: Record<string, unknown>[] = [];
 let mockIsPending = false;
 const mockGerar = vi.fn();
 
