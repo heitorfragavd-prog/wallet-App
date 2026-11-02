@@ -498,4 +498,288 @@ describe("FinancialConsolidationService — Gate 1: Prevenção Canônica de Dup
     expect(report.dadosParciais).toBe(true);
     expect(report.itensConsolidados).toEqual([]);
   });
+
+  describe("Gate C: 10 Casos Canônicos de Conciliação sem Inferência Indevida", () => {
+    it("1. Transferência verdadeira entre contas da empresa é confirmada e excluída de despesa operacional", () => {
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-transf-1",
+          valor: 1500.0,
+          data: "2026-11-01",
+          descricao: "Transferência entre contas próprias Itaú -> Bradesco",
+          tipo: "transferencia",
+          conta_id: "conta-itau",
+          conta_destino_id: "conta-bradesco",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({ workspaceId, transacoes });
+      expect(report.transferenciasInternasConfirmadas).toBe(1500.0);
+      expect(report.totalPorCompetencia).toBe(0.0);
+      expect(report.totalPorCaixa).toBe(0.0);
+      expect(report.diferencasJustificadas[0].tipo).toBe("transferencia_propria");
+    });
+
+    it("2. Pagamento a fornecedor com método 'transferencia' NÃO é excluído como transferência interna", () => {
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-pagto-fornecedor",
+          valor: 820.5,
+          data: "2026-11-01",
+          descricao: "Pagamento transferência Fornecedor Pães e Doces",
+          tipo: "despesa",
+          metodo_pagamento: "transferencia",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({ workspaceId, transacoes });
+      // Pagamento a fornecedor é despesa operacional legítima!
+      expect(report.transferenciasInternasConfirmadas).toBe(0.0);
+      expect(report.totalPorCompetencia).toBe(820.5);
+      expect(report.totalPorCaixa).toBe(820.5);
+      expect(report.itensConsolidados[0].classificacaoContabil).toBe("saida_caixa");
+    });
+
+    it("3. Compra legítima contendo a palavra 'fatura' na descrição NÃO é excluída como fatura de cartão", () => {
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-cpfl-fatura",
+          valor: 450.0,
+          data: "2026-11-02",
+          descricao: "Fatura de Energia Elétrica CPFL Cia Paulista",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({ workspaceId, transacoes });
+      expect(report.faturasCartao).toBe(0.0);
+      expect(report.totalPorCompetencia).toBe(450.0);
+      expect(report.totalPorCaixa).toBe(450.0);
+      expect(report.itensConsolidados[0].classificacaoContabil).toBe("saida_caixa");
+    });
+
+    it("4. Compra no cartão individual e pagamento consolidado da fatura com categoria explícita segregam a fatura", () => {
+      const despesas: DespesaInput[] = [
+        {
+          id: "desp-mercado",
+          valor: 300.0,
+          data: "2026-11-01",
+          descricao: "Compra Atacadão Cartão",
+          metodo_pagamento: "cartao_credito",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-pgto-fatura",
+          valor: 1200.0,
+          data: "2026-11-05",
+          descricao: "Pagamento de Fatura Cartão Santander",
+          tipo: "despesa",
+          categorias: { nome: "Pagamento de Fatura" },
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas,
+        transacoes,
+      });
+
+      // Compra no cartão é mantida; pagamento da fatura consolidada é segregado
+      expect(report.faturasCartao).toBe(1200.0);
+      expect(report.totalPorCompetencia).toBe(300.0);
+      expect(report.diferencasJustificadas.some((d) => d.tipo === "fatura_cartao")).toBe(true);
+    });
+
+    it("5. Despesa manual vinculada ao pagamento bancário via deduplication_key é contabilizada uma única vez", () => {
+      const despesas: DespesaInput[] = [
+        {
+          id: "desp-internet",
+          valor: 150.0,
+          data: "2026-11-01",
+          descricao: "Internet Fibra",
+          workspace_id: workspaceId,
+          deduplication_key: "link:fibra-nov",
+        },
+      ];
+
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-fibra",
+          valor: 150.0,
+          data: "2026-11-02",
+          descricao: "Débito Fibra Telecom",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+          deduplication_key: "link:fibra-nov",
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas,
+        transacoes,
+      });
+
+      expect(report.duplicidadesConfirmadas).toBe(1);
+      expect(report.duplicidadesEvitadasValor).toBe(150.0);
+      expect(report.totalPorCompetencia).toBe(150.0);
+      expect(report.totalPorCaixa).toBe(150.0);
+      expect(report.lancamentosUnicos).toBe(1);
+    });
+
+    it("6. Duas despesas iguais e legítimas com mesmo valor e data sem chave de vínculo são preservadas e auditadas", () => {
+      const despesas: DespesaInput[] = [
+        {
+          id: "desp-gas-1",
+          valor: 120.0,
+          data: "2026-11-01",
+          descricao: "Botijão de Gás Cozinha 1",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-gas-2",
+          valor: 120.0,
+          data: "2026-11-01",
+          descricao: "Botijão de Gás Cozinha 2",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas,
+        transacoes,
+      });
+
+      // NENHUM registro é excluído cegamente! Ambos são mantidos e sinalizados
+      expect(report.lancamentosUnicos).toBe(2);
+      expect(report.registrosPendentes).toBe(1);
+      expect(report.pendenciasConciliacao).toBe(120.0);
+      expect(report.totalPorCompetencia).toBe(240.0);
+    });
+
+    it("7. Pagamento Divipay com ID canônico é conciliado sem duplicação", () => {
+      const divipayWithdraws: DivipayWithdrawInput[] = [
+        {
+          id: "saque-101",
+          amount: 450.0,
+          createdAt: "2026-11-01T12:00:00Z",
+          description: "Saque Divipay Repasse",
+        },
+      ];
+
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-divipay-101",
+          valor: 450.0,
+          data: "2026-11-01",
+          descricao: "Saque Divipay Repasse",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+          divipay_external_id: "saque-101",
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({
+        workspaceId,
+        transacoes,
+        divipayWithdraws,
+      });
+
+      expect(report.duplicidadesConfirmadas).toBe(1);
+      expect(report.totalPorCompetencia).toBe(450.0);
+      expect(report.lancamentosUnicos).toBe(1);
+    });
+
+    it("8. Estorno comprovado é registrado sem zerar silenciosamente outras despesas", () => {
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-venda-normal",
+          valor: 500.0,
+          data: "2026-11-01",
+          descricao: "Compra de Embalagens",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+        },
+        {
+          id: "tx-estorno",
+          valor: 50.0,
+          data: "2026-11-02",
+          descricao: "Estorno parcial embalagens avariadas",
+          tipo: "estorno",
+          natureza_operacao: "estorno",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({ workspaceId, transacoes });
+      expect(report.estornosReembolsos).toBe(50.0);
+      expect(report.totalPorCompetencia).toBe(450.0);
+      expect(report.lancamentosUnicos).toBe(2);
+    });
+
+    it("9. Reembolso comprovado é abatido do caixa conforme regime contábil", () => {
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-reembolso",
+          valor: 80.0,
+          data: "2026-11-02",
+          descricao: "Reembolso despesa de transporte",
+          tipo: "reembolso",
+          natureza_operacao: "reembolso",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({ workspaceId, transacoes });
+      expect(report.estornosReembolsos).toBe(80.0);
+      expect(report.totalPorCaixa).toBe(-80.0);
+      expect(report.itensConsolidados[0].classificacaoContabil).toBe("reembolso");
+    });
+
+    it("10. Conciliação incompleta é preservada em pendenciasConciliacao com detalhes para auditoria", () => {
+      const despesas: DespesaInput[] = [
+        {
+          id: "desp-duvida",
+          valor: 99.9,
+          data: "2026-11-02",
+          descricao: "Lançamento em análise",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const transacoes: TransacaoInput[] = [
+        {
+          id: "tx-duvida",
+          valor: 99.9,
+          data: "2026-11-02",
+          descricao: "Débito em análise",
+          tipo: "despesa",
+          workspace_id: workspaceId,
+        },
+      ];
+
+      const report = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas,
+        transacoes,
+      });
+
+      expect(report.registrosPendentes).toBe(1);
+      expect(report.pendenciasConciliacao).toBe(99.9);
+      expect(report.diferencasJustificadas.some((d) => d.tipo === "conciliacao_pendente")).toBe(true);
+      expect(report.diferencasJustificadas[0].detalhes).toContain("Preservados ambos para conferência auditável");
+    });
+  });
 });

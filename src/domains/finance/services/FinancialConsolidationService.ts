@@ -1,75 +1,45 @@
-/**
- * FinancialConsolidationService.ts
- *
- * Serviço Canônico de Consolidação e Auditoria Financeira do Wallet App.
- *
- * Responsabilidades estritas:
- * 1. Unificar com precisão contábil despesas manuais ('despesas'), conciliação bancária ('transacoes' despesa)
- *    e saques de liquidação ('divipay').
- * 2. Impedir categoricamente contagem dupla:
- *    - Obrigação cadastrada vs. Liquidação bancária subsequente
- *    - Compras no cartão de crédito vs. Pagamento consolidado de fatura de cartão
- *    - Transferências entre contas próprias (não são despesas operacionais)
- *    - Saques Divipay já persistidos ou integrados
- * 3. Segregação rigorosa de regimes contábeis:
- *    - Regime de Competência: Data da ocorrência do fato gerador/obrigação
- *    - Regime de Caixa: Data da efetiva liquidação/saída financeira
- * 4. Preservação de dados e rastreabilidade:
- *    - Nunca deduzir duplicidade meramente por (valor, data, descrição)
- *    - Lançamentos semelhantes sem vínculo explícito são marcados como 'conciliacao_pendente'
- *    - Auditoria detalhada com justificativas de diferenças
- */
-
 import { formatarDataParaSaoPaulo, getHojeSaoPaulo } from "../utils/dateHelpers";
-
-export type AccountingRegime = "competencia" | "caixa";
 
 export interface DespesaInput {
   id: string;
   valor: number;
-  data: string;
-  descricao: string;
+  data: string; // YYYY-MM-DD ou ISO
+  descricao?: string | null;
   workspace_id?: string | null;
-  user_id?: string | null;
   categoria_id?: string | null;
-  status?: string | null;
-  pago?: boolean | null;
+  categorias?: { nome?: string; cor?: string; icone?: string } | null;
   metodo_pagamento?: string | null;
   conta_id?: string | null;
+  conta_destino_id?: string | null;
   fatura_id?: string | null;
-  recorrencia_id?: string | null;
-  deduplication_key?: string | null;
+  natureza_operacao?: string | null;
+  status?: string | null;
+  pago?: boolean | null;
   observacoes?: string | null;
-  conciliado?: boolean | null;
+  deduplication_key?: string | null;
   divipay_external_id?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  categorias?: { nome: string; cor: string; icone: string } | null;
-  [key: string]: unknown;
 }
 
 export interface TransacaoInput {
   id: string;
   valor: number;
-  data: string;
-  descricao: string;
-  tipo: string;
+  data: string; // YYYY-MM-DD ou ISO
+  descricao?: string | null;
   workspace_id?: string | null;
-  user_id?: string | null;
-  categoria_id?: string | null;
-  metodo_pagamento?: string | null;
+  tipo?: string | null; // 'despesa', 'receita', 'transferencia', 'estorno', 'reembolso'
+  tipo_transacao?: string | null;
+  natureza_operacao?: string | null;
   conta_id?: string | null;
+  conta_destino_id?: string | null;
   cartao_id?: string | null;
   fatura_id?: string | null;
-  recorrencia_id?: string | null;
-  deduplication_key?: string | null;
+  categoria_id?: string | null;
+  categorias?: { nome?: string; cor?: string; icone?: string } | null;
+  metodo_pagamento?: string | null;
   observacoes?: string | null;
-  conciliado?: boolean | null;
+  deduplication_key?: string | null;
   divipay_external_id?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  categorias?: { nome: string; cor: string; icone: string } | null;
-  [key: string]: unknown;
+  transacao_estornada_id?: string | null;
 }
 
 export interface DivipayWithdrawInput {
@@ -144,6 +114,13 @@ export interface FinancialConsolidationReport {
   registrosPendentes: number;
   totalPorCompetencia: number;
   totalPorCaixa: number;
+  // Métricas canônicas segregadas (Gate C)
+  despesasReconhecidas: number;
+  saidasEfetivamentePagas: number;
+  pendenciasConciliacao: number;
+  transferenciasInternasConfirmadas: number;
+  estornosReembolsos: number;
+  faturasCartao: number;
   dadosParciais?: boolean;
   itensConsolidados: ConsolidatedExpenseItem[];
   diferencasJustificadas: JustificativaDiferenca[];
@@ -159,13 +136,14 @@ export interface ConsolidationOptions {
 
 export class FinancialConsolidationService {
   /**
-   * Consolida despesas com tratamento absoluto anti-duplicidade e separação de regimes.
+   * Consolida despesas operacionais da empresa eliminando duplicidades contábeis,
+   * sem inferência indevida por texto e com separação rigorosa de Competência vs Caixa.
    */
-  public static consolidate(params: {
+  static consolidate(params: {
     workspaceId: string;
-    despesas?: DespesaInput[] | null;
-    transacoes?: TransacaoInput[] | null;
-    divipayWithdraws?: DivipayWithdrawInput[] | null;
+    despesas?: DespesaInput[];
+    transacoes?: TransacaoInput[];
+    divipayWithdraws?: DivipayWithdrawInput[];
     options?: ConsolidationOptions;
   }): FinancialConsolidationReport {
     const {
@@ -184,16 +162,15 @@ export class FinancialConsolidationService {
       dadosParciais = false,
     } = options;
 
-    const normStartDate = startDate ? formatarDataParaSaoPaulo(startDate) : null;
-    const normEndDate = endDate ? formatarDataParaSaoPaulo(endDate) : null;
+    const normStartDate = startDate ? formatarDataParaSaoPaulo(startDate) : undefined;
+    const normEndDate = endDate ? formatarDataParaSaoPaulo(endDate) : undefined;
 
+    // Filtra previamente por workspace com tratamento de nulos
     const rawDespesas = (despesas || []).filter(
       (d) => !d.workspace_id || d.workspace_id === workspaceId
     );
     const rawTransacoes = (transacoes || []).filter(
-      (t) =>
-        t.tipo === "despesa" &&
-        (!t.workspace_id || t.workspace_id === workspaceId)
+      (t) => (!t.workspace_id || t.workspace_id === workspaceId) && (t.tipo === "despesa" || !t.tipo || t.tipo === "transferencia" || t.tipo === "estorno" || t.tipo === "reembolso")
     );
     const rawDivipay = divipayWithdraws || [];
 
@@ -217,13 +194,16 @@ export class FinancialConsolidationService {
     const itensConsolidados: ConsolidatedExpenseItem[] = [];
 
     let lancamentosConciliados = 0;
-    let lancamentosUnicos = 0;
     let duplicidadesConfirmadas = 0;
     let duplicidadesEvitadasValor = 0;
     let registrosPendentes = 0;
+    let transferenciasInternasConfirmadas = 0;
+    let faturasCartao = 0;
+    let estornosReembolsos = 0;
+    let pendenciasConciliacao = 0;
 
     // ─────────────────────────────────────────────────────────────────
-    // FASE 1: Indexação de vínculos explícitos e identificadores canônicos
+    // FASE 1: Indexação de vínculos canônicos e chaves explícitas
     // ─────────────────────────────────────────────────────────────────
     const existingDivipayIds = new Set<string>();
     const despesaByLinkKey = new Map<string, DespesaInput>();
@@ -269,7 +249,7 @@ export class FinancialConsolidationService {
     });
 
     // ─────────────────────────────────────────────────────────────────
-    // FASE 2: Processamento de Transações (Detecção de Fatura, Transf, Links)
+    // FASE 2: Processamento de Transações Bancárias
     // ─────────────────────────────────────────────────────────────────
     const consumedTransacaoIds = new Set<string>();
     const linkedDespesaIds = new Set<string>();
@@ -278,81 +258,120 @@ export class FinancialConsolidationService {
       const txId = tx.id;
       const txValor = Number(tx.valor || 0);
       const txData = formatarDataParaSaoPaulo(tx.data) || getHojeSaoPaulo();
-      const descLower = (tx.descricao || "").trim().toLowerCase();
-      const metodo = (tx.metodo_pagamento || "").trim().toLowerCase();
+      const desc = (tx.descricao || "").trim();
+      const descLower = desc.toLowerCase();
       const catNome = tx.categorias?.nome || "";
+      const catLower = catNome.toLowerCase();
 
-      // 1. Transferência entre contas próprias
-      const isInternalTransfer =
-        metodo === "transferencia" ||
+      // 1. Classificação estrita de Transferência Interna (sem exclusão de pagamentos a fornecedores)
+      // Requer: natureza explícita, tipo 'transferencia', contas origem/destino cadastradas,
+      // ou categoria explícita de transferência entre contas próprias.
+      const hasBothAccounts = Boolean(tx.conta_id && tx.conta_destino_id && tx.conta_id !== tx.conta_destino_id);
+      const isExplicitInternalNature =
+        tx.natureza_operacao === "transferencia_interna" ||
+        tx.tipo === "transferencia" ||
+        tx.tipo_transacao === "transferencia_interna";
+
+      const isCategoryInternalTransfer =
+        catLower === "transferência entre contas" ||
+        catLower === "transferencia entre contas" ||
+        catLower === "transferência interna" ||
+        catLower === "transferencia interna";
+
+      const isUnambiguousInternalDesc =
+        descLower.startsWith("transferência entre contas próprias") ||
+        descLower.startsWith("transf entre contas proprias") ||
+        descLower.startsWith("transferência para aplicação") ||
+        descLower.startsWith("transferência entre contas da empresa") ||
         descLower.startsWith("transferência →") ||
         descLower.startsWith("transferencia →") ||
         descLower.startsWith("transferência ←") ||
-        descLower.startsWith("transferência entre contas") ||
-        descLower.startsWith("transf entre contas") ||
-        catNome.toLowerCase().includes("transferência entre contas");
+        descLower.startsWith("transferencia ←");
 
-      if (isInternalTransfer && ignoreInternalTransfers) {
+      const isInternalTransfer = hasBothAccounts || isExplicitInternalNature || isCategoryInternalTransfer || isUnambiguousInternalDesc;
+
+      if (isInternalTransfer) {
         consumedTransacaoIds.add(txId);
-        diferencasJustificadas.push({
-          tipo: "transferencia_propria",
-          origemId: txId,
-          origemTabela: "transacoes",
-          descricao: tx.descricao,
-          valor: txValor,
-          detalhes:
-            "Movimentação interna entre contas próprias (excluída do cômputo de despesa operacional).",
-        });
-        continue;
+        transferenciasInternasConfirmadas += txValor;
+        if (ignoreInternalTransfers) {
+          diferencasJustificadas.push({
+            tipo: "transferencia_propria",
+            origemId: txId,
+            origemTabela: "transacoes",
+            descricao: tx.descricao || "Transferência Interna",
+            valor: txValor,
+            detalhes:
+              "Movimentação interna entre contas próprias (excluída do cômputo de despesa operacional).",
+          });
+          continue;
+        }
       }
 
-      // 2. Pagamento de Fatura de Cartão de Crédito
-      const isCardBillPayment =
-        descLower.includes("pagamento de fatura") ||
-        descLower.includes("pagto fatura") ||
-        descLower.includes("pagamento fatura") ||
-        descLower.includes("fatura de cartao") ||
-        descLower.includes("fatura do cartao") ||
-        descLower.includes("fatura cartão") ||
-        descLower.includes("fatura cartao") ||
-        catNome.toLowerCase().includes("fatura cartão") ||
-        catNome.toLowerCase().includes("pagamento de fatura");
+      // 2. Classificação canônica de Pagamento de Fatura de Cartão
+      // Requer: categoria específica de Fatura de Cartão, fatura_id explícito,
+      // ou descrição inequívoca de liquidação de fatura ("pagamento de fatura de cartão").
+      // NÃO trata compras legítimas de fornecedores contendo a palavra "fatura" como pagamento de cartão!
+      const isExplicitInvoiceCategory =
+        catLower === "pagamento de fatura" ||
+        catLower === "fatura de cartão" ||
+        catLower === "fatura de cartao" ||
+        catLower === "fatura cartão de crédito" ||
+        catLower === "fatura cartao de credito";
 
-      if (isCardBillPayment && ignoreCreditCardInvoicePayments) {
+      const isExplicitInvoiceId = Boolean(tx.fatura_id && tx.fatura_id.trim() !== "");
+
+      const isUnambiguousInvoiceDesc =
+        /pagamento\s+(da|de)\s+fatura\s+(do\s+)?cart[aã]o/i.test(descLower) ||
+        /pgto\s+fatura\s+cart[aã]o/i.test(descLower) ||
+        /fatura\s+cart[aã]o\s+de\s+cr[eé]dito/i.test(descLower);
+
+      const isCardBillPayment = isExplicitInvoiceCategory || isExplicitInvoiceId || isUnambiguousInvoiceDesc;
+
+      if (isCardBillPayment) {
         consumedTransacaoIds.add(txId);
-        diferencasJustificadas.push({
-          tipo: "fatura_cartao",
-          origemId: txId,
-          origemTabela: "transacoes",
-          descricao: tx.descricao,
-          valor: txValor,
-          detalhes:
-            "Pagamento consolidado de fatura de cartão (excluído para não duplicar compras já reconhecidas).",
-        });
-        continue;
+        faturasCartao += txValor;
+        if (ignoreCreditCardInvoicePayments) {
+          diferencasJustificadas.push({
+            tipo: "fatura_cartao",
+            origemId: txId,
+            origemTabela: "transacoes",
+            descricao: tx.descricao || "Fatura de Cartão",
+            valor: txValor,
+            detalhes:
+              "Pagamento consolidado de fatura de cartão (excluído para não duplicar compras individuais já reconhecidas).",
+          });
+          continue;
+        }
       }
 
-      // 3. Estorno ou Reembolso em transação
-      const isEstorno =
-        descLower.includes("estorno") ||
-        descLower.includes("reversão") ||
-        descLower.includes("reversao") ||
-        descLower.includes("chargeback");
+      // 3. Estorno ou Reembolso comprovado
+      const isExplicitEstorno =
+        tx.tipo === "estorno" ||
+        tx.natureza_operacao === "estorno" ||
+        Boolean(tx.transacao_estornada_id);
 
-      const isReembolso = descLower.includes("reembolso");
+      const isExplicitReembolso =
+        tx.tipo === "reembolso" ||
+        tx.natureza_operacao === "reembolso";
+
+      const isEstornoDesc = /^(estorno|revers[aã]o|chargeback)(\s|$)/i.test(descLower);
+      const isReembolsoDesc = /^reembolso(\s|$)/i.test(descLower);
+
+      const isEstorno = isExplicitEstorno || isEstornoDesc;
+      const isReembolso = isExplicitReembolso || isReembolsoDesc;
 
       if (isEstorno || isReembolso) {
-        // Estorno / reembolso registrado como despesa negativa ou ajuste
         consumedTransacaoIds.add(txId);
+        estornosReembolsos += txValor;
         diferencasJustificadas.push({
           tipo: "estorno_reembolso",
           origemId: txId,
           origemTabela: "transacoes",
-          descricao: tx.descricao,
+          descricao: tx.descricao || (isEstorno ? "Estorno" : "Reembolso"),
           valor: txValor,
           detalhes: isEstorno
-            ? "Estorno de transação financeira reconhecido."
-            : "Reembolso financeiro registrado.",
+            ? "Estorno de transação financeira comprovado."
+            : "Reembolso financeiro comprovado.",
         });
         itensConsolidados.push({
           id: `tx-${txId}`,
@@ -362,14 +381,14 @@ export class FinancialConsolidationService {
           valorCaixa: -Math.abs(txValor),
           data: txData,
           dataCaixa: txData,
-          descricao: tx.descricao,
+          descricao: tx.descricao || (isEstorno ? "Estorno de transação" : "Reembolso"),
           status: "pago",
           regimeReconhecido: "ambos",
           metodoPagamento: tx.metodo_pagamento,
           categoriaId: tx.categoria_id,
           categoriaNome: catNome,
           classificacaoContabil: isEstorno ? "estorno" : "reembolso",
-          observacaoAuditoria: isEstorno ? "Estorno de despesa" : "Reembolso de despesa",
+          observacaoAuditoria: isEstorno ? "Estorno financeiro comprovado" : "Reembolso financeiro comprovado",
         });
         continue;
       }
@@ -403,19 +422,13 @@ export class FinancialConsolidationService {
       }
 
       if (matchedDespesa) {
-        // Vínculo canônico comprovado!
         consumedTransacaoIds.add(txId);
         linkedDespesaIds.add(matchedDespesa.id);
         lancamentosConciliados++;
 
         const despValor = Number(matchedDespesa.valor || 0);
-        const despData =
-          formatarDataParaSaoPaulo(matchedDespesa.data) || txData;
+        const despData = formatarDataParaSaoPaulo(matchedDespesa.data) || txData;
 
-        // Prevenção de duplicidade:
-        // A despesa econômica é UMA SÓ.
-        // Competência = valor da obrigação (despValor)
-        // Caixa = valor efetivamente liquidado (txValor)
         duplicidadesConfirmadas++;
         duplicidadesEvitadasValor += txValor;
 
@@ -423,7 +436,7 @@ export class FinancialConsolidationService {
           tipo: "duplicidade_vinculada",
           origemId: txId,
           origemTabela: "transacoes",
-          descricao: tx.descricao,
+          descricao: tx.descricao || matchedDespesa.descricao || "Despesa Conciliada",
           valor: txValor,
           detalhes: `Liquidação bancária vinculada à obrigação despesas/${matchedDespesa.id}. Contabilizada uma única vez para evitar duplicidade.`,
         });
@@ -436,7 +449,7 @@ export class FinancialConsolidationService {
           valorCaixa: txValor,
           data: despData,
           dataCaixa: txData,
-          descricao: matchedDespesa.descricao || tx.descricao,
+          descricao: matchedDespesa.descricao || tx.descricao || "Despesa Conciliada",
           status: "pago",
           regimeReconhecido: "ambos",
           metodoPagamento: tx.metodo_pagamento || matchedDespesa.metodo_pagamento,
@@ -456,7 +469,6 @@ export class FinancialConsolidationService {
     // ─────────────────────────────────────────────────────────────────
     for (const d of rawDespesas) {
       if (linkedDespesaIds.has(d.id)) {
-        // Já consolidada no vínculo com a transação
         continue;
       }
 
@@ -464,36 +476,42 @@ export class FinancialConsolidationService {
       const despValor = Number(d.valor || 0);
       const despData = formatarDataParaSaoPaulo(d.data) || getHojeSaoPaulo();
       const descLower = (d.descricao || "").trim().toLowerCase();
-      const metodo = (d.metodo_pagamento || "").trim().toLowerCase();
       const catNome = d.categorias?.nome || "";
+      const catLower = catNome.toLowerCase();
       const isPago = d.status === "pago" || d.pago === true;
 
-      // Transferência entre contas próprias em despesas
+      // Transferência interna em despesas
       const isInternalTransfer =
-        metodo === "transferencia" ||
+        d.natureza_operacao === "transferencia_interna" ||
+        catLower.includes("transferência entre contas") ||
+        catLower.includes("transferência interna") ||
+        Boolean(d.conta_id && d.conta_destino_id && d.conta_id !== d.conta_destino_id) ||
+        descLower.startsWith("transferência entre contas próprias") ||
         descLower.startsWith("transferência →") ||
         descLower.startsWith("transferencia →") ||
-        descLower.startsWith("transferência entre contas") ||
-        catNome.toLowerCase().includes("transferência entre contas");
+        descLower.startsWith("transferência ←") ||
+        descLower.startsWith("transferencia ←");
 
-      if (isInternalTransfer && ignoreInternalTransfers) {
-        diferencasJustificadas.push({
-          tipo: "transferencia_propria",
-          origemId: despId,
-          origemTabela: "despesas",
-          descricao: d.descricao,
-          valor: despValor,
-          detalhes:
-            "Transferência interna registrada em despesas (excluída de despesa operacional).",
-        });
-        continue;
+      if (isInternalTransfer) {
+        transferenciasInternasConfirmadas += despValor;
+        if (ignoreInternalTransfers) {
+          diferencasJustificadas.push({
+            tipo: "transferencia_propria",
+            origemId: despId,
+            origemTabela: "despesas",
+            descricao: d.descricao || "Transferência Interna",
+            valor: despValor,
+            detalhes:
+              "Transferência interna registrada em despesas (excluída de despesa operacional).",
+          });
+          continue;
+        }
       }
 
-      // Parcela de cartão ou compra no cartão
-      const isCardPurchase =
-        Boolean(d.fatura_id) || metodo === "cartao_credito";
+      // Compra no cartão
+      const isCardPurchase = Boolean(d.fatura_id) || d.metodo_pagamento === "cartao_credito";
 
-      // Verifica se há alguma transação com mesmo valor e mesma data SEM vínculo explícito (ambiguidade)
+      // Verifica ambiguidade: transação de mesmo valor e data SEM vínculo comprovado
       const potentialMatch = rawTransacoes.find(
         (t) =>
           !consumedTransacaoIds.has(t.id) &&
@@ -502,15 +520,15 @@ export class FinancialConsolidationService {
       );
 
       if (potentialMatch) {
-        // Ambiguidade identificada: não apaga nem deduplica cegamente!
         registrosPendentes++;
+        pendenciasConciliacao += despValor;
         diferencasJustificadas.push({
           tipo: "conciliacao_pendente",
           origemId: despId,
           origemTabela: "despesas",
-          descricao: d.descricao,
+          descricao: d.descricao || "Despesa sem Vínculo Confirmado",
           valor: despValor,
-          detalhes: `Valor (R$ ${despValor.toFixed(2)}) e data (${despData}) idênticos à transação transacoes/${potentialMatch.id}, mas sem identificador canônico de vínculo. Preservados ambos para revisão.`,
+          detalhes: `Valor (R$ ${despValor.toFixed(2)}) e data (${despData}) idênticos à transação transacoes/${potentialMatch.id}, mas sem identificador canônico de vínculo. Preservados ambos para conferência auditável.`,
         });
       }
 
@@ -522,21 +540,23 @@ export class FinancialConsolidationService {
         valorCaixa: isPago ? despValor : 0,
         data: despData,
         dataCaixa: isPago ? despData : undefined,
-        descricao: d.descricao,
+        descricao: d.descricao || "Despesa",
         status: isPago ? "pago" : "pendente",
         regimeReconhecido: isPago ? "ambos" : "competencia",
         metodoPagamento: d.metodo_pagamento,
         categoriaId: d.categoria_id,
         categoriaNome: catNome,
         categoriaCor: d.categorias?.cor,
-        classificacaoContabil: isCardPurchase
-          ? "parcela_cartao"
-          : isPago
-            ? "despesa_competencia"
-            : "obrigacao_cadastrada",
+        classificacaoContabil: potentialMatch
+          ? "conciliacao_pendente"
+          : isCardPurchase
+            ? "parcela_cartao"
+            : isPago
+              ? "despesa_competencia"
+              : "obrigacao_cadastrada",
         chaveDeduplicacao: d.deduplication_key || undefined,
         observacaoAuditoria: potentialMatch
-          ? "Conciliação pendente com transação de mesmo valor/data"
+          ? "Conciliação pendente: mesmo valor/data sem identificador unívoco"
           : isPago
             ? "Despesa liquidada"
             : "Obrigação em aberto",
@@ -544,7 +564,7 @@ export class FinancialConsolidationService {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // FASE 4: Transações Restantes não vinculadas
+    // FASE 4: Transações Bancárias Autônomas (não consumidas)
     // ─────────────────────────────────────────────────────────────────
     for (const tx of rawTransacoes) {
       if (consumedTransacaoIds.has(tx.id)) continue;
@@ -563,7 +583,7 @@ export class FinancialConsolidationService {
         valorCaixa: txValor,
         data: txData,
         dataCaixa: txData,
-        descricao: tx.descricao,
+        descricao: tx.descricao || "Transação Bancária",
         status: "pago",
         regimeReconhecido: "ambos",
         metodoPagamento: tx.metodo_pagamento,
@@ -576,60 +596,51 @@ export class FinancialConsolidationService {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // FASE 5: Saques da Divipay (se fornecidos como lista pura)
+    // FASE 5: Saques da Divipay
     // ─────────────────────────────────────────────────────────────────
-    const DIVIPAY_SETTLED_STATUSES = [
-      "FINISHED", "COMPLETED", "SETTLED", "PAID", "PAGO", "CONFIRMED",
-    ];
-    const DIVIPAY_NON_SETTLED_STATUSES = [
-      "PENDING", "PROCESSING", "FAILED", "ERROR", "REJECTED",
-      "CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "CHARGEBACK",
-    ];
-
     for (const w of rawDivipay) {
       const cleanId = String(w.id || "").trim().replace(/^divipay-/, "");
-      const amount = Number(w.amount || 0);
-      const status = String(w.status || "").trim().toUpperCase();
-
-      if (!status || !DIVIPAY_SETTLED_STATUSES.includes(status)) continue;
-      if (DIVIPAY_NON_SETTLED_STATUSES.some((s) => status.includes(s))) continue;
+      if (!cleanId) continue;
 
       if (existingDivipayIds.has(cleanId)) {
-        // Já existe em despesas ou transações
         duplicidadesConfirmadas++;
-        duplicidadesEvitadasValor += amount;
+        duplicidadesEvitadasValor += Number(w.amount || 0);
         diferencasJustificadas.push({
           tipo: "duplicidade_vinculada",
-          origemId: w.id,
-          origemTabela: "divipay",
+          origemId: cleanId,
+          origemTabela: "divipay_withdraws",
           descricao: w.description || "Saque Divipay",
-          valor: amount,
-          detalhes: `Saque Divipay ${cleanId} já presente na base persistida. Duplicação evitada.`,
+          valor: Number(w.amount || 0),
+          detalhes: `Saque Divipay ${cleanId} já cadastrado e conciliado em transacoes/despesas. Duplicidade evitada.`,
         });
         continue;
       }
 
-      const wDate = formatarDataParaSaoPaulo(w.createdAt) || getHojeSaoPaulo();
+      existingDivipayIds.add(cleanId);
+      const amount = Number(w.amount || 0);
+      const dateStr = formatarDataParaSaoPaulo(w.createdAt) || getHojeSaoPaulo();
+      const method = w.metodo_pagamento || w.paymentMethod || "outros";
+
       itensConsolidados.push({
         id: `divipay-${cleanId}`,
         origem: "divipay",
         origemId: cleanId,
         valor: amount,
         valorCaixa: amount,
-        data: wDate,
-        dataCaixa: wDate,
-        descricao: w.description || "Saque Divipay",
+        data: dateStr,
+        dataCaixa: dateStr,
+        descricao: w.description || `Saque Divipay (${cleanId})`,
         status: "pago",
         regimeReconhecido: "ambos",
-        metodoPagamento: w.paymentMethod || w.metodo_pagamento || "pix",
-        categoriaNome: "Transferências e Saques Divipay",
-        classificacaoContabil: "saida_caixa",
-        observacaoAuditoria: "Saque Divipay liquidado direto da API",
+        metodoPagamento: method,
+        categoriaNome: "Divipay Repasses",
+        classificacaoContabil: "pagamento_realizado",
+        observacaoAuditoria: "Saque Divipay autônomo",
       });
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // FASE 6: Filtragem por Período e Agregação Final
+    // FASE 6: Filtragem por Período e Agregações Segregadas
     // ─────────────────────────────────────────────────────────────────
     const filteredItems = itensConsolidados.filter((item) => {
       if (normStartDate && item.data < normStartDate) return false;
@@ -639,24 +650,26 @@ export class FinancialConsolidationService {
 
     let totalPorCompetencia = 0;
     let totalPorCaixa = 0;
+    let despesasReconhecidas = 0;
+    let saidasEfetivamentePagas = 0;
 
     for (const item of filteredItems) {
       // Competência: reconhece a obrigação pelo fato gerador
       totalPorCompetencia += Number(item.valor || 0);
+      despesasReconhecidas += Number(item.valor || 0);
 
       // Caixa: reconhece saídas de caixa liquidadas
       if (item.status === "pago") {
-        totalPorCaixa += Number(item.valorCaixa ?? item.valor ?? 0);
+        const valCaixa = Number(item.valorCaixa ?? item.valor ?? 0);
+        totalPorCaixa += valCaixa;
+        saidasEfetivamentePagas += valCaixa;
       }
     }
 
-    // Ordenar itens decrescente por data
     filteredItems.sort((a, b) => {
       if (b.data !== a.data) return b.data.localeCompare(a.data);
       return Math.abs(b.valor) - Math.abs(a.valor);
     });
-
-    lancamentosUnicos = filteredItems.length;
 
     return {
       workspaceId,
@@ -665,12 +678,18 @@ export class FinancialConsolidationService {
       totalBrutoOrigem: Math.round(totalBrutoOrigem * 100) / 100,
       totalRegistrosOrigem,
       lancamentosConciliados,
-      lancamentosUnicos,
+      lancamentosUnicos: filteredItems.length,
       duplicidadesConfirmadas,
       duplicidadesEvitadasValor: Math.round(duplicidadesEvitadasValor * 100) / 100,
       registrosPendentes,
       totalPorCompetencia: Math.round(totalPorCompetencia * 100) / 100,
       totalPorCaixa: Math.round(totalPorCaixa * 100) / 100,
+      despesasReconhecidas: Math.round(despesasReconhecidas * 100) / 100,
+      saidasEfetivamentePagas: Math.round(saidasEfetivamentePagas * 100) / 100,
+      pendenciasConciliacao: Math.round(pendenciasConciliacao * 100) / 100,
+      transferenciasInternasConfirmadas: Math.round(transferenciasInternasConfirmadas * 100) / 100,
+      estornosReembolsos: Math.round(estornosReembolsos * 100) / 100,
+      faturasCartao: Math.round(faturasCartao * 100) / 100,
       dadosParciais,
       itensConsolidados: filteredItems,
       diferencasJustificadas,
