@@ -209,7 +209,32 @@ export class MarketplaceIntegrationService {
     }
 
     try {
-      // 1. Consulta registro existente para preservar logs
+      // 1. Tenta acionar Edge Function com cofre isolado de credenciais
+      try {
+        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
+          body: {
+            action: 'save_credentials',
+            workspace_id: workspaceId,
+            channel_name: channelName,
+            merchant_id: merchantId.trim(),
+            client_id: clientId.trim(),
+            client_secret: clientSecret?.trim() || undefined,
+            auto_accept_orders: autoAcceptOrders,
+          },
+        });
+
+        if (!edgeError && edgeData?.success) {
+          return {
+            success: true,
+            state: edgeData.state || 'credentials_present_unverified',
+            message: edgeData.message || 'Credenciais gravadas no cofre seguro do servidor.',
+          };
+        }
+      } catch {
+        // Fallback para persistência direta em delivery_channels em caso de ambiente sem Edge Function
+      }
+
+      // 2. Consulta registro existente para preservar logs
       const { data: existing } = await supabase
         .from('delivery_channels')
         .select('id, config, connection_state')
@@ -231,7 +256,8 @@ export class MarketplaceIntegrationService {
       const updatedLogs = [newLogItem, ...prevLogs].slice(0, 20);
 
       const hasSecret = Boolean(clientSecret?.trim() || prevConfig.has_client_secret);
-      const connectionState: MarketplaceConnectionState = 'credentials_present_unverified';
+      const isHomologated = existing?.connection_state === 'homologated';
+      const connectionState: MarketplaceConnectionState = isHomologated ? 'homologated' : 'credentials_present_unverified';
 
       const newConfig: Record<string, unknown> = {
         ...prevConfig,
@@ -248,9 +274,9 @@ export class MarketplaceIntegrationService {
         channel_name: channelName,
         display_name: channelName === 'ifood' ? 'iFood Marketplace' : '99Food Restaurante',
         is_active: true,
-        status: 'pending_auth',
+        status: isHomologated ? 'active' : 'pending_auth',
         connection_state: connectionState,
-        auto_accept_orders: autoAcceptOrders ?? false,
+        auto_accept_orders: isHomologated ? (autoAcceptOrders ?? false) : false,
         config: newConfig,
         updated_at: new Date().toISOString(),
       };
@@ -283,6 +309,38 @@ export class MarketplaceIntegrationService {
 
     try {
       const connector = getConnector(channelName);
+
+      // 1. Tenta teste real via Edge Function oficial (handshake HTTP com OAuth)
+      try {
+        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
+          body: {
+            action: 'test_connection',
+            workspace_id: workspaceId,
+            channel_name: channelName,
+            merchant_id: merchantId,
+            client_id: clientId,
+            client_secret: clientSecret,
+          },
+        });
+
+        if (!edgeError && edgeData) {
+          const latency = typeof edgeData.latency_ms === 'number' ? edgeData.latency_ms : (Date.now() - startTime);
+          return {
+            success: Boolean(edgeData.success),
+            state: edgeData.state || (edgeData.success ? 'homologated' : 'credentials_present_unverified'),
+            message: edgeData.message || (edgeData.success ? 'Conexão verificada com sucesso.' : 'Falha na conexão.'),
+            latency_ms: latency,
+            tested_at: new Date().toISOString(),
+            capabilities: connector.getCapabilities({
+              merchantId,
+              clientId,
+              isHomologated: edgeData.state === 'homologated',
+            }),
+          };
+        }
+      } catch {
+        // Fallback para conector local
+      }
 
       // Se parâmetros não foram fornecidos diretamente, busca do banco
       let finalMerchantId = merchantId;
@@ -390,6 +448,19 @@ export class MarketplaceIntegrationService {
     }
 
     try {
+      // 1. Tenta acionar Edge Function para purga segura no cofre do servidor
+      try {
+        await supabase.functions.invoke('delivery-marketplace-vault', {
+          body: {
+            action: 'disconnect',
+            workspace_id: workspaceId,
+            channel_name: channelName,
+          },
+        });
+      } catch {
+        // Prossegue com atualização local
+      }
+
       const { data: current } = await supabase
         .from('delivery_channels')
         .select('config')

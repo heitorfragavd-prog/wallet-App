@@ -127,7 +127,7 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
       expect(res2.message).toContain('obrigatórios');
     });
 
-    it('persiste credenciais com state credentials_present_unverified e registra log', async () => {
+    it('persiste credenciais com state credentials_present_unverified e bloqueia auto-aceite sem homologação', async () => {
       const maybeSingleMock = vi.fn().mockResolvedValue({
         data: { id: 'ch-1', config: { event_log: [] }, connection_state: 'not_configured' },
       });
@@ -151,17 +151,52 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
 
       expect(res.success).toBe(true);
       expect(res.state).toBe('credentials_present_unverified');
+      // Trava de segurança: auto-aceite NÃO pode ser ativado sem homologação confirmada
       expect(upsertMock).toHaveBeenCalledWith(
         expect.objectContaining({
           workspace_id: 'ws-1',
           channel_name: 'ifood',
           connection_state: 'credentials_present_unverified',
-          auto_accept_orders: true,
+          auto_accept_orders: false,
           config: expect.objectContaining({
             merchant_id: 'rodo-ifood-99',
             client_id: 'client-key-8888',
             has_client_secret: true,
           }),
+        }),
+        expect.objectContaining({ onConflict: 'workspace_id,channel_name' })
+      );
+    });
+
+    it('permite auto-aceite quando o canal já se encontra oficialmente homologado', async () => {
+      const maybeSingleMock = vi.fn().mockResolvedValue({
+        data: { id: 'ch-1', config: { event_log: [] }, connection_state: 'homologated' },
+      });
+      const upsertMock = vi.fn().mockResolvedValue({ error: null });
+
+      vi.spyOn(supabase, 'from').mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: maybeSingleMock,
+        upsert: upsertMock,
+      } as unknown as ReturnType<typeof supabase.from>);
+
+      const res = await MarketplaceIntegrationService.saveCredentials({
+        workspaceId: 'ws-1',
+        channelName: 'ifood',
+        merchantId: 'rodo-ifood-99',
+        clientId: 'client-key-8888',
+        autoAcceptOrders: true,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.state).toBe('homologated');
+      expect(upsertMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspace_id: 'ws-1',
+          channel_name: 'ifood',
+          connection_state: 'homologated',
+          auto_accept_orders: true,
         }),
         expect.objectContaining({ onConflict: 'workspace_id,channel_name' })
       );

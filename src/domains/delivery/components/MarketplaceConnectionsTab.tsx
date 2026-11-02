@@ -78,14 +78,17 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
   const handleOpenCredentialsModal = (item: MarketplaceChannelIntegration) => {
     setCredentialsModalChannel(item.channel_name);
     setFormMerchantId(item.store_id || '');
-    setFormClientId(item.client_id_preview || '');
+    setFormClientId(''); // Não preenche input editável com preview mascarado
     setFormClientSecret('');
-    setFormAutoAccept(item.auto_accept_orders);
+    setFormAutoAccept(item.auto_accept_orders && item.connection_state === 'homologated');
   };
 
   // Salva credenciais com segurança no cofre
   const handleSaveCredentials = async () => {
     if (!workspaceId || !credentialsModalChannel) return;
+    const currentChannel = integrations.find((i) => i.channel_name === credentialsModalChannel);
+    const hasExistingClientId = Boolean(currentChannel?.client_id_preview);
+
     if (!formMerchantId.trim()) {
       toast({
         title: 'Campo obrigatório',
@@ -94,7 +97,7 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
       });
       return;
     }
-    if (!formClientId.trim()) {
+    if (!formClientId.trim() && !hasExistingClientId) {
       toast({
         title: 'Campo obrigatório',
         description: 'Informe a Chave da Aplicação (Client ID / App Key).',
@@ -109,7 +112,7 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
         workspaceId,
         channelName: credentialsModalChannel,
         merchantId: formMerchantId.trim(),
-        clientId: formClientId.trim(),
+        clientId: formClientId.trim() || 'KEEP_EXISTING',
         clientSecret: formClientSecret.trim() || undefined,
         autoAcceptOrders: formAutoAccept,
       });
@@ -796,13 +799,25 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
                 <label className="text-[11px] text-slate-300 font-medium block mb-1">
                   {credentialsModalChannel === 'ifood' ? 'Client ID da Aplicação' : 'App Key da Aplicação'} *
                 </label>
-                <input
-                  type="text"
-                  value={formClientId}
-                  onChange={(e) => setFormClientId(e.target.value)}
-                  placeholder="Ex: ifood-client-id-..."
-                  className="w-full bg-slate-950 border border-border/60 rounded-lg px-3 py-2 text-foreground font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
+                {(() => {
+                  const ch = integrations.find((i) => i.channel_name === credentialsModalChannel);
+                  return (
+                    <>
+                      <input
+                        type="text"
+                        value={formClientId}
+                        onChange={(e) => setFormClientId(e.target.value)}
+                        placeholder={ch?.client_id_preview ? `Configurado: ${ch.client_id_preview} (deixe em branco para manter)` : "Ex: ifood-client-id-..."}
+                        className="w-full bg-slate-950 border border-border/60 rounded-lg px-3 py-2 text-foreground font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                      {ch?.client_id_preview && (
+                        <span className="text-[10px] text-muted-foreground mt-1 block">
+                          Client ID atual no cofre: <span className="font-mono text-slate-300">{ch.client_id_preview}</span>. Digite apenas se desejar substituir.
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               <div>
@@ -821,20 +836,34 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
                 </span>
               </div>
 
-              <div className="pt-2 border-t border-border/40 flex items-center justify-between">
-                <div>
-                  <span className="font-semibold text-foreground text-xs block">Aceite Automático de Pedidos</span>
-                  <span className="text-[10px] text-muted-foreground block">
-                    Confirma novos pedidos automaticamente sem exigir clique manual no KDS.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={formAutoAccept}
-                  onChange={(e) => setFormAutoAccept(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500"
-                />
-              </div>
+              {(() => {
+                const ch = integrations.find((i) => i.channel_name === credentialsModalChannel);
+                const isHomologated = ch?.connection_state === 'homologated';
+                return (
+                  <div className="pt-2 border-t border-border/40 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-semibold text-foreground text-xs block">Aceite Automático de Pedidos</span>
+                        <span className="text-[10px] text-muted-foreground block">
+                          Confirma novos pedidos automaticamente sem exigir clique manual no KDS.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={formAutoAccept && isHomologated}
+                        disabled={!isHomologated}
+                        onChange={(e) => setFormAutoAccept(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500 disabled:opacity-40"
+                      />
+                    </div>
+                    {!isHomologated && (
+                      <span className="text-[10px] text-amber-400/90 block">
+                        Disponível apenas após a conexão ser homologada e verificada junto ao parceiro oficial.
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-border/40">
                 <Button
