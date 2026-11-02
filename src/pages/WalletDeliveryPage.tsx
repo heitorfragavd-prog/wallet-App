@@ -14,10 +14,12 @@ import {
   FileText,
   Clock,
   Save,
+  Network,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { DeliveryRoleGuard } from '@/domains/delivery/DeliveryRoleGuard';
 import { DeliveryMarginSimulator } from '@/domains/delivery/components/DeliveryMarginSimulator';
+import { MarketplaceConnectionsTab } from '@/domains/delivery/components/MarketplaceConnectionsTab';
 import { supabase } from '@/integrations/supabase/client';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useToast } from '@/shared/hooks/use-toast';
@@ -41,6 +43,9 @@ export const WalletDeliveryPage: React.FC = () => {
   const [tempoMedioPreparo, setTempoMedioPreparo] = useState<number | null>(null);
   const [taxaConclusao, setTaxaConclusao] = useState<number | null>(null);
   const [taxaCancelamento, setTaxaCancelamento] = useState<number>(0);
+
+  // Sub-navegação do Delivery Growth (Hub de Canais, Integrações API, Simulador)
+  const [activeSubTab, setActiveSubTab] = useState<'hub' | 'integracoes' | 'simulador'>('hub');
 
   // Modais de ações inferiores
   const [activeModal, setActiveModal] = useState<'simulador' | 'taxas' | 'historico' | 'alertas' | null>(null);
@@ -250,280 +255,362 @@ export const WalletDeliveryPage: React.FC = () => {
             </div>
           </div>
 
-          {/* 3 Channel Cards Conforme Painel 5 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* 1. iFood Card */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="px-2.5 py-1 rounded bg-red-600 text-white font-bold text-xs tracking-wide">
-                    iFood
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[10px] border-slate-700 text-slate-400 bg-slate-900/60">
-                      Não conectado
-                    </Badge>
-                  </div>
-                </div>
+          {/* Sub-navegação do Delivery Growth (Hub de Canais, Integrações API, Simulador) */}
+          <div className="flex items-center gap-2 bg-muted/30 p-1 rounded-lg border border-border/40 w-fit">
+            <button
+              onClick={() => setActiveSubTab('hub')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                activeSubTab === 'hub'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Bike className="w-3.5 h-3.5" />
+              Hub de Canais & KPIs
+            </button>
+            <button
+              onClick={() => setActiveSubTab('integracoes')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                activeSubTab === 'integracoes'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Network className="w-3.5 h-3.5" />
+              Integrações de Marketplace (iFood / 99Food)
+            </button>
+            <button
+              onClick={() => setActiveSubTab('simulador')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                activeSubTab === 'simulador'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              Simulador de Rentabilidade
+            </button>
+          </div>
 
-                <div className="text-xs text-amber-400/90 font-medium flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  Aguardando homologação
-                </div>
+          {/* ABA 1: Hub de Canais & KPIs Operacionais */}
+          {activeSubTab === 'hub' && (
+            <div className="space-y-6">
+              {/* 3 Channel Cards Conforme Painel 5 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* 1. iFood Card */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2.5 py-1 rounded bg-red-600 text-white font-bold text-xs tracking-wide">
+                        iFood
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-[10px] border-slate-700 text-slate-400 bg-slate-900/60">
+                          Não conectado
+                        </Badge>
+                      </div>
+                    </div>
 
-                <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Comissão contratual:</span>
-                    <span className="font-semibold text-foreground">
-                      {channelRates.ifood.comissao}%
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Taxa de pagamento*:</span>
-                    <span className="font-semibold text-foreground">
-                      {channelRates.ifood.pagamento}%
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
-                    <span className="text-slate-400 font-medium">Inativa</span>
-                  </div>
-                </div>
+                    <div className="text-xs text-amber-400/90 font-medium flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      Aguardando homologação
+                    </div>
 
-                <Button
-                  onClick={() => {
-                    setSelectedChannel('ifood');
-                    setActiveModal('taxas');
-                  }}
-                  className="w-full h-8 text-xs font-semibold bg-red-700/80 hover:bg-red-700 text-white"
+                    <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Comissão contratual:</span>
+                        <span className="font-semibold text-foreground">
+                          {channelRates.ifood.comissao}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Taxa de pagamento*:</span>
+                        <span className="font-semibold text-foreground">
+                          {channelRates.ifood.pagamento}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
+                        <span className="text-slate-400 font-medium">Inativa</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => {
+                          setSelectedChannel('ifood');
+                          setActiveModal('taxas');
+                        }}
+                        variant="outline"
+                        className="flex-1 h-8 text-xs font-semibold border-red-700/60 text-red-200 hover:bg-red-950/40"
+                      >
+                        Taxas
+                      </Button>
+                      <Button
+                        onClick={() => setActiveSubTab('integracoes')}
+                        className="flex-1 h-8 text-xs font-semibold bg-red-700/80 hover:bg-red-700 text-white"
+                      >
+                        Integração API
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 2. 99Food Card */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 font-bold text-xs tracking-wide">
+                        99Food
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="text-[10px] border-slate-700 text-slate-400 bg-slate-900/60">
+                          Não conectado
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-amber-400/90 font-medium flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      Aguardando credenciais
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Comissão contratual:</span>
+                        <span className="font-semibold text-foreground">
+                          {channelRates['99food'].comissao}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Taxa de pagamento*:</span>
+                        <span className="font-semibold text-foreground">
+                          {channelRates['99food'].pagamento}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
+                        <span className="text-slate-400 font-medium">Inativa</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => {
+                          setSelectedChannel('99food');
+                          setActiveModal('taxas');
+                        }}
+                        variant="outline"
+                        className="flex-1 h-8 text-xs font-semibold border-amber-600/60 text-amber-200 hover:bg-amber-950/40"
+                      >
+                        Taxas
+                      </Button>
+                      <Button
+                        onClick={() => setActiveSubTab('integracoes')}
+                        className="flex-1 h-8 text-xs font-semibold bg-amber-500/80 hover:bg-amber-500 text-slate-950"
+                      >
+                        Integração API
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 3. Direto / WhatsApp Card */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2.5 py-1 rounded bg-emerald-600 text-white font-bold text-xs tracking-wide flex items-center gap-1">
+                        <Bike className="w-3.5 h-3.5" />
+                        Direto / WhatsApp
+                      </span>
+                      <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400 bg-emerald-500/10">
+                        Canal Próprio
+                      </Badge>
+                    </div>
+
+                    <div className="text-xs text-slate-300 font-medium">
+                      Pedidos via site/WhatsApp
+                    </div>
+
+                    <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Taxa de pagamento:</span>
+                        <span className="font-semibold text-emerald-400">Pix / Maquininha ({channelRates.direto.pagamento}%)</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Comissão sobre vendas:</span>
+                        <span className="font-semibold text-emerald-400">0% (Livre de comissão)</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
+                        <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Ativa no KDS
+                        </span>
+                      </div>
+                    </div>
+
+                    <Link to="/delivery/kds" className="block w-full">
+                      <Button className="w-full h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white">
+                        Abrir KDS Cozinha
+                      </Button>
+                    </Link>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* 4 KPIs de Delivery Conforme Painel 5 (com Taxa de Conclusão Canônica) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. Pedidos (30 dias) */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-4">
+                    <div className="text-xs text-muted-foreground font-medium">Pedidos (30 dias)</div>
+                    <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                      {pedidos30Dias.toLocaleString('pt-BR')}
+                    </div>
+                    <div className="mt-2 text-xs text-emerald-400 font-medium flex items-center gap-1">
+                      {pedidos30Dias > 0 ? (
+                        <>
+                          <TrendingUp className="w-3 h-3" />
+                          Pedidos registrados
+                        </>
+                      ) : (
+                        <span className="text-slate-500">Sem pedidos no período</span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 2. Entrega (média) */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-4">
+                    <div className="text-xs text-muted-foreground font-medium">Entrega (média)</div>
+                    <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                      {tempoMedioPreparo !== null ? `${tempoMedioPreparo} min` : 'Aguardando dados'}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {tempoMedioPreparo !== null ? 'Tempo médio de expedição' : 'Conforme pedidos entregues'}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 3. Taxa de Conclusão */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-4">
+                    <div className="text-xs text-muted-foreground font-medium">Taxa de Conclusão</div>
+                    <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                      {taxaConclusao !== null ? `${taxaConclusao}%` : 'Aguardando dados'}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {taxaConclusao !== null ? 'Pedidos entregues com sucesso' : 'Calculado após conclusão'}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 4. Cancelamentos */}
+                <Card className="bg-card/70 border-border/50">
+                  <CardContent className="p-4">
+                    <div className="text-xs text-muted-foreground font-medium">Cancelamentos</div>
+                    <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+                      {taxaCancelamento.toFixed(1)}%
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      Taxa de pedidos cancelados
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* 4 Ações / Módulos Inferiores Conforme Painel 5 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. Simulador de Margem */}
+                <Card
+                  onClick={() => setActiveSubTab('simulador')}
+                  className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
                 >
-                  Configurar Taxas
-                </Button>
-              </CardContent>
-            </Card>
+                  <CardContent className="p-4 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0">
+                      <Calculator className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-foreground">Simulador de Margem</div>
+                      <div className="text-[11px] text-muted-foreground">Calcule sua rentabilidade</div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-            {/* 2. 99Food Card */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 font-bold text-xs tracking-wide">
-                    99Food
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[10px] border-slate-700 text-slate-400 bg-slate-900/60">
-                      Não conectado
-                    </Badge>
-                  </div>
-                </div>
-
-                <div className="text-xs text-amber-400/90 font-medium flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  Aguardando credenciais
-                </div>
-
-                <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Comissão contratual:</span>
-                    <span className="font-semibold text-foreground">
-                      {channelRates['99food'].comissao}%
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Taxa de pagamento*:</span>
-                    <span className="font-semibold text-foreground">
-                      {channelRates['99food'].pagamento}%
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
-                    <span className="text-slate-400 font-medium">Inativa</span>
-                  </div>
-                </div>
-
-                <Button
-                  onClick={() => {
-                    setSelectedChannel('99food');
-                    setActiveModal('taxas');
-                  }}
-                  className="w-full h-8 text-xs font-semibold bg-amber-500/80 hover:bg-amber-500 text-slate-950"
+                {/* 2. Taxas Contratuais */}
+                <Card
+                  onClick={() => setActiveModal('taxas')}
+                  className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
                 >
-                  Configurar Taxas
-                </Button>
-              </CardContent>
-            </Card>
+                  <CardContent className="p-4 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0">
+                      <Settings2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-foreground">Taxas Contratuais</div>
+                      <div className="text-[11px] text-muted-foreground">Configure por canal</div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-            {/* 3. Direto / WhatsApp Card */}
+                {/* 3. Histórico de Pedidos */}
+                <Card
+                  onClick={() => setActiveModal('historico')}
+                  className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
+                >
+                  <CardContent className="p-4 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-foreground">Histórico de Pedidos</div>
+                      <div className="text-[11px] text-muted-foreground">Acompanhe e analise</div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 4. Alertas Operacionais */}
+                <Card
+                  onClick={() => setActiveModal('alertas')}
+                  className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
+                >
+                  <CardContent className="p-4 flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center shrink-0">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-foreground">Alertas Operacionais</div>
+                      <div className="text-[11px] text-muted-foreground">Atrasos, falhas e anomalias</div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {/* ABA 2: Integrações de Marketplace (Gate 5) */}
+          {activeSubTab === 'integracoes' && (
+            <MarketplaceConnectionsTab
+              workspaceId={workspaceId}
+              onRefreshChannels={loadChannelRates}
+            />
+          )}
+
+          {/* ABA 3: Simulador de Rentabilidade */}
+          {activeSubTab === 'simulador' && (
             <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="px-2.5 py-1 rounded bg-emerald-600 text-white font-bold text-xs tracking-wide flex items-center gap-1">
-                    <Bike className="w-3.5 h-3.5" />
-                    Direto / WhatsApp
-                  </span>
-                  <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400 bg-emerald-500/10">
-                    Canal Próprio
-                  </Badge>
-                </div>
-
-                <div className="text-xs text-slate-300 font-medium">
-                  Pedidos via site/WhatsApp
-                </div>
-
-                <div className="space-y-2 pt-2 border-t border-border/40 text-xs">
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Taxa de pagamento:</span>
-                    <span className="font-semibold text-emerald-400">Pix / Maquininha ({channelRates.direto.pagamento}%)</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Comissão sobre vendas:</span>
-                    <span className="font-semibold text-emerald-400">0% (Livre de comissão)</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[11px]">Recepção de pedidos:</span>
-                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      Ativa no KDS
-                    </span>
-                  </div>
-                </div>
-
-                <Link to="/delivery/kds" className="block w-full">
-                  <Button className="w-full h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white">
-                    Abrir KDS Cozinha
-                  </Button>
-                </Link>
+              <CardHeader className="pb-3 border-b border-border/40">
+                <CardTitle className="text-sm font-bold text-foreground">
+                  Simulador de Margem & Precificação Estratégica por Canal
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <DeliveryMarginSimulator />
               </CardContent>
             </Card>
-          </div>
-
-          {/* 4 KPIs de Delivery Conforme Painel 5 (com Taxa de Conclusão Canônica) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* 1. Pedidos (30 dias) */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground font-medium">Pedidos (30 dias)</div>
-                <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                  {pedidos30Dias.toLocaleString('pt-BR')}
-                </div>
-                <div className="mt-2 text-xs text-emerald-400 font-medium flex items-center gap-1">
-                  {pedidos30Dias > 0 ? (
-                    <>
-                      <TrendingUp className="w-3 h-3" />
-                      Pedidos registrados
-                    </>
-                  ) : (
-                    <span className="text-slate-500">Sem pedidos no período</span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 2. Entrega (média) */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground font-medium">Entrega (média)</div>
-                <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                  {tempoMedioPreparo !== null ? `${tempoMedioPreparo} min` : 'Aguardando dados'}
-                </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  {tempoMedioPreparo !== null ? 'Tempo médio de expedição' : 'Conforme pedidos entregues'}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 3. Taxa de Conclusão (Renomeado canonicamente de Taxa de Conversão - Gate 4) */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground font-medium">Taxa de Conclusão</div>
-                <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                  {taxaConclusao !== null ? `${taxaConclusao}%` : 'Aguardando dados'}
-                </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  {taxaConclusao !== null ? 'Pedidos entregues com sucesso' : 'Calculado após conclusão'}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 4. Cancelamentos */}
-            <Card className="bg-card/70 border-border/50">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground font-medium">Cancelamentos</div>
-                <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                  {taxaCancelamento.toFixed(1)}%
-                </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  Taxa de pedidos cancelados
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* 4 Ações / Módulos Inferiores Conforme Painel 5 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* 1. Simulador de Margem */}
-            <Card
-              onClick={() => setActiveModal('simulador')}
-              className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
-            >
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0">
-                  <Calculator className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-foreground">Simulador de Margem</div>
-                  <div className="text-[11px] text-muted-foreground">Calcule sua rentabilidade</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 2. Taxas Contratuais */}
-            <Card
-              onClick={() => setActiveModal('taxas')}
-              className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
-            >
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0">
-                  <Settings2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-foreground">Taxas Contratuais</div>
-                  <div className="text-[11px] text-muted-foreground">Configure por canal</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 3. Histórico de Pedidos */}
-            <Card
-              onClick={() => setActiveModal('historico')}
-              className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
-            >
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-foreground">Histórico de Pedidos</div>
-                  <div className="text-[11px] text-muted-foreground">Acompanhe e analise</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 4. Alertas Operacionais */}
-            <Card
-              onClick={() => setActiveModal('alertas')}
-              className="bg-card/70 border-border/50 hover:border-amber-500/40 cursor-pointer transition-colors"
-            >
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-rose-500/10 text-rose-400 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-foreground">Alertas Operacionais</div>
-                  <div className="text-[11px] text-muted-foreground">Atrasos, falhas e anomalias</div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          )}
 
           {/* Modal: Simulador de Margem */}
           {activeModal === 'simulador' && (
