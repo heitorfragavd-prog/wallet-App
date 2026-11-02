@@ -281,6 +281,10 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
     const rawMap = new Map<string, RawDespesaRow>();
     mappedDespesas.forEach((d) => rawMap.set(d.id, d as unknown as RawDespesaRow));
     mappedTransacoes.forEach((t) => rawMap.set(t.id, t as unknown as RawDespesaRow));
+    divipayDespesas.forEach((d) => {
+      rawMap.set(d.id, d as unknown as RawDespesaRow);
+      rawMap.set(d.id.replace(/^divipay-/, ""), d as unknown as RawDespesaRow);
+    });
 
     const res: Despesa[] = report.itensConsolidados.map((item) => {
       const raw = rawMap.get(item.origemId);
@@ -294,9 +298,9 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
         data: item.data,
         created_at: (raw?.created_at as string) || new Date().toISOString(),
         updated_at: (raw?.updated_at as string) || new Date().toISOString(),
-        metodo_pagamento: (item.metodoPagamento as PaymentMethod) || "outros",
+        metodo_pagamento: (item.metodoPagamento as PaymentMethod) || (raw?.metodo_pagamento as PaymentMethod) || "outros",
         observacoes: (raw?.observacoes as string) || null,
-        status: item.status,
+        status: (raw?.status as string) || (item.status === "obrigacao_cadastrada" ? "pendente" : "pago"),
         categorias:
           (Array.isArray(raw?.categorias) ? raw?.categorias[0] : raw?.categorias) ||
           (item.categoriaNome
