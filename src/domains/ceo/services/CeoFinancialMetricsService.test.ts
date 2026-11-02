@@ -3,21 +3,30 @@ import {
   CeoFinancialMetricsService,
   getSaoPauloParts,
   getSaoPauloYesterday,
-  getSaoPauloDateString,
 } from './CeoFinancialMetricsService';
-import { supabase } from '@/integrations/supabase/client';
-
-vi.mock('@/integrations/supabase/client', () => {
-  return {
-    supabase: {
-      from: vi.fn(),
-    },
-  };
-});
 
 interface MockRow {
-  [key: string]: any;
+  [key: string]: unknown;
 }
+
+interface MockQueryBuilder {
+  select: (_cols?: string, _opts?: { count?: string; head?: boolean }) => MockQueryBuilder;
+  eq: (col: string, val: unknown) => MockQueryBuilder;
+  neq: (col: string, val: unknown) => MockQueryBuilder;
+  gte: (col: string, val: unknown) => MockQueryBuilder;
+  lte: (col: string, val: unknown) => MockQueryBuilder;
+  order: () => MockQueryBuilder;
+  range: (from: number, to: number) => Promise<{ data: MockRow[]; error: unknown }>;
+  then: (resolve: (val: { data: MockRow[]; count: number; error: unknown }) => void) => void;
+}
+
+const mockFrom = vi.fn();
+
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    from: (...args: unknown[]) => mockFrom(...args),
+  },
+}));
 
 let mockDatabase: Record<string, MockRow[]> = {
   transacoes: [],
@@ -37,26 +46,24 @@ function setupDefaultMockSupabase(db: Partial<typeof mockDatabase> = {}) {
     ...db,
   };
 
-  (supabase.from as any).mockImplementation((table: string) => {
+  mockFrom.mockImplementation((table: string) => {
     let currentRows = [...(mockDatabase[table] || [])];
 
-    const builder: any = {};
-    builder.select = vi.fn().mockImplementation((_cols?: string, _opts?: { count?: string; head?: boolean }) => {
-      return builder;
-    });
-    builder.eq = vi.fn().mockImplementation((col: string, val: any) => {
+    const builder = {} as MockQueryBuilder;
+    builder.select = vi.fn().mockImplementation(() => builder);
+    builder.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
       currentRows = currentRows.filter((r) => r[col] === val);
       return builder;
     });
-    builder.neq = vi.fn().mockImplementation((col: string, val: any) => {
+    builder.neq = vi.fn().mockImplementation((col: string, val: unknown) => {
       currentRows = currentRows.filter((r) => r[col] !== val);
       return builder;
     });
-    builder.gte = vi.fn().mockImplementation((col: string, val: any) => {
+    builder.gte = vi.fn().mockImplementation((col: string, val: unknown) => {
       currentRows = currentRows.filter((r) => String(r[col] || '') >= String(val));
       return builder;
     });
-    builder.lte = vi.fn().mockImplementation((col: string, val: any) => {
+    builder.lte = vi.fn().mockImplementation((col: string, val: unknown) => {
       currentRows = currentRows.filter((r) => String(r[col] || '') <= String(val));
       return builder;
     });
@@ -67,7 +74,7 @@ function setupDefaultMockSupabase(db: Partial<typeof mockDatabase> = {}) {
         error: null,
       });
     });
-    builder.then = (resolve: (val: any) => void) => {
+    builder.then = (resolve: (val: { data: MockRow[]; count: number; error: unknown }) => void) => {
       resolve({
         data: currentRows,
         count: currentRows.length,
@@ -397,7 +404,7 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
     });
 
     it('Cenário 6: Falha de consulta — captura erro com resiliência e sinaliza dadosIndisponiveis', async () => {
-      (supabase.from as any).mockImplementation(() => {
+      mockFrom.mockImplementation(() => {
         return {
           select: () => {
             throw new Error('Database network disconnected');
