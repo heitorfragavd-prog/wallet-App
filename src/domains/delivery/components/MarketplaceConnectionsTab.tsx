@@ -112,7 +112,8 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
         workspaceId,
         channelName: credentialsModalChannel,
         merchantId: formMerchantId.trim(),
-        clientId: formClientId.trim() || 'KEEP_EXISTING',
+        clientId: formClientId.trim() || undefined,
+        preserveClientId: !formClientId.trim() && hasExistingClientId,
         clientSecret: formClientSecret.trim() || undefined,
         autoAcceptOrders: formAutoAccept,
       });
@@ -231,19 +232,43 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
             Homologado
           </Badge>
         );
-      case 'credentials_present_unverified':
+      case 'auth_approved':
+        return (
+          <Badge className="bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center gap-1 text-[11px]">
+            <Radio className="w-3.5 h-3.5" />
+            Autenticado (Aguardando Loja)
+          </Badge>
+        );
+      case 'merchant_auth_pending':
+        return (
+          <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1 text-[11px]">
+            <Clock className="w-3.5 h-3.5" />
+            Aguardando Autorização da Loja
+          </Badge>
+        );
+      case 'homologation_pending':
       case 'awaiting_homologation':
         return (
           <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1 text-[11px]">
             <Clock className="w-3.5 h-3.5" />
-            Aguardando homologação
+            Aguardando Homologação Oficial
           </Badge>
         );
+      case 'insufficient_scopes':
+        return (
+          <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1 text-[11px]">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Escopos Insuficientes
+          </Badge>
+        );
+      case 'credentials_saved':
+      case 'credentials_present_unverified':
       case 'authenticating':
       case 'authenticated':
+      case 'merchant_authorized':
         return (
           <Badge className="bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center gap-1 text-[11px]">
-            <Radio className="w-3.5 h-3.5 animate-pulse" />
+            <Radio className="w-3.5 h-3.5" />
             Credenciais cadastradas
           </Badge>
         );

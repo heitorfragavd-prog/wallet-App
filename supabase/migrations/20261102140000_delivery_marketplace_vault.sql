@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS public.delivery_channel_secrets (
   channel_name TEXT NOT NULL CHECK (channel_name IN ('ifood', '99food')),
   merchant_id TEXT NOT NULL,
   client_id TEXT NOT NULL,
+  key_id TEXT NOT NULL DEFAULT 'v1',
   client_secret_encrypted TEXT NOT NULL,
   access_token_encrypted TEXT,
   token_expires_at TIMESTAMPTZ,
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS public.delivery_channel_secrets (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_delivery_channel_secrets_workspace_channel UNIQUE (workspace_id, channel_name)
 );
+
+ALTER TABLE public.delivery_channel_secrets ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT 'v1';
 
 CREATE INDEX IF NOT EXISTS idx_delivery_channel_secrets_workspace
   ON public.delivery_channel_secrets(workspace_id);

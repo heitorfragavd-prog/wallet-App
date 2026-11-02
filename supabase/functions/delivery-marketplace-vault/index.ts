@@ -1,5 +1,6 @@
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import { encryptVaultSecret, decryptVaultSecret } from "../_shared/vault-crypto.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -13,8 +14,15 @@ interface VaultRequestBody {
   channel_name: "ifood" | "99food";
   merchant_id?: string;
   client_id?: string;
+  preserve_client_id?: boolean;
   client_secret?: string;
   auto_accept_orders?: boolean;
+}
+
+function maskSecretPreview(val?: string): string {
+  if (!val) return "";
+  if (val.length <= 8) return "********";
+  return `${val.slice(0, 4)}••••••••${val.slice(-4)}`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -39,6 +47,8 @@ Deno.serve(async (req: Request) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    const masterSecret = Deno.env.get("MARKETPLACE_VAULT_KEY") || serviceRoleKey;
 
     // 1. Validação de Autenticação JWT
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
@@ -116,7 +126,13 @@ Deno.serve(async (req: Request) => {
 
     // 3. Execução das Ações de Cofre Seguro
     if (action === "save_credentials") {
-      const { merchant_id: merchantId, client_id: clientId, client_secret: clientSecret, auto_accept_orders: autoAccept } = body;
+      const {
+        merchant_id: merchantId,
+        client_id: clientId,
+        preserve_client_id: preserveClientId,
+        client_secret: clientSecret,
+        auto_accept_orders: autoAccept,
+      } = body;
 
       if (!merchantId?.trim()) {
         return new Response(
@@ -133,9 +149,9 @@ Deno.serve(async (req: Request) => {
         .eq("channel_name", channelName)
         .maybeSingle();
 
-      const finalClientId = (clientId && clientId !== "KEEP_EXISTING" && !clientId.includes("••••"))
-        ? clientId.trim()
-        : existingSecret?.client_id;
+      const finalClientId = (preserveClientId || !clientId || clientId.includes("••••"))
+        ? existingSecret?.client_id
+        : clientId.trim();
 
       if (!finalClientId) {
         return new Response(
@@ -144,15 +160,20 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const finalSecret = clientSecret?.trim() || existingSecret?.client_secret_encrypted;
-      if (!finalSecret) {
+      let finalEncryptedSecret = existingSecret?.client_secret_encrypted;
+      if (clientSecret && clientSecret.trim().length > 0) {
+        // Criptografia Autenticada AES-256-GCM real
+        finalEncryptedSecret = await encryptVaultSecret(clientSecret.trim(), masterSecret, "v1");
+      }
+
+      if (!finalEncryptedSecret) {
         return new Response(
           JSON.stringify({ success: false, error: "Client Secret é obrigatório no cadastro inicial." }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      // Upsert no cofre secreto
+      // Upsert no cofre secreto isolado
       const { error: vaultErr } = await adminClient
         .from("delivery_channel_secrets")
         .upsert(
@@ -161,7 +182,8 @@ Deno.serve(async (req: Request) => {
             channel_name: channelName,
             merchant_id: merchantId.trim(),
             client_id: finalClientId,
-            client_secret_encrypted: finalSecret,
+            key_id: "v1",
+            client_secret_encrypted: finalEncryptedSecret,
             environment: "production",
             updated_at: new Date().toISOString(),
           },
@@ -191,18 +213,23 @@ Deno.serve(async (req: Request) => {
         id: `log-${Date.now()}`,
         event_type: "connect",
         status: "success",
-        message: "Credenciais registradas no cofre seguro do servidor. Pronto para teste de conexão.",
+        message: "Credenciais armazenadas com criptografia AES-256-GCM no cofre do servidor.",
         timestamp: new Date().toISOString(),
       };
 
       const updatedConfig = {
         ...currentConfig,
         merchant_id: merchantId.trim(),
-        client_id: clientId.trim(),
+        client_id_preview: maskSecretPreview(finalClientId),
         has_client_secret: true,
         event_log: [newLog, ...logs].slice(0, 20),
         updated_at: new Date().toISOString(),
       };
+      // Remove qualquer possível chave pura residual da config
+      delete (updatedConfig as Record<string, unknown>).client_id;
+      delete (updatedConfig as Record<string, unknown>).client_secret;
+
+      const nextState = isHomologated ? "homologated" : "credentials_saved";
 
       await adminClient.from("delivery_channels").upsert(
         {
@@ -211,8 +238,7 @@ Deno.serve(async (req: Request) => {
           display_name: channelName === "ifood" ? "iFood Marketplace" : "99Food Restaurante",
           is_active: true,
           status: isHomologated ? "active" : "pending_auth",
-          connection_state: isHomologated ? "homologated" : "credentials_present_unverified",
-          // Aceite automático só pode ser habilitado se já estiver homologado
+          connection_state: nextState,
           auto_accept_orders: isHomologated ? Boolean(autoAccept) : false,
           config: updatedConfig,
           updated_at: new Date().toISOString(),
@@ -223,8 +249,8 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           success: true,
-          message: "Credenciais armazenadas no cofre seguro. Execute o teste para validar a homologação.",
-          state: isHomologated ? "homologated" : "credentials_present_unverified",
+          message: "Credenciais armazenadas com criptografia AES-256-GCM no cofre seguro.",
+          state: nextState,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -241,16 +267,35 @@ Deno.serve(async (req: Request) => {
 
       const finalMerchantId = body.merchant_id?.trim() || secretRow?.merchant_id;
       const finalClientId = body.client_id?.trim() || secretRow?.client_id;
-      const finalSecret = body.client_secret?.trim() || secretRow?.client_secret_encrypted;
 
-      if (!finalMerchantId || !finalClientId || !finalSecret) {
+      let rawSecret: string | null = null;
+      if (body.client_secret && body.client_secret.trim().length > 0) {
+        rawSecret = body.client_secret.trim();
+      } else if (secretRow?.client_secret_encrypted) {
+        try {
+          rawSecret = await decryptVaultSecret(secretRow.client_secret_encrypted, masterSecret);
+        } catch {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              http_status: 500,
+              latency_ms: 0,
+              state: "error",
+              message: "Falha na descriptografia do cofre: chave inválida ou adulteração de dados.",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
+      if (!finalMerchantId || !finalClientId || !rawSecret) {
         return new Response(
           JSON.stringify({
             success: false,
             http_status: 400,
             latency_ms: 0,
             state: "not_configured",
-            message: "Credenciais incompletas: informe Merchant ID, Client ID e Client Secret.",
+            message: "Credenciais incompletas: cadastre Merchant ID, Client ID e Client Secret.",
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -260,15 +305,23 @@ Deno.serve(async (req: Request) => {
       let httpStatus = 0;
       let latencyMs = 0;
       let isSuccess = false;
-      let connectionState: "homologated" | "credentials_present_unverified" | "error" = "credentials_present_unverified";
+      let connectionState:
+        | "homologated"
+        | "auth_approved"
+        | "merchant_auth_pending"
+        | "homologation_pending"
+        | "insufficient_scopes"
+        | "credentials_saved"
+        | "error" = "credentials_saved";
       let feedbackMsg = "";
 
       if (channelName === "ifood") {
         try {
+          // Etapa 1: Obtenção do Token OAuth via Client Credentials
           const authParams = new URLSearchParams({
             grantType: "client_credentials",
             clientId: finalClientId,
-            clientSecret: finalSecret,
+            clientSecret: rawSecret,
           });
 
           const resp = await fetch("https://merchant-api.ifood.com.br/authentication/v1.0/oauth/token", {
@@ -278,7 +331,7 @@ Deno.serve(async (req: Request) => {
               "User-Agent": "Wallet-App/2.1 (Integration Handshake)",
             },
             body: authParams.toString(),
-            signal: AbortSignal.timeout(10000), // 10s timeout
+            signal: AbortSignal.timeout(10000),
           });
 
           latencyMs = Date.now() - startTime;
@@ -286,34 +339,75 @@ Deno.serve(async (req: Request) => {
 
           if (resp.ok) {
             const tokenData = await resp.json().catch(() => ({}));
-            isSuccess = true;
-            connectionState = "homologated";
-            feedbackMsg = `Conexão homologada com sucesso! Resposta do iFood em ${latencyMs}ms.`;
+            const accessToken = tokenData.accessToken;
 
-            // Grava token criptografado e validade no cofre
-            if (tokenData.accessToken) {
+            if (accessToken) {
+              // Criptografa e armazena o access token no cofre
+              const encryptedToken = await encryptVaultSecret(accessToken, masterSecret, "v1");
               const expiresIn = typeof tokenData.expiresIn === "number" ? tokenData.expiresIn : 3600;
               const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
               await adminClient
                 .from("delivery_channel_secrets")
                 .update({
-                  access_token_encrypted: tokenData.accessToken,
+                  access_token_encrypted: encryptedToken,
                   token_expires_at: expiresAt,
                   updated_at: new Date().toISOString(),
                 })
                 .eq("workspace_id", workspaceId)
                 .eq("channel_name", channelName);
+
+              // Etapa 2: Validação Real de Autorização do Merchant (Gate 3)
+              try {
+                const statusResp = await fetch(
+                  `https://merchant-api.ifood.com.br/merchant/v1.0/merchants/${finalMerchantId}/status`,
+                  {
+                    method: "GET",
+                    headers: {
+                      Authorization: `Bearer ${accessToken}`,
+                      "User-Agent": "Wallet-App/2.1 (Merchant Status Check)",
+                    },
+                    signal: AbortSignal.timeout(6000),
+                  }
+                );
+
+                if (statusResp.ok) {
+                  isSuccess = true;
+                  connectionState = "homologated";
+                  feedbackMsg = `Conexão e loja homologadas com sucesso no iFood em ${latencyMs}ms.`;
+                } else if (statusResp.status === 401 || statusResp.status === 403) {
+                  isSuccess = false;
+                  connectionState = "merchant_auth_pending";
+                  feedbackMsg = "Credenciais autenticadas no iFood, porém a loja ainda não autorizou o aplicativo no Portal do Parceiro.";
+                } else if (statusResp.status === 404) {
+                  isSuccess = false;
+                  connectionState = "merchant_auth_pending";
+                  feedbackMsg = `Loja ${finalMerchantId} não encontrada ou não vinculada a esta aplicação no iFood.`;
+                } else {
+                  isSuccess = false;
+                  connectionState = "auth_approved";
+                  feedbackMsg = `Autenticação iFood concedida. Aguardando ativação da loja (Status ${statusResp.status}).`;
+                }
+              } catch {
+                isSuccess = false;
+                connectionState = "auth_approved";
+                feedbackMsg = "Autenticação iFood concedida. Consulta de status da loja indisponível no momento.";
+              }
+            } else {
+              isSuccess = false;
+              connectionState = "credentials_saved";
+              feedbackMsg = "Resposta de autenticação do iFood não continha token de acesso válido.";
             }
           } else if (resp.status === 400 || resp.status === 401) {
             isSuccess = false;
-            connectionState = "credentials_present_unverified";
-            feedbackMsg = `Credenciais rejeitadas pelo iFood (${httpStatus} Unauthorized): Verifique Client ID e Client Secret no Portal Developer.`;
+            connectionState = "credentials_saved";
+            feedbackMsg = `Credenciais rejeitadas pelo iFood (${httpStatus} Unauthorized): Verifique Client ID e Client Secret.`;
           } else {
             isSuccess = false;
             connectionState = "error";
             feedbackMsg = `Servidor do iFood retornou status ${httpStatus} em ${latencyMs}ms.`;
           }
-        } catch (fetchErr: unknown) {
+        } catch {
           latencyMs = Date.now() - startTime;
           httpStatus = 504;
           isSuccess = false;
@@ -322,7 +416,6 @@ Deno.serve(async (req: Request) => {
         }
       } else if (channelName === "99food") {
         try {
-          // Chamada real ao endpoint oficial da 99Food Open API
           const resp = await fetch("https://open-api.99app.com/food/v2/oauth/token", {
             method: "POST",
             headers: {
@@ -331,7 +424,7 @@ Deno.serve(async (req: Request) => {
             },
             body: JSON.stringify({
               app_key: finalClientId,
-              app_secret: finalSecret,
+              app_secret: rawSecret,
               shop_id: finalMerchantId,
             }),
             signal: AbortSignal.timeout(10000),
@@ -341,12 +434,20 @@ Deno.serve(async (req: Request) => {
           httpStatus = resp.status;
 
           if (resp.ok) {
-            isSuccess = true;
-            connectionState = "homologated";
-            feedbackMsg = `Conexão homologada com sucesso! Resposta da 99Food em ${latencyMs}ms.`;
+            const data = await resp.json().catch(() => ({}));
+            // Na 99Food, verificar se a loja está liberada comercialmente
+            if (data?.shop_status === "active" || data?.data?.is_authorized === true) {
+              isSuccess = true;
+              connectionState = "homologated";
+              feedbackMsg = `Conexão homologada com sucesso na 99Food em ${latencyMs}ms.`;
+            } else {
+              isSuccess = false;
+              connectionState = "homologation_pending";
+              feedbackMsg = "Credenciais salvas e autenticadas. Aguardando homologação oficial da loja pela 99Food.";
+            }
           } else if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
             isSuccess = false;
-            connectionState = "credentials_present_unverified";
+            connectionState = "credentials_saved";
             feedbackMsg = `Credenciais rejeitadas pela 99Food (${httpStatus}): Verifique App Key e App Secret no Portal 99Food.`;
           } else {
             isSuccess = false;
@@ -362,11 +463,11 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Atualiza canal no banco com o resultado do teste
+      // Atualiza canal no banco com o resultado estrito do teste
       const testedAt = new Date().toISOString();
       const { data: currentCh } = await adminClient
         .from("delivery_channels")
-        .select("config")
+        .select("config, auto_accept_orders")
         .eq("workspace_id", workspaceId)
         .eq("channel_name", channelName)
         .maybeSingle();
@@ -377,16 +478,20 @@ Deno.serve(async (req: Request) => {
       const testLog = {
         id: `test-${Date.now()}`,
         event_type: "test",
-        status: isSuccess ? "success" : "warning",
-        message: `Teste HTTP real (${latencyMs}ms, status ${httpStatus}): ${feedbackMsg}`,
+        status: isSuccess ? "success" : connectionState.includes("pending") ? "warning" : "error",
+        message: `Teste HTTP (${latencyMs}ms, status ${httpStatus}): ${feedbackMsg}`,
         timestamp: testedAt,
       };
+
+      // auto_accept_orders SÓ pode permanecer ativo se for homologado
+      const autoAcceptAllowed = connectionState === "homologated" ? Boolean(currentCh?.auto_accept_orders) : false;
 
       await adminClient
         .from("delivery_channels")
         .update({
           connection_state: connectionState,
           status: isSuccess ? "active" : "pending_auth",
+          auto_accept_orders: autoAcceptAllowed,
           config: {
             ...cfg,
             last_connection_test: {
@@ -443,6 +548,15 @@ Deno.serve(async (req: Request) => {
         timestamp: new Date().toISOString(),
       };
 
+      const updatedConfig: Record<string, unknown> = {
+        ...cfg,
+        has_client_secret: false,
+        client_id_preview: null,
+        event_log: [disconnectLog, ...existingLogs].slice(0, 20),
+      };
+      delete updatedConfig.client_id;
+      delete updatedConfig.client_secret;
+
       await adminClient
         .from("delivery_channels")
         .update({
@@ -450,11 +564,7 @@ Deno.serve(async (req: Request) => {
           status: "pending_auth",
           is_active: false,
           auto_accept_orders: false,
-          config: {
-            ...cfg,
-            has_client_secret: false,
-            event_log: [disconnectLog, ...existingLogs].slice(0, 20),
-          },
+          config: updatedConfig,
           updated_at: new Date().toISOString(),
         })
         .eq("workspace_id", workspaceId)

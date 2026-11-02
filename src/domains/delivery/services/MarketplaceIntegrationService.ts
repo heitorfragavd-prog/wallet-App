@@ -49,7 +49,8 @@ export interface SaveCredentialsParams {
   workspaceId: string;
   channelName: 'ifood' | '99food';
   merchantId: string;
-  clientId: string;
+  clientId?: string;
+  preserveClientId?: boolean;
   clientSecret?: string;
   autoAcceptOrders?: boolean;
 }
@@ -179,7 +180,11 @@ export class MarketplaceIntegrationService {
           auto_accept_orders: found?.auto_accept_orders ?? false,
           store_id: storeId,
           merchant_name: typeof config.merchant_name === 'string' ? config.merchant_name : undefined,
-          client_id_preview: clientId ? maskSecretPreview(clientId) : undefined,
+          client_id_preview: clientId
+            ? maskSecretPreview(clientId)
+            : typeof config.client_id_preview === 'string'
+            ? config.client_id_preview
+            : undefined,
           has_client_secret: hasSecret,
           last_sync_at: typeof config.last_sync_at === 'string' ? config.last_sync_at : null,
           last_connection_test: lastTest,
@@ -195,239 +200,118 @@ export class MarketplaceIntegrationService {
   }
 
   /**
-   * Salva credenciais de forma segura no cofre do canal,
+   * Salva credenciais de forma segura exclusivamente no cofre do servidor,
    * garantindo que segredos nunca sejam retornados ou expostos em texto puro.
    */
   static async saveCredentials(params: SaveCredentialsParams): Promise<IntegrationActionResult> {
-    const { workspaceId, channelName, merchantId, clientId, clientSecret, autoAcceptOrders } = params;
+    const { workspaceId, channelName, merchantId, clientId, preserveClientId, clientSecret, autoAcceptOrders } = params;
 
     if (!workspaceId) {
       return { success: false, message: 'Workspace ID é obrigatório.' };
     }
-    if (!merchantId?.trim() || !clientId?.trim()) {
-      return { success: false, message: 'Merchant ID e Client ID / App Key são obrigatórios.' };
+    if (!merchantId?.trim()) {
+      return { success: false, message: 'Merchant ID / Shop ID é obrigatório.' };
+    }
+    if (!preserveClientId && !clientId?.trim()) {
+      return { success: false, message: 'Client ID / App Key é obrigatório.' };
     }
 
     try {
-      // 1. Tenta acionar Edge Function com cofre isolado de credenciais
-      try {
-        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
-          body: {
-            action: 'save_credentials',
-            workspace_id: workspaceId,
-            channel_name: channelName,
-            merchant_id: merchantId.trim(),
-            client_id: clientId.trim(),
-            client_secret: clientSecret?.trim() || undefined,
-            auto_accept_orders: autoAcceptOrders,
-          },
-        });
+      // Aciona Edge Function com cofre isolado de credenciais (fail-closed)
+      const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
+        body: {
+          action: 'save_credentials',
+          workspace_id: workspaceId,
+          channel_name: channelName,
+          merchant_id: merchantId.trim(),
+          client_id: clientId?.trim() || undefined,
+          preserve_client_id: Boolean(preserveClientId),
+          client_secret: clientSecret?.trim() || undefined,
+          auto_accept_orders: autoAcceptOrders,
+        },
+      });
 
-        if (!edgeError && edgeData?.success) {
-          return {
-            success: true,
-            state: edgeData.state || 'credentials_present_unverified',
-            message: edgeData.message || 'Credenciais gravadas no cofre seguro do servidor.',
-          };
-        }
-      } catch {
-        // Fallback para persistência direta em delivery_channels em caso de ambiente sem Edge Function
-      }
-
-      // 2. Consulta registro existente para preservar logs
-      const { data: existing } = await supabase
-        .from('delivery_channels')
-        .select('id, config, connection_state')
-        .eq('workspace_id', workspaceId)
-        .eq('channel_name', channelName)
-        .maybeSingle();
-
-      const prevConfig = (existing?.config && typeof existing.config === 'object' ? existing.config : {}) as Record<string, unknown>;
-      const prevLogs = Array.isArray(prevConfig.event_log) ? (prevConfig.event_log as IntegrationEventLogItem[]) : [];
-
-      const newLogItem: IntegrationEventLogItem = {
-        id: `log-${Date.now()}`,
-        event_type: 'connect',
-        status: 'success',
-        message: 'Credenciais cadastradas no cofre seguro. Pronto para verificação/homologação.',
-        timestamp: new Date().toISOString(),
-      };
-
-      const updatedLogs = [newLogItem, ...prevLogs].slice(0, 20);
-
-      const hasSecret = Boolean(clientSecret?.trim() || prevConfig.has_client_secret);
-      const isHomologated = existing?.connection_state === 'homologated';
-      const connectionState: MarketplaceConnectionState = isHomologated ? 'homologated' : 'credentials_present_unverified';
-
-      const newConfig: Record<string, unknown> = {
-        ...prevConfig,
-        merchant_id: merchantId.trim(),
-        client_id: clientId.trim(),
-        has_client_secret: hasSecret,
-        scopes: ['orders:read', 'orders:status', 'catalog:read'],
-        event_log: updatedLogs,
-        updated_at: new Date().toISOString(),
-      };
-
-      const payload = {
-        workspace_id: workspaceId,
-        channel_name: channelName,
-        display_name: channelName === 'ifood' ? 'iFood Marketplace' : '99Food Restaurante',
-        is_active: true,
-        status: isHomologated ? 'active' : 'pending_auth',
-        connection_state: connectionState,
-        auto_accept_orders: isHomologated ? (autoAcceptOrders ?? false) : false,
-        config: newConfig,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: upsertErr } = await supabase
-        .from('delivery_channels')
-        .upsert(payload, { onConflict: 'workspace_id,channel_name' });
-
-      if (upsertErr) {
-        throw new Error(upsertErr.message);
+      if (edgeError || !edgeData?.success) {
+        const errorMsg =
+          edgeData?.error ||
+          'Serviço seguro de cofre indisponível no servidor. Ação não executada por segurança.';
+        return {
+          success: false,
+          message: errorMsg,
+          error: errorMsg,
+        };
       }
 
       return {
         success: true,
-        state: connectionState,
-        message: 'Credenciais salvas com sucesso no cofre seguro do canal.',
+        state: edgeData.state || 'credentials_saved',
+        message: edgeData.message || 'Credenciais gravadas no cofre seguro do servidor.',
       };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Falha ao salvar credenciais.';
+    } catch {
+      const msg = 'Serviço seguro de cofre indisponível no servidor. Ação não executada por segurança.';
       return { success: false, message: msg, error: msg };
     }
   }
 
   /**
-   * Executa teste de conexão canônico sem emitir falso positivo.
+   * Executa teste de conexão canônico exclusivamente pela Edge Function oficial.
+   * Não emite falso positivo nem usa dados simulados no cliente.
    */
   static async testConnection(params: TestConnectionParams): Promise<IntegrationActionResult> {
-    const { workspaceId, channelName, merchantId, clientId, clientSecret, isHomologated } = params;
+    const { workspaceId, channelName, merchantId, clientId, clientSecret } = params;
     const startTime = Date.now();
+
+    if (!workspaceId) {
+      return { success: false, message: 'Workspace ID é obrigatório.' };
+    }
 
     try {
       const connector = getConnector(channelName);
 
-      // 1. Tenta teste real via Edge Function oficial (handshake HTTP com OAuth)
-      try {
-        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
-          body: {
-            action: 'test_connection',
-            workspace_id: workspaceId,
-            channel_name: channelName,
-            merchant_id: merchantId,
-            client_id: clientId,
-            client_secret: clientSecret,
-          },
-        });
+      // Chamada obrigatória e exclusiva à Edge Function oficial com cofre
+      const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
+        body: {
+          action: 'test_connection',
+          workspace_id: workspaceId,
+          channel_name: channelName,
+          merchant_id: merchantId?.trim() || undefined,
+          client_id: clientId?.trim() || undefined,
+          client_secret: clientSecret?.trim() || undefined,
+        },
+      });
 
-        if (!edgeError && edgeData) {
-          const latency = typeof edgeData.latency_ms === 'number' ? edgeData.latency_ms : (Date.now() - startTime);
-          return {
-            success: Boolean(edgeData.success),
-            state: edgeData.state || (edgeData.success ? 'homologated' : 'credentials_present_unverified'),
-            message: edgeData.message || (edgeData.success ? 'Conexão verificada com sucesso.' : 'Falha na conexão.'),
-            latency_ms: latency,
-            tested_at: new Date().toISOString(),
-            capabilities: connector.getCapabilities({
-              merchantId,
-              clientId,
-              isHomologated: edgeData.state === 'homologated',
-            }),
-          };
-        }
-      } catch {
-        // Fallback para conector local
+      if (edgeError || !edgeData) {
+        const errorMsg =
+          edgeData?.message ||
+          'Serviço seguro de cofre indisponível no servidor. Ação não executada por segurança.';
+        return {
+          success: false,
+          state: 'error',
+          message: errorMsg,
+          latency_ms: Date.now() - startTime,
+          tested_at: new Date().toISOString(),
+          error: errorMsg,
+        };
       }
 
-      // Se parâmetros não foram fornecidos diretamente, busca do banco
-      let finalMerchantId = merchantId;
-      let finalClientId = clientId;
-      let finalHasSecret = Boolean(clientSecret);
-      let finalIsHomologated = Boolean(isHomologated);
-
-      if (!finalMerchantId || !finalClientId) {
-        const { data: channelRow } = await supabase
-          .from('delivery_channels')
-          .select('connection_state, config')
-          .eq('workspace_id', workspaceId)
-          .eq('channel_name', channelName)
-          .maybeSingle();
-
-        const cfg = (channelRow?.config && typeof channelRow.config === 'object' ? channelRow.config : {}) as Record<string, unknown>;
-        finalMerchantId = finalMerchantId || (typeof cfg.merchant_id === 'string' ? cfg.merchant_id : undefined);
-        finalClientId = finalClientId || (typeof cfg.client_id === 'string' ? cfg.client_id : undefined);
-        finalHasSecret = finalHasSecret || Boolean(cfg.has_client_secret);
-        finalIsHomologated = finalIsHomologated || (channelRow?.connection_state === 'homologated');
-      }
-
-      const authPayload: ConnectorAuthPayload = {
-        merchantId: finalMerchantId,
-        clientId: finalClientId,
-        clientSecret: finalHasSecret ? (clientSecret || 'vault-protected-secret') : undefined,
-        isHomologated: finalIsHomologated,
-      };
-
-      const testResult = await connector.testConnection(authPayload);
-      const latencyMs = Date.now() - startTime;
-      const testedAt = new Date().toISOString();
-
-      // Grava o resultado do teste de conexão no log e no config do canal
-      if (workspaceId) {
-        const { data: current } = await supabase
-          .from('delivery_channels')
-          .select('config')
-          .eq('workspace_id', workspaceId)
-          .eq('channel_name', channelName)
-          .maybeSingle();
-
-        if (current) {
-          const cfg = (current.config && typeof current.config === 'object' ? current.config : {}) as Record<string, unknown>;
-          const logs = Array.isArray(cfg.event_log) ? (cfg.event_log as IntegrationEventLogItem[]) : [];
-
-          const testLogItem: IntegrationEventLogItem = {
-            id: `test-${Date.now()}`,
-            event_type: 'test',
-            status: testResult.success ? 'success' : testResult.state === 'credentials_present_unverified' ? 'warning' : 'error',
-            message: `Teste de conexão executado (${latencyMs}ms): ${testResult.message}`,
-            timestamp: testedAt,
-          };
-
-          await supabase
-            .from('delivery_channels')
-            .update({
-              connection_state: testResult.state,
-              config: {
-                ...cfg,
-                last_connection_test: {
-                  success: testResult.success,
-                  state: testResult.state,
-                  message: testResult.message,
-                  tested_at: testedAt,
-                  latency_ms: latencyMs,
-                },
-                event_log: [testLogItem, ...logs].slice(0, 20),
-              },
-              updated_at: testedAt,
-            })
-            .eq('workspace_id', workspaceId)
-            .eq('channel_name', channelName);
-        }
-      }
+      const latency = typeof edgeData.latency_ms === 'number' ? edgeData.latency_ms : Date.now() - startTime;
+      const isHomologated = edgeData.state === 'homologated';
 
       return {
-        success: testResult.success,
-        state: testResult.state,
-        message: testResult.message,
-        latency_ms: latencyMs,
-        tested_at: testedAt,
-        capabilities: testResult.capabilities,
+        success: Boolean(edgeData.success),
+        state: (edgeData.state as MarketplaceConnectionState) || (isHomologated ? 'homologated' : 'credentials_saved'),
+        message: edgeData.message || (isHomologated ? 'Conexão e loja homologadas com sucesso.' : 'Falha na conexão.'),
+        latency_ms: latency,
+        tested_at: new Date().toISOString(),
+        capabilities: connector.getCapabilities({
+          merchantId,
+          clientId,
+          isHomologated,
+        }),
       };
-    } catch (err: unknown) {
+    } catch {
       const latencyMs = Date.now() - startTime;
-      const msg = err instanceof Error ? err.message : 'Falha inesperada no teste de conexão.';
+      const msg = 'Serviço seguro de cofre indisponível no servidor. Ação não executada por segurança.';
       return {
         success: false,
         state: 'error',
@@ -440,75 +324,42 @@ export class MarketplaceIntegrationService {
   }
 
   /**
-   * Desconecta o canal e remove chaves confidenciais do cofre seguro.
+   * Desconecta o canal e purga credenciais confidenciais do cofre seguro.
    */
-  static async disconnectChannel(workspaceId: string, channelName: 'ifood' | '99food'): Promise<IntegrationActionResult> {
+  static async disconnectChannel(
+    workspaceId: string,
+    channelName: 'ifood' | '99food'
+  ): Promise<IntegrationActionResult> {
     if (!workspaceId) {
       return { success: false, message: 'Workspace ID é obrigatório.' };
     }
 
     try {
-      // 1. Tenta acionar Edge Function para purga segura no cofre do servidor
-      try {
-        await supabase.functions.invoke('delivery-marketplace-vault', {
-          body: {
-            action: 'disconnect',
-            workspace_id: workspaceId,
-            channel_name: channelName,
-          },
+      const { data: edgeData, error: edgeError } = await supabase.functions.invoke('delivery-marketplace-vault', {
+        body: {
+          action: 'disconnect',
+          workspace_id: workspaceId,
+          channel_name: channelName,
+        },
+      });
+
+      if (edgeError || !edgeData?.success) {
+        // Tenta RPC autorizada no banco caso a Edge Function não esteja disponível
+        const { error: rpcErr } = await supabase.rpc('disconnect_delivery_marketplace', {
+          p_workspace_id: workspaceId,
+          p_channel_name: channelName,
         });
-      } catch {
-        // Prossegue com atualização local
-      }
 
-      const { data: current } = await supabase
-        .from('delivery_channels')
-        .select('config')
-        .eq('workspace_id', workspaceId)
-        .eq('channel_name', channelName)
-        .maybeSingle();
-
-      const prevConfig = (current?.config && typeof current.config === 'object' ? current.config : {}) as Record<string, unknown>;
-      const prevLogs = Array.isArray(prevConfig.event_log) ? (prevConfig.event_log as IntegrationEventLogItem[]) : [];
-
-      const disconnectLog: IntegrationEventLogItem = {
-        id: `disconnect-${Date.now()}`,
-        event_type: 'disconnect',
-        status: 'info',
-        message: 'Canal desconectado pelo administrador. Credenciais removidas do cofre seguro.',
-        timestamp: new Date().toISOString(),
-      };
-
-      const updatedConfig: Record<string, unknown> = {
-        ...prevConfig,
-        has_client_secret: false,
-        last_sync_at: null,
-        event_log: [disconnectLog, ...prevLogs].slice(0, 20),
-      };
-      delete updatedConfig.client_id;
-      delete updatedConfig.merchant_id;
-      delete updatedConfig.encrypted_secret;
-
-      const { error } = await supabase
-        .from('delivery_channels')
-        .update({
-          is_active: false,
-          status: 'inactive',
-          connection_state: 'disconnected',
-          config: updatedConfig,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('workspace_id', workspaceId)
-        .eq('channel_name', channelName);
-
-      if (error) {
-        throw new Error(error.message);
+        if (rpcErr) {
+          const msg = edgeError?.message || rpcErr.message || 'Falha ao desconectar canal.';
+          return { success: false, message: msg, error: msg };
+        }
       }
 
       return {
         success: true,
         state: 'disconnected',
-        message: `Canal ${channelName === 'ifood' ? 'iFood' : '99Food'} desconectado com sucesso.`,
+        message: `Canal ${channelName === 'ifood' ? 'iFood' : '99Food'} desconectado com sucesso e credenciais removidas do cofre.`,
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Falha ao desconectar canal.';

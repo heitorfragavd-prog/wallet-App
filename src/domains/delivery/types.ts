@@ -9,11 +9,18 @@ export type DeliveryChannelStatus = 'active' | 'inactive' | 'pending_auth' | 'er
 
 export type MarketplaceConnectionState =
   | 'not_configured'
+  | 'credentials_saved'
   | 'credentials_present_unverified'
   | 'authenticating'
   | 'authenticated'
+  | 'auth_approved'
+  | 'merchant_auth_pending'
+  | 'merchant_authorized'
+  | 'homologation_pending'
   | 'awaiting_homologation'
   | 'homologated'
+  | 'insufficient_scopes'
+  | 'operational'
   | 'disconnected'
   | 'error';
 

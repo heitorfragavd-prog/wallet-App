@@ -5,6 +5,19 @@ import {
 } from './MarketplaceIntegrationService';
 import { supabase } from '@/integrations/supabase/client';
 
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    auth: {
+      getUser: vi.fn(),
+    },
+    functions: {
+      invoke: vi.fn(),
+    },
+    rpc: vi.fn(),
+    from: vi.fn(),
+  },
+}));
+
 describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (Gate 5)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,7 +69,7 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
           display_name: 'iFood Marketplace',
           is_active: true,
           status: 'pending_auth',
-          connection_state: 'credentials_present_unverified',
+          connection_state: 'credentials_saved',
           commission_rate: 0.23,
           payment_fee_rate: 0.032,
           fixed_fee: 0,
@@ -79,7 +92,7 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
         },
       ];
 
-      vi.spyOn(supabase, 'from').mockReturnValue({
+      vi.mocked(supabase.from).mockReturnValue({
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         in: vi.fn().mockResolvedValue({ data: mockRows, error: null }),
@@ -95,8 +108,7 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
       expect(ifood.client_id_preview).toContain('••••••••');
       // Garante que o client_id original não vaza em texto puro na preview
       expect(ifood.client_id_preview).not.toBe('ifood-client-id-abc-1234');
-      expect(ifood.connection_state).toBe('credentials_present_unverified');
-      expect(ifood.capabilities.can_fetch_orders.status).toBe('awaiting_homologation');
+      expect(ifood.connection_state).toBe('credentials_saved');
       expect(ifood.event_log).toHaveLength(1);
 
       const ninetyNine = integrations.find((i) => i.channel_name === '99food')!;
@@ -124,21 +136,18 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
         clientId: 'c-1',
       });
       expect(res2.success).toBe(false);
-      expect(res2.message).toContain('obrigatórios');
+      expect(res2.message).toContain('Merchant ID');
     });
 
-    it('persiste credenciais com state credentials_present_unverified e bloqueia auto-aceite sem homologação', async () => {
-      const maybeSingleMock = vi.fn().mockResolvedValue({
-        data: { id: 'ch-1', config: { event_log: [] }, connection_state: 'not_configured' },
+    it('persiste credenciais exclusivamente via Edge Function de cofre seguro', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: {
+          success: true,
+          state: 'credentials_saved',
+          message: 'Credenciais armazenadas com criptografia AES-256-GCM no cofre seguro.',
+        },
+        error: null,
       });
-      const upsertMock = vi.fn().mockResolvedValue({ error: null });
-
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: maybeSingleMock,
-        upsert: upsertMock,
-      } as unknown as ReturnType<typeof supabase.from>);
 
       const res = await MarketplaceIntegrationService.saveCredentials({
         workspaceId: 'ws-1',
@@ -146,70 +155,85 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
         merchantId: 'rodo-ifood-99',
         clientId: 'client-key-8888',
         clientSecret: 'secret-xyz',
-        autoAcceptOrders: true,
+        autoAcceptOrders: false,
       });
 
       expect(res.success).toBe(true);
-      expect(res.state).toBe('credentials_present_unverified');
-      // Trava de segurança: auto-aceite NÃO pode ser ativado sem homologação confirmada
-      expect(upsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(res.state).toBe('credentials_saved');
+      expect(supabase.functions.invoke).toHaveBeenCalledWith('delivery-marketplace-vault', {
+        body: expect.objectContaining({
+          action: 'save_credentials',
           workspace_id: 'ws-1',
           channel_name: 'ifood',
-          connection_state: 'credentials_present_unverified',
-          auto_accept_orders: false,
-          config: expect.objectContaining({
-            merchant_id: 'rodo-ifood-99',
-            client_id: 'client-key-8888',
-            has_client_secret: true,
-          }),
+          merchant_id: 'rodo-ifood-99',
+          client_id: 'client-key-8888',
+          preserve_client_id: false,
+          client_secret: 'secret-xyz',
         }),
-        expect.objectContaining({ onConflict: 'workspace_id,channel_name' })
-      );
+      });
     });
 
-    it('permite auto-aceite quando o canal já se encontra oficialmente homologado', async () => {
-      const maybeSingleMock = vi.fn().mockResolvedValue({
-        data: { id: 'ch-1', config: { event_log: [] }, connection_state: 'homologated' },
+    it('fail-closed: falha de forma segura se a Edge Function estiver indisponível sem fallback inseguro', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: null,
+        error: new Error('Edge Function offline'),
       });
-      const upsertMock = vi.fn().mockResolvedValue({ error: null });
-
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: maybeSingleMock,
-        upsert: upsertMock,
-      } as unknown as ReturnType<typeof supabase.from>);
 
       const res = await MarketplaceIntegrationService.saveCredentials({
         workspaceId: 'ws-1',
         channelName: 'ifood',
         merchantId: 'rodo-ifood-99',
         clientId: 'client-key-8888',
-        autoAcceptOrders: true,
+        clientSecret: 'secret-xyz',
       });
 
-      expect(res.success).toBe(true);
-      expect(res.state).toBe('homologated');
-      expect(upsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspace_id: 'ws-1',
-          channel_name: 'ifood',
-          connection_state: 'homologated',
-          auto_accept_orders: true,
-        }),
-        expect.objectContaining({ onConflict: 'workspace_id,channel_name' })
-      );
+      expect(res.success).toBe(false);
+      expect(res.message).toContain('Serviço seguro de cofre indisponível no servidor');
     });
   });
 
   describe('testConnection', () => {
-    it('identifica canal não configurado quando faltam chaves', async () => {
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({ data: null }),
-      } as unknown as ReturnType<typeof supabase.from>);
+    it('executa handshake estritamente via Edge Function sem emitir falso positivo no cliente', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: {
+          success: true,
+          state: 'homologated',
+          latency_ms: 250,
+          message: 'Conexão e loja homologadas com sucesso no iFood em 250ms.',
+        },
+        error: null,
+      });
+
+      const res = await MarketplaceIntegrationService.testConnection({
+        workspaceId: 'ws-1',
+        channelName: 'ifood',
+        merchantId: 'rodo-ifood-prod',
+        clientId: 'client-prod-id',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.state).toBe('homologated');
+      expect(res.latency_ms).toBe(250);
+      expect(res.message).toContain('homologadas com sucesso');
+      expect(supabase.functions.invoke).toHaveBeenCalledWith('delivery-marketplace-vault', {
+        body: expect.objectContaining({
+          action: 'test_connection',
+          workspace_id: 'ws-1',
+          channel_name: 'ifood',
+        }),
+      });
+    });
+
+    it('retorna merchant_auth_pending quando o parceiro não autorizou o app', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: {
+          success: false,
+          state: 'merchant_auth_pending',
+          latency_ms: 310,
+          message: 'Credenciais autenticadas no iFood, porém a loja ainda não autorizou o aplicativo no Portal do Parceiro.',
+        },
+        error: null,
+      });
 
       const res = await MarketplaceIntegrationService.testConnection({
         workspaceId: 'ws-1',
@@ -217,26 +241,20 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
       });
 
       expect(res.success).toBe(false);
-      expect(res.state).toBe('not_configured');
-      expect(res.message).toContain('obrigatórios ausentes');
+      expect(res.state).toBe('merchant_auth_pending');
+      expect(res.message).toContain('loja ainda não autorizou');
     });
 
-    it('valida credenciais cadastradas sem homologação ativa sem gerar falso positivo', async () => {
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: {
-            connection_state: 'credentials_present_unverified',
-            config: {
-              merchant_id: 'rodo-99-store',
-              client_id: 'app-key-99',
-              has_client_secret: true,
-            },
-          },
-        }),
-        update: vi.fn().mockReturnThis(),
-      } as unknown as ReturnType<typeof supabase.from>);
+    it('retorna homologation_pending para 99Food enquanto aguarda liberação comercial', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: {
+          success: false,
+          state: 'homologation_pending',
+          latency_ms: 180,
+          message: 'Credenciais salvas e autenticadas. Aguardando homologação oficial da loja pela 99Food.',
+        },
+        error: null,
+      });
 
       const res = await MarketplaceIntegrationService.testConnection({
         workspaceId: 'ws-1',
@@ -244,77 +262,48 @@ describe('MarketplaceIntegrationService — Testes Canônicos do Hub de Canais (
       });
 
       expect(res.success).toBe(false);
-      expect(res.state).toBe('credentials_present_unverified');
-      expect(res.message).toContain('A homologação oficial requer aprovação');
-      expect(res.latency_ms).toBeGreaterThanOrEqual(0);
+      expect(res.state).toBe('homologation_pending');
+      expect(res.message).toContain('Aguardando homologação oficial');
     });
 
-    it('confirma conexão homologada quando isHomologated é verdadeiro', async () => {
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: {
-            connection_state: 'homologated',
-            config: {
-              merchant_id: 'rodo-ifood-prod',
-              client_id: 'client-prod-id',
-              has_client_secret: true,
-            },
-          },
-        }),
-        update: vi.fn().mockReturnThis(),
-      } as unknown as ReturnType<typeof supabase.from>);
+    it('fail-closed: falha com erro seguro se o cofre remoto falhar', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: null,
+        error: new Error('Network timeout'),
+      });
 
       const res = await MarketplaceIntegrationService.testConnection({
         workspaceId: 'ws-1',
         channelName: 'ifood',
-        isHomologated: true,
       });
 
-      expect(res.success).toBe(true);
-      expect(res.state).toBe('homologated');
-      expect(res.message).toContain('homologada com o iFood');
+      expect(res.success).toBe(false);
+      expect(res.state).toBe('error');
+      expect(res.message).toContain('Serviço seguro de cofre indisponível no servidor');
     });
   });
 
   describe('disconnectChannel', () => {
-    it('remove chaves confidenciais e define status como desconectado', async () => {
-      const updateMock = vi.fn().mockReturnThis();
-
-      vi.spyOn(supabase, 'from').mockReturnValue({
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: {
-            config: {
-              merchant_id: 'rodo-1',
-              client_id: 'key-1',
-              has_client_secret: true,
-              event_log: [],
-            },
-          },
-        }),
-        update: updateMock,
-      } as unknown as ReturnType<typeof supabase.from>);
+    it('desconecta via Edge Function e purga credenciais com sucesso', async () => {
+      vi.mocked(supabase.functions.invoke).mockResolvedValue({
+        data: {
+          success: true,
+          message: 'Canal desconectado com sucesso e credenciais removidas do cofre.',
+        },
+        error: null,
+      });
 
       const res = await MarketplaceIntegrationService.disconnectChannel('ws-1', 'ifood');
 
       expect(res.success).toBe(true);
       expect(res.state).toBe('disconnected');
-      expect(updateMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          is_active: false,
-          status: 'inactive',
-          connection_state: 'disconnected',
-          config: expect.objectContaining({
-            has_client_secret: false,
-            event_log: expect.arrayContaining([
-              expect.objectContaining({ event_type: 'disconnect' }),
-            ]),
-          }),
-        })
-      );
+      expect(supabase.functions.invoke).toHaveBeenCalledWith('delivery-marketplace-vault', {
+        body: {
+          action: 'disconnect',
+          workspace_id: 'ws-1',
+          channel_name: 'ifood',
+        },
+      });
     });
   });
 });
