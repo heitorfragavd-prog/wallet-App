@@ -1089,38 +1089,40 @@ async function fetchDashboardData(
   };
   const selectedStoreId = storeId || config.store_id;
 
-  // Função auxiliar para buscar com tratamento de erro detalhado
+  // Função auxiliar para buscar com retentativa exponencial e fallback resiliente
   const fetchWithFallback = async (primaryUrl: string, fallbackUrl?: string) => {
-    try {
-      const response = await fetch(primaryUrl, { headers });
-      if (response.ok) {
-        return await response.json();
-      }
-      const errorText = await response.text().catch(() => "Sem detalhes");
-      console.warn(`Eyemobile API ${primaryUrl} falhou: ${response.status} - ${errorText}`);
-    
-      if (fallbackUrl) {
-        console.log(`Tentando fallback: ${fallbackUrl}`);
-        const fallbackResponse = await fetch(fallbackUrl, { headers });
-        if (fallbackResponse.ok) {
-          return await fallbackResponse.json();
-        }
-        const fallbackError = await fallbackResponse.text().catch(() => "Sem detalhes");
-        console.error(`Eyemobile API fallback ${fallbackUrl} também falhou: ${fallbackResponse.status} - ${fallbackError}`);
-      }
-    
-      // Retorna estrutura vazia em vez de lançar erro para não quebrar o dashboard
-      return { data: [], has_more: false };
-    } catch (err: any) {
-      console.error(`Erro de rede ao consultar ${primaryUrl}:`, err.message);
-      if (fallbackUrl) {
+    const executeFetch = async (url: string) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const fallbackResponse = await fetch(fallbackUrl, { headers });
-          if (fallbackResponse.ok) return await fallbackResponse.json();
-        } catch {}
+          const response = await fetch(url, { headers });
+          if (response.ok) {
+            return await response.json();
+          }
+          if (response.status === 404) {
+            return null;
+          }
+          if (response.status === 429 || response.status >= 500) {
+            await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt)));
+            continue;
+          }
+          return null;
+        } catch (_) {
+          await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt)));
+        }
       }
-      return { data: [], has_more: false };
+      return null;
+    };
+
+    const primaryData = await executeFetch(primaryUrl);
+    if (primaryData) return primaryData;
+
+    if (fallbackUrl) {
+      console.log(`Tentando fallback para: ${fallbackUrl}`);
+      const fallbackData = await executeFetch(fallbackUrl);
+      if (fallbackData) return fallbackData;
     }
+
+    return { data: [], has_more: false, partialError: true };
   };
 
   const effectiveStartDate = startDate || toSaoPauloDate(new Date().toISOString());
@@ -1192,56 +1194,74 @@ async function fetchDashboardData(
     const maxPages = 150; // Suporta até 15.000 vendas por período no dashboard
     let pagesFetched = 0;
 
+    const seenPageSignatures = new Set<string>();
+    let isTruncated = false;
+
     while (hasMore && pagesFetched < maxPages) {
       const pageOffsets: number[] = [];
       for (let i = 0; i < batchSize; i++) {
         pageOffsets.push(currentOffset + i * customLimit);
       }
       console.log(`Dashboard batch fetch for offsets: ${pageOffsets.join(", ")}`);
-      
-      const promises = pageOffsets.map(off => {
+
+      const promises = pageOffsets.map((off) => {
         const salesUrl = buildUrl(off);
         const transactionsUrl = buildFallbackUrl(off);
         return fetchWithFallback(transactionsUrl, salesUrl);
       });
 
       const results = await Promise.all(promises);
-      
+
       for (let i = 0; i < results.length; i++) {
         const res = results[i];
         const sales = res?.data || [];
+        if (sales.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Proteção contra loops e repetição de páginas
+        const firstSaleId = String(sales[0]?.id || "");
+        const lastSaleId = String(sales[sales.length - 1]?.id || "");
+        const pageSignature = `${firstSaleId}:${lastSaleId}`;
+        if (firstSaleId && seenPageSignatures.has(pageSignature)) {
+          console.warn(`[eyemobile-sync] Página repetida detectada (${pageSignature}). Encerrando paginação com segurança.`);
+          hasMore = false;
+          break;
+        }
+        if (firstSaleId) seenPageSignatures.add(pageSignature);
+
         allSales.push(...sales);
         pagesFetched++;
 
-        // Verifica se chegamos após a data limite ou passamos da zona de completados
-        const lastSale = sales.length > 0 ? sales[sales.length - 1] : null;
-        const lastSaleDate = lastSale ? (lastSale.time || lastSale.created_at) : null;
-        const lastSaleCompleted = lastSale ? (lastSale.completed && !lastSale.cancelled) : true;
-        
-        // Se a última venda da página é incompleta/cancelada, passamos do fim dos completados
-        if (!lastSaleCompleted) {
-          hasMore = false;
-        }
-
-        if (endDate && lastSaleDate) {
-          const saleDate = String(lastSaleDate).split("T")[0];
-          // Apenas breaka por data maior se ainda estamos na zona de completados (ano coerente)
-          if (lastSaleCompleted && saleDate > endDate) {
+        // Checagem segura de data final (apenas se toda a página ultrapassar endDate)
+        if (endDate) {
+          const allBeyondEnd = sales.every((s: any) => {
+            const dt = String(s.time || s.created_at || "").split("T")[0];
+            return dt && dt > endDate;
+          });
+          if (allBeyondEnd) {
             hasMore = false;
             break;
           }
         }
 
-        if (!res || res.has_more === false || sales.length === 0) {
+        if (!res || res.has_more === false) {
           hasMore = false;
           break;
         }
       }
 
+      if (pagesFetched >= maxPages && hasMore) {
+        isTruncated = true;
+        hasMore = false;
+        break;
+      }
+
       if (hasMore) {
         currentOffset += batchSize * customLimit;
-        // Pequena pausa (50ms) entre lotes para respeitar limites da API
-        await new Promise(r => setTimeout(r, 50));
+        // Pausa segura de 50ms entre lotes
+        await new Promise((r) => setTimeout(r, 50));
       } else {
         break;
       }
@@ -1256,7 +1276,7 @@ async function fetchDashboardData(
   const storesResult = await fetchWithFallback(`${baseUrl}/stores`);
   const stores = storesResult.data || [];
 
-  return { configured: true, sales: allSales, products, stores, hasMore };
+  return { configured: true, sales: allSales, products, stores, hasMore, isTruncated };
 }
 
 async function syncUserEyemobile(
@@ -1510,16 +1530,13 @@ async function syncUserEyemobile(
             }
           }
 
-          let hitBoundary = false;
           let completedInPage = 0;
           for (let sIdx = 0; sIdx < salesData.data.length; sIdx++) {
             const sale = salesData.data[sIdx];
-            // Na API Eyemobile, todas as vendas completadas estão no início do stream cronológico.
-            // Ao encontrar a primeira venda não-completada ou cancelada, atingimos o fim do stream de completadas.
+            // Vendas canceladas ou não-completadas não geram receita, mas NÃO interrompem a paginação do stream
             if (sale.cancelled || !sale.completed) {
-              console.log(`[eyemobile-sync] Boundary de vendas completadas atingido no offset ${offset + sIdx} (venda #${sale.id}).`);
-              hitBoundary = true;
-              break;
+              console.log(`[eyemobile-sync] Venda cancelada/incompleta ignorada no offset ${offset + sIdx} (venda #${sale.id}).`);
+              continue;
             }
             completedInPage++;
 
@@ -1585,9 +1602,9 @@ async function syncUserEyemobile(
             }
             salesCount++;
           }
-          fetchedHasMore = salesData.has_more === true && !hitBoundary;
-          hasMore = salesData.has_more === true && !hitBoundary;
-          const newHighestOffset = offset + completedInPage;
+          fetchedHasMore = salesData.has_more === true;
+          hasMore = salesData.has_more === true;
+          const newHighestOffset = offset + salesData.data.length;
 
           // Salva o progresso garantindo que nunca regrida
           const safeOffsetToSave = Math.max(config.last_synced_offset || 0, newHighestOffset);
@@ -1596,10 +1613,6 @@ async function syncUserEyemobile(
             .update({ last_synced_offset: safeOffsetToSave, updated_at: new Date().toISOString() })
             .eq("user_id", user_id);
           config.last_synced_offset = safeOffsetToSave;
-
-          if (hitBoundary) {
-            break;
-          }
 
           offset += limit;
           pagesFetched++;

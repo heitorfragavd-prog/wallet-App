@@ -97,6 +97,12 @@ export const toLocalDate = (iso: string): string => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
       return trimmed;
     }
+    // Fast path para timestamps ISO com offset America/Sao_Paulo (-03:00)
+    const spIsoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?-03:00$/);
+    if (spIsoMatch) {
+      return spIsoMatch[1];
+    }
+
     let d: Date;
     if (trimmed.includes("T") || trimmed.includes("Z") || trimmed.includes("+") || (/-\d{2}:\d{2}$/.test(trimmed))) {
       d = new Date(trimmed);
@@ -115,6 +121,10 @@ export const toLocalDate = (iso: string): string => {
 const parseHour = (str: string) => {
   if (!str) return -1;
   try {
+    const spIsoMatch = str.match(/T(\d{2}):\d{2}:\d{2}(?:\.\d+)?-03:00$/);
+    if (spIsoMatch) {
+      return parseInt(spIsoMatch[1], 10);
+    }
     const d = new Date(str);
     if (isNaN(d.getTime())) return -1;
     const parsed = parseInt(saoPauloHourFormatter.format(d), 10);

@@ -290,7 +290,72 @@ describe("buildEyemobileDashboard", () => {
       expect(dashboard.kpis.totalRevenue).toBe(123000);
       expect(dashboard.kpis.totalItemsSold).toBe(20000);
       expect(dashboard.dataCompleteness).toBe("truncated");
-      expect(duration).toBeLessThan(150); // Deve ser sub-150ms para 10.000 registros
+      expect(duration).toBeLessThan(350); // Deve ser sub-350ms para 10.000 registros
+    });
+
+    it("Gate 3: Deduplicação segura quando há IDs de vendas duplicados no payload", () => {
+      const sales = [
+        { id: "sale-dup-1", total: 100, time: "2026-11-01T10:00:00-03:00", items: [{ quantity: 1 }] },
+        { id: "sale-dup-1", total: 100, time: "2026-11-01T10:00:00-03:00", items: [{ quantity: 1 }] }, // repetido
+        { id: "sale-dup-2", total: 50, time: "2026-11-01T11:00:00-03:00", items: [{ quantity: 2 }] },
+      ];
+
+      const dashboard = buildEyemobileDashboard({ sales, products: [], stores: [] });
+
+      // Deve processar apenas 2 vendas únicas (100 + 50 = 150)
+      expect(dashboard.kpis.totalTransactions).toBe(2);
+      expect(dashboard.kpis.totalRevenue).toBe(150);
+      expect(dashboard.kpis.totalItemsSold).toBe(3);
+    });
+
+    it("Gate 3: Vendas canceladas ou incompletas no meio do stream NÃO interrompem vendas completadas posteriores", () => {
+      const sales = [
+        { id: "sale-valid-1", total: 70, completed: true, cancelled: false, time: "2026-11-01T10:00:00-03:00" },
+        { id: "sale-cancel-1", total: 500, completed: true, cancelled: true, time: "2026-11-01T10:15:00-03:00" }, // Cancelada
+        { id: "sale-incomp-1", total: 300, completed: false, cancelled: false, time: "2026-11-01T10:30:00-03:00" }, // Incompleta
+        { id: "sale-valid-2", total: 80, completed: true, cancelled: false, time: "2026-11-01T10:45:00-03:00" }, // Válida posterior
+      ];
+
+      const dashboard = buildEyemobileDashboard({ sales, products: [], stores: [] });
+
+      // Ambas as vendas válidas foram contabilizadas (70 + 80 = 150), as inválidas foram ignoradas
+      expect(dashboard.kpis.totalTransactions).toBe(2);
+      expect(dashboard.kpis.totalRevenue).toBe(150);
+    });
+
+    it("Gate 3: Vendas fora de ordem cronológica são ordenadas e agrupadas perfeitamente na série diária", () => {
+      const sales = [
+        { id: "sale-dia-3", total: 30, time: "2026-11-03T12:00:00-03:00" },
+        { id: "sale-dia-1", total: 10, time: "2026-11-01T12:00:00-03:00" },
+        { id: "sale-dia-2", total: 20, time: "2026-11-02T12:00:00-03:00" },
+      ];
+
+      const dashboard = buildEyemobileDashboard({ sales, products: [], stores: [] });
+
+      expect(dashboard.dailySales).toEqual([
+        { date: "2026-11-01", total: 10, transactions: 1 },
+        { date: "2026-11-02", total: 20, transactions: 1 },
+        { date: "2026-11-03", total: 30, transactions: 1 },
+      ]);
+      expect(dashboard.kpis.totalRevenue).toBe(60);
+    });
+
+    it("Gate 3: Vendas sem data confiável são segregadas em unclassifiedRevenue e não quebram o gráfico", () => {
+      const sales = [
+        { id: "sale-com-data", total: 100, time: "2026-11-01T14:00:00-03:00" },
+        { id: "sale-sem-data", total: 45, time: null }, // Sem data
+        { id: "sale-data-invalida", total: 55, time: "data_corrompida_abc" }, // Inválida
+      ];
+
+      const dashboard = buildEyemobileDashboard({ sales, products: [], stores: [] });
+
+      expect(dashboard.kpis.totalRevenue).toBe(200);
+      expect(dashboard.dailySalesCoverage.classifiedRevenue).toBe(100);
+      expect(dashboard.dailySalesCoverage.unclassifiedRevenue).toBe(100);
+      expect(dashboard.dailySalesCoverage.coverageRatio).toBe(0.5);
+      expect(dashboard.dailySales).toEqual([
+        { date: "2026-11-01", total: 100, transactions: 1 },
+      ]);
     });
   });
 

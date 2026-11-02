@@ -15,9 +15,8 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   CeoFinancialMetricsService,
   TopProdutoFaturamento,
-  getSaoPauloDateString,
-  getSaoPauloParts,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 
 interface CeoCommercialAnalysisTabProps {
@@ -58,27 +57,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
     setErrorMessage(null);
 
     try {
-      const hoje = new Date();
-      let diasAtras = 30;
-      let inicioStr = '';
-
-      if (periodo === 'este_mes') {
-        const parts = getSaoPauloParts(hoje);
-        diasAtras = parts.day;
-        inicioStr = `${parts.year}-${String(parts.month).padStart(2, '0')}-01`;
-      } else if (periodo === 'ultimos_7_dias') {
-        diasAtras = 7;
-        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
-      } else {
-        diasAtras = 30;
-        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
-      }
-
-      const fimStr = getSaoPauloDateString(hoje);
-
-      // Período anterior equivalente real (sem multiplicadores arbitrários)
-      const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
-      const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
+      const range = getCeoPeriodRange(periodo, new Date());
+      const inicioStr = range.inicioStr;
+      const fimStr = range.fimStr;
+      const inicioAntStr = range.inicioAntStr;
+      const fimAntStr = range.fimAntStr;
 
       // 1. Consulta Eyemobile PDV em tempo real para o período selecionado
       const eyemobileData = await fetchLiveDashboard(
@@ -210,10 +193,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
       // 3. Vendas por dia (BarChart real)
       const dailyBars: DailySaleBar[] = [];
-      const numDias = Math.min(diasAtras, 30);
+      const numDias = Math.min(range.diasNoPeriodo, 30);
+      const hoje = new Date();
       for (let i = numDias - 1; i >= 0; i--) {
         const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
-        const iso = getSaoPauloDateString(d);
+        const iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
         const parts = iso.split('-');
         const dayLabel = `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}`;
         dailyBars.push({
