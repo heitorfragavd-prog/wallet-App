@@ -38,6 +38,27 @@ ALTER TABLE public.delivery_channel_secrets ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.delivery_channel_secrets FROM PUBLIC, anon, authenticated;
 GRANT ALL ON public.delivery_channel_secrets TO service_role;
 
+-- 2.1 EXPANSÃO DO CHECK CONSTRAINT DE CONNECTION_STATE EM DELIVERY_CHANNELS
+ALTER TABLE public.delivery_channels DROP CONSTRAINT IF EXISTS delivery_channels_connection_state_check;
+ALTER TABLE public.delivery_channels ADD CONSTRAINT delivery_channels_connection_state_check
+  CHECK (connection_state IN (
+    'not_configured',
+    'credentials_saved',
+    'credentials_present_unverified',
+    'authenticating',
+    'authenticated',
+    'auth_approved',
+    'merchant_auth_pending',
+    'merchant_authorized',
+    'homologation_pending',
+    'awaiting_homologation',
+    'homologated',
+    'insufficient_scopes',
+    'operational',
+    'disconnected',
+    'error'
+  ));
+
 -- 3. RPC: OBTER METADATA SANITIZADA DO CANAL (SEM EXPOR SEGREDO)
 -- GATE 1: Restrita exclusivamente a service_role (Edge Functions autorizadas)
 CREATE OR REPLACE FUNCTION public.get_delivery_channel_metadata(
