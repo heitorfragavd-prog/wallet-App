@@ -1,6 +1,10 @@
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
-import { encryptVaultSecret, decryptVaultSecret } from "../_shared/vault-crypto.ts";
+import {
+  encryptVaultSecret,
+  decryptVaultSecret,
+  validateVaultKeyEntropy,
+} from "../_shared/vault-crypto.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -17,12 +21,6 @@ interface VaultRequestBody {
   preserve_client_id?: boolean;
   client_secret?: string;
   auto_accept_orders?: boolean;
-}
-
-function maskSecretPreview(val?: string): string {
-  if (!val) return "";
-  if (val.length <= 8) return "********";
-  return `${val.slice(0, 4)}••••••••${val.slice(-4)}`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -48,13 +46,14 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // GATE A: Chave mestra dedicada MARKETPLACE_VAULT_KEY (Sem fallback para service_role)
+    // GATE A & Ponto 3: Chave mestra dedicada MARKETPLACE_VAULT_KEY com validação matemática de entropia
     const masterSecret = Deno.env.get("MARKETPLACE_VAULT_KEY");
-    if (!masterSecret || masterSecret.trim().length < 32) {
+    const entropyValidation = validateVaultKeyEntropy(masterSecret);
+    if (!entropyValidation.valid) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Chave mestre de cofre não configurada ou com entropia insuficiente (MARKETPLACE_VAULT_KEY). Ação abortada por segurança.",
+          error: `Chave mestre de cofre não configurada ou com entropia insuficiente (MARKETPLACE_VAULT_KEY): ${entropyValidation.reason}. Ação abortada por segurança.`,
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -135,6 +134,25 @@ Deno.serve(async (req: Request) => {
     }
 
     // 3. Execução das Ações de Cofre Seguro
+    if (action === "get_metadata") {
+      const { data: meta, error: metaErr } = await adminClient.rpc("get_delivery_channel_metadata", {
+        p_workspace_id: workspaceId,
+        p_channel_name: channelName,
+      });
+
+      if (metaErr) {
+        return new Response(
+          JSON.stringify({ success: false, error: `Falha ao obter metadados: ${metaErr.message}` }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, metadata: meta?.[0] || null }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (action === "save_credentials") {
       const {
         merchant_id: merchantId,
@@ -150,7 +168,7 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Consulta se já existem credenciais prévias no cofre
+      // Consulta se já existem credenciais prévias no cofre para preservar client_id se mascarado
       const { data: existingSecret } = await adminClient
         .from("delivery_channel_secrets")
         .select("client_id, client_secret_encrypted")
@@ -182,82 +200,20 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // GATE C: Verificação estrita de erro na persistência do cofre
-      const { error: vaultErr } = await adminClient
-        .from("delivery_channel_secrets")
-        .upsert(
-          {
-            workspace_id: workspaceId,
-            channel_name: channelName,
-            merchant_id: merchantId.trim(),
-            client_id: finalClientId,
-            key_id: "v1",
-            client_secret_encrypted: finalEncryptedSecret,
-            environment: "production",
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "workspace_id,channel_name" }
-        );
+      // Ponto 3: Persistência ATÔMICA via RPC transacional no PostgreSQL
+      const { data: saveResult, error: rpcErr } = await adminClient.rpc("save_delivery_channel_vault_atomic", {
+        p_workspace_id: workspaceId,
+        p_channel_name: channelName,
+        p_merchant_id: merchantId.trim(),
+        p_client_id: finalClientId,
+        p_key_id: "v1",
+        p_client_secret_encrypted: finalEncryptedSecret,
+        p_environment: "production",
+      });
 
-      if (vaultErr) {
+      if (rpcErr) {
         return new Response(
-          JSON.stringify({ success: false, error: `Falha ao persistir no cofre: ${vaultErr.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Consulta canal existente para preservar histórico de logs
-      const { data: channelRow } = await adminClient
-        .from("delivery_channels")
-        .select("config")
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName)
-        .maybeSingle();
-
-      const currentConfig = (channelRow?.config && typeof channelRow.config === "object" ? channelRow.config : {}) as Record<string, unknown>;
-      const logs = Array.isArray(currentConfig.event_log) ? currentConfig.event_log : [];
-
-      const newLog = {
-        id: `log-${Date.now()}`,
-        event_type: "connect",
-        status: "info",
-        message: "Credenciais atualizadas no cofre AES-256-GCM. Homologação anterior invalidada até novo teste.",
-        timestamp: new Date().toISOString(),
-      };
-
-      const updatedConfig = {
-        ...currentConfig,
-        merchant_id: merchantId.trim(),
-        client_id_preview: maskSecretPreview(finalClientId),
-        has_client_secret: true,
-        event_log: [newLog, ...logs].slice(0, 20),
-        updated_at: new Date().toISOString(),
-      };
-      delete (updatedConfig as Record<string, unknown>).client_id;
-      delete (updatedConfig as Record<string, unknown>).client_secret;
-
-      // GATE B: Alterar credenciais ou vínculo de loja INVALIDA homologação anterior
-      // auto_accept_orders é desativado obrigatoriamente
-      const nextState = "credentials_saved";
-
-      const { error: channelErr } = await adminClient.from("delivery_channels").upsert(
-        {
-          workspace_id: workspaceId,
-          channel_name: channelName,
-          display_name: channelName === "ifood" ? "iFood Marketplace" : "99Food Restaurante",
-          is_active: true,
-          status: "pending_auth",
-          connection_state: nextState,
-          auto_accept_orders: false, // Homologação resetada: auto-aceite bloqueado
-          config: updatedConfig,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "workspace_id,channel_name" }
-      );
-
-      if (channelErr) {
-        return new Response(
-          JSON.stringify({ success: false, error: `Falha ao atualizar canal público: ${channelErr.message}` }),
+          JSON.stringify({ success: false, error: `Falha ao persistir no cofre transacional: ${rpcErr.message}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -265,8 +221,8 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           success: true,
-          message: "Credenciais armazenadas no cofre seguro. Execute o teste de conexão para homologar o canal.",
-          state: nextState,
+          message: saveResult?.message || "Credenciais armazenadas no cofre seguro. Execute o teste de conexão para homologar o canal.",
+          state: saveResult?.state || "credentials_saved",
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -293,6 +249,12 @@ Deno.serve(async (req: Request) => {
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+
+      // Ponto 2: Identificar se o teste utiliza credenciais temporárias não salvas no cofre
+      const hasAdHocMerchant = body.merchant_id && body.merchant_id.trim() !== secretRow?.merchant_id;
+      const hasAdHocClient = body.client_id && !body.client_id.includes("••••") && body.client_id.trim() !== secretRow?.client_id;
+      const hasAdHocSecret = Boolean(body.client_secret && body.client_secret.trim().length > 0);
+      const isDryRun = hasAdHocMerchant || hasAdHocClient || hasAdHocSecret || !secretRow;
 
       const finalMerchantId = body.merchant_id?.trim() || secretRow?.merchant_id;
       const finalClientId = body.client_id?.trim() || secretRow?.client_id;
@@ -334,6 +296,7 @@ Deno.serve(async (req: Request) => {
       let httpStatus = 0;
       let latencyMs = 0;
       let isSuccess = false;
+      let operationalStatus: string | null = null;
       let connectionState:
         | "homologated"
         | "auth_approved"
@@ -372,101 +335,103 @@ Deno.serve(async (req: Request) => {
             const accessToken = tokenData.accessToken;
 
             if (accessToken) {
-              // Criptografa e armazena o access token no cofre
-              const encryptedToken = await encryptVaultSecret(accessToken, masterSecret, "v1");
-              const expiresIn = typeof tokenData.expiresIn === "number" ? tokenData.expiresIn : 3600;
-              const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+              // Criptografa e armazena o access token no cofre apenas se não for dry-run
+              if (!isDryRun) {
+                const encryptedToken = await encryptVaultSecret(accessToken, masterSecret, "v1");
+                const expiresIn = typeof tokenData.expiresIn === "number" ? tokenData.expiresIn : 3600;
+                const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-              const { error: tokenSaveErr } = await adminClient
-                .from("delivery_channel_secrets")
-                .update({
-                  access_token_encrypted: encryptedToken,
-                  token_expires_at: expiresAt,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("workspace_id", workspaceId)
-                .eq("channel_name", channelName);
-
-              if (tokenSaveErr) {
-                return new Response(
-                  JSON.stringify({
-                    success: false,
-                    error: `Falha ao persistir token no cofre: ${tokenSaveErr.message}`,
-                  }),
-                  { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-                );
+                await adminClient
+                  .from("delivery_channel_secrets")
+                  .update({
+                    access_token_encrypted: encryptedToken,
+                    token_expires_at: expiresAt,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("workspace_id", workspaceId)
+                  .eq("channel_name", channelName);
               }
 
-              // GATE B: Validação de Escopos Concedidos
-              const scopesRaw = tokenData.scope || tokenData.scopes || "";
-              const scopesList = typeof scopesRaw === "string" ? scopesRaw.split(" ") : Array.isArray(scopesRaw) ? scopesRaw : [];
-              const hasOrderScope = scopesList.length === 0 || scopesList.some((s: string) => s.includes("order"));
-
-              if (scopesList.length > 0 && !hasOrderScope) {
+              // Ponto 2: Validação Estrita de Escopos Concedidos
+              // Escopos ausentes devem ser tratados como NÃO verificados / insuficientes, NUNCA autorizados por presunção!
+              const scopesRaw = tokenData.scope || tokenData.scopes;
+              if (!scopesRaw) {
                 isSuccess = false;
                 connectionState = "insufficient_scopes";
-                feedbackMsg = "Token autenticado no iFood, porém a aplicação não possui escopos de pedidos (orders:read/orders:status).";
+                feedbackMsg = "Token emitido pelo iFood sem escopos explícitos comprovados (insufficient_scopes). Homologação requer escopos de pedidos.";
               } else {
-                // Etapa 2: Validação Real de Autorização e Status Operacional do Merchant (Gate B)
-                try {
-                  const statusResp = await fetch(
-                    `https://merchant-api.ifood.com.br/merchant/v1.0/merchants/${finalMerchantId}/status`,
-                    {
-                      method: "GET",
-                      headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                        "User-Agent": "Wallet-App/2.1 (Merchant Status Check)",
-                      },
-                      signal: AbortSignal.timeout(6000),
-                    }
-                  );
+                const scopesList = typeof scopesRaw === "string" ? scopesRaw.split(" ") : Array.isArray(scopesRaw) ? scopesRaw : [];
+                const hasOrderScope = scopesList.some((s: string) =>
+                  s.includes("order") || s.includes("merchant:order") || s.includes("orders:read")
+                );
 
-                  if (statusResp.ok) {
-                    const statusData = await statusResp.json().catch(() => null);
-
-                    // Contrato oficial iFood: statusData é um array de operações
-                    if (Array.isArray(statusData) && statusData.length > 0) {
-                      const deliveryOp = statusData.find((op: Record<string, unknown>) => op.operation === "DELIVERY") || statusData[0];
-                      const opState = String(deliveryOp?.state || "").toUpperCase();
-
-                      if (opState === "OK") {
-                        isSuccess = true;
-                        connectionState = "homologated";
-                        feedbackMsg = `Conexão e loja homologadas com sucesso no iFood em ${latencyMs}ms (Operação: ${deliveryOp.operation || 'DELIVERY'}, Estado: OK).`;
-                      } else if (opState === "CLOSED" || opState === "PAUSED") {
-                        // Loja autorizada pelo merchant mas fechada/pausada operacionalmente
-                        isSuccess = false;
-                        connectionState = "merchant_authorized";
-                        feedbackMsg = `Loja vinculada e autorizada no iFood, porém atualmente fechada/pausada (${opState}). Homologação operacional pendente de abertura.`;
-                      } else {
-                        // Outros estados restritivos
-                        isSuccess = false;
-                        connectionState = "merchant_auth_pending";
-                        feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}).`;
+                if (!hasOrderScope) {
+                  isSuccess = false;
+                  connectionState = "insufficient_scopes";
+                  feedbackMsg = "Token autenticado no iFood, porém a aplicação não possui escopos de pedidos (orders:read/orders:status).";
+                } else {
+                  // Etapa 2: Validação Real de Autorização do Merchant e Status Operacional (Ponto 1)
+                  try {
+                    const statusResp = await fetch(
+                      `https://merchant-api.ifood.com.br/merchant/v1.0/merchants/${finalMerchantId}/status`,
+                      {
+                        method: "GET",
+                        headers: {
+                          Authorization: `Bearer ${accessToken}`,
+                          "User-Agent": "Wallet-App/2.1 (Merchant Status Check)",
+                        },
+                        signal: AbortSignal.timeout(6000),
                       }
+                    );
+
+                    if (statusResp.ok) {
+                      const statusData = await statusResp.json().catch(() => null);
+
+                      // Contrato oficial iFood: statusData é um array de operações
+                      if (Array.isArray(statusData) && statusData.length > 0) {
+                        const deliveryOp = statusData.find((op: Record<string, unknown>) => op.operation === "DELIVERY") || statusData[0];
+                        const opState = String(deliveryOp?.state || "").toUpperCase();
+                        operationalStatus = opState;
+
+                        // Ponto 1: Separar homologação oficial do aplicativo iFood, autorização do merchant e status operacional.
+                        // Loja fechada ou pausada NÃO significa homologação perdida!
+                        if (opState === "OK") {
+                          isSuccess = true;
+                          connectionState = "homologated";
+                          feedbackMsg = `Conexão e loja homologadas com sucesso no iFood em ${latencyMs}ms (Operação: ${deliveryOp.operation || 'DELIVERY'}, Estado: OK).`;
+                        } else if (opState === "CLOSED" || opState === "PAUSED") {
+                          isSuccess = true;
+                          connectionState = "homologated";
+                          feedbackMsg = `Conexão e aplicativo homologados no iFood. Loja autorizada, atualmente fechada/pausada operacionalmente (${opState}).`;
+                        } else {
+                          isSuccess = false;
+                          connectionState = "merchant_auth_pending";
+                          feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}).`;
+                        }
+                      } else {
+                        // Resposta 200 porém sem operações válidas
+                        isSuccess = false;
+                        connectionState = "auth_approved";
+                        feedbackMsg = "Autenticação iFood concedida. Operações da loja retornaram vazias ou inconclusivas.";
+                      }
+                    } else if (statusResp.status === 401 || statusResp.status === 403) {
+                      isSuccess = false;
+                      connectionState = "merchant_auth_pending";
+                      feedbackMsg = "Credenciais autenticadas no iFood, porém a loja ainda não autorizou o aplicativo no Portal do Parceiro.";
+                    } else if (statusResp.status === 404) {
+                      isSuccess = false;
+                      connectionState = "merchant_auth_pending";
+                      feedbackMsg = `Loja ${finalMerchantId} não encontrada ou não vinculada a esta aplicação no iFood.`;
                     } else {
-                      // Resposta 200 porém sem operações válidas
                       isSuccess = false;
                       connectionState = "auth_approved";
-                      feedbackMsg = "Autenticação iFood concedida. Operações da loja retornaram vazias ou inconclusivas.";
+                      feedbackMsg = `Autenticação iFood concedida. Verificação da loja retornou status HTTP ${statusResp.status}.`;
                     }
-                  } else if (statusResp.status === 401 || statusResp.status === 403) {
-                    isSuccess = false;
-                    connectionState = "merchant_auth_pending";
-                    feedbackMsg = "Credenciais autenticadas no iFood, porém a loja ainda não autorizou o aplicativo no Portal do Parceiro.";
-                  } else if (statusResp.status === 404) {
-                    isSuccess = false;
-                    connectionState = "merchant_auth_pending";
-                    feedbackMsg = `Loja ${finalMerchantId} não encontrada ou não vinculada a esta aplicação no iFood.`;
-                  } else {
+                  } catch {
                     isSuccess = false;
                     connectionState = "auth_approved";
-                    feedbackMsg = `Autenticação iFood concedida. Verificação da loja retornou status HTTP ${statusResp.status}.`;
+                    feedbackMsg = "Autenticação iFood concedida. Consulta de status da loja indisponível no momento.";
                   }
-                } catch {
-                  isSuccess = false;
-                  connectionState = "auth_approved";
-                  feedbackMsg = "Autenticação iFood concedida. Consulta de status da loja indisponível no momento.";
                 }
               }
             } else {
@@ -514,14 +479,19 @@ Deno.serve(async (req: Request) => {
             const data = await resp.json().catch(() => ({}));
             // Contrato 99Food: errno === 0 indica token emitido com sucesso
             if (data?.errno === 0 && data?.data?.access_token) {
-              // Verifica se a loja está expressamente ativa e certificada no retorno oficial
               const shopInfo = data?.data?.shop_info;
               if (shopInfo && (shopInfo.status === 1 || shopInfo.is_active === true)) {
                 isSuccess = true;
+                operationalStatus = "OPEN";
                 connectionState = "homologated";
                 feedbackMsg = `Conexão homologada com sucesso na 99Food em ${latencyMs}ms (Loja Ativa).`;
+              } else if (shopInfo && (shopInfo.status === 2 || shopInfo.status === 0)) {
+                // Loja cadastrada/vinculada porém fechada operacionalmente
+                isSuccess = true;
+                operationalStatus = shopInfo.status === 2 ? "CLOSED" : "PAUSED";
+                connectionState = "homologated";
+                feedbackMsg = `Conexão e aplicativo homologados na 99Food. Loja atualmente em horário fechado/pausado (${operationalStatus}).`;
               } else {
-                // Situação inconclusiva ou aguardando liberação operacional da equipe 99Food
                 isSuccess = false;
                 connectionState = "homologation_pending";
                 feedbackMsg = "Credenciais autenticadas via 99Food Open Platform. Aguardando homologação e vínculo oficial da loja pela equipe da 99Food.";
@@ -549,67 +519,39 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // GATE C: Atualiza canal no banco com verificação estrita de erros
-      const testedAt = new Date().toISOString();
-      const { data: currentCh, error: currentChErr } = await adminClient
-        .from("delivery_channels")
-        .select("config, auto_accept_orders")
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName)
-        .maybeSingle();
-
-      if (currentChErr) {
+      // Ponto 2: Testes com credenciais temporárias (dry-run) NÃO alteram o estado persistente do canal no banco!
+      if (isDryRun) {
         return new Response(
           JSON.stringify({
-            success: false,
-            error: `Falha ao carregar canal para teste: ${currentChErr.message}`,
+            success: isSuccess,
+            http_status: httpStatus,
+            latency_ms: latencyMs,
+            state: connectionState,
+            operational_status: operationalStatus,
+            is_dry_run: true,
+            message: `[MODO SIMULAÇÃO] ${feedbackMsg} Salve as credenciais no cofre para registrar a homologação definitiva.`,
           }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      const cfg = (currentCh?.config && typeof currentCh.config === "object" ? currentCh.config : {}) as Record<string, unknown>;
-      const existingLogs = Array.isArray(cfg.event_log) ? cfg.event_log : [];
+      // Ponto 3: Atualiza canal de forma atômica no banco via RPC
+      const { error: rpcTestErr } = await adminClient.rpc("record_delivery_channel_test_atomic", {
+        p_workspace_id: workspaceId,
+        p_channel_name: channelName,
+        p_connection_state: connectionState,
+        p_is_success: isSuccess,
+        p_http_status: httpStatus,
+        p_latency_ms: latencyMs,
+        p_feedback_msg: feedbackMsg,
+        p_operational_status: operationalStatus,
+      });
 
-      const testLog = {
-        id: `test-${Date.now()}`,
-        event_type: "test",
-        status: isSuccess ? "success" : connectionState.includes("pending") || connectionState.includes("approved") ? "warning" : "error",
-        message: `Teste HTTP (${latencyMs}ms, status ${httpStatus}): ${feedbackMsg}`,
-        timestamp: testedAt,
-      };
-
-      // auto_accept_orders SÓ pode permanecer ativo se for comprovadamente homologado
-      const autoAcceptAllowed = connectionState === "homologated" ? Boolean(currentCh?.auto_accept_orders) : false;
-
-      const { error: updateChannelErr } = await adminClient
-        .from("delivery_channels")
-        .update({
-          connection_state: connectionState,
-          status: isSuccess ? "active" : "pending_auth",
-          auto_accept_orders: autoAcceptAllowed,
-          config: {
-            ...cfg,
-            last_connection_test: {
-              success: isSuccess,
-              state: connectionState,
-              message: feedbackMsg,
-              tested_at: testedAt,
-              latency_ms: latencyMs,
-              http_status: httpStatus,
-            },
-            event_log: [testLog, ...existingLogs].slice(0, 20),
-          },
-          updated_at: testedAt,
-        })
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName);
-
-      if (updateChannelErr) {
+      if (rpcTestErr) {
         return new Response(
           JSON.stringify({
             success: false,
-            error: `Falha ao atualizar estado do canal no banco: ${updateChannelErr.message}`,
+            error: `Falha ao registrar teste atômico no banco: ${rpcTestErr.message}`,
           }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -621,6 +563,7 @@ Deno.serve(async (req: Request) => {
           http_status: httpStatus,
           latency_ms: latencyMs,
           state: connectionState,
+          operational_status: operationalStatus,
           message: feedbackMsg,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -628,73 +571,15 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "disconnect") {
-      // GATE C: Purga credenciais do cofre com verificação estrita de erro
-      const { error: delErr } = await adminClient
-        .from("delivery_channel_secrets")
-        .delete()
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName);
+      // Ponto 3: Desconexão e purga ATÔMICA via RPC transacional no PostgreSQL
+      const { error: rpcDiscErr } = await adminClient.rpc("disconnect_delivery_marketplace", {
+        p_workspace_id: workspaceId,
+        p_channel_name: channelName,
+      });
 
-      if (delErr) {
+      if (rpcDiscErr) {
         return new Response(
-          JSON.stringify({ success: false, error: `Falha ao purgar credenciais do cofre: ${delErr.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Desativa canal e limpa metadados públicos
-      const { data: currentCh, error: chErr } = await adminClient
-        .from("delivery_channels")
-        .select("config")
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName)
-        .maybeSingle();
-
-      if (chErr) {
-        return new Response(
-          JSON.stringify({ success: false, error: `Falha ao consultar canal para desconexão: ${chErr.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const cfg = (currentCh?.config && typeof currentCh.config === "object" ? currentCh.config : {}) as Record<string, unknown>;
-      const existingLogs = Array.isArray(cfg.event_log) ? cfg.event_log : [];
-
-      const disconnectLog = {
-        id: `disconnect-${Date.now()}`,
-        event_type: "disconnect",
-        status: "info",
-        message: "Canal desconectado e credenciais purgadas do cofre do servidor.",
-        timestamp: new Date().toISOString(),
-      };
-
-      const updatedConfig: Record<string, unknown> = {
-        ...cfg,
-        has_client_secret: false,
-        client_id_preview: null,
-        event_log: [disconnectLog, ...existingLogs].slice(0, 20),
-      };
-      delete updatedConfig.client_id;
-      delete updatedConfig.client_secret;
-      delete updatedConfig.merchant_id;
-      delete updatedConfig.encrypted_secret;
-
-      const { error: upErr } = await adminClient
-        .from("delivery_channels")
-        .update({
-          connection_state: "disconnected",
-          status: "pending_auth",
-          is_active: false,
-          auto_accept_orders: false,
-          config: updatedConfig,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("workspace_id", workspaceId)
-        .eq("channel_name", channelName);
-
-      if (upErr) {
-        return new Response(
-          JSON.stringify({ success: false, error: `Falha ao desativar canal no banco: ${upErr.message}` }),
+          JSON.stringify({ success: false, error: `Falha na desconexão atômica: ${rpcDiscErr.message}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -702,7 +587,7 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           success: true,
-          message: "Canal desconectado com sucesso e credenciais removidas do cofre.",
+          message: "Canal desconectado com sucesso e credenciais purgadas do cofre via transação atômica.",
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

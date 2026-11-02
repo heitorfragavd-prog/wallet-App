@@ -10,6 +10,7 @@
  * 3. Formato Canônico Versionado: "v1:<key_id>:<base64_iv>:<base64_ciphertext_tag>"
  * 4. Suporte a Rotação de Chaves: Identificador de chave (keyId) no cabeçalho permite descriptografia com chaves anteriores e re-cifragem com a chave ativa.
  * 5. Fail-Closed: Qualquer adulteração de bytes ou ausência de chave lança erro genérico sem expor dados confidenciais.
+ * 6. Entropia Comprovada: Verificação matemática de entropia de Shannon e diversidade de caracteres na chave mestre.
  */
 
 function toBase64(bytes: Uint8Array): string {
@@ -37,14 +38,67 @@ function fromBase64(b64: string): Uint8Array {
 }
 
 /**
+ * Calcula a entropia de Shannon (em bits por caractere) de uma string.
+ */
+export function calculateShannonEntropy(str: string): number {
+  if (!str || str.length === 0) return 0;
+  const len = str.length;
+  const frequencies = new Map<string, number>();
+  for (const char of str) {
+    frequencies.set(char, (frequencies.get(char) || 0) + 1);
+  }
+  let entropy = 0;
+  for (const count of frequencies.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/**
+ * Valida se uma chave mestre atende a requisitos criptográficos rígidos:
+ * - Mínimo 32 caracteres (equivalente a 256 bits);
+ * - Mínimo 12 caracteres distintos;
+ * - Entropia de Shannon >= 3.2 bits/char (elimina padrões triviais e repetições).
+ */
+export function validateVaultKeyEntropy(key?: string | null): { valid: boolean; reason?: string } {
+  if (!key || typeof key !== "string") {
+    return { valid: false, reason: "MARKETPLACE_VAULT_KEY ausente ou inválida" };
+  }
+  const trimmed = key.trim();
+  if (trimmed.length < 32) {
+    return {
+      valid: false,
+      reason: `MARKETPLACE_VAULT_KEY possui apenas ${trimmed.length} caracteres (mínimo exigido: 32 caracteres / 256 bits)`,
+    };
+  }
+  const uniqueChars = new Set(trimmed).size;
+  if (uniqueChars < 12) {
+    return {
+      valid: false,
+      reason: `MARKETPLACE_VAULT_KEY possui baixa diversidade de caracteres (${uniqueChars} únicos, mínimo exigido: 12)`,
+    };
+  }
+  const entropy = calculateShannonEntropy(trimmed);
+  if (entropy < 3.2) {
+    return {
+      valid: false,
+      reason: `MARKETPLACE_VAULT_KEY possui entropia de Shannon insuficiente (${entropy.toFixed(2)} bits/char, mínimo exigido: 3.2)`,
+    };
+  }
+  return { valid: true };
+}
+
+/**
  * Deriva uma CryptoKey AES-256-GCM a partir de um segredo mestre usando HKDF-SHA256.
  */
 export async function deriveVaultKey(
   masterSecret: string,
   keyId = "v1"
 ): Promise<CryptoKey> {
-  if (!masterSecret || masterSecret.trim().length === 0) {
-    throw new Error("Master secret cannot be empty for vault key derivation");
+  const validation = validateVaultKeyEntropy(masterSecret);
+  if (!validation.valid) {
+    throw new Error(`Master secret validation failed: ${validation.reason}`);
   }
 
   const enc = new TextEncoder();

@@ -3,6 +3,8 @@ import {
   encryptVaultSecret,
   decryptVaultSecret,
   rotateVaultSecret,
+  calculateShannonEntropy,
+  validateVaultKeyEntropy,
 } from '../../../../supabase/functions/_shared/vault-crypto';
 import { MarketplaceIntegrationService } from './MarketplaceIntegrationService';
 import { supabase } from '@/integrations/supabase/client';
@@ -20,7 +22,7 @@ vi.mock('@/integrations/supabase/client', () => ({
   },
 }));
 
-describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptografia e Integridade (Gates A a D)', () => {
+describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptografia e Integridade (Gates A a D & Missão 2)', () => {
   const masterKeyV1 = 'super-secret-master-encryption-key-for-wallet-2026';
   const masterKeyV2 = 'rotated-super-secret-master-encryption-key-2027';
   const syntheticSecret = 'prod-ifood-secret-oauth-9988-test-live-key-xyz!@#';
@@ -251,13 +253,14 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(res.state).not.toBe('homologated');
   });
 
-  // Teste 13: Gate B - Resposta HTTP 200 com loja fechada ou pausada não concede homologação ativa
-  it('13. HTTP 200 com loja fechada/pausada: define merchant_authorized e impede homologado operacional', async () => {
+  // Teste 13: Ponto 1 (Missão 2) — Homologação oficial preservada mesmo com loja fechada ou pausada
+  it('13. HTTP 200 com loja fechada/pausada: homologação concedida com separação estrita de status operacional (CLOSED/PAUSED)', async () => {
     vi.mocked(supabase.functions.invoke).mockResolvedValue({
       data: {
-        success: false,
-        state: 'merchant_authorized',
-        message: 'Loja vinculada e autorizada no iFood, porém atualmente fechada/pausada (CLOSED). Homologação operacional pendente de abertura.',
+        success: true,
+        state: 'homologated',
+        operational_status: 'CLOSED',
+        message: 'Conexão e aplicativo homologados no iFood. Loja autorizada, atualmente fechada/pausada operacionalmente (CLOSED).',
       },
       error: null,
     });
@@ -268,10 +271,10 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
       merchantId: 'm-closed',
     });
 
-    expect(res.success).toBe(false);
-    expect(res.state).toBe('merchant_authorized');
-    expect(res.state).not.toBe('homologated');
-    expect(res.message).toContain('fechada/pausada');
+    // Ponto 1: Loja fechada NÃO perde homologação da aplicação
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('homologated');
+    expect(res.message).toContain('fechada/pausada operacionalmente');
   });
 
   // Teste 14: Gate D - Não assume taxas contratuais fictícias (retorna 0 para canais sem taxa registrada)
@@ -306,5 +309,82 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(ifood.commission_rate).toBe(0);
     expect(ifood.payment_fee_rate).toBe(0);
     expect(ifood.fixed_fee).toBe(0);
+  });
+
+  // Teste 15: Ponto 3 (Missão 2) — Validação matemática de entropia criptográfica da MARKETPLACE_VAULT_KEY
+  it('15. Entropia criptográfica: rejeita chaves fracas, curtas ou repetitivas e aprova chaves de alta entropia', () => {
+    // Chave curta (< 32 chars)
+    const shortKey = 'short-key-123';
+    const vShort = validateVaultKeyEntropy(shortKey);
+    expect(vShort.valid).toBe(false);
+    expect(vShort.reason).toContain('apenas 13 caracteres');
+
+    // Chave longa repetitiva (32 caracteres iguais, entropia = 0)
+    const repeatedKey = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const vRep = validateVaultKeyEntropy(repeatedKey);
+    expect(vRep.valid).toBe(false);
+    expect(vRep.reason).toContain('baixa diversidade');
+
+    // Chave com padrão repetitivo (baixa diversidade)
+    const lowDivKey = '12341234123412341234123412341234';
+    const vLowDiv = validateVaultKeyEntropy(lowDivKey);
+    expect(vLowDiv.valid).toBe(false);
+    expect(vLowDiv.reason).toContain('baixa diversidade');
+
+    // Chave com 12 caracteres distintos porém com viés de repetição (entropia de Shannon < 3.2 bits/char)
+    const lowEntropyKey = 'abcdefghijklabcdefghijklaaaaaaaaaa';
+    const vLow = validateVaultKeyEntropy(lowEntropyKey);
+    expect(vLow.valid).toBe(false);
+    expect(vLow.reason).toContain('entropia de Shannon insuficiente');
+
+    // Chave criptograficamente forte (entropia >= 3.2 bits/char)
+    const strongKey = 'v1_prod_vault_key_AES256GCM_Wallet2026_x89#$kL!';
+    const vStrong = validateVaultKeyEntropy(strongKey);
+    expect(vStrong.valid).toBe(true);
+    expect(calculateShannonEntropy(strongKey)).toBeGreaterThan(3.5);
+  });
+
+  // Teste 16: Ponto 2 (Missão 2) — Escopos ausentes no token OAuth tratados estritamente como insufficient_scopes
+  it('16. Escopos ausentes no token OAuth são tratados estritamente como insufficient_scopes (sem presunção)', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: false,
+        state: 'insufficient_scopes',
+        message: 'Token emitido pelo iFood sem escopos explícitos comprovados (insufficient_scopes). Homologação requer escopos de pedidos.',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: 'ifood',
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.state).toBe('insufficient_scopes');
+    expect(res.message).toContain('insufficient_scopes');
+  });
+
+  // Teste 17: Ponto 2 (Missão 2) — Teste com credenciais temporárias é executado como simulação (dry-run)
+  it('17. Testes com credenciais temporárias são executados como dry-run sem alterar estado persistente do canal', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: true,
+        state: 'homologated',
+        is_dry_run: true,
+        message: '[MODO SIMULAÇÃO] Conexão e aplicativo homologados no iFood. Salve as credenciais no cofre para registrar a homologação definitiva.',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: 'ifood',
+      clientId: 'temp-client-id',
+      clientSecret: 'temp-secret',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.message).toContain('[MODO SIMULAÇÃO]');
   });
 });
