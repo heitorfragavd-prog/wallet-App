@@ -103,8 +103,8 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .range(from, to)
       );
 
-      // 3. Despesas do período com paginação integral
-      const desp = await CeoFinancialMetricsService.fetchAllPaginated<{
+      // 3. Despesas do período com paginação integral (contas a pagar + transações tipo despesa)
+      const despContas = await CeoFinancialMetricsService.fetchAllPaginated<{
         valor: number;
         data: string;
         categoria_id?: string | null;
@@ -116,22 +116,58 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .select('valor, data, categoria_id, descricao')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioStr)
+            .lte('data', fimStr)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
+
+      const despTransacoes = await CeoFinancialMetricsService.fetchAllPaginated<{
+        valor: number;
+        data: string;
+        categoria_id?: string | null;
+        descricao?: string | null;
+      }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor, data, categoria_id, descricao')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioStr)
             .lte('data', `${fimStr}T23:59:59.999Z`)
             .order('data', { ascending: true })
             .range(from, to)
       );
 
+      const desp = [...despContas, ...despTransacoes];
+
       // 4. Despesas do período anterior
-      const despAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+      const despContasAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
         (from, to) =>
           supabase
             .from('despesas')
             .select('valor')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioAntStr)
+            .lte('data', fimAntStr)
+            .range(from, to)
+      );
+
+      const despTransacoesAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioAntStr)
             .lte('data', `${fimAntStr}T23:59:59.999Z`)
             .range(from, to)
       );
+
+      const totalDespAnt =
+        despContasAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0) +
+        despTransacoesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
       let totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
       let isEyeOrigin = false;
@@ -146,7 +182,6 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
 
       const totalRecAnt = recAnt.reduce((acc, r) => acc + Number(r.valor || 0), 0);
       const totalDesp = desp.reduce((acc, d) => acc + Number(d.valor || 0), 0);
-      const totalDespAnt = despAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
       setReceitaBruta(totalRec);
       setDespesasOperacionais(totalDesp);
@@ -343,7 +378,11 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Despesas Operacionais</div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-              R$ {despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              {despesasOperacionais > 0 ? (
+                `R$ ${despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+              ) : (
+                <span className="text-sm font-normal text-slate-400">Não apurado</span>
+              )}
             </div>
             <div className="mt-2 text-xs">
               {variacaoDespesas !== null ? (
@@ -352,7 +391,9 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                   {variacaoDespesas > 0 ? `+${variacaoDespesas}%` : `${variacaoDespesas}%`}
                 </span>
               ) : (
-                <span className="text-slate-500">Despesas lançadas</span>
+                <span className="text-slate-500">
+                  {despesasOperacionais > 0 ? 'Despesas consolidadas' : 'Aguardando lançamento de despesas'}
+                </span>
               )}
             </div>
           </CardContent>

@@ -271,7 +271,7 @@ export class CeoFinancialMetricsService {
           ? Math.round(((faturamentoOntem - mediaDiaSemana) / mediaDiaSemana) * 1000) / 10
           : null;
 
-      // 4. Despesas Mês Atual reais (paginação completa)
+      // 4. Despesas Mês Atual reais (paginação completa: despesas + transacoes tipo despesa)
       const despMes = await this.fetchAllPaginated<{ valor: number }>(
         (from, to) =>
           supabase
@@ -283,7 +283,21 @@ export class CeoFinancialMetricsService {
             .range(from, to)
       );
 
-      const totalDespesasMes = despMes.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const txDespMes = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioMesAtual)
+            .lte('data', `${fimMesAtual}T23:59:59.999Z`)
+            .range(from, to)
+      );
+
+      const totalDespesasMes =
+        despMes.reduce((acc, d) => acc + Number(d.valor || 0), 0) +
+        txDespMes.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
       // Despesas Mês Anterior equivalentes
       const despMesAnt = await this.fetchAllPaginated<{ valor: number }>(
@@ -297,7 +311,21 @@ export class CeoFinancialMetricsService {
             .range(from, to)
       );
 
-      const totalDespesasMesAnt = despMesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const txDespMesAnt = await this.fetchAllPaginated<{ valor: number }>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('valor')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioMesAnt)
+            .lte('data', `${fimMesAntEquivalente}T23:59:59.999Z`)
+            .range(from, to)
+      );
+
+      const totalDespesasMesAnt =
+        despMesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0) +
+        txDespMesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
       const variacaoDespesas =
         totalDespesasMesAnt > 0
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10
