@@ -38,7 +38,7 @@ export type DiaSemanaAnteriorAjuste = {
   label: string;
   recebeuAntecipacao: boolean;
   uberAntecipadoCentavos?: number;
-  uberRealCentavos: number;
+  uberRealCentavos?: number | null;
   metaCentavos?: number;
 };
 
@@ -56,6 +56,7 @@ export type DiferencaDiariaUber = {
   uberAntecipadoCentavos: number;
   uberRealCentavos: number;
   diferencaCentavos: number;
+  informado: boolean;
 };
 
 export type AcertoSemanalTransporteCalculado = {
@@ -287,26 +288,56 @@ export function calcularAcertoSemanalTransporte(
   let totalMetasCentavos = 0;
 
   const diferencasDiarias: DiferencaDiariaUber[] = input.semanaAnterior.map((dia) => {
-    const uberReal = Math.round(Number(dia.uberRealCentavos) || 0);
+    const temGastoInformado = dia.uberRealCentavos !== null && dia.uberRealCentavos !== undefined;
+    const uberReal = temGastoInformado ? Math.round(Number(dia.uberRealCentavos)) : 0;
     const meta = Math.round(Number(dia.metaCentavos) || 0);
     totalMetasCentavos += meta;
 
     if (dia.recebeuAntecipacao) {
       diasComAntecipacaoAnterior += 1;
       const uberAntecipado = Math.round(dia.uberAntecipadoCentavos ?? uberFixoPadrao);
-      const diferenca = uberReal - uberAntecipado;
-
       uberAntecipadoTotalAnteriorCentavos += uberAntecipado;
-      uberRealTotalAnteriorCentavos += uberReal;
-      saldoAjusteUberCentavos += diferenca;
+
+      if (temGastoInformado) {
+        const diferenca = uberReal - uberAntecipado;
+        uberRealTotalAnteriorCentavos += uberReal;
+        saldoAjusteUberCentavos += diferenca;
+
+        return {
+          data: dia.data,
+          label: dia.label,
+          recebeuAntecipacao: true,
+          uberAntecipadoCentavos: uberAntecipado,
+          uberRealCentavos: uberReal,
+          diferencaCentavos: diferenca,
+          informado: true,
+        };
+      }
 
       return {
         data: dia.data,
         label: dia.label,
         recebeuAntecipacao: true,
         uberAntecipadoCentavos: uberAntecipado,
+        uberRealCentavos: 0,
+        diferencaCentavos: 0,
+        informado: false,
+      };
+    }
+
+    // Se não recebeu antecipação mas gastou Uber a trabalho comprovado, reembolsa integralmente o gasto elegível
+    if (temGastoInformado && uberReal > 0) {
+      uberRealTotalAnteriorCentavos += uberReal;
+      saldoAjusteUberCentavos += uberReal;
+
+      return {
+        data: dia.data,
+        label: dia.label,
+        recebeuAntecipacao: false,
+        uberAntecipadoCentavos: 0,
         uberRealCentavos: uberReal,
-        diferencaCentavos: diferenca,
+        diferencaCentavos: uberReal,
+        informado: true,
       };
     }
 
@@ -315,8 +346,9 @@ export function calcularAcertoSemanalTransporte(
       label: dia.label,
       recebeuAntecipacao: false,
       uberAntecipadoCentavos: 0,
-      uberRealCentavos: uberReal,
+      uberRealCentavos: temGastoInformado ? uberReal : 0,
       diferencaCentavos: 0,
+      informado: temGastoInformado,
     };
   });
 

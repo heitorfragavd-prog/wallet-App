@@ -434,5 +434,86 @@ describe('equipeCalculations', () => {
       expect(res.totalMetasCentavos).toBe(3500); // R$ 35,00
       expect(res.totalTransferenciaCentavos).toBe(10950 + 3500); // R$ 144,50
     });
+
+    it('Cenário 7: Reembolso de gasto elegível realizado do próprio bolso (sem antecipação prévia)', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: false, uberRealCentavos: 1500 }, // não recebeu, gastou R$ 15,00 -> reembolso +15,00
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.totalAntecipacaoCentavos).toBe(10950); // 6 dias x 18,25
+      expect(res.saldoAjusteUberCentavos).toBe(1500); // +15,00 de reembolso
+      expect(res.totalTransferenciaCentavos).toBe(10950 + 1500); // R$ 124,50
+      expect(res.diferencasDiarias[0]).toMatchObject({
+        recebeuAntecipacao: false,
+        uberAntecipadoCentavos: 0,
+        uberRealCentavos: 1500,
+        diferencaCentavos: 1500,
+        informado: true,
+      });
+    });
+
+    it('Cenário 8: Dia sem gasto de Uber (recebeu R$ 12,00 antecipado mas gastou R$ 0,00 -> desconta R$ 12,00)', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: 0 }, // recebeu 12, gastou 0 -> desconta -12,00
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-30', label: 'Sexta', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-10-31', label: 'Sábado', recebeuAntecipacao: true, uberRealCentavos: 1200 },
+        { data: '2026-11-01', label: 'Domingo', recebeuAntecipacao: false, uberRealCentavos: 0 },
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.totalAntecipacaoCentavos).toBe(10950);
+      expect(res.saldoAjusteUberCentavos).toBe(-1200); // -R$ 12,00
+      expect(res.totalTransferenciaCentavos).toBe(10950 - 1200); // R$ 97,50
+      expect(res.diferencasDiarias[0]).toMatchObject({
+        recebeuAntecipacao: true,
+        uberAntecipadoCentavos: 1200,
+        uberRealCentavos: 0,
+        diferencaCentavos: -1200,
+        informado: true,
+      });
+    });
+
+    it('Cenário 9: Diferencia explicitamente gasto não informado (null/undefined) de R$ 0,00', () => {
+      const semanaAnterior = [
+        { data: '2026-10-26', label: 'Segunda', recebeuAntecipacao: true, uberRealCentavos: null }, // ainda não informado
+        { data: '2026-10-27', label: 'Terça', recebeuAntecipacao: true, uberRealCentavos: undefined }, // ainda não informado
+        { data: '2026-10-28', label: 'Quarta', recebeuAntecipacao: true, uberRealCentavos: 0 }, // explicitamente 0 -> desconta
+        { data: '2026-10-29', label: 'Quinta', recebeuAntecipacao: false, uberRealCentavos: null }, // não recebeu e não informado -> sem diferença
+      ];
+
+      const res = calcularAcertoSemanalTransporte({
+        semanaAtual: semanaAtualPadrao,
+        semanaAnterior,
+      });
+
+      expect(res.diferencasDiarias[0].informado).toBe(false);
+      expect(res.diferencasDiarias[0].diferencaCentavos).toBe(0);
+      expect(res.diferencasDiarias[1].informado).toBe(false);
+      expect(res.diferencasDiarias[1].diferencaCentavos).toBe(0);
+
+      expect(res.diferencasDiarias[2].informado).toBe(true);
+      expect(res.diferencasDiarias[2].diferencaCentavos).toBe(-1200);
+
+      expect(res.diferencasDiarias[3].informado).toBe(false);
+      expect(res.diferencasDiarias[3].diferencaCentavos).toBe(0);
+    });
   });
 });

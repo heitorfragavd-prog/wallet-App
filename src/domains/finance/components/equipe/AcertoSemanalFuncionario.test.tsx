@@ -4,12 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcertoSemanalFuncionario } from "./AcertoSemanalFuncionario";
 
 let mockAcertosData: Record<string, unknown>[] = [];
+let mockAjustesData: Record<string, unknown>[] = [];
 let mockIsPending = false;
 const mockGerar = vi.fn();
 
 vi.mock("@/domains/finance/hooks/useEquipeAcertos", () => ({
   useEquipeAcertos: () => ({
     data: mockAcertosData,
+    acertos: mockAcertosData,
+    ajustes: mockAjustesData,
     isLoading: false,
     gerarAcerto: {
       mutateAsync: mockGerar,
@@ -22,6 +25,7 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
   beforeEach(() => {
     vi.clearAllMocks();
     mockAcertosData = [];
+    mockAjustesData = [];
     mockIsPending = false;
     mockGerar.mockResolvedValue("acerto-uuid-123");
   });
@@ -92,15 +96,17 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     fireEvent.click(screen.getByRole("button", { name: /gerar acerto pendente/i }));
 
     await waitFor(() => expect(mockGerar).toHaveBeenCalledTimes(1));
-    expect(mockGerar).toHaveBeenCalledWith({
-      colaboradorId: "colab-1",
-      periodoInicio: "2026-11-02",
-      periodoFim: "2026-11-08",
-      itens: [
-        expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
-        expect.objectContaining({ natureza: "ajuste", valor: -0.02 }),
-      ],
-    });
+    expect(mockGerar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        colaboradorId: "colab-1",
+        periodoInicio: "2026-11-02",
+        periodoFim: "2026-11-08",
+        itens: [
+          expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
+          expect.objectContaining({ natureza: "ajuste", valor: -0.02 }),
+        ],
+      })
+    );
   });
 
   it("4. Cenário 3: Uber anterior de R$ 15,00 em um dia e R$ 12,00 nos demais -> R$ 112,50", async () => {
@@ -125,15 +131,17 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     fireEvent.click(screen.getByRole("button", { name: /gerar acerto pendente/i }));
 
     await waitFor(() => expect(mockGerar).toHaveBeenCalledTimes(1));
-    expect(mockGerar).toHaveBeenCalledWith({
-      colaboradorId: "colab-1",
-      periodoInicio: "2026-11-02",
-      periodoFim: "2026-11-08",
-      itens: [
-        expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
-        expect.objectContaining({ natureza: "ajuste", valor: 3 }),
-      ],
-    });
+    expect(mockGerar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        colaboradorId: "colab-1",
+        periodoInicio: "2026-11-02",
+        periodoFim: "2026-11-08",
+        itens: [
+          expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
+          expect.objectContaining({ natureza: "ajuste", valor: 3 }),
+        ],
+      })
+    );
   });
 
   it("5. Cenário 4: Vários ajustes positivos e negativos na mesma semana", async () => {
@@ -162,15 +170,17 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     fireEvent.click(screen.getByRole("button", { name: /gerar acerto pendente/i }));
 
     await waitFor(() => expect(mockGerar).toHaveBeenCalledTimes(1));
-    expect(mockGerar).toHaveBeenCalledWith({
-      colaboradorId: "colab-1",
-      periodoInicio: "2026-11-02",
-      periodoFim: "2026-11-08",
-      itens: [
-        expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
-        expect.objectContaining({ natureza: "ajuste", valor: 2.48 }),
-      ],
-    });
+    expect(mockGerar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        colaboradorId: "colab-1",
+        periodoInicio: "2026-11-02",
+        periodoFim: "2026-11-08",
+        itens: [
+          expect.objectContaining({ natureza: "transporte", valor: 109.5 }),
+          expect.objectContaining({ natureza: "ajuste", valor: 2.48 }),
+        ],
+      })
+    );
   });
 
   it("6. Cenário 5: Ausência de trabalho e antecipações em dias específicos", async () => {
@@ -191,6 +201,7 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
 
     // Desmarca Terça na semana anterior (não recebeu antecipação -> não cria diferença artificial)
     fireEvent.click(screen.getByLabelText("Recebeu antecipação na Terça"));
+    fireEvent.change(screen.getByLabelText("Uber real de Terça"), { target: { value: "" } });
 
     // Permanece R$ 91,25
     expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 91,25");
@@ -210,9 +221,9 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
-    const button = screen.getByRole("button", { name: /gerar acerto pendente/i });
+    const button = screen.getByRole("button");
     expect(button).toBeDisabled();
-    expect(screen.getByText(/Gerando pagamento.../i)).toBeInTheDocument();
+    expect(screen.getByText(/Salvando acerto.../i)).toBeInTheDocument();
   });
 
   it("8. Cenário 8: Acerto já pago é bloqueado para edição (imutabilidade)", () => {
@@ -238,7 +249,7 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     );
 
     expect(screen.getByText(/Acerto já pago em definitivo/i)).toBeInTheDocument();
-    const button = screen.getByRole("button", { name: /gerar acerto pendente/i });
+    const button = screen.getByRole("button", { name: /acerto já pago/i });
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent(/Acerto Pago \(Bloqueado\)/i);
   });
@@ -262,5 +273,147 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "PGRST202: Função não encontrada no catálogo"
     );
+  });
+
+  it("10. Restaura estado exato dos inputs a partir de acertoAtual.detalhes (reload de tela)", () => {
+    mockAcertosData = [
+      {
+        id: "acerto-pendente-1",
+        tipo: "semanal_funcionario",
+        periodo_inicio: "2026-11-02",
+        periodo_fim: "2026-11-08",
+        status: "pendente",
+        valor_total: 112.5,
+        detalhes: {
+          semana_atual: [
+            { date: "2026-11-02", dayName: "Segunda", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-03", dayName: "Terça", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-04", dayName: "Quarta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-05", dayName: "Quinta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-06", dayName: "Sexta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-07", dayName: "Sábado", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-08", dayName: "Domingo", previsaoTrabalho: false, uberFixo: 12, passagem: 6.25 },
+          ],
+          semana_anterior: [
+            { date: "2026-10-26", dayName: "Segunda", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 15, meta: null },
+            { date: "2026-10-27", dayName: "Terça", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 12, meta: null },
+            { date: "2026-10-28", dayName: "Quarta", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 12, meta: null },
+            { date: "2026-10-29", dayName: "Quinta", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 12, meta: null },
+            { date: "2026-10-30", dayName: "Sexta", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 12, meta: null },
+            { date: "2026-10-31", dayName: "Sábado", recebeuAntecipacao: true, uberAntecipado: 12, uberReal: 12, meta: null },
+            { date: "2026-11-01", dayName: "Domingo", recebeuAntecipacao: false, uberAntecipado: 0, uberReal: null, meta: null },
+          ],
+        },
+      },
+    ];
+
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colab-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-11-02"
+        previousWeekStart="2026-10-26"
+      />
+    );
+
+    const inputSegundaUber = screen.getByLabelText("Uber real de Segunda") as HTMLInputElement;
+    expect(inputSegundaUber.value).toBe("15");
+    expect(screen.getByRole("button", { name: /atualizar acerto pendente/i })).toHaveTextContent("R$ 112,50");
+  });
+
+  it("11. Carrega histórico comprovado da semana anterior através de acertoAnterior.detalhes", () => {
+    mockAcertosData = [
+      {
+        id: "acerto-semana-passada",
+        tipo: "semanal_funcionario",
+        periodo_inicio: "2026-10-26",
+        periodo_fim: "2026-11-01",
+        status: "pago",
+        detalhes: {
+          semana_atual: [
+            { date: "2026-10-26", dayName: "Segunda", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-10-27", dayName: "Terça", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-10-28", dayName: "Quarta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-10-29", dayName: "Quinta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-10-30", dayName: "Sexta", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-10-31", dayName: "Sábado", previsaoTrabalho: true, uberFixo: 12, passagem: 6.25 },
+            { date: "2026-11-01", dayName: "Domingo", previsaoTrabalho: false, uberFixo: 12, passagem: 6.25 },
+          ],
+        },
+      },
+    ];
+
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colab-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-11-02"
+        previousWeekStart="2026-10-26"
+      />
+    );
+
+    expect(screen.getByText(/Antecipações da semana anterior carregadas do histórico persistido/i)).toBeInTheDocument();
+  });
+
+  it("12. Reembolso de Uber elegível sem antecipação (recebeuAntecipacao=false, uberReal=20)", async () => {
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colab-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-11-02"
+        previousWeekStart="2026-10-26"
+      />
+    );
+
+    // Desmarca antecipação da Segunda e informa R$ 20,00 de Uber real elegível do próprio bolso
+    fireEvent.click(screen.getByLabelText("Recebeu antecipação na Segunda"));
+    fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "20.00" } });
+
+    // Total: 109,50 + 20,00 = 129,50
+    expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 129,50");
+
+    fireEvent.click(screen.getByRole("button", { name: /gerar acerto pendente/i }));
+
+    await waitFor(() => expect(mockGerar).toHaveBeenCalledTimes(1));
+    expect(mockGerar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ajustesDiarios: expect.arrayContaining([
+          expect.objectContaining({
+            data_gasto: "2026-10-26",
+            valor_antecipado: 0,
+            valor_real: 20,
+            diferenca: 20,
+          }),
+        ]),
+        detalhes: expect.objectContaining({
+          origem: "AcertoSemanalFuncionario",
+        }),
+      })
+    );
+  });
+
+  it("13. Desconto total quando recebeu antecipação mas não gastou nada (uberReal=0)", async () => {
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colab-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-11-02"
+        previousWeekStart="2026-10-26"
+      />
+    );
+
+    // Mantém antecipação na Segunda (R$ 12,00) e informa gasto zero (0.00)
+    fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "0" } });
+
+    // Desconto de -12,00: 109,50 - 12,00 = 97,50
+    expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 97,50");
   });
 });
