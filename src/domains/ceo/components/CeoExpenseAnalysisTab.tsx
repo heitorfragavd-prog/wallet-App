@@ -1,4 +1,5 @@
 import { getSaoPauloDateString, CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select';
@@ -42,6 +43,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
 
   // 4 KPIs Financeiros
   const [receitaBruta, setReceitaBruta] = useState(0);
+  const [isEyemobileSales, setIsEyemobileSales] = useState(false);
   const [crescimentoReceita, setCrescimentoReceita] = useState<number | null>(null);
   const [cmvValor, setCmvValor] = useState<number | null>(null);
   const [cmvPercent, setCmvPercent] = useState<number | null>(null);
@@ -131,7 +133,17 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .range(from, to)
       );
 
-      const totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      let totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
+      let isEyeOrigin = false;
+      if (totalRec === 0) {
+        const eyeRes = await fetchLiveDashboard({ startDate: inicioStr, endDate: fimStr }, workspaceId).catch(() => null);
+        if (eyeRes?.configured && eyeRes.kpis.totalRevenue > 0) {
+          totalRec = eyeRes.kpis.totalRevenue;
+          isEyeOrigin = true;
+        }
+      }
+      setIsEyemobileSales(isEyeOrigin);
+
       const totalRecAnt = recAnt.reduce((acc, r) => acc + Number(r.valor || 0), 0);
       const totalDesp = desp.reduce((acc, d) => acc + Number(d.valor || 0), 0);
       const totalDespAnt = despAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
@@ -290,7 +302,9 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         {/* 1. Receita Bruta */}
         <Card className="bg-card/70 border-border/50">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">Receita Bruta</div>
+            <div className="text-xs text-muted-foreground font-medium">
+              {isEyemobileSales ? 'Receita Bruta (PDV Eyemobile)' : 'Receita Bruta'}
+            </div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
               R$ {receitaBruta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
@@ -301,7 +315,9 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                   {crescimentoReceita > 0 ? `+${crescimentoReceita}%` : `${crescimentoReceita}%`}
                 </span>
               ) : (
-                <span className="text-slate-500">Período selecionado</span>
+                <span className="text-slate-500">
+                  {isEyemobileSales ? 'Vendas brutas PDV' : 'Período selecionado'}
+                </span>
               )}
             </div>
           </CardContent>
