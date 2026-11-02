@@ -253,12 +253,24 @@ Deno.serve(async (req: Request) => {
       // Consulta estado prévio do canal para preservar homologação comprovada
       const { data: currentChannel } = await adminClient
         .from("delivery_channels")
-        .select("connection_state, auto_accept_orders")
+        .select("connection_state, auto_accept_orders, config")
         .eq("workspace_id", workspaceId)
         .eq("channel_name", channelName)
         .maybeSingle();
 
-      const wasPreviouslyHomologated = currentChannel?.connection_state === "homologated";
+      const currentConfig = (currentChannel?.config && typeof currentChannel.config === "object"
+        ? currentChannel.config
+        : {}) as Record<string, unknown>;
+
+      const officialHomologation = currentConfig.official_homologation && typeof currentConfig.official_homologation === "object"
+        ? (currentConfig.official_homologation as Record<string, unknown>)
+        : null;
+
+      // Homologação prévia SOMENTE é preservada se existir evidência confiável explícita de aprovação oficial
+      const hasReliableHomologationEvidence = Boolean(
+        (officialHomologation?.approved === true || currentConfig.is_officially_homologated === true) &&
+        currentChannel?.connection_state === "homologated"
+      );
 
       // GATE 1 & GATE 2: Identificar se o teste utiliza credenciais temporárias não salvas no cofre
       const hasAdHocMerchant = body.merchant_id && body.merchant_id.trim() !== secretRow?.merchant_id;
@@ -317,6 +329,7 @@ Deno.serve(async (req: Request) => {
         | "credentials_saved"
         | "error" = "credentials_saved";
       let feedbackMsg = "";
+      let verifiedScopes: string[] = [];
 
       if (channelName === "ifood") {
         try {
@@ -370,7 +383,13 @@ Deno.serve(async (req: Request) => {
                 connectionState = "insufficient_scopes";
                 feedbackMsg = "Token emitido pelo iFood sem escopos explícitos comprovados (insufficient_scopes). Homologação requer escopos de pedidos.";
               } else {
-                const scopesList = typeof scopesRaw === "string" ? scopesRaw.split(" ") : Array.isArray(scopesRaw) ? scopesRaw : [];
+                const scopesList = typeof scopesRaw === "string"
+                  ? scopesRaw.split(" ").map((s: string) => s.trim()).filter(Boolean)
+                  : Array.isArray(scopesRaw)
+                  ? scopesRaw.map((s: unknown) => String(s).trim()).filter(Boolean)
+                  : [];
+                verifiedScopes = scopesList;
+
                 const hasOrderScope = scopesList.some((s: string) =>
                   s.includes("order") || s.includes("merchant:order") || s.includes("orders:read")
                 );
@@ -404,22 +423,30 @@ Deno.serve(async (req: Request) => {
                         operationalStatus = opState;
 
                         // GATE 2: Separar homologação oficial do aplicativo da disponibilidade operacional da loja.
-                        // Se a homologação já existia ou o handshake + escopos + merchant status foram confirmados:
-                        if (opState === "OK") {
+                        // Homologado SOMENTE se houver evidência confiável prévia de aprovação oficial.
+                        if (hasReliableHomologationEvidence) {
                           isSuccess = true;
                           connectionState = "homologated";
-                          feedbackMsg = `Conexão e aplicativo homologados no iFood em ${latencyMs}ms (Loja Operacional: OK).`;
-                        } else if (opState === "CLOSED" || opState === "PAUSED") {
-                          // Preservar homologação comprovada mesmo com loja fechada fora do horário
-                          isSuccess = true;
-                          connectionState = "homologated";
-                          feedbackMsg = wasPreviouslyHomologated
-                            ? `Homologação comprovada preservada no iFood. Loja atualmente fechada/pausada operacionalmente (${opState}).`
-                            : `Conexão e aplicativo homologados no iFood. Loja vinculada, atualmente fora do horário operacional (${opState}).`;
+                          if (opState === "OK") {
+                            feedbackMsg = `Conexão e aplicativo oficialmente homologados no iFood em ${latencyMs}ms (Loja Operacional: OK).`;
+                          } else if (opState === "CLOSED" || opState === "PAUSED") {
+                            feedbackMsg = `Homologação oficial comprovada preservada no iFood. Loja atualmente fechada/pausada operacionalmente (${opState}).`;
+                          } else {
+                            isSuccess = false;
+                            connectionState = "merchant_auth_pending";
+                            feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}). Homologação operacional pendente.`;
+                          }
                         } else {
-                          isSuccess = false;
-                          connectionState = "merchant_auth_pending";
-                          feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}). Homologação operacional pendente.`;
+                          // Sem evidência confiável prévia, loja vinculada é 'merchant_authorized', NUNCA 'homologated'
+                          if (opState === "OK" || opState === "CLOSED" || opState === "PAUSED") {
+                            isSuccess = true;
+                            connectionState = "merchant_authorized";
+                            feedbackMsg = `Loja vinculada e autorizada no iFood em ${latencyMs}ms (Estado Operacional: ${opState}). Homologação oficial do aplicativo pendente de aprovação pela equipe do iFood Developer.`;
+                          } else {
+                            isSuccess = false;
+                            connectionState = "merchant_auth_pending";
+                            feedbackMsg = `Loja no iFood retornou estado operacional restritivo (${opState}). Homologação operacional pendente.`;
+                          }
                         }
                       } else {
                         isSuccess = false;
@@ -492,23 +519,26 @@ Deno.serve(async (req: Request) => {
             // Contrato 99Food: errno === 0 indica token emitido com sucesso
             if (data?.errno === 0 && data?.data?.access_token) {
               const shopInfo = data?.data?.shop_info;
-              if (shopInfo && (shopInfo.status === 1 || shopInfo.is_active === true)) {
-                isSuccess = true;
-                operationalStatus = "OPEN";
-                connectionState = "homologated";
-                feedbackMsg = `Conexão homologada com sucesso na 99Food em ${latencyMs}ms (Loja Ativa).`;
-              } else if (shopInfo && (shopInfo.status === 2 || shopInfo.status === 0)) {
-                // Loja cadastrada/vinculada porém fechada operacionalmente
-                isSuccess = true;
-                operationalStatus = shopInfo.status === 2 ? "CLOSED" : "PAUSED";
-                connectionState = "homologated";
-                feedbackMsg = wasPreviouslyHomologated
-                  ? `Homologação oficial preservada na 99Food. Loja atualmente fechada/pausada (${operationalStatus}).`
-                  : `Conexão e aplicativo homologados na 99Food. Loja atualmente em horário fechado/pausado (${operationalStatus}).`;
+              if (shopInfo) {
+                const isActive = shopInfo.status === 1 || shopInfo.is_active === true;
+                operationalStatus = isActive ? "OPEN" : (shopInfo.status === 2 ? "CLOSED" : "PAUSED");
+
+                if (hasReliableHomologationEvidence) {
+                  isSuccess = true;
+                  connectionState = "homologated";
+                  feedbackMsg = isActive
+                    ? `Conexão oficialmente homologada na 99Food em ${latencyMs}ms (Loja Ativa: OPEN).`
+                    : `Homologação oficial comprovada preservada na 99Food. Loja atualmente fechada/pausada (${operationalStatus}).`;
+                } else {
+                  // Sem evidência confiável prévia, loja vinculada é 'merchant_authorized', NUNCA 'homologated'
+                  isSuccess = true;
+                  connectionState = "merchant_authorized";
+                  feedbackMsg = `Loja vinculada e autorizada na 99Food em ${latencyMs}ms (Estado: ${operationalStatus}). Homologação oficial do aplicativo pendente de aprovação pela equipe da 99Food.`;
+                }
               } else {
                 isSuccess = false;
                 connectionState = "homologation_pending";
-                feedbackMsg = "Credenciais autenticadas via 99Food Open Platform. Aguardando homologação e confirmação oficial da loja pela equipe da 99Food.";
+                feedbackMsg = "Credenciais autenticadas via 99Food Open Platform. Aguardando vinculação e confirmação oficial da loja pela equipe da 99Food.";
               }
             } else {
               isSuccess = false;
@@ -542,6 +572,7 @@ Deno.serve(async (req: Request) => {
             latency_ms: latencyMs,
             state: connectionState,
             operational_status: operationalStatus,
+            scopes: verifiedScopes,
             is_dry_run: true,
             message: `[MODO SIMULAÇÃO] ${feedbackMsg} Salve as credenciais no cofre para registrar a homologação definitiva.`,
           }),
@@ -559,6 +590,7 @@ Deno.serve(async (req: Request) => {
         p_latency_ms: latencyMs,
         p_feedback_msg: feedbackMsg,
         p_operational_status: operationalStatus,
+        p_scopes: verifiedScopes.length > 0 ? verifiedScopes : null,
       });
 
       if (rpcTestErr) {
@@ -578,6 +610,7 @@ Deno.serve(async (req: Request) => {
           latency_ms: latencyMs,
           state: connectionState,
           operational_status: operationalStatus,
+          scopes: verifiedScopes,
           message: feedbackMsg,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

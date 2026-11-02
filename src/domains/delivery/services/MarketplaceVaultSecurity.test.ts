@@ -414,4 +414,151 @@ describe('MarketplaceVaultSecurity — Testes Mandatórios de Auditoria, Criptog
     expect(res.success).toBe(true);
     expect(res.message).toContain('[MODO SIMULAÇÃO]');
   });
+
+  // Teste 18: Handshake do iFood com status da loja OK sem evidência prévia de homologação oficial resulta em merchant_authorized
+  it('18. Falso positivo bloqueado: HTTP 200 no status da loja (OK/CLOSED) sem aprovação oficial resulta em merchant_authorized e NÃO homologated', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: true,
+        state: 'merchant_authorized',
+        operational_status: 'OK',
+        message: 'Loja vinculada e autorizada no iFood em 120ms (Estado Operacional: OK). Homologação oficial do aplicativo pendente de aprovação pela equipe do iFood Developer.',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: 'ifood',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('merchant_authorized');
+    expect(res.state).not.toBe('homologated');
+    expect(res.message).toContain('Homologação oficial do aplicativo pendente');
+  });
+
+  // Teste 19: Handshake do iFood com homologação oficial comprovada preserva homologated mesmo com loja CLOSED
+  it('19. Preservação de homologação: loja com aprovação oficial comprovada preserva homologated mesmo fechada operacionalmente', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: true,
+        state: 'homologated',
+        operational_status: 'CLOSED',
+        message: 'Homologação oficial comprovada preservada no iFood. Loja atualmente fechada/pausada operacionalmente (CLOSED).',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: 'ifood',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('homologated');
+    expect(res.operational_status).toBe('CLOSED');
+    expect(res.message).toContain('Homologação oficial comprovada preservada');
+  });
+
+  // Teste 20: 99Food com token e loja ativa sem homologação oficial prévia resulta em merchant_authorized
+  it('20. 99Food sem presunção: token emitido e loja ativa sem aprovação oficial resulta em merchant_authorized e NÃO homologated', async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: {
+        success: true,
+        state: 'merchant_authorized',
+        operational_status: 'OPEN',
+        message: 'Loja vinculada e autorizada na 99Food em 150ms (Estado: OPEN). Homologação oficial do aplicativo pendente de aprovação pela equipe da 99Food.',
+      },
+      error: null,
+    });
+
+    const res = await MarketplaceIntegrationService.testConnection({
+      workspaceId: 'ws-1',
+      channelName: '99food',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.state).toBe('merchant_authorized');
+    expect(res.state).not.toBe('homologated');
+    expect(res.message).toContain('Homologação oficial do aplicativo pendente de aprovação');
+  });
+
+  // Teste 21: Em merchant_authorized, auto_accept_orders é false e capacidades operacionais ficam bloqueadas (awaiting_homologation)
+  it('21. Capacidades restritas e auto-aceite bloqueados no estado merchant_authorized', async () => {
+    const mockRows = [
+      {
+        id: 'ch-ifood-merchant-auth',
+        workspace_id: 'ws-1',
+        channel_name: 'ifood',
+        display_name: 'iFood Marketplace',
+        is_active: true,
+        status: 'active',
+        connection_state: 'merchant_authorized',
+        commission_rate: 0.12,
+        payment_fee_rate: 0.02,
+        fixed_fee: 0,
+        auto_accept_orders: false,
+        config: {
+          merchant_id: 'm-auth-1',
+          client_id_preview: 'ifoo••••••••1234',
+          has_client_secret: true,
+          scopes: ['orders:read'],
+        },
+      },
+    ];
+
+    vi.mocked(supabase.from).mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      in: vi.fn().mockResolvedValue({ data: mockRows, error: null }),
+    } as unknown as ReturnType<typeof supabase.from>);
+
+    const integrations = await MarketplaceIntegrationService.getIntegrations('ws-1');
+    const ifood = integrations.find((i) => i.channel_name === 'ifood')!;
+
+    expect(ifood.connection_state).toBe('merchant_authorized');
+    expect(ifood.auto_accept_orders).toBe(false);
+    // As capacidades do conector não concedem 'available' enquanto não for homologated
+    expect(ifood.capabilities.can_fetch_orders.status).toBe('awaiting_homologation');
+    expect(ifood.capabilities.can_accept_orders.status).toBe('awaiting_homologation');
+    expect(ifood.capabilities.can_update_status.status).toBe('awaiting_homologation');
+  });
+
+  // Teste 22: getIntegrations NUNCA presume escopos fictícios quando não fornecidos pela API/banco
+  it('22. getIntegrations retorna array vazio de escopos se o banco/API não possuir escopos explícitos (sem presunção)', async () => {
+    const mockRows = [
+      {
+        id: 'ch-99food-no-scopes',
+        workspace_id: 'ws-1',
+        channel_name: '99food',
+        display_name: '99Food Restaurante',
+        is_active: true,
+        status: 'active',
+        connection_state: 'merchant_authorized',
+        commission_rate: 0.15,
+        payment_fee_rate: 0.03,
+        fixed_fee: 0,
+        auto_accept_orders: false,
+        config: {
+          merchant_id: 'shop-99-no-scopes',
+          has_client_secret: true,
+          // scopes ausente
+        },
+      },
+    ];
+
+    vi.mocked(supabase.from).mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      in: vi.fn().mockResolvedValue({ data: mockRows, error: null }),
+    } as unknown as ReturnType<typeof supabase.from>);
+
+    const integrations = await MarketplaceIntegrationService.getIntegrations('ws-1');
+    const ninetyNine = integrations.find((i) => i.channel_name === '99food')!;
+
+    expect(ninetyNine.scopes).toEqual([]);
+    expect(ninetyNine.scopes).not.toContain('orders:read');
+    expect(ninetyNine.scopes).not.toContain('orders:status');
+  });
 });

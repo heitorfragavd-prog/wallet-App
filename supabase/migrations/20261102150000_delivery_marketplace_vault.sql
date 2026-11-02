@@ -230,7 +230,8 @@ CREATE OR REPLACE FUNCTION public.record_delivery_channel_test_atomic(
   p_http_status INT,
   p_latency_ms INT,
   p_feedback_msg TEXT,
-  p_operational_status TEXT DEFAULT NULL
+  p_operational_status TEXT DEFAULT NULL,
+  p_scopes JSONB DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -245,7 +246,7 @@ DECLARE
 BEGIN
   v_status := CASE WHEN p_is_success THEN 'active' ELSE 'pending_auth' END;
   
-  -- GATE 2: auto_accept SÓ pode permanecer ativo se for homologado E loja aberta operacionalmente (OK)
+  -- GATE 2: auto_accept SÓ pode permanecer ativo se for HOMOLOGADO E loja aberta operacionalmente (OK)
   v_auto_accept_allowed := (p_connection_state = 'homologated' AND upper(coalesce(p_operational_status, 'OK')) = 'OK');
 
   v_test_log := jsonb_build_object(
@@ -262,6 +263,7 @@ BEGIN
     status = v_status,
     auto_accept_orders = CASE WHEN v_auto_accept_allowed THEN auto_accept_orders ELSE false END,
     config = coalesce(config, '{}'::jsonb) || jsonb_build_object(
+      'scopes', coalesce(p_scopes, config->'scopes', '[]'::jsonb),
       'last_connection_test', jsonb_build_object(
         'success', p_is_success,
         'state', p_connection_state,
@@ -285,8 +287,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT) TO service_role;
+REVOKE ALL ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT, JSONB) TO service_role;
 
 -- 6. RPC TRANSACIONAL ATÔMICA: DESCONECTAR MARKETPLACE E PURGAR CREDENCIAIS
 -- GATE 1: Restrita exclusivamente a service_role (Edge Functions autorizadas)

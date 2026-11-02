@@ -70,6 +70,7 @@ export interface IntegrationActionResult {
   state?: MarketplaceConnectionState;
   latency_ms?: number;
   tested_at?: string;
+  operational_status?: string;
   capabilities?: ConnectorCapabilities;
   error?: string;
 }
@@ -143,7 +144,11 @@ export class MarketplaceIntegrationService {
         const connector = getConnector(chName);
 
         const storeId = typeof config.merchant_id === 'string' ? config.merchant_id : undefined;
-        const clientId = typeof config.client_id === 'string' ? config.client_id : undefined;
+        const clientId = typeof config.client_id === 'string'
+          ? config.client_id
+          : typeof config.client_id_preview === 'string'
+          ? config.client_id_preview
+          : undefined;
         const hasSecret = Boolean(config.has_client_secret || config.encrypted_secret);
         const isHomologated = found?.connection_state === 'homologated';
 
@@ -188,7 +193,7 @@ export class MarketplaceIntegrationService {
           has_client_secret: hasSecret,
           last_sync_at: typeof config.last_sync_at === 'string' ? config.last_sync_at : null,
           last_connection_test: lastTest,
-          scopes: Array.isArray(config.scopes) ? (config.scopes as string[]) : ['orders:read', 'orders:status'],
+          scopes: Array.isArray(config.scopes) ? (config.scopes as string[]) : [],
           capabilities,
           event_log: eventLog,
         };
@@ -303,6 +308,7 @@ export class MarketplaceIntegrationService {
         message: edgeData.message || (isHomologated ? 'Conexão e loja homologadas com sucesso.' : 'Falha na conexão.'),
         latency_ms: latency,
         tested_at: new Date().toISOString(),
+        operational_status: typeof edgeData.operational_status === 'string' ? edgeData.operational_status : undefined,
         capabilities: connector.getCapabilities({
           merchantId,
           clientId,

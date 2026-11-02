@@ -682,13 +682,13 @@ BEGIN
 
   -- 4.2: Edge function registra teste de loja fechada (homologado porém auto-aceite bloqueado)
   v_test_res := public.record_delivery_channel_test_atomic(
-    v_ws1_id, 'ifood', 'homologated', true, 200, 150, 'Loja fora de expediente', 'CLOSED'
+    v_ws1_id, 'ifood', 'homologated', true, 200, 150, 'Loja fora de expediente', 'CLOSED', '["orders:read", "orders:status"]'::jsonb
   );
   IF (v_test_res->>'success')::boolean IS NOT TRUE THEN
     RAISE EXCEPTION 'FALHA OPERACIONAL [CENÁRIO 14.B.8]: service_role falhou ao registrar teste atômico!';
   END IF;
 
-  SELECT auto_accept_orders, connection_state INTO v_channel_record
+  SELECT auto_accept_orders, connection_state, config INTO v_channel_record
   FROM public.delivery_channels
   WHERE workspace_id = v_ws1_id AND channel_name = 'ifood';
 
@@ -698,6 +698,28 @@ BEGIN
 
   IF v_channel_record.auto_accept_orders IS TRUE THEN
     RAISE EXCEPTION 'FALHA DE REGRA DE NEGÓCIO [CENÁRIO 14.B.10]: auto_accept_orders não pode ficar ativo quando loja está CLOSED!';
+  END IF;
+
+  IF jsonb_array_length(v_channel_record.config->'scopes') <> 2 THEN
+    RAISE EXCEPTION 'FALHA DE REGISTRO [CENÁRIO 14.B.10.B]: scopes verificados não foram persistidos em config!';
+  END IF;
+
+  -- 4.2.B: Edge function registra merchant_authorized (loja vinculada mas sem homologação oficial)
+  -- Auto-aceite NUNCA pode ficar ativo em merchant_authorized, mesmo com loja operacional OK
+  v_test_res := public.record_delivery_channel_test_atomic(
+    v_ws1_id, 'ifood', 'merchant_authorized', true, 200, 120, 'Loja vinculada aguardando homologação oficial', 'OK'
+  );
+
+  SELECT auto_accept_orders, connection_state INTO v_channel_record
+  FROM public.delivery_channels
+  WHERE workspace_id = v_ws1_id AND channel_name = 'ifood';
+
+  IF v_channel_record.connection_state <> 'merchant_authorized' THEN
+    RAISE EXCEPTION 'FALHA DE ESTADO [CENÁRIO 14.B.10.C]: connection_state deveria ser merchant_authorized!';
+  END IF;
+
+  IF v_channel_record.auto_accept_orders IS TRUE THEN
+    RAISE EXCEPTION 'FALHA DE SEGURANÇA [CENÁRIO 14.B.10.D]: auto_accept_orders jamais pode ser concedido no estado merchant_authorized!';
   END IF;
 
   -- 4.3: Edge function desconecta canal atomicamente

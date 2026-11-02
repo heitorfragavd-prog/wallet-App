@@ -5,6 +5,7 @@
 
 BEGIN;
 
+DROP FUNCTION IF EXISTS public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT, JSONB);
 DROP FUNCTION IF EXISTS public.record_delivery_channel_test_atomic(UUID, TEXT, TEXT, BOOLEAN, INT, INT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS public.save_delivery_channel_vault_atomic(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS public.disconnect_delivery_marketplace(UUID, TEXT);

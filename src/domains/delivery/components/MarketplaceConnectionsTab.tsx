@@ -261,13 +261,19 @@ export const MarketplaceConnectionsTab: React.FC<MarketplaceConnectionsTabProps>
             Escopos Insuficientes
           </Badge>
         );
+      case 'merchant_authorized':
+        return (
+          <Badge className="bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center gap-1 text-[11px]">
+            <Radio className="w-3.5 h-3.5" />
+            Loja Vinculada (Aguardando Homologação)
+          </Badge>
+        );
       case 'credentials_saved':
       case 'credentials_present_unverified':
       case 'authenticating':
       case 'authenticated':
-      case 'merchant_authorized':
         return (
-          <Badge className="bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center gap-1 text-[11px]">
+          <Badge className="bg-slate-500/20 text-slate-400 border border-slate-500/30 flex items-center gap-1 text-[11px]">
             <Radio className="w-3.5 h-3.5" />
             Credenciais cadastradas
           </Badge>
