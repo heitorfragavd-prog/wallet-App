@@ -280,6 +280,9 @@ export class CeoIntelligenceEngine {
     // 2. Venda Adicional de Bebidas no Almoço
     const totalRev = kpis.faturamentoMes;
     if (totalRev > 0) {
+      const totalSampleRev = topProducts.reduce((acc, p) => acc + p.faturamento, 0);
+      const isPartialSample = totalSampleRev < totalRev * 0.90;
+
       const beverageSales = topProducts.filter((p) => {
         const name = p.produto.toLowerCase();
         return (
@@ -294,26 +297,38 @@ export class CeoIntelligenceEngine {
       const bevRatio = bevTotal / totalRev;
 
       if (bevRatio < 0.25) {
+        const probDesc = isPartialSample
+          ? `Na amostra dos produtos líderes analisados, bebidas representam ${(bevRatio * 100).toFixed(1)}% do faturamento total da loja (R$ ${bevTotal.toFixed(2)} de R$ ${totalRev.toFixed(2)}). Análise amostral condicionada aos itens no ranking.`
+          : `Bebidas representam ${(bevRatio * 100).toFixed(1)}% do faturamento de vendas no período (R$ ${bevTotal.toFixed(2)} de R$ ${totalRev.toFixed(2)}).`;
+
+        const calcLimit = isPartialSample
+          ? "Hipótese baseada na amostra de produtos mais vendidos. Vendas de bebidas fora do ranking dos itens líderes não constam nesta amostra."
+          : "Impacto financeiro condicionado à elasticidade de demanda e margem unitária por tipo de bebida.";
+
         opps.push({
           id: "opp-bebidas-lunch",
           workspace_id: workspaceId,
           department: "comercial",
           title: "Potencialização de Bebidas Geladas no Almoço",
-          problem_description: `Bebidas representam ${(bevRatio * 100).toFixed(1)}% do faturamento de vendas no período (R$ ${bevTotal.toFixed(2)} de R$ ${totalRev.toFixed(2)}).`,
+          problem_description: probDesc,
           description: "Posicionar refrigeradores visíveis próximos ao balcão e oferecer sugestivamente bebida no momento do pedido.",
           hypothesis: "Oferecer sugestivamente opção de bebida bem gelada durante o atendimento eleva a proporção de pedidos com itens agregados.",
           recommended_action: "Incentivar venda sugestiva de refrigerantes, sucos e água no caixa e certificar posicionamento dos expositores.",
           estimated_financial_impact: null,
           potential_monthly_gain: null,
-          confidence_score: 0.65,
+          confidence_score: isPartialSample ? 0.55 : 0.65,
           status: "identificada",
           nature: "hipotese_comercial",
-          simulation_premises: "Venda sugestiva por impulso em momentos de refeição.",
-          calculation_limitations: "Impacto financeiro condicionado à elasticidade de demanda e margem unitária por tipo de bebida.",
-          formula_or_criteria: `Proporção apurada: faturamento de bebidas (R$ ${bevTotal.toFixed(2)}) / faturamento total (R$ ${totalRev.toFixed(2)}) = ${(bevRatio * 100).toFixed(1)}%.`,
+          simulation_premises: isPartialSample
+            ? "Hipótese amostral baseada nos produtos líderes observados no período."
+            : "Venda sugestiva por impulso em momentos de refeição.",
+          calculation_limitations: calcLimit,
+          formula_or_criteria: `Proporção apurada: faturamento de bebidas na amostra (R$ ${bevTotal.toFixed(2)}) / faturamento total (R$ ${totalRev.toFixed(2)}) = ${(bevRatio * 100).toFixed(1)}%.`,
           evidence_data: {
             source: "eyemobile_categories",
-            has_sufficient_data: true,
+            has_sufficient_data: !isPartialSample,
+            is_partial_sample: isPartialSample,
+            sample_revenue: totalSampleRev,
             beverage_ratio: bevRatio,
             beverage_revenue: bevTotal,
             total_revenue: totalRev,
