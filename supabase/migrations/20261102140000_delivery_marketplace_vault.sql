@@ -99,12 +99,29 @@ BEGIN
   WHERE workspace_id = p_workspace_id
     AND channel_name = p_channel_name;
 
-  -- Atualiza o canal público para desconectado
+  -- Atualiza o canal público para desconectado, desativa auto-aceite e limpa metadados confidenciais
   UPDATE public.delivery_channels
   SET
     connection_state = 'disconnected',
-    status = 'pending_auth',
+    status = 'inactive',
     is_active = false,
+    auto_accept_orders = false,
+    config = (
+      config - 'client_id' - 'client_secret' - 'has_client_secret' - 'client_id_preview' - 'encrypted_secret' - 'merchant_id'
+    ) || jsonb_build_object(
+      'has_client_secret', false,
+      'client_id_preview', null,
+      'last_sync_at', null,
+      'event_log', jsonb_build_array(
+        jsonb_build_object(
+          'id', 'disconnect-' || floor(extract(epoch from now()) * 1000)::text,
+          'event_type', 'disconnect',
+          'status', 'info',
+          'message', 'Canal desconectado pelo administrador e credenciais purgadas do cofre.',
+          'timestamp', now()
+        )
+      ) || coalesce(config->'event_log', '[]'::jsonb)
+    ),
     updated_at = now()
   WHERE workspace_id = p_workspace_id
     AND channel_name = p_channel_name;
