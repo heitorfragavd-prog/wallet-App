@@ -32,6 +32,7 @@ import { useWalletIA, type WalletIAMessage } from '@/domains/ia/hooks/useWalletI
 import { WalletAiOrchestratorClient } from '@/domains/ia/services/WalletAiOrchestratorClient';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
+import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useAuth } from '@/domains/auth/hooks/useAuth';
@@ -52,6 +53,7 @@ interface ConversationItem {
 export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   workspaceId,
   kpis,
+  onNavigateToPlan,
 }) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -61,10 +63,13 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   const [briefingExpanded, setBriefingExpanded] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Intervalo canônico de análise respeitando timezone America/Sao_Paulo (Gate 4)
+  const range = useMemo(() => getCeoPeriodRange('este_mes'), []);
+
   // Motor analítico do CEO gerando o briefing quantitativo com citações canônicas (Gate 4)
   const briefing = useMemo(
-    () => CeoIntelligenceEngine.generateExecutiveBriefing(kpis),
-    [kpis]
+    () => CeoIntelligenceEngine.generateExecutiveBriefing({ kpis, range }),
+    [kpis, range]
   );
 
   // Estados de persistência canônica do chat (Gate 1)
@@ -513,11 +518,11 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
                 Briefing Executivo Quantitativo
                 <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                  {briefing.periodLabel}
+                  {briefing.periodoRotulo}
                 </span>
               </CardTitle>
               <p className="text-[11px] text-muted-foreground">
-                {briefing.calculationCriteria} | Fontes: {briefing.sources.join(', ')}
+                Período: {range.rotulo} (vs. {range.rotuloAnterior}) | Base quantitativa auditada
               </p>
             </div>
           </div>
@@ -546,36 +551,50 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
         {briefingExpanded && (
           <CardContent className="pt-4 space-y-4">
-            {/* Headline */}
+            {/* Resumo Geral do Briefing */}
             <div className="text-xs md:text-sm font-medium text-slate-200 bg-slate-950/50 p-3 rounded-lg border border-border/40">
-              📢 {briefing.headline}
+              📢 {briefing.resumoGeral}
             </div>
 
-            {/* Grid de Insights Quantitativos */}
+            {/* Grid de Seções e Insights Quantitativos */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {briefing.keyInsights.map((insight, idx) => (
-                <div
-                  key={idx}
-                  className="bg-slate-950/40 p-3 rounded-lg border border-border/40 space-y-1.5"
-                >
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
-                    <span>{insight.title}</span>
-                    <span className="text-foreground font-bold">{insight.valueFormatted}</span>
+              {(briefing.secoes || []).map((secao, idx) => {
+                const statusColor =
+                  secao.status === 'positivo'
+                    ? 'text-emerald-400'
+                    : secao.status === 'critico'
+                    ? 'text-rose-400'
+                    : secao.status === 'atencao'
+                    ? 'text-amber-400'
+                    : 'text-foreground';
+
+                return (
+                  <div
+                    key={idx}
+                    className="bg-slate-950/40 p-3 rounded-lg border border-border/40 space-y-1.5 flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                        <span>{secao.titulo}</span>
+                        <span className={`font-bold ${statusColor}`}>{secao.destaque}</span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-snug mt-1">
+                        {secao.conteudo}
+                      </p>
+                    </div>
+                    <div className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-800/60 space-y-0.5">
+                      <div><span className="text-slate-400">Fonte:</span> {secao.fonte}</div>
+                      <div><span className="text-slate-400">Critério:</span> {secao.criterioCalculo}</div>
+                    </div>
                   </div>
-                  <p className="text-xs text-slate-300 leading-snug">
-                    {insight.description}
-                  </p>
-                  <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
-                    {insight.sourceCitation}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Alertas de Qualidade de Dados */}
-            {briefing.dataQualityAlerts.length > 0 && (
+            {briefing.alertasQualidadeDados && briefing.alertasQualidadeDados.length > 0 && (
               <div className="space-y-1.5 pt-2">
-                {briefing.dataQualityAlerts.map((alert, idx) => (
+                {briefing.alertasQualidadeDados.map((alert, idx) => (
                   <div
                     key={idx}
                     className="text-[11px] bg-amber-500/10 border border-amber-500/20 text-amber-300 px-3 py-2 rounded-md flex items-center gap-2"
