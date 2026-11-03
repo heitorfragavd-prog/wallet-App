@@ -5,6 +5,11 @@ import { logger } from "@/core/logging/LoggerService";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Despesa as DespesaType, PaymentMethod } from "../types";
 import { formatarDataParaSaoPaulo, getHojeSaoPaulo } from "../utils/dateHelpers";
+import {
+  FinancialConsolidationService,
+  DespesaInput,
+  TransacaoInput,
+} from "../services/FinancialConsolidationService";
 
 export interface Despesa extends Omit<DespesaType, "tags" | "anexos"> {
   updated_at?: string;
@@ -252,39 +257,62 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
       } as unknown as Despesa;
     });
 
-    // Anti-duplicidade estrita por ID externo (sem heurística de valor/descrição/data)
-    const existingDivipayIds = new Set<string>();
-    const registerId = (id?: string | null) => {
-      if (id && id.trim()) existingDivipayIds.add(id.trim());
-    };
-
-    [...mappedDespesas, ...mappedTransacoes].forEach((d) => {
-      const row = d as unknown as RawDespesaRow;
-      if (row.divipay_external_id) registerId(String(row.divipay_external_id));
-      const obs = String(row.observacoes || "");
-      if (obs.includes("divipay-saque:")) {
-        const id = obs.split("divipay-saque:")[1]?.split(")")[0]?.trim();
-        registerId(id);
-      }
-      if (obs.includes("Pago via Divipay") && obs.includes(" - ")) {
-        const id = obs.split(" - ").pop()?.trim();
-        registerId(id);
-      }
+    // Consolidação canônica anti-duplicidade com separação de regimes contábeis
+    const report = FinancialConsolidationService.consolidate({
+      workspaceId,
+      despesas: mappedDespesas as unknown as DespesaInput[],
+      transacoes: mappedTransacoes as unknown as TransacaoInput[],
+      divipayWithdraws: divipayDespesas.map((d) => ({
+        id: d.id.replace(/^divipay-/, ""),
+        amount: d.valor,
+        createdAt: d.created_at || d.data,
+        description: d.descricao,
+        status: "COMPLETED",
+        paymentMethod: d.metodo_pagamento,
+      })),
+      options: {
+        startDate: normStartDate,
+        endDate: normEndDate,
+        ignoreInternalTransfers: true,
+        ignoreCreditCardInvoicePayments: true,
+      },
     });
 
-    const filteredDivipay = divipayDespesas.filter((d) => {
-      const externalId = d.id.replace("divipay-", "").trim();
-      return !existingDivipayIds.has(externalId);
+    const rawMap = new Map<string, RawDespesaRow>();
+    mappedDespesas.forEach((d) => rawMap.set(d.id, d as unknown as RawDespesaRow));
+    mappedTransacoes.forEach((t) => rawMap.set(t.id, t as unknown as RawDespesaRow));
+    divipayDespesas.forEach((d) => {
+      rawMap.set(d.id, d as unknown as RawDespesaRow);
+      rawMap.set(d.id.replace(/^divipay-/, ""), d as unknown as RawDespesaRow);
     });
 
-    const res = [...mappedDespesas, ...mappedTransacoes, ...filteredDivipay].sort((a, b) => {
-      const dateA = a.data ? new Date(a.data).getTime() : 0;
-      const dateB = b.data ? new Date(b.data).getTime() : 0;
-      if (dateB !== dateA) return dateB - dateA;
-      const createdA = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const createdB = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return createdB - createdA;
-    }) as Despesa[];
+    const res: Despesa[] = report.itensConsolidados.map((item) => {
+      const raw = rawMap.get(item.origemId);
+      return {
+        id: item.origem === "divipay" ? `divipay-${item.origemId}` : item.origemId,
+        workspace_id: workspaceId,
+        user_id: (raw?.user_id as string) || "",
+        tipo: (raw?.tipo as "fixa" | "variavel") || "variavel",
+        valor: item.valor,
+        descricao: item.descricao,
+        data: item.data,
+        created_at: (raw?.created_at as string) || new Date().toISOString(),
+        updated_at: (raw?.updated_at as string) || new Date().toISOString(),
+        metodo_pagamento: (item.metodoPagamento as PaymentMethod) || (raw?.metodo_pagamento as PaymentMethod) || "outros",
+        observacoes: (raw?.observacoes as string) || null,
+        status: (raw?.status as string) || (item.status === "obrigacao_cadastrada" ? "pendente" : "pago"),
+        categorias:
+          (Array.isArray(raw?.categorias) ? raw?.categorias[0] : raw?.categorias) ||
+          (item.categoriaNome
+            ? {
+                nome: item.categoriaNome,
+                cor: item.categoriaCor || "#f97316",
+                icone: "DollarSign",
+              }
+            : undefined),
+        tags: raw?.despesa_tags?.map((dt) => dt.tags).filter(Boolean) ?? [],
+      } as Despesa;
+    });
 
     return res;
   } catch (err: unknown) {

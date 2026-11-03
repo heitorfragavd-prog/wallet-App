@@ -1,4 +1,10 @@
-import { getSaoPauloDateString, CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
+import {
+  FinancialConsolidationService,
+  DespesaInput,
+  TransacaoInput,
+} from '@/domains/finance/services/FinancialConsolidationService';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
@@ -60,20 +66,11 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
     setIsLoading(true);
 
     try {
-      const hoje = new Date();
-      let diasAtras = 30;
-      if (periodo === 'este_mes') {
-        diasAtras = hoje.getDate();
-      } else if (periodo === 'ultimos_7_dias') {
-        diasAtras = 7;
-      }
-
-      const inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 24 * 60 * 60 * 1000));
-      const fimStr = getSaoPauloDateString(hoje);
-
-      // Período anterior equivalente
-      const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
-      const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
+      const range = getCeoPeriodRange(periodo, new Date());
+      const inicioStr = range.inicioStr;
+      const fimStr = range.fimStr;
+      const inicioAntStr = range.inicioAntStr;
+      const fimAntStr = range.fimAntStr;
 
       // 1. Receitas do período com paginação integral
       const rec = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
@@ -103,35 +100,82 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .range(from, to)
       );
 
-      // 3. Despesas do período com paginação integral
-      const desp = await CeoFinancialMetricsService.fetchAllPaginated<{
-        valor: number;
-        data: string;
-        categoria_id?: string | null;
-        descricao?: string | null;
-      }>(
+      // 3. Despesas do período com paginação integral (consolidação canônica anti-duplicidade)
+      const despContas = await CeoFinancialMetricsService.fetchAllPaginated<DespesaInput>(
         (from, to) =>
           supabase
             .from('despesas')
-            .select('valor, data, categoria_id, descricao')
+            .select('id, valor, data, descricao, categoria_id, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
+            .gte('data', inicioStr)
+            .lte('data', fimStr)
+            .order('data', { ascending: true })
+            .range(from, to)
+      );
+
+      const despTransacoes = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoInput>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
             .gte('data', inicioStr)
             .lte('data', `${fimStr}T23:59:59.999Z`)
             .order('data', { ascending: true })
             .range(from, to)
       );
 
-      // 4. Despesas do período anterior
-      const despAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+      const reportDesp = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas: despContas,
+        transacoes: despTransacoes,
+        options: {
+          startDate: inicioStr,
+          endDate: fimStr,
+          ignoreInternalTransfers: true,
+          ignoreCreditCardInvoicePayments: true,
+        },
+      });
+
+      // 4. Despesas do período anterior (com consolidação equivalente)
+      const despContasAnt = await CeoFinancialMetricsService.fetchAllPaginated<DespesaInput>(
         (from, to) =>
           supabase
             .from('despesas')
-            .select('valor')
+            .select('id, valor, data, descricao, categoria_id, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
+            .gte('data', inicioAntStr)
+            .lte('data', fimAntStr)
+            .range(from, to)
+      );
+
+      const despTransacoesAnt = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoInput>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
             .gte('data', inicioAntStr)
             .lte('data', `${fimAntStr}T23:59:59.999Z`)
             .range(from, to)
       );
+
+      const reportDespAnt = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas: despContasAnt,
+        transacoes: despTransacoesAnt,
+        options: {
+          startDate: inicioAntStr,
+          endDate: fimAntStr,
+          ignoreInternalTransfers: true,
+          ignoreCreditCardInvoicePayments: true,
+        },
+      });
+
+      const totalDesp = reportDesp.totalPorCompetencia;
+      const totalDespAnt = reportDespAnt.totalPorCompetencia;
 
       let totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
       let isEyeOrigin = false;
@@ -145,8 +189,6 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       setIsEyemobileSales(isEyeOrigin);
 
       const totalRecAnt = recAnt.reduce((acc, r) => acc + Number(r.valor || 0), 0);
-      const totalDesp = desp.reduce((acc, d) => acc + Number(d.valor || 0), 0);
-      const totalDespAnt = despAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
 
       setReceitaBruta(totalRec);
       setDespesasOperacionais(totalDesp);
@@ -195,9 +237,12 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       }
 
       const catMap = new Map<string, number>();
-      for (const d of desp || []) {
-        const catName = (d.categoria_id && catNamesById.get(d.categoria_id)) || 'Outros / Operacional';
-        catMap.set(catName, (catMap.get(catName) || 0) + Number(d.valor || 0));
+      for (const item of reportDesp.itensConsolidados) {
+        const catName =
+          (item.categoriaId && catNamesById.get(item.categoriaId)) ||
+          item.categoriaNome ||
+          'Outros / Operacional';
+        catMap.set(catName, (catMap.get(catName) || 0) + Number(item.valor || 0));
       }
 
       const categoryPalette = ['#ef4444', '#3b82f6', '#f59e0b', '#10b981', '#ec4899', '#06b6d4', '#8b5cf6'];
@@ -227,17 +272,18 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       }
 
       const despMap = new Map<string, number>();
-      for (const d of desp || []) {
+      for (const d of reportDesp.itensConsolidados) {
         if (!d.data) continue;
         const dia = d.data.slice(0, 10);
         despMap.set(dia, (despMap.get(dia) || 0) + Number(d.valor || 0));
       }
 
       const dailyLines: DailyResultItem[] = [];
-      const numDias = Math.min(diasAtras, 30);
+      const numDias = Math.min(range.diasNoPeriodo, 30);
+      const hojeRef = new Date();
       for (let i = numDias - 1; i >= 0; i--) {
-        const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
-        const iso = d.toISOString().slice(0, 10);
+        const d = new Date(hojeRef.getTime() - i * 24 * 60 * 60 * 1000);
+        const iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
         dailyLines.push({
           date: `${d.getDate()}/${d.getMonth() + 1}`,
           receita: recMap.get(iso) || 0,
@@ -343,7 +389,11 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Despesas Operacionais</div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-              R$ {despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              {despesasOperacionais > 0 ? (
+                `R$ ${despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+              ) : (
+                <span className="text-sm font-normal text-slate-400">Não apurado</span>
+              )}
             </div>
             <div className="mt-2 text-xs">
               {variacaoDespesas !== null ? (
@@ -352,7 +402,9 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                   {variacaoDespesas > 0 ? `+${variacaoDespesas}%` : `${variacaoDespesas}%`}
                 </span>
               ) : (
-                <span className="text-slate-500">Despesas lançadas</span>
+                <span className="text-slate-500">
+                  {despesasOperacionais > 0 ? 'Despesas consolidadas' : 'Aguardando lançamento de despesas'}
+                </span>
               )}
             </div>
           </CardContent>

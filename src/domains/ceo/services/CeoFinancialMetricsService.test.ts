@@ -486,5 +486,32 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
 
       expect(variacao).toBeNull();
     });
+
+    it('Cenário 11: Consolidação integral de despesas (contas a pagar + transações bancárias/cartão tipo despesa)', async () => {
+      const wsId = 'ws-rodo-point-test';
+      const refDate = new Date('2026-11-02T12:00:00-03:00');
+
+      setupDefaultMockSupabase({
+        transacoes: [
+          // Receita do mês
+          { id: 'tx-rec-1', valor: 5000, data: '2026-11-01', tipo: 'receita', workspace_id: wsId },
+          // Despesa bancária do mês (transações tipo despesa)
+          { id: 'tx-desp-1', valor: 800, data: '2026-11-01', tipo: 'despesa', workspace_id: wsId },
+          { id: 'tx-desp-2', valor: 200, data: '2026-11-02', tipo: 'despesa', workspace_id: wsId },
+        ],
+        despesas: [
+          // Contas a pagar lançadas no módulo de despesas
+          { id: 'desp-1', valor: 1500, data: '2026-11-01', workspace_id: wsId },
+        ],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+
+      expect(kpis.faturamentoMes).toBe(5000);
+      // Total despesas: 1500 (despesas) + 800 + 200 (transacoes despesa) = 2500
+      expect(kpis.despesasMes).toBe(2500);
+      expect(kpis.resultadoOperacional).toBe(2500); // 5000 - 2500
+      expect(kpis.margemOperacionalPercent).toBe(50); // 2500 / 5000 = 50%
+    });
   });
 });

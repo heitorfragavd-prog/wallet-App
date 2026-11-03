@@ -193,6 +193,8 @@ export function createQueryToolCatalog(
             total: result.total,
             faturamentoDiaCivil: result.total,
             quantidadeTransacoes: result.transacoesCount ?? null,
+            itensVendidos: result.totalItemsSold ?? null,
+            coberturaItens: result.itemsCoverage ?? null,
             source: result.source,
             stale: result.stale,
           };
@@ -205,6 +207,9 @@ export function createQueryToolCatalog(
             totalBrutoDiaCivil: "faturamento bruto do PDV Eyemobile no dia civil (fuso America/Sao_Paulo), idêntico ao painel",
             source: result.source,
           };
+          if (typeof result.totalItemsSold === "number") {
+            formulas.itensVendidos = "unidades comercializadas no período apurado";
+          }
           if (dataPayload.totalTurnoEstendido) {
             formulas.totalTurnoEstendido = "faturamento acumulado do turno estendido incluindo a madrugada seguinte";
           }

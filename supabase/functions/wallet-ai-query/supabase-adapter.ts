@@ -44,6 +44,8 @@ export interface EyemobileSalesResult {
   total: number;
   totalTurnoEstendido?: number;
   transacoesCount?: number;
+  totalItemsSold?: number | null;
+  itemsCoverage?: "complete" | "partial" | "unavailable";
   source: EyemobileSalesSource;
   stale: boolean;
   warning?: string;
@@ -122,7 +124,26 @@ export function createEyemobileLiveClient(client: SupabaseClientLike): Eyemobile
               // do painel (fuso America/Sao_Paulo e período start a end)
               const sales = Array.isArray(response.sales) ? (response.sales as Array<Record<string, unknown>>) : [];
               if (sales.length > 0) {
-                const validSales = sales.filter((s) => !s.cancelled && s.completed !== false);
+                const seenSaleIds = new Set<string>();
+                const validSales = sales.filter((s) => {
+                  if (
+                    s.cancelled === true ||
+                    s.completed === false ||
+                    s.refunded === true ||
+                    s.is_refund === true ||
+                    s.status === "cancelled" ||
+                    s.status === "canceled" ||
+                    s.status === "refunded"
+                  ) {
+                    return false;
+                  }
+                  const saleId = String(s.id || s.transaction_id || s.sale_id || s.uuid || "");
+                  if (saleId) {
+                    if (seenSaleIds.has(saleId)) return false;
+                    seenSaleIds.add(saleId);
+                  }
+                  return true;
+                });
 
                 // 1. Vendas estritamente no dia civil canônico (America/Sao_Paulo)
                 const civilSales = validSales.filter((s) => {
@@ -144,10 +165,36 @@ export function createEyemobileLiveClient(client: SupabaseClientLike): Eyemobile
                 );
                 const roundedTurno = Math.round(totalTurno * 100) / 100;
 
+                // 3. Contagem de itens vendidos e cobertura
+                let totalItemsSold = 0;
+                let salesWithItemsCount = 0;
+                for (const s of civilSales) {
+                  const items = Array.isArray(s.items) ? s.items : Array.isArray(s.products) ? s.products : [];
+                  let hasItem = false;
+                  for (const rawItem of items) {
+                    const item = rawItem as Record<string, unknown>;
+                    if (item.cancelled || item.refunded || item.status === "cancelled" || item.status === "refunded") continue;
+                    const qty = Number(item.quantity ?? item.qtd ?? item.amount ?? 0);
+                    if (qty > 0 && Number.isFinite(qty)) {
+                      totalItemsSold += qty;
+                      hasItem = true;
+                    }
+                  }
+                  if (hasItem) salesWithItemsCount++;
+                }
+
+                let itemsCoverage: "complete" | "partial" | "unavailable" = "unavailable";
+                if (civilSales.length > 0) {
+                  if (salesWithItemsCount === civilSales.length) itemsCoverage = "complete";
+                  else if (salesWithItemsCount > 0) itemsCoverage = "partial";
+                }
+
                 return {
                   total: roundedCivil,
                   totalTurnoEstendido: roundedTurno !== roundedCivil ? roundedTurno : undefined,
                   transacoesCount: civilSales.length,
+                  totalItemsSold: itemsCoverage !== "unavailable" ? totalItemsSold : null,
+                  itemsCoverage,
                   source: "eyemobile_live",
                   stale: false,
                   period,

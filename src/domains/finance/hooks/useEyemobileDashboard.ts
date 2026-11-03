@@ -38,6 +38,7 @@ interface EyemobileSyncResponse {
   sales?: unknown[];
   products?: unknown[];
   stores?: unknown[];
+  hasMore?: boolean;
   error?: string;
 }
 
@@ -180,6 +181,7 @@ export async function fetchLiveDashboard(
     stores: data?.stores ?? [],
     startDate: isoStartDate,
     endDate: isoEndDate,
+    hasMore: data?.hasMore,
   });
   return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
 }

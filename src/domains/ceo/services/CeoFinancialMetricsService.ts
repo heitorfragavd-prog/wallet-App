@@ -38,6 +38,11 @@ export function getSaoPauloYesterday(referenceDate: Date = new Date()): {
   return getSaoPauloParts(yesterdayNoon);
 }
 import { supabase } from '@/integrations/supabase/client';
+import {
+  FinancialConsolidationService,
+  DespesaInput,
+  TransacaoInput,
+} from '@/domains/finance/services/FinancialConsolidationService';
 
 export interface CeoExecutiveKpis {
   faturamentoMes: number;
@@ -271,33 +276,80 @@ export class CeoFinancialMetricsService {
           ? Math.round(((faturamentoOntem - mediaDiaSemana) / mediaDiaSemana) * 1000) / 10
           : null;
 
-      // 4. Despesas Mês Atual reais (paginação completa)
-      const despMes = await this.fetchAllPaginated<{ valor: number }>(
+      // 4. Despesas Mês Atual reais (consolidação canônica com prevenção estrita de duplicidade)
+      const despMes = await this.fetchAllPaginated<DespesaInput>(
         (from, to) =>
           supabase
             .from('despesas')
-            .select('valor')
+            .select('id, valor, data, descricao, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioMesAtual)
             .lte('data', fimMesAtual)
             .range(from, to)
       );
 
-      const totalDespesasMes = despMes.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const txDespMes = await this.fetchAllPaginated<TransacaoInput>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioMesAtual)
+            .lte('data', `${fimMesAtual}T23:59:59.999Z`)
+            .range(from, to)
+      );
+
+      const repMes = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas: despMes,
+        transacoes: txDespMes,
+        options: {
+          startDate: inicioMesAtual,
+          endDate: fimMesAtual,
+          ignoreInternalTransfers: true,
+          ignoreCreditCardInvoicePayments: true,
+        },
+      });
+      const totalDespesasMes = repMes.totalPorCompetencia;
 
       // Despesas Mês Anterior equivalentes
-      const despMesAnt = await this.fetchAllPaginated<{ valor: number }>(
+      const despMesAnt = await this.fetchAllPaginated<DespesaInput>(
         (from, to) =>
           supabase
             .from('despesas')
-            .select('valor')
+            .select('id, valor, data, descricao, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioMesAnt)
             .lte('data', fimMesAntEquivalente)
             .range(from, to)
       );
 
-      const totalDespesasMesAnt = despMesAnt.reduce((acc, d) => acc + Number(d.valor || 0), 0);
+      const txDespMesAnt = await this.fetchAllPaginated<TransacaoInput>(
+        (from, to) =>
+          supabase
+            .from('transacoes')
+            .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'despesa')
+            .gte('data', inicioMesAnt)
+            .lte('data', `${fimMesAntEquivalente}T23:59:59.999Z`)
+            .range(from, to)
+      );
+
+      const repMesAnt = FinancialConsolidationService.consolidate({
+        workspaceId,
+        despesas: despMesAnt,
+        transacoes: txDespMesAnt,
+        options: {
+          startDate: inicioMesAnt,
+          endDate: fimMesAntEquivalente,
+          ignoreInternalTransfers: true,
+          ignoreCreditCardInvoicePayments: true,
+        },
+      });
+      const totalDespesasMesAnt = repMesAnt.totalPorCompetencia;
+
       const variacaoDespesas =
         totalDespesasMesAnt > 0
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10

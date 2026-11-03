@@ -15,9 +15,8 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   CeoFinancialMetricsService,
   TopProdutoFaturamento,
-  getSaoPauloDateString,
-  getSaoPauloParts,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 
 interface CeoCommercialAnalysisTabProps {
@@ -45,6 +44,9 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
   const [crescimentoTicket, setCrescimentoTicket] = useState<number | null>(null);
   const [itensVendidos, setItensVendidos] = useState<number | null>(null);
   const [crescimentoItens, setCrescimentoItens] = useState<number | null>(null);
+  const [itemsCoverage, setItemsCoverage] = useState<'complete' | 'partial' | 'unavailable'>('unavailable');
+  const [itemsCoverageRatio, setItemsCoverageRatio] = useState<number>(0);
+  const [unclassifiedRevenue, setUnclassifiedRevenue] = useState<number>(0);
 
   const [dailySalesData, setDailySalesData] = useState<DailySaleBar[]>([]);
   const [topProducts, setTopProducts] = useState<TopProdutoFaturamento[]>([]);
@@ -55,27 +57,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
     setErrorMessage(null);
 
     try {
-      const hoje = new Date();
-      let diasAtras = 30;
-      let inicioStr = '';
-
-      if (periodo === 'este_mes') {
-        const parts = getSaoPauloParts(hoje);
-        diasAtras = parts.day;
-        inicioStr = `${parts.year}-${String(parts.month).padStart(2, '0')}-01`;
-      } else if (periodo === 'ultimos_7_dias') {
-        diasAtras = 7;
-        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
-      } else {
-        diasAtras = 30;
-        inicioStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras - 1) * 24 * 60 * 60 * 1000));
-      }
-
-      const fimStr = getSaoPauloDateString(hoje);
-
-      // Período anterior equivalente real (sem multiplicadores arbitrários)
-      const inicioAntStr = getSaoPauloDateString(new Date(hoje.getTime() - diasAtras * 2 * 24 * 60 * 60 * 1000));
-      const fimAntStr = getSaoPauloDateString(new Date(hoje.getTime() - (diasAtras + 1) * 24 * 60 * 60 * 1000));
+      const range = getCeoPeriodRange(periodo, new Date());
+      const inicioStr = range.inicioStr;
+      const fimStr = range.fimStr;
+      const inicioAntStr = range.inicioAntStr;
+      const fimAntStr = range.fimAntStr;
 
       // 1. Consulta Eyemobile PDV em tempo real para o período selecionado
       const eyemobileData = await fetchLiveDashboard(
@@ -207,10 +193,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
       // 3. Vendas por dia (BarChart real)
       const dailyBars: DailySaleBar[] = [];
-      const numDias = Math.min(diasAtras, 30);
+      const numDias = Math.min(range.diasNoPeriodo, 30);
+      const hoje = new Date();
       for (let i = numDias - 1; i >= 0; i--) {
         const d = new Date(hoje.getTime() - i * 24 * 60 * 60 * 1000);
-        const iso = getSaoPauloDateString(d);
+        const iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(d);
         const parts = iso.split('-');
         const dayLabel = `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}`;
         dailyBars.push({
@@ -222,13 +209,15 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
       // 4. Itens vendidos reais calculados sobre todas as vendas do período
       const totalItems = eyemobileData?.kpis?.totalItemsSold;
+      const coverage = eyemobileData?.kpis?.itemsCoverage ?? 'unavailable';
+      const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? 0;
+      setItemsCoverage(coverage);
+      setItemsCoverageRatio(ratio);
+      setUnclassifiedRevenue(eyemobileData?.dailySalesCoverage?.unclassifiedRevenue ?? 0);
+
       if (typeof totalItems === 'number' && totalItems > 0) {
         setItensVendidos(totalItems);
-      } else if (eyemobileData?.configured) {
-        // Sem detalhamento por item no payload de vendas
-        setItensVendidos(null);
       } else {
-        // Fallback local: sem detalhamento por item
         setItensVendidos(null);
       }
       setCrescimentoItens(null);
@@ -373,13 +362,24 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
             <div className="text-xs text-muted-foreground font-medium">Itens Vendidos</div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
               {itensVendidos !== null ? (
-                itensVendidos.toLocaleString('pt-BR')
+                <span>
+                  {itensVendidos.toLocaleString('pt-BR')}
+                  {itemsCoverage === 'partial' && (
+                    <span className="text-xs font-normal text-amber-400 ml-1.5" title={`Cobertura parcial: ${Math.round(itemsCoverageRatio * 100)}% das vendas detalhadas`}>
+                      (parcial)
+                    </span>
+                  )}
+                </span>
               ) : (
                 <span className="text-sm font-normal text-slate-400">Dados insuficientes</span>
               )}
             </div>
             <div className="mt-2 text-xs">
-              {crescimentoItens !== null ? (
+              {itemsCoverage === 'partial' ? (
+                <span className="text-amber-400/90 font-medium">
+                  Parcial ({Math.round(itemsCoverageRatio * 100)}% das vendas c/ itens)
+                </span>
+              ) : crescimentoItens !== null ? (
                 <span className="text-emerald-400 font-medium">+{crescimentoItens}%</span>
               ) : (
                 <span className="text-slate-500">Unidades comercializadas</span>
@@ -426,6 +426,12 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               <div className="h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
                 <ShoppingBag className="w-8 h-8 text-slate-600 mb-1" />
                 <span>Nenhuma venda registrada no período selecionado.</span>
+              </div>
+            )}
+            {unclassifiedRevenue > 0 && (
+              <div className="mt-2 text-[11px] text-slate-400 border-t border-border/30 pt-2 flex items-center justify-between">
+                <span>Vendas sem data exata apurada:</span>
+                <span className="font-medium text-slate-300">R$ {unclassifiedRevenue.toFixed(2)}</span>
               </div>
             )}
           </CardContent>
