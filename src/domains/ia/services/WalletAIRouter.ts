@@ -80,16 +80,16 @@ const AGENT_V2_PATTERNS: RegExp[] = [
 
 /** Intenção VENDAS — consulta de faturamento bruto do PDV Eyemobile. */
 const FAST_QUERY_VENDAS_PATTERNS: RegExp[] = [
-  /^quanto (vendi|vendeu|faturei|faturou)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
-  /^vendas (hoje|ontem|essa semana|este mes|deste mes)$/,
-  /^faturamento (hoje|ontem|esse mes|deste mes|do dia|da semana)?$/,
+  /^quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
+  /^vendas (de )?(hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^faturamento (de )?(hoje|ontem|esse mes|deste mes|do dia|da semana)?$/,
   /^quanto (a loja|a empresa) vendeu( (hoje|ontem|este mes))?$/,
   /como estao as vendas$/,
 ];
 
 /** Intenção RECEITAS — consulta de entradas financeiras da Wallet (líquido). */
 const FAST_QUERY_RECEITAS_PATTERNS: RegExp[] = [
-  /^quanto (tive de receita|recebi|entrou)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
+  /^quanto (tive de receita|tivemos de receita|recebi|recebemos|entrou)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
   /^receita (hoje|ontem|essa semana|este mes|deste mes)$/,
   /^quanto entrou( (hoje|ontem|esta semana|este mes))?$/,
   /^entradas (hoje|ontem|essa semana|este mes)$/,
@@ -98,7 +98,7 @@ const FAST_QUERY_RECEITAS_PATTERNS: RegExp[] = [
 
 /** Consultas que não são nem vendas nem receitas mas são pontuais. */
 const FAST_QUERY_OUTROS_PATTERNS: RegExp[] = [
-  /^quanto (gastei|gastou|despesa)( (hoje|ontem|esse mes))?$/,
+  /^quanto (gastei|gastou|gastamos|despesa)( (hoje|ontem|esse mes))?$/,
   /saldo (atual|agora|hoje|em conta)/,
   /quanto tenho (em conta|disponivel|na conta)/,
   /(caixa|saldo) (agora|hoje|atual)/,

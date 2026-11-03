@@ -61,4 +61,5 @@ describe("WalletAIRouter", () => {
   it("DEFAULT: vazio -> AGENT_V2", () => { expect(routeMessage({ message: "" }).route).toBe("AGENT_V2"); });
   it("ACENTUACAO: Analise acentuado -> AGENT_V2", () => { expect(routeMessage({ message: "Analise detalhada das receitas" }).route).toBe("AGENT_V2"); });
   it("ACENTUACAO: Tendencia acentuada -> AGENT_V2", () => { expect(routeMessage({ message: "Qual a tendencia?" }).route).toBe("AGENT_V2"); });
+  it('FAST: Quanto vendemos ontem -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quanto vendemos ontem?' }).route).toBe('FAST_QUERY'); });
 });
