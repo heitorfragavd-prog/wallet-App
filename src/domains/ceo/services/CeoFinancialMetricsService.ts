@@ -80,7 +80,63 @@ export interface CeoExecutiveKpis {
   dataAtualizacao: string;
   dailySales30Days: { date: string; valor: number }[];
   dadosIndisponiveis?: boolean;
+  dadosIndisponiveis?: boolean;
   erroMensagem?: string;
+  despesasIndisponiveis?: boolean;
+  faturamentoIndisponivel?: boolean;
+  motivoIndisponibilidadeDespesas?: string | null;
+  motivoIndisponibilidadeCmv?: string | null;
+}
+
+export interface TransacaoReceitaItem {
+  id?: string;
+  valor: number;
+  data: string;
+  created_at?: string;
+  descricao?: string | null;
+  observacoes?: string | null;
+  deduplication_key?: string | null;
+}
+
+/**
+ * Deduplica registros de receita (ex: múltiplas inserções de vendas sincronizadas Eyemobile)
+ * identificando chaves de venda únicas em deduplication_key, observações ou descrição.
+ */
+export function deduplicateRevenues<T extends TransacaoReceitaItem>(transacoes: T[]): T[] {
+  const seen = new Set<string>();
+  const deduplicated: T[] = [];
+
+  for (const t of transacoes) {
+    let key: string | null = null;
+
+    if (t.deduplication_key) {
+      key = `dedup:${t.deduplication_key}`;
+    } else {
+      const obs = t.observacoes || "";
+      const desc = t.descricao || "";
+      const matchObs = obs.match(/Venda:\s*#(\d+)/i);
+      const matchDesc = desc.match(/Venda Eyemobile\s*#(\d+)/i);
+
+      if (matchObs) {
+        key = `eyemobile:sale:${matchObs[1]}`;
+      } else if (matchDesc) {
+        key = `eyemobile:sale:${matchDesc[1]}`;
+      } else if (t.id) {
+        key = `id:${t.id}`;
+      }
+    }
+
+    if (key) {
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+    }
+
+    deduplicated.push(t);
+  }
+
+  return deduplicated;
 }
 
 export interface VendaCanalDistribuicao {
@@ -175,12 +231,12 @@ export class CeoFinancialMetricsService {
       const diasSemanaNomes = ['domingos', 'segundas-feiras', 'terças-feiras', 'quartas-feiras', 'quintas-feiras', 'sextas-feiras', 'sábados'];
       const diaSemanaOntemNome = diasSemanaNomes[yesterdayParts.dayOfWeek];
 
-      // 1. Faturamento e Transações do Mês Atual (paginação segura completa)
-      const txMes = await this.fetchAllPaginated<{ valor: number; data: string; created_at?: string }>(
+      // 1. Faturamento e Transações do Mês Atual (paginação segura completa com deduplicação de vendas PDV)
+      const txMesRaw = await this.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor, data, created_at')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioMesAtual)
@@ -189,16 +245,17 @@ export class CeoFinancialMetricsService {
             .range(from, to)
       );
 
+      const txMes = deduplicateRevenues(txMesRaw);
       const faturamentoMes = txMes.reduce((acc, t) => acc + Number(t.valor || 0), 0);
       const pedidosMes = txMes.length;
       const ticketMedioMes = pedidosMes > 0 ? Math.round((faturamentoMes / pedidosMes) * 100) / 100 : null;
 
-      // 2. Faturamento Mês Anterior (Período Equivalente)
-      const txMesAnt = await this.fetchAllPaginated<{ valor: number }>(
+      // 2. Faturamento Mês Anterior (Período Equivalente com deduplicação)
+      const txMesAntRaw = await this.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioMesAnt)
@@ -206,6 +263,7 @@ export class CeoFinancialMetricsService {
             .range(from, to)
       );
 
+      const txMesAnt = deduplicateRevenues(txMesAntRaw);
       const faturamentoMesAnt = txMesAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
       const pedidosMesAnt = txMesAnt.length;
       const ticketMedioMesAnt = pedidosMesAnt > 0 ? faturamentoMesAnt / pedidosMesAnt : null;
@@ -227,17 +285,18 @@ export class CeoFinancialMetricsService {
           : null;
 
       // 3. Faturamento de Ontem real (Consulta dedicada independente do mês — resolve virada de mês/ano)
-      const txOntem = await this.fetchAllPaginated<{ valor: number; data: string }>(
+      const txOntemRaw = await this.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor, data')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', ontemStr)
             .lte('data', `${ontemStr}T23:59:59.999Z`)
             .range(from, to)
       );
+      const txOntem = deduplicateRevenues(txOntemRaw);
       const faturamentoOntem = txOntem.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
       // Média real do mesmo dia da semana nas últimas 4 semanas (28 dias antes de ontem)
@@ -245,17 +304,18 @@ export class CeoFinancialMetricsService {
       const date28DaysAgo = new Date(yesterdayNoonMs - 28 * 24 * 60 * 60 * 1000);
       const inicioHistoricoStr = getSaoPauloDateString(date28DaysAgo);
 
-      const txHistoricoSemana = await this.fetchAllPaginated<{ valor: number; data: string }>(
+      const txHistoricoSemanaRaw = await this.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor, data')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioHistoricoStr)
             .lte('data', `${ontemStr}T23:59:59.999Z`)
             .range(from, to)
       );
+      const txHistoricoSemana = deduplicateRevenues(txHistoricoSemanaRaw);
 
       const diaSemanaIndex = yesterdayParts.dayOfWeek;
       const vendasMesmoDiaSemana = txHistoricoSemana.filter((t) => {
@@ -277,89 +337,102 @@ export class CeoFinancialMetricsService {
           : null;
 
       // 4. Despesas Mês Atual reais (consolidação canônica com prevenção estrita de duplicidade)
-      const despMes = await this.fetchAllPaginated<DespesaInput>(
-        (from, to) =>
-          supabase
-            .from('despesas')
-            .select('id, valor, data, descricao, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
-            .eq('workspace_id', workspaceId)
-            .gte('data', inicioMesAtual)
-            .lte('data', fimMesAtual)
-            .range(from, to)
-      );
+      let totalDespesasMes = 0;
+      let totalDespesasMesAnt = 0;
+      let despesasIndisponiveis = false;
+      let motivoIndisponibilidadeDespesas: string | null = null;
 
-      const txDespMes = await this.fetchAllPaginated<TransacaoInput>(
-        (from, to) =>
-          supabase
-            .from('transacoes')
-            .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
-            .eq('workspace_id', workspaceId)
-            .eq('tipo', 'despesa')
-            .gte('data', inicioMesAtual)
-            .lte('data', `${fimMesAtual}T23:59:59.999Z`)
-            .range(from, to)
-      );
+      try {
+        const despMes = await this.fetchAllPaginated<DespesaInput>(
+          (from, to) =>
+            supabase
+              .from('despesas')
+              .select('id, valor, data, descricao, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
+              .eq('workspace_id', workspaceId)
+              .gte('data', inicioMesAtual)
+              .lte('data', fimMesAtual)
+              .range(from, to)
+        );
 
-      const repMes = FinancialConsolidationService.consolidate({
-        workspaceId,
-        despesas: despMes,
-        transacoes: txDespMes,
-        options: {
-          startDate: inicioMesAtual,
-          endDate: fimMesAtual,
-          ignoreInternalTransfers: true,
-          ignoreCreditCardInvoicePayments: true,
-        },
-      });
-      const totalDespesasMes = repMes.totalPorCompetencia;
+        const txDespMes = await this.fetchAllPaginated<TransacaoInput>(
+          (from, to) =>
+            supabase
+              .from('transacoes')
+              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+              .eq('workspace_id', workspaceId)
+              .eq('tipo', 'despesa')
+              .gte('data', inicioMesAtual)
+              .lte('data', `${fimMesAtual}T23:59:59.999Z`)
+              .range(from, to)
+        );
 
-      // Despesas Mês Anterior equivalentes
-      const despMesAnt = await this.fetchAllPaginated<DespesaInput>(
-        (from, to) =>
-          supabase
-            .from('despesas')
-            .select('id, valor, data, descricao, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
-            .eq('workspace_id', workspaceId)
-            .gte('data', inicioMesAnt)
-            .lte('data', fimMesAntEquivalente)
-            .range(from, to)
-      );
+        const repMes = FinancialConsolidationService.consolidate({
+          workspaceId,
+          despesas: despMes,
+          transacoes: txDespMes,
+          options: {
+            startDate: inicioMesAtual,
+            endDate: fimMesAtual,
+            ignoreInternalTransfers: true,
+            ignoreCreditCardInvoicePayments: true,
+          },
+        });
+        totalDespesasMes = repMes.totalPorCompetencia;
 
-      const txDespMesAnt = await this.fetchAllPaginated<TransacaoInput>(
-        (from, to) =>
-          supabase
-            .from('transacoes')
-            .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
-            .eq('workspace_id', workspaceId)
-            .eq('tipo', 'despesa')
-            .gte('data', inicioMesAnt)
-            .lte('data', `${fimMesAntEquivalente}T23:59:59.999Z`)
-            .range(from, to)
-      );
+        // Despesas Mês Anterior equivalentes
+        const despMesAnt = await this.fetchAllPaginated<DespesaInput>(
+          (from, to) =>
+            supabase
+              .from('despesas')
+              .select('id, valor, data, descricao, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
+              .eq('workspace_id', workspaceId)
+              .gte('data', inicioMesAnt)
+              .lte('data', fimMesAntEquivalente)
+              .range(from, to)
+        );
 
-      const repMesAnt = FinancialConsolidationService.consolidate({
-        workspaceId,
-        despesas: despMesAnt,
-        transacoes: txDespMesAnt,
-        options: {
-          startDate: inicioMesAnt,
-          endDate: fimMesAntEquivalente,
-          ignoreInternalTransfers: true,
-          ignoreCreditCardInvoicePayments: true,
-        },
-      });
-      const totalDespesasMesAnt = repMesAnt.totalPorCompetencia;
+        const txDespMesAnt = await this.fetchAllPaginated<TransacaoInput>(
+          (from, to) =>
+            supabase
+              .from('transacoes')
+              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+              .eq('workspace_id', workspaceId)
+              .eq('tipo', 'despesa')
+              .gte('data', inicioMesAnt)
+              .lte('data', `${fimMesAntEquivalente}T23:59:59.999Z`)
+              .range(from, to)
+        );
+
+        const repMesAnt = FinancialConsolidationService.consolidate({
+          workspaceId,
+          despesas: despMesAnt,
+          transacoes: txDespMesAnt,
+          options: {
+            startDate: inicioMesAnt,
+            endDate: fimMesAntEquivalente,
+            ignoreInternalTransfers: true,
+            ignoreCreditCardInvoicePayments: true,
+          },
+        });
+        totalDespesasMesAnt = repMesAnt.totalPorCompetencia;
+      } catch (errDesp: unknown) {
+        console.warn('[CeoFinancialMetricsService] Despesas indisponíveis ou não configuradas:', errDesp);
+        despesasIndisponiveis = true;
+        motivoIndisponibilidadeDespesas =
+          errDesp instanceof Error ? errDesp.message : 'Falha ao consultar tabela de despesas';
+      }
 
       const variacaoDespesas =
-        totalDespesasMesAnt > 0
+        !despesasIndisponiveis && totalDespesasMesAnt > 0
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10
           : null;
 
-      // 5. Resultado Operacional Real (Receitas - Despesas), permitindo valor negativo
-      const resultadoOperacional = faturamentoMes - totalDespesasMes;
-      const margemOperacional = (faturamentoMes > 0 && totalDespesasMes > 0)
-        ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
-        : null;
+      // 5. Resultado Operacional Real (Receitas - Despesas), preservando fidelidade contábil
+      const resultadoOperacional = despesasIndisponiveis ? faturamentoMes : (faturamentoMes - totalDespesasMes);
+      const margemOperacional =
+        !despesasIndisponiveis && faturamentoMes > 0 && totalDespesasMes > 0
+          ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
+          : null;
 
       // 6. CMV Status: checa se há fichas técnicas reais e cobertura efetiva
       const { count: countFichas } = await supabase
@@ -379,24 +452,28 @@ export class CeoFinancialMetricsService {
         : 0;
       const cmvPercent: number | null = null;
       const cmvStatus = hasFichas ? 'atencao' : 'dados_insuficientes';
+      const motivoIndisponibilidadeCmv = !hasFichas
+        ? 'Fichas técnicas de produtos ainda não cadastradas no sistema'
+        : null;
 
-      // 7. Evolução diária de vendas (últimos 30 dias reais)
+      // 7. Evolução diária de vendas (últimos 30 dias reais com deduplicação)
       const limite30Dias = new Date(hoje.getTime() - 29 * 24 * 60 * 60 * 1000);
       const limite30DiasStr = limite30Dias.toISOString().slice(0, 10);
 
-      const tx30Dias = await this.fetchAllPaginated<{ valor: number; data: string }>(
+      const tx30DiasRaw = await this.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor, data')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', limite30DiasStr)
-            .lte('data', fimMesAtual)
+            .lte('data', `${fimMesAtual}T23:59:59.999Z`)
             .order('data', { ascending: true })
             .range(from, to)
       );
 
+      const tx30Dias = deduplicateRevenues(tx30DiasRaw);
       const mapDaily = new Map<string, number>();
       for (const t of tx30Dias) {
         if (!t.data) continue;
@@ -483,6 +560,9 @@ export class CeoFinancialMetricsService {
         acoesHoje,
         dataAtualizacao: 'atualizado agora',
         dailySales30Days,
+        despesasIndisponiveis,
+        motivoIndisponibilidadeDespesas,
+        motivoIndisponibilidadeCmv,
       };
     } catch (err: unknown) {
       console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos reais:', err);
@@ -495,11 +575,6 @@ export class CeoFinancialMetricsService {
       };
     }
   }
-
-  /**
-   * Obtém a distribuição de vendas por canal baseada em dados reais.
-   * Não inventa percentuais de iFood/99Food se não houver pedidos nesses canais.
-   */
   static async getSalesByChannel(workspaceId: string): Promise<VendaCanalDistribuicao[]> {
     if (!workspaceId) return [];
 

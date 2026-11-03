@@ -20,7 +20,7 @@ export type FinancialDataRow = Record<string, unknown>;
 export type FinancialDataExecutor = (query: FinancialDataQuery) => Promise<FinancialDataRow[]>;
 
 function assertScope(row: FinancialDataRow, context: AiExecutionContext): void {
-  if (row.user_id !== context.userId || row.workspace_id !== context.workspaceId) {
+  if (row.workspace_id !== context.workspaceId) {
     throw new Error("repository_scope_mismatch");
   }
 }
@@ -47,21 +47,40 @@ function normalizeRecords(
           ? "expense"
           : "income"
       : defaultKind;
+    const desc = String(row.descricao ?? "Sem descrição");
+    const matchEyemobile = desc.match(/Venda Eyemobile\s*#(\d+)/i);
+    const dedup = typeof row.deduplication_key === "string" && row.deduplication_key
+      ? row.deduplication_key
+      : matchEyemobile
+        ? `eyemobile:sale:${matchEyemobile[1]}`
+        : `${sourceType}:${sourceId}`;
+
     return {
       id: sourceId,
       sourceType,
       sourceId,
       workspaceId: context.workspaceId,
-      userId: context.userId,
+      userId: String(row.user_id || context.userId),
       kind,
       amount: amount(row.valor),
       occurredOn: String(row.data),
-      deduplicationKey: typeof row.deduplication_key === "string" && row.deduplication_key
-        ? row.deduplication_key
-        : `${sourceType}:${sourceId}`,
-      description: String(row.descricao ?? "Sem descrição"),
+      deduplicationKey: dedup,
+      description: desc,
     };
   });
+}
+
+function deduplicateCanonicalRecords(records: CanonicalFinancialRecord[]): CanonicalFinancialRecord[] {
+  const seen = new Set<string>();
+  const out: CanonicalFinancialRecord[] = [];
+  for (const r of records) {
+    if (r.deduplicationKey) {
+      if (seen.has(r.deduplicationKey)) continue;
+      seen.add(r.deduplicationKey);
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 function scopedQuery(
@@ -101,7 +120,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       ]);
       const recs = normalizeRecords(recRows, context, "receita", "income");
       const txs = normalizeRecords(txRows, context, "transacao", "income");
-      return [...recs, ...txs];
+      return deduplicateCanonicalRecords([...recs, ...txs]);
     },
     async listExpenses(context, period) {
       const [despRows, txRows] = await Promise.all([
@@ -123,7 +142,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       ]);
       const desps = normalizeRecords(despRows, context, "despesa", "expense");
       const txs = normalizeRecords(txRows, context, "transacao", "expense");
-      return [...desps, ...txs];
+      return deduplicateCanonicalRecords([...desps, ...txs]);
     },
     async listTransactions(context, period) {
       const rows = await execute(scopedQuery(
@@ -132,7 +151,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
         context,
         period,
       ));
-      return normalizeRecords(rows, context, "transacao", "income");
+      return deduplicateCanonicalRecords(normalizeRecords(rows, context, "transacao", "income"));
     },
     async listBalances(context) {
       const rows = await execute(scopedQuery(
@@ -172,21 +191,15 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
     },
     async listSalesPDV(context, period) {
       // Fonte canônica de vendas brutas do PDV Eyemobile no banco.
-      // Usa a mesma origem do buildLocalFallbackDashboard:
-      // transacoes WHERE tipo='receita' AND descricao LIKE 'Venda Eyemobile %'
-      // Este valor é BRUTO (sem deduções de taxas Divipay).
-      const query = scopedQuery(
-        "transacoes",
-        "id,user_id,workspace_id,descricao,valor,data,tipo",
-        context,
-        period,
-      );
+      // Consulta todas as vendas da loja no workspace_id (inclui sincronizações por usuário integrador).
       const rows = await execute({
-        ...query,
-        equals: { ...query.equals, tipo: "receita" },
+        table: "transacoes",
+        columns: "id,user_id,workspace_id,descricao,valor,data,tipo",
+        equals: { workspace_id: context.workspaceId, tipo: "receita" },
+        dateRange: period ? { column: "data", ...period } : undefined,
         like: { column: "descricao", pattern: "Venda Eyemobile %" },
       });
-      return normalizeRecords(rows, context, "transacao", "income");
+      return deduplicateCanonicalRecords(normalizeRecords(rows, context, "transacao", "income"));
     },
   };
 }

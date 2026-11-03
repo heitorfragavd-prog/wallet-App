@@ -13,7 +13,7 @@ import {
 import { useToast } from '@/shared/hooks/use-toast';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 import { CommercialExperiment, GrowthOpportunity } from '@/domains/ceo/types';
-import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { CeoExecutiveKpis, CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
 
 interface CeoOpportunitiesTabProps {
@@ -37,16 +37,25 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
   const loadOpportunities = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const opps = await CeoRepository.listOpportunities(workspaceId);
-      if (opps && opps.length > 0) {
+      const res = await CeoRepository.listOpportunities(workspaceId);
+      const opps = res?.data;
+      if (opps && Array.isArray(opps) && opps.length > 0) {
         setOpportunities(opps);
       } else {
-        const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, kpis);
+        const topProds = await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
+        const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
+          kpis,
+          topProducts: topProds,
+        });
         setOpportunities(groundedOpps);
       }
     } catch (err) {
       console.warn('[CeoOpportunitiesTab] Erro ao carregar oportunidades do banco, usando motor canônico:', err);
-      const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, kpis);
+      const topProds = await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
+      const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
+        kpis,
+        topProducts: topProds,
+      });
       setOpportunities(groundedOpps);
     }
   }, [workspaceId, kpis]);

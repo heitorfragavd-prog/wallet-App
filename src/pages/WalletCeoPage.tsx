@@ -97,58 +97,12 @@ export const WalletCeoPage: React.FC = () => {
       );
       setDeliveryChannelsConfigured(hasActiveHomologated);
 
-      const mergedKpis: CeoExecutiveKpis = { ...kpis };
-
-      // Se Eyemobile de ontem estiver disponível e configurado, reconcilia vendas brutas PDV
-      if (
-        yesterdayEyemobile?.configured &&
-        (yesterdayEyemobile.kpis.totalRevenue > 0 || yesterdayEyemobile.kpis.totalTransactions > 0)
-      ) {
-        mergedKpis.faturamentoOntem = yesterdayEyemobile.kpis.totalRevenue;
-        if (mergedKpis.mediaDiaSemanaOntem && mergedKpis.mediaDiaSemanaOntem > 0) {
-          const varPct =
-            Math.round(
-              ((mergedKpis.faturamentoOntem - mergedKpis.mediaDiaSemanaOntem) /
-                mergedKpis.mediaDiaSemanaOntem) *
-                1000
-            ) / 10;
-          mergedKpis.variacaoOntemVsMedia = varPct;
-          mergedKpis.variacaoOntemVsMediaPercent = varPct;
-        }
-      }
-
-      setExecutiveKpis(mergedKpis);
+      // Fonte canônica unificada: CeoFinancialMetricsService consolida transações reais deduplicadas
+      setExecutiveKpis(kpis);
     } catch (err) {
       console.warn('[WalletCeoPage] Erro ao carregar KPIs executivos:', err);
     }
-  }, [workspaceId, hoje]);
-
-  // Reconcilia dados do mês do Eyemobile PDV quando carregados
-  useEffect(() => {
-    if (
-      eyemobileData?.configured &&
-      (eyemobileData.kpis.totalRevenue > 0 || eyemobileData.kpis.totalTransactions > 0)
-    ) {
-      setExecutiveKpis((prev) => {
-        const rev = eyemobileData.kpis.totalRevenue;
-        const txs = eyemobileData.kpis.totalTransactions;
-        const avg = eyemobileData.kpis.averageTicket;
-        const despesas = prev.despesasMes;
-        const resOp = despesas > 0 ? rev - despesas : rev;
-        const margem = despesas > 0 && rev > 0 ? Math.round((resOp / rev) * 1000) / 10 : null;
-
-        return {
-          ...prev,
-          faturamentoMes: rev,
-          pedidosMes: txs,
-          ticketMedioMes: avg,
-          resultadoOperacional: resOp,
-          margemOperacional: margem,
-          margemOperacionalPercent: margem,
-        };
-      });
-    }
-  }, [eyemobileData]);
+  }, [workspaceId]);
 
   const loadRepositoryData = useCallback(async () => {
     if (!workspaceId) return;
