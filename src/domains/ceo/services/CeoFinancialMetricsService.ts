@@ -358,7 +358,7 @@ export class CeoFinancialMetricsService {
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, cartao_id, workspace_id')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'despesa')
               .gte('data', inicioMesAtual)
@@ -395,7 +395,7 @@ export class CeoFinancialMetricsService {
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+              .select('id, valor, data, descricao, tipo, metodo_pagamento, deduplication_key, observacoes, cartao_id, workspace_id')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'despesa')
               .gte('data', inicioMesAnt)
