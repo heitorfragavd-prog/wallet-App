@@ -1180,6 +1180,7 @@ async function fetchDashboardData(
 
   const offset = startOffset + customOffset;
   let hasMore = true;
+  let isTruncated = false;
 
   if (isExternalPagination) {
     const salesUrl = buildUrl(offset);
@@ -1195,7 +1196,6 @@ async function fetchDashboardData(
     let pagesFetched = 0;
 
     const seenPageSignatures = new Set<string>();
-    let isTruncated = false;
 
     while (hasMore && pagesFetched < maxPages) {
       const pageOffsets: number[] = [];

@@ -15,6 +15,8 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   CeoFinancialMetricsService,
   TopProdutoFaturamento,
+  TransacaoReceitaItem,
+  deduplicateRevenues,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
@@ -126,11 +128,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         }
       } else {
         // Fallback local: Transações reais deste período com paginação integral segura
-        const tx = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+        const txRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('valor, data')
+              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'receita')
               .gte('data', inicioStr)
@@ -139,18 +141,20 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               .range(from, to)
         );
 
-        const txAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+        const txAntRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('valor, data')
+              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'receita')
               .gte('data', inicioAntStr)
               .lte('data', `${fimAntStr}T23:59:59.999Z`)
-              .order('data', { ascending: true })
               .range(from, to)
         );
+
+        const tx = deduplicateRevenues(txRaw);
+        const txAnt = deduplicateRevenues(txAntRaw);
 
         total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
         count = tx.length;

@@ -3,6 +3,8 @@ import {
   CeoFinancialMetricsService,
   getSaoPauloParts,
   getSaoPauloYesterday,
+  deduplicateRevenues,
+  TransacaoReceitaItem,
 } from './CeoFinancialMetricsService';
 
 interface MockRow {
@@ -512,6 +514,48 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(kpis.despesasMes).toBe(2500);
       expect(kpis.resultadoOperacional).toBe(2500); // 5000 - 2500
       expect(kpis.margemOperacionalPercent).toBe(50); // 2500 / 5000 = 50%
+    });
+    it('Cenário 12: deduplicateRevenues elimina triplicatas de vendas Eyemobile por observações', () => {
+      const raw: TransacaoReceitaItem[] = [
+        { id: 'tx-1', valor: 15.0, data: '2026-11-01', observacoes: 'Integrado via Eyemobile API. Venda: #1234' },
+        { id: 'tx-2', valor: 15.0, data: '2026-11-01', observacoes: 'Integrado via Eyemobile API. Venda: #1234' },
+        { id: 'tx-3', valor: 15.0, data: '2026-11-01', observacoes: 'Integrado via Eyemobile API. Venda: #1234' },
+        { id: 'tx-4', valor: 32.5, data: '2026-11-01', observacoes: 'Integrado via Eyemobile API. Venda: #1235' },
+      ];
+
+      const deduplicated = deduplicateRevenues(raw);
+      expect(deduplicated).toHaveLength(2);
+      expect(deduplicated[0].id).toBe('tx-1');
+      expect(deduplicated[1].id).toBe('tx-4');
+      const total = deduplicated.reduce((acc, t) => acc + t.valor, 0);
+      expect(total).toBe(47.5);
+    });
+
+    it('Cenário 13: deduplicateRevenues elimina duplicatas com "Venda Eyemobile #1234" na descrição', () => {
+      const raw: TransacaoReceitaItem[] = [
+        { id: 'tx-a', valor: 20.0, data: '2026-11-02', descricao: 'Venda Eyemobile #999' },
+        { id: 'tx-b', valor: 20.0, data: '2026-11-02', descricao: 'Venda Eyemobile #999' },
+      ];
+
+      const deduplicated = deduplicateRevenues(raw);
+      expect(deduplicated).toHaveLength(1);
+      expect(deduplicated[0].id).toBe('tx-a');
+    });
+
+    it('Cenário 14: Resiliência de despesas — despesas indisponíveis não zeram o faturamento', async () => {
+      const wsId = 'ws-rodo-point-test';
+      const refDate = new Date('2026-11-02T12:00:00-03:00');
+
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-rec-1', valor: 8500, data: '2026-11-01', tipo: 'receita', workspace_id: wsId },
+        ],
+        despesas: [],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+      expect(kpis.faturamentoMes).toBe(8500);
+      expect(kpis.dadosIndisponiveis).toBeFalsy();
     });
   });
 });

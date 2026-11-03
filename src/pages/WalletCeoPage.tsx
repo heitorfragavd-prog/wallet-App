@@ -35,12 +35,11 @@ import {
   CeoExecutiveKpis,
   getSaoPauloDateString,
   getSaoPauloParts,
-  getSaoPauloYesterday,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useFoodCost } from '@/domains/finance/hooks/useFoodCost';
-import { useEyemobileDashboard, fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
+import { useEyemobileDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -79,12 +78,8 @@ export const WalletCeoPage: React.FC = () => {
   const loadExecutiveData = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const yesterdayParts = getSaoPauloYesterday(hoje);
-      const ontemStr = yesterdayParts.dateString;
-
-      const [kpis, yesterdayEyemobile, channelsRes] = await Promise.all([
+      const [kpis, channelsRes] = await Promise.all([
         CeoFinancialMetricsService.getExecutiveKpis(workspaceId),
-        fetchLiveDashboard({ startDate: ontemStr, endDate: ontemStr }, workspaceId).catch(() => null),
         supabase
           .from('delivery_channels')
           .select('id, is_active, status, connection_state')
@@ -97,58 +92,12 @@ export const WalletCeoPage: React.FC = () => {
       );
       setDeliveryChannelsConfigured(hasActiveHomologated);
 
-      const mergedKpis: CeoExecutiveKpis = { ...kpis };
-
-      // Se Eyemobile de ontem estiver disponível e configurado, reconcilia vendas brutas PDV
-      if (
-        yesterdayEyemobile?.configured &&
-        (yesterdayEyemobile.kpis.totalRevenue > 0 || yesterdayEyemobile.kpis.totalTransactions > 0)
-      ) {
-        mergedKpis.faturamentoOntem = yesterdayEyemobile.kpis.totalRevenue;
-        if (mergedKpis.mediaDiaSemanaOntem && mergedKpis.mediaDiaSemanaOntem > 0) {
-          const varPct =
-            Math.round(
-              ((mergedKpis.faturamentoOntem - mergedKpis.mediaDiaSemanaOntem) /
-                mergedKpis.mediaDiaSemanaOntem) *
-                1000
-            ) / 10;
-          mergedKpis.variacaoOntemVsMedia = varPct;
-          mergedKpis.variacaoOntemVsMediaPercent = varPct;
-        }
-      }
-
-      setExecutiveKpis(mergedKpis);
+      // Fonte canônica unificada: CeoFinancialMetricsService consolida transações reais deduplicadas
+      setExecutiveKpis(kpis);
     } catch (err) {
       console.warn('[WalletCeoPage] Erro ao carregar KPIs executivos:', err);
     }
-  }, [workspaceId, hoje]);
-
-  // Reconcilia dados do mês do Eyemobile PDV quando carregados
-  useEffect(() => {
-    if (
-      eyemobileData?.configured &&
-      (eyemobileData.kpis.totalRevenue > 0 || eyemobileData.kpis.totalTransactions > 0)
-    ) {
-      setExecutiveKpis((prev) => {
-        const rev = eyemobileData.kpis.totalRevenue;
-        const txs = eyemobileData.kpis.totalTransactions;
-        const avg = eyemobileData.kpis.averageTicket;
-        const despesas = prev.despesasMes;
-        const resOp = despesas > 0 ? rev - despesas : rev;
-        const margem = despesas > 0 && rev > 0 ? Math.round((resOp / rev) * 1000) / 10 : null;
-
-        return {
-          ...prev,
-          faturamentoMes: rev,
-          pedidosMes: txs,
-          ticketMedioMes: avg,
-          resultadoOperacional: resOp,
-          margemOperacional: margem,
-          margemOperacionalPercent: margem,
-        };
-      });
-    }
-  }, [eyemobileData]);
+  }, [workspaceId]);
 
   const loadRepositoryData = useCallback(async () => {
     if (!workspaceId) return;
