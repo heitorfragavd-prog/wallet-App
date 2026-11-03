@@ -53,7 +53,7 @@ export function resolveBeneficiary(
     desc.includes("boleto");
 
   let name = "---";
-  let document = "---";
+  const document = "---";
 
   if (!isBoleto) {
     // Pix: extrai nome se explicitado na descrição oficial do banco

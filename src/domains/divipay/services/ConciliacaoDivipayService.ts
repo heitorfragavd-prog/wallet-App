@@ -19,6 +19,31 @@ import {
 import { resolveBeneficiary } from "../utils";
 import type { Contato } from "@/domains/finance/hooks/useContatos";
 
+
+type DynamicDb = {
+  from: (table: string) => {
+    select: (cols?: string) => DynamicDb;
+    insert: (values: unknown) => DynamicDb;
+    update: (values: unknown) => DynamicDb;
+    upsert: (values: unknown, opts?: unknown) => DynamicDb;
+    delete: () => DynamicDb;
+    eq: (col: string, val: unknown) => DynamicDb;
+    neq: (col: string, val: unknown) => DynamicDb;
+    in: (col: string, vals: unknown[]) => DynamicDb;
+    or: (filter: string) => DynamicDb;
+    gt: (col: string, val: unknown) => DynamicDb;
+    order: (col: string, opts?: unknown) => DynamicDb;
+    range: (from: number, to: number) => DynamicDb;
+    limit: (count: number) => DynamicDb;
+    single: () => Promise<{ data: Record<string, unknown> | null; error: unknown }>;
+    maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: unknown }>;
+    then: (onfulfilled?: (val: { data: unknown[]; error: unknown }) => unknown) => Promise<unknown>;
+  };
+  rpc: (fn: string, params?: unknown) => Promise<{ data: Record<string, unknown> | null; error: unknown }>;
+};
+
+const dynamicDb = supabase as unknown as DynamicDb;
+
 const COMPONENT = "ConciliacaoDivipayService";
 
 export type DivipayConciliacao = Database["public"]["Tables"]["divipay_conciliacoes"]["Row"] & {
@@ -287,7 +312,7 @@ async function criarDespesaFornecedor(
   const descEfetiva = saque.descricao || `${metodoPagamento === "boleto" ? "Pagamento Boleto" : "Pagamento Pix"} - ${fornecedor.nome}`;
   const effectiveCatId = categoriaId || fornecedor.categoria_padrao_id || (await findOrCreateCategoria(userId, "Compra de Mercadorias", "ShoppingBag", "#10b981"));
 
-  const { data, error } = await (supabase as any)
+  const { data, error } = await dynamicDb
     .from("despesas")
     .insert({
       user_id: userId,
@@ -416,7 +441,7 @@ export function mapearSaque(t: DivipayTransacao): SaqueParaConciliar | null {
 export class ConciliacaoDivipayService {
   async listar(status?: string, workspaceId?: string | null): Promise<DivipayConciliacao[]> {
     const userId = await requireUserId();
-    let query = (supabase as any)
+    let query = dynamicDb
       .from("divipay_conciliacoes")
       .select("*")
       .eq("user_id", userId)
@@ -444,18 +469,18 @@ export class ConciliacaoDivipayService {
     const userId = await requireUserId();
 
     // 1. Carrega dados de Colaboradores e Acertos
-    const { data: colabsRaw } = await (supabase as any)
+    const { data: colabsRaw } = await dynamicDb
       .from("colaboradores")
       .select("id, nome, tipo, pix_chave, pix_chave_normalizada, cpf")
       .eq("workspace_id", wsId);
     const colaboradores: ColaboradorCandidato[] = colabsRaw ?? [];
 
-    const { data: equipeRows } = await (supabase as any)
+    const { data: equipeRows } = await dynamicDb
       .from("colaborador_acertos")
       .select("id, colaborador_id, tipo, pix_chave_snapshot, valor_total, vencimento, status")
       .eq("workspace_id", wsId)
       .in("status", ["pendente", "processando"]);
-    const acertos: AcertoEquipeCandidato[] = (equipeRows ?? []).map((a: any) => ({
+    const acertos: AcertoEquipeCandidato[] = (equipeRows ?? []).map((a: Record<string, unknown>) => ({
       id: a.id,
       colaborador_id: a.colaborador_id,
       tipo: a.tipo,
@@ -466,7 +491,7 @@ export class ConciliacaoDivipayService {
     }));
 
     // 2. Carrega Fornecedores (contatos com tipo 'fornecedor' e ativos)
-    const { data: fornRaw } = await (supabase as any)
+    const { data: fornRaw } = await dynamicDb
       .from("contatos")
       .select("*")
       .eq("workspace_id", wsId)
@@ -475,14 +500,14 @@ export class ConciliacaoDivipayService {
     const fornecedores: Contato[] = fornRaw ?? [];
 
     // 3. Carrega Dívidas em aberto
-    const { data: dividasRaw } = await (supabase as any)
+    const { data: dividasRaw } = await dynamicDb
       .from("dividas")
       .select("id, descricao, credor, documento_favorecido, valor_restante, data_vencimento, categoria_id, linha_digitavel, codigo_barras, contato_id")
       .eq("user_id", userId)
       .eq("workspace_id", wsId)
       .neq("status", "quitada")
       .gt("valor_restante", 0);
-    const dividasAbertas: DividaCandidata[] = (dividasRaw ?? []).map((d: any) => ({
+    const dividasAbertas: DividaCandidata[] = (dividasRaw ?? []).map((d: Record<string, unknown>) => ({
       id: d.id,
       descricao: d.descricao,
       credor: d.credor,
@@ -499,18 +524,18 @@ export class ConciliacaoDivipayService {
     // 4. Cache de transações já processadas para idempotência
     const jaProcessados = new Set<string>();
     for (let offset = 0; offset < 50000; offset += 1000) {
-      const { data: lote } = await (supabase as any)
+      const { data: lote } = await dynamicDb
         .from("divipay_conciliacoes")
         .select("divipay_external_id")
         .eq("user_id", userId)
         .eq("workspace_id", wsId)
         .range(offset, offset + 999);
       const rows = lote ?? [];
-      rows.forEach((c: any) => jaProcessados.add(c.divipay_external_id));
+      rows.forEach((c: { divipay_external_id: string }) => jaProcessados.add(c.divipay_external_id));
       if (rows.length < 1000) break;
     }
 
-    const { data: locais } = await (supabase as any)
+    const { data: locais } = await dynamicDb
       .from("divipay_transacoes")
       .select("external_id, status, metadata")
       .eq("user_id", userId)
@@ -518,8 +543,8 @@ export class ConciliacaoDivipayService {
       .eq("type", "CASH_OUT");
     const localPorExternalId = new Map(
       (locais ?? [])
-        .filter((l: any) => l.external_id)
-        .map((l: any) => [l.external_id as string, l]),
+        .filter((l: Record<string, unknown>) => l.external_id)
+        .map((l: Record<string, unknown>) => [l.external_id as string, l]),
     );
 
     // 5. Itera sobre cada saque executando o motor de conciliação avançada
@@ -573,7 +598,7 @@ export class ConciliacaoDivipayService {
       // CASO A: Identificado como Colaborador ou Sócio
       if (match.tipo === "colaborador" || match.tipo === "socio") {
         if (match.acertoSugerido) {
-          const { error: rpcErr } = await (supabase as any).rpc("confirmar_pagamento_acerto", {
+          const { error: rpcErr } = await dynamicDb.rpc("confirmar_pagamento_acerto", {
             p_acerto_id: match.acertoSugerido.id,
             p_divipay_external_id: saque.externalId,
             p_pagamento_id: typeof localMeta.pagamento_id === "string" ? localMeta.pagamento_id : null,
@@ -595,7 +620,7 @@ export class ConciliacaoDivipayService {
           });
         } else {
           // Pix identificado para colaborador sem acerto prévio: cria registro via RPC manual
-          const { data: resManual } = await (supabase as any).rpc("registrar_pagamento_colaborador_manual", {
+          const { data: resManual } = await dynamicDb.rpc("registrar_pagamento_colaborador_manual", {
             p_colaborador_id: match.colaborador.id,
             p_tipo: match.tipo === "socio" ? "pro_labore" : "outro",
             p_periodo_inicio: saque.dataPagamento.slice(0, 10),
@@ -727,7 +752,7 @@ export class ConciliacaoDivipayService {
       throw new Error("user_id é obrigatório para registrar conciliação (fail-closed)");
     }
 
-    const { error } = await (supabase as any).from("divipay_conciliacoes").upsert(
+    const { error } = await dynamicDb.from("divipay_conciliacoes").upsert(
       {
         user_id: userId,
         workspace_id: wsId,
@@ -780,7 +805,7 @@ export class ConciliacaoDivipayService {
     if (!ok) return false;
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await (supabase as any)
+    const { error } = await dynamicDb
       .from("divipay_conciliacoes")
       .update({ status: "conciliada", divida_id: dividaId })
       .eq("id", conciliacao.id);
@@ -796,7 +821,7 @@ export class ConciliacaoDivipayService {
     const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
     const userId = await requireUserId();
 
-    const { data: contato } = await (supabase as any)
+    const { data: contato } = await dynamicDb
       .from("contatos")
       .select("*")
       .eq("id", contatoId)
@@ -833,7 +858,7 @@ export class ConciliacaoDivipayService {
 
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await (supabase as any)
+    const { error } = await dynamicDb
       .from("divipay_conciliacoes")
       .update({
         status: "conciliada",
@@ -861,7 +886,7 @@ export class ConciliacaoDivipayService {
     const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
     const userId = await requireUserId();
 
-    const { data: colab } = await (supabase as any)
+    const { data: colab } = await dynamicDb
       .from("colaboradores")
       .select("*")
       .eq("id", colaboradorId)
@@ -885,7 +910,7 @@ export class ConciliacaoDivipayService {
     let targetDespesaId = conciliacao.despesa_id;
 
     if (targetAcertoId) {
-      await (supabase as any).rpc("confirmar_pagamento_acerto", {
+      await dynamicDb.rpc("confirmar_pagamento_acerto", {
         p_acerto_id: targetAcertoId,
         p_divipay_external_id: saque.externalId,
         p_pagamento_id: null,
@@ -895,7 +920,7 @@ export class ConciliacaoDivipayService {
         p_comprovante_url: null,
       });
     } else {
-      const { data: resRpc, error: errRpc } = await (supabase as any).rpc("registrar_pagamento_colaborador_manual", {
+      const { data: resRpc, error: errRpc } = await dynamicDb.rpc("registrar_pagamento_colaborador_manual", {
         p_colaborador_id: colaboradorId,
         p_tipo: colab.tipo === "socio" ? "pro_labore" : "outro",
         p_periodo_inicio: saque.dataPagamento.slice(0, 10),
@@ -913,7 +938,7 @@ export class ConciliacaoDivipayService {
 
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await (supabase as any)
+    const { error } = await dynamicDb
       .from("divipay_conciliacoes")
       .update({
         status: "conciliada",
@@ -948,7 +973,7 @@ export class ConciliacaoDivipayService {
     const despesaId = await criarDespesaAvulsa(userId, saque, wsId);
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await (supabase as any)
+    const { error } = await dynamicDb
       .from("divipay_conciliacoes")
       .update({ status: "importada", despesa_id: despesaId })
       .eq("id", conciliacao.id);
@@ -956,7 +981,7 @@ export class ConciliacaoDivipayService {
   }
 
   async ignorar(conciliacaoId: string): Promise<boolean> {
-    const { error } = await (supabase as any)
+    const { error } = await dynamicDb
       .from("divipay_conciliacoes")
       .update({ status: "ignorada" })
       .eq("id", conciliacaoId);

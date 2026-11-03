@@ -124,7 +124,7 @@ export class ConciliacaoFinanceiraAvancada {
     dividas: DividaCandidata[];
     despesas?: DespesaCandidata[];
   }): MatchBeneficiarioResultado {
-    const { saque, colaboradores, acertos, fornecedores, dividas, despesas = [] } = params;
+    const { saque, colaboradores, acertos, fornecedores, dividas, despesas: _despesas = [] } = params;
     const isBoleto = String(saque.tipo).toUpperCase() === "BILLET" || String(saque.descricao || "").toLowerCase().includes("boleto");
 
     const pixKeyNormalizada = normalizarChavePix(saque.recipientKey || saque.favorecidoDocumento);
