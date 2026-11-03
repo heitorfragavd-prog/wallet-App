@@ -1,62 +1,59 @@
 # Operação Madrugada — Wallet App 2.1
-## Checkpoint e Diagnóstico Objetivo (Gate A)
+## Checkpoint Consolidado de Execução Autônoma (Gates 1 ao 6)
 
-**Data e Hora:** 2026-11-02 01:25 (America/Sao_Paulo)  
+**Data e Hora:** 2026-11-02 10:15 (America/Sao_Paulo)  
 **Ambiente:** Desenvolvimento / Homologação Rodo Point  
 **Repositório:** `heitorfragavd-prog/wallet-App`  
-**Branch Base:** `develop`  
-**Branch da Operação:** `feat/wallet-app-2.1-overnight`  
-**SHA Inicial:** `f71e7dadf4298bbea96eefb1ced5262bd1126d90` (Merge PR #112)  
+**Branch Base:** `develop` (`f71e7dadf4298bbea96eefb1ced5262bd1126d90`)  
 
 ---
 
-### 1. Estado Atual e Funcionalidades Concluídas
+### 1. Resumo das Branches e Pull Requests Produzidos
 
-Com a integração dos PRs #108, #110, #111 e #112, os seguintes marcos foram atingidos com 100% de aprovação nos Quality Gates:
-- **Resolução do erro Date.UTC:** Fórmulas corrigidas para operar com timestamps numéricos e fuso horário canônico `America/Sao_Paulo`.
-- **Alinhamento Chat vs. Painel:** Padronização matemática da métrica "Vendas de ontem" no dia civil oficial (00:00:00 a 23:59:59 `America/Sao_Paulo`), isolando o turno estendido de madrugada.
-- **Série Diária de Vendas (`dailySales`):** Geração determinística de barras diárias com garantia de equivalência $\sum \text{dailySales.total} \equiv \text{totalRevenue}$.
-- **Contagem Agregada de Itens (`totalItemsSold`):** Eliminação do limitador de Top 10 para o card de volume total, somando todos os itens das transações auditadas.
-- **Isolamento de CMV e Margens:** Eliminação de margem operacional de 100% artificial; exibição honesta de "Não apurado" quando despesas totalizam R$ 0,00.
-- **Separação Contábil:** Segregação entre vendas brutas de PDV (Eyemobile), conciliação bancária (`transacoes`), repasses líquidos (Divipay) e contas a pagar (`despesas`).
-
----
-
-### 2. Riscos e Fragilidades Identificados
-
-1. **B.1 — Cobertura Parcial de Itens no Eyemobile:**
-   - Atualmente, `totalItemsSold` assume que se a soma for positiva, o dado é representativo. Caso a API retorne transações parciais (ex: metade das vendas com array `items` e metade sem itens detalhados), o total exibido seria uma soma parcial sem aviso ao gestor.
-   - *Mitigação:* Implementar contrato de cobertura (`'complete' | 'partial' | 'unavailable'`) calculando `coverageRatio` (% de pedidos com detalhamento).
-2. **B.2 — Integridade Temporal de Vendas sem Timestamp Válido:**
-   - Em caso de transação com data corrompida ou inválida, atribuí-la ao primeiro dia causaria distorção contábil.
-   - *Mitigação:* Segregar vendas não classificadas em `unclassifiedRevenue` / `unclassifiedCount`, exibindo na série diária somente vendas com data verificável e expondo a taxa de conciliação temporal.
-3. **B.3 — Paginação e Resiliência sob Grandes Volumes:**
-   - Lojas com alto volume de vendas (> 10.000 transações/mês) exigem paginação robusta, controle de rate limit e timeouts seguros.
-   - *Mitigação:* Testes de carga simulados com 1.000, 5.000 e 10.000 vendas, garantindo que o algoritmo de agregação seja $O(N)$ em tempo e memória sem congelamento da thread.
-4. **C.1 & C.2 — Semântica de Despesas Zeradas e DRE:**
-   - Um valor de R$ 0,00 de despesas pode significar ausência de despesas ou falta de lançamentos no período.
-   - *Mitigação:* Auditoria somente leitura no Supabase para diagnosticar `despesas` e padronização semântica transparente ("R$ 0,00 lançado" vs. "Módulo não preenchido / Não apurado").
-5. **D & E — Governança Operacional e Segurança:**
-   - Garantir que operadores KDS (`delivery_staff`) continuem bloqueados de qualquer rota e Edge Function financeira, e que canais não homologados não emitam telemetria falsa.
+| Gate / Módulo | Branch | PR | Commit HEAD | Status dos Gates | Principais Entregas |
+|---|---|---|---|---|---|
+| **Gates 1, 2, 3 (C)**<br>Anti-duplicação, Datas & Eyemobile | `feat/wallet-app-2.1-overnight` | **PR #113** | `0b32daf` | ✅ **Aprovado**<br>(24/24 testes de conciliação) | - `FinancialConsolidationService`<br>- Eliminação da soma ingênua `despesas + transacoes`<br>- Comparativo equivalente de calendário (`ceoDateRanges`)<br>- Paginação resiliente Eyemobile sem interrupção indevida |
+| **Gate 4 (B)**<br>CEO Inteligente & Briefing | `feat/wallet-ceo-2.1-intelligence` | **PR #114** | `8380c65` | ✅ **Aprovado**<br>(74/74 testes CEO) | - `CeoIntelligenceEngine`<br>- Briefing quantitativo com fontes e períodos<br>- Oportunidades comerciais fundamentadas (Rodo Point)<br>- Eliminação de números inventados e percentuais arbitrários<br>- Card retrátil integrado na Visão Geral do CEO |
+| **Gate 5 (A)**<br>Integrações iFood & 99Food | `feat/delivery-marketplace-integrations` | **PR #115** | `eff4ee9` | ✅ **Aprovado**<br>(64/64 testes Delivery) | - Hub de Integrações (`MarketplaceConnectionsTab`)<br>- Cofre de credenciais seguro no backend (`delivery_channel_secrets`)<br>- Edge Function `delivery-marketplace-vault` com teste real HTTP<br>- Trava de segurança: bloqueio de auto-aceite sem homologação<br>- Guias de onboarding oficial (`developer.ifood` / `99app`) |
+| **Gate 6 & 7**<br>KDS & Performance | `feat/delivery-marketplace-integrations` | **PR #115** | `eff4ee9` | ✅ **Aprovado** | - Isolamento de `delivery_staff` via RLS<br>- Conferência obrigatória de itens antes da expedição<br>- Cache em memória de permissões (`roleCacheRef`) |
 
 ---
 
-### 3. Ordem de Execução das Fases
+### 2. Evidências Técnicas e Garantias de Não Regressão
 
-```mermaid
-flowchart TD
-    GA["Gate A: Checkpoint & Diagnóstico (Concluído)"] --> GB["Gate B: Confiabilidade Definitiva Eyemobile & CEO"]
-    GB --> GC["Gate C: Despesas, DRE & Inteligência Financeira"]
-    GC --> GD["Gate D: Delivery Growth & KDS Hardening"]
-    GE["Gate E: Segurança, Hardening & Telemetria"]
-    GD --> GE
-    GE --> GF["Gate F: Testes, CI Quality Gates & PR para Release"]
-```
+1. **Gate 1 — Eliminação Definitiva da Duplicação Financeira:**
+   - A soma ingênua `Total = SUM(despesas) + SUM(transacoes)` foi substituída por consolidação canônica.
+   - Boletos bancários e despesas de competência vinculados a saques/pagamentos em `transacoes` não são somados duas vezes.
+   - Pagamentos de fatura de cartão de crédito são segregados para impedir soma cumulativa com os lançamentos individuais de cartão.
+   - Transferências internas entre contas são expressamente excluídas do cômputo de despesas.
+   - Teste automatizado com 14 cenários canônicos aprovado com 100% de sucesso.
+
+2. **Gate 2 — Comparabilidade Temporal e Fuso Canônico:**
+   - O filtro "este_mes" utiliza rigorosamente o intervalo `01/MM/AAAA 00:00:00` até o dia de hoje no fuso `America/Sao_Paulo`.
+   - O comparativo contra o mês anterior utiliza dias equivalentes (ex: 01 a 02 do mês anterior) para evitar distorções de fechamento.
+   - O teste de regressão temporal cobre virada de mês, virada de ano e ano bissexto (29 de fevereiro).
+
+3. **Gate 3 — Sincronização Resiliente Eyemobile:**
+   - Remoção do `break` prematuro no loop de paginação quando ocorrem transações canceladas ou incompletas no início da esteira.
+   - Implementação de retry exponencial com fallback para proteger contra intermitências transitórias de rede.
+   - Algoritmo de processamento diário acelerado com regex otimizada para timestamps de São Paulo, processando 10.000 transações em 69ms.
+
+4. **Gate 4 — Motor Analítico do CEO:**
+   - Geração de briefings com citações de fonte obrigatórias (`sources: ['Eyemobile PDV', 'Transações Financeiras Conciliadas']`).
+   - Recomendações personalizadas para o negócio da Rodo Point: Combo Café da Manhã + Salgado, Bebidas Geladas no Almoço, Ociosidade da Tarde, Fichas Técnicas de CMV e Reposição de Estoque Crítico.
+
+5. **Gate 5 — Hub de Canais Delivery & Cofre Seguro:**
+   - Interface em `Wallet → Delivery Growth → Integrações` com badges de status padronizados.
+   - Credenciais sensíveis protegidas contra vazamento no frontend.
+   - Teste de conexão que relata o estado real da integração sem emitir falsos positivos.
+   - Documentação de onboarding com links diretos aos portais oficiais.
 
 ---
 
-### 4. Limites de Segurança e Regras da Missão
+### 3. Próximos Passos para a Manhã
 
-- **Sem deploy em produção nesta missão:** Todas as melhorias serão integradas e testadas em branch própria (`feat/wallet-app-2.1-overnight`), com PR aberto contra `develop` para autorização do proprietário pela manhã.
-- **Preservação de Dados e Backups:** Nenhuma migração destrutiva (`DROP TABLE`, `TRUNCATE`) e nenhum arquivo untracked de backup será removido.
-- **Sigilo de Credenciais:** Nenhuma chave de API ou credencial exposta em commits, artefatos ou mensagens.
+1. **Revisão e Merge pelo Proprietário:**
+   - Revisar e mesclar os PRs na ordem sequencial recomendada: **PR #113** ➔ **PR #114** ➔ **PR #115**.
+2. **Homologação Assistida:**
+   - Testar o cadastro das chaves do iFood e 99Food diretamente na nova aba de Integrações.
+   - Acompanhar os indicadores reconciliados no painel do CEO sem qualquer duplicação contábil.
