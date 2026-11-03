@@ -105,7 +105,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         (from, to) =>
           supabase
             .from('despesas')
-            .select('id, valor, data, descricao, categoria_id, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
+            .select('id, valor, data, descricao, categoria_id, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioStr)
             .lte('data', fimStr)
@@ -117,7 +117,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, cartao_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'despesa')
             .gte('data', inicioStr)
@@ -143,7 +143,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         (from, to) =>
           supabase
             .from('despesas')
-            .select('id, valor, data, descricao, categoria_id, status, pago, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
+            .select('id, valor, data, descricao, categoria_id, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .gte('data', inicioAntStr)
             .lte('data', fimAntStr)
@@ -154,7 +154,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, fatura_id, cartao_id, workspace_id')
+            .select('id, valor, data, descricao, tipo, categoria_id, metodo_pagamento, deduplication_key, observacoes, cartao_id, workspace_id')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'despesa')
             .gte('data', inicioAntStr)

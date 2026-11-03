@@ -65,70 +65,9 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       const inicioAntStr = range.inicioAntStr;
       const fimAntStr = range.fimAntStr;
 
-      // 1. Consulta Eyemobile PDV em tempo real para o período selecionado
-      const eyemobileData = await fetchLiveDashboard(
-        { startDate: inicioStr, endDate: fimStr },
-        workspaceId
-      ).catch(() => null);
-
-      let total = 0;
-      let count = 0;
-      let totalAnt = 0;
-      let countAnt = 0;
-      let topProdsList: TopProdutoFaturamento[] = [];
-      const dayMap = new Map<string, number>();
-
-      if (
-        eyemobileData?.configured &&
-        (eyemobileData.kpis.totalRevenue > 0 || eyemobileData.kpis.totalTransactions > 0)
-      ) {
-        total = eyemobileData.kpis.totalRevenue;
-        count = eyemobileData.kpis.totalTransactions;
-
-        // Top products do Eyemobile com faturamento real
-        if (eyemobileData.topProducts && eyemobileData.topProducts.length > 0) {
-          topProdsList = eyemobileData.topProducts.map((p, idx) => ({
-            rank: idx + 1,
-            id: p.id,
-            produto: p.product,
-            quantidade: p.quantity,
-            faturamento: p.total,
-            percentualFaturamento: total > 0 ? Math.round((p.total / total) * 1000) / 10 : 0,
-            margemEstimada: null,
-          }));
-        }
-
-        // Distribuição diária canônica a partir das vendas reais Eyemobile
-        if (eyemobileData.dailySales && Array.isArray(eyemobileData.dailySales)) {
-          for (const d of eyemobileData.dailySales) {
-            dayMap.set(d.date, d.total);
-          }
-        }
-
-        // Comparação com período anterior: estritamente da mesma fonte (Eyemobile PDV)
-        // NUNCA misturar vendas brutas de PDV com transações bancárias da Wallet.
-        if (periodo === 'ultimos_7_dias') {
-          try {
-            const eyemobileAntData = await fetchLiveDashboard(
-              { startDate: inicioAntStr, endDate: fimAntStr },
-              workspaceId
-            ).catch(() => null);
-            if (eyemobileAntData?.configured && (eyemobileAntData.kpis.totalRevenue > 0 || eyemobileAntData.kpis.totalTransactions > 0)) {
-              totalAnt = eyemobileAntData.kpis.totalRevenue;
-              countAnt = eyemobileAntData.kpis.totalTransactions;
-            }
-          } catch {
-            totalAnt = 0;
-            countAnt = 0;
-          }
-        } else {
-          // Para períodos de 30 dias / mês, evita consultas pesadas duplicadas
-          totalAnt = 0;
-          countAnt = 0;
-        }
-      } else {
-        // Fallback local: Transações reais deste período com paginação integral segura
-        const txRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
+      // Fonte canônica unificada: Transações reais deste período com paginação integral segura e deduplicação
+      const [txRaw, txAntRaw, prods] = await Promise.all([
+        CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
           (from, to) =>
             supabase
               .from('transacoes')
@@ -139,9 +78,8 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               .lte('data', `${fimStr}T23:59:59.999Z`)
               .order('data', { ascending: true })
               .range(from, to)
-        );
-
-        const txAntRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
+        ),
+        CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
           (from, to) =>
             supabase
               .from('transacoes')
@@ -151,24 +89,43 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               .gte('data', inicioAntStr)
               .lte('data', `${fimAntStr}T23:59:59.999Z`)
               .range(from, to)
-        );
+        ),
+        CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []),
+      ]);
 
-        const tx = deduplicateRevenues(txRaw);
-        const txAnt = deduplicateRevenues(txAntRaw);
+      const tx = deduplicateRevenues(txRaw);
+      const txAnt = deduplicateRevenues(txAntRaw);
 
-        total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-        count = tx.length;
-        totalAnt = txAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
-        countAnt = txAnt.length;
+      const total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const count = tx.length;
+      const totalAnt = txAnt.reduce((acc, t) => acc + Number(t.valor || 0), 0);
+      const countAnt = txAnt.length;
+      const dayMap = new Map<string, number>();
 
-        for (const t of tx || []) {
-          if (!t.data) continue;
-          const d = t.data.slice(0, 10);
-          dayMap.set(d, (dayMap.get(d) || 0) + Number(t.valor || 0));
-        }
+      for (const t of tx || []) {
+        if (!t.data) continue;
+        const d = t.data.slice(0, 10);
+        dayMap.set(d, (dayMap.get(d) || 0) + Number(t.valor || 0));
+      }
 
-        const prods = await CeoFinancialMetricsService.getTopProducts(workspaceId);
-        topProdsList = prods;
+      let topProdsList: TopProdutoFaturamento[] = prods;
+
+      // Enriquecimento opcional de itens via Eyemobile live dashboard se disponível
+      const eyemobileData = await fetchLiveDashboard(
+        { startDate: inicioStr, endDate: fimStr },
+        workspaceId
+      ).catch(() => null);
+
+      if (eyemobileData?.configured && eyemobileData.topProducts && eyemobileData.topProducts.length > 0 && topProdsList.length === 0) {
+        topProdsList = eyemobileData.topProducts.map((p, idx) => ({
+          rank: idx + 1,
+          id: p.id,
+          produto: p.product,
+          quantidade: p.quantity,
+          faturamento: p.total,
+          percentualFaturamento: total > 0 ? Math.round((p.total / total) * 1000) / 10 : 0,
+          margemEstimada: null,
+        }));
       }
 
       setVendasTotais(total);
