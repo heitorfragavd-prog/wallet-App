@@ -13,16 +13,20 @@ import {
 import { useToast } from '@/shared/hooks/use-toast';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 import { CommercialExperiment, GrowthOpportunity } from '@/domains/ceo/types';
+import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
 
 interface CeoOpportunitiesTabProps {
   workspaceId: string;
   experiments: CommercialExperiment[];
+  kpis?: CeoExecutiveKpis;
   onExperimentCreated?: () => void;
 }
 
 export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
   workspaceId,
   experiments,
+  kpis,
   onExperimentCreated,
 }) => {
   const { toast } = useToast();
@@ -34,11 +38,18 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
     if (!workspaceId) return;
     try {
       const opps = await CeoRepository.listOpportunities(workspaceId);
-      setOpportunities(opps);
+      if (opps && opps.length > 0) {
+        setOpportunities(opps);
+      } else {
+        const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, kpis);
+        setOpportunities(groundedOpps);
+      }
     } catch (err) {
-      console.warn('[CeoOpportunitiesTab] Erro ao carregar oportunidades:', err);
+      console.warn('[CeoOpportunitiesTab] Erro ao carregar oportunidades do banco, usando motor canônico:', err);
+      const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, kpis);
+      setOpportunities(groundedOpps);
     }
-  }, [workspaceId]);
+  }, [workspaceId, kpis]);
 
   useEffect(() => {
     loadOpportunities();
