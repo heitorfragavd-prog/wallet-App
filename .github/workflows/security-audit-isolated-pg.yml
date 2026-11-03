@@ -157,6 +157,8 @@ jobs:
         uses: supabase/setup-cli@v1
         with:
           version: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start Real Supabase Stack (PostgreSQL, Auth, PostgREST, Inbucket)
         run: |
