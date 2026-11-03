@@ -133,6 +133,21 @@ type ConfirmarPagamentoInput = {
   comprovanteUrl?: string | null;
 };
 
+export type RegistrarPagamentoManualInput = {
+  colaboradorId: string;
+  tipo: string;
+  periodoInicio: string;
+  periodoFim: string;
+  valor: number;
+  dataPagamento: string;
+  origem?: 'manual' | 'divipay_externo' | 'wallet_divipay';
+  referencia?: string | null;
+  comprovanteUrl?: string | null;
+  observacoes?: string | null;
+  despesaId?: string | null;
+  acertoId?: string | null;
+};
+
 async function callRpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.rpc(name as never, args as never);
   if (error) throw error;
@@ -237,6 +252,28 @@ export function useEquipeAcertos(colaboradorId: string | null) {
     onSuccess: invalidateEquipe,
   });
 
+  const registrarPagamentoManual = useMutation({
+    mutationFn: (input: RegistrarPagamentoManualInput) =>
+      callRpc<{ sucesso: boolean; ja_registrado: boolean; acerto_id: string; pagamento_id: string; despesa_id: string }>(
+        'registrar_pagamento_colaborador_manual',
+        {
+          p_colaborador_id: input.colaboradorId,
+          p_tipo: input.tipo,
+          p_periodo_inicio: input.periodoInicio,
+          p_periodo_fim: input.periodoFim,
+          p_valor: input.valor,
+          p_data_pagamento: input.dataPagamento,
+          p_origem: input.origem ?? 'manual',
+          p_referencia: input.referencia ?? null,
+          p_comprovante_url: input.comprovanteUrl ?? null,
+          p_observacoes: input.observacoes ?? null,
+          p_despesa_id: input.despesaId ?? null,
+          p_acerto_id: input.acertoId ?? null,
+        },
+      ),
+    onSuccess: invalidateEquipe,
+  });
+
   return {
     ...query,
     data: query.data ?? [],
@@ -248,5 +285,6 @@ export function useEquipeAcertos(colaboradorId: string | null) {
     confirmarPagamento,
     registrarFalha,
     cancelarEscala,
+    registrarPagamentoManual,
   };
 }

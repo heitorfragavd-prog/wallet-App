@@ -7,7 +7,12 @@ import EquipeDetalhePage from "./EquipeDetalhe";
 const navigate = vi.fn();
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
-  return { ...actual, useNavigate: () => navigate, useParams: () => ({ id: "colaborador-1" }) };
+  return {
+    ...actual,
+    useNavigate: () => navigate,
+    useParams: () => ({ id: "colaborador-1" }),
+    useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  };
 });
 vi.mock("@/shared/components/layouts/DashboardLayout", () => ({ DashboardLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 

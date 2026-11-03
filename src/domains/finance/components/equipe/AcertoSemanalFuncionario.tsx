@@ -39,6 +39,7 @@ type Props = {
   previousWeekStart?: string;
   pixChave?: string | null;
   pixTipo?: string | null;
+  onSuccess?: (acertoId?: string) => void;
 };
 
 type DiaAtualInput = {
@@ -65,6 +66,7 @@ export function AcertoSemanalFuncionario({
   previousWeekStart,
   pixChave,
   pixTipo = "cpf",
+  onSuccess,
 }: Props) {
   // Semana Atual (Segunda a Domingo)
   const mondayAtual = weekStart ?? currentMonday();
@@ -378,7 +380,7 @@ export function AcertoSemanalFuncionario({
         })),
       };
 
-      await gerarAcerto.mutateAsync({
+      const generatedAcertoId = await gerarAcerto.mutateAsync({
         colaboradorId,
         periodoInicio: daysAtual[0].date,
         periodoFim: daysAtual[6].date,
@@ -390,8 +392,12 @@ export function AcertoSemanalFuncionario({
       setFeedback(
         isPendenteExistente
           ? "Acerto semanal atualizado com sucesso!"
-          : "Acerto pendente criado com sucesso! Revise os detalhes e confirme a transferência quando estiver pronto."
+          : "Acerto pendente criado com sucesso! Redirecionando para a aba de acertos..."
       );
+
+      if (onSuccess) {
+        onSuccess(typeof generatedAcertoId === "string" ? generatedAcertoId : undefined);
+      }
     } catch (generateError) {
       setError(
         generateError instanceof Error
