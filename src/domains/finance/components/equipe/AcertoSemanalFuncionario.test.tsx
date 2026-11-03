@@ -70,7 +70,7 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
     );
 
     // 6 dias x R$ 18,25 = R$ 109,50
-    // Como os 6 dias da semana anterior têm Uber real default 12,00 (diferença zero), total = 109,50
+    // Sem histórico da semana anterior e sem ajustes informados, total = R$ 109,50
     expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 109,50");
   });
 
@@ -85,6 +85,9 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
         previousWeekStart="2026-10-26"
       />
     );
+
+    // Confirma manualmente que Seg a Sáb receberam antecipação de R$ 12,00
+    fireEvent.click(screen.getByRole("button", { name: /confirmar seg a sáb/i }));
 
     // Altera Uber real de Segunda na semana anterior para 11.98 (-0,02 de diferença)
     const inputSegundaUber = screen.getByLabelText("Uber real de Segunda");
@@ -121,6 +124,9 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
+    // Confirma manualmente que Seg a Sáb receberam antecipação de R$ 12,00
+    fireEvent.click(screen.getByRole("button", { name: /confirmar seg a sáb/i }));
+
     // Altera Uber real de Segunda para 15.00 (+3,00)
     const inputSegundaUber = screen.getByLabelText("Uber real de Segunda");
     fireEvent.change(inputSegundaUber, { target: { value: "15.00" } });
@@ -155,6 +161,9 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
         previousWeekStart="2026-10-26"
       />
     );
+
+    // Confirma manualmente a antecipação de Seg a Sáb
+    fireEvent.click(screen.getByRole("button", { name: /confirmar seg a sáb/i }));
 
     // Seg: 15.00 (+3.00)
     fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "15.00" } });
@@ -195,6 +204,9 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
+    // Confirma manualmente a antecipação de Seg a Sáb
+    fireEvent.click(screen.getByRole("button", { name: /confirmar seg a sáb/i }));
+
     // Desmarca Quarta na semana atual (não vai trabalhar -> 5 dias previstos = 5 * 18.25 = 91.25)
     fireEvent.click(screen.getByLabelText("Previsão de trabalho na Quarta"));
     expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 91,25");
@@ -221,7 +233,7 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
-    const button = screen.getByRole("button");
+    const button = screen.getByRole("button", { name: /gerar acerto pendente/i });
     expect(button).toBeDisabled();
     expect(screen.getByText(/Salvando acerto.../i)).toBeInTheDocument();
   });
@@ -371,8 +383,8 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
-    // Desmarca antecipação da Segunda e informa R$ 20,00 de Uber real elegível do próprio bolso
-    fireEvent.click(screen.getByLabelText("Recebeu antecipação na Segunda"));
+    // Sem histórico, Segunda já inicia sem antecipação (recebeuAntecipacao=false).
+    // Informa R$ 20,00 de Uber real elegível do próprio bolso
     fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "20.00" } });
 
     // Total: 109,50 + 20,00 = 129,50
@@ -410,10 +422,34 @@ describe("AcertoSemanalFuncionario — Regra Oficial de Transporte e Ajuste", ()
       />
     );
 
-    // Mantém antecipação na Segunda (R$ 12,00) e informa gasto zero (0.00)
+    // Ativa antecipação na Segunda (R$ 12,00) e informa gasto zero (0.00)
+    fireEvent.click(screen.getByLabelText("Recebeu antecipação na Segunda"));
     fireEvent.change(screen.getByLabelText("Uber real de Segunda"), { target: { value: "0" } });
 
     // Desconto de -12,00: 109,50 - 12,00 = 97,50
     expect(screen.getByRole("button", { name: /gerar acerto pendente/i })).toHaveTextContent("R$ 97,50");
+  });
+
+  it("14. Sem histórico gravado, dias iniciam desmarcados; clique em 'Confirmar Seg a Sáb' marca os 6 dias com R$ 12", () => {
+    render(
+      <AcertoSemanalFuncionario
+        colaboradorId="colab-1"
+        colaboradorNome="Shuellen Pereira Santos"
+        valorPassagem={6.25}
+        uberBase={12}
+        weekStart="2026-11-02"
+        previousWeekStart="2026-10-26"
+      />
+    );
+
+    // Verifica que sem histórico Segunda está desmarcada
+    const checkSegunda = screen.getByLabelText("Recebeu antecipação na Segunda");
+    expect(checkSegunda.getAttribute("data-state")).toBe("unchecked");
+
+    // Clica no botão de confirmação manual
+    fireEvent.click(screen.getByRole("button", { name: /confirmar seg a sáb/i }));
+
+    // Agora Segunda está marcada
+    expect(screen.getByLabelText("Recebeu antecipação na Segunda").getAttribute("data-state")).toBe("checked");
   });
 });
