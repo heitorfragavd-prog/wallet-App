@@ -4,12 +4,25 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
+export interface ChavePixAdicional {
+  chave: string;
+  tipo: "cpf" | "cnpj" | "telefone" | "email" | "aleatoria" | string;
+  descricao?: string;
+}
+
+export interface IdentificadorBoleto {
+  tipo: "codigo_beneficiario" | "cnpj_beneficiario" | "linha_digitavel" | "convenio" | string;
+  valor: string;
+  descricao?: string;
+}
+
 export interface Contato {
   id: string;
   user_id: string;
   workspace_id?: string | null;
   tipo: "fornecedor" | "cliente";
   nome: string;
+  nome_fantasia?: string | null;
   cnpj_cpf?: string | null;
   telefone?: string | null;
   email?: string | null;
@@ -17,7 +30,20 @@ export interface Contato {
   contato_nome?: string | null;
   prazo_pagamento_dias?: number | null;
   observacoes?: string | null;
+  categoria_padrao_id?: string | null;
+  subcategoria_padrao_id?: string | null;
+  ativo?: boolean;
+  pix_chave?: string | null;
+  pix_tipo?: "cpf" | "cnpj" | "telefone" | "email" | "aleatoria" | string | null;
+  pix_chave_normalizada?: string | null;
+  beneficiario_documento?: string | null;
+  beneficiario_documento_normalizado?: string | null;
+  beneficiario_nome?: string | null;
+  chaves_pix_adicionais?: ChavePixAdicional[];
+  identificadores_boletos?: IdentificadorBoleto[];
+  historico_identificadores?: Array<Record<string, unknown>>;
   created_at?: string;
+  updated_at?: string;
 }
 
 export const CONTATOS_QUERY_KEY = ["contatos"] as const;
@@ -50,12 +76,12 @@ export const useContatos = () => {
   });
 
   const createContato = useMutation({
-    mutationFn: async (c: Omit<Contato, "id" | "user_id" | "created_at">) => {
+    mutationFn: async (c: Omit<Contato, "id" | "user_id" | "created_at" | "updated_at">) => {
       if (!currentWorkspaceId) {
         throw new Error("Workspace não selecionado para criar contato.");
       }
       const userId = (await supabase.auth.getUser()).data.user?.id;
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from("contatos")
         .insert([{ ...c, user_id: userId, workspace_id: currentWorkspaceId }])
         .select()
@@ -75,7 +101,7 @@ export const useContatos = () => {
 
   const updateContato = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<Contato> & { id: string }) => {
-      let q = supabase
+      let q = (supabase as any)
         .from("contatos")
         .update(updates)
         .eq("id", id);

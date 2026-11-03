@@ -17,6 +17,9 @@ function invalidarTudo(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["dividas"] });
   qc.invalidateQueries({ queryKey: ["despesas"] });
   qc.invalidateQueries({ queryKey: ["divipay-transferencias"] });
+  qc.invalidateQueries({ queryKey: ["fornecedor-financeiro"] });
+  qc.invalidateQueries({ queryKey: ["equipe-resumo"] });
+  qc.invalidateQueries({ queryKey: ["colaboradores"] });
 }
 
 export function useDivipayConciliacoes(status = "pendente") {
@@ -46,9 +49,9 @@ export function useDivipayConciliacao() {
         toast({
           title: "Conciliação Divipay concluída",
           description: [
-            resumo.conciliadasAuto > 0 ? `${resumo.conciliadasAuto} dívida(s) baixada(s)` : null,
+            resumo.conciliadasAuto > 0 ? `${resumo.conciliadasAuto} pagamento(s) identificado(s)` : null,
             resumo.avulsas > 0 ? `${resumo.avulsas} despesa(s) avulsa(s)` : null,
-            resumo.pendentes > 0 ? `${resumo.pendentes} aguardando confirmação` : null,
+            resumo.pendentes > 0 ? `${resumo.pendentes} aguardando revisão` : null,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -69,6 +72,46 @@ export function useDivipayConciliacao() {
         toast({ title: "Dívida baixada", description: "Pagamento conciliado com a dívida com sucesso." });
       } else {
         toast({ title: "Falha na conciliação", description: "Não foi possível dar baixa na dívida.", variant: "destructive" });
+      }
+    },
+  });
+
+  const vincularFornecedor = useMutation({
+    mutationFn: ({
+      conciliacao,
+      contatoId,
+      categoriaId,
+    }: {
+      conciliacao: DivipayConciliacao;
+      contatoId: string;
+      categoriaId?: string | null;
+    }) => conciliacaoDivipayService.vincularFornecedor(conciliacao, contatoId, categoriaId, workspaceId),
+    onSuccess: (ok) => {
+      if (ok) {
+        invalidarTudo(qc);
+        toast({ title: "Fornecedor vinculado", description: "Pagamento associado à ficha do fornecedor com sucesso." });
+      } else {
+        toast({ title: "Falha ao vincular", description: "Não foi possível vincular o fornecedor.", variant: "destructive" });
+      }
+    },
+  });
+
+  const vincularColaborador = useMutation({
+    mutationFn: ({
+      conciliacao,
+      colaboradorId,
+      acertoId,
+    }: {
+      conciliacao: DivipayConciliacao;
+      colaboradorId: string;
+      acertoId?: string | null;
+    }) => conciliacaoDivipayService.vincularColaborador(conciliacao, colaboradorId, acertoId, workspaceId),
+    onSuccess: (ok) => {
+      if (ok) {
+        invalidarTudo(qc);
+        toast({ title: "Colaborador vinculado", description: "Pagamento associado à ficha do colaborador com sucesso." });
+      } else {
+        toast({ title: "Falha ao vincular", description: "Não foi possível vincular o colaborador.", variant: "destructive" });
       }
     },
   });
@@ -96,17 +139,17 @@ export function useDivipayConciliacao() {
     confirmar: (conciliacao: DivipayConciliacao, dividaId: string) =>
       confirmar.mutateAsync({ conciliacao, dividaId }),
     isConfirmando: confirmar.isPending,
+    vincularFornecedor: (params: { conciliacao: DivipayConciliacao; contatoId: string; categoriaId?: string | null }) =>
+      vincularFornecedor.mutateAsync(params),
+    isVinculandoFornecedor: vincularFornecedor.isPending,
+    vincularColaborador: (params: { conciliacao: DivipayConciliacao; colaboradorId: string; acertoId?: string | null }) =>
+      vincularColaborador.mutateAsync(params),
+    isVinculandoColaborador: vincularColaborador.isPending,
     importarAvulsa: (c: DivipayConciliacao) => importarAvulsa.mutateAsync(c),
     ignorar: (id: string) => ignorar.mutateAsync(id),
   };
 }
 
-/**
- * Roda o motor de conciliação automaticamente ao abrir o app
- * (uma vez por dia por sessão), para as despesas da carteira Divipay
- * aparecerem sem precisar abrir a tela de Saques.
- * Montar uma única vez no layout autenticado.
- */
 export function useDivipayConciliacaoAuto(enabled = true) {
   const { transferencias, loading } = useDivipayTransferencias({ enabled });
   const { conciliar } = useDivipayConciliacao();
@@ -119,10 +162,8 @@ export function useDivipayConciliacaoAuto(enabled = true) {
     if (sessionStorage.getItem(chave)) return;
     disparou.current = true;
     sessionStorage.setItem(chave, "1");
-    conciliar(transferencias).catch(() => {
-      // falha: libera para tentar de novo na próxima navegação
-      sessionStorage.removeItem(chave);
+    conciliar(transferencias).catch((err) => {
+      logger.error("useDivipayConciliacaoAuto", "Erro ao rodar conciliação automática", { error: String(err) });
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transferencias, loading, activeWorkspace?.id, enabled]);
+  }, [enabled, loading, transferencias, conciliar, activeWorkspace?.id]);
 }

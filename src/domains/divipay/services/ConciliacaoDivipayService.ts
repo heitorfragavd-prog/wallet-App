@@ -1,32 +1,45 @@
-// ConciliacaoDivipayService — motor de 3 camadas para transformar saques/pagamentos
-// Divipay (Pix DICT e boleto BILLET) em despesas SEM duplicar dívidas cadastradas.
-//
-// Camada 1 (auto):     documento do favorecido bate + valor ≈ valor_restante → baixa direta
-// Camada 2 (pendente): valor bate mas falta confiança → inbox de confirmação
-// Camada 3 (avulsa):   sem candidato → despesa avulsa categorizada
-//
-// A taxa Divipay vira SEMPRE uma despesa separada ("Taxas Divipay / Tarifas Bancárias"),
-// mantendo a despesa principal com o valor exato do boleto/Pix (Decisão A do usuário).
+// ConciliacaoDivipayService — motor de identificação e conciliação financeira automatizada
+// para transformar saques/pagamentos Divipay (Pix DICT e boleto BILLET) em despesas,
+// vinculando-os automaticamente a fornecedores, funcionários e sócios cadastrados.
 
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
 import type { DivipayTransacao } from "@/domains/divipay/types";
 import type { Database } from "@/integrations/supabase/types";
 import {
-  avaliarSaque,
   isSaqueConcluido,
   type DividaCandidata,
   type SaqueParaConciliar,
 } from "./conciliacaoMatcher";
-import { resolveBeneficiary } from "../utils";
 import {
-  matchEquipePayment,
-  type EquipePaymentCandidate,
-} from "../../../../supabase/functions/_shared/equipe-conciliacao";
+  ConciliacaoFinanceiraAvancada,
+  type ColaboradorCandidato,
+  type AcertoEquipeCandidato,
+} from "./conciliacaoFinanceiraAvancada";
+import { resolveBeneficiary } from "../utils";
+import type { Contato } from "@/domains/finance/hooks/useContatos";
 
 const COMPONENT = "ConciliacaoDivipayService";
 
-export type DivipayConciliacao = Database["public"]["Tables"]["divipay_conciliacoes"]["Row"];
+export type DivipayConciliacao = Database["public"]["Tables"]["divipay_conciliacoes"]["Row"] & {
+  beneficiario_tipo?: "fornecedor" | "colaborador" | "socio" | "outro" | null;
+  contato_id?: string | null;
+  colaborador_id?: string | null;
+  acerto_id?: string | null;
+  categoria_id?: string | null;
+  subcategoria_id?: string | null;
+  metodo_pagamento?: "pix" | "boleto" | "cartao" | "ted" | "outro" | string | null;
+  origem_evidencia?: string | null;
+  linha_digitavel?: string | null;
+  codigo_barras?: string | null;
+  competencia?: string | null;
+  comprovante_url?: string | null;
+  valor_aplicado?: number | null;
+  saldo_remanescente?: number | null;
+  revisado_por?: string | null;
+  revisado_em?: string | null;
+  motivo_revisao?: string | null;
+};
 
 export interface ResumoConciliacao {
   processados: number;
@@ -85,10 +98,6 @@ async function findContaDivipay(userId: string): Promise<string | null> {
   return data?.id ?? null;
 }
 
-/**
- * Valida e exige o workspace_id ativo para operações de conciliação.
- * FAIL-CLOSED: não faz fallback por PJ, is_default ou primeiro workspace.
- */
 function requireWorkspaceId(workspaceId?: string | null): string {
   if (!workspaceId || typeof workspaceId !== "string" || !workspaceId.trim()) {
     throw new Error("workspace_id é obrigatório para operações de conciliação Divipay (fail-closed)");
@@ -151,7 +160,7 @@ function normalizarTexto(texto: string): string {
 
 function sugerirCategoria(descricao: string): string {
   const desc = normalizarTexto(descricao);
-  
+
   if (
     desc.includes("alimentacao") ||
     desc.includes("comida") ||
@@ -163,14 +172,8 @@ function sugerirCategoria(descricao: string): string {
     desc.includes("supermercado") ||
     desc.includes("padaria") ||
     desc.includes("biscoito") ||
-    desc.includes("biacoito") ||
     desc.includes("salgado") ||
-    desc.includes("coca") ||
-    desc.includes("bebida") ||
-    desc.includes("churrasco") ||
-    desc.includes("fruta") ||
-    desc.includes("acougue") ||
-    desc.includes("panificadora")
+    desc.includes("bebida")
   ) {
     return "Alimentação";
   }
@@ -179,15 +182,9 @@ function sugerirCategoria(descricao: string): string {
     desc.includes("transporte") ||
     desc.includes("passagem") ||
     desc.includes("uber") ||
-    desc.includes("99pop") ||
-    desc.includes("taxi") ||
     desc.includes("combustivel") ||
     desc.includes("posto") ||
-    desc.includes("gasolina") ||
-    desc.includes("diesel") ||
-    desc.includes("etanol") ||
-    desc.includes("pedagio") ||
-    desc.includes("viagem")
+    desc.includes("gasolina")
   ) {
     return "Transporte";
   }
@@ -195,103 +192,24 @@ function sugerirCategoria(descricao: string): string {
   if (
     desc.includes("tecnologia") ||
     desc.includes("software") ||
-    desc.includes("licenca") ||
     desc.includes("aws") ||
     desc.includes("google") ||
-    desc.includes("microsoft") ||
-    desc.includes("hosting") ||
-    desc.includes("hospedagem") ||
-    desc.includes("internet") ||
-    desc.includes("conexao") ||
-    desc.includes("provedor") ||
-    desc.includes("computador") ||
-    desc.includes("celular") ||
-    desc.includes("robo")
+    desc.includes("internet")
   ) {
     return "Tecnologia";
   }
 
   if (
     desc.includes("servico") ||
-    desc.includes("consultoria") ||
-    desc.includes("honorarios") ||
-    desc.includes("limpeza") ||
-    desc.includes("reforma") ||
     desc.includes("manutencao") ||
-    desc.includes("pintura") ||
-    desc.includes("advogado") ||
+    desc.includes("limpeza") ||
     desc.includes("contador") ||
-    desc.includes("consorcio") ||
-    desc.includes("viviane") ||
-    desc.includes("kenia") ||
+    desc.includes("salario") ||
     desc.includes("folguista") ||
     desc.includes("colaborador") ||
-    desc.includes("funcionario") ||
-    desc.includes("acerto") ||
-    desc.includes("vale") ||
-    desc.includes("comissao") ||
-    desc.includes("salario") ||
-    desc.includes("13o") ||
-    desc.includes("decimo")
+    desc.includes("acerto")
   ) {
     return "Serviços";
-  }
-
-  if (
-    desc.includes("aluguel") ||
-    desc.includes("condominio") ||
-    desc.includes("energia") ||
-    desc.includes("copel") ||
-    desc.includes("sanepar") ||
-    desc.includes("luz") ||
-    desc.includes("agua") ||
-    desc.includes("gas") ||
-    desc.includes("iptu")
-  ) {
-    return "Moradia";
-  }
-
-  if (
-    desc.includes("saude") ||
-    desc.includes("farmacia") ||
-    desc.includes("drogaria") ||
-    desc.includes("medico") ||
-    desc.includes("hospital") ||
-    desc.includes("clinica") ||
-    desc.includes("exame") ||
-    desc.includes("remedio")
-  ) {
-    return "Saúde";
-  }
-
-  if (
-    desc.includes("lazer") ||
-    desc.includes("cinema") ||
-    desc.includes("show") ||
-    desc.includes("teatro") ||
-    desc.includes("spotify") ||
-    desc.includes("netflix") ||
-    desc.includes("prime") ||
-    desc.includes("streaming") ||
-    desc.includes("jogo") ||
-    desc.includes("games") ||
-    desc.includes("cigarro") ||
-    desc.includes("cerveja") ||
-    desc.includes("bar") ||
-    desc.includes("pub")
-  ) {
-    return "Lazer";
-  }
-
-  if (
-    desc.includes("taxa") ||
-    desc.includes("tarifa") ||
-    desc.includes("mensalidade") ||
-    desc.includes("juros") ||
-    desc.includes("multa") ||
-    desc.includes("anuidade")
-  ) {
-    return "Taxas Divipay / Tarifas Bancárias";
   }
 
   return "Transferências e Saques Divipay";
@@ -299,15 +217,8 @@ function sugerirCategoria(descricao: string): string {
 
 function sugerirMetodoPagamento(tipo: string, descricao: string): string {
   const desc = normalizarTexto(descricao);
-  if (tipo === "BILLET" || desc.includes("boleto") || desc.includes("consorcio")) {
+  if (tipo === "BILLET" || desc.includes("boleto")) {
     return "boleto";
-  }
-  // Como são importações do Divipay (conta corrente/checking), transações descritas como cartão são cartao_debito
-  if (desc.includes("cartao")) {
-    return "cartao_debito";
-  }
-  if (desc.includes("dinheiro") || desc.includes("especie") || desc.includes("cash")) {
-    return "dinheiro";
   }
   return "pix";
 }
@@ -324,17 +235,13 @@ async function criarDespesaAvulsa(
 
   const descEfetiva = saque.descricao || (saque.tipo === "BILLET" ? "Pagamento de boleto" : "Pagamento Pix") + ` Divipay - ${saque.favorecidoNome ?? "favorecido"}`;
   const catSugerida = sugerirCategoria(descEfetiva);
-  
+
   let icone = "ArrowUpRight";
   let cor = "#f97316";
   if (catSugerida === "Alimentação") { icone = "Utensils"; cor = "#10b981"; }
   else if (catSugerida === "Transporte") { icone = "Car"; cor = "#3b82f6"; }
-  else if (catSugerida === "Moradia") { icone = "Home"; cor = "#6366f1"; }
-  else if (catSugerida === "Saúde") { icone = "Heart"; cor = "#ec4899"; }
-  else if (catSugerida === "Lazer") { icone = "Smile"; cor = "#f59e0b"; }
   else if (catSugerida === "Tecnologia") { icone = "Cpu"; cor = "#8b5cf6"; }
   else if (catSugerida === "Serviços") { icone = "Briefcase"; cor = "#06b6d4"; }
-  else if (catSugerida === "Taxas Divipay / Tarifas Bancárias") { icone = "Percent"; cor = "#ef4444"; }
 
   const categoriaId = await findOrCreateCategoria(userId, catSugerida, icone, cor);
   const metodoPagamento = sugerirMetodoPagamento(saque.tipo, descEfetiva);
@@ -355,6 +262,7 @@ async function criarDespesaAvulsa(
     })
     .select("id")
     .single();
+
   if (error) {
     logger.error(COMPONENT, "Erro ao criar despesa avulsa", { error: error.message });
     return null;
@@ -362,44 +270,80 @@ async function criarDespesaAvulsa(
   return data.id;
 }
 
-/**
- * Dá baixa numa dívida a partir de um saque Divipay.
- * Replica a lógica de usePagamentosDivida.createPagamento:
- * insere pagamentos_dividas (o trigger sync_pagamento_divida_to_despesa cria a despesa)
- * e atualiza valor_pago/parcelas/status/vencimento da dívida.
- * Idempotente via índice único pagamentos_dividas.divipay_external_id.
- */
+async function criarDespesaFornecedor(
+  userId: string,
+  saque: SaqueParaConciliar,
+  fornecedor: Contato,
+  categoriaId: string | null | undefined,
+  subcategoriaId: string | null | undefined,
+  metodoPagamento: "pix" | "boleto",
+  workspaceId: string,
+): Promise<string | null> {
+  const wsId = requireWorkspaceId(workspaceId);
+  const marcador = `divipay-saque:${saque.externalId}`;
+  const existente = await despesaJaExiste(userId, marcador);
+  if (existente) return existente;
+
+  const descEfetiva = saque.descricao || `${metodoPagamento === "boleto" ? "Pagamento Boleto" : "Pagamento Pix"} - ${fornecedor.nome}`;
+  const effectiveCatId = categoriaId || fornecedor.categoria_padrao_id || (await findOrCreateCategoria(userId, "Compra de Mercadorias", "ShoppingBag", "#10b981"));
+
+  const { data, error } = await (supabase as any)
+    .from("despesas")
+    .insert({
+      user_id: userId,
+      categoria_id: effectiveCatId,
+      subcategoria_id: subcategoriaId || fornecedor.subcategoria_padrao_id || null,
+      conta_id: await findContaDivipay(userId),
+      workspace_id: wsId,
+      contato_id: fornecedor.id,
+      descricao: descEfetiva,
+      valor: saque.valor,
+      data: saque.dataPagamento.slice(0, 10),
+      observacoes: `Importado via Divipay API (${marcador})`,
+      metodo_pagamento: metodoPagamento,
+      status: "pago",
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    logger.error(COMPONENT, "Erro ao criar despesa para fornecedor", { error: error.message });
+    return null;
+  }
+  return data.id;
+}
+
 async function baixarDivida(
   userId: string,
   dividaId: string,
   saque: SaqueParaConciliar,
 ): Promise<boolean> {
-  const { data: divida, error: dividaError } = await supabase
+  const { data: divida, error: dError } = await supabase
     .from("dividas")
     .select("*")
     .eq("id", dividaId)
     .single();
-  if (dividaError || !divida) {
+
+  if (dError || !divida) {
     logger.error(COMPONENT, "Dívida não encontrada para baixa", { dividaId });
     return false;
   }
 
   const valorBaixa = Math.min(saque.valor, Number(divida.valor_restante));
-  if (valorBaixa <= 0) return false;
+  if (valorBaixa <= 0) return true;
 
   const { error: pagError } = await supabase.from("pagamentos_dividas").insert({
     divida_id: dividaId,
     user_id: userId,
     valor: valorBaixa,
     data_pagamento: saque.dataPagamento.slice(0, 10),
-    metodo_pagamento: "pix",
+    metodo_pagamento: saque.tipo === "BILLET" ? "boleto" : "pix",
     conta_id: await findContaDivipay(userId),
-    observacoes: `Pago via Divipay (${saque.tipo === "BILLET" ? "boleto" : "Pix"}) - ${saque.externalId}`,
+    observacoes: `Pago via Divipay (${saque.tipo === "BILLET" ? "Boleto" : "Pix"}) - ${saque.externalId}`,
     divipay_external_id: saque.externalId,
   });
 
   if (pagError) {
-    // 23505 = unique violation → baixa já feita para este saque (idempotente)
     if (pagError.code === "23505") return true;
     logger.error(COMPONENT, "Erro ao registrar pagamento da dívida", { error: pagError.message });
     return false;
@@ -440,58 +384,52 @@ async function baixarDivida(
   return true;
 }
 
-// ─── Mapeamento: DivipayTransacao → SaqueParaConciliar ──────────────────
-
 export function mapearSaque(t: DivipayTransacao): SaqueParaConciliar | null {
   const externalId = t.external_id ?? (t.id.startsWith("api-") ? t.id.slice(4) : t.id);
   if (!externalId) return null;
   const meta = (t.metadata ?? {}) as Record<string, unknown>;
-  const isBoleto = typeof meta.paymentType === "string" ? meta.paymentType === "BILLET" : String(t.description || "").toLowerCase().includes("boleto");
+  const isBoleto =
+    typeof meta.paymentType === "string"
+      ? meta.paymentType === "BILLET"
+      : String(t.description || "").toLowerCase().includes("boleto");
   const resolved = resolveBeneficiary(Number(t.amount || 0), t.description || "", isBoleto ? "Boleto" : "Pix");
-  
+
   return {
     externalId,
-    tipo: typeof meta.paymentType === "string" ? meta.paymentType : null,
+    tipo: typeof meta.paymentType === "string" ? meta.paymentType : (isBoleto ? "BILLET" : "DICT"),
     favorecidoNome:
       (typeof meta.payerName === "string" && meta.payerName) ||
-      resolved.name ||
+      (resolved.name !== "---" ? resolved.name : null) ||
       t.recipient_key ||
       null,
     favorecidoDocumento:
       (typeof meta.document === "string" && meta.document && meta.document !== "---")
         ? meta.document
-        : resolved.document || null,
+        : (resolved.document !== "---" ? resolved.document : null),
     valor: Number(t.amount || 0),
-    taxa: Number(t.fee || meta.tax || 3.50),
+    taxa: Number(t.fee || meta.tax || 3.5),
     dataPagamento: t.created_at,
     descricao: t.description ?? null,
   };
 }
 
-// ─── Service ────────────────────────────────────────────────────────────
-
 export class ConciliacaoDivipayService {
-  /** Lista conciliações (padrão: pendentes, mais recentes primeiro). */
   async listar(status?: string, workspaceId?: string | null): Promise<DivipayConciliacao[]> {
     const userId = await requireUserId();
-    let query = supabase
+    let query = (supabase as any)
       .from("divipay_conciliacoes")
       .select("*")
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("data_pagamento", { ascending: false });
     if (workspaceId && typeof workspaceId === "string" && workspaceId.trim()) {
       query = query.eq("workspace_id", workspaceId.trim());
     }
     if (status) query = query.eq("status", status);
     const { data, error } = await query;
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []) as DivipayConciliacao[];
   }
 
-  /**
-   * Processa os saques mais recentes: cria conciliações, dá baixas automáticas
-   * e gera despesas avulsas. Seguro para rodar várias vezes (idempotente).
-   */
   async conciliar(transacoes: DivipayTransacao[], workspaceId?: string | null): Promise<ResumoConciliacao> {
     const resumo: ResumoConciliacao = {
       processados: 0,
@@ -505,45 +443,74 @@ export class ConciliacaoDivipayService {
     const wsId = requireWorkspaceId(workspaceId);
     const userId = await requireUserId();
 
-    const { data: equipeRows, error: equipeError } = await supabase
-      .from("colaborador_acertos" as never)
-      .select("id, pix_chave_snapshot, valor_total, vencimento, status")
+    // 1. Carrega dados de Colaboradores e Acertos
+    const { data: colabsRaw } = await (supabase as any)
+      .from("colaboradores")
+      .select("id, nome, tipo, pix_chave, pix_chave_normalizada, cpf")
+      .eq("workspace_id", wsId);
+    const colaboradores: ColaboradorCandidato[] = colabsRaw ?? [];
+
+    const { data: equipeRows } = await (supabase as any)
+      .from("colaborador_acertos")
+      .select("id, colaborador_id, tipo, pix_chave_snapshot, valor_total, vencimento, status")
       .eq("workspace_id", wsId)
       .in("status", ["pendente", "processando"]);
-    if (equipeError) throw equipeError;
-
-    const equipeCandidatos: EquipePaymentCandidate[] = ((equipeRows ?? []) as unknown as Array<{
-      id: string;
-      pix_chave_snapshot: string | null;
-      valor_total: number;
-      vencimento: string;
-      status: string;
-    }>).map((acerto) => ({
-      id: acerto.id,
-      pix: acerto.pix_chave_snapshot,
-      valorCentavos: Math.round(Number(acerto.valor_total) * 100),
-      vencimento: acerto.vencimento,
-      status: acerto.status,
+    const acertos: AcertoEquipeCandidato[] = (equipeRows ?? []).map((a: any) => ({
+      id: a.id,
+      colaborador_id: a.colaborador_id,
+      tipo: a.tipo,
+      valor_total: Number(a.valor_total),
+      vencimento: a.vencimento,
+      status: a.status,
+      pix_chave_snapshot: a.pix_chave_snapshot,
     }));
 
-    // O que já foi processado/importado antes (paginado: o PostgREST corta
-    // em 1000 linhas por requisição — sem isso, com o histórico completo,
-    // a anti-duplicidade falharia e criaria despesas em dobro)
+    // 2. Carrega Fornecedores (contatos com tipo 'fornecedor' e ativos)
+    const { data: fornRaw } = await (supabase as any)
+      .from("contatos")
+      .select("*")
+      .eq("workspace_id", wsId)
+      .eq("tipo", "fornecedor")
+      .eq("ativo", true);
+    const fornecedores: Contato[] = fornRaw ?? [];
+
+    // 3. Carrega Dívidas em aberto
+    const { data: dividasRaw } = await (supabase as any)
+      .from("dividas")
+      .select("id, descricao, credor, documento_favorecido, valor_restante, data_vencimento, categoria_id, linha_digitavel, codigo_barras, contato_id")
+      .eq("user_id", userId)
+      .eq("workspace_id", wsId)
+      .neq("status", "quitada")
+      .gt("valor_restante", 0);
+    const dividasAbertas: DividaCandidata[] = (dividasRaw ?? []).map((d: any) => ({
+      id: d.id,
+      descricao: d.descricao,
+      credor: d.credor,
+      documento_favorecido: d.documento_favorecido,
+      valor_restante: Number(d.valor_restante),
+      data_vencimento: d.data_vencimento,
+      workspace_id: wsId,
+      categoria_id: d.categoria_id,
+      linha_digitavel: d.linha_digitavel,
+      codigo_barras: d.codigo_barras,
+      contato_id: d.contato_id,
+    }));
+
+    // 4. Cache de transações já processadas para idempotência
     const jaProcessados = new Set<string>();
     for (let offset = 0; offset < 50000; offset += 1000) {
-      const { data: lote } = await supabase
+      const { data: lote } = await (supabase as any)
         .from("divipay_conciliacoes")
         .select("divipay_external_id")
         .eq("user_id", userId)
         .eq("workspace_id", wsId)
         .range(offset, offset + 999);
       const rows = lote ?? [];
-      rows.forEach((c) => jaProcessados.add(c.divipay_external_id));
+      rows.forEach((c: any) => jaProcessados.add(c.divipay_external_id));
       if (rows.length < 1000) break;
     }
 
-    // Transações locais criadas pelo app (webhook pode já ter lançado a despesa)
-    const { data: locais } = await supabase
+    const { data: locais } = await (supabase as any)
       .from("divipay_transacoes")
       .select("external_id, status, metadata")
       .eq("user_id", userId)
@@ -551,27 +518,11 @@ export class ConciliacaoDivipayService {
       .eq("type", "CASH_OUT");
     const localPorExternalId = new Map(
       (locais ?? [])
-        .filter((l) => l.external_id)
-        .map((l) => [l.external_id as string, l]),
+        .filter((l: any) => l.external_id)
+        .map((l: any) => [l.external_id as string, l]),
     );
 
-    // Dívidas abertas para o motor de match
-    const { data: dividas } = await supabase
-      .from("dividas")
-      .select("id, descricao, credor, documento_favorecido, valor_restante, data_vencimento")
-      .eq("user_id", userId)
-      .eq("workspace_id", wsId)
-      .neq("status", "quitada")
-      .gt("valor_restante", 0);
-    const dividasAbertas: DividaCandidata[] = (dividas ?? []).map((d) => ({
-      id: d.id,
-      descricao: d.descricao,
-      credor: d.credor,
-      documento_favorecido: d.documento_favorecido,
-      valor_restante: Number(d.valor_restante),
-      data_vencimento: d.data_vencimento,
-    }));
-
+    // 5. Itera sobre cada saque executando o motor de conciliação avançada
     for (const t of transacoes) {
       const saque = mapearSaque(t);
       if (!saque || saque.valor <= 0) continue;
@@ -583,14 +534,12 @@ export class ConciliacaoDivipayService {
       const local = localPorExternalId.get(saque.externalId);
       const localMeta = (local?.metadata ?? {}) as Record<string, unknown>;
 
-      // Saque iniciado pelo app ainda pendente: aguarda conclusão
       const statusEfetivo = String(local?.status ?? t.status ?? "");
       if (!isSaqueConcluido(statusEfetivo)) {
         resumo.ignorados++;
         continue;
       }
 
-      // Webhook já lançou a despesa desse saque iniciado pelo app
       if (local && localMeta.despesa_id) {
         await this.registrarConciliacao(userId, wsId, saque, "importada", {
           despesaId: String(localMeta.despesa_id),
@@ -600,91 +549,150 @@ export class ConciliacaoDivipayService {
         continue;
       }
 
-      const acertoIdInformado = typeof localMeta.acerto_id === "string" ? localMeta.acerto_id : null;
-      const equipeMatch = acertoIdInformado
-        ? ({ kind: "matched", acertoId: acertoIdInformado } as const)
-        : matchEquipePayment(
-            {
-              pix: saque.favorecidoDocumento || t.recipient_key,
-              valorCentavos: Math.round(saque.valor * 100),
-              data: saque.dataPagamento,
-            },
-            equipeCandidatos,
-          );
+      // Avalia saque com motor avançado (Pix e Boletos)
+      const match = ConciliacaoFinanceiraAvancada.avaliarSaque({
+        saque: {
+          externalId: saque.externalId,
+          tipo: saque.tipo,
+          valor: saque.valor,
+          taxa: saque.taxa,
+          dataPagamento: saque.dataPagamento,
+          favorecidoNome: saque.favorecidoNome,
+          favorecidoDocumento: saque.favorecidoDocumento,
+          recipientKey: t.recipient_key,
+          descricao: saque.descricao,
+          linhaDigitavel: (localMeta?.billetCode as string) || t.recipient_key,
+          codigoBarras: (localMeta?.billetCode as string) || null,
+        },
+        colaboradores,
+        acertos,
+        fornecedores,
+        dividas: dividasAbertas,
+      });
 
-      if (equipeMatch.kind === "matched") {
-        const { error } = await supabase.rpc("confirmar_pagamento_acerto" as never, {
-          p_acerto_id: equipeMatch.acertoId,
-          p_divipay_external_id: saque.externalId,
-          p_pagamento_id: typeof localMeta.pagamento_id === "string" ? localMeta.pagamento_id : null,
-          p_origem: acertoIdInformado ? "wallet_divipay" : "divipay_externo",
-          p_valor: saque.valor,
-          p_taxa: saque.taxa,
-          p_comprovante_url: null,
-        } as never);
-        if (error) throw error;
+      // CASO A: Identificado como Colaborador ou Sócio
+      if (match.tipo === "colaborador" || match.tipo === "socio") {
+        if (match.acertoSugerido) {
+          const { error: rpcErr } = await (supabase as any).rpc("confirmar_pagamento_acerto", {
+            p_acerto_id: match.acertoSugerido.id,
+            p_divipay_external_id: saque.externalId,
+            p_pagamento_id: typeof localMeta.pagamento_id === "string" ? localMeta.pagamento_id : null,
+            p_origem: "divipay_externo",
+            p_valor: saque.valor,
+            p_taxa: saque.taxa,
+            p_comprovante_url: null,
+          });
+          if (!rpcErr) {
+            match.acertoSugerido.status = "pago";
+          }
+          await criarDespesaTaxa(userId, saque, wsId);
+          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
+            beneficiarioTipo: match.tipo,
+            colaboradorId: match.colaborador.id,
+            acertoId: match.acertoSugerido.id,
+            metodoPagamento: "pix",
+            origemEvidencia: match.evidencia,
+          });
+        } else {
+          // Pix identificado para colaborador sem acerto prévio: cria registro via RPC manual
+          const { data: resManual } = await (supabase as any).rpc("registrar_pagamento_colaborador_manual", {
+            p_colaborador_id: match.colaborador.id,
+            p_tipo: match.tipo === "socio" ? "pro_labore" : "outro",
+            p_periodo_inicio: saque.dataPagamento.slice(0, 10),
+            p_periodo_fim: saque.dataPagamento.slice(0, 10),
+            p_valor: saque.valor,
+            p_data_pagamento: saque.dataPagamento,
+            p_origem: "divipay_externo",
+            p_referencia: saque.externalId,
+            p_observacoes: "Identificação automática de Pix Divipay",
+          });
 
-        await criarDespesaTaxa(userId, saque, wsId);
-        await this.registrarConciliacao(userId, wsId, {
-          ...saque,
-          descricao: "Pagamento de acerto da equipe",
-        }, "conciliada");
+          await criarDespesaTaxa(userId, saque, wsId);
+          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
+            beneficiarioTipo: match.tipo,
+            colaboradorId: match.colaborador.id,
+            acertoId: resManual?.acerto_id ?? null,
+            despesaId: resManual?.despesa_id ?? null,
+            metodoPagamento: "pix",
+            origemEvidencia: match.evidencia,
+          });
+        }
 
-        const candidatoBaixado = equipeCandidatos.find((item) => item.id === equipeMatch.acertoId);
-        if (candidatoBaixado) candidatoBaixado.status = "pago";
         resumo.processados++;
         resumo.conciliadasAuto++;
         continue;
       }
 
-      if (equipeMatch.kind === "ambiguous") {
-        await this.registrarConciliacao(userId, wsId, {
-          ...saque,
-          descricao: "Pagamento com mais de um acerto possível da equipe",
-        }, "pendente");
+      // CASO B: Identificado como Fornecedor (Pix ou Boleto)
+      if (match.tipo === "fornecedor") {
+        if (match.dividaSugerida) {
+          const ok = await baixarDivida(userId, match.dividaSugerida.id, saque);
+          if (ok) {
+            match.dividaSugerida.valor_restante = Math.max(0, match.dividaSugerida.valor_restante - saque.valor);
+          }
+          await criarDespesaTaxa(userId, saque, wsId);
+          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
+            beneficiarioTipo: "fornecedor",
+            contatoId: match.fornecedor.id,
+            dividaId: match.dividaSugerida.id,
+            categoriaId: match.categoriaIdSugerida,
+            subcategoriaId: match.subcategoriaIdSugerida,
+            metodoPagamento: match.metodoPagamento,
+            origemEvidencia: match.evidencia,
+          });
+        } else {
+          const despesaId = await criarDespesaFornecedor(
+            userId,
+            saque,
+            match.fornecedor,
+            match.categoriaIdSugerida,
+            match.subcategoriaIdSugerida,
+            match.metodoPagamento,
+            wsId,
+          );
+          await criarDespesaTaxa(userId, saque, wsId);
+          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
+            beneficiarioTipo: "fornecedor",
+            contatoId: match.fornecedor.id,
+            despesaId,
+            categoriaId: match.categoriaIdSugerida,
+            subcategoriaId: match.subcategoriaIdSugerida,
+            metodoPagamento: match.metodoPagamento,
+            origemEvidencia: match.evidencia,
+          });
+        }
+
+        resumo.processados++;
+        resumo.conciliadasAuto++;
+        continue;
+      }
+
+      // CASO C: Ambiguidade -> Fila de revisão (Pendente)
+      if (match.tipo === "ambiguo") {
+        await this.registrarConciliacao(userId, wsId, saque, "pendente", {
+          motivoRevisao: match.motivo,
+        });
         resumo.processados++;
         resumo.pendentes++;
         continue;
       }
 
-      // Saque iniciado pelo app com divida_id na metadata: baixa direta (fallback do webhook)
-      if (local && typeof localMeta.divida_id === "string" && localMeta.divida_id) {
-        const ok = await baixarDivida(userId, localMeta.divida_id, saque);
-        if (ok) {
-          await criarDespesaTaxa(userId, saque, wsId);
-          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
-            dividaId: localMeta.divida_id,
-          });
-          resumo.processados++;
-          resumo.conciliadasAuto++;
-        }
-        continue;
-      }
-
-      // Motor de 3 camadas (pagamentos externos, feitos no painel Divipay)
-      const resultado = avaliarSaque(saque, dividasAbertas);
-      resumo.processados++;
-
-      if (resultado.camada === "auto") {
-        const ok = await baixarDivida(userId, resultado.divida.id, saque);
-        if (ok) {
-          await criarDespesaTaxa(userId, saque, wsId);
-          await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
-            dividaId: resultado.divida.id,
-          });
-          // Atualiza o pool local para não conciliar duas vezes a mesma dívida
-          resultado.divida.valor_restante = Math.max(0, resultado.divida.valor_restante - saque.valor);
-          resumo.conciliadasAuto++;
-        }
-      } else if (resultado.camada === "pendente") {
+      // CASO D: Não identificado
+      if (match.dividaAparente) {
         await this.registrarConciliacao(userId, wsId, saque, "pendente", {
-          dividaSugeridaId: resultado.dividaSugerida?.id ?? null,
+          dividaSugeridaId: match.dividaAparente.id,
+          motivoRevisao: match.motivo,
         });
+        resumo.processados++;
         resumo.pendentes++;
       } else {
         const despesaId = await criarDespesaAvulsa(userId, saque, wsId);
         await criarDespesaTaxa(userId, saque, wsId);
-        await this.registrarConciliacao(userId, wsId, saque, "importada", { despesaId });
+        await this.registrarConciliacao(userId, wsId, saque, "importada", {
+          despesaId,
+          motivoRevisao: match.motivo,
+        });
+        resumo.processados++;
         resumo.avulsas++;
       }
     }
@@ -698,14 +706,28 @@ export class ConciliacaoDivipayService {
     workspaceId: string,
     saque: SaqueParaConciliar,
     status: "pendente" | "conciliada" | "importada" | "ignorada",
-    extra: { dividaId?: string | null; dividaSugeridaId?: string | null; despesaId?: string | null } = {},
+    extra: {
+      dividaId?: string | null;
+      dividaSugeridaId?: string | null;
+      despesaId?: string | null;
+      contatoId?: string | null;
+      colaboradorId?: string | null;
+      acertoId?: string | null;
+      categoriaId?: string | null;
+      subcategoriaId?: string | null;
+      metodoPagamento?: "pix" | "boleto" | "cartao" | "ted" | "outro" | string | null;
+      beneficiarioTipo?: "fornecedor" | "colaborador" | "socio" | "outro" | null;
+      origemEvidencia?: string | null;
+      competencia?: string | null;
+      motivoRevisao?: string | null;
+    } = {},
   ): Promise<void> {
     const wsId = requireWorkspaceId(workspaceId);
     if (!userId || typeof userId !== "string" || !userId.trim()) {
       throw new Error("user_id é obrigatório para registrar conciliação (fail-closed)");
     }
 
-    const { error } = await supabase.from("divipay_conciliacoes").upsert(
+    const { error } = await (supabase as any).from("divipay_conciliacoes").upsert(
       {
         user_id: userId,
         workspace_id: wsId,
@@ -721,6 +743,16 @@ export class ConciliacaoDivipayService {
         divida_id: extra.dividaId ?? null,
         divida_sugerida_id: extra.dividaSugeridaId ?? null,
         despesa_id: extra.despesaId ?? null,
+        contato_id: extra.contatoId ?? null,
+        colaborador_id: extra.colaboradorId ?? null,
+        acerto_id: extra.acertoId ?? null,
+        categoria_id: extra.categoriaId ?? null,
+        subcategoria_id: extra.subcategoriaId ?? null,
+        metodo_pagamento: extra.metodoPagamento ?? null,
+        beneficiario_tipo: extra.beneficiarioTipo ?? null,
+        origem_evidencia: extra.origemEvidencia ?? null,
+        competencia: extra.competencia ?? saque.dataPagamento.slice(0, 7),
+        motivo_revisao: extra.motivoRevisao ?? null,
       },
       { onConflict: "user_id,divipay_external_id" },
     );
@@ -730,7 +762,6 @@ export class ConciliacaoDivipayService {
     }
   }
 
-  /** Camada 2 → confirma que o saque pagou uma dívida (a sugerida ou outra). */
   async confirmar(conciliacao: DivipayConciliacao, dividaId: string, workspaceId?: string | null): Promise<boolean> {
     const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
     const userId = await requireUserId();
@@ -749,14 +780,157 @@ export class ConciliacaoDivipayService {
     if (!ok) return false;
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from("divipay_conciliacoes")
       .update({ status: "conciliada", divida_id: dividaId })
       .eq("id", conciliacao.id);
     return !error;
   }
 
-  /** Camada 2 → usuário diz que NÃO é dívida: vira despesa avulsa. */
+  async vincularFornecedor(
+    conciliacao: DivipayConciliacao,
+    contatoId: string,
+    categoriaId?: string | null,
+    workspaceId?: string | null,
+  ): Promise<boolean> {
+    const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
+    const userId = await requireUserId();
+
+    const { data: contato } = await (supabase as any)
+      .from("contatos")
+      .select("*")
+      .eq("id", contatoId)
+      .eq("workspace_id", wsId)
+      .single();
+
+    if (!contato) throw new Error("Fornecedor não encontrado");
+
+    const saque: SaqueParaConciliar = {
+      externalId: conciliacao.divipay_external_id,
+      tipo: conciliacao.tipo,
+      favorecidoNome: conciliacao.favorecido_nome,
+      favorecidoDocumento: conciliacao.favorecido_documento,
+      valor: Number(conciliacao.valor),
+      taxa: Number(conciliacao.taxa),
+      dataPagamento: conciliacao.data_pagamento ?? new Date().toISOString(),
+      descricao: conciliacao.descricao,
+    };
+
+    const isBoleto =
+      conciliacao.tipo === "BILLET" ||
+      String(conciliacao.descricao || "").toLowerCase().includes("boleto");
+    const metodo: "pix" | "boleto" = isBoleto ? "boleto" : "pix";
+
+    const despesaId = await criarDespesaFornecedor(
+      userId,
+      saque,
+      contato,
+      categoriaId || contato.categoria_padrao_id,
+      contato.subcategoria_padrao_id,
+      metodo,
+      wsId,
+    );
+
+    await criarDespesaTaxa(userId, saque, wsId);
+
+    const { error } = await (supabase as any)
+      .from("divipay_conciliacoes")
+      .update({
+        status: "conciliada",
+        beneficiario_tipo: "fornecedor",
+        contato_id: contatoId,
+        categoria_id: categoriaId || contato.categoria_padrao_id,
+        subcategoria_id: contato.subcategoria_padrao_id,
+        metodo_pagamento: metodo,
+        despesa_id: despesaId,
+        origem_evidencia: "manual_usuario",
+        revisado_por: userId,
+        revisado_em: new Date().toISOString(),
+      })
+      .eq("id", conciliacao.id);
+
+    return !error;
+  }
+
+  async vincularColaborador(
+    conciliacao: DivipayConciliacao,
+    colaboradorId: string,
+    acertoId?: string | null,
+    workspaceId?: string | null,
+  ): Promise<boolean> {
+    const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
+    const userId = await requireUserId();
+
+    const { data: colab } = await (supabase as any)
+      .from("colaboradores")
+      .select("*")
+      .eq("id", colaboradorId)
+      .eq("workspace_id", wsId)
+      .single();
+
+    if (!colab) throw new Error("Colaborador não encontrado");
+
+    const saque: SaqueParaConciliar = {
+      externalId: conciliacao.divipay_external_id,
+      tipo: conciliacao.tipo,
+      favorecidoNome: conciliacao.favorecido_nome,
+      favorecidoDocumento: conciliacao.favorecido_documento,
+      valor: Number(conciliacao.valor),
+      taxa: Number(conciliacao.taxa),
+      dataPagamento: conciliacao.data_pagamento ?? new Date().toISOString(),
+      descricao: conciliacao.descricao,
+    };
+
+    let targetAcertoId = acertoId;
+    let targetDespesaId = conciliacao.despesa_id;
+
+    if (targetAcertoId) {
+      await (supabase as any).rpc("confirmar_pagamento_acerto", {
+        p_acerto_id: targetAcertoId,
+        p_divipay_external_id: saque.externalId,
+        p_pagamento_id: null,
+        p_origem: "divipay_externo",
+        p_valor: saque.valor,
+        p_taxa: saque.taxa,
+        p_comprovante_url: null,
+      });
+    } else {
+      const { data: resRpc, error: errRpc } = await (supabase as any).rpc("registrar_pagamento_colaborador_manual", {
+        p_colaborador_id: colaboradorId,
+        p_tipo: colab.tipo === "socio" ? "pro_labore" : "outro",
+        p_periodo_inicio: saque.dataPagamento.slice(0, 10),
+        p_periodo_fim: saque.dataPagamento.slice(0, 10),
+        p_valor: saque.valor,
+        p_data_pagamento: saque.dataPagamento,
+        p_origem: "divipay_externo",
+        p_referencia: saque.externalId,
+        p_observacoes: "Conciliação manual com Pix Divipay",
+      });
+      if (errRpc) throw errRpc;
+      targetAcertoId = resRpc?.acerto_id ?? null;
+      targetDespesaId = resRpc?.despesa_id ?? targetDespesaId;
+    }
+
+    await criarDespesaTaxa(userId, saque, wsId);
+
+    const { error } = await (supabase as any)
+      .from("divipay_conciliacoes")
+      .update({
+        status: "conciliada",
+        beneficiario_tipo: colab.tipo === "socio" ? "socio" : "colaborador",
+        colaborador_id: colaboradorId,
+        acerto_id: targetAcertoId,
+        despesa_id: targetDespesaId,
+        metodo_pagamento: "pix",
+        origem_evidencia: "manual_usuario",
+        revisado_por: userId,
+        revisado_em: new Date().toISOString(),
+      })
+      .eq("id", conciliacao.id);
+
+    return !error;
+  }
+
   async importarAvulsa(conciliacao: DivipayConciliacao, workspaceId?: string | null): Promise<boolean> {
     const wsId = requireWorkspaceId(workspaceId ?? conciliacao.workspace_id);
     const userId = await requireUserId();
@@ -774,23 +948,21 @@ export class ConciliacaoDivipayService {
     const despesaId = await criarDespesaAvulsa(userId, saque, wsId);
     await criarDespesaTaxa(userId, saque, wsId);
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from("divipay_conciliacoes")
       .update({ status: "importada", despesa_id: despesaId })
       .eq("id", conciliacao.id);
     return !error;
   }
 
-  /** Ignora o saque (não é despesa do negócio — ex: transferência entre contas). */
   async ignorar(conciliacaoId: string): Promise<boolean> {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from("divipay_conciliacoes")
       .update({ status: "ignorada" })
       .eq("id", conciliacaoId);
     return !error;
   }
 
-  /** Vincula divida_id na transação local (usado pelo botão "Pagar via Divipay"). */
   async vincularDividaNaTransacao(transacaoId: string, dividaId: string): Promise<void> {
     const { data: atual } = await supabase
       .from("divipay_transacoes")
