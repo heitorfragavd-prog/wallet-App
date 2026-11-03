@@ -29,13 +29,15 @@ async function resilientAuthLock<R>(
           return await fn();
         }
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const errName = err instanceof Error ? err.name : "";
       if (
-        err?.name === "AbortError" ||
-        err?.message?.includes("steal") ||
-        err?.message?.includes("Lock broken")
+        errName === "AbortError" ||
+        message.includes("steal") ||
+        message.includes("Lock broken")
       ) {
-        console.warn(`[Supabase AuthLock] Lock "${name}" absorvido (${err.message}), prosseguindo com segurança.`);
+        console.warn(`[Supabase AuthLock] Lock "${name}" absorvido (${message}), prosseguindo com segurança.`);
         return await fn();
       }
       console.warn(`[Supabase AuthLock] Falha não crítica no lock "${name}":`, err);

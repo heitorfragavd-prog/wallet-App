@@ -35,12 +35,11 @@ import {
   CeoExecutiveKpis,
   getSaoPauloDateString,
   getSaoPauloParts,
-  getSaoPauloYesterday,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useFoodCost } from '@/domains/finance/hooks/useFoodCost';
-import { useEyemobileDashboard, fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
+import { useEyemobileDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -79,12 +78,8 @@ export const WalletCeoPage: React.FC = () => {
   const loadExecutiveData = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const yesterdayParts = getSaoPauloYesterday(hoje);
-      const ontemStr = yesterdayParts.dateString;
-
-      const [kpis, yesterdayEyemobile, channelsRes] = await Promise.all([
+      const [kpis, channelsRes] = await Promise.all([
         CeoFinancialMetricsService.getExecutiveKpis(workspaceId),
-        fetchLiveDashboard({ startDate: ontemStr, endDate: ontemStr }, workspaceId).catch(() => null),
         supabase
           .from('delivery_channels')
           .select('id, is_active, status, connection_state')
