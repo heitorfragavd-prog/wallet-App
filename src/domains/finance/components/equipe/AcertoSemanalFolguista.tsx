@@ -16,6 +16,7 @@ type Props = {
   colaboradorNome: string;
   valorDiaria?: number;
   weekStart?: string;
+  onSuccess?: (acertoId?: string) => void;
 };
 
 type DayInput = { trabalhou: boolean; diaria: number; meta: number };
@@ -25,6 +26,7 @@ export function AcertoSemanalFolguista({
   colaboradorNome,
   valorDiaria = 100,
   weekStart,
+  onSuccess,
 }: Props) {
   const days = useMemo(() => buildWeek(weekStart ?? currentMonday()), [weekStart]);
   const monthRef = days[0].date.slice(0, 7);
@@ -96,13 +98,16 @@ export function AcertoSemanalFolguista({
         });
       }
 
-      await gerarAcerto.mutateAsync({
+      const generatedId = await gerarAcerto.mutateAsync({
         colaboradorId,
         periodoInicio: days[0].date,
         periodoFim: days[6].date,
         itens,
       });
       setFeedback("Acerto pendente criado. O pagamento ainda precisa ser revisado e confirmado.");
+      if (onSuccess) {
+        onSuccess(typeof generatedId === "string" ? generatedId : undefined);
+      }
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Não foi possível gerar o acerto.");
     }

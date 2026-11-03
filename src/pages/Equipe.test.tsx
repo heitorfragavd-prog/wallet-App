@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import type { Colaborador } from "@/domains/finance/hooks/useColaboradores";
 import EquipePage from "./Equipe";
@@ -10,10 +11,37 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { ...actual, useNavigate: () => navigate };
 });
-vi.mock("@/shared/components/layouts/DashboardLayout", () => ({ DashboardLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock("@/domains/finance/hooks/useEquipeObrigacoesMensais", () => ({ useEquipeObrigacoesMensais: () => ({}) }));
+vi.mock("@/shared/components/layouts/DashboardLayout", () => ({
+  DashboardLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock("@/domains/finance/hooks/useEquipeObrigacoesMensais", () => ({
+  useEquipeObrigacoesMensais: () => ({}),
+}));
 vi.mock("@/domains/finance/hooks/useEquipeResumo", () => ({
-  useEquipeResumo: () => ({ data: { pendentes: 3, processando: 1, pagosNoMes: 4, falhas: 0, totalPendente: 10_109.5, proximoVencimento: "2026-08-18" } }),
+  useEquipeResumo: () => ({
+    data: {
+      pendentes: 3,
+      processando: 1,
+      pagosNoMes: 4,
+      totalPagoNoMes: 4000,
+      falhas: 0,
+      totalPendente: 10_109.5,
+      proximoVencimento: "2026-08-18",
+      obrigacoesVencidas: 0,
+      totalVencido: 0,
+      custoEstimadoEquipe: 11621,
+      mesReferencia: "2026-08",
+      explicacaoPendencias: [],
+    },
+  }),
+  getSaoPauloDateParts: () => ({
+    year: 2026,
+    month: 8,
+    day: 25,
+    isoDate: "2026-08-25",
+    yearMonth: "2026-08",
+  }),
+  formatMonthInSaoPaulo: (d: string) => d.slice(0, 7),
 }));
 
 const base: Colaborador = {
@@ -45,17 +73,16 @@ vi.mock("@/domains/finance/hooks/useColaboradores", () => ({
   useColaboradores: () => ({ data: colaboradores, isLoading: false, error: null }),
 }));
 
-beforeEach(() => {
-  vi.setSystemTime(new Date("2026-08-25T12:00:00Z"));
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
+function renderWithQuery(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 describe("EquipePage", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-08-25T12:00:00Z"));
   });
 
@@ -64,21 +91,21 @@ describe("EquipePage", () => {
   });
 
   it("mostra resumo, contagens globais, alertas e filtros sem distorcer os totais", () => {
-    render(<EquipePage />);
+    renderWithQuery(<EquipePage />);
 
     expect(screen.getByText("R$ 10.109,50")).toBeInTheDocument();
-    expect(screen.getByText("2 sócios · 1 funcionário · 1 folguista")).toBeInTheDocument();
-    expect(screen.getByText(/Pix pendente/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 sócios · 1 funcionário · 1 folguistas/i)).toBeInTheDocument();
+    expect(screen.getByText(/Chave Pix não cadastrada/i)).toBeInTheDocument();
     expect(screen.getByText(/experiência termina/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /folguistas/i }));
     expect(screen.getByText("Luiz Fellipe")).toBeInTheDocument();
     expect(screen.queryByText("Shuellen Pereira")).not.toBeInTheDocument();
-    expect(screen.getByText("2 sócios · 1 funcionário · 1 folguista")).toBeInTheDocument();
+    expect(screen.getByText(/2 sócios · 1 funcionário · 1 folguistas/i)).toBeInTheDocument();
   });
 
   it("usa a mesma regra de custo do domínio no card do funcionário", () => {
-    render(<EquipePage />);
+    renderWithQuery(<EquipePage />);
     expect(screen.getByTestId("custo-s")).toHaveTextContent("R$ 2.390,07");
   });
 });
