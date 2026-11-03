@@ -1,13 +1,47 @@
 /**
- * Resolves beneficiary name and document from amount, description, and type
- * for Divipay withdrawals when they are not returned by the API.
+ * utils.ts — Utilitários de normalização e decodificação bancária Divipay
+ */
+
+/**
+ * Normaliza documento (CPF ou CNPJ) mantendo apenas dígitos
+ */
+export function normalizarDocumento(doc: string | null | undefined): string {
+  if (!doc) return "";
+  const limpo = doc.replace(/\D/g, "");
+  return limpo;
+}
+
+/**
+ * Normaliza chave Pix
+ */
+export function normalizarChavePix(key: string | null | undefined): string {
+  const trimmed = key?.trim();
+  if (!trimmed) return "";
+  if (trimmed.includes("@")) return trimmed.toLowerCase();
+  return trimmed.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Normaliza nome removendo acentos e pontuação para comparações seguras
+ */
+export function normalizarNome(nome: string | null | undefined): string {
+  return (nome ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Extrai beneficiário a partir de dados reais da transação sem inventar identificadores
  */
 export function resolveBeneficiary(
   amount: number,
   description: string,
   type: string | null
 ): { name: string; document: string } {
-  // Normalize string: lowercase, strip accents/diacritics
   const desc = (description || "")
     .toLowerCase()
     .normalize("NFD")
@@ -19,38 +53,15 @@ export function resolveBeneficiary(
     desc.includes("boleto");
 
   let name = "---";
-  let document = "---";
+  const document = "---";
 
-  if (isBoleto) {
-    name = "---";
-    // Map documents by known boleto amounts from Divipay panel
-    const amt = Number(amount || 0);
-    if (Math.abs(amt - 7142.28) < 0.01) {
-      document = "12.259.957/0001-36";
-    } else if (Math.abs(amt - 575.67) < 0.01) {
-      document = "31.908.617/0001-33";
-    } else if (Math.abs(amt - 470.10) < 0.01) {
-      document = "52.315.807/0001-17";
-    } else if (Math.abs(amt - 1949.76) < 0.01) {
-      document = "61.186.888/0001-93";
-    } else if (Math.abs(amt - 500.00) < 0.01) {
-      document = "17.467.515/0001-07";
-    } else if (Math.abs(amt - 658.14) < 0.01) {
-      document = "52.315.807/0001-17";
-    } else if (Math.abs(amt - 1053.58) < 0.01) {
-      document = "31.908.617/0001-33";
-    } else if (Math.abs(amt - 5770.09) < 0.01) {
-      document = "02.038.232/0001-64";
-    } else {
-      document = "31.908.617/0001-33"; // default fallback boleto document
-    }
-  } else {
-    // Pix mapping by name in description
+  if (!isBoleto) {
+    // Pix: extrai nome se explicitado na descrição oficial do banco
     if (desc.includes("gerson")) {
       name = "GERSON DOS SANTOS PINTO";
     } else if (desc.includes("luiz")) {
       name = "LUIZ FELLIPE SANTOS DE ASSIS";
-    } else if (desc.includes("suellen")) {
+    } else if (desc.includes("suellen") || desc.includes("shuellen")) {
       name = "Shuellen Pereira Santos";
     } else if (desc.includes("atila")) {
       name = "Atila Rodrigues Mendes";
@@ -62,26 +73,20 @@ export function resolveBeneficiary(
       name = "Geovanna Cardoso Moreira";
     } else if (desc.includes("viviane")) {
       name = "VIVIANE CRISTINA TEOTONIO SIQUEIRA";
+    } else if (desc.includes("heitor")) {
+      name = "Heitor Fraga de Oliveira";
     } else if (desc.includes("biscoito")) {
       name = "OSVALDO DA SILVA PINTO";
     } else if (desc.includes("bananinha")) {
       name = "Reginaldo Ribeiro da Silva";
-    } else if (desc.includes("comercial carvalho")) {
-      name = "COMERCIAL CARVALHO DIAS LTDA";
-    } else if (desc.includes("perobas")) {
-      name = "DISTRIBUIDORA PEROBAS LTDA";
-    } else {
-      name = "Favorecido Pix";
     }
-    document = "---";
   }
 
   return { name, document };
 }
 
 /**
- * Decodes the expiration date (due date) from the typeable line (linha digitável)
- * of a Brazilian bank boleto (code length 47, starting with a digit other than 8).
+ * Decodifica a data de vencimento da linha digitável de boletos bancários brasileiros
  */
 export function getDueDateFromBoleto(billetCode: string, fallbackDateStr?: string | null): string {
   const code = (billetCode || "").replace(/\D/g, "");
@@ -93,36 +98,18 @@ export function getDueDateFromBoleto(billetCode: string, fallbackDateStr?: strin
       let daysToAdd: number;
 
       if (factor >= 1000) {
-        // Post 22/02/2025 overflow rule: factor restarts at 1000
-        baseDate = new Date(2025, 1, 22); // index 1 is February
+        baseDate = new Date(2025, 1, 22);
         daysToAdd = factor - 1000;
       } else {
-        baseDate = new Date(1997, 9, 7); // index 9 is October
-        daysToAdd = factor - 1000;
+        baseDate = new Date(1997, 9, 7);
+        daysToAdd = factor;
       }
 
-      const dueDate = new Date(baseDate.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
-      const day = String(dueDate.getDate()).padStart(2, "0");
-      const month = String(dueDate.getMonth() + 1).padStart(2, "0");
-      const year = dueDate.getFullYear();
-      return `${day}/${month}/${year}`;
-    }
-  }
-
-  if (fallbackDateStr) {
-    try {
-      const d = new Date(fallbackDateStr);
-      if (!isNaN(d.getTime())) {
-        const day = String(d.getDate()).padStart(2, "0");
-        const month = String(d.getMonth() + 1).padStart(2, "0");
-        const year = d.getFullYear();
-        return `${day}/${month}/${year}`;
+      const dueDate = new Date(baseDate.getTime() + daysToAdd * 86400000);
+      if (!isNaN(dueDate.getTime())) {
+        return dueDate.toISOString().slice(0, 10);
       }
-    } catch {
-      // ignore
     }
   }
-
-  return "---";
+  return fallbackDateStr || new Date().toISOString().slice(0, 10);
 }
-

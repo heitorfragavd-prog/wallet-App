@@ -157,6 +157,31 @@ function valorBate(valorDivida: number, valorSaque: number): boolean {
   return Math.abs(valorDivida - valorSaque) <= 1.0;
 }
 
+const BANCOS_INTERMEDIARIOS = new Set([
+  "60701190000104", // Itaú
+  "00000000000191", // Banco do Brasil
+  "00360305000104", // Caixa
+  "90400888000142", // Santander
+  "07237373000120", // Bradesco
+  "61088183000109", // Safra
+  "13079034000142", // Stone
+  "10573521000191", // Mercado Pago
+  "18236120000158", // Nubank
+  "33885724000119", // PagBank
+  "30306294000145", // BTG Pactual
+  "04913711000108", // Banco Inter
+  "28018868000130", // PicPay
+]);
+
+function normalizarChavePix(chave: string | null | undefined): string {
+  if (!chave) return "";
+  const limpa = chave.trim().toLowerCase();
+  const digits = limpa.replace(/\D/g, "");
+  if (/^\+?55\d{10,11}$/.test(limpa)) return limpa.replace(/^\+55/, "").replace(/\D/g, "");
+  if (digits.length === 11 || digits.length === 14) return digits;
+  return limpa;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -648,53 +673,228 @@ serve(async (req) => {
             metadata.conciliacao_status = 'pendente'
             // NENHUMA despesa avulsa é criada aqui para aguardar a decisão do usuário em /conciliacao
           } else {
-            // Camada 3: Despesa Avulsa
-            const categoriaSaidaId = await findOrCreateCategoria(
-              supabaseAdmin, userId, 'Transferências e Saques Divipay', 'despesa', 'ArrowUpRight', '#f97316',
-            )
-            const { data: despesa, error: despesaError } = await supabaseAdmin
-              .from('despesas')
-              .insert({
-                user_id: userId,
-                categoria_id: categoriaSaidaId,
-                conta_id: contaId,
-                workspace_id: targetWorkspaceId,
-                descricao: transacao.description ?? `Transferência Pix Divipay ${externalId}`,
-                valor: transacao.amount,
-                data: hoje,
-                observacoes: `Importado via Divipay API (divipay-saque:${externalId})`,
-                metodo_pagamento: 'pix',
-                status: 'pago',
-              })
-              .select('id')
-              .single()
+            // ── Identificação Avançada: Colaboradores e Fornecedores
+            const isBoleto = String(metadata.paymentType || '').toUpperCase() === 'BILLET' || 
+                             String(transacao.recipient_key || '').length > 35;
+            const docSaqueNormalizado = normalizarDocumento(saqueFavorecidoDocumento);
+            const pixChaveSaque = normalizarChavePix(transacao.recipient_key);
 
-            if (despesaError) {
-              console.error('Erro ao criar despesa de cash-out:', despesaError)
-            } else {
-              metadata.despesa_id = despesa.id
+            let identificadoColaborador: any = null;
+            let identificadoContato: any = null;
 
-              // Registrar conciliação como importada
-              const metaType = metadata.paymentType
+            // 1. Identificação de Colaborador (Pix ou Documento)
+            const { data: colabs } = await supabaseAdmin
+              .from('colaboradores')
+              .select('id, nome, tipo, pix_chave, pix_chave_normalizada, cpf, workspace_id')
+              .eq('workspace_id', targetWorkspaceId)
+              .eq('status', 'ativo');
+
+            if (colabs && colabs.length > 0) {
+              identificadoColaborador = colabs.find((c: any) => {
+                if (pixChaveSaque && (
+                  normalizarChavePix(c.pix_chave_normalizada) === pixChaveSaque ||
+                  normalizarChavePix(c.pix_chave) === pixChaveSaque
+                )) {
+                  return true;
+                }
+                if (docSaqueNormalizado.length >= 11 && (
+                  normalizarDocumento(c.documento_normalizado) === docSaqueNormalizado ||
+                  normalizarDocumento(c.cpf) === docSaqueNormalizado
+                )) {
+                  return true;
+                }
+                return false;
+              });
+            }
+
+            // 2. Se não for colaborador, buscar em Fornecedores (contatos)
+            if (!identificadoColaborador) {
+              const { data: contatos } = await supabaseAdmin
+                .from('contatos')
+                .select('id, nome, nome_fantasia, tipo, categoria_padrao_id, subcategoria_padrao_id, pix_chave, pix_chave_normalizada, beneficiario_documento, beneficiario_documento_normalizado, chaves_pix_adicionais, identificadores_boletos, workspace_id')
+                .eq('workspace_id', targetWorkspaceId)
+                .eq('tipo', 'fornecedor')
+                .eq('ativo', true);
+
+              if (contatos && contatos.length > 0) {
+                identificadoContato = contatos.find((contato: any) => {
+                  if (isBoleto) {
+                    if (docSaqueNormalizado && BANCOS_INTERMEDIARIOS.has(docSaqueNormalizado)) {
+                      return false; // Nunca atribuir banco intermediário
+                    }
+                    if (docSaqueNormalizado.length >= 11 && (
+                      normalizarDocumento(contato.beneficiario_documento_normalizado) === docSaqueNormalizado ||
+                      normalizarDocumento(contato.beneficiario_documento) === docSaqueNormalizado
+                    )) {
+                      return true;
+                    }
+                    const boletoIds = Array.isArray(contato.identificadores_boletos) ? contato.identificadores_boletos : [];
+                    if (boletoIds.some((b: string) => normalizarDocumento(b) === docSaqueNormalizado)) {
+                      return true;
+                    }
+                  } else {
+                    if (pixChaveSaque && (
+                      normalizarChavePix(contato.pix_chave_normalizada) === pixChaveSaque ||
+                      normalizarChavePix(contato.pix_chave) === pixChaveSaque
+                    )) {
+                      return true;
+                    }
+                    const pixAdicionais = Array.isArray(contato.chaves_pix_adicionais) ? contato.chaves_pix_adicionais : [];
+                    if (pixAdicionais.some((p: string) => normalizarChavePix(p) === pixChaveSaque)) {
+                      return true;
+                    }
+                  }
+                  return false;
+                });
+              }
+            }
+
+            if (identificadoColaborador) {
+              // Buscar acerto de equipe pendente
+              const { data: acertosPendentes } = await supabaseAdmin
+                .from('colaborador_acertos')
+                .select('id, valor_total, status, colaborador_id')
+                .eq('colaborador_id', identificadoColaborador.id)
+                .eq('workspace_id', targetWorkspaceId)
+                .in('status', ['pendente', 'processando']);
+
+              const acertoCompativel = (acertosPendentes ?? []).find(
+                (a: any) => Math.abs(Number(a.valor_total) - saqueValor) <= 0.05
+              );
+
+              let targetAcertoId = acertoCompativel?.id ?? null;
+              let targetDespesaId: string | null = null;
+
+              if (targetAcertoId) {
+                await supabaseAdmin.rpc('confirmar_pagamento_acerto', {
+                  p_acerto_id: targetAcertoId,
+                  p_divipay_external_id: externalId,
+                  p_pagamento_id: null,
+                  p_origem: 'divipay_externo',
+                  p_valor: saqueValor,
+                  p_taxa: effectiveFee ?? 0,
+                  p_comprovante_url: null,
+                });
+              } else {
+                const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('registrar_pagamento_colaborador_manual', {
+                  p_colaborador_id: identificadoColaborador.id,
+                  p_tipo: identificadoColaborador.tipo === 'socio' ? 'pro_labore' : 'outro',
+                  p_periodo_inicio: saqueData.slice(0, 10),
+                  p_periodo_fim: saqueData.slice(0, 10),
+                  p_valor: saqueValor,
+                  p_data_pagamento: saqueData,
+                  p_origem: 'divipay_externo',
+                  p_referencia: externalId,
+                  p_observacoes: 'Conciliação automática via webhook Divipay',
+                });
+                if (!rpcErr && rpcRes) {
+                  targetAcertoId = rpcRes.acerto_id ?? null;
+                  targetDespesaId = rpcRes.despesa_id ?? null;
+                }
+              }
+
+              const metaType = metadata.paymentType;
               await supabaseAdmin.from('divipay_conciliacoes').upsert(
                 {
                   user_id: userId,
                   workspace_id: targetWorkspaceId,
                   divipay_external_id: externalId,
-                  tipo: typeof metaType === 'string' ? metaType : null,
+                  tipo: typeof metaType === 'string' ? metaType : (isBoleto ? 'BILLET' : 'DICT'),
+                  favorecido_nome: saqueFavorecidoNome || identificadoColaborador.nome,
+                  favorecido_documento: saqueFavorecidoDocumento || identificadoColaborador.cpf_cnpj,
+                  valor: saqueValor,
+                  taxa: effectiveFee ?? 0,
+                  data_pagamento: transacao.created_at,
+                  descricao: transacao.description,
+                  status: 'conciliada',
+                  beneficiario_tipo: identificadoColaborador.tipo === 'socio' ? 'socio' : 'colaborador',
+                  colaborador_id: identificadoColaborador.id,
+                  acerto_id: targetAcertoId,
+                  despesa_id: targetDespesaId,
+                  metodo_pagamento: 'pix',
+                  origem_evidencia: 'webhook_identificacao_colaborador',
+                },
+                { onConflict: 'user_id,divipay_external_id' }
+              );
+              metadata.conciliacao_status = 'conciliada';
+              metadata.colaborador_id = identificadoColaborador.id;
+            } else if (identificadoContato) {
+              const categoriaFornecedorId = identificadoContato.categoria_padrao_id || await findOrCreateCategoria(
+                supabaseAdmin, userId, 'Fornecedores e Serviços', 'despesa', 'Building2', '#0284c7'
+              );
+
+              const { data: despesa } = await supabaseAdmin
+                .from('despesas')
+                .insert({
+                  user_id: userId,
+                  categoria_id: categoriaFornecedorId,
+                  subcategoria_id: identificadoContato.subcategoria_padrao_id ?? null,
+                  conta_id: contaId,
+                  workspace_id: targetWorkspaceId,
+                  contato_id: identificadoContato.id,
+                  descricao: transacao.description ?? `Pagamento Fornecedor ${identificadoContato.nome} (${externalId})`,
+                  valor: saqueValor,
+                  data: hoje,
+                  observacoes: `Conciliação automática Divipay (${isBoleto ? 'Boleto' : 'Pix'}) - ${externalId}`,
+                  metodo_pagamento: isBoleto ? 'boleto' : 'pix',
+                  status: 'pago',
+                })
+                .select('id')
+                .single();
+
+              const despesaId = despesa?.id ?? null;
+              if (despesaId) metadata.despesa_id = despesaId;
+
+              const metaType = metadata.paymentType;
+              await supabaseAdmin.from('divipay_conciliacoes').upsert(
+                {
+                  user_id: userId,
+                  workspace_id: targetWorkspaceId,
+                  divipay_external_id: externalId,
+                  tipo: typeof metaType === 'string' ? metaType : (isBoleto ? 'BILLET' : 'DICT'),
+                  favorecido_nome: saqueFavorecidoNome || identificadoContato.nome,
+                  favorecido_documento: saqueFavorecidoDocumento || identificadoContato.beneficiario_documento,
+                  valor: saqueValor,
+                  taxa: effectiveFee ?? 0,
+                  data_pagamento: transacao.created_at,
+                  descricao: transacao.description,
+                  status: 'conciliada',
+                  beneficiario_tipo: 'fornecedor',
+                  contato_id: identificadoContato.id,
+                  categoria_id: categoriaFornecedorId,
+                  subcategoria_id: identificadoContato.subcategoria_padrao_id ?? null,
+                  despesa_id: despesaId,
+                  metodo_pagamento: isBoleto ? 'boleto' : 'pix',
+                  origem_evidencia: 'webhook_identificacao_fornecedor',
+                },
+                { onConflict: 'user_id,divipay_external_id' }
+              );
+              metadata.conciliacao_status = 'conciliada';
+              metadata.contato_id = identificadoContato.id;
+            } else {
+              // Nem colaborador nem fornecedor identificado: fila de revisão "Pagamentos a Identificar"
+              const metaType = metadata.paymentType;
+              await supabaseAdmin.from('divipay_conciliacoes').upsert(
+                {
+                  user_id: userId,
+                  workspace_id: targetWorkspaceId,
+                  divipay_external_id: externalId,
+                  tipo: typeof metaType === 'string' ? metaType : (isBoleto ? 'BILLET' : 'DICT'),
                   favorecido_nome: saqueFavorecidoNome,
                   favorecido_documento: saqueFavorecidoDocumento,
                   valor: saqueValor,
                   taxa: effectiveFee ?? 0,
                   data_pagamento: transacao.created_at,
                   descricao: transacao.description,
-                  status: 'importada',
+                  status: 'pendente',
+                  motivo_revisao: 'Beneficiário não identificado automaticamente',
                   divida_id: null,
                   divida_sugerida_id: null,
-                  despesa_id: despesa.id,
+                  despesa_id: null,
                 },
                 { onConflict: 'user_id,divipay_external_id' }
-              )
+              );
+              metadata.conciliacao_status = 'pendente';
             }
           }
         }
