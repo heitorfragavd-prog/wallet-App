@@ -10,7 +10,7 @@ export interface ItemHistoricoFornecedor {
   metodoPagamento: "pix" | "boleto" | "outro";
   valor: number;
   categoriaNome: string;
-  status: "pago" | "pendente" | "cancelado";
+  status: "pago" | "pendente";
   divipayExternalId?: string | null;
   comprovanteUrl?: string | null;
   despesaId?: string | null;
@@ -33,6 +33,51 @@ export interface ResumoFinanceiroFornecedor {
   historico: ItemHistoricoFornecedor[];
 }
 
+interface ConciliacaoQueryRow {
+  id: string;
+  despesa_id?: string | null;
+  divida_id?: string | null;
+  data_pagamento?: string | null;
+  metodo_pagamento?: string | null;
+  tipo?: string | null;
+  competencia?: string | null;
+  descricao?: string | null;
+  valor?: number | string | null;
+  categorias?: { nome?: string | null } | null;
+  status?: string | null;
+  divipay_external_id?: string | null;
+  comprovante_url?: string | null;
+  origem_evidencia?: string | null;
+}
+
+interface DespesaQueryRow {
+  id: string;
+  data?: string | null;
+  metodo_pagamento?: string | null;
+  descricao?: string | null;
+  valor?: number | string | null;
+  categorias?: { nome?: string | null } | null;
+  status?: string | null;
+}
+
+interface DividaQueryRow {
+  id: string;
+  status?: string | null;
+  valor_restante?: number | string | null;
+  data_vencimento?: string | null;
+}
+
+interface GenericSupabaseClient {
+  from: (table: string) => {
+    select: (cols: string) => {
+      eq: (col: string, val: unknown) => {
+        eq: (col: string, val: unknown) => Promise<{ data: unknown[] | null }>;
+        or: (condition: string) => Promise<{ data: unknown[] | null }>;
+      };
+    };
+  };
+}
+
 export function useFornecedorFinanceiro(params: {
   fornecedorId?: string | null;
   fornecedorNome?: string | null;
@@ -42,7 +87,7 @@ export function useFornecedorFinanceiro(params: {
 }) {
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? null;
-  const { fornecedorId, fornecedorNome, fornecedorCnpjCpf, ano = new Date().getFullYear(), mes = new Date().getMonth() + 1 } = params;
+  const { fornecedorId, fornecedorNome, fornecedorCnpjCpf: _fornecedorCnpjCpf, ano = new Date().getFullYear(), mes = new Date().getMonth() + 1 } = params;
 
   return useQuery({
     queryKey: ["fornecedor-financeiro", workspaceId, fornecedorId, ano, mes],
@@ -69,39 +114,41 @@ export function useFornecedorFinanceiro(params: {
       const dataFimMes = `${ano}-${mesStr}-${String(ultimoDia).padStart(2, "0")}`;
       const hoje = new Date().toISOString().slice(0, 10);
 
+      const db = supabase as unknown as GenericSupabaseClient;
+
       // 1. Busca conciliações Divipay vinculadas a este fornecedor
-      const { data: conciliacoesRaw } = await (supabase as any)
+      const { data: conciliacoesRaw } = await db
         .from("divipay_conciliacoes")
         .select("*, categorias (nome)")
         .eq("workspace_id", workspaceId)
         .eq("contato_id", fornecedorId);
 
       // 2. Busca despesas diretas vinculadas ao fornecedor via contato_id
-      const { data: despesasRaw } = await (supabase as any)
+      const { data: despesasRaw } = await db
         .from("despesas")
         .select("*, categorias (nome)")
         .eq("workspace_id", workspaceId)
         .eq("contato_id", fornecedorId);
 
       // 3. Busca dívidas abertas e quitadas deste fornecedor
-      let queryDividas = (supabase as any)
+      let queryDividas = db
         .from("dividas")
         .select("*, categorias (nome)")
         .eq("workspace_id", workspaceId);
 
       if (fornecedorNome) {
-        queryDividas = queryDividas.or(`contato_id.eq.${fornecedorId},credor.ilike.%${fornecedorNome}%`);
+        queryDividas = queryDividas.or(`contato_id.eq.${fornecedorId},credor.ilike.%${fornecedorNome}%`) as unknown as typeof queryDividas;
       } else {
-        queryDividas = queryDividas.eq("contato_id", fornecedorId);
+        queryDividas = queryDividas.eq("contato_id", fornecedorId) as unknown as typeof queryDividas;
       }
-      const { data: dividasRaw } = await queryDividas;
+      const { data: dividasRaw } = await (queryDividas as unknown as Promise<{ data: unknown[] | null }>);
 
       // Monta histórico unificado
       const itens: ItemHistoricoFornecedor[] = [];
       const despesasProcessadas = new Set<string>();
 
       // Adiciona conciliações Divipay
-      (conciliacoesRaw || []).forEach((c: any) => {
+      ((conciliacoesRaw || []) as ConciliacaoQueryRow[]).forEach((c) => {
         if (c.despesa_id) despesasProcessadas.add(c.despesa_id);
         const dataStr = c.data_pagamento ? c.data_pagamento.slice(0, 10) : "";
         const isBoleto = c.metodo_pagamento === "boleto" || c.tipo === "BILLET";
@@ -123,7 +170,7 @@ export function useFornecedorFinanceiro(params: {
       });
 
       // Adiciona despesas que não vieram da conciliação Divipay
-      (despesasRaw || []).forEach((d: any) => {
+      ((despesasRaw || []) as DespesaQueryRow[]).forEach((d) => {
         if (despesasProcessadas.has(d.id)) return;
         const dataStr = d.data || "";
         const isBoleto = String(d.metodo_pagamento).toLowerCase() === "boleto";
@@ -165,7 +212,7 @@ export function useFornecedorFinanceiro(params: {
       let totalPendente = 0;
       let totalVencido = 0;
 
-      (dividasRaw || []).forEach((div: any) => {
+      ((dividasRaw || []) as DividaQueryRow[]).forEach((div) => {
         if (div.status !== "quitada") {
           const valorRestante = Number(div.valor_restante || 0);
           totalPendente += valorRestante;
@@ -175,12 +222,13 @@ export function useFornecedorFinanceiro(params: {
         }
       });
 
-      const ultimoPago = itens.find((i) => i.status === "pago");
-      const ultimoPagamento = ultimoPago
+      // Último pagamento realizado
+      const pagamentosConcluidos = itens.filter((i) => i.status === "pago");
+      const ultimoPagamento = pagamentosConcluidos.length > 0
         ? {
-            data: ultimoPago.data,
-            valor: ultimoPago.valor,
-            metodo: ultimoPago.metodoPagamento,
+            data: pagamentosConcluidos[0].data,
+            valor: pagamentosConcluidos[0].valor,
+            metodo: pagamentosConcluidos[0].metodoPagamento,
           }
         : null;
 

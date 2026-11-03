@@ -10,9 +10,7 @@ import {
   Receipt,
   Clock,
   AlertCircle,
-  ExternalLink,
   Search,
-  Filter,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -46,7 +44,7 @@ export const FornecedorFichaFinanceiraModal: React.FC<FornecedorFichaFinanceiraM
   const [mes, setMes] = useState(hoje.getMonth() + 1);
   const [busca, setBusca] = useState("");
   const [filtroMetodo, setFiltroMetodo] = useState<"todos" | "pix" | "boleto">("todos");
-  const [filtroStatus, setFiltroStatus] = useState<"todos" | "pago" | "pendente">("todos");
+  const [filtroStatus] = useState<"todos" | "pago" | "pendente">("todos");
 
   const { data: resumo, isLoading } = useFornecedorFinanceiro({
     fornecedorId: fornecedor?.id,

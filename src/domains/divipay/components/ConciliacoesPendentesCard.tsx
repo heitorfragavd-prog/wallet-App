@@ -14,8 +14,6 @@ import {
   Building2,
   Users,
   AlertTriangle,
-  QrCode,
-  FileText,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -25,7 +23,7 @@ import {
 import { useDividas } from "@/domains/finance/hooks/useDividas";
 import { useContatos } from "@/domains/finance/hooks/useContatos";
 import { useCategorias } from "@/domains/finance/hooks/useCategorias";
-import { useEquipe } from "@/domains/finance/hooks/useEquipe";
+import { useColaboradores } from "@/domains/finance/hooks/useColaboradores";
 import { useToast } from "@/shared/hooks/use-toast";
 import type { DivipayConciliacao } from "@/domains/divipay/services/ConciliacaoDivipayService";
 
@@ -41,7 +39,7 @@ export function ConciliacoesPendentesCard() {
   const { dividas } = useDividas();
   const { contatos } = useContatos();
   const { categorias } = useCategorias();
-  const { colaboradores } = useEquipe();
+  const { data: colaboradores = [] } = useColaboradores();
   const {
     confirmar,
     importarAvulsa,

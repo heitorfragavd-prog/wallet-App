@@ -6,7 +6,7 @@ import { Button } from "@/shared/components/ui/button";
 import { Badge } from "@/shared/components/ui/badge";
 import { Input } from "@/shared/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
-import { Users, Plus, Phone, Mail, CalendarClock, Pencil, Trash2, Search, Filter } from "lucide-react";
+import { Users, Plus, Phone, Mail, CalendarClock, Pencil, Trash2, Search } from "lucide-react";
 import { FornecedorCard } from "@/domains/finance/components/fornecedores/FornecedorCard";
 import { FornecedorFormDialog } from "@/domains/finance/components/fornecedores/FornecedorFormDialog";
 import { FornecedorFichaFinanceiraModal } from "@/domains/finance/components/fornecedores/FornecedorFichaFinanceiraModal";
@@ -29,7 +29,7 @@ const Fornecedores = () => {
   const [filtroCategoria, setFiltroCategoria] = useState("");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | "ativos" | "inativos">("todos");
 
-  const abrirNovo = (tipo: "fornecedor" | "cliente") => {
+  const abrirNovo = (_tipo: "fornecedor" | "cliente") => {
     setEditando(null);
     setFormDialogOpen(true);
   };
@@ -44,11 +44,11 @@ const Fornecedores = () => {
     setFichaModalOpen(true);
   };
 
-  const handleSave = async (payload: any) => {
+  const handleSave = async (payload: Partial<Contato>) => {
     if (editando) {
       await updateContato({ id: editando.id, ...payload });
     } else {
-      await createContato(payload);
+      await createContato(payload as Omit<Contato, "id" | "user_id" | "created_at" | "updated_at">);
     }
   };
 

@@ -15,7 +15,7 @@ interface FornecedorFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   fornecedor: Contato | null;
-  onSave: (payload: any) => Promise<void>;
+  onSave: (payload: Partial<Contato>) => Promise<void>;
 }
 
 export const FornecedorFormDialog: React.FC<FornecedorFormDialogProps> = ({
@@ -520,7 +520,7 @@ export const FornecedorFormDialog: React.FC<FornecedorFormDialogProps> = ({
                     <History className="h-3 w-3" /> Trilha de Auditoria Bancária
                   </span>
                   <div className="max-h-24 overflow-y-auto space-y-1 text-[10px] text-muted-foreground font-mono">
-                    {fornecedor.historico_identificadores.map((h: any, i) => (
+                    {(fornecedor.historico_identificadores as Array<{ alterado_em?: string; pix_anterior?: string; pix_novo?: string }>).map((h, i) => (
                       <div key={i} className="border-b border-border/20 pb-0.5">
                         {h.alterado_em?.slice(0, 16)}: Pix alterado de &quot;{h.pix_anterior || "vazio"}&quot; para &quot;{h.pix_novo || "vazio"}&quot;
                       </div>

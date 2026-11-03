@@ -62,6 +62,22 @@ async function fetchContatos(workspaceId: string | null): Promise<Contato[]> {
   return (data ?? []) as Contato[];
 }
 
+interface UntypedSupabase {
+  from: (table: string) => {
+    insert: (values: unknown) => {
+      select: () => { single: () => Promise<{ data: Contato | null; error: Error | null }> };
+    };
+    update: (values: unknown) => {
+      eq: (col: string, val: unknown) => {
+        eq: (col: string, val: unknown) => {
+          select: () => { single: () => Promise<{ data: Contato | null; error: Error | null }> };
+        };
+        select: () => { single: () => Promise<{ data: Contato | null; error: Error | null }> };
+      };
+    };
+  };
+}
+
 export const useContatos = () => {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -81,7 +97,7 @@ export const useContatos = () => {
         throw new Error("Workspace não selecionado para criar contato.");
       }
       const userId = (await supabase.auth.getUser()).data.user?.id;
-      const { data, error } = await (supabase as any)
+      const { data, error } = await (supabase as unknown as UntypedSupabase)
         .from("contatos")
         .insert([{ ...c, user_id: userId, workspace_id: currentWorkspaceId }])
         .select()
@@ -101,7 +117,7 @@ export const useContatos = () => {
 
   const updateContato = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<Contato> & { id: string }) => {
-      let q = (supabase as any)
+      let q = (supabase as unknown as UntypedSupabase)
         .from("contatos")
         .update(updates)
         .eq("id", id);
