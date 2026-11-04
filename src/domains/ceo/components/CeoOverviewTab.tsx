@@ -82,7 +82,63 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   const fastQueryFn = useCallback(
     (pergunta: string): string => {
       const p = pergunta.toLowerCase();
-      // Pergunta sobre vendas/faturamento de ontem
+
+      // 1. Pergunta sobre produtos mais vendidos
+      if (
+        p.includes('produto') ||
+        p.includes('mais vendido') ||
+        p.includes('venderam mais') ||
+        p.includes('itens mais') ||
+        p.includes('top produto')
+      ) {
+        const prods = kpis.topProducts || [];
+        if (prods.length > 0) {
+          const rankingTxt = prods
+            .map(
+              (pr) =>
+                `  ${pr.rank}. **${pr.produto}**: ${pr.quantidade} un — R$ ${pr.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${pr.percentualFaturamento}% do faturamento)`
+            )
+            .join('\n');
+          return `🏆 **Top Produtos Mais Vendidos (PDV Rodo Point):**\n\n${rankingTxt}\n\n> 💡 Apurado canonicamente a partir dos itens registrados nas vendas PDV.`;
+        }
+        return `🏆 **Top Produtos Mais Vendidos:**\n\nNenhum item individualizado registrado para o período consultado.`;
+      }
+
+      // 2. Pergunta sobre quantidade de vendas / pedidos
+      if (
+        p.includes('quantas vendas') ||
+        p.includes('quantos pedidos') ||
+        p.includes('quantidade de vendas') ||
+        p.includes('quantidade de pedidos') ||
+        p.includes('total de pedidos')
+      ) {
+        const pedMes = kpis.pedidosMes || 0;
+        const fatMes = kpis.faturamentoMes || 0;
+        const tm = kpis.ticketMedioMes || 0;
+        const cresc = kpis.crescimentoPedidos;
+        const crescTxt =
+          cresc !== null && cresc !== undefined
+            ? ` (${cresc >= 0 ? '+' : ''}${cresc}% vs mês anterior)`
+            : '';
+        return `📦 **Volume de Vendas Deste Mês (Rodo Point):**\n\n- **Total de vendas concluídas:** **${pedMes} pedidos**${crescTxt}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Faturamento acumulado:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente com deduplicação de transações do PDV Eyemobile.`;
+      }
+
+      // 3. Pergunta sobre resultado operacional / lucro
+      if (
+        p.includes('resultado operacional') ||
+        p.includes('resultado') ||
+        p.includes('lucro') ||
+        p.includes('margem operacional')
+      ) {
+        const resOp = kpis.resultadoOperacional || 0;
+        const margem = kpis.margemOperacional;
+        const fatMes = kpis.faturamentoMes || 0;
+        const despMes = kpis.despesasMes || 0;
+        const margemTxt = margem !== null && margem !== undefined ? `${margem}%` : 'Não calculada';
+        return `💼 **Resultado Operacional (Visão Executiva):**\n\n- **Resultado Líquido Operacional:** **R$ ${resOp.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**\n- **Margem Operacional:** ${margemTxt}\n- **Faturamento do Mês:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Despesas do Mês:** R$ ${despMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Calculado por competência financeira da Rodo Point.`;
+      }
+
+      // 4. Pergunta sobre vendas/faturamento de ontem
       if (p.includes('ontem')) {
         const valOntem = kpis.faturamentoOntem || 0;
         const mediaOntem = kpis.mediaDiaSemanaOntem || 0;
@@ -95,7 +151,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         return `🏪 **Vendas de Ontem (${diaNome}):**\n\n- **Faturamento apurado:** **R$ ${valOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${varTxt}\n- **Média histórica das ${diaNome}s:** R$ ${mediaOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente a partir das transações PDV da Rodo Point.`;
       }
 
-      // Pergunta sobre mês atual ou faturamento do mês
+      // 5. Pergunta sobre mês atual ou faturamento do mês
       if (
         (p.includes('fatur') || p.includes('vend') || p.includes('receit')) &&
         (p.includes('mes') || p.includes('mês') || p.includes('atual'))
@@ -111,8 +167,8 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         return `📊 **Faturamento Deste Mês (Visão Executiva):**\n\n- **Vendas totais apuradas:** **R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${crescTxt}\n- **Pedidos concluídos:** ${pedMes}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)`;
       }
 
-      // Pergunta sobre despesas
-      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo')) {
+      // 6. Pergunta sobre despesas
+      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos')) {
         const desp = kpis.despesasMes || 0;
         const despAnt = kpis.despesasMesAnterior || 0;
         const varDesp = kpis.variacaoDespesasPercent;

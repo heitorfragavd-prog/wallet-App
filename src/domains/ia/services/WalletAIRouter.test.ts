@@ -62,4 +62,9 @@ describe("WalletAIRouter", () => {
   it("ACENTUACAO: Analise acentuado -> AGENT_V2", () => { expect(routeMessage({ message: "Analise detalhada das receitas" }).route).toBe("AGENT_V2"); });
   it("ACENTUACAO: Tendencia acentuada -> AGENT_V2", () => { expect(routeMessage({ message: "Qual a tendencia?" }).route).toBe("AGENT_V2"); });
   it('FAST: Quanto vendemos ontem -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quanto vendemos ontem?' }).route).toBe('FAST_QUERY'); });
+  it('FAST: Quanto faturamos neste mes -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quanto faturamos neste mês?' }).route).toBe('FAST_QUERY'); });
+  it('FAST: Quantas vendas tivemos -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quantas vendas tivemos?' }).route).toBe('FAST_QUERY'); });
+  it('FAST: Quanto gastamos -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quanto gastamos?' }).route).toBe('FAST_QUERY'); });
+  it('FAST: Qual foi o resultado operacional -> FAST_QUERY', () => { expect(routeMessage({ message: 'Qual foi o resultado operacional?' }).route).toBe('FAST_QUERY'); });
+  it('FAST: Quais produtos venderam mais -> FAST_QUERY', () => { expect(routeMessage({ message: 'Quais produtos venderam mais?' }).route).toBe('FAST_QUERY'); });
 });

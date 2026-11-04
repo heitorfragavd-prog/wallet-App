@@ -71,7 +71,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
+              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'receita')
               .gte('data', inicioStr)
@@ -83,7 +83,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           (from, to) =>
             supabase
               .from('transacoes')
-              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
+              .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'receita')
               .gte('data', inicioAntStr)
@@ -149,7 +149,40 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
       setDailySalesData(dailyBars);
 
+      // Extração de itens reais deduplicados a partir das transações carregadas
+      let localTotalItems = 0;
+      const localProdMap = new Map<string, { quantidade: number; faturamento: number }>();
+      for (const t of tx) {
+        if (!t.itens || !Array.isArray(t.itens)) continue;
+        for (const item of t.itens) {
+          if (!item || typeof item !== 'object') continue;
+          const raw = item as Record<string, unknown>;
+          const q = Number(raw.quantity ?? raw.quantidade ?? 1);
+          const v = Number(raw.total ?? raw.valor ?? (Number(raw.price || 0) * q));
+          localTotalItems += q;
+          const name = (raw.product_name as string) || (raw.name as string) || (raw.descricao as string) || 'Item sem nome';
+          const cur = localProdMap.get(name) || { quantidade: 0, faturamento: 0 };
+          cur.quantidade += q;
+          cur.faturamento += v;
+          localProdMap.set(name, cur);
+        }
+      }
+
       let topProdsList: TopProdutoFaturamento[] = prods;
+      if (topProdsList.length === 0 && localProdMap.size > 0) {
+        const sortedLocal = Array.from(localProdMap.entries())
+          .sort((a, b) => b[1].faturamento - a[1].faturamento)
+          .slice(0, 5);
+        topProdsList = sortedLocal.map(([produto, stats], idx) => ({
+          rank: idx + 1,
+          id: `prod-${idx + 1}`,
+          produto,
+          quantidade: stats.quantidade,
+          faturamento: stats.faturamento,
+          percentualFaturamento: total > 0 ? Math.round((stats.faturamento / total) * 1000) / 10 : 0,
+          margemEstimada: null,
+        }));
+      }
 
       // Enriquecimento opcional de itens via Eyemobile live dashboard com timeout estrito de 3.5s
       const eyemobilePromise = fetchLiveDashboard(
@@ -172,18 +205,15 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       }
 
       // Itens vendidos reais calculados sobre todas as vendas do período
-      const totalItems = eyemobileData?.kpis?.totalItemsSold;
-      const coverage = eyemobileData?.kpis?.itemsCoverage ?? 'unavailable';
-      const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? 0;
+      const remoteTotalItems = eyemobileData?.kpis?.totalItemsSold;
+      const coverage = eyemobileData?.kpis?.itemsCoverage ?? (localTotalItems > 0 ? 'complete' : 'unavailable');
+      const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? (localTotalItems > 0 ? 1 : 0);
       setItemsCoverage(coverage);
       setItemsCoverageRatio(ratio);
       setUnclassifiedRevenue(eyemobileData?.dailySalesCoverage?.unclassifiedRevenue ?? 0);
 
-      if (typeof totalItems === 'number' && totalItems > 0) {
-        setItensVendidos(totalItems);
-      } else {
-        setItensVendidos(null);
-      }
+      const effectiveItems = typeof remoteTotalItems === 'number' && remoteTotalItems > 0 ? remoteTotalItems : (localTotalItems > 0 ? localTotalItems : null);
+      setItensVendidos(effectiveItems);
       setCrescimentoItens(null);
 
       // Top 5 Produtos reais

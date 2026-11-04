@@ -37,23 +37,31 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
   const loadOpportunities = useCallback(async () => {
     if (!workspaceId) return;
     try {
+      const effectiveKpis = kpis || CeoFinancialMetricsService.getEmptyKpis();
       const res = await CeoRepository.listOpportunities(workspaceId);
       const opps = res?.data;
       if (opps && Array.isArray(opps) && opps.length > 0) {
         setOpportunities(opps);
       } else {
-        const topProds = await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
+        const topProds =
+          kpis?.topProducts && kpis.topProducts.length > 0
+            ? kpis.topProducts
+            : await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
         const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
-          kpis,
+          kpis: effectiveKpis,
           topProducts: topProds,
         });
         setOpportunities(groundedOpps);
       }
     } catch (err) {
       console.warn('[CeoOpportunitiesTab] Erro ao carregar oportunidades do banco, usando motor canônico:', err);
-      const topProds = await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
+      const effectiveKpis = kpis || CeoFinancialMetricsService.getEmptyKpis();
+      const topProds =
+        kpis?.topProducts && kpis.topProducts.length > 0
+          ? kpis.topProducts
+          : await CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []);
       const groundedOpps = CeoIntelligenceEngine.detectRodoPointOpportunities(workspaceId, {
-        kpis,
+        kpis: effectiveKpis,
         topProducts: topProds,
       });
       setOpportunities(groundedOpps);
