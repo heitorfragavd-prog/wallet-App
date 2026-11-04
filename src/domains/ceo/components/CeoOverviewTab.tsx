@@ -605,7 +605,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
             {/* Card 4: Resultado Operacional Real (sem Math.max artificial) */}
             <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
-              <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                <span>Resultado Operacional Preliminar</span>
+                <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">Caixa (sem CMV/impostos)</span>
+              </div>
               <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
                 {kpis.despesasMes === 0 ? (
                   <span className="text-sm font-normal text-slate-400">Não apurado</span>
@@ -616,12 +619,12 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
                 {(kpis.margemOperacionalPercent != null || (kpis as unknown as { margemOperacional?: number }).margemOperacional != null) ? (
                   <span className={isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}>
-                    Margem: {kpis.margemOperacionalPercent ?? (kpis as unknown as { margemOperacional?: number }).margemOperacional}%
+                    Margem preliminar: {kpis.margemOperacionalPercent ?? (kpis as unknown as { margemOperacional?: number }).margemOperacional}%
                   </span>
                 ) : kpis.despesasMes === 0 ? (
                   <span className="text-slate-500">Aguardando lançamento de despesas</span>
                 ) : (
-                  <span className="text-slate-500">Receitas vs Despesas reais</span>
+                  <span className="text-slate-500">Faturamento vs Despesas pagas (preliminar)</span>
                 )}
               </div>
             </div>

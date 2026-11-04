@@ -66,7 +66,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       const fimAntStr = range.fimAntStr;
 
       // Fonte canônica unificada: Transações reais deste período com paginação integral segura e deduplicação
-      const [txRaw, txAntRaw, prods] = await Promise.all([
+      const [txRaw, txAntRaw] = await Promise.all([
         CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
           (from, to) =>
             supabase
@@ -90,11 +90,16 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               .lte('data', `${fimAntStr}T23:59:59.999Z`)
               .range(from, to)
         ),
-        CeoFinancialMetricsService.getTopProducts(workspaceId).catch(() => []),
       ]);
 
       const tx = deduplicateRevenues(txRaw);
       const txAnt = deduplicateRevenues(txAntRaw);
+
+      const prods = await CeoFinancialMetricsService.getTopProducts(workspaceId, {
+        startDate: inicioStr,
+        endDate: fimStr,
+        customTransactions: tx,
+      }).catch(() => []);
 
       const total = tx.reduce((acc, t) => acc + Number(t.valor || 0), 0);
       const count = tx.length;
@@ -206,8 +211,21 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
       // Itens vendidos reais calculados sobre todas as vendas do período
       const remoteTotalItems = eyemobileData?.kpis?.totalItemsSold;
-      const coverage = eyemobileData?.kpis?.itemsCoverage ?? (localTotalItems > 0 ? 'complete' : 'unavailable');
-      const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? (localTotalItems > 0 ? 1 : 0);
+      const txComItens = tx.filter((t) => t.itens && Array.isArray(t.itens) && t.itens.length > 0);
+      const vendasComItensCount = txComItens.length;
+      const totalVendasCount = tx.length;
+      const localCoverageRatio = totalVendasCount > 0 ? vendasComItensCount / totalVendasCount : 0;
+      const localCoverage: 'complete' | 'partial' | 'unavailable' =
+        totalVendasCount === 0
+          ? 'unavailable'
+          : vendasComItensCount === totalVendasCount
+          ? 'complete'
+          : vendasComItensCount > 0
+          ? 'partial'
+          : 'unavailable';
+
+      const coverage = eyemobileData?.kpis?.itemsCoverage ?? localCoverage;
+      const ratio = eyemobileData?.kpis?.itemsCoverageRatio ?? localCoverageRatio;
       setItemsCoverage(coverage);
       setItemsCoverageRatio(ratio);
       setUnclassifiedRevenue(eyemobileData?.dailySalesCoverage?.unclassifiedRevenue ?? 0);
@@ -438,7 +456,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               <span>Top 5 Produtos (faturamento)</span>
               <span className="text-xs font-normal text-amber-400 flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-amber-400" />
-                Participação de receita
+                Participação de receita {vendasTotais > 0 ? `(% sobre R$ ${vendasTotais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})` : ''}
               </span>
             </CardTitle>
           </CardHeader>

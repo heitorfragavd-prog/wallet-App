@@ -153,17 +153,17 @@ export class CeoIntelligenceEngine {
       );
     }
 
-    // 5. Despesas e Resultado Operacional
+    // 5. Despesas e Resultado Operacional Preliminar
     if (kpis.despesasMes > 0) {
       const despStr = `R$ ${kpis.despesasMes.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
       const resStr = `R$ ${kpis.resultadoOperacional.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
       secoes.push({
-        titulo: "Despesas e Margem Operacional",
+        titulo: "Despesas e Resultado Operacional Preliminar",
         destaque: resStr,
-        conteudo: `Despesas consolidadas: ${despStr}. Resultado operacional real: ${resStr} (${kpis.margemOperacionalPercent != null ? `${kpis.margemOperacionalPercent}% de margem` : "sem margem apurada"}).`,
+        conteudo: `Despesas pagas consolidadas: ${despStr}. Resultado operacional preliminar (caixa): ${resStr} (${kpis.margemOperacionalPercent != null ? `${kpis.margemOperacionalPercent}% de margem preliminar` : "sem margem apurada"}). Custos ausentes: CMV e tributos não parametrizados.`,
         fonte: "Módulo Financeiro / FinancialConsolidationService",
         periodo: `${range.inicioStr} a ${range.fimStr}`,
-        criterioCalculo: "Receita bruta menos despesas consolidadas no regime de competência (sem contagem dupla)",
+        criterioCalculo: "Receita líquida deduplicada menos despesas consolidadas no regime de caixa/competência (sem contagem dupla). Não reflete lucro líquido definitivo por ausência de CMV e tributos.",
         status: kpis.resultadoOperacional >= 0 ? "positivo" : "critico",
       });
     } else {
