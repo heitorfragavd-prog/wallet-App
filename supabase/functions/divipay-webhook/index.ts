@@ -674,15 +674,20 @@ serve(async (req) => {
             // NENHUMA despesa avulsa é criada aqui para aguardar a decisão do usuário em /conciliacao
           } else {
             // ── Identificação Avançada: Colaboradores e Fornecedores
-            const isBoleto = String(metadata.paymentType || '').toUpperCase() === 'BILLET' || 
-                             String(transacao.recipient_key || '').length > 35;
+            const rawTipo = String(metadata.paymentType || transacao.type || '').toUpperCase();
+            const recipientKeyClean = String(transacao.recipient_key || '').trim();
+            const isConfirmedBoletoType = rawTipo === 'BILLET' || rawTipo === 'BOLETO';
+            const isBoletoBarcode = /^\d{44,48}$/.test(recipientKeyClean.replace(/\D/g, '')) && !recipientKeyClean.includes('@') && !recipientKeyClean.includes('-');
+            const isBoleto = isConfirmedBoletoType || isBoletoBarcode;
+
             const docSaqueNormalizado = normalizarDocumento(saqueFavorecidoDocumento);
+            const isIntermediario = isIntermediarioBancario(docSaqueNormalizado);
             const pixChaveSaque = normalizarChavePix(transacao.recipient_key);
 
-            let identificadoColaborador: any = null;
-            let identificadoContato: any = null;
+            let colaboradoresCandidatos: any[] = [];
+            let contatosCandidatos: any[] = [];
 
-            // 1. Identificação de Colaborador (Pix ou Documento)
+            // 1. Identificação de Colaborador (Pix ou CPF direto, sem intermediário)
             const { data: colabs } = await supabaseAdmin
               .from('colaboradores')
               .select('id, nome, tipo, pix_chave, pix_chave_normalizada, cpf, workspace_id')
@@ -690,66 +695,101 @@ serve(async (req) => {
               .eq('status', 'ativo');
 
             if (colabs && colabs.length > 0) {
-              identificadoColaborador = colabs.find((c: any) => {
+              colaboradoresCandidatos = colabs.filter((c: any) => {
                 if (pixChaveSaque && (
                   normalizarChavePix(c.pix_chave_normalizada) === pixChaveSaque ||
                   normalizarChavePix(c.pix_chave) === pixChaveSaque
                 )) {
                   return true;
                 }
-                if (docSaqueNormalizado.length >= 11 && (
-                  normalizarDocumento(c.documento_normalizado) === docSaqueNormalizado ||
-                  normalizarDocumento(c.cpf) === docSaqueNormalizado
-                )) {
+                if (!isIntermediario && docSaqueNormalizado.length >= 11 && normalizarDocumento(c.cpf) === docSaqueNormalizado) {
                   return true;
                 }
                 return false;
               });
             }
 
-            // 2. Se não for colaborador, buscar em Fornecedores (contatos)
-            if (!identificadoColaborador) {
-              const { data: contatos } = await supabaseAdmin
-                .from('contatos')
-                .select('id, nome, nome_fantasia, tipo, categoria_padrao_id, subcategoria_padrao_id, pix_chave, pix_chave_normalizada, beneficiario_documento, beneficiario_documento_normalizado, chaves_pix_adicionais, identificadores_boletos, workspace_id')
-                .eq('workspace_id', targetWorkspaceId)
-                .eq('tipo', 'fornecedor')
-                .eq('ativo', true);
+            // 2. Identificação de Fornecedores (contatos)
+            const { data: contatos } = await supabaseAdmin
+              .from('contatos')
+              .select('id, nome, nome_fantasia, tipo, categoria_padrao_id, subcategoria_padrao_id, pix_chave, pix_chave_normalizada, beneficiario_documento, beneficiario_documento_normalizado, chaves_pix_adicionais, identificadores_boletos, workspace_id')
+              .eq('workspace_id', targetWorkspaceId)
+              .eq('tipo', 'fornecedor')
+              .eq('ativo', true);
 
-              if (contatos && contatos.length > 0) {
-                identificadoContato = contatos.find((contato: any) => {
-                  if (isBoleto) {
-                    if (docSaqueNormalizado && BANCOS_INTERMEDIARIOS.has(docSaqueNormalizado)) {
-                      return false; // Nunca atribuir banco intermediário
-                    }
-                    if (docSaqueNormalizado.length >= 11 && (
-                      normalizarDocumento(contato.beneficiario_documento_normalizado) === docSaqueNormalizado ||
-                      normalizarDocumento(contato.beneficiario_documento) === docSaqueNormalizado
-                    )) {
-                      return true;
-                    }
-                    const boletoIds = Array.isArray(contato.identificadores_boletos) ? contato.identificadores_boletos : [];
-                    if (boletoIds.some((b: string) => normalizarDocumento(b) === docSaqueNormalizado)) {
-                      return true;
-                    }
-                  } else {
-                    if (pixChaveSaque && (
-                      normalizarChavePix(contato.pix_chave_normalizada) === pixChaveSaque ||
-                      normalizarChavePix(contato.pix_chave) === pixChaveSaque
-                    )) {
-                      return true;
-                    }
-                    const pixAdicionais = Array.isArray(contato.chaves_pix_adicionais) ? contato.chaves_pix_adicionais : [];
-                    if (pixAdicionais.some((p: string) => normalizarChavePix(p) === pixChaveSaque)) {
-                      return true;
-                    }
+            if (contatos && contatos.length > 0) {
+              contatosCandidatos = contatos.filter((contato: any) => {
+                if (isBoleto) {
+                  if (isIntermediario) return false; // Nunca atribuir banco intermediário
+                  if (docSaqueNormalizado.length >= 11 && (
+                    normalizarDocumento(contato.beneficiario_documento_normalizado) === docSaqueNormalizado ||
+                    normalizarDocumento(contato.beneficiario_documento) === docSaqueNormalizado
+                  )) {
+                    return true;
                   }
-                  return false;
-                });
-              }
+                  const boletoIds = Array.isArray(contato.identificadores_boletos) ? contato.identificadores_boletos : [];
+                  if (boletoIds.some((b: string) => normalizarDocumento(b) === docSaqueNormalizado)) {
+                    return true;
+                  }
+                } else {
+                  if (pixChaveSaque && (
+                    normalizarChavePix(contato.pix_chave_normalizada) === pixChaveSaque ||
+                    normalizarChavePix(contato.pix_chave) === pixChaveSaque
+                  )) {
+                    return true;
+                  }
+                  const pixAdicionais = Array.isArray(contato.chaves_pix_adicionais) ? contato.chaves_pix_adicionais : [];
+                  if (pixAdicionais.some((p: string) => normalizarChavePix(p) === pixChaveSaque)) {
+                    return true;
+                  }
+                  if (!isIntermediario && docSaqueNormalizado.length >= 11 && (
+                    normalizarDocumento(contato.beneficiario_documento_normalizado) === docSaqueNormalizado ||
+                    normalizarDocumento(contato.beneficiario_documento) === docSaqueNormalizado
+                  )) {
+                    return true;
+                  }
+                }
+                return false;
+              });
             }
 
-            if (identificadoColaborador) {
+            // Checagem de ambiguidade / conflito
+            const temConflito = colaboradoresCandidatos.length > 0 && contatosCandidatos.length > 0;
+            const multiplosColabs = colaboradoresCandidatos.length > 1;
+            const multiplosContatos = contatosCandidatos.length > 1;
+
+            if (temConflito || multiplosColabs || multiplosContatos) {
+              const motivo = temConflito
+                ? 'Identificação ambígua: dados correspondem tanto a colaborador quanto a fornecedor'
+                : multiplosColabs
+                  ? 'Múltiplos colaboradores correspondem aos dados da transação'
+                  : 'Múltiplos fornecedores correspondem aos dados da transação';
+
+              const metaType = metadata.paymentType;
+              await supabaseAdmin.from('divipay_conciliacoes').upsert(
+                {
+                  user_id: userId,
+                  workspace_id: targetWorkspaceId,
+                  divipay_external_id: externalId,
+                  tipo: typeof metaType === 'string' ? metaType : (isBoleto ? 'BILLET' : 'DICT'),
+                  favorecido_nome: saqueFavorecidoNome,
+                  favorecido_documento: saqueFavorecidoDocumento,
+                  valor: saqueValor,
+                  taxa: effectiveFee ?? 0,
+                  data_pagamento: transacao.created_at,
+                  descricao: transacao.description,
+                  status: 'pendente',
+                  motivo_revisao: motivo,
+                  divida_id: null,
+                  divida_sugerida_id: null,
+                  despesa_id: null,
+                  metodo_pagamento: isBoleto ? 'boleto' : 'pix',
+                },
+                { onConflict: 'user_id,divipay_external_id' }
+              );
+              metadata.conciliacao_status = 'pendente';
+            } else if (colaboradoresCandidatos.length === 1) {
+              const identificadoColaborador = colaboradoresCandidatos[0];
               // Buscar acerto de equipe pendente
               const { data: acertosPendentes } = await supabaseAdmin
                 .from('colaborador_acertos')
@@ -764,9 +804,10 @@ serve(async (req) => {
 
               let targetAcertoId = acertoCompativel?.id ?? null;
               let targetDespesaId: string | null = null;
+              let erroExecucao: string | null = null;
 
               if (targetAcertoId) {
-                await supabaseAdmin.rpc('confirmar_pagamento_acerto', {
+                const { error: rpcErr } = await supabaseAdmin.rpc('confirmar_pagamento_acerto', {
                   p_acerto_id: targetAcertoId,
                   p_divipay_external_id: externalId,
                   p_pagamento_id: null,
@@ -775,10 +816,14 @@ serve(async (req) => {
                   p_taxa: effectiveFee ?? 0,
                   p_comprovante_url: null,
                 });
+                if (rpcErr) {
+                  erroExecucao = `Beneficiário colaborador identificado, mas falha ao confirmar acerto: ${rpcErr.message}`;
+                  console.error(erroExecucao);
+                }
               } else {
                 const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('registrar_pagamento_colaborador_manual', {
                   p_colaborador_id: identificadoColaborador.id,
-                  p_tipo: identificadoColaborador.tipo === 'socio' ? 'pro_labore' : 'outro',
+                  p_tipo: 'outro',
                   p_periodo_inicio: saqueData.slice(0, 10),
                   p_periodo_fim: saqueData.slice(0, 10),
                   p_valor: saqueValor,
@@ -787,7 +832,10 @@ serve(async (req) => {
                   p_referencia: externalId,
                   p_observacoes: 'Conciliação automática via webhook Divipay',
                 });
-                if (!rpcErr && rpcRes) {
+                if (rpcErr || !rpcRes) {
+                  erroExecucao = `Beneficiário colaborador identificado, mas falha ao registrar pagamento manual: ${rpcErr?.message || 'Falha na RPC'}`;
+                  console.error(erroExecucao);
+                } else {
                   targetAcertoId = rpcRes.acerto_id ?? null;
                   targetDespesaId = rpcRes.despesa_id ?? null;
                 }
@@ -801,12 +849,13 @@ serve(async (req) => {
                   divipay_external_id: externalId,
                   tipo: typeof metaType === 'string' ? metaType : (isBoleto ? 'BILLET' : 'DICT'),
                   favorecido_nome: saqueFavorecidoNome || identificadoColaborador.nome,
-                  favorecido_documento: saqueFavorecidoDocumento || identificadoColaborador.cpf_cnpj,
+                  favorecido_documento: saqueFavorecidoDocumento || identificadoColaborador.cpf,
                   valor: saqueValor,
                   taxa: effectiveFee ?? 0,
                   data_pagamento: transacao.created_at,
                   descricao: transacao.description,
-                  status: 'conciliada',
+                  status: erroExecucao ? 'pendente' : 'conciliada',
+                  motivo_revisao: erroExecucao,
                   beneficiario_tipo: identificadoColaborador.tipo === 'socio' ? 'socio' : 'colaborador',
                   colaborador_id: identificadoColaborador.id,
                   acerto_id: targetAcertoId,
@@ -816,14 +865,15 @@ serve(async (req) => {
                 },
                 { onConflict: 'user_id,divipay_external_id' }
               );
-              metadata.conciliacao_status = 'conciliada';
+              metadata.conciliacao_status = erroExecucao ? 'pendente' : 'conciliada';
               metadata.colaborador_id = identificadoColaborador.id;
-            } else if (identificadoContato) {
+            } else if (contatosCandidatos.length === 1) {
+              const identificadoContato = contatosCandidatos[0];
               const categoriaFornecedorId = identificadoContato.categoria_padrao_id || await findOrCreateCategoria(
                 supabaseAdmin, userId, 'Fornecedores e Serviços', 'despesa', 'Building2', '#0284c7'
               );
 
-              const { data: despesa } = await supabaseAdmin
+              const { data: despesa, error: despErr } = await supabaseAdmin
                 .from('despesas')
                 .insert({
                   user_id: userId,
@@ -846,6 +896,8 @@ serve(async (req) => {
               if (despesaId) metadata.despesa_id = despesaId;
 
               const metaType = metadata.paymentType;
+              const erroDespesa = despErr ? `Fornecedor identificado, mas falha ao criar despesa: ${despErr.message}` : null;
+
               await supabaseAdmin.from('divipay_conciliacoes').upsert(
                 {
                   user_id: userId,
@@ -858,7 +910,8 @@ serve(async (req) => {
                   taxa: effectiveFee ?? 0,
                   data_pagamento: transacao.created_at,
                   descricao: transacao.description,
-                  status: 'conciliada',
+                  status: erroDespesa ? 'pendente' : 'conciliada',
+                  motivo_revisao: erroDespesa,
                   beneficiario_tipo: 'fornecedor',
                   contato_id: identificadoContato.id,
                   categoria_id: categoriaFornecedorId,
@@ -869,7 +922,7 @@ serve(async (req) => {
                 },
                 { onConflict: 'user_id,divipay_external_id' }
               );
-              metadata.conciliacao_status = 'conciliada';
+              metadata.conciliacao_status = erroDespesa ? 'pendente' : 'conciliada';
               metadata.contato_id = identificadoContato.id;
             } else {
               // Nem colaborador nem fornecedor identificado: fila de revisão "Pagamentos a Identificar"
@@ -891,6 +944,7 @@ serve(async (req) => {
                   divida_id: null,
                   divida_sugerida_id: null,
                   despesa_id: null,
+                  metodo_pagamento: isBoleto ? 'boleto' : 'pix',
                 },
                 { onConflict: 'user_id,divipay_external_id' }
               );

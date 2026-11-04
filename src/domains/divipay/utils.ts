@@ -3,6 +3,40 @@
  */
 
 /**
+ * Bancos e instituições arrecadadoras que atuam como intermediários bancários.
+ * Seus CNPJs aparecem na liquidação de boletos e saques mas JAMAIS devem ser
+ * atribuídos como o credor/fornecedor comercial final.
+ */
+export const BANCOS_INTERMEDIARIOS = new Set<string>([
+  "60701190000104", // Itaú Unibanco
+  "00000000000191", // Banco do Brasil
+  "00360305000104", // Caixa Econômica Federal
+  "90400888000142", // Santander
+  "07237373000120", // Bradesco
+  "61088183000109", // Banco Safra
+  "13079034000142", // Stone / Pagamentos
+  "10573521000191", // Mercado Pago
+  "18236120000158", // Nubank (Nu Pagamentos)
+  "33885724000119", // PagBank (PagSeguro)
+  "30306294000145", // BTG Pactual
+  "04913711000108", // Banco Inter
+  "28018868000130", // PicPay
+  "02038232000164", // Sicoob
+  "01181521000155", // Sicredi
+  "17298092000130", // Banco Original
+  "07450604000189", // C6 Bank
+  "00416968000101", // Banrisul
+  "04184779000101", // Banco Cetelem
+  "01701201000189", // Ailos
+]);
+
+export function isIntermediarioBancario(doc: string | null | undefined): boolean {
+  if (!doc) return false;
+  const digits = doc.replace(/\D/g, "");
+  return BANCOS_INTERMEDIARIOS.has(digits);
+}
+
+/**
  * Normaliza documento (CPF ou CNPJ) mantendo apenas dígitos
  */
 export function normalizarDocumento(doc: string | null | undefined): string {
@@ -47,10 +81,10 @@ export function resolveBeneficiary(
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 
+  const normalizedType = String(type || "").toUpperCase();
   const isBoleto =
-    type === "BILLET" ||
-    type === "Boleto" ||
-    desc.includes("boleto");
+    normalizedType === "BILLET" ||
+    normalizedType === "BOLETO";
 
   let name = "---";
   const document = "---";

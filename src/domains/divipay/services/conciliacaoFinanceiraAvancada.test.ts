@@ -311,4 +311,131 @@ describe("ConciliacaoFinanceiraAvancada — Testes Rigorosos (ETAPA 11)", () => 
       expect(res.evidencia).toBe("linha_digitavel_divida_vinculada");
     }
   });
+
+  it("10. Transação DICT contendo 'boleto' na descrição não é classificada como boleto", () => {
+    const saque: SaqueMovimento = {
+      externalId: "tx-pix-desc-boleto",
+      tipo: "DICT",
+      descricao: "Pagamento referente a boleto de compras",
+      valor: 450.0,
+      recipientKey: "financeiro@distribuidoraabc.com.br",
+      favorecidoNome: "Distribuidora ABC Ltda",
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [mockFuncionario],
+      acertos: [],
+      fornecedores: [mockFornecedor],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("fornecedor");
+    if (res.tipo === "fornecedor") {
+      expect(res.metodoPagamento).toBe("pix");
+      expect(res.metodoPagamento).not.toBe("boleto");
+    }
+  });
+
+  it("11. Chave Pix aleatória (UUID de 36 caracteres) é classificada como PIX e não como boleto", () => {
+    const fornecedorComChaveAleatoria: Contato = {
+      ...mockFornecedor,
+      id: "forn-evp",
+      pix_chave: "9f8c67e2-45a1-4389-9a25-2b47120df01b",
+      pix_chave_normalizada: "9f8c67e2-45a1-4389-9a25-2b47120df01b",
+    };
+
+    const saque: SaqueMovimento = {
+      externalId: "tx-pix-evp",
+      tipo: "DICT",
+      valor: 250.0,
+      recipientKey: "9f8c67e2-45a1-4389-9a25-2b47120df01b", // 36 caracteres
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [],
+      acertos: [],
+      fornecedores: [fornecedorComChaveAleatoria],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("fornecedor");
+    if (res.tipo === "fornecedor") {
+      expect(res.fornecedor.id).toBe("forn-evp");
+      expect(res.metodoPagamento).toBe("pix");
+    }
+  });
+
+  it("12. Conflito entre colaborador e fornecedor deve retornar tipo 'ambiguo'", () => {
+    const fornecedorConflitante: Contato = {
+      ...mockFornecedor,
+      id: "forn-conflito",
+      beneficiario_documento: "12312312388", // Mesmo CPF da funcionária Shuellen
+      beneficiario_documento_normalizado: "12312312388",
+    };
+
+    const saque: SaqueMovimento = {
+      externalId: "tx-conflito",
+      tipo: "DICT",
+      valor: 200.0,
+      favorecidoDocumento: "12312312388",
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [mockFuncionario],
+      acertos: [],
+      fornecedores: [fornecedorConflitante],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("ambiguo");
+    if (res.tipo === "ambiguo") {
+      expect(res.confianca).toBe("baixa");
+    }
+  });
+
+  it("13. Documento de intermediário bancário (ex: Banco do Brasil) é rejeitado na identificação de fornecedor", () => {
+    const saque: SaqueMovimento = {
+      externalId: "tx-bb-intermediario",
+      tipo: "BILLET",
+      valor: 500.0,
+      favorecidoDocumento: "00.000.000/0001-91", // Banco do Brasil
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [],
+      acertos: [],
+      fornecedores: [mockFornecedor],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("nao_identificado");
+  });
+
+  it("14. Documento no favorecidoDocumento não é usado indevidamente como chave Pix", () => {
+    const saque: SaqueMovimento = {
+      externalId: "tx-pix-chave-divergente",
+      tipo: "DICT",
+      valor: 100.0,
+      recipientKey: "outro@email.com",
+      favorecidoDocumento: "12312312388",
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [mockFuncionario],
+      acertos: [],
+      fornecedores: [],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("colaborador");
+    if (res.tipo === "colaborador") {
+      expect(res.evidencia).toBe("documento_cpf_exato");
+      expect(res.evidencia).not.toBe("chave_pix_exata");
+    }
+  });
 });
