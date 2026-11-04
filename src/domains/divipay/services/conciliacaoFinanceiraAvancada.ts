@@ -17,7 +17,12 @@
  * 5. Idempotência -> Reprocessar transações já conciliadas preserva resultado sem duplicar despesas.
  */
 
-import { normalizarChavePix, normalizarDocumento, normalizarNome } from "../utils";
+import {
+  normalizarChavePix,
+  normalizarDocumento,
+  normalizarNome,
+  isIntermediarioBancario,
+} from "../utils";
 import type { Contato } from "@/domains/finance/hooks/useContatos";
 
 export interface SaqueMovimento {
@@ -125,11 +130,15 @@ export class ConciliacaoFinanceiraAvancada {
     despesas?: DespesaCandidata[];
   }): MatchBeneficiarioResultado {
     const { saque, colaboradores, acertos, fornecedores, dividas, despesas: _despesas = [] } = params;
-    const isBoleto = String(saque.tipo).toUpperCase() === "BILLET" || String(saque.descricao || "").toLowerCase().includes("boleto");
+    const rawTipo = String(saque.tipo || "").toUpperCase();
+    const isConfirmedBoletoType = rawTipo === "BILLET" || rawTipo === "BOLETO";
+    const recipientKeyClean = String(saque.recipientKey || "").trim();
+    const isBoletoBarcode = /^\d{44,48}$/.test(recipientKeyClean.replace(/\D/g, "")) && !recipientKeyClean.includes("@") && !recipientKeyClean.includes("-");
+    const isBoleto = isConfirmedBoletoType || isBoletoBarcode;
 
-    const pixKeyNormalizada = normalizarChavePix(saque.recipientKey || saque.favorecidoDocumento);
+    const pixKeyNormalizada = normalizarChavePix(saque.recipientKey);
     const docNormalizado = normalizarDocumento(saque.favorecidoDocumento);
-    const linhaDigNormalizada = normalizarDocumento(saque.linhaDigitavel || saque.codigoBarras || saque.recipientKey);
+    const linhaDigNormalizada = normalizarDocumento(saque.linhaDigitavel || saque.codigoBarras || (isBoletoBarcode ? saque.recipientKey : undefined));
 
     // ─────────────────────────────────────────────────────────────────────────
     // 1. RECONHECIMENTO DE BOLETOS (ETAPA 4)
@@ -163,52 +172,41 @@ export class ConciliacaoFinanceiraAvancada {
       }
 
       // 1.2 Prioridade 2: CPF/CNPJ confirmado do beneficiário final correspondente a um único fornecedor
-      if (docNormalizado.length === 11 || docNormalizado.length === 14) {
-        // Ignora documentos conhecidos de bancos/intermediários arrecadadores
-        const intermediariosBancarios = new Set([
-          "00000000000191", // Banco do Brasil
-          "60701190000104", // Itaú Unibanco
-          "90400888000142", // Santander
-          "60746948000112", // Bradesco
-          "00360305000104", // Caixa Econômica Federal
-        ]);
+      if ((docNormalizado.length === 11 || docNormalizado.length === 14) && !isIntermediarioBancario(docNormalizado)) {
+        const fornecedoresPorDoc = fornecedores.filter((f) => {
+          const fDoc = normalizarDocumento(f.cnpj_cpf);
+          const fBeneDoc = normalizarDocumento(f.beneficiario_documento);
+          return fDoc === docNormalizado || fBeneDoc === docNormalizado;
+        });
 
-        if (!intermediariosBancarios.has(docNormalizado)) {
-          const fornecedoresPorDoc = fornecedores.filter((f) => {
-            const fDoc = normalizarDocumento(f.cnpj_cpf);
-            const fBeneDoc = normalizarDocumento(f.beneficiario_documento);
-            return fDoc === docNormalizado || fBeneDoc === docNormalizado;
+        if (fornecedoresPorDoc.length === 1) {
+          const f = fornecedoresPorDoc[0];
+          // Procura dívida em aberto correspondente ao valor
+          const dividaCompativel = dividas.find((d) => {
+            const mesmoCredor = d.contato_id === f.id || normalizarNome(d.credor) === normalizarNome(f.nome);
+            const valorOk = Math.abs(d.valor_restante - saque.valor) <= 1.0;
+            return mesmoCredor && valorOk;
           });
 
-          if (fornecedoresPorDoc.length === 1) {
-            const f = fornecedoresPorDoc[0];
-            // Procura dívida em aberto correspondente ao valor
-            const dividaCompativel = dividas.find((d) => {
-              const mesmoCredor = d.contato_id === f.id || normalizarNome(d.credor) === normalizarNome(f.nome);
-              const valorOk = Math.abs(d.valor_restante - saque.valor) <= 1.0;
-              return mesmoCredor && valorOk;
-            });
+          return {
+            tipo: "fornecedor",
+            fornecedor: f,
+            categoriaIdSugerida: dividaCompativel?.categoria_id || f.categoria_padrao_id,
+            subcategoriaIdSugerida: f.subcategoria_padrao_id,
+            dividaSugerida: dividaCompativel || null,
+            metodoPagamento: "boleto",
+            evidencia: "cnpj_beneficiario_final_exato",
+            confianca: "alta",
+          };
+        }
 
-            return {
-              tipo: "fornecedor",
-              fornecedor: f,
-              categoriaIdSugerida: dividaCompativel?.categoria_id || f.categoria_padrao_id,
-              subcategoriaIdSugerida: f.subcategoria_padrao_id,
-              dividaSugerida: dividaCompativel || null,
-              metodoPagamento: "boleto",
-              evidencia: "cnpj_beneficiario_final_exato",
-              confianca: "alta",
-            };
-          }
-
-          if (fornecedoresPorDoc.length > 1) {
-            return {
-              tipo: "ambiguo",
-              motivo: `Múltiplos fornecedores encontrados para o documento ${docNormalizado}`,
-              candidatosNomes: fornecedoresPorDoc.map((f) => f.nome),
-              confianca: "baixa",
-            };
-          }
+        if (fornecedoresPorDoc.length > 1) {
+          return {
+            tipo: "ambiguo",
+            motivo: `Múltiplos fornecedores encontrados para o documento ${docNormalizado}`,
+            candidatosNomes: fornecedoresPorDoc.map((f) => f.nome),
+            confianca: "baixa",
+          };
         }
       }
 
@@ -226,7 +224,7 @@ export class ConciliacaoFinanceiraAvancada {
           const f = fornecedoresPorBoletoId[0];
           return {
             tipo: "fornecedor",
-            fornecedor: f,
+            fornecedor,
             categoriaIdSugerida: f.categoria_padrao_id,
             subcategoriaIdSugerida: f.subcategoria_padrao_id,
             metodoPagamento: "boleto",
@@ -247,51 +245,24 @@ export class ConciliacaoFinanceiraAvancada {
     // ─────────────────────────────────────────────────────────────────────────
     // 2. RECONHECIMENTO DE PIX (ETAPA 3)
     // ─────────────────────────────────────────────────────────────────────────
+    const isDocIntermediario = isIntermediarioBancario(docNormalizado);
 
     // 2.1 Verifica Funcionários e Sócios (Equipe)
-    if (pixKeyNormalizada || docNormalizado) {
-      const colaboradoresMatch = colaboradores.filter((c) => {
+    let colaboradoresMatch: ColaboradorCandidato[] = [];
+    if (pixKeyNormalizada || (docNormalizado && !isDocIntermediario)) {
+      colaboradoresMatch = colaboradores.filter((c) => {
         const cPix = normalizarChavePix(c.pix_chave_normalizada || c.pix_chave);
         const cCpf = normalizarDocumento(c.cpf);
-        const batePix = pixKeyNormalizada && cPix && cPix === pixKeyNormalizada;
-        const bateCpf = docNormalizado && cCpf && cCpf.length === 11 && cCpf === docNormalizado;
+        const batePix = Boolean(pixKeyNormalizada && cPix && cPix === pixKeyNormalizada);
+        const bateCpf = Boolean(!isDocIntermediario && docNormalizado && cCpf && cCpf.length === 11 && cCpf === docNormalizado);
         return batePix || bateCpf;
       });
-
-      if (colaboradoresMatch.length === 1) {
-        const colab = colaboradoresMatch[0];
-        const isSocio = colab.tipo === "socio";
-
-        // Procura acerto pendente compatível
-        const acertoCompativel = acertos.find((a) => {
-          if (a.colaborador_id !== colab.id) return false;
-          if (!["pendente", "processando"].includes(a.status)) return false;
-          // Tolera diferença de arredondamento de até R$ 0.10
-          return Math.abs(a.valor_total - saque.valor) <= 0.10;
-        });
-
-        return {
-          tipo: isSocio ? "socio" : "colaborador",
-          colaborador: colab,
-          acertoSugerido: acertoCompativel || null,
-          evidencia: "chave_pix_ou_cpf_colaborador_exato",
-          confianca: "alta",
-        };
-      }
-
-      if (colaboradoresMatch.length > 1) {
-        return {
-          tipo: "ambiguo",
-          motivo: "Múltiplos membros da equipe compatíveis com o mesmo Pix/CPF",
-          candidatosNomes: colaboradoresMatch.map((c) => c.nome),
-          confianca: "baixa",
-        };
-      }
     }
 
     // 2.2 Verifica Fornecedores via Pix
-    if (pixKeyNormalizada || docNormalizado) {
-      const fornecedoresPixMatch = fornecedores.filter((f) => {
+    let fornecedoresPixMatch: Contato[] = [];
+    if (pixKeyNormalizada || (docNormalizado && !isDocIntermediario)) {
+      fornecedoresPixMatch = fornecedores.filter((f) => {
         // Chave Pix principal
         const fPix = normalizarChavePix(f.pix_chave_normalizada || f.pix_chave);
         if (pixKeyNormalizada && fPix && fPix === pixKeyNormalizada) return true;
@@ -301,47 +272,106 @@ export class ConciliacaoFinanceiraAvancada {
         const bateExtra = extras.some((k) => normalizarChavePix(k.chave) === pixKeyNormalizada);
         if (bateExtra) return true;
 
-        // Documento beneficiário bancário
-        const fBeneDoc = normalizarDocumento(f.beneficiario_documento_normalizado || f.beneficiario_documento);
-        if (docNormalizado && fBeneDoc && fBeneDoc === docNormalizado) return true;
+        if (!isDocIntermediario && docNormalizado) {
+          // Documento beneficiário bancário
+          const fBeneDoc = normalizarDocumento(f.beneficiario_documento_normalizado || f.beneficiario_documento);
+          if (fBeneDoc && fBeneDoc === docNormalizado) return true;
 
-        // CNPJ/CPF do fornecedor
-        const fCnpj = normalizarDocumento(f.cnpj_cpf);
-        if (docNormalizado && fCnpj && fCnpj === docNormalizado) return true;
+          // CNPJ/CPF do fornecedor
+          const fCnpj = normalizarDocumento(f.cnpj_cpf);
+          if (fCnpj && fCnpj === docNormalizado) return true;
+        }
 
         return false;
       });
+    }
 
-      if (fornecedoresPixMatch.length === 1) {
-        const f = fornecedoresPixMatch[0];
+    // 2.3 Resolução de Ambiguidade / Conflito
+    const temConflitoColabFornecedor = colaboradoresMatch.length > 0 && fornecedoresPixMatch.length > 0;
+    if (temConflitoColabFornecedor) {
+      return {
+        tipo: "ambiguo",
+        motivo: "Identificação ambígua: dados correspondem tanto a colaborador quanto a fornecedor",
+        candidatosNomes: [
+          ...colaboradoresMatch.map((c) => c.nome),
+          ...fornecedoresPixMatch.map((f) => f.nome),
+        ],
+        confianca: "baixa",
+      };
+    }
 
-        // Verifica despesa ou dívida pré-existente
-        const dividaCompativel = dividas.find((d) => {
-          const mesmoCredor = d.contato_id === f.id || normalizarNome(d.credor) === normalizarNome(f.nome);
-          const valorOk = Math.abs(d.valor_restante - saque.valor) <= 1.0;
-          return mesmoCredor && valorOk;
-        });
+    if (colaboradoresMatch.length > 1) {
+      return {
+        tipo: "ambiguo",
+        motivo: "Múltiplos membros da equipe compatíveis com o mesmo Pix/CPF",
+        candidatosNomes: colaboradoresMatch.map((c) => c.nome),
+        confianca: "baixa",
+      };
+    }
 
-        return {
-          tipo: "fornecedor",
-          fornecedor: f,
-          categoriaIdSugerida: dividaCompativel?.categoria_id || f.categoria_padrao_id,
-          subcategoriaIdSugerida: f.subcategoria_padrao_id,
-          dividaSugerida: dividaCompativel || null,
-          metodoPagamento: "pix",
-          evidencia: "pix_chave_ou_documento_fornecedor_exato",
-          confianca: "alta",
-        };
-      }
+    if (fornecedoresPixMatch.length > 1) {
+      return {
+        tipo: "ambiguo",
+        motivo: "Múltiplos fornecedores cadastrados para a mesma chave Pix ou CPF/CNPJ",
+        candidatosNomes: fornecedoresPixMatch.map((f) => f.nome),
+        confianca: "baixa",
+      };
+    }
 
-      if (fornecedoresPixMatch.length > 1) {
-        return {
-          tipo: "ambiguo",
-          motivo: "Múltiplos fornecedores cadastrados para a mesma chave Pix ou CPF/CNPJ",
-          candidatosNomes: fornecedoresPixMatch.map((f) => f.nome),
-          confianca: "baixa",
-        };
-      }
+    // 2.4 Colaborador Único Identificado
+    if (colaboradoresMatch.length === 1) {
+      const colab = colaboradoresMatch[0];
+      const isSocio = colab.tipo === "socio";
+
+      const cPix = normalizarChavePix(colab.pix_chave_normalizada || colab.pix_chave);
+      const cCpf = normalizarDocumento(colab.cpf);
+      const batePix = Boolean(pixKeyNormalizada && cPix && cPix === pixKeyNormalizada);
+      const bateCpf = Boolean(!isDocIntermediario && docNormalizado && cCpf && cCpf.length === 11 && cCpf === docNormalizado);
+
+      const evidencia = batePix && !bateCpf
+        ? "chave_pix_exata"
+        : bateCpf && !batePix
+          ? "documento_cpf_exato"
+          : "chave_pix_ou_cpf_colaborador_exato";
+
+      // Procura acerto pendente compatível
+      const acertoCompativel = acertos.find((a) => {
+        if (a.colaborador_id !== colab.id) return false;
+        if (!["pendente", "processando"].includes(a.status)) return false;
+        // Tolera diferença de arredondamento de até R$ 0.10
+        return Math.abs(a.valor_total - saque.valor) <= 0.10;
+      });
+
+      return {
+        tipo: isSocio ? "socio" : "colaborador",
+        colaborador: colab,
+        acertoSugerido: acertoCompativel || null,
+        evidencia,
+        confianca: "alta",
+      };
+    }
+
+    // 2.5 Fornecedor Único Identificado
+    if (fornecedoresPixMatch.length === 1) {
+      const f = fornecedoresPixMatch[0];
+
+      // Verifica despesa ou dívida pré-existente
+      const dividaCompativel = dividas.find((d) => {
+        const mesmoCredor = d.contato_id === f.id || normalizarNome(d.credor) === normalizarNome(f.nome);
+        const valorOk = Math.abs(d.valor_restante - saque.valor) <= 1.0;
+        return mesmoCredor && valorOk;
+      });
+
+      return {
+        tipo: "fornecedor",
+        fornecedor: f,
+        categoriaIdSugerida: dividaCompativel?.categoria_id || f.categoria_padrao_id,
+        subcategoriaIdSugerida: f.subcategoria_padrao_id,
+        dividaSugerida: dividaCompativel || null,
+        metodoPagamento: "pix",
+        evidencia: "pix_chave_ou_documento_fornecedor_exato",
+        confianca: "alta",
+      };
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -240,9 +240,9 @@ function sugerirCategoria(descricao: string): string {
   return "Transferências e Saques Divipay";
 }
 
-function sugerirMetodoPagamento(tipo: string, descricao: string): string {
-  const desc = normalizarTexto(descricao);
-  if (tipo === "BILLET" || desc.includes("boleto")) {
+function sugerirMetodoPagamento(tipo: string): string {
+  const t = String(tipo || "").toUpperCase();
+  if (t === "BILLET" || t === "BOLETO") {
     return "boleto";
   }
   return "pix";
@@ -269,7 +269,7 @@ async function criarDespesaAvulsa(
   else if (catSugerida === "Serviços") { icone = "Briefcase"; cor = "#06b6d4"; }
 
   const categoriaId = await findOrCreateCategoria(userId, catSugerida, icone, cor);
-  const metodoPagamento = sugerirMetodoPagamento(saque.tipo, descEfetiva);
+  const metodoPagamento = sugerirMetodoPagamento(saque.tipo);
 
   const { data, error } = await supabase
     .from("despesas")
@@ -413,10 +413,10 @@ export function mapearSaque(t: DivipayTransacao): SaqueParaConciliar | null {
   const externalId = t.external_id ?? (t.id.startsWith("api-") ? t.id.slice(4) : t.id);
   if (!externalId) return null;
   const meta = (t.metadata ?? {}) as Record<string, unknown>;
-  const isBoleto =
-    typeof meta.paymentType === "string"
-      ? meta.paymentType === "BILLET"
-      : String(t.description || "").toLowerCase().includes("boleto");
+  const rawType = typeof meta.paymentType === "string" ? meta.paymentType.toUpperCase() : String(t.type || "").toUpperCase();
+  const recipientDigits = String(t.recipient_key || "").replace(/\D/g, "");
+  const isBoletoBarcode = /^\d{44,48}$/.test(recipientDigits) && !String(t.recipient_key || "").includes("@") && !String(t.recipient_key || "").includes("-");
+  const isBoleto = rawType === "BILLET" || rawType === "BOLETO" || isBoletoBarcode;
   const resolved = resolveBeneficiary(Number(t.amount || 0), t.description || "", isBoleto ? "Boleto" : "Pix");
 
   return {
@@ -607,9 +607,21 @@ export class ConciliacaoDivipayService {
             p_taxa: saque.taxa,
             p_comprovante_url: null,
           });
-          if (!rpcErr) {
-            match.acertoSugerido.status = "pago";
+          if (rpcErr) {
+            logger.error(COMPONENT, "Falha ao confirmar pagamento do acerto", { error: rpcErr });
+            await this.registrarConciliacao(userId, wsId, saque, "pendente", {
+              beneficiarioTipo: match.tipo,
+              colaboradorId: match.colaborador.id,
+              acertoId: match.acertoSugerido.id,
+              motivoRevisao: `Beneficiário identificado, mas falha ao confirmar acerto: ${rpcErr.message ?? String(rpcErr)}`,
+              metodoPagamento: "pix",
+              origemEvidencia: match.evidencia,
+            });
+            resumo.processados++;
+            resumo.pendentes++;
+            continue;
           }
+          match.acertoSugerido.status = "pago";
           await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
             beneficiarioTipo: match.tipo,
@@ -619,10 +631,10 @@ export class ConciliacaoDivipayService {
             origemEvidencia: match.evidencia,
           });
         } else {
-          // Pix identificado para colaborador sem acerto prévio: cria registro via RPC manual
-          const { data: resManual } = await dynamicDb.rpc("registrar_pagamento_colaborador_manual", {
+          // Pix identificado para colaborador sem acerto prévio: cria registro via RPC manual (tipo 'outro' para não presumir pró-labore)
+          const { data: resManual, error: errManual } = await dynamicDb.rpc("registrar_pagamento_colaborador_manual", {
             p_colaborador_id: match.colaborador.id,
-            p_tipo: match.tipo === "socio" ? "pro_labore" : "outro",
+            p_tipo: "outro",
             p_periodo_inicio: saque.dataPagamento.slice(0, 10),
             p_periodo_fim: saque.dataPagamento.slice(0, 10),
             p_valor: saque.valor,
@@ -631,6 +643,20 @@ export class ConciliacaoDivipayService {
             p_referencia: saque.externalId,
             p_observacoes: "Identificação automática de Pix Divipay",
           });
+
+          if (errManual) {
+            logger.error(COMPONENT, "Falha ao registrar pagamento manual do colaborador", { error: errManual });
+            await this.registrarConciliacao(userId, wsId, saque, "pendente", {
+              beneficiarioTipo: match.tipo,
+              colaboradorId: match.colaborador.id,
+              motivoRevisao: `Beneficiário identificado, mas falha ao registrar pagamento: ${errManual.message ?? String(errManual)}`,
+              metodoPagamento: "pix",
+              origemEvidencia: match.evidencia,
+            });
+            resumo.processados++;
+            resumo.pendentes++;
+            continue;
+          }
 
           await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
@@ -652,9 +678,23 @@ export class ConciliacaoDivipayService {
       if (match.tipo === "fornecedor") {
         if (match.dividaSugerida) {
           const ok = await baixarDivida(userId, match.dividaSugerida.id, saque);
-          if (ok) {
-            match.dividaSugerida.valor_restante = Math.max(0, match.dividaSugerida.valor_restante - saque.valor);
+          if (!ok) {
+            logger.error(COMPONENT, "Falha ao processar baixa contábil da dívida", { dividaId: match.dividaSugerida.id });
+            await this.registrarConciliacao(userId, wsId, saque, "pendente", {
+              beneficiarioTipo: "fornecedor",
+              contatoId: match.fornecedor.id,
+              dividaSugeridaId: match.dividaSugerida.id,
+              motivoRevisao: "Beneficiário identificado, mas falha ao processar baixa contábil da dívida",
+              categoriaId: match.categoriaIdSugerida,
+              subcategoriaId: match.subcategoriaIdSugerida,
+              metodoPagamento: match.metodoPagamento,
+              origemEvidencia: match.evidencia,
+            });
+            resumo.processados++;
+            resumo.pendentes++;
+            continue;
           }
+          match.dividaSugerida.valor_restante = Math.max(0, match.dividaSugerida.valor_restante - saque.valor);
           await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
             beneficiarioTipo: "fornecedor",
@@ -675,6 +715,21 @@ export class ConciliacaoDivipayService {
             match.metodoPagamento,
             wsId,
           );
+          if (!despesaId) {
+            logger.error(COMPONENT, "Falha ao criar despesa para fornecedor", { fornecedorId: match.fornecedor.id });
+            await this.registrarConciliacao(userId, wsId, saque, "pendente", {
+              beneficiarioTipo: "fornecedor",
+              contatoId: match.fornecedor.id,
+              motivoRevisao: "Fornecedor identificado, mas falha ao criar despesa contábil",
+              categoriaId: match.categoriaIdSugerida,
+              subcategoriaId: match.subcategoriaIdSugerida,
+              metodoPagamento: match.metodoPagamento,
+              origemEvidencia: match.evidencia,
+            });
+            resumo.processados++;
+            resumo.pendentes++;
+            continue;
+          }
           await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
             beneficiarioTipo: "fornecedor",
@@ -841,9 +896,8 @@ export class ConciliacaoDivipayService {
       descricao: conciliacao.descricao,
     };
 
-    const isBoleto =
-      conciliacao.tipo === "BILLET" ||
-      String(conciliacao.descricao || "").toLowerCase().includes("boleto");
+    const rawTipo = String(conciliacao.tipo || "").toUpperCase();
+    const isBoleto = rawTipo === "BILLET" || rawTipo === "BOLETO";
     const metodo: "pix" | "boleto" = isBoleto ? "boleto" : "pix";
 
     const despesaId = await criarDespesaFornecedor(
@@ -855,6 +909,10 @@ export class ConciliacaoDivipayService {
       metodo,
       wsId,
     );
+
+    if (!despesaId) {
+      throw new Error("Falha ao registrar despesa contábil do fornecedor");
+    }
 
     await criarDespesaTaxa(userId, saque, wsId);
 
@@ -910,7 +968,7 @@ export class ConciliacaoDivipayService {
     let targetDespesaId = conciliacao.despesa_id;
 
     if (targetAcertoId) {
-      await dynamicDb.rpc("confirmar_pagamento_acerto", {
+      const { error: rpcErr } = await dynamicDb.rpc("confirmar_pagamento_acerto", {
         p_acerto_id: targetAcertoId,
         p_divipay_external_id: saque.externalId,
         p_pagamento_id: null,
@@ -919,10 +977,11 @@ export class ConciliacaoDivipayService {
         p_taxa: saque.taxa,
         p_comprovante_url: null,
       });
+      if (rpcErr) throw rpcErr;
     } else {
       const { data: resRpc, error: errRpc } = await dynamicDb.rpc("registrar_pagamento_colaborador_manual", {
         p_colaborador_id: colaboradorId,
-        p_tipo: colab.tipo === "socio" ? "pro_labore" : "outro",
+        p_tipo: "outro",
         p_periodo_inicio: saque.dataPagamento.slice(0, 10),
         p_periodo_fim: saque.dataPagamento.slice(0, 10),
         p_valor: saque.valor,

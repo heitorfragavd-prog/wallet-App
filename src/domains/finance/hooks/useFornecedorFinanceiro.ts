@@ -7,7 +7,7 @@ export interface ItemHistoricoFornecedor {
   data: string;
   competencia: string;
   descricao: string;
-  metodoPagamento: "pix" | "boleto" | "outro";
+  metodoPagamento: "pix" | "boleto" | "cartao" | "ted" | "dinheiro" | "outro";
   valor: number;
   categoriaNome: string;
   status: "pago" | "pendente";
@@ -71,11 +71,25 @@ interface GenericSupabaseClient {
   from: (table: string) => {
     select: (cols: string) => {
       eq: (col: string, val: unknown) => {
-        eq: (col: string, val: unknown) => Promise<{ data: unknown[] | null }>;
-        or: (condition: string) => Promise<{ data: unknown[] | null }>;
+        eq: (col: string, val: unknown) => Promise<{ data: unknown[] | null; error?: unknown }>;
+        or: (condition: string) => Promise<{ data: unknown[] | null; error?: unknown }>;
       };
     };
   };
+}
+
+function resolverMetodoPagamento(
+  metodo?: string | null,
+  tipo?: string | null,
+): "pix" | "boleto" | "cartao" | "ted" | "dinheiro" | "outro" {
+  const m = String(metodo || "").toLowerCase();
+  const t = String(tipo || "").toUpperCase();
+  if (m === "boleto" || t === "BILLET" || t === "BOLETO") return "boleto";
+  if (m === "pix" || t === "DICT" || t === "PIX" || t === "QRCODE") return "pix";
+  if (m.includes("cartao") || m.includes("card") || m.includes("credito") || m.includes("debito")) return "cartao";
+  if (m.includes("ted") || m.includes("doc") || m.includes("transferencia")) return "ted";
+  if (m.includes("dinheiro") || m.includes("especie")) return "dinheiro";
+  return "outro";
 }
 
 export function useFornecedorFinanceiro(params: {
@@ -117,18 +131,20 @@ export function useFornecedorFinanceiro(params: {
       const db = supabase as unknown as GenericSupabaseClient;
 
       // 1. Busca conciliações Divipay vinculadas a este fornecedor
-      const { data: conciliacoesRaw } = await db
+      const { data: conciliacoesRaw, error: errConc } = await db
         .from("divipay_conciliacoes")
         .select("*, categorias (nome)")
         .eq("workspace_id", workspaceId)
         .eq("contato_id", fornecedorId);
+      if (errConc) throw errConc;
 
       // 2. Busca despesas diretas vinculadas ao fornecedor via contato_id
-      const { data: despesasRaw } = await db
+      const { data: despesasRaw, error: errDesp } = await db
         .from("despesas")
         .select("*, categorias (nome)")
         .eq("workspace_id", workspaceId)
         .eq("contato_id", fornecedorId);
+      if (errDesp) throw errDesp;
 
       // 3. Busca dívidas abertas e quitadas deste fornecedor
       let queryDividas = db
@@ -141,23 +157,26 @@ export function useFornecedorFinanceiro(params: {
       } else {
         queryDividas = queryDividas.eq("contato_id", fornecedorId) as unknown as typeof queryDividas;
       }
-      const { data: dividasRaw } = await (queryDividas as unknown as Promise<{ data: unknown[] | null }>);
+      const { data: dividasRaw, error: errDiv } = await (queryDividas as unknown as Promise<{ data: unknown[] | null; error?: unknown }>);
+      if (errDiv) throw errDiv;
 
       // Monta histórico unificado
       const itens: ItemHistoricoFornecedor[] = [];
       const despesasProcessadas = new Set<string>();
+      const externalIdsProcessados = new Set<string>();
 
       // Adiciona conciliações Divipay
       ((conciliacoesRaw || []) as ConciliacaoQueryRow[]).forEach((c) => {
         if (c.despesa_id) despesasProcessadas.add(c.despesa_id);
+        if (c.divipay_external_id) externalIdsProcessados.add(c.divipay_external_id);
         const dataStr = c.data_pagamento ? c.data_pagamento.slice(0, 10) : "";
-        const isBoleto = c.metodo_pagamento === "boleto" || c.tipo === "BILLET";
+        const metodo = resolverMetodoPagamento(c.metodo_pagamento, c.tipo);
         itens.push({
           id: `conc-${c.id}`,
           data: dataStr,
           competencia: c.competencia || dataStr.slice(0, 7) || `${ano}-${mesStr}`,
-          descricao: c.descricao || (isBoleto ? "Pagamento de Boleto" : "Transferência Pix"),
-          metodoPagamento: isBoleto ? "boleto" : "pix",
+          descricao: c.descricao || (metodo === "boleto" ? "Pagamento de Boleto" : "Transferência Pix"),
+          metodoPagamento: metodo,
           valor: Number(c.valor || 0),
           categoriaNome: c.categorias?.nome || "Compra de Mercadorias",
           status: c.status === "conciliada" || c.status === "importada" ? "pago" : "pendente",
@@ -173,13 +192,13 @@ export function useFornecedorFinanceiro(params: {
       ((despesasRaw || []) as DespesaQueryRow[]).forEach((d) => {
         if (despesasProcessadas.has(d.id)) return;
         const dataStr = d.data || "";
-        const isBoleto = String(d.metodo_pagamento).toLowerCase() === "boleto";
+        const metodo = resolverMetodoPagamento(d.metodo_pagamento);
         itens.push({
           id: `desp-${d.id}`,
           data: dataStr,
           competencia: dataStr.slice(0, 7) || `${ano}-${mesStr}`,
           descricao: d.descricao || "Despesa de Fornecedor",
-          metodoPagamento: isBoleto ? "boleto" : "pix",
+          metodoPagamento: metodo,
           valor: Number(d.valor || 0),
           categoriaNome: d.categorias?.nome || "Fornecedores",
           status: d.status === "pago" ? "pago" : "pendente",
@@ -202,7 +221,7 @@ export function useFornecedorFinanceiro(params: {
           qtdPagamentos++;
           if (item.metodoPagamento === "boleto") {
             totalPagoBoleto += item.valor;
-          } else {
+          } else if (item.metodoPagamento === "pix") {
             totalPagoPix += item.valor;
           }
         }
