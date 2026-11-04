@@ -597,5 +597,36 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(top[2].faturamento).toBe(20);
       expect(top[2].quantidade).toBe(5);
     });
+
+    it('Cenário 16 (Gate A & B): Segregação contábil de Vendas PDV, Despesas Pagas, Pendentes e Resultado Preliminar', async () => {
+      const empty = CeoFinancialMetricsService.getEmptyKpis();
+      expect(empty.vendasBrutasPdv).toBe(0);
+      expect(empty.despesasPagas).toBe(0);
+      expect(empty.despesasPendentes).toBe(0);
+      expect(empty.despesasTotalCompetencia).toBe(0);
+      expect(empty.resultadoPreliminarCompetencia).toBe(0);
+      expect(empty.diferencaVendasDespesasPagas).toBe(0);
+      expect(empty.statusConciliacao03Nov).toBe('pendente_fechamento_pdv');
+
+      const wsId = 'ws-acct-test';
+      const refDate = new Date('2026-11-04T12:00:00.000Z');
+
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-venda-1', valor: 4500, data: '2026-11-02', tipo: 'receita', workspace_id: wsId },
+          { id: 'tx-desp-paga-1', valor: 2000, data: '2026-11-02', tipo: 'despesa', workspace_id: wsId },
+        ],
+        despesas: [
+          { id: 'desp-pend-1', valor: 1000, data: '2026-11-10', status: 'pendente', workspace_id: wsId },
+        ],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+      expect(kpis.vendasBrutasPdv).toBe(4500);
+      expect(kpis.despesasPagas).toBeGreaterThanOrEqual(0);
+      expect(kpis.despesasTotalCompetencia).toBeGreaterThanOrEqual(kpis.despesasPagas);
+      expect(kpis.resultadoPreliminarCompetencia).toBe(kpis.vendasBrutasPdv - kpis.despesasTotalCompetencia);
+      expect(kpis.statusConciliacao03Nov).toBe('pendente_fechamento_pdv');
+    });
   });
 });

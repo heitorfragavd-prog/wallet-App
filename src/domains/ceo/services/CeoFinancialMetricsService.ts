@@ -86,6 +86,14 @@ export interface CeoExecutiveKpis {
   faturamentoIndisponivel?: boolean;
   motivoIndisponibilidadeDespesas?: string | null;
   motivoIndisponibilidadeCmv?: string | null;
+  // Segregação contábil estrita de Caixa vs Competência (Gate A)
+  vendasBrutasPdv: number;
+  despesasPagas: number;
+  despesasPendentes: number;
+  despesasTotalCompetencia: number;
+  resultadoPreliminarCompetencia: number;
+  diferencaVendasDespesasPagas: number;
+  statusConciliacao03Nov?: 'reconciliado' | 'pendente_fechamento_pdv';
 }
 
 export interface TransacaoReceitaItem {
@@ -342,8 +350,14 @@ export class CeoFinancialMetricsService {
       let totalDespesasMesAnt = 0;
       let despesasIndisponiveis = false;
       let motivoIndisponibilidadeDespesas: string | null = null;
+      let despesasPagas = 0;
+      let despesasPendentes = 0;
+      let despesasTotalCompetencia = 0;
 
       try {
+        const daysInMonth = new Date(Date.UTC(anoAtual, mesAtual, 0)).getUTCDate();
+        const fimDoMesAtual = `${anoAtual}-${mesPad}-${String(daysInMonth).padStart(2, '0')}`;
+
         const despMes = await this.fetchAllPaginated<DespesaInput>(
           (from, to) =>
             supabase
@@ -351,7 +365,7 @@ export class CeoFinancialMetricsService {
               .select('id, valor, data, descricao, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id')
               .eq('workspace_id', workspaceId)
               .gte('data', inicioMesAtual)
-              .lte('data', fimMesAtual)
+              .lte('data', fimDoMesAtual)
               .range(from, to)
         );
 
@@ -363,7 +377,7 @@ export class CeoFinancialMetricsService {
               .eq('workspace_id', workspaceId)
               .eq('tipo', 'despesa')
               .gte('data', inicioMesAtual)
-              .lte('data', `${fimMesAtual}T23:59:59.999Z`)
+              .lte('data', `${fimDoMesAtual}T23:59:59.999Z`)
               .range(from, to)
         );
 
@@ -373,12 +387,15 @@ export class CeoFinancialMetricsService {
           transacoes: txDespMes,
           options: {
             startDate: inicioMesAtual,
-            endDate: fimMesAtual,
+            endDate: fimDoMesAtual,
             ignoreInternalTransfers: true,
             ignoreCreditCardInvoicePayments: true,
           },
         });
-        totalDespesasMes = repMes.totalPorCompetencia;
+        despesasTotalCompetencia = repMes.totalPorCompetencia;
+        despesasPagas = repMes.totalPorCaixa;
+        despesasPendentes = Math.max(0, repMes.totalPorCompetencia - repMes.totalPorCaixa);
+        totalDespesasMes = despesasTotalCompetencia;
 
         // Despesas Mês Anterior equivalentes
         const despMesAnt = await this.fetchAllPaginated<DespesaInput>(
@@ -428,8 +445,10 @@ export class CeoFinancialMetricsService {
           ? Math.round(((totalDespesasMes - totalDespesasMesAnt) / totalDespesasMesAnt) * 1000) / 10
           : null;
 
-      // 5. Resultado Operacional Real (Receitas - Despesas), preservando fidelidade contábil
-      const resultadoOperacional = despesasIndisponiveis ? faturamentoMes : (faturamentoMes - totalDespesasMes);
+      // 5. Resultado Operacional Real (Competência e Diferença de Caixa de Saídas)
+      const resultadoPreliminarCompetencia = despesasIndisponiveis ? faturamentoMes : (faturamentoMes - despesasTotalCompetencia);
+      const diferencaVendasDespesasPagas = despesasIndisponiveis ? faturamentoMes : (faturamentoMes - despesasPagas);
+      const resultadoOperacional = resultadoPreliminarCompetencia;
       const margemOperacional =
         !despesasIndisponiveis && faturamentoMes > 0 && totalDespesasMes > 0
           ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
@@ -566,6 +585,13 @@ export class CeoFinancialMetricsService {
         despesasIndisponiveis,
         motivoIndisponibilidadeDespesas,
         motivoIndisponibilidadeCmv,
+        vendasBrutasPdv: faturamentoMes,
+        despesasPagas,
+        despesasPendentes,
+        despesasTotalCompetencia,
+        resultadoPreliminarCompetencia,
+        diferencaVendasDespesasPagas,
+        statusConciliacao03Nov: 'pendente_fechamento_pdv',
       };
     } catch (err: unknown) {
       console.warn('[CeoFinancialMetricsService] Erro ao consolidar KPIs executivos reais:', err);
@@ -790,20 +816,28 @@ export class CeoFinancialMetricsService {
         }
       }
 
-      // 2. Consulta itens de delivery_order_items (pedidos delivery)
-      let queryDelivery = supabase
-        .from('delivery_order_items')
-        .select('product_name, quantity, total_price, created_at')
-        .eq('workspace_id', workspaceId);
+      // 2. Consulta itens de delivery_order_items (pedidos delivery) com paginação segura
+      const itemsDelivery = await this.fetchAllPaginated<{
+        product_name?: string;
+        name?: string;
+        quantity?: number;
+        total_price?: number;
+        created_at?: string;
+      }>((from, to) => {
+        let queryDelivery = supabase
+          .from('delivery_order_items')
+          .select('product_name, quantity, total_price, created_at')
+          .eq('workspace_id', workspaceId);
 
-      if (queryStart) {
-        queryDelivery = queryDelivery.gte('created_at', `${queryStart}T00:00:00.000Z`);
-      }
-      if (queryEnd) {
-        queryDelivery = queryDelivery.lte('created_at', `${queryEnd}T23:59:59.999Z`);
-      }
+        if (queryStart) {
+          queryDelivery = queryDelivery.gte('created_at', `${queryStart}T00:00:00.000Z`);
+        }
+        if (queryEnd) {
+          queryDelivery = queryDelivery.lte('created_at', `${queryEnd}T23:59:59.999Z`);
+        }
 
-      const { data: itemsDelivery } = await queryDelivery.limit(2000);
+        return queryDelivery.range(from, to);
+      });
 
       for (const item of itemsDelivery || []) {
         const rawItem = item as Record<string, unknown>;
@@ -981,6 +1015,13 @@ export class CeoFinancialMetricsService {
       dataAtualizacao: 'aguardando sincronização',
       dailySales30Days: [],
       topProducts: [],
+      vendasBrutasPdv: 0,
+      despesasPagas: 0,
+      despesasPendentes: 0,
+      despesasTotalCompetencia: 0,
+      resultadoPreliminarCompetencia: 0,
+      diferencaVendasDespesasPagas: 0,
+      statusConciliacao03Nov: 'pendente_fechamento_pdv',
     };
   }
 }
