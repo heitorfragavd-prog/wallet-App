@@ -47,12 +47,18 @@ function runQuery(sql) {
 }
 
 async function main() {
-  try {
-    const result = await runQuery(query);
-    console.log(JSON.stringify(result, null, 2));
-  } catch (err) {
-    console.error('Query error:', err);
-    process.exit(1);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await runQuery(query);
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    } catch (err) {
+      if (attempt === 3) {
+        console.error('Query error after 3 attempts:', err);
+        process.exit(1);
+      }
+      await new Promise(r => setTimeout(r, 1500 * attempt));
+    }
   }
 }
 

@@ -231,6 +231,7 @@ export class CeoIntelligenceEngine {
   ): GrowthOpportunity[] {
     const opps: GrowthOpportunity[] = [];
     const { kpis, topProducts = [], salesByHour = [], criticalStock = [], consolidationReport } = inputs;
+    const effectiveKpis = kpis || CeoFinancialMetricsService.getEmptyKpis();
 
     // 1. Combo Café da Manhã & Salgados
     const cafeProd = topProducts.find(
@@ -278,7 +279,7 @@ export class CeoIntelligenceEngine {
     }
 
     // 2. Venda Adicional de Bebidas no Almoço
-    const totalRev = kpis.faturamentoMes;
+    const totalRev = effectiveKpis.faturamentoMes;
     if (totalRev > 0) {
       const totalSampleRev = topProducts.reduce((acc, p) => acc + p.faturamento, 0);
       const isPartialSample = totalSampleRev < totalRev * 0.90;
@@ -408,7 +409,7 @@ export class CeoIntelligenceEngine {
     }
 
     // 5. Custo de Mercadorias sem Ficha Técnica
-    if (kpis.cmvStatus === "dados_insuficientes") {
+    if (effectiveKpis.cmvStatus === "dados_insuficientes") {
       opps.push({
         id: "opp-cmv-fichas-tecnicas",
         workspace_id: workspaceId,

@@ -80,10 +80,13 @@ const AGENT_V2_PATTERNS: RegExp[] = [
 
 /** Intenção VENDAS — consulta de faturamento bruto do PDV Eyemobile. */
 const FAST_QUERY_VENDAS_PATTERNS: RegExp[] = [
-  /^quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)( (hoje|ontem|essa semana|este mes|deste mes))?$/,
-  /^vendas (de )?(hoje|ontem|essa semana|este mes|deste mes)$/,
-  /^faturamento (de )?(hoje|ontem|esse mes|deste mes|do dia|da semana)?$/,
-  /^quanto (a loja|a empresa) vendeu( (hoje|ontem|este mes))?$/,
+  /^quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)( (hoje|ontem|essa semana|esta semana|este mes|deste mes|neste mes|esse mes))?$/,
+  /^vendas (de )?(hoje|ontem|essa semana|esta semana|este mes|deste mes|neste mes|esse mes)$/,
+  /^faturamento (de )?(hoje|ontem|esse mes|este mes|deste mes|neste mes|do dia|da semana)?$/,
+  /^quanto (a loja|a empresa) vendeu( (hoje|ontem|este mes|neste mes|esse mes))?$/,
+  /^quantas vendas (tivemos|foram feitas|tive|ocorreram)?( (hoje|ontem|essa semana|esta semana|este mes|deste mes|neste mes|esse mes))?$/,
+  /^(quantos pedidos|total de pedidos)( (hoje|ontem|este mes|deste mes|neste mes|esse mes))?$/,
+  /^(quais (os )?(produtos|itens) (mais vendidos|venderam mais)|(produtos|itens) mais vendidos|quais os mais vendidos)$/,
   /como estao as vendas$/,
 ];
 
@@ -98,12 +101,13 @@ const FAST_QUERY_RECEITAS_PATTERNS: RegExp[] = [
 
 /** Consultas que não são nem vendas nem receitas mas são pontuais. */
 const FAST_QUERY_OUTROS_PATTERNS: RegExp[] = [
-  /^quanto (gastei|gastou|gastamos|despesa)( (hoje|ontem|esse mes))?$/,
+  /^quanto (gastei|gastou|gastamos|despesa)( (hoje|ontem|esse mes|este mes|deste mes))?$/,
   /saldo (atual|agora|hoje|em conta)/,
   /quanto tenho (em conta|disponivel|na conta)/,
   /(caixa|saldo) (agora|hoje|atual)/,
   /^despesa (hoje|ontem|essa semana|este mes|deste mes)$/,
   /^lucro (hoje|ontem|essa semana|este mes|deste mes)$/,
+  /^qual (foi o )?(resultado operacional|lucro operacional|resultado)( (deste mes|este mes))?$/,
   /posso (comprar|gastar|pagar) (r\$|ate|isso)?/,
   /qual meu (saldo|lucro|resultado) (hoje|agora|atual)/,
   /^quanto (tenho|sobrou)( agora| hoje)?$/,
@@ -135,7 +139,9 @@ export function routeMessage(input: RouterInput): RouterDecision {
   }
 
   // 3. Análise complexa ou cross-métrica → Agent V2 (PRIORIDADE SOBRE FAST_QUERY)
-  if (AGENT_V2_PATTERNS.some((p) => p.test(normalized))) {
+  // Exceção: consultas pontuais de ranking dos produtos mais vendidos vão diretamente para FAST_QUERY
+  const isTopProductsQuery = /^(quais (os )?(produtos|itens) (mais vendidos|venderam mais)|(produtos|itens) mais vendidos|quais os mais vendidos)$/.test(normalized);
+  if (!isTopProductsQuery && AGENT_V2_PATTERNS.some((p) => p.test(normalized))) {
     return {
       route: "AGENT_V2",
       reason: "Consulta analítica complexa, cross-métrica ou modificador → Agent V2 com ferramentas",

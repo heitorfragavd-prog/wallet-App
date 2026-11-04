@@ -79,7 +79,7 @@ export interface CeoExecutiveKpis {
   }[];
   dataAtualizacao: string;
   dailySales30Days: { date: string; valor: number }[];
-  dadosIndisponiveis?: boolean;
+  topProducts?: TopProdutoFaturamento[];
   dadosIndisponiveis?: boolean;
   erroMensagem?: string;
   despesasIndisponiveis?: boolean;
@@ -96,6 +96,7 @@ export interface TransacaoReceitaItem {
   descricao?: string | null;
   observacoes?: string | null;
   deduplication_key?: string | null;
+  itens?: unknown;
 }
 
 /**
@@ -236,7 +237,7 @@ export class CeoFinancialMetricsService {
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioMesAtual)
@@ -464,7 +465,7 @@ export class CeoFinancialMetricsService {
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', limite30DiasStr)
@@ -474,6 +475,7 @@ export class CeoFinancialMetricsService {
       );
 
       const tx30Dias = deduplicateRevenues(tx30DiasRaw);
+      const topProducts = this.extractTopProductsFromTransactions(tx30Dias);
       const mapDaily = new Map<string, number>();
       for (const t of tx30Dias) {
         if (!t.data) continue;
@@ -560,6 +562,7 @@ export class CeoFinancialMetricsService {
         acoesHoje,
         dataAtualizacao: 'atualizado agora',
         dailySales30Days,
+        topProducts,
         despesasIndisponiveis,
         motivoIndisponibilidadeDespesas,
         motivoIndisponibilidadeCmv,
@@ -655,17 +658,104 @@ export class CeoFinancialMetricsService {
   }
 
   /**
+   * Extrai e agrega os Top Produtos a partir de transações deduplicadas contendo JSONB de itens.
+   */
+  public static extractTopProductsFromTransactions(
+    transacoes: TransacaoReceitaItem[]
+  ): TopProdutoFaturamento[] {
+    const productMap = new Map<string, { quantidade: number; faturamento: number }>();
+
+    for (const t of transacoes) {
+      if (!t.itens || !Array.isArray(t.itens)) continue;
+      for (const item of t.itens) {
+        if (!item || typeof item !== 'object') continue;
+        const raw = item as Record<string, unknown>;
+        const name = (raw.product_name as string) || (raw.name as string) || (raw.descricao as string) || 'Item sem nome';
+        const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+        const valor = Number(raw.total ?? raw.valor ?? (Number(raw.price || 0) * qtd));
+        const current = productMap.get(name) || { quantidade: 0, faturamento: 0 };
+        current.quantidade += qtd;
+        current.faturamento += valor;
+        productMap.set(name, current);
+      }
+    }
+
+    if (productMap.size === 0) {
+      return [];
+    }
+
+    const totalFaturamento = Array.from(productMap.values()).reduce((acc, p) => acc + p.faturamento, 0);
+
+    const sorted = Array.from(productMap.entries())
+      .sort((a, b) => b[1].faturamento - a[1].faturamento)
+      .slice(0, 5);
+
+    return sorted.map(([produto, stats], idx) => {
+      const pct = totalFaturamento > 0 ? Math.round((stats.faturamento / totalFaturamento) * 1000) / 10 : 0;
+      return {
+        rank: idx + 1,
+        id: `prod-${idx + 1}`,
+        produto,
+        quantidade: stats.quantidade,
+        faturamento: stats.faturamento,
+        percentualFaturamento: pct,
+        margemEstimada: null,
+      };
+    });
+  }
+
+  /**
    * Obtém ranking dos Top 5 Produtos por Faturamento real.
    * Prioriza vendas reais do PDV Eyemobile e pedidos do Delivery.
-   * Se não houver itens individualizados no banco, retorna lista vazia.
    */
-  static async getTopProducts(workspaceId: string): Promise<TopProdutoFaturamento[]> {
+  static async getTopProducts(
+    workspaceId: string,
+    customTransactions?: TransacaoReceitaItem[]
+  ): Promise<TopProdutoFaturamento[]> {
     if (!workspaceId) return [];
 
     try {
+      if (customTransactions && customTransactions.length > 0) {
+        const topFromTx = this.extractTopProductsFromTransactions(customTransactions);
+        if (topFromTx.length > 0) return topFromTx;
+      }
+
       const productMap = new Map<string, { quantidade: number; faturamento: number }>();
 
-      // 1. Consulta itens de delivery_order_items (pedidos delivery)
+      // 1. Consulta itens de transações recentes do PDV (últimos 30 dias com itens)
+      const hoje = new Date();
+      const limite30Dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const limite30DiasStr = limite30Dias.toISOString().slice(0, 10);
+
+      const { data: txRaw } = await supabase
+        .from('transacoes')
+        .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
+        .eq('workspace_id', workspaceId)
+        .eq('tipo', 'receita')
+        .gte('data', limite30DiasStr)
+        .not('itens', 'is', null)
+        .order('data', { ascending: false })
+        .limit(2000);
+
+      if (txRaw && Array.isArray(txRaw)) {
+        const deduplicated = deduplicateRevenues(txRaw as TransacaoReceitaItem[]);
+        for (const t of deduplicated) {
+          if (!t.itens || !Array.isArray(t.itens)) continue;
+          for (const item of t.itens) {
+            if (!item || typeof item !== 'object') continue;
+            const raw = item as Record<string, unknown>;
+            const name = (raw.product_name as string) || (raw.name as string) || (raw.descricao as string) || 'Item sem nome';
+            const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+            const valor = Number(raw.total ?? raw.valor ?? (Number(raw.price || 0) * qtd));
+            const current = productMap.get(name) || { quantidade: 0, faturamento: 0 };
+            current.quantidade += qtd;
+            current.faturamento += valor;
+            productMap.set(name, current);
+          }
+        }
+      }
+
+      // 2. Consulta itens de delivery_order_items (pedidos delivery)
       const { data: itemsDelivery } = await supabase
         .from('delivery_order_items')
         .select('product_name, quantity, total_price')
@@ -683,8 +773,6 @@ export class CeoFinancialMetricsService {
         productMap.set(name, current);
       }
 
-      // Se não houver itens detalhados individualmente de vendas no banco, retorna lista vazia
-      // (ranking disponível apenas para vendas com itens registrados)
       if (productMap.size === 0) {
         return [];
       }
@@ -704,7 +792,7 @@ export class CeoFinancialMetricsService {
           quantidade: stats.quantidade,
           faturamento: stats.faturamento,
           percentualFaturamento: pct,
-          margemEstimada: null, // Sem fichas técnicas validadas, margem é null
+          margemEstimada: null,
         };
       });
     } catch (err) {
@@ -849,6 +937,7 @@ export class CeoFinancialMetricsService {
       ],
       dataAtualizacao: 'aguardando sincronização',
       dailySales30Days: [],
+      topProducts: [],
     };
   }
 }
