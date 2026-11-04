@@ -141,52 +141,54 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
           </p>
         </div>
 
-        {/* Sub-tabs buttons */}
-        <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-border/50 text-xs">
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('oportunidades')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              activeSubTab === 'oportunidades'
-                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Oportunidades ({opportunities.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('experimentos')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              activeSubTab === 'experimentos'
-                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Experimentos
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('em_execucao')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              activeSubTab === 'em_execucao'
-                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Em Execução ({activeExperiments.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('concluidas')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-              activeSubTab === 'concluidas'
-                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Concluídas
-          </button>
+        {/* Sub-tabs buttons - rolagem horizontal no mobile */}
+        <div className="overflow-x-auto no-scrollbar -mx-2 px-2 sm:mx-0 sm:px-0 w-full sm:w-auto">
+          <div className="inline-flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-border/50 text-xs w-max sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('oportunidades')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                activeSubTab === 'oportunidades'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Oportunidades ({opportunities.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('experimentos')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                activeSubTab === 'experimentos'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Experimentos
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('em_execucao')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                activeSubTab === 'em_execucao'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Em Execução ({activeExperiments.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('concluidas')}
+              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                activeSubTab === 'concluidas'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Concluídas
+            </button>
+          </div>
         </div>
       </div>
 
@@ -295,22 +297,22 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
 
       {/* Modal / Dialog de Detalhes do Plano */}
       {selectedOpp && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg bg-slate-900 border-border shadow-xl animate-in fade-in-50">
-            <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-border/50">
-              <CardTitle className="text-sm font-bold text-foreground">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <Card className="w-full max-w-lg bg-slate-900 border-border shadow-xl animate-in fade-in-50 max-h-[90vh] flex flex-col overflow-hidden">
+            <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-border/50 shrink-0">
+              <CardTitle className="text-xs sm:text-sm font-bold text-foreground truncate pr-2">
                 Plano de Ação: {selectedOpp.title}
               </CardTitle>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setSelectedOpp(null)}
-                className="h-7 w-7 p-0"
+                className="h-7 w-7 p-0 shrink-0"
               >
                 <X className="w-4 h-4" />
               </Button>
             </CardHeader>
-            <CardContent className="p-5 space-y-4 text-xs">
+            <CardContent className="p-4 sm:p-5 space-y-4 text-xs overflow-y-auto flex-1">
               <div>
                 <span className="font-semibold text-slate-300">Hipótese Comercial:</span>
                 <p className="text-slate-400 mt-1">{selectedOpp.hypothesis || selectedOpp.description}</p>

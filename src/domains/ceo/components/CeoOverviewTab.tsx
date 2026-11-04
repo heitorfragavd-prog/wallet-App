@@ -130,12 +130,16 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         p.includes('lucro') ||
         p.includes('margem operacional')
       ) {
-        const resOp = kpis.resultadoOperacional || 0;
-        const margem = kpis.margemOperacional;
         const fatMes = kpis.faturamentoMes || 0;
-        const despMes = kpis.despesasMes || 0;
+        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
+        const despPagas = kpis.despesasPagas || 0;
+        const despPend = kpis.despesasPendentes || 0;
+        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
+        const difVendasPagas = kpis.diferencaVendasDespesasPagas ?? (fatMes - despPagas);
+        const margem = kpis.margemOperacional;
         const margemTxt = margem !== null && margem !== undefined ? `${margem}%` : 'Não calculada';
-        return `💼 **Resultado Operacional (Visão Executiva):**\n\n- **Resultado Líquido Operacional:** **R$ ${resOp.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**\n- **Margem Operacional:** ${margemTxt}\n- **Faturamento do Mês:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Despesas do Mês:** R$ ${despMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Calculado por competência financeira da Rodo Point.`;
+
+        return `💼 **Demonstrativo de Resultado Preliminar (Rodo Point):**\n\n- **Vendas Brutas PDV (Mês):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas por Competência (Mês):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • Despesas Pagas no Caixa: R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • Despesas Pendentes: R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar por Competência:** **R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem: ${margemTxt})\n- **Diferença Vendas vs Despesas Pagas:** R$ ${difVendasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n> 💡 **Nota Contábil:** A diferença entre vendas e despesas pagas não representa saldo de caixa bancário final, pois depende da conciliação das entradas bancárias e taxas de adquirentes de cartão/PIX.`;
       }
 
       // 4. Pergunta sobre vendas/faturamento de ontem
@@ -160,28 +164,33 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         const pedMes = kpis.pedidosMes || 0;
         const tm = kpis.ticketMedioMes || 0;
         const cresc = kpis.crescimentoMes;
+        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
         const crescTxt =
           cresc !== null && cresc !== undefined
             ? ` (${cresc >= 0 ? '+' : ''}${cresc}% vs mês anterior)`
             : '';
-        return `📊 **Faturamento Deste Mês (Visão Executiva):**\n\n- **Vendas totais apuradas:** **R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${crescTxt}\n- **Pedidos concluídos:** ${pedMes}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)`;
+        return `📊 **Vendas Brutas Deste Mês (PDV Rodo Point):**\n\n- **Vendas brutas apuradas:** **R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${crescTxt}\n- **Pedidos concluídos:** ${pedMes}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar (Competência):** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n\n> 💡 Apurado canonicamente com deduplicação de transações do PDV Eyemobile.`;
       }
 
       // 6. Pergunta sobre despesas
       if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos')) {
-        const desp = kpis.despesasMes || 0;
+        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
+        const despPagas = kpis.despesasPagas || 0;
+        const despPend = kpis.despesasPendentes || 0;
         const despAnt = kpis.despesasMesAnterior || 0;
         const varDesp = kpis.variacaoDespesasPercent;
         const varTxt =
           varDesp !== null && varDesp !== undefined
             ? ` (${varDesp >= 0 ? '+' : ''}${varDesp}% vs mês anterior)`
             : '';
-        return `💳 **Despesas Deste Mês:**\n\n- **Total apurado:** **R$ ${desp.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${varTxt}\n- **Mês anterior:** R$ ${despAnt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return `💳 **Despesas Deste Mês (Rodo Point):**\n\n- **Total por Competência:** **R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${varTxt}\n  • **Despesas Pagas (Caixa):** R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • **Despesas Pendentes:** R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Mês anterior:** R$ ${despAnt.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n> 💡 Valores apurados via integração Divipay e lançamentos de despesas operacionais.`;
       }
 
       // Resumo executivo rápido
       if (p.includes('resumo') || p.includes('como estamos') || p.includes('painel')) {
-        return `📈 **Resumo Executivo Rodo Point:**\n\n- **Faturamento do Mês:** R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas do Mês:** R$ ${(kpis.despesasMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Operacional:** R$ ${(kpis.resultadoOperacional || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n- **Vendas de Ontem:** R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
+        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
+        return `📈 **Resumo Executivo Rodo Point:**\n\n- **Vendas Brutas (Mês):** R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas Totais (Competência):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas Pagas (Caixa):** R$ ${(kpis.despesasPagas || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar (Competência):** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n- **Vendas de Ontem:** R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
       }
 
       return `📊 **Painel Executivo CEO:**\n- Faturamento Mês: R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Faturamento Ontem: R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Despesas Mês: R$ ${(kpis.despesasMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
@@ -546,12 +555,19 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
           </div>
 
           {/* 4 Cards Principais de Indicadores Executivos */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-6">
-            {/* Card 1: Faturamento (Mês) */}
-            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
-              <div className="text-xs text-muted-foreground font-medium">Faturamento (Mês)</div>
-              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 pt-6">
+            {/* Card 1: Vendas Brutas PDV (Mês) */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                  <span>Vendas Brutas (PDV)</span>
+                  <span className="text-[10px] text-sky-400 font-normal px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">
+                    PDV Eyemobile
+                  </span>
+                </div>
+                <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
+                  R$ {kpis.faturamentoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </div>
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
                 {(kpis.crescimentoMesPercent != null || (kpis as unknown as { crescimentoMes?: number }).crescimentoMes != null) ? (
@@ -560,16 +576,18 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     {((kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoMesPercent ?? (kpis as unknown as { crescimentoMes?: number }).crescimentoMes}% vs mês anterior
                   </span>
                 ) : (
-                  <span className="text-slate-500">Sem base comparativa anterior</span>
+                  <span className="text-slate-500">Deduplicação auditada</span>
                 )}
               </div>
             </div>
 
             {/* Card 2: Pedidos */}
-            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
-              <div className="text-xs text-muted-foreground font-medium">Pedidos</div>
-              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                {kpis.pedidosMes.toLocaleString('pt-BR')}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="text-xs text-muted-foreground font-medium">Pedidos Concluídos</div>
+                <div className="text-xl sm:text-2xl font-bold text-foreground mt-1">
+                  {kpis.pedidosMes.toLocaleString('pt-BR')}
+                </div>
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
                 {(kpis.crescimentoPedidosPercent != null || (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos != null) ? (
@@ -578,18 +596,20 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     {((kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos ?? 0) >= 0) ? '+' : ''}{kpis.crescimentoPedidosPercent ?? (kpis as unknown as { crescimentoPedidos?: number }).crescimentoPedidos}% vs mês anterior
                   </span>
                 ) : (
-                  <span className="text-slate-500">Período equivalente</span>
+                  <span className="text-slate-500">Transações PDV reais</span>
                 )}
               </div>
             </div>
 
             {/* Card 3: Ticket Médio */}
-            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
-              <div className="text-xs text-muted-foreground font-medium">Ticket Médio</div>
-              <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-                {kpis.ticketMedioMes !== null
-                  ? `R$ ${kpis.ticketMedioMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-                  : 'Aguardando dados'}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="text-xs text-muted-foreground font-medium">Ticket Médio</div>
+                <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
+                  {kpis.ticketMedioMes !== null
+                    ? `R$ ${kpis.ticketMedioMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                    : 'Aguardando dados'}
+                </div>
               </div>
               <div className="mt-2 text-xs flex items-center gap-1 font-medium">
                 {(kpis.crescimentoTicketMedioPercent != null || (kpis as unknown as { crescimentoTicket?: number }).crescimentoTicket != null) ? (
@@ -603,28 +623,36 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               </div>
             </div>
 
-            {/* Card 4: Resultado Operacional Real (sem Math.max artificial) */}
-            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors">
-              <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-                <span>Resultado Operacional Preliminar</span>
-                <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">Caixa (sem CMV/impostos)</span>
-              </div>
-              <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {kpis.despesasMes === 0 ? (
-                  <span className="text-sm font-normal text-slate-400">Não apurado</span>
-                ) : (
-                  `R$ ${kpis.resultadoOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-                )}
-              </div>
-              <div className="mt-2 text-xs flex items-center gap-1 font-medium">
-                {(kpis.margemOperacionalPercent != null || (kpis as unknown as { margemOperacional?: number }).margemOperacional != null) ? (
-                  <span className={isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}>
-                    Margem preliminar: {kpis.margemOperacionalPercent ?? (kpis as unknown as { margemOperacional?: number }).margemOperacional}%
+            {/* Card 4: Resultado Preliminar por Competência (GATE A) */}
+            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+                  <span>Resultado Preliminar</span>
+                  <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                    Competência
                   </span>
-                ) : kpis.despesasMes === 0 ? (
-                  <span className="text-slate-500">Aguardando lançamento de despesas</span>
+                </div>
+                <div className={`text-xl sm:text-2xl font-bold mt-1 truncate ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {kpis.despesasMes === 0 && !kpis.despesasTotalCompetencia ? (
+                    <span className="text-sm font-normal text-slate-400">Não apurado</span>
+                  ) : (
+                    `R$ ${(kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 text-[11px] space-y-0.5 font-medium text-slate-400">
+                {kpis.despesasPagas > 0 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                    <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    <span>Pend: R$ {kpis.despesasPendentes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  </div>
                 ) : (
-                  <span className="text-slate-500">Faturamento vs Despesas pagas (preliminar)</span>
+                  <span className="text-slate-500">Faturamento vs Despesas de Competência</span>
+                )}
+                {kpis.diferencaVendasDespesasPagas != null && (
+                  <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60">
+                    Dif. Vendas vs Pagas: R$ {kpis.diferencaVendasDespesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </div>
                 )}
               </div>
             </div>
@@ -735,11 +763,11 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
       </Card>
 
       {/* 2. Grid Central: Evolução de Vendas (30 dias) + Converse com seu CEO */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Left: Gráfico Real de Evolução de Vendas (30 dias) */}
-        <Card className="bg-card/70 border-border/50 flex flex-col">
+        <Card className="bg-card/70 border-border/50 flex flex-col min-w-0 overflow-hidden">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold text-foreground flex flex-wrap items-center justify-between gap-1">
               <span>Evolução de Vendas (30 dias)</span>
               <span className="text-xs font-normal text-emerald-400 flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
@@ -747,10 +775,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               </span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="pt-4 flex-1 flex flex-col justify-center">
+          <CardContent className="pt-4 flex-1 flex flex-col justify-center min-w-0 overflow-hidden">
             {kpis.dailySales30Days && kpis.dailySales30Days.some((d) => d.valor > 0) ? (
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="h-56 sm:h-64 w-full min-w-0">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <LineChart data={kpis.dailySales30Days}>
                     <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} interval={4} />
                     <YAxis
@@ -776,44 +804,45 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div className="h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
+              <div className="h-56 sm:h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
                 <ShoppingBag className="w-8 h-8 text-slate-600 mb-1" />
                 <span>Nenhuma venda registrada nos últimos 30 dias.</span>
-                <span className="text-[11px] text-slate-500">As vendas sincronizadas pelo Eyemobile ou KDS aparecerão aqui.</span>
+                <span className="text-[11px] text-slate-500 text-center">As vendas sincronizadas pelo Eyemobile ou KDS aparecerão aqui.</span>
               </div>
             )}
           </CardContent>
         </Card>
 
         {/* Right: Converse com seu CEO (Chat Proeminente Integrado com Histórico Real) */}
-        <Card className="bg-card/70 border-border/50 flex flex-col h-[400px] md:h-[420px]">
-          <CardHeader className="pb-3 border-b border-border/40 flex flex-row items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-amber-400">✨</span>
-              <CardTitle className="text-sm font-semibold text-foreground">
+        <Card className="bg-card/70 border-border/50 flex flex-col h-[460px] sm:h-[480px] min-w-0 overflow-hidden shadow-lg">
+          <CardHeader className="pb-3 border-b border-border/40 flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-amber-400 shrink-0">✨</span>
+              <CardTitle className="text-xs sm:text-sm font-semibold text-foreground truncate">
                 Converse com seu CEO
               </CardTitle>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 shrink-0">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleNewConversation}
-                className="h-7 text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1"
+                className="h-7 text-[11px] sm:text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1 px-2"
                 title="Criar nova conversa sem apagar o histórico"
               >
                 <Plus className="w-3 h-3 text-amber-400" />
-                Nova conversa
+                <span className="hidden sm:inline">Nova conversa</span>
+                <span className="sm:hidden">Nova</span>
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowHistoryModal(true)}
-                className="h-7 text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1"
+                className="h-7 text-[11px] sm:text-xs border-border/60 hover:bg-slate-800 text-slate-300 gap-1 px-2"
                 title="Selecionar conversa anterior"
               >
                 <History className="w-3 h-3 text-sky-400" />
-                Histórico
+                <span className="hidden sm:inline">Histórico</span>
               </Button>
               <Button
                 variant="ghost"
@@ -828,7 +857,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
           </CardHeader>
 
           {/* Área de Mensagens com Scroll */}
-          <CardContent className="flex-1 overflow-y-auto p-4 space-y-3">
+          <CardContent className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3">
             {loadingHistory ? (
               <div className="h-full flex items-center justify-center text-xs text-slate-400">
                 <Clock className="w-4 h-4 mr-2 animate-spin text-amber-400" />
@@ -949,52 +978,52 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             <div ref={messagesEndRef} />
           </CardContent>
 
-          {/* Quick Pills Conforme a Imagem de Referência */}
-          <div className="px-4 py-2 border-t border-border/30 bg-slate-950/40 flex flex-wrap gap-1.5 shrink-0">
+          {/* Quick Pills Conforme a Imagem de Referência - Rolável com toque no mobile */}
+          <div className="px-3 sm:px-4 py-2 border-t border-border/30 bg-slate-950/40 overflow-x-auto no-scrollbar flex flex-nowrap items-center gap-1.5 shrink-0">
             <button
               onClick={() => handleSelectPill('Quanto vendemos ontem?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
             >
               Vendas de ontem
             </button>
             <button
               onClick={() => handleSelectPill('Quais foram os 5 produtos mais vendidos neste mês?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
             >
               Top 5 produtos
             </button>
             <button
               onClick={() => handleSelectPill('Como estão as despesas deste mês por categoria?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
             >
               Despesas do mês
             </button>
             <button
               onClick={() => handleSelectPill('Monte um plano de crescimento para aumentar o lucro')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"
+              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
             >
               Plano de crescimento
             </button>
           </div>
 
           {/* Input de Pergunta com Botão Laranja */}
-          <div className="p-3 border-t border-border/40 bg-card/90 flex items-center gap-2">
+          <div className="p-2.5 sm:p-3 border-t border-border/40 bg-card/90 flex items-center gap-2">
             <input
               type="text"
               value={inputPrompt}
               onChange={(e) => setInputPrompt(e.target.value)}
               onKeyDown={handleKeyPress}
-              placeholder="Digite sua pergunta... Ex: Como estão minhas vendas dos últimos 30 dias?"
-              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+              placeholder="Pergunte ao seu CEO... (ex: vendas de ontem, produtos mais vendidos)"
+              className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50 min-h-[38px]"
               disabled={isLoading}
             />
             <Button
               size="sm"
               onClick={handleSend}
               disabled={!inputPrompt.trim() || isLoading}
-              className="h-8 w-8 p-0 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold shrink-0 rounded-lg"
+              className="h-[38px] w-[38px] p-0 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold shrink-0 rounded-lg min-w-[38px] flex items-center justify-center"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-4 h-4" />
             </Button>
           </div>
         </Card>
