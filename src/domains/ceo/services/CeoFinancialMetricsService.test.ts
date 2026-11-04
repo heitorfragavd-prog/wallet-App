@@ -557,5 +557,45 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(kpis.faturamentoMes).toBe(8500);
       expect(kpis.dadosIndisponiveis).toBeFalsy();
     });
+
+    it('Cenário 15: getTopProducts aceita options com período e customTransactions calculando ranking exato', async () => {
+      const customTx: TransacaoReceitaItem[] = [
+        {
+          id: 'tx-1',
+          valor: 100,
+          data: '2026-11-01',
+          itens: [
+            { product_name: 'SALGADOS', quantity: 10, total: 80 },
+            { product_name: 'ÁGUA', quantity: 4, total: 20 },
+          ],
+        },
+        {
+          id: 'tx-2',
+          valor: 50,
+          data: '2026-11-02',
+          itens: [
+            { product_name: 'ÁGUA', quantity: 6, total: 30 },
+            { product_name: 'CAFÉ', quantity: 5, total: 20 },
+          ],
+        },
+      ];
+
+      const top = await CeoFinancialMetricsService.getTopProducts('ws-test', {
+        startDate: '2026-11-01',
+        endDate: '2026-11-02',
+        customTransactions: customTx,
+      });
+
+      expect(top).toHaveLength(3);
+      expect(top[0].produto).toBe('SALGADOS');
+      expect(top[0].faturamento).toBe(80);
+      expect(top[0].quantidade).toBe(10);
+      expect(top[1].produto).toBe('ÁGUA');
+      expect(top[1].faturamento).toBe(50);
+      expect(top[1].quantidade).toBe(10);
+      expect(top[2].produto).toBe('CAFÉ');
+      expect(top[2].faturamento).toBe(20);
+      expect(top[2].quantidade).toBe(5);
+    });
   });
 });

@@ -708,13 +708,36 @@ export class CeoFinancialMetricsService {
    * Obtém ranking dos Top 5 Produtos por Faturamento real.
    * Prioriza vendas reais do PDV Eyemobile e pedidos do Delivery.
    */
+  /**
+   * Obtém ranking dos Top 5 Produtos por Faturamento real.
+   * Suporta intervalo de datas personalizado (startDate, endDate) ou transações pré-carregadas.
+   * Utiliza paginação segura sem limite arbitrário de 2000 registros.
+   */
   static async getTopProducts(
     workspaceId: string,
-    customTransactions?: TransacaoReceitaItem[]
+    optionsOrTx?:
+      | TransacaoReceitaItem[]
+      | {
+          startDate?: string;
+          endDate?: string;
+          customTransactions?: TransacaoReceitaItem[];
+        }
   ): Promise<TopProdutoFaturamento[]> {
     if (!workspaceId) return [];
 
     try {
+      let customTransactions: TransacaoReceitaItem[] | undefined;
+      let startDate: string | undefined;
+      let endDate: string | undefined;
+
+      if (Array.isArray(optionsOrTx)) {
+        customTransactions = optionsOrTx;
+      } else if (optionsOrTx && typeof optionsOrTx === 'object') {
+        customTransactions = optionsOrTx.customTransactions;
+        startDate = optionsOrTx.startDate;
+        endDate = optionsOrTx.endDate;
+      }
+
       if (customTransactions && customTransactions.length > 0) {
         const topFromTx = this.extractTopProductsFromTransactions(customTransactions);
         if (topFromTx.length > 0) return topFromTx;
@@ -722,20 +745,32 @@ export class CeoFinancialMetricsService {
 
       const productMap = new Map<string, { quantidade: number; faturamento: number }>();
 
-      // 1. Consulta itens de transações recentes do PDV (últimos 30 dias com itens)
-      const hoje = new Date();
-      const limite30Dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const limite30DiasStr = limite30Dias.toISOString().slice(0, 10);
+      // 1. Consulta itens de transações do PDV no período solicitado (com paginação segura completa)
+      let queryStart = startDate;
+      const queryEnd = endDate;
 
-      const { data: txRaw } = await supabase
-        .from('transacoes')
-        .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
-        .eq('workspace_id', workspaceId)
-        .eq('tipo', 'receita')
-        .gte('data', limite30DiasStr)
-        .not('itens', 'is', null)
-        .order('data', { ascending: false })
-        .limit(2000);
+      if (!queryStart) {
+        const hoje = new Date();
+        const limite30Dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000);
+        queryStart = limite30Dias.toISOString().slice(0, 10);
+      }
+
+      const txRaw = await this.fetchAllPaginated<TransacaoReceitaItem>((from, to) => {
+        let q = supabase
+          .from('transacoes')
+          .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
+          .eq('workspace_id', workspaceId)
+          .eq('tipo', 'receita')
+          .gte('data', queryStart!)
+          .not('itens', 'is', null)
+          .order('data', { ascending: false });
+
+        if (queryEnd) {
+          q = q.lte('data', `${queryEnd}T23:59:59.999Z`);
+        }
+
+        return q.range(from, to);
+      });
 
       if (txRaw && Array.isArray(txRaw)) {
         const deduplicated = deduplicateRevenues(txRaw as TransacaoReceitaItem[]);
@@ -756,11 +791,19 @@ export class CeoFinancialMetricsService {
       }
 
       // 2. Consulta itens de delivery_order_items (pedidos delivery)
-      const { data: itemsDelivery } = await supabase
+      let queryDelivery = supabase
         .from('delivery_order_items')
-        .select('product_name, quantity, total_price')
-        .eq('workspace_id', workspaceId)
-        .limit(2000);
+        .select('product_name, quantity, total_price, created_at')
+        .eq('workspace_id', workspaceId);
+
+      if (queryStart) {
+        queryDelivery = queryDelivery.gte('created_at', `${queryStart}T00:00:00.000Z`);
+      }
+      if (queryEnd) {
+        queryDelivery = queryDelivery.lte('created_at', `${queryEnd}T23:59:59.999Z`);
+      }
+
+      const { data: itemsDelivery } = await queryDelivery.limit(2000);
 
       for (const item of itemsDelivery || []) {
         const rawItem = item as Record<string, unknown>;
