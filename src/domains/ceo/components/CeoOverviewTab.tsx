@@ -1048,29 +1048,41 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             <div ref={messagesEndRef} />
           </CardContent>
 
-          {/* Quick Pills Conforme a Imagem de Referência - Rolável com toque no mobile */}
+          {/* Quick Pills com scroll horizontal suave no mobile */}
           <div className="px-3 sm:px-4 py-2 border-t border-border/30 bg-slate-950/40 overflow-x-auto no-scrollbar flex flex-nowrap items-center gap-1.5 shrink-0">
             <button
+              onClick={() => handleSelectPill('Quais os custos de atacado e CMV confirmado?')}
+              className="text-[11px] whitespace-nowrap bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-700/50 transition-colors shrink-0"
+            >
+              Custos de atacado (CMV)
+            </button>
+            <button
+              onClick={() => handleSelectPill('Quais os produtos com maiores margens de lucro?')}
+              className="text-[11px] whitespace-nowrap bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 px-2.5 py-1 rounded-full border border-amber-700/50 transition-colors shrink-0"
+            >
+              Produtos mais lucrativos
+            </button>
+            <button
               onClick={() => handleSelectPill('Quanto vendemos ontem?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
+              className="text-[11px] whitespace-nowrap bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors shrink-0"
             >
               Vendas de ontem
             </button>
             <button
               onClick={() => handleSelectPill('Quais foram os 5 produtos mais vendidos neste mês?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
+              className="text-[11px] whitespace-nowrap bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors shrink-0"
             >
               Top 5 produtos
             </button>
             <button
               onClick={() => handleSelectPill('Como estão as despesas deste mês por categoria?')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
+              className="text-[11px] whitespace-nowrap bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors shrink-0"
             >
               Despesas do mês
             </button>
             <button
               onClick={() => handleSelectPill('Monte um plano de crescimento para aumentar o lucro')}
-              className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors whitespace-nowrap shrink-0"
+              className="text-[11px] whitespace-nowrap bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors shrink-0"
             >
               Plano de crescimento
             </button>

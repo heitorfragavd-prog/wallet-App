@@ -20,7 +20,6 @@ import {
   ProdutoRentabilidadeItem,
   deduplicateRevenues,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
-import { Badge } from '@/shared/components/ui/badge';
 import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 
@@ -429,15 +428,26 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               <span className="text-[10px] text-emerald-400 font-semibold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">NF Comprovada</span>
             </div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-              {profitabilityReport ? `R$ ${profitabilityReport.cmvTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'R$ 0,00'}
+              {profitabilityReport?.dadosIndisponiveis ? (
+                <span className="text-sm font-normal text-amber-400">Dados Indisponíveis</span>
+              ) : profitabilityReport ? (
+                `R$ ${profitabilityReport.cmvTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              ) : (
+                'R$ 0,00'
+              )}
             </div>
             <div className="mt-2 text-xs text-slate-400">
-              {profitabilityReport && profitabilityReport.receitaComCusto > 0 ? (
+              {profitabilityReport && !profitabilityReport.dadosIndisponiveis && profitabilityReport.receitaComCusto > 0 ? (
                 <span>
-                  ${((profitabilityReport.cmvTotal / profitabilityReport.receitaComCusto) * 100).toFixed(1)}% do faturamento apurado com custo
+                  {((profitabilityReport.cmvTotal / profitabilityReport.receitaComCusto) * 100).toFixed(1)}% do faturamento apurado com custo
+                  {profitabilityReport.cmvEstimado && profitabilityReport.cmvEstimado > 0 ? (
+                    <span className="block text-[11px] text-sky-400/90 mt-0.5">
+                      (R$ {profitabilityReport.cmvComprovado?.toFixed(2)} auditado NF + R$ {profitabilityReport.cmvEstimado?.toFixed(2)} ref. atual)
+                    </span>
+                  ) : null}
                 </span>
               ) : (
-                <span>Sem itens com custo no período</span>
+                <span>{profitabilityReport?.erroMensagem || 'Sem itens com custo no período'}</span>
               )}
             </div>
           </CardContent>
@@ -447,17 +457,28 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         <Card className="bg-card/70 border-border/50">
           <CardContent className="p-4">
             <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-              <span>Lucro Bruto Comprovado</span>
+              <span>Lucro Bruto (Margem de Contribuição)</span>
               <span className="text-[10px] text-amber-400 font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">Margem Real</span>
             </div>
             <div className="text-xl md:text-2xl font-bold text-emerald-400 mt-1">
-              {profitabilityReport ? `R$ ${profitabilityReport.lucroBrutoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'R$ 0,00'}
+              {profitabilityReport?.dadosIndisponiveis ? (
+                <span className="text-sm font-normal text-amber-400">Dados Indisponíveis</span>
+              ) : profitabilityReport ? (
+                `R$ ${profitabilityReport.lucroBrutoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              ) : (
+                'R$ 0,00'
+              )}
             </div>
             <div className="mt-2 text-xs">
-              {profitabilityReport && profitabilityReport.margemBrutaMedia > 0 ? (
-                <span className="text-emerald-400 font-semibold">
-                  Margem Bruta Média: ${profitabilityReport.margemBrutaMedia}%
-                </span>
+              {profitabilityReport && !profitabilityReport.dadosIndisponiveis && profitabilityReport.margemBrutaMedia > 0 ? (
+                <div className="space-y-0.5">
+                  <span className="text-emerald-400 font-semibold">
+                    Margem Bruta Média: {profitabilityReport.margemBrutaMedia}%
+                  </span>
+                  <span className="block text-[10px] text-slate-400">
+                    * Lucro Bruto Comercial antes de despesas fixas operacionais
+                  </span>
+                </div>
               ) : (
                 <span className="text-slate-400">Margem sob custo conhecido</span>
               )}
@@ -473,12 +494,18 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               <span className="text-[10px] text-sky-400 font-semibold px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">Auditado</span>
             </div>
             <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
-              {profitabilityReport ? `${profitabilityReport.coberturaReceitaPercent}%` : '0%'}
+              {profitabilityReport?.dadosIndisponiveis ? (
+                <span className="text-sm font-normal text-amber-400">—</span>
+              ) : profitabilityReport ? (
+                `${profitabilityReport.coberturaReceitaPercent}%`
+              ) : (
+                '0%'
+              )}
             </div>
             <div className="mt-2 text-xs text-slate-400">
-              {profitabilityReport ? (
+              {profitabilityReport && !profitabilityReport.dadosIndisponiveis ? (
                 <span>
-                  R$ ${profitabilityReport.receitaComCusto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo (${profitabilityReport.produtosComCustoQtd} itens)
+                  R$ {profitabilityReport.receitaComCusto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo ({profitabilityReport.produtosComCustoQtd} itens)
                 </span>
               ) : (
                 <span>Aguardando notas fiscais</span>
@@ -673,13 +700,22 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                     </thead>
                     <tbody className="divide-y divide-border/20">
                       {displayList.map((item) => {
-                        const hasCost = item.statusCusto === 'confirmado' && item.custoUnitario !== null;
+                        const hasCost = item.custoUnitario !== null && item.custoUnitario > 0;
+                        const isNfComprovada = item.statusCusto === 'confirmado' || item.statusCusto === 'historico_comprovado';
+                        const isRefAtual = item.statusCusto === 'referencia_atual';
                         const lucroUnit = hasCost ? (item.precoVendaMedio - item.custoUnitario!) : null;
 
                         return (
                           <tr key={item.id} className="hover:bg-slate-900/40 transition-colors">
                             <td className="py-2 px-3 font-medium text-foreground max-w-[220px] truncate" title={item.produto}>
-                              {item.produto}
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate">{item.produto}</span>
+                                {item.isCombo && (
+                                  <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/15 text-purple-400 font-medium shrink-0">
+                                    Combo
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2 px-2 text-right text-slate-300">
                               {item.quantidade}
@@ -689,7 +725,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                             </td>
                             <td className="py-2 px-2 text-right">
                               {hasCost ? (
-                                <span className="text-sky-400 font-medium">
+                                <span className={`font-medium ${isNfComprovada ? 'text-emerald-400' : 'text-sky-400'}`}>
                                   R$ {item.custoUnitario!.toFixed(2)}
                                 </span>
                               ) : (
@@ -727,13 +763,17 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                               )}
                             </td>
                             <td className="py-2 px-3 text-center">
-                              {hasCost ? (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                  Auditado
+                              {isNfComprovada ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title={item.tipoCustoLabel || 'Auditado por Nota Fiscal'}>
+                                  Auditado por NF
+                                </span>
+                              ) : isRefAtual ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20" title={item.tipoCustoLabel || 'Custo de referência atual'}>
+                                  Referência Atual
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Aguardando nota fiscal ou ficha técnica de composição">
-                                  Sem NF / Composição
+                                  Sem NF / Ficha
                                 </span>
                               )}
                             </td>
