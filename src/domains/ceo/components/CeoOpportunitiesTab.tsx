@@ -141,27 +141,30 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
           </p>
         </div>
 
-        {/* Sub-tabs buttons - rolagem horizontal no mobile */}
-        <div className="overflow-x-auto no-scrollbar -mx-2 px-2 sm:mx-0 sm:px-0 w-full sm:w-auto">
-          <div className="inline-flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-border/50 text-xs w-max sm:w-auto">
+        {/* Sub-tabs buttons - grid 2 colunas no celular, linha flex no desktop */}
+        <div className="w-full sm:w-auto">
+          <div className="grid grid-cols-2 sm:flex sm:flex-row w-full sm:w-auto gap-1.5 bg-slate-900/80 p-1.5 rounded-xl border border-border/50 text-xs">
             <button
               type="button"
               onClick={() => setActiveSubTab('oportunidades')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+              className={`h-10 sm:h-8 px-3 py-1.5 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center text-center gap-1.5 ${
                 activeSubTab === 'oportunidades'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-orange-500 text-white font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-slate-800/60'
               }`}
             >
-              Oportunidades ({opportunities.length})
+              <span>Oportunidades</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold leading-none">
+                {opportunities.length}
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setActiveSubTab('experimentos')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+              className={`h-10 sm:h-8 px-3 py-1.5 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center text-center ${
                 activeSubTab === 'experimentos'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-orange-500 text-white font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-slate-800/60'
               }`}
             >
               Experimentos
@@ -169,21 +172,24 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
             <button
               type="button"
               onClick={() => setActiveSubTab('em_execucao')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+              className={`h-10 sm:h-8 px-3 py-1.5 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center text-center gap-1.5 ${
                 activeSubTab === 'em_execucao'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-orange-500 text-white font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-slate-800/60'
               }`}
             >
-              Em Execução ({activeExperiments.length})
+              <span>Em Execução</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold leading-none">
+                {activeExperiments.length}
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setActiveSubTab('concluidas')}
-              className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+              className={`h-10 sm:h-8 px-3 py-1.5 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center text-center ${
                 activeSubTab === 'concluidas'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-orange-500 text-white font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-slate-800/60'
               }`}
             >
               Concluídas
