@@ -99,7 +99,7 @@ describe('SEC-AUDIT: Auditoria de Segurança Máxima e Hardening', () => {
     });
 
     it('VULN-03: channel_mappings e ia_leitura_erros restringem acesso explicitamente a service_role', () => {
-      const sql = fs.readFileSync(migrationPath, 'utf8');
+      const sql = fs.readFileSync(migrationPath, 'utf8').replace(/\r\n/g, '\n');
 
       // channel_mappings
       expect(sql).toContain('ON public.channel_mappings FOR ALL\nTO service_role');

@@ -16,8 +16,11 @@ import {
   CeoFinancialMetricsService,
   TopProdutoFaturamento,
   TransacaoReceitaItem,
+  RelatorioRentabilidadeComercial,
+  ProdutoRentabilidadeItem,
   deduplicateRevenues,
 } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import { Badge } from '@/shared/components/ui/badge';
 import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import { fetchLiveDashboard } from '@/domains/eyemobile/hooks/useEyemobileDashboard';
 
@@ -52,6 +55,8 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
   const [dailySalesData, setDailySalesData] = useState<DailySaleBar[]>([]);
   const [topProducts, setTopProducts] = useState<TopProdutoFaturamento[]>([]);
+  const [profitabilityReport, setProfitabilityReport] = useState<RelatorioRentabilidadeComercial | null>(null);
+  const [filtroRentabilidade, setFiltroRentabilidade] = useState<'mais_lucrativos' | 'maiores_margens' | 'menores_margens' | 'sem_custo'>('mais_lucrativos');
 
   const loadData = useCallback(async () => {
     if (!workspaceId) return;
@@ -236,6 +241,14 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
 
       // Top 5 Produtos reais
       setTopProducts(topProdsList.slice(0, 5));
+
+      // Relatório de Rentabilidade Real e Custos de Atacado
+      const profitReport = await CeoFinancialMetricsService.getCommercialProfitability(workspaceId, {
+        startDate: inicioStr,
+        endDate: fimStr,
+        customTransactions: tx,
+      }).catch(() => null);
+      setProfitabilityReport(profitReport);
     } catch (err: unknown) {
       console.warn('[CeoCommercialAnalysisTab] Erro ao carregar dados comerciais:', err);
       setErrorMessage(err instanceof Error ? err.message : 'Falha na consulta');
@@ -401,6 +414,75 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         </Card>
       </div>
 
+      {/* Cards Executivos de CMV e Rentabilidade Comprovada */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Card CMV Confirmado */}
+        <Card className="bg-card/70 border-border/50">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>CMV Confirmado (Atacado)</span>
+              <span className="text-[10px] text-emerald-400 font-semibold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">NF Comprovada</span>
+            </div>
+            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+              {profitabilityReport ? `R$ ${profitabilityReport.cmvTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'R$ 0,00'}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              {profitabilityReport && profitabilityReport.receitaComCusto > 0 ? (
+                <span>
+                  ${((profitabilityReport.cmvTotal / profitabilityReport.receitaComCusto) * 100).toFixed(1)}% do faturamento apurado com custo
+                </span>
+              ) : (
+                <span>Sem itens com custo no período</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Card Lucro Bruto Comprovado */}
+        <Card className="bg-card/70 border-border/50">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>Lucro Bruto Comprovado</span>
+              <span className="text-[10px] text-amber-400 font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">Margem Real</span>
+            </div>
+            <div className="text-xl md:text-2xl font-bold text-emerald-400 mt-1">
+              {profitabilityReport ? `R$ ${profitabilityReport.lucroBrutoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'R$ 0,00'}
+            </div>
+            <div className="mt-2 text-xs">
+              {profitabilityReport && profitabilityReport.margemBrutaMedia > 0 ? (
+                <span className="text-emerald-400 font-semibold">
+                  Margem Bruta Média: ${profitabilityReport.margemBrutaMedia}%
+                </span>
+              ) : (
+                <span className="text-slate-400">Margem sob custo conhecido</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Card Cobertura de CMV */}
+        <Card className="bg-card/70 border-border/50">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>Cobertura de Custos</span>
+              <span className="text-[10px] text-sky-400 font-semibold px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">Auditado</span>
+            </div>
+            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+              {profitabilityReport ? `${profitabilityReport.coberturaReceitaPercent}%` : '0%'}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              {profitabilityReport ? (
+                <span>
+                  R$ ${profitabilityReport.receitaComCusto.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo (${profitabilityReport.produtosComCustoQtd} itens)
+                </span>
+              ) : (
+                <span>Aguardando notas fiscais</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Grid: Vendas por Dia + Top 5 Produtos (faturamento) Conforme Painel 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Vendas por Dia (BarChart Azul) */}
@@ -500,6 +582,171 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           </CardContent>
         </Card>
       </div>
+
+      {/* Seção Completa de Rentabilidade por Produto e Margens de Atacado */}
+      <Card className="bg-card/70 border-border/50">
+        <CardHeader className="pb-3 border-b border-border/40">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
+                <span>💰</span> Rentabilidade por Produto & Margens de Atacado
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Custos unitários apurados via Notas Fiscais SPAL (Coca-Cola), Brasnorte (Ambev) e distribuidores credenciados.
+              </p>
+            </div>
+
+            {/* Filtros de Ordenação */}
+            <div className="flex flex-wrap items-center gap-1.5 self-stretch sm:self-auto">
+              <Button
+                size="sm"
+                variant={filtroRentabilidade === 'mais_lucrativos' ? 'default' : 'outline'}
+                className="h-7 text-xs"
+                onClick={() => setFiltroRentabilidade('mais_lucrativos')}
+              >
+                Mais Lucrativos (R$)
+              </Button>
+              <Button
+                size="sm"
+                variant={filtroRentabilidade === 'maiores_margens' ? 'default' : 'outline'}
+                className="h-7 text-xs"
+                onClick={() => setFiltroRentabilidade('maiores_margens')}
+              >
+                Maiores Margens (%)
+              </Button>
+              <Button
+                size="sm"
+                variant={filtroRentabilidade === 'menores_margens' ? 'default' : 'outline'}
+                className="h-7 text-xs"
+                onClick={() => setFiltroRentabilidade('menores_margens')}
+              >
+                Menores Margens (%)
+              </Button>
+              <Button
+                size="sm"
+                variant={filtroRentabilidade === 'sem_custo' ? 'default' : 'outline'}
+                className="h-7 text-xs"
+                onClick={() => setFiltroRentabilidade('sem_custo')}
+              >
+                Custo Pendente ({profitabilityReport?.semCusto.length || 0})
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-4">
+          {profitabilityReport ? (
+            (() => {
+              let displayList: ProdutoRentabilidadeItem[] = [];
+              if (filtroRentabilidade === 'mais_lucrativos') displayList = profitabilityReport.maisLucrativos;
+              else if (filtroRentabilidade === 'maiores_margens') displayList = profitabilityReport.maioresMargens;
+              else if (filtroRentabilidade === 'menores_margens') displayList = profitabilityReport.menoresMargens;
+              else displayList = profitabilityReport.semCusto;
+
+              if (displayList.length === 0) {
+                return (
+                  <div className="py-8 text-center text-xs text-muted-foreground">
+                    Nenhum produto encontrado nesta categoria no período selecionado.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="text-[11px] uppercase tracking-wider text-muted-foreground bg-slate-900/50 border-b border-border/40">
+                      <tr>
+                        <th className="py-2.5 px-3">Produto</th>
+                        <th className="py-2.5 px-2 text-right">Qtd</th>
+                        <th className="py-2.5 px-2 text-right">Preço Venda</th>
+                        <th className="py-2.5 px-2 text-right">Custo Unitário</th>
+                        <th className="py-2.5 px-2 text-right">Lucro Unitário</th>
+                        <th className="py-2.5 px-3 text-right">Faturamento</th>
+                        <th className="py-2.5 px-3 text-right">Lucro Bruto</th>
+                        <th className="py-2.5 px-2 text-right">Margem %</th>
+                        <th className="py-2.5 px-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/20">
+                      {displayList.map((item) => {
+                        const hasCost = item.statusCusto === 'confirmado' && item.custoUnitario !== null;
+                        const lucroUnit = hasCost ? (item.precoVendaMedio - item.custoUnitario!) : null;
+
+                        return (
+                          <tr key={item.id} className="hover:bg-slate-900/40 transition-colors">
+                            <td className="py-2 px-3 font-medium text-foreground max-w-[220px] truncate" title={item.produto}>
+                              {item.produto}
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-300">
+                              {item.quantidade}
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-300">
+                              R$ {item.precoVendaMedio.toFixed(2)}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {hasCost ? (
+                                <span className="text-sky-400 font-medium">
+                                  R$ {item.custoUnitario!.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic">Pendente</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {lucroUnit !== null ? (
+                                <span className="text-emerald-400 font-semibold">
+                                  R$ {lucroUnit.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-right text-slate-300 font-medium">
+                              R$ {item.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="py-2 px-3 text-right">
+                              {item.lucroBrutoTotal !== null ? (
+                                <span className="text-emerald-400 font-bold">
+                                  R$ {item.lucroBrutoTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {item.margemBrutaPercent !== null ? (
+                                <span className={`font-semibold ${item.margemBrutaPercent >= 60 ? 'text-emerald-400' : item.margemBrutaPercent >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                  {item.margemBrutaPercent}%
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">—</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              {hasCost ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                  Auditado
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Aguardando nota fiscal ou ficha técnica de composição">
+                                  Sem NF / Composição
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()
+          ) : (
+            <div className="py-8 text-center text-xs text-muted-foreground">
+              Carregando dados de rentabilidade...
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };

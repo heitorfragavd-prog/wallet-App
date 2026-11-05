@@ -71,6 +71,14 @@ export interface CeoExecutiveKpis {
   cmvPercent: number | null; // null se dados insuficientes
   cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes';
   coberturaFichasPercent: number;
+  cmvConfirmado: number | null;
+  receitaComCustoConhecido: number;
+  receitaComCustoPendente: number;
+  coberturaCmvPercent: number;
+  lucroBrutoConfirmado: number | null;
+  margemBrutaConfirmadaPercent: number | null;
+  produtosComCustoCadastrado: number;
+  totalProdutosCatalogo: number;
   acoesHoje: {
     numero: number;
     titulo: string;
@@ -163,6 +171,42 @@ export interface TopProdutoFaturamento {
   faturamento: number;
   percentualFaturamento: number;
   margemEstimada: number | null;
+  custoUnitario?: number | null;
+  cmvTotal?: number | null;
+  lucroBrutoTotal?: number | null;
+  margemBrutaPercent?: number | null;
+  statusCusto?: 'confirmado' | 'pendente_ficha' | 'sem_nota';
+}
+
+export interface ProdutoRentabilidadeItem {
+  id: string;
+  codigo: string;
+  produto: string;
+  quantidade: number;
+  faturamento: number;
+  precoVendaMedio: number;
+  custoUnitario: number | null;
+  cmvTotal: number | null;
+  lucroBrutoTotal: number | null;
+  margemBrutaPercent: number | null;
+  statusCusto: 'confirmado' | 'pendente_ficha' | 'sem_nota';
+}
+
+export interface RelatorioRentabilidadeComercial {
+  receitaTotal: number;
+  receitaComCusto: number;
+  receitaSemCusto: number;
+  cmvTotal: number;
+  lucroBrutoTotal: number;
+  margemBrutaMedia: number;
+  coberturaReceitaPercent: number;
+  produtosComCustoQtd: number;
+  produtosTotalQtd: number;
+  itens: ProdutoRentabilidadeItem[];
+  maisLucrativos: ProdutoRentabilidadeItem[];
+  maioresMargens: ProdutoRentabilidadeItem[];
+  menoresMargens: ProdutoRentabilidadeItem[];
+  semCusto: ProdutoRentabilidadeItem[];
 }
 
 export class CeoFinancialMetricsService {
@@ -435,27 +479,94 @@ export class CeoFinancialMetricsService {
           ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
           : null;
 
-      // 6. CMV Status: checa se há fichas técnicas reais e cobertura efetiva
-      const { count: countFichas } = await supabase
-        .from('fichas_tecnicas')
-        .select('*', { count: 'exact', head: true });
+      // 6. CMV e Rentabilidade Real: apuração sobre custos de atacado comprovados e produtos_eyemobile
+      let totalFichas = 0;
+      let totalProdutos = 0;
+      let hasFichas = false;
+      let coberturaFichas = 0;
+      let cmvPercent: number | null = null;
+      let cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes' = 'dados_insuficientes';
+      let motivoIndisponibilidadeCmv: string | null = null;
+      let cmvConfirmado: number | null = null;
+      let receitaComCustoConhecido = 0;
+      let receitaComCustoPendente = 0;
+      let coberturaCmvPercent = 0;
+      let lucroBrutoConfirmado: number | null = null;
+      let margemBrutaConfirmadaPercent: number | null = null;
+      let produtosComCustoCadastrado = 0;
+      let totalProdutosCatalogo = 0;
 
-      const { count: countProdutos } = await supabase
-        .from('produtos_eyemobile')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspaceId);
+      try {
+        const { count: countFichas } = await supabase
+          .from('fichas_tecnicas')
+          .select('*', { count: 'exact', head: true });
+        totalFichas = countFichas ?? 0;
+        hasFichas = totalFichas > 0;
 
-      const totalFichas = countFichas ?? 0;
-      const totalProdutos = countProdutos ?? 0;
-      const hasFichas = totalFichas > 0;
-      const coberturaFichas = totalProdutos > 0 && totalFichas > 0
-        ? Math.min(100, Math.round((totalFichas / totalProdutos) * 100))
-        : 0;
-      const cmvPercent: number | null = null;
-      const cmvStatus = hasFichas ? 'atencao' : 'dados_insuficientes';
-      const motivoIndisponibilidadeCmv = !hasFichas
-        ? 'Fichas técnicas de produtos ainda não cadastradas no sistema'
-        : null;
+        const { data: prodsEyemobile } = await supabase
+          .from('produtos_eyemobile')
+          .select('codigo, descricao, custo_atual, preco_venda')
+          .eq('workspace_id', workspaceId);
+
+        const catalogo = prodsEyemobile || [];
+        totalProdutos = catalogo.length;
+        totalProdutosCatalogo = catalogo.length;
+        coberturaFichas = totalProdutos > 0 && totalFichas > 0
+          ? Math.min(100, Math.round((totalFichas / totalProdutos) * 100))
+          : 0;
+
+        const costMap = new Map<string, { custo: number; descricao: string }>();
+        for (const p of catalogo) {
+          const c = Number(p.custo_atual || 0);
+          if (c > 0 && p.codigo) {
+            costMap.set(String(p.codigo), { custo: c, descricao: p.descricao || '' });
+            produtosComCustoCadastrado++;
+          }
+        }
+
+        let cmvAcumulado = 0;
+        let temItens = false;
+
+        for (const t of txMes) {
+          if (!t.itens || !Array.isArray(t.itens)) continue;
+          for (const item of t.itens) {
+            if (!item || typeof item !== 'object') continue;
+            temItens = true;
+            const raw = item as Record<string, unknown>;
+            const pId = String(raw.product_id || raw.id || '');
+            const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+            const totalItem = Number(raw.total ?? raw.valor ?? (Number(raw.price || 0) * qtd));
+
+            const matchCusto = costMap.get(pId);
+            if (matchCusto && matchCusto.custo > 0) {
+              const custoItem = matchCusto.custo * qtd;
+              cmvAcumulado += custoItem;
+              receitaComCustoConhecido += totalItem;
+            } else {
+              receitaComCustoPendente += totalItem;
+            }
+          }
+        }
+
+        if (receitaComCustoConhecido > 0 && cmvAcumulado > 0) {
+          cmvConfirmado = Math.round(cmvAcumulado * 100) / 100;
+          lucroBrutoConfirmado = Math.round((receitaComCustoConhecido - cmvAcumulado) * 100) / 100;
+          cmvPercent = Math.round((cmvAcumulado / receitaComCustoConhecido) * 1000) / 10;
+          margemBrutaConfirmadaPercent = Math.round(((receitaComCustoConhecido - cmvAcumulado) / receitaComCustoConhecido) * 1000) / 10;
+          const receitaTotalApurada = receitaComCustoConhecido + receitaComCustoPendente;
+          coberturaCmvPercent = receitaTotalApurada > 0 ? Math.round((receitaComCustoConhecido / receitaTotalApurada) * 1000) / 10 : 0;
+          cmvStatus = cmvPercent <= 40 ? 'saudavel' : 'atencao';
+        } else if (!temItens || costMap.size === 0) {
+          cmvStatus = 'dados_insuficientes';
+          motivoIndisponibilidadeCmv = costMap.size === 0
+            ? 'Custos unitários de produtos ainda não cadastrados no sistema'
+            : 'Transações sem detalhamento de itens no período';
+        }
+      } catch (errCmv) {
+        console.warn('[CeoFinancialMetricsService] Aviso ao apurar CMV:', errCmv);
+        cmvStatus = 'dados_insuficientes';
+        motivoIndisponibilidadeCmv = 'Falha ao consultar custos no banco de dados';
+      }
 
       // 7. Evolução diária de vendas (últimos 30 dias reais com deduplicação)
       const limite30Dias = new Date(hoje.getTime() - 29 * 24 * 60 * 60 * 1000);
@@ -559,6 +670,14 @@ export class CeoFinancialMetricsService {
         cmvPercent,
         cmvStatus,
         coberturaFichasPercent: coberturaFichas,
+        cmvConfirmado,
+        receitaComCustoConhecido,
+        receitaComCustoPendente,
+        coberturaCmvPercent,
+        lucroBrutoConfirmado,
+        margemBrutaConfirmadaPercent,
+        produtosComCustoCadastrado,
+        totalProdutosCatalogo,
         acoesHoje,
         dataAtualizacao: 'atualizado agora',
         dailySales30Days,
@@ -933,6 +1052,228 @@ export class CeoFinancialMetricsService {
     }
   }
 
+  /**
+   * Obtém relatório completo de rentabilidade comercial e margens brutas
+   * cruzando os itens de vendas com custos de atacado reais comprovados.
+   */
+  static async getCommercialProfitability(
+    workspaceId: string,
+    options?: {
+      startDate?: string;
+      endDate?: string;
+      customTransactions?: TransacaoReceitaItem[];
+    }
+  ): Promise<RelatorioRentabilidadeComercial> {
+    if (!workspaceId) {
+      return {
+        receitaTotal: 0,
+        receitaComCusto: 0,
+        receitaSemCusto: 0,
+        cmvTotal: 0,
+        lucroBrutoTotal: 0,
+        margemBrutaMedia: 0,
+        coberturaReceitaPercent: 0,
+        produtosComCustoQtd: 0,
+        produtosTotalQtd: 0,
+        itens: [],
+        maisLucrativos: [],
+        maioresMargens: [],
+        menoresMargens: [],
+        semCusto: [],
+      };
+    }
+
+    try {
+      // 1. Carrega catálogo de produtos com custos
+      const { data: prodsData } = await supabase
+        .from('produtos_eyemobile')
+        .select('codigo, descricao, custo_atual, preco_venda')
+        .eq('workspace_id', workspaceId);
+
+      const catalogo = prodsData || [];
+      const costMap = new Map<string, { custo: number; descricao: string; precoVenda: number }>();
+      let prodsComCusto = 0;
+
+      for (const p of catalogo) {
+        const c = Number(p.custo_atual || 0);
+        const pv = Number(p.preco_venda || 0);
+        if (p.codigo) {
+          costMap.set(String(p.codigo), { custo: c, descricao: p.descricao || '', precoVenda: pv });
+          if (c > 0) prodsComCusto++;
+        }
+      }
+
+      // 2. Carrega ou utiliza transações do período
+      let tx: TransacaoReceitaItem[] = [];
+      if (options?.customTransactions && options.customTransactions.length > 0) {
+        tx = options.customTransactions;
+      } else {
+        let queryStart = options?.startDate;
+        const queryEnd = options?.endDate;
+        if (!queryStart) {
+          const hoje = new Date();
+          const d30 = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000);
+          queryStart = d30.toISOString().slice(0, 10);
+        }
+
+        const raw = await this.fetchAllPaginated<TransacaoReceitaItem>((from, to) => {
+          let q = supabase
+            .from('transacoes')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', queryStart!)
+            .not('itens', 'is', null)
+            .order('data', { ascending: false });
+
+          if (queryEnd) {
+            q = q.lte('data', `${queryEnd}T23:59:59.999Z`);
+          }
+          return q.range(from, to);
+        });
+
+        tx = deduplicateRevenues(raw);
+      }
+
+      // 3. Agrega itens vendidos
+      const itemAgg = new Map<string, {
+        id: string;
+        produto: string;
+        quantidade: number;
+        faturamento: number;
+        prices: number[];
+      }>();
+
+      for (const t of tx) {
+        if (!t.itens || !Array.isArray(t.itens)) continue;
+        for (const item of t.itens) {
+          if (!item || typeof item !== 'object') continue;
+          const raw = item as Record<string, unknown>;
+          const pId = String(raw.product_id || raw.id || 'sem_id');
+          const name = (raw.product_name as string) || (raw.name as string) || (raw.descricao as string) || 'Item sem nome';
+          const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+          const pr = Number(raw.price || 0);
+          const totalItem = Number(raw.total ?? raw.valor ?? (pr * qtd));
+
+          const cur = itemAgg.get(pId) || {
+            id: pId,
+            produto: name,
+            quantidade: 0,
+            faturamento: 0,
+            prices: [],
+          };
+          cur.quantidade += qtd;
+          cur.faturamento += totalItem;
+          if (pr > 0) cur.prices.push(pr);
+          itemAgg.set(pId, cur);
+        }
+      }
+
+      let receitaTotal = 0;
+      let receitaComCusto = 0;
+      let receitaSemCusto = 0;
+      let cmvTotal = 0;
+
+      const itensRelatorio: ProdutoRentabilidadeItem[] = [];
+
+      for (const [pId, agg] of itemAgg.entries()) {
+        receitaTotal += agg.faturamento;
+        const info = costMap.get(pId);
+        const custoUnit = info && info.custo > 0 ? info.custo : null;
+
+        // Preço médio praticado
+        const precoVendaMedio = agg.prices.length > 0
+          ? agg.prices.reduce((a, b) => a + b, 0) / agg.prices.length
+          : (agg.quantidade > 0 ? agg.faturamento / agg.quantidade : 0);
+
+        if (custoUnit !== null && custoUnit > 0) {
+          const cmvItem = custoUnit * agg.quantidade;
+          const lucroTotal = agg.faturamento - cmvItem;
+          const lucroUnit = precoVendaMedio - custoUnit;
+          const margemPct = agg.faturamento > 0 ? (lucroTotal / agg.faturamento) * 100 : 0;
+
+          receitaComCusto += agg.faturamento;
+          cmvTotal += cmvItem;
+
+          itensRelatorio.push({
+            id: pId,
+            codigo: pId,
+            produto: agg.produto,
+            quantidade: agg.quantidade,
+            faturamento: Math.round(agg.faturamento * 100) / 100,
+            precoVendaMedio: Math.round(precoVendaMedio * 100) / 100,
+            custoUnitario: Math.round(custoUnit * 10000) / 10000,
+            cmvTotal: Math.round(cmvItem * 100) / 100,
+            lucroBrutoTotal: Math.round(lucroTotal * 100) / 100,
+            margemBrutaPercent: Math.round(margemPct * 10) / 10,
+            statusCusto: 'confirmado',
+          });
+        } else {
+          receitaSemCusto += agg.faturamento;
+          itensRelatorio.push({
+            id: pId,
+            codigo: pId,
+            produto: agg.produto,
+            quantidade: agg.quantidade,
+            faturamento: Math.round(agg.faturamento * 100) / 100,
+            precoVendaMedio: Math.round(precoVendaMedio * 100) / 100,
+            custoUnitario: null,
+            cmvTotal: null,
+            lucroBrutoTotal: null,
+            margemBrutaPercent: null,
+            statusCusto: 'sem_nota',
+          });
+        }
+      }
+
+      const lucroBrutoTotal = receitaComCusto - cmvTotal;
+      const margemBrutaMedia = receitaComCusto > 0 ? Math.round((lucroBrutoTotal / receitaComCusto) * 1000) / 10 : 0;
+      const coberturaReceitaPercent = receitaTotal > 0 ? Math.round((receitaComCusto / receitaTotal) * 1000) / 10 : 0;
+
+      const confirmados = itensRelatorio.filter((i) => i.statusCusto === 'confirmado');
+      const semCusto = itensRelatorio.filter((i) => i.statusCusto !== 'confirmado');
+
+      const maisLucrativos = [...confirmados].sort((a, b) => (b.lucroBrutoTotal || 0) - (a.lucroBrutoTotal || 0));
+      const maioresMargens = [...confirmados].sort((a, b) => (b.margemBrutaPercent || 0) - (a.margemBrutaPercent || 0));
+      const menoresMargens = [...confirmados].sort((a, b) => (a.margemBrutaPercent || 0) - (b.margemBrutaPercent || 0));
+
+      return {
+        receitaTotal: Math.round(receitaTotal * 100) / 100,
+        receitaComCusto: Math.round(receitaComCusto * 100) / 100,
+        receitaSemCusto: Math.round(receitaSemCusto * 100) / 100,
+        cmvTotal: Math.round(cmvTotal * 100) / 100,
+        lucroBrutoTotal: Math.round(lucroBrutoTotal * 100) / 100,
+        margemBrutaMedia,
+        coberturaReceitaPercent,
+        produtosComCustoQtd: prodsComCusto,
+        produtosTotalQtd: catalogo.length,
+        itens: itensRelatorio,
+        maisLucrativos,
+        maioresMargens,
+        menoresMargens,
+        semCusto,
+      };
+    } catch (err) {
+      console.warn('[CeoFinancialMetricsService] Erro ao calcular rentabilidade:', err);
+      return {
+        receitaTotal: 0,
+        receitaComCusto: 0,
+        receitaSemCusto: 0,
+        cmvTotal: 0,
+        lucroBrutoTotal: 0,
+        margemBrutaMedia: 0,
+        coberturaReceitaPercent: 0,
+        produtosComCustoQtd: 0,
+        produtosTotalQtd: 0,
+        itens: [],
+        maisLucrativos: [],
+        maioresMargens: [],
+        menoresMargens: [],
+        semCusto: [],
+      };
+    }
+  }
+
   static getEmptyKpis(): CeoExecutiveKpis {
     return {
       faturamentoMes: 0,
@@ -961,6 +1302,14 @@ export class CeoFinancialMetricsService {
       cmvPercent: null,
       cmvStatus: 'dados_insuficientes',
       coberturaFichasPercent: 0,
+      cmvConfirmado: null,
+      receitaComCustoConhecido: 0,
+      receitaComCustoPendente: 0,
+      coberturaCmvPercent: 0,
+      lucroBrutoConfirmado: null,
+      margemBrutaConfirmadaPercent: null,
+      produtosComCustoCadastrado: 0,
+      totalProdutosCatalogo: 0,
       acoesHoje: [
         {
           numero: 1,
