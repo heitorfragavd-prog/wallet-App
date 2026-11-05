@@ -264,9 +264,9 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-between sm:justify-end">
           <Select value={periodo} onValueChange={setPeriodo}>
-            <SelectTrigger className="w-[160px] h-9 text-xs bg-card/60">
+            <SelectTrigger className="flex-1 sm:w-[160px] h-9 text-xs bg-card/60">
               <SelectValue placeholder="Período" />
             </SelectTrigger>
             <SelectContent>
@@ -281,10 +281,10 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
             variant="outline"
             onClick={loadData}
             disabled={isLoading}
-            className="h-9 text-xs gap-1.5 bg-primary/10 border-primary/30 text-primary hover:bg-primary/20"
+            className="h-9 text-xs gap-1.5 bg-primary/10 border-primary/30 text-primary hover:bg-primary/20 shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            Atualizar
+            <span>Atualizar</span>
           </Button>
         </div>
       </div>
