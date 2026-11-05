@@ -305,28 +305,30 @@ export const WalletCeoPage: React.FC = () => {
 
         {/* Abas Principais: Visão Geral, Análises, Oportunidades, Experimentos, Departamentos */}
         <Tabs value={activeMainTab} onValueChange={setActiveMainTab} className="space-y-6">
-          <TabsList className="bg-muted/40 p-1 border border-border/40 rounded-lg">
-            <TabsTrigger value="overview" className="text-xs font-semibold gap-1.5">
-              <Crown className="w-3.5 h-3.5 text-amber-400" />
-              Visão Geral
-            </TabsTrigger>
-            <TabsTrigger value="analyses" className="text-xs font-semibold gap-1.5">
-              <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
-              Análises
-            </TabsTrigger>
-            <TabsTrigger value="opportunities" className="text-xs font-semibold gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              Oportunidades
-            </TabsTrigger>
-            <TabsTrigger value="experiments" className="text-xs font-semibold gap-1.5">
-              <FlaskConical className="w-3.5 h-3.5 text-emerald-400" />
-              Experimentos ({experiments.length})
-            </TabsTrigger>
-            <TabsTrigger value="departments" className="text-xs font-semibold gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
-              Departamentos
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto no-scrollbar -mx-2 px-2 sm:mx-0 sm:px-0">
+            <TabsList className="bg-muted/40 p-1 border border-border/40 rounded-lg inline-flex w-max min-w-full sm:min-w-0 sm:w-auto">
+              <TabsTrigger value="overview" className="text-xs font-semibold gap-1.5 whitespace-nowrap px-3 py-2">
+                <Crown className="w-3.5 h-3.5 text-amber-400" />
+                Visão Geral
+              </TabsTrigger>
+              <TabsTrigger value="analyses" className="text-xs font-semibold gap-1.5 whitespace-nowrap px-3 py-2">
+                <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
+                Análises
+              </TabsTrigger>
+              <TabsTrigger value="opportunities" className="text-xs font-semibold gap-1.5 whitespace-nowrap px-3 py-2">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                Oportunidades
+              </TabsTrigger>
+              <TabsTrigger value="experiments" className="text-xs font-semibold gap-1.5 whitespace-nowrap px-3 py-2">
+                <FlaskConical className="w-3.5 h-3.5 text-emerald-400" />
+                Experimentos ({experiments.length})
+              </TabsTrigger>
+              <TabsTrigger value="departments" className="text-xs font-semibold gap-1.5 whitespace-nowrap px-3 py-2">
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                Departamentos
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* ABA 1: Visão Geral (Painel 1) */}
           <TabsContent value="overview" className="space-y-6 focus-visible:outline-none">
@@ -340,29 +342,31 @@ export const WalletCeoPage: React.FC = () => {
           {/* ABA 2: Análises (Painéis 2 e 3) */}
           <TabsContent value="analyses" className="space-y-6 focus-visible:outline-none">
             {/* Sub-navegação entre Comercial (Painel 2) e Despesas (Painel 3) */}
-            <div className="flex items-center gap-2 bg-muted/30 p-1 rounded-lg border border-border/40 w-fit">
-              <button
-                onClick={() => setActiveAnalysisSubTab('comercial')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  activeAnalysisSubTab === 'comercial'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <ShoppingCart className="w-3.5 h-3.5" />
-                Vendas e Produtos (Comercial)
-              </button>
-              <button
-                onClick={() => setActiveAnalysisSubTab('despesas')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  activeAnalysisSubTab === 'despesas'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <PieChartIcon className="w-3.5 h-3.5" />
-                Análise de Despesas
-              </button>
+            <div className="overflow-x-auto no-scrollbar -mx-2 px-2 sm:mx-0 sm:px-0">
+              <div className="inline-flex items-center gap-1.5 bg-muted/30 p-1 rounded-lg border border-border/40 w-max sm:w-fit">
+                <button
+                  onClick={() => setActiveAnalysisSubTab('comercial')}
+                  className={`px-3 py-2 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                    activeAnalysisSubTab === 'comercial'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <ShoppingCart className="w-3.5 h-3.5" />
+                  Vendas e Produtos (Comercial)
+                </button>
+                <button
+                  onClick={() => setActiveAnalysisSubTab('despesas')}
+                  className={`px-3 py-2 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                    activeAnalysisSubTab === 'despesas'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <PieChartIcon className="w-3.5 h-3.5" />
+                  Análise de Despesas
+                </button>
+              </div>
             </div>
 
             <div className={activeAnalysisSubTab === 'comercial' ? 'block' : 'hidden'}>

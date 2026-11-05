@@ -54,6 +54,8 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
   const [cmvValor, setCmvValor] = useState<number | null>(null);
   const [cmvPercent, setCmvPercent] = useState<number | null>(null);
   const [despesasOperacionais, setDespesasOperacionais] = useState(0);
+  const [despesasPagas, setDespesasPagas] = useState(0);
+  const [despesasPendentes, setDespesasPendentes] = useState(0);
   const [variacaoDespesas, setVariacaoDespesas] = useState<number | null>(null);
   const [resultadoOperacional, setResultadoOperacional] = useState<number | null>(null);
   const [margemOperacional, setMargemOperacional] = useState<number | null>(null);
@@ -176,6 +178,8 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
 
       const totalDesp = reportDesp.totalPorCompetencia;
       const totalDespAnt = reportDespAnt.totalPorCompetencia;
+      const totalDespCaixa = reportDesp.totalPorCaixa;
+      const totalDespPend = Math.max(0, reportDesp.totalPorCompetencia - reportDesp.totalPorCaixa);
 
       let totalRec = rec.reduce((acc, r) => acc + Number(r.valor || 0), 0);
       let isEyeOrigin = false;
@@ -192,6 +196,8 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
 
       setReceitaBruta(totalRec);
       setDespesasOperacionais(totalDesp);
+      setDespesasPagas(totalDespCaixa);
+      setDespesasPendentes(totalDespPend);
 
       if (!isEyeOrigin && totalRecAnt > 0) {
         setCrescimentoReceita(Math.round(((totalRec - totalRecAnt) / totalRecAnt) * 1000) / 10);
@@ -346,14 +352,17 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       </div>
 
       {/* 4 KPIs Financeiros Conforme Painel 3 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* 1. Receita Bruta */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">
-              {isEyemobileSales ? 'Receita Bruta (PDV Eyemobile)' : 'Receita Bruta'}
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>{isEyemobileSales ? 'Receita Bruta (PDV)' : 'Receita Bruta'}</span>
+              <span className="text-[10px] text-sky-400 font-normal px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">
+                {isEyemobileSales ? 'PDV Eyemobile' : 'Vendas'}
+              </span>
             </div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               R$ {receitaBruta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
             <div className="mt-2 text-xs">
@@ -372,10 +381,10 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         </Card>
 
         {/* 2. CMV */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">CMV</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="text-xs text-muted-foreground font-medium">CMV (Custo Mercadoria)</div>
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               {cmvValor !== null ? `R$ ${cmvValor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'Dados insuficientes'}
             </div>
             <div className="mt-2 text-xs text-slate-400">
@@ -384,37 +393,53 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
           </CardContent>
         </Card>
 
-        {/* 3. Despesas Operacionais */}
-        <Card className="bg-card/70 border-border/50">
+        {/* 3. Despesas Totais por Competência */}
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">Despesas Operacionais</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>Despesas (Competência)</span>
+              <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                Divipay + Contas
+              </span>
+            </div>
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               {despesasOperacionais > 0 ? (
                 `R$ ${despesasOperacionais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
               ) : (
                 <span className="text-sm font-normal text-slate-400">Não apurado</span>
               )}
             </div>
-            <div className="mt-2 text-xs">
+            <div className="mt-2 text-[11px] space-y-0.5 font-medium text-slate-400">
+              {despesasPagas > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                  <span>Pagas: R$ {despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  <span>Pend: R$ {despesasPendentes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                </div>
+              )}
               {variacaoDespesas !== null ? (
                 <span className={`inline-flex items-center gap-0.5 font-medium ${variacaoDespesas <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {variacaoDespesas <= 0 ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
-                  {variacaoDespesas > 0 ? `+${variacaoDespesas}%` : `${variacaoDespesas}%`}
+                  {variacaoDespesas > 0 ? `+${variacaoDespesas}%` : `${variacaoDespesas}%`} vs período anterior
                 </span>
               ) : (
                 <span className="text-slate-500">
-                  {despesasOperacionais > 0 ? 'Despesas consolidadas' : 'Aguardando lançamento de despesas'}
+                  {despesasOperacionais > 0 ? 'Despesas consolidadas' : 'Aguardando lançamento'}
                 </span>
               )}
             </div>
           </CardContent>
         </Card>
 
-        {/* 4. Resultado Operacional */}
-        <Card className={`border ${isPositiveMargin ? 'bg-card/70 border-border/50' : 'bg-rose-950/20 border-rose-900/40'}`}>
+        {/* 4. Resultado Preliminar por Competência */}
+        <Card className={`border flex flex-col justify-between ${isPositiveMargin ? 'bg-card/70 border-border/50' : 'bg-rose-950/20 border-rose-900/40'}`}>
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">Resultado Operacional</div>
-            <div className={`text-xl md:text-2xl font-bold mt-1 ${isPositiveMargin ? 'text-foreground' : 'text-rose-400'}`}>
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>Resultado Preliminar</span>
+              <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                Competência
+              </span>
+            </div>
+            <div className={`text-xl sm:text-2xl font-bold mt-1 truncate ${isPositiveMargin ? 'text-foreground' : 'text-rose-400'}`}>
               {resultadoOperacional !== null ? (
                 resultadoOperacional < 0
                   ? `-R$ ${Math.abs(resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
@@ -428,10 +453,13 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                 <span className={`font-semibold ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
                   Margem: {margemOperacional}%
                 </span>
-              ) : despesasOperacionais === 0 ? (
-                <span className="text-slate-500">Aguardando lançamento de despesas</span>
               ) : (
-                <span className="text-slate-500">Receitas - Despesas</span>
+                <span className="text-slate-500">Vendas vs Despesas totais</span>
+              )}
+              {despesasPagas > 0 && (
+                <div className="text-[10px] text-slate-500 pt-0.5">
+                  Dif. Vendas vs Pagas: R$ {(receitaBruta - despesasPagas).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </div>
               )}
             </div>
           </CardContent>
@@ -439,19 +467,19 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       </div>
 
       {/* Grid: Despesas por Categoria (Donut) + Evolução do Resultado (LineChart 2 linhas) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Left: Despesas por Categoria (Donut) */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 min-w-0 overflow-hidden">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-foreground">
               Despesas por Categoria
             </CardTitle>
           </CardHeader>
-          <CardContent className="pt-2">
+          <CardContent className="pt-2 min-w-0 overflow-hidden">
             {categoryData.length > 0 ? (
               <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="h-52 w-52 relative flex items-center justify-center shrink-0">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                     <PieChart>
                       <Pie
                         data={categoryData}
@@ -475,14 +503,14 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-2 flex-1 w-full max-h-52 overflow-y-auto">
+                <div className="space-y-2 flex-1 w-full max-h-52 overflow-y-auto min-w-0">
                   {categoryData.map((cat, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2 truncate">
+                    <div key={idx} className="flex items-center justify-between text-xs gap-2">
+                      <div className="flex items-center gap-2 truncate min-w-0 flex-1">
                         <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
                         <span className="text-slate-300 truncate">{cat.name}</span>
                       </div>
-                      <span className="text-slate-400 font-medium ml-2">{cat.value}%</span>
+                      <span className="text-slate-400 font-medium shrink-0">{cat.value}%</span>
                     </div>
                   ))}
                 </div>
@@ -497,12 +525,12 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
         </Card>
 
         {/* Right: Evolução do Resultado (Receita vs Despesas) */}
-        <Card className="bg-card/70 border-border/50">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-semibold text-foreground">
+        <Card className="bg-card/70 border-border/50 min-w-0 overflow-hidden">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+            <CardTitle className="text-sm font-semibold text-foreground truncate">
               Evolução do Resultado
             </CardTitle>
-            <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-2 sm:gap-3 text-xs shrink-0">
               <span className="flex items-center gap-1 text-emerald-400">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
                 Receita
@@ -513,10 +541,10 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
               </span>
             </div>
           </CardHeader>
-          <CardContent className="pt-2">
+          <CardContent className="pt-2 min-w-0 overflow-hidden">
             {dailyResultData.some((d) => d.receita > 0 || d.despesas > 0) ? (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="h-56 w-full min-w-0">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <LineChart data={dailyResultData}>
                     <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} interval={4} />
                     <YAxis

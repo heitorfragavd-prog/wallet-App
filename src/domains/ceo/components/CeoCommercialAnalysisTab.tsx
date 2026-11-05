@@ -320,12 +320,17 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       )}
 
       {/* 4 KPIs Cards Comerciais Conforme Referência */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* 1. Vendas Totais */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">Vendas Totais</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span>Vendas Brutas (PDV)</span>
+              <span className="text-[10px] text-sky-400 font-normal px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">
+                Eyemobile
+              </span>
+            </div>
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               R$ {vendasTotais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
             <div className="mt-2 text-xs">
@@ -342,10 +347,10 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         </Card>
 
         {/* 2. Pedidos */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground font-medium">Pedidos</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="text-xs text-muted-foreground font-medium">Pedidos Concluídos</div>
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               {pedidosTotal.toLocaleString('pt-BR')}
             </div>
             <div className="mt-2 text-xs">
@@ -355,17 +360,17 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                   {crescimentoPedidos > 0 ? `+${crescimentoPedidos}%` : `${crescimentoPedidos}%`}
                 </span>
               ) : (
-                <span className="text-slate-500">Transações PDV/KDS</span>
+                <span className="text-slate-500">Transações PDV reais</span>
               )}
             </div>
           </CardContent>
         </Card>
 
         {/* 3. Ticket Médio */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Ticket Médio</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               {ticketMedio !== null ? `R$ ${ticketMedio.toFixed(2)}` : 'Dado indisponível'}
             </div>
             <div className="mt-2 text-xs">
@@ -382,10 +387,10 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         </Card>
 
         {/* 4. Itens Vendidos */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 flex flex-col justify-between">
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground font-medium">Itens Vendidos</div>
-            <div className="text-xl md:text-2xl font-bold text-foreground mt-1">
+            <div className="text-xl sm:text-2xl font-bold text-foreground mt-1 truncate">
               {itensVendidos !== null ? (
                 <span>
                   {itensVendidos.toLocaleString('pt-BR')}
@@ -484,11 +489,11 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
       </div>
 
       {/* Grid: Vendas por Dia + Top 5 Produtos (faturamento) Conforme Painel 2 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Left: Vendas por Dia (BarChart Azul) */}
-        <Card className="bg-card/70 border-border/50">
+        <Card className="bg-card/70 border-border/50 min-w-0 overflow-hidden">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold text-foreground flex flex-wrap items-center justify-between gap-1">
               <span>Vendas por Dia</span>
               <span className="text-xs font-normal text-sky-400 flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-sky-400" />
@@ -496,10 +501,10 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               </span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-4 min-w-0 overflow-hidden">
             {dailySalesData.some((d) => d.faturamento > 0) ? (
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="h-56 sm:h-64 w-full min-w-0">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <BarChart data={dailySalesData}>
                     <XAxis dataKey="dayLabel" stroke="#64748b" fontSize={10} tickLine={false} interval={2} />
                     <YAxis
@@ -517,7 +522,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div className="h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
+              <div className="h-56 sm:h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
                 <ShoppingBag className="w-8 h-8 text-slate-600 mb-1" />
                 <span>Nenhuma venda registrada no período selecionado.</span>
               </div>
@@ -532,9 +537,9 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
         </Card>
 
         {/* Right: Top 5 Produtos (faturamento) */}
-        <Card className="bg-card/70 border-border/50 flex flex-col">
+        <Card className="bg-card/70 border-border/50 flex flex-col min-w-0 overflow-hidden">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold text-foreground flex flex-wrap items-center justify-between gap-1">
               <span>Top 5 Produtos (faturamento)</span>
               <span className="text-xs font-normal text-amber-400 flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-amber-400" />
@@ -542,20 +547,20 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
               </span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="pt-4 flex-1 flex flex-col justify-center">
+          <CardContent className="pt-4 flex-1 flex flex-col justify-center min-w-0 overflow-hidden">
             {topProducts.length > 0 ? (
               <div className="space-y-3.5">
                 {topProducts.map((p) => (
                   <div key={p.id} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-medium text-foreground truncate max-w-[200px]">
+                    <div className="flex items-center justify-between text-xs gap-2">
+                      <span className="font-medium text-foreground truncate min-w-0 flex-1">
                         {p.produto}
                       </span>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                         <span className="text-slate-300 font-semibold">
                           R$ {p.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </span>
-                        <span className="text-[11px] text-amber-400 w-12 text-right">
+                        <span className="text-[11px] text-amber-400 w-11 text-right">
                           {p.percentualFaturamento}%
                         </span>
                       </div>
@@ -571,7 +576,7 @@ export const CeoCommercialAnalysisTab: React.FC<CeoCommercialAnalysisTabProps> =
                 ))}
               </div>
             ) : (
-              <div className="h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
+              <div className="h-56 sm:h-64 flex flex-col items-center justify-center text-xs text-muted-foreground space-y-2">
                 <Package className="w-8 h-8 text-slate-600 mb-1" />
                 <span className="text-center font-medium text-slate-300">Detalhamento por produto disponível apenas para pedidos Delivery com itens registrados.</span>
                 <span className="text-[11px] text-slate-500 max-w-sm text-center">
