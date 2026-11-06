@@ -188,8 +188,10 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         return `📦 **Volume de Vendas Deste Mês (Rodo Point):**\n\n- **Total de vendas concluídas:** **${pedMes} pedidos**${crescTxt}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Faturamento acumulado:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente com deduplicação de transações do PDV Eyemobile.`;
       }
 
-      // 3. Pergunta sobre resultado operacional / lucro
+      // 3. Pergunta sobre resultado operacional / lucro líquido real
       if (
+        p.includes('lucro líquido') ||
+        p.includes('lucro liquido') ||
         p.includes('resultado operacional') ||
         p.includes('resultado') ||
         p.includes('lucro') ||
@@ -199,12 +201,36 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
         const despPagas = kpis.despesasPagas || 0;
         const despPend = kpis.despesasPendentes || 0;
+        const lucroLiq = kpis.lucroLiquidoReal;
+        const margemLiq = kpis.margemLiquidaRealPercent;
+        const statusConf = kpis.statusConfiabilidadeLucro || 'estimado';
+        const cob = kpis.coberturaCustosLucroPercent ?? kpis.coberturaCmvPercent ?? 0;
+
+        let statusBadge = '🟡 Parcial (Aguardando custos de outros produtos)';
+        if (statusConf === 'confirmado') statusBadge = '🟢 Confirmado (100% dos custos auditados por NF)';
+        else if (statusConf === 'insuficiente') statusBadge = '⚪ Dados Insuficientes';
+
+        let lucroLiqTxt = '';
+        if (lucroLiq !== null && lucroLiq !== undefined) {
+          lucroLiqTxt = `- **Lucro Líquido Real Apurado:** **R$ ${lucroLiq.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}** (${margemLiq ?? 0}% de Margem Líquida)\n` +
+            `- **Qualidade dos Dados:** ${statusBadge}\n` +
+            `- **Cobertura de Custos de Atacado:** ${cob}% do faturamento com custos de NF comprovados.\n\n`;
+        }
+
         const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
         const difVendasPagas = kpis.diferencaVendasDespesasPagas ?? (fatMes - despPagas);
         const margem = kpis.margemOperacional;
         const margemTxt = margem !== null && margem !== undefined ? `${margem}%` : 'Não calculada';
 
-        return `💼 **Demonstrativo de Resultado Preliminar (Rodo Point):**\n\n- **Vendas Brutas PDV (Mês):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas por Competência (Mês):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • Despesas Pagas no Caixa: R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • Despesas Pendentes: R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar por Competência:** **R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem: ${margemTxt})\n- **Diferença Vendas vs Despesas Pagas:** R$ ${difVendasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n> 💡 **Nota Contábil:** A diferença entre vendas e despesas pagas não representa saldo de caixa bancário final, pois depende da conciliação das entradas bancárias e taxas de adquirentes de cartão/PIX.`;
+        return `💼 **Demonstrativo de Resultado & Lucro Líquido (Rodo Point):**\n\n` +
+          lucroLiqTxt +
+          `- **Vendas Brutas PDV (Mês):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **Despesas por Competência (Mês):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `  • Despesas Pagas no Caixa: R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `  • Despesas Pendentes: R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **Resultado Preliminar por Competência:** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem: ${margemTxt})\n` +
+          `- **Diferença Vendas vs Despesas Pagas:** R$ ${difVendasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n` +
+          `> 💡 Para visualizar a cascata DRE detalhada, centros de custos e evolução mês a mês, acesse a aba **Análises → Resultado & Lucro Líquido**.`;
       }
 
       // 4. Pergunta sobre vendas/faturamento de ontem
@@ -547,8 +573,6 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     }
   };
 
-  const isPositiveMargin = kpis.despesasMes === 0 ? true : kpis.resultadoOperacional >= 0;
-
   return (
     <div className="space-y-6">
       {kpis.dadosIndisponiveis && (
@@ -688,20 +712,34 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               </div>
             </div>
 
-            {/* Card 4: Resultado Preliminar por Competência (GATE A) */}
+            {/* Card 4: Lucro Líquido Real / Resultado por Competência */}
             <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-                  <span>Resultado Preliminar</span>
-                  <span className="text-[10px] text-amber-400 font-normal px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                    Competência
+                  <span>Lucro Líquido Real</span>
+                  <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ${
+                    kpis.statusConfiabilidadeLucro === 'confirmado'
+                      ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                      : kpis.statusConfiabilidadeLucro === 'insuficiente'
+                      ? 'text-slate-400 bg-slate-500/10 border-slate-500/20'
+                      : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                  }`}>
+                    {kpis.statusConfiabilidadeLucro === 'confirmado'
+                      ? 'Confirmado (100% NF)'
+                      : kpis.statusConfiabilidadeLucro === 'insuficiente'
+                      ? 'Insuficiente'
+                      : 'Parcial (NF)'}
                   </span>
                 </div>
-                <div className={`text-xl sm:text-2xl font-bold mt-1 truncate ${isPositiveMargin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {kpis.despesasMes === 0 && !kpis.despesasTotalCompetencia ? (
+                <div className={`text-xl sm:text-2xl font-bold mt-1 truncate ${
+                  (kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional) >= 0
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
+                }`}>
+                  {kpis.despesasMes === 0 && !kpis.despesasTotalCompetencia && kpis.lucroLiquidoReal === null ? (
                     <span className="text-sm font-normal text-slate-400">Não apurado</span>
                   ) : (
-                    `R$ ${(kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                    `R$ ${(kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
                   )}
                 </div>
               </div>
@@ -711,18 +749,18 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     CMV Auditado: R$ {kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({kpis.coberturaCmvPercent}% cob.)
                   </div>
                 ) : null}
+                {kpis.margemLiquidaRealPercent !== null && kpis.margemLiquidaRealPercent !== undefined ? (
+                  <div className="text-[10px] text-slate-300">
+                    Margem Líquida Real: <span className="font-semibold">{kpis.margemLiquidaRealPercent}%</span>
+                  </div>
+                ) : null}
                 {kpis.despesasPagas > 0 ? (
                   <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
                     <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                     <span>Pend: R$ {kpis.despesasPendentes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                   </div>
                 ) : (
-                  <span className="text-slate-500">Faturamento vs Despesas de Competência</span>
-                )}
-                {kpis.diferencaVendasDespesasPagas != null && (
-                  <div className="text-[10px] text-slate-500 pt-0.5 border-t border-slate-800/60">
-                    Dif. Vendas vs Pagas: R$ {kpis.diferencaVendasDespesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                  </div>
+                  <span className="text-slate-500">DRE por Competência & NF</span>
                 )}
               </div>
             </div>
@@ -1050,6 +1088,12 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
           {/* Quick Pills Conforme a Imagem de Referência - Flex-wrap responsivo sem barra de rolagem */}
           <div className="px-3 sm:px-4 py-2 border-t border-border/30 bg-slate-950/40 flex flex-wrap items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => handleSelectPill('Qual é o lucro líquido real deste mês?')}
+              className="text-[11px] bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-700/50 transition-colors font-medium"
+            >
+              💰 Lucro líquido real
+            </button>
             <button
               onClick={() => handleSelectPill('Quais os custos de atacado e CMV confirmado?')}
               className="text-[11px] bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-700/50 transition-colors"

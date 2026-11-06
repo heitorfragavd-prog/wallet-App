@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { divipayService } from "@/domains/divipay/services/DivipayService";
+import { CeoFinancialMetricsService, RelatorioLucroLiquidoReal } from "@/domains/ceo/services/CeoFinancialMetricsService";
 import type { DREGerencial, LinhaDRE } from "@/domains/finance/types/foodCost";
 
 export const DRE_QUERY_KEY = ["dre_gerencial"] as const;
@@ -143,15 +144,32 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
   const totalImpostos = impostosSimples + pisCofinsSobreReceita + issServicos;
   const receitaLiquida = receitaBruta - totalImpostos;
 
+  let relatorioLucroCanonica: RelatorioLucroLiquidoReal | null = null;
+  if (workspaceId) {
+    try {
+      relatorioLucroCanonica = await CeoFinancialMetricsService.getRealNetProfit(workspaceId, { mes, ano });
+    } catch (e) {
+      console.warn("DRE: Falha ao obter lucro canônico:", e);
+    }
+  }
+
   const { data: fichasData } = await (workspaceId
     ? supabase.from("fichas_tecnicas").select("quantidade, custo_unitario").eq("workspace_id", workspaceId)
     : supabase.from("fichas_tecnicas").select("quantidade, custo_unitario"));
 
   let cmv: number;
-  if (fichasData && fichasData.length > 0) {
-    cmv = fichasData.reduce((acc, f) => acc + Number(f.quantidade) * Number(f.custo_unitario), 0);
+  let labelCMV = "(-) CMV — Custo de Mercadoria Vendida";
+  if (relatorioLucroCanonica && !relatorioLucroCanonica.dadosIndisponiveis && relatorioLucroCanonica.cmvReal > 0) {
+    cmv = relatorioLucroCanonica.cmvReal;
+    labelCMV = relatorioLucroCanonica.cmvComprovado > 0
+      ? "(-) CMV Real (Auditado por NF)"
+      : "(-) CMV Real (Referência de Atacado)";
+  } else if (fichasData && fichasData.length > 0) {
+    cmv = fichasData.reduce((acc: number, f: { quantidade?: number | string | null; custo_unitario?: number | string | null }) => acc + Number(f.quantidade) * Number(f.custo_unitario), 0);
+    labelCMV = "(-) CMV Real (Fichas Técnicas)";
   } else {
     cmv = receitaBruta * ALIQUOTA_CMV_ESTIMADO;
+    labelCMV = "(-) CMV Estimado (Pendente de Custos Reais)";
   }
 
   const lucroBruto = receitaLiquida - cmv;
@@ -183,7 +201,7 @@ async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<D
     { label: "(-) PIS/COFINS (3,65%)", valor: -pisCofinsSobreReceita, percentualSobreReceita: pct(pisCofinsSobreReceita), tipo: "negativo", indent: 1 },
     { label: "(-) ISS Serviços (2%)", valor: -issServicos, percentualSobreReceita: pct(issServicos), tipo: "negativo", indent: 1 },
     { label: "= Receita Líquida", valor: receitaLiquida, percentualSobreReceita: pct(receitaLiquida), tipo: "subtotal" },
-    { label: "(-) CMV — Custo de Mercadoria Vendida", valor: -cmv, percentualSobreReceita: pct(cmv), tipo: "negativo" },
+    { label: labelCMV, valor: -cmv, percentualSobreReceita: pct(cmv), tipo: "negativo" },
     { label: "= Lucro Bruto", valor: lucroBruto, percentualSobreReceita: pct(lucroBruto), tipo: "subtotal" },
     { label: "(-) Despesas Operacionais", valor: -despesasOperacionais, percentualSobreReceita: pct(despesasOperacionais), tipo: "negativo" },
     { label: "(-) Despesas com Cartão de Crédito", valor: -despesasCartao, percentualSobreReceita: pct(despesasCartao), tipo: "negativo", indent: 1 },

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DashboardLayout } from '@/shared/components/layouts/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
@@ -12,6 +13,7 @@ import {
   Crown,
   PieChart as PieChartIcon,
   ShoppingCart,
+  Coins,
 } from 'lucide-react';
 import {
   calculateEffectiveWeightedCMV,
@@ -29,6 +31,7 @@ import { GrowthExperimentCard } from '@/domains/ceo/components/GrowthExperimentC
 import { CeoOverviewTab } from '@/domains/ceo/components/CeoOverviewTab';
 import { CeoCommercialAnalysisTab } from '@/domains/ceo/components/CeoCommercialAnalysisTab';
 import { CeoExpenseAnalysisTab } from '@/domains/ceo/components/CeoExpenseAnalysisTab';
+import { CeoNetProfitAnalysisTab } from '@/domains/ceo/components/CeoNetProfitAnalysisTab';
 import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTab';
 import {
   CeoFinancialMetricsService,
@@ -48,8 +51,12 @@ export const WalletCeoPage: React.FC = () => {
   const { activeWorkspace } = useWorkspace();
   const workspaceId = activeWorkspace?.id ?? '';
 
-  const [activeMainTab, setActiveMainTab] = useState('overview');
-  const [activeAnalysisSubTab, setActiveAnalysisSubTab] = useState<'comercial' | 'despesas'>('comercial');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'overview';
+  const initialSubTab = (searchParams.get('subtab') as 'comercial' | 'despesas' | 'lucro') || 'comercial';
+
+  const [activeMainTab, setActiveMainTab] = useState(initialTab);
+  const [activeAnalysisSubTab, setActiveAnalysisSubTab] = useState<'comercial' | 'despesas' | 'lucro'>(initialSubTab);
 
   // KPIs executivos consolidados para a Visão Geral
   const [executiveKpis, setExecutiveKpis] = useState<CeoExecutiveKpis>(() =>
@@ -369,7 +376,19 @@ export const WalletCeoPage: React.FC = () => {
           {/* ABA 2: Análises (Painéis 2 e 3) */}
           <TabsContent value="analyses" className="space-y-6 focus-visible:outline-none">
             {/* Sub-navegação entre Comercial (Painel 2) e Despesas (Painel 3) - Grid 2 colunas no celular */}
-            <div className="grid grid-cols-2 sm:flex sm:flex-row w-full sm:w-auto gap-1.5 bg-muted/30 p-1.5 rounded-xl border border-border/40">
+            <div className="grid grid-cols-1 sm:grid-cols-3 sm:flex sm:flex-row w-full sm:w-auto gap-1.5 bg-muted/30 p-1.5 rounded-xl border border-border/40">
+              <button
+                type="button"
+                onClick={() => setActiveAnalysisSubTab('lucro')}
+                className={`h-11 sm:h-9 px-3 py-2 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
+                  activeAnalysisSubTab === 'lucro'
+                    ? 'bg-orange-500 text-white shadow-sm font-bold'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
+              >
+                <Coins className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span className="truncate">Resultado & Lucro Líquido</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setActiveAnalysisSubTab('comercial')}
@@ -396,6 +415,9 @@ export const WalletCeoPage: React.FC = () => {
               </button>
             </div>
 
+            <div className={activeAnalysisSubTab === 'lucro' ? 'block' : 'hidden'}>
+              <CeoNetProfitAnalysisTab workspaceId={workspaceId} />
+            </div>
             <div className={activeAnalysisSubTab === 'comercial' ? 'block' : 'hidden'}>
               <CeoCommercialAnalysisTab workspaceId={workspaceId} />
             </div>
