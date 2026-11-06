@@ -259,6 +259,7 @@ export interface MesEvolucaoLucro {
   margemLiquidaPercent: number | null;
   statusConfiabilidade: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes';
   coberturaCustosPercent: number;
+  semMovimentacao?: boolean;
 }
 
 export interface LancamentoResultadoItem {
@@ -297,6 +298,7 @@ export interface RelatorioLucroLiquidoReal {
   produtosComCustoQtd: number;
   produtosTotalQtd: number;
   produtosVendidosSemCusto: { codigo: string; nome: string; quantidade: number; faturamento: number }[];
+  faturamentoVendasSemCusto: number;
   // Lucro Bruto
   lucroBruto: number;
   lucroBrutoComprovado: number;
@@ -333,6 +335,7 @@ export interface RelatorioLucroLiquidoReal {
     variacaoValor: number;
     variacaoPercent: number | null;
     tendencia: 'crescimento' | 'reducao' | 'estavel';
+    mesAnteriorSemMovimentacao?: boolean;
   };
   // Evolução Histórica (últimos 3, 6 e 12 meses)
   evolucaoMensal: MesEvolucaoLucro[];
@@ -382,33 +385,60 @@ export function classificarNaturezaResultado(
   categoria: string,
   descricao: string
 ): 'operacional' | 'financeira' | 'tributo_resultado' | 'compra_estoque' | 'retirada_socios' | 'amortizacao_emprestimo' {
-  const texto = `${categoria} ${descricao}`.toLowerCase();
+  const cat = (categoria || '').toLowerCase().trim();
+  const desc = (descricao || '').toLowerCase().trim();
+  const texto = `${cat} ${desc}`;
 
-  // 1. Compra de estoque para revenda (o custo entra via CMV na venda efetiva, evitando duplicidade contábil)
-  if (/estoque|mercadorias?|fornecedor|compra.*bebida|bebidas?.*atacado|fardo|caixa\s*de\s*bebida/i.test(texto)) {
-    return 'compra_estoque';
-  }
-
-  // 2. Retirada de sócios e distribuição de lucros (destinação de patrimônio líquido, não despesa)
-  if (/distribui[cç][aã]o\s*(de\s*)?lucros?|dividendos?|retirada.*s[oó]cio|s[oó]cio.*retirada|adiantamento.*s[oó]cio|pr[oó]-?labore.*s[oó]cio/i.test(texto)) {
+  // 1. Distribuição de Lucros / Dividendos / Antecipação aos Sócios
+  // Destinação patrimonial de lucros apurados, NÃO despesa operacional do negócio.
+  // IMPORTANTE: Pró-labore NÃO é distribuição de lucro; pró-labore remunera o trabalho do sócio e é despesa operacional.
+  if (
+    /distribui[cç][aã]o\s*(de\s*)?lucros?|dividendos?|retirada\s*(de\s*)?lucros?|antecipa[cç][aã]o\s*(de\s*)?lucros?/i.test(texto) ||
+    /retirada\s*patrimonial/i.test(texto)
+  ) {
     return 'retirada_socios';
   }
 
-  // 3. Amortização de principal de empréstimo (reduz passivo/caixa; apenas juros afetam o resultado)
-  if (/amortiza[cç][aã]o\s*(de\s*)?empr[eé]stimo|pagamento\s*de\s*empr[eé]stimo\s*\(?principal\)?/i.test(texto)) {
+  // 2. Pró-labore e Remuneração de Sócios / Pessoal
+  // É despesa operacional legítima de pessoal (remuneração pelo trabalho dos sócios/administradores).
+  if (/pr[oó]-?labore/i.test(texto)) {
+    return 'operacional';
+  }
+
+  // 3. Amortização de principal de empréstimo (reduz passivo financeiro; juros e encargos entram em despesa financeira)
+  if (/amortiza[cç][aã]o\s*(de\s*)?empr[eé]stimo|pagamento\s*de\s*empr[eé]stimo\s*\(?principal\)?|principal\s*de\s*financiamento/i.test(texto)) {
     return 'amortizacao_emprestimo';
   }
 
-  // 4. Despesas financeiras
-  if (/tarifa\s*banc[aá]ria|taxa\s*banc[aá]ria|juros\s*(banc[aá]rios?|empr[eé]stimo)|encargo\s*financeiro|iof/i.test(texto)) {
+  // 4. Despesas financeiras (taxas de maquineta de cartão/adquirência, tarifas bancárias, juros de empréstimo, IOF)
+  if (
+    /tarifa\s*banc[aá]ria|taxa\s*banc[aá]ria|juros|encargo\s*financeiro|iof|manuten[cç][aã]o\s*de\s*conta/i.test(texto) ||
+    /taxa\s*(de\s*)?(maquininha|cart[aã]o|cr[eé]dito|d[eé]bito|stone|rede|cielo|pagseguro|divipay|adquirente)/i.test(texto)
+  ) {
     return 'financeira';
   }
 
-  // 5. Tributos sobre o resultado
+  // 5. Tributos sobre o resultado (IRPJ e CSLL)
   if (/irpj|csll|imposto\s*de\s*renda\s*pessoa\s*jur[ií]dica|contribui[cç][aã]o\s*social\s*sobre\s*(o\s*)?lucro/i.test(texto)) {
     return 'tributo_resultado';
   }
 
+  // 6. Compras de Estoque para Revenda
+  // O custo entra via CMV no momento da venda, evitando duplicidade contábil.
+  // Regra Estrita: NÃO classificar qualquer "fornecedor" como compra de estoque.
+  // Apenas categorias ou descrições explícitas de mercadorias/bebidas/insumos para revenda ou atacadistas de bebidas/alimentos confirmados.
+  const isCategoriaEstoque = /estoque|mercadorias?\s*(para\s*revenda)?|insumos?\s*(para\s*revenda)?|bebidas?\s*(para\s*revenda)?|alimentos?\s*(para\s*revenda)?/i.test(cat);
+  const isFornecedorBebidaAtacado = /spal\s*ind|ambev|brasnorte|coca-?cola\s*femsa|fardo|engradado|caixa\s*de\s*bebida/i.test(desc);
+  const isDescricaoMercadoriaEstoque = /(compra|aquisi[cç][aã]o)\s*(de\s*)?(mercadorias?|estoque|bebidas?|refrigerantes?|cervejas?)/i.test(desc);
+
+  // Excluir expressamente serviços e despesas operacionais que contenham a palavra fornecedor
+  const isServicoOuOperacional = /servi[cç]o|software|sistema|\bti\b|internet|energia|aluguel|limpeza|contab|honor[aá]rio|consultoria|manuten[cç]/i.test(texto);
+
+  if ((isCategoriaEstoque || isFornecedorBebidaAtacado || isDescricaoMercadoriaEstoque) && !isServicoOuOperacional) {
+    return 'compra_estoque';
+  }
+
+  // 7. Despesa Operacional legítima
   return 'operacional';
 }
 
@@ -1698,6 +1728,7 @@ export class CeoFinancialMetricsService {
       ano?: number;
       startDate?: string;
       endDate?: string;
+      historicoMeses?: 3 | 6 | 12;
     }
   ): Promise<RelatorioLucroLiquidoReal> {
     const mesesNomes = [
@@ -1722,6 +1753,7 @@ export class CeoFinancialMetricsService {
         produtosComCustoQtd: 0,
         produtosTotalQtd: 0,
         produtosVendidosSemCusto: [],
+        faturamentoVendasSemCusto: 0,
         lucroBruto: 0,
         lucroBrutoComprovado: 0,
         margemBrutaPercent: null,
@@ -2019,28 +2051,42 @@ export class CeoFinancialMetricsService {
       const lucroLiquido = Math.round((resultadoOperacional - despesasFinanceiras - tributosSobreResultado) * 100) / 100;
       const margemLiquidaPercent = receitaLiquida > 0 ? Math.round((lucroLiquido / receitaLiquida) * 1000) / 10 : null;
 
-      // 7. Qualidade dos Dados e Confiabilidade
+      // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica
+      const faturamentoVendasSemCusto = Math.round(
+        produtosVendidosSemCusto.reduce((acc, p) => acc + Number(p.faturamento || 0), 0) * 100
+      ) / 100;
+
       let statusConfiabilidade: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes' = 'dados_insuficientes';
       let motivoConfiabilidade = '';
 
       if (faturamentoBruto === 0 && despesasOperacionais === 0) {
         statusConfiabilidade = 'dados_insuficientes';
         motivoConfiabilidade = 'Sem movimentação financeira no período selecionado.';
-      } else if (coberturaCustosPercent >= 90) {
+      } else if (coberturaCustosPercent >= 95 && produtosVendidosSemCusto.length === 0) {
         statusConfiabilidade = 'confirmado';
-        motivoConfiabilidade = 'Resultado apurado com alta cobertura de custos de atacado e despesas operacionais conciliadas.';
-      } else if (coberturaCustosPercent > 0) {
+        motivoConfiabilidade = 'Resultado apurado com custos de aquisição integralmente auditados por notas fiscais e despesas operacionais conciliadas.';
+      } else if (coberturaCustosPercent > 0 || relatorioComercial.produtosComCustoQtd > 0) {
         statusConfiabilidade = 'parcial';
-        motivoConfiabilidade = `Resultado parcial: ${relatorioComercial.produtosComCustoQtd} produtos com custos confirmados cobrindo ${coberturaCustosPercent}% do faturamento. ${produtosVendidosSemCusto.length} produtos vendidos ainda aguardam cadastramento de custos de aquisição.`;
+        motivoConfiabilidade = `Resultado parcial: ${relatorioComercial.produtosComCustoQtd} produtos com custos comprovados por NF cobrindo ${coberturaCustosPercent}% do faturamento. ${produtosVendidosSemCusto.length} produtos vendidos (${faturamentoVendasSemCusto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) ainda aguardam cadastramento de custos de aquisição.`;
       } else {
         statusConfiabilidade = 'estimado';
-        motivoConfiabilidade = 'Custos de aquisição ainda não cadastrados para as vendas deste período. Resultado sem dedução de CMV.';
+        motivoConfiabilidade = 'Custos de aquisição ainda não cadastrados para as vendas deste período. Resultado preliminar sem dedução de CMV.';
       }
 
-      // 8. Comparativo com o Mês Anterior
+      // 8. Comparativo com o Mês Anterior (Metodologia Canônica Simétrica com CMV Real)
       let faturamentoMesAnt = 0;
+      let deducoesMesAnt = 0;
+      let receitaLiquidaMesAnt = 0;
+      let cmvRealMesAnt = 0;
+      let lucroBrutoMesAnt = 0;
       let despesasMesAnt = 0;
+      let despesasFinanceirasMesAnt = 0;
+      let tributosMesAnt = 0;
+      let resultadoOperacionalMesAnt = 0;
       let lucroLiquidoMesAnt = 0;
+      let statusConfiabilidadeMesAnt: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes' = 'dados_insuficientes';
+      let coberturaCustosMesAnt = 0;
+      let mesAnteriorSemMovimentacao = false;
 
       const mesAntNum = mes === 1 ? 12 : mes - 1;
       const anoAntNum = mes === 1 ? ano - 1 : ano;
@@ -2050,7 +2096,7 @@ export class CeoFinancialMetricsService {
       const endAnt = `${anoAntNum}-${mesAntPad}-${String(ultimoDiaMesAnt).padStart(2, '0')}`;
 
       try {
-        const [antTxRaw, antDespRows, antTxDespRows] = await Promise.all([
+        const [antTxRaw, antDespRows, antTxDespRows, relatorioComercialAnt] = await Promise.all([
           this.fetchAllPaginated<TransacaoReceitaItem>((from, to) =>
             supabase
               .from('transacoes')
@@ -2080,10 +2126,30 @@ export class CeoFinancialMetricsService {
               .lte('data', `${endAnt}T23:59:59.999Z`)
               .range(from, to)
           ),
+          this.getCommercialProfitability(workspaceId, { startDate: startAnt, endDate: endAnt }),
         ]);
 
         const antTx = deduplicateRevenues(antTxRaw);
-        faturamentoMesAnt = antTx.reduce((sum, t) => sum + (Number(t.valor) > 0 ? Number(t.valor) : 0), 0);
+        for (const t of antTx) {
+          const val = Number(t.valor || 0);
+          if (val < 0) {
+            deducoesMesAnt += Math.abs(val);
+          } else {
+            faturamentoMesAnt += val;
+          }
+        }
+
+        if (faturamentoMesAnt === 0 && relatorioComercialAnt.receitaTotal > 0) {
+          faturamentoMesAnt = relatorioComercialAnt.receitaTotal;
+        }
+
+        faturamentoMesAnt = Math.round(faturamentoMesAnt * 100) / 100;
+        deducoesMesAnt = Math.round(deducoesMesAnt * 100) / 100;
+        receitaLiquidaMesAnt = Math.round(Math.max(0, faturamentoMesAnt - deducoesMesAnt) * 100) / 100;
+
+        cmvRealMesAnt = relatorioComercialAnt.cmvTotal;
+        coberturaCustosMesAnt = relatorioComercialAnt.coberturaReceitaPercent;
+        lucroBrutoMesAnt = Math.round((receitaLiquidaMesAnt - cmvRealMesAnt) * 100) / 100;
 
         const antConsolidado = FinancialConsolidationService.consolidate({
           workspaceId,
@@ -2092,31 +2158,53 @@ export class CeoFinancialMetricsService {
           options: { startDate: startAnt, endDate: endAnt, ignoreInternalTransfers: true, ignoreCreditCardInvoicePayments: true },
         });
 
-        despesasMesAnt = antConsolidado.itensConsolidados.reduce((sum, i) => {
+        for (const i of antConsolidado.itensConsolidados) {
+          const val = Number(i.valor || 0);
           const nat = classificarNaturezaResultado(i.categoriaNome || '', i.descricao || '');
-          return nat === 'operacional' ? sum + Number(i.valor || 0) : sum;
-        }, 0);
+          if (nat === 'operacional') {
+            despesasMesAnt += val;
+          } else if (nat === 'financeira') {
+            despesasFinanceirasMesAnt += val;
+          } else if (nat === 'tributo_resultado') {
+            tributosMesAnt += val;
+          }
+        }
 
-        faturamentoMesAnt = Math.round(faturamentoMesAnt * 100) / 100;
         despesasMesAnt = Math.round(despesasMesAnt * 100) / 100;
+        resultadoOperacionalMesAnt = Math.round((lucroBrutoMesAnt - despesasMesAnt) * 100) / 100;
+        lucroLiquidoMesAnt = Math.round((resultadoOperacionalMesAnt - despesasFinanceirasMesAnt - tributosMesAnt) * 100) / 100;
 
-        // Estimativa do resultado do mês anterior
-        lucroLiquidoMesAnt = Math.round((faturamentoMesAnt - despesasMesAnt) * 100) / 100;
+        if (faturamentoMesAnt === 0 && despesasMesAnt === 0) {
+          mesAnteriorSemMovimentacao = true;
+          statusConfiabilidadeMesAnt = 'dados_insuficientes';
+        } else if (coberturaCustosMesAnt >= 95) {
+          statusConfiabilidadeMesAnt = 'confirmado';
+        } else if (coberturaCustosMesAnt > 0) {
+          statusConfiabilidadeMesAnt = 'parcial';
+        } else {
+          statusConfiabilidadeMesAnt = 'estimado';
+        }
       } catch (errAnt) {
         console.warn('[CeoFinancialMetricsService] Aviso ao apurar comparativo do mês anterior:', errAnt);
       }
 
-      const variacaoValor = Math.round((lucroLiquido - lucroLiquidoMesAnt) * 100) / 100;
-      const variacaoPercent =
-        lucroLiquidoMesAnt !== 0
-          ? Math.round(((lucroLiquido - lucroLiquidoMesAnt) / Math.abs(lucroLiquidoMesAnt)) * 1000) / 10
-          : null;
-      const tendencia: 'crescimento' | 'reducao' | 'estavel' =
-        variacaoValor > 0 ? 'crescimento' : variacaoValor < 0 ? 'reducao' : 'estavel';
+      let variacaoValor = 0;
+      let variacaoPercent: number | null = null;
+      let tendencia: 'crescimento' | 'reducao' | 'estavel' = 'estavel';
 
-      // 9. Evolução Histórica (últimos 6 meses)
+      if (!mesAnteriorSemMovimentacao && (faturamentoMesAnt > 0 || despesasMesAnt > 0)) {
+        variacaoValor = Math.round((lucroLiquido - lucroLiquidoMesAnt) * 100) / 100;
+        variacaoPercent =
+          lucroLiquidoMesAnt !== 0
+            ? Math.round(((lucroLiquido - lucroLiquidoMesAnt) / Math.abs(lucroLiquidoMesAnt)) * 1000) / 10
+            : null;
+        tendencia = variacaoValor > 0 ? 'crescimento' : variacaoValor < 0 ? 'reducao' : 'estavel';
+      }
+
+      // 9. Evolução Histórica (3, 6 ou 12 meses)
+      const historicoMeses = options?.historicoMeses ?? 6;
       const evolucaoMensal: MesEvolucaoLucro[] = [];
-      for (let i = 5; i >= 0; i--) {
+      for (let i = historicoMeses - 1; i >= 0; i--) {
         const d = new Date(ano, mes - 1 - i, 1);
         const loopMes = d.getMonth() + 1;
         const loopAno = d.getFullYear();
@@ -2137,28 +2225,28 @@ export class CeoFinancialMetricsService {
             margemLiquidaPercent,
             statusConfiabilidade,
             coberturaCustosPercent,
+            semMovimentacao: faturamentoBruto === 0 && despesasOperacionais === 0,
           });
         } else if (loopMes === mesAntNum && loopAno === anoAntNum) {
-          const recLiqAnt = faturamentoMesAnt;
-          const lbAnt = recLiqAnt;
-          const llAnt = lucroLiquidoMesAnt;
-          const mgAnt = recLiqAnt > 0 ? Math.round((llAnt / recLiqAnt) * 1000) / 10 : null;
+          const mgAnt = receitaLiquidaMesAnt > 0 ? Math.round((lucroLiquidoMesAnt / receitaLiquidaMesAnt) * 1000) / 10 : null;
           evolucaoMensal.push({
             periodo: loopPeriodo,
             mes: loopMes,
             ano: loopAno,
             faturamentoBruto: faturamentoMesAnt,
-            receitaLiquida: recLiqAnt,
-            cmvReal: 0,
-            lucroBruto: lbAnt,
+            receitaLiquida: receitaLiquidaMesAnt,
+            cmvReal: cmvRealMesAnt,
+            lucroBruto: lucroBrutoMesAnt,
             despesasOperacionais: despesasMesAnt,
-            resultadoOperacional: llAnt,
-            lucroLiquido: llAnt,
+            resultadoOperacional: resultadoOperacionalMesAnt,
+            lucroLiquido: lucroLiquidoMesAnt,
             margemLiquidaPercent: mgAnt,
-            statusConfiabilidade: 'estimado',
-            coberturaCustosPercent: 0,
+            statusConfiabilidade: statusConfiabilidadeMesAnt,
+            coberturaCustosPercent: coberturaCustosMesAnt,
+            semMovimentacao: mesAnteriorSemMovimentacao,
           });
         } else {
+          // Meses históricos adicionais não consultados individualmente
           evolucaoMensal.push({
             periodo: loopPeriodo,
             mes: loopMes,
@@ -2173,6 +2261,7 @@ export class CeoFinancialMetricsService {
             margemLiquidaPercent: null,
             statusConfiabilidade: 'dados_insuficientes',
             coberturaCustosPercent: 0,
+            semMovimentacao: true,
           });
         }
       }
@@ -2260,6 +2349,7 @@ export class CeoFinancialMetricsService {
         produtosComCustoQtd: relatorioComercial.produtosComCustoQtd,
         produtosTotalQtd: relatorioComercial.produtosTotalQtd,
         produtosVendidosSemCusto,
+        faturamentoVendasSemCusto,
         lucroBruto,
         lucroBrutoComprovado,
         margemBrutaPercent,
@@ -2288,6 +2378,7 @@ export class CeoFinancialMetricsService {
           variacaoValor,
           variacaoPercent,
           tendencia,
+          mesAnteriorSemMovimentacao,
         },
         evolucaoMensal,
         fatoresExplicativos,
