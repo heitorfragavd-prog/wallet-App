@@ -301,5 +301,133 @@ describe('CeoNetProfit — Auditoria Canônica do Lucro Líquido Real (Hotfix 6)
       expect(relatorio.comparativoMesAnterior.variacaoPercent).toBeNull();
       expect(relatorio.comparativoMesAnterior.tendencia).toBe('estavel');
     });
+
+    it('GATE 2: exige comprovação tributária e quitação operacional para classificar lucro como definitivo', async () => {
+      // Cenário com 100% de cobertura de CMV, mas tributos pendentes de escrituração
+      setupMockDatabase({
+        produtos_eyemobile: [
+          {
+            workspace_id: testWorkspaceId,
+            codigo: '2032242',
+            descricao: 'Coca ks',
+            custo_atual: 1.7017,
+            preco_venda: 7.00,
+          },
+        ],
+        historico_custo_produto: [
+          {
+            workspace_id: testWorkspaceId,
+            produto_codigo: '2032242',
+            custo_unitario: 1.7017,
+            data_compra: '2026-08-21',
+            fornecedor: 'SPAL Bebidas',
+          },
+        ],
+        transacoes: [
+          {
+            id: 't-1',
+            workspace_id: testWorkspaceId,
+            tipo: 'receita',
+            valor: 70.0,
+            data: '2026-11-04T15:30:00Z',
+            itens: [
+              { id: '2032242', product_name: 'Coca ks', quantity: 10, total: 70.0 },
+            ],
+          },
+        ],
+        despesas: [
+          {
+            id: 'd-1',
+            workspace_id: testWorkspaceId,
+            valor: 20.0,
+            data: '2026-11-04',
+            descricao: 'Limpeza e conservação',
+            categoria_id: 'cat-serv',
+            categorias: { nome: 'Serviços' },
+            status: 'pago',
+          },
+        ],
+      });
+
+      const relatorioPendente = await CeoFinancialMetricsService.getRealNetProfit(testWorkspaceId, {
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        mes: 11,
+        ano: 2026,
+      });
+
+      // Sem tributos sobre o resultado registrados, não pode ser classificado como definitivo
+      expect(relatorioPendente.tributosStatus).toBe('pendente_escrituracao');
+      expect(relatorioPendente.statusConfiabilidade).toBe('parcial');
+      expect(relatorioPendente.lucroLiquidoDefinitivo).toBeNull();
+      expect(relatorioPendente.resultadoPreliminarCustosConhecidos).toBeCloseTo(32.98, 2); // 52.98 - 20.0
+
+      // Agora adicionando apuração tributária real quitada
+      setupMockDatabase({
+        produtos_eyemobile: [
+          {
+            workspace_id: testWorkspaceId,
+            codigo: '2032242',
+            descricao: 'Coca ks',
+            custo_atual: 1.7017,
+            preco_venda: 7.00,
+          },
+        ],
+        historico_custo_produto: [
+          {
+            workspace_id: testWorkspaceId,
+            produto_codigo: '2032242',
+            custo_unitario: 1.7017,
+            data_compra: '2026-08-21',
+            fornecedor: 'SPAL Bebidas',
+          },
+        ],
+        transacoes: [
+          {
+            id: 't-1',
+            workspace_id: testWorkspaceId,
+            tipo: 'receita',
+            valor: 70.0,
+            data: '2026-11-04T15:30:00Z',
+            itens: [
+              { id: '2032242', product_name: 'Coca ks', quantity: 10, total: 70.0 },
+            ],
+          },
+        ],
+        despesas: [
+          {
+            id: 'd-1',
+            workspace_id: testWorkspaceId,
+            valor: 20.0,
+            data: '2026-11-04',
+            descricao: 'Limpeza e conservação',
+            categoria_id: 'cat-serv',
+            categorias: { nome: 'Serviços' },
+            status: 'pago',
+          },
+          {
+            id: 'd-trib-1',
+            workspace_id: testWorkspaceId,
+            valor: 5.0,
+            data: '2026-11-04',
+            descricao: 'DAS Simples Nacional apurado',
+            categoria_id: 'cat-trib',
+            categorias: { nome: 'Tributos' },
+            status: 'pago',
+          },
+        ],
+      });
+
+      const relatorioConfirmado = await CeoFinancialMetricsService.getRealNetProfit(testWorkspaceId, {
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        mes: 11,
+        ano: 2026,
+      });
+
+      expect(relatorioConfirmado.tributosStatus).toBe('apurado');
+      expect(relatorioConfirmado.statusConfiabilidade).toBe('confirmado');
+      expect(relatorioConfirmado.lucroLiquidoDefinitivo).toBeCloseTo(27.98, 2); // 32.98 - 5.0
+    });
   });
 });

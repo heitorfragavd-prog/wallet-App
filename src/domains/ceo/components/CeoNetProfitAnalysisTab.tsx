@@ -202,11 +202,16 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold uppercase tracking-wider">
-                  Qualidade dos Dados: {relatorio.statusConfiabilidade === 'confirmado' ? 'Confirmado' : relatorio.statusConfiabilidade === 'parcial' ? 'Resultado Parcial' : 'Estimado'}
+                  Qualidade dos Dados: {relatorio.statusConfiabilidade === 'confirmado' ? 'Lucro Líquido Definitivo' : relatorio.statusConfiabilidade === 'parcial' ? 'Resultado Preliminar com Custos Conhecidos' : 'Resultado Estimado'}
                 </span>
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-current font-semibold">
                   {relatorio.coberturaCustosPercent}% de cobertura de CMV
                 </Badge>
+                {relatorio.tributosStatus === 'pendente_escrituracao' && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-400 text-amber-400 font-semibold">
+                    Tributos pendentes de escrituração
+                  </Badge>
+                )}
               </div>
               <p className="text-xs text-foreground/80 mt-1 leading-relaxed">
                 {relatorio.motivoConfiabilidade}
@@ -430,7 +435,16 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
 
                 {/* 5. Lucro Bruto */}
                 <tr className="bg-muted/40 font-bold border-y border-border/40">
-                  <td className="px-4 sm:px-6 py-2.5 text-foreground">(=) LUCRO BRUTO COMERCIAL</td>
+                  <td className="px-4 sm:px-6 py-2.5 text-foreground">
+                    <div className="flex flex-col">
+                      <span>(=) LUCRO BRUTO COMERCIAL</span>
+                      {relatorio && relatorio.faturamentoVendasSemCusto > 0 && (
+                        <span className="text-[11px] font-normal text-amber-400">
+                          Comprovado por NF: {formatCurrency(relatorio.lucroBrutoComprovado)} | Faturamento sem custo cadastrado: {formatCurrency(relatorio.faturamentoVendasSemCusto)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 sm:px-6 py-2.5 text-right font-mono text-emerald-400">
                     {formatCurrency(relatorio?.lucroBruto ?? 0)}
                   </td>
@@ -476,7 +490,14 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
 
                 {/* 9. Tributos sobre o Resultado */}
                 <tr className="hover:bg-muted/30 text-muted-foreground">
-                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10">(-) Tributos e Encargos sobre o Resultado</td>
+                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>(-) Tributos sobre o Resultado / DAS Simples Nacional</span>
+                      {(!relatorio?.tributosSobreResultado || relatorio.tributosSobreResultado === 0) && (
+                        <span className="text-[10px] text-amber-400 font-semibold">(Pendente de escrituração fiscal)</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 sm:px-6 py-2.5 text-right font-mono text-rose-400">
                     {relatorio?.tributosSobreResultado ? `(${formatCurrency(relatorio.tributosSobreResultado)})` : 'R$ 0,00'}
                   </td>
