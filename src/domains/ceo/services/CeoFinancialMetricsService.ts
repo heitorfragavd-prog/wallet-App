@@ -302,6 +302,9 @@ export interface RelatorioLucroLiquidoReal {
   // Lucro Bruto
   lucroBruto: number;
   lucroBrutoComprovado: number;
+  receitaComCustoConhecido: number;
+  receitaComCustoPendente: number;
+  resultadoPreliminarCustosConhecidos: number;
   margemBrutaPercent: number | null;
   // Despesas Operacionais
   despesasOperacionais: number;
@@ -321,8 +324,11 @@ export interface RelatorioLucroLiquidoReal {
   // Ajustes Financeiros e Tributários
   despesasFinanceiras: number; // juros/tarifas
   tributosSobreResultado: number; // impostos sobre lucro
+  tributosComprovados: boolean;
+  tributosStatus: 'apurado' | 'pendente_escrituracao';
   // Lucro Líquido
   lucroLiquido: number;
+  lucroLiquidoDefinitivo: number | null;
   margemLiquidaPercent: number | null;
   // Confiabilidade
   statusConfiabilidade: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes';
@@ -418,8 +424,8 @@ export function classificarNaturezaResultado(
     return 'financeira';
   }
 
-  // 5. Tributos sobre o resultado (IRPJ e CSLL)
-  if (/irpj|csll|imposto\s*de\s*renda\s*pessoa\s*jur[ií]dica|contribui[cç][aã]o\s*social\s*sobre\s*(o\s*)?lucro/i.test(texto)) {
+  // 5. Tributos sobre o resultado e Simples Nacional (IRPJ, CSLL, DAS Simples Nacional)
+  if (/irpj|csll|imposto\s*de\s*renda\s*pessoa\s*jur[ií]dica|contribui[cç][aã]o\s*social\s*sobre\s*(o\s*)?lucro|\bdas\b|simples\s*nacional/i.test(texto)) {
     return 'tributo_resultado';
   }
 
@@ -1756,6 +1762,9 @@ export class CeoFinancialMetricsService {
         faturamentoVendasSemCusto: 0,
         lucroBruto: 0,
         lucroBrutoComprovado: 0,
+        receitaComCustoConhecido: 0,
+        receitaComCustoPendente: 0,
+        resultadoPreliminarCustosConhecidos: 0,
         margemBrutaPercent: null,
         despesasOperacionais: 0,
         despesasOperacionaisPagas: 0,
@@ -1771,7 +1780,10 @@ export class CeoFinancialMetricsService {
         margemOperacionalPercent: null,
         despesasFinanceiras: 0,
         tributosSobreResultado: 0,
+        tributosComprovados: false,
+        tributosStatus: 'pendente_escrituracao',
         lucroLiquido: 0,
+        lucroLiquidoDefinitivo: null,
         margemLiquidaPercent: null,
         statusConfiabilidade: 'dados_insuficientes',
         motivoConfiabilidade: 'Workspace não informado.',
@@ -2051,23 +2063,37 @@ export class CeoFinancialMetricsService {
       const lucroLiquido = Math.round((resultadoOperacional - despesasFinanceiras - tributosSobreResultado) * 100) / 100;
       const margemLiquidaPercent = receitaLiquida > 0 ? Math.round((lucroLiquido / receitaLiquida) * 1000) / 10 : null;
 
-      // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica
+      // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica (GATE 2)
       const faturamentoVendasSemCusto = Math.round(
         produtosVendidosSemCusto.reduce((acc, p) => acc + Number(p.faturamento || 0), 0) * 100
       ) / 100;
+      const receitaComCustoConhecido = relatorioComercial.receitaComprovada;
+      const receitaComCustoPendente = faturamentoVendasSemCusto;
+      const resultadoPreliminarCustosConhecidos = Math.round((lucroBrutoComprovado - despesasOperacionais) * 100) / 100;
+
+      // Tributos comprovados vs pendentes de escrituração:
+      const tributosApurados = tributosSobreResultado > 0 || deducoesVendas > 0;
+      const tributosStatus: 'apurado' | 'pendente_escrituracao' = tributosApurados ? 'apurado' : 'pendente_escrituracao';
 
       let statusConfiabilidade: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes' = 'dados_insuficientes';
       let motivoConfiabilidade = '';
+      let lucroLiquidoDefinitivo: number | null = null;
 
       if (faturamentoBruto === 0 && despesasOperacionais === 0) {
         statusConfiabilidade = 'dados_insuficientes';
         motivoConfiabilidade = 'Sem movimentação financeira no período selecionado.';
-      } else if (coberturaCustosPercent >= 95 && produtosVendidosSemCusto.length === 0) {
+      } else if (
+        coberturaCustosPercent >= 95 &&
+        produtosVendidosSemCusto.length === 0 &&
+        tributosApurados &&
+        despesasOperacionaisPendentes === 0
+      ) {
         statusConfiabilidade = 'confirmado';
-        motivoConfiabilidade = 'Resultado apurado com custos de aquisição integralmente auditados por notas fiscais e despesas operacionais conciliadas.';
+        lucroLiquidoDefinitivo = lucroLiquido;
+        motivoConfiabilidade = 'Lucro líquido definitivo: custos de aquisição integralmente auditados por notas fiscais, despesas operacionais conciliadas e tributos apurados.';
       } else if (coberturaCustosPercent > 0 || relatorioComercial.produtosComCustoQtd > 0) {
         statusConfiabilidade = 'parcial';
-        motivoConfiabilidade = `Resultado parcial: ${relatorioComercial.produtosComCustoQtd} produtos com custos comprovados por NF cobrindo ${coberturaCustosPercent}% do faturamento. ${produtosVendidosSemCusto.length} produtos vendidos (${faturamentoVendasSemCusto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) ainda aguardam cadastramento de custos de aquisição.`;
+        motivoConfiabilidade = `Resultado preliminar: ${relatorioComercial.produtosComCustoQtd} produtos com custos comprovados por NF cobrindo ${coberturaCustosPercent}% do faturamento. ${produtosVendidosSemCusto.length} produtos vendidos (${faturamentoVendasSemCusto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) aguardam cadastramento de custos e apuração tributária (pendente de escrituração fiscal).`;
       } else {
         statusConfiabilidade = 'estimado';
         motivoConfiabilidade = 'Custos de aquisição ainda não cadastrados para as vendas deste período. Resultado preliminar sem dedução de CMV.';
@@ -2352,6 +2378,9 @@ export class CeoFinancialMetricsService {
         faturamentoVendasSemCusto,
         lucroBruto,
         lucroBrutoComprovado,
+        receitaComCustoConhecido,
+        receitaComCustoPendente,
+        resultadoPreliminarCustosConhecidos,
         margemBrutaPercent,
         despesasOperacionais,
         despesasOperacionaisPagas,
@@ -2367,7 +2396,10 @@ export class CeoFinancialMetricsService {
         margemOperacionalPercent,
         despesasFinanceiras,
         tributosSobreResultado,
+        tributosComprovados: tributosApurados,
+        tributosStatus,
         lucroLiquido,
+        lucroLiquidoDefinitivo,
         margemLiquidaPercent,
         statusConfiabilidade,
         motivoConfiabilidade,
@@ -2404,6 +2436,9 @@ export class CeoFinancialMetricsService {
         produtosVendidosSemCusto: [],
         lucroBruto: 0,
         lucroBrutoComprovado: 0,
+        receitaComCustoConhecido: 0,
+        receitaComCustoPendente: 0,
+        resultadoPreliminarCustosConhecidos: 0,
         margemBrutaPercent: null,
         despesasOperacionais: 0,
         despesasOperacionaisPagas: 0,
@@ -2419,7 +2454,10 @@ export class CeoFinancialMetricsService {
         margemOperacionalPercent: null,
         despesasFinanceiras: 0,
         tributosSobreResultado: 0,
+        tributosComprovados: false,
+        tributosStatus: 'pendente_escrituracao',
         lucroLiquido: 0,
+        lucroLiquidoDefinitivo: null,
         margemLiquidaPercent: null,
         statusConfiabilidade: 'dados_insuficientes',
         motivoConfiabilidade: 'Falha ao consultar banco de dados para apuração do lucro.',
