@@ -310,9 +310,9 @@ export function validateRemoteSnapshot(
     const precoVenda = Number.isFinite(rawPreco) && rawPreco >= 0 ? rawPreco : 0;
 
     const rawCusto = Number(prod.cost_price ?? prod.cost ?? 0);
-    const custoAtual = Number.isFinite(rawCusto) && rawCusto > 0
-      ? rawCusto
-      : (precoVenda > 0 ? precoVenda * 0.7 : 0);
+    // FAIL-SAFE DE CUSTO REAL: Jamais atribuir custo fictício ou arbitrário (ex: 70% da venda).
+    // Se o PDV remoto não trouxer cost_price comprovado, manter custoAtual = 0 para preservar o custo local.
+    const custoAtual = Number.isFinite(rawCusto) && rawCusto > 0 ? rawCusto : 0;
 
     const rawEstoque = Number(prod.stock ?? prod.quantity ?? 0);
     const estoqueAtual = Number.isFinite(rawEstoque) ? rawEstoque : 0;

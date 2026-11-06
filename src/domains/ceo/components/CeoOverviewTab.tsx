@@ -83,6 +83,71 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     (pergunta: string): string => {
       const p = pergunta.toLowerCase();
 
+      // 0. Pergunta sobre CMV, custos de atacado ou fornecedores de bebidas (Coca-Cola / Ambev)
+      if (
+        p.includes('cmv') ||
+        p.includes('custo de mercadoria') ||
+        p.includes('custo unitario') ||
+        p.includes('custo unitário') ||
+        p.includes('custo de compra') ||
+        p.includes('quanto custa') ||
+        p.includes('preco de custo') ||
+        p.includes('preço de custo') ||
+        p.includes('fornecedor') ||
+        p.includes('spal') ||
+        p.includes('brasnorte') ||
+        p.includes('ambev') ||
+        p.includes('coca-cola')
+      ) {
+        const cmvConf = kpis.cmvConfirmado;
+        const recConf = kpis.receitaComCustoConhecido;
+        const cob = kpis.coberturaCmvPercent;
+        const lucroConf = kpis.lucroBrutoConfirmado;
+        const margemConf = kpis.margemBrutaConfirmadaPercent;
+
+        let cmvInfo = '';
+        if (cmvConf !== null && cmvConf > 0) {
+          cmvInfo = `- **CMV Confirmado (Notas Fiscais):** **R$ ${cmvConf.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` +
+            ` (${kpis.cmvPercent}% sobre R$ ${recConf.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo auditado)\n` +
+            `- **Lucro Bruto Comprovado:** **R$ ${lucroConf?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}** (Margem Média de ${margemConf}%)\n` +
+            `- **Cobertura de Custos:** ${cob}% do faturamento do mês auditado por notas fiscais.\n\n`;
+        }
+
+        return `🛒 **Custos de Atacado & CMV Comprovado (Rodo Point):**\n\n` +
+          cmvInfo +
+          `📋 **Preços de Custo Unitários Auditados (NF SPAL e Brasnorte):**\n` +
+          `  • **Coca KS**: Custo R$ 1,70 | Venda R$ 7,00 | **Margem 75,7%** (SPAL)\n` +
+          `  • **Refrigerante 350ml**: Custo R$ 1,83 | Venda R$ 7,00 | **Margem 73,9%** (SPAL)\n` +
+          `  • **Refrigerante 200ml**: Custo R$ 1,34 | Venda R$ 4,00 | **Margem 66,5%** (SPAL)\n` +
+          `  • **Kapo**: Custo R$ 1,64 | Venda R$ 4,50 | **Margem 63,6%** (SPAL)\n` +
+          `  • **Skol 473ml**: Custo R$ 3,97 | Venda R$ 10,00 | **Margem 60,3%** (Brasnorte)\n` +
+          `  • **Brahma**: Custo R$ 4,31 | Venda R$ 10,00 | **Margem 56,9%** (Brasnorte)\n` +
+          `  • **Suco Del Valle**: Custo R$ 2,86 | Venda R$ 6,00 | **Margem 52,3%** (SPAL)\n` +
+          `  • **Monster Energy LT 473ml**: Custo R$ 7,21 | Venda R$ 14,90 | **Margem 51,6%** (SPAL)\n` +
+          `  • **Red Bull 250ml**: Custo R$ 8,13 | Venda R$ 14,90 | **Margem 45,5%** (Brasnorte)\n` +
+          `  • **Corona**: Custo R$ 6,77 | Venda R$ 12,00 | **Margem 43,6%** (Brasnorte)\n\n` +
+          `> 💡 *Atenção aos produtos de fabricação própria (como Pão de Queijo): o pó de queijo isolado não compõe o custo total e aguarda ficha técnica completa.* `;
+      }
+
+      // 0.1 Pergunta sobre produtos mais lucrativos ou maiores margens
+      if (
+        p.includes('mais lucrativo') ||
+        p.includes('maior margem') ||
+        p.includes('melhor margem') ||
+        p.includes('maiores margens') ||
+        p.includes('rentabilidade') ||
+        p.includes('lucro por produto') ||
+        p.includes('lucro dos produtos')
+      ) {
+        return `💰 **Ranking de Lucratividade dos Produtos (Custos Comprovados):**\n\n` +
+          `🥇 **Refrigerante 350ml**: Lucro de **R$ 5,17/un** (Faturamento R$ 5,4k | Lucro total: R$ 4.008,37 | **Margem 73,9%**)\n` +
+          `🥈 **Refrigerante 200ml**: Lucro de **R$ 2,66/un** (Faturamento R$ 4,2k | Lucro total: R$ 2.806,55 | **Margem 66,5%**)\n` +
+          `🥉 **Coca KS**: Lucro de **R$ 5,30/un** (Faturamento R$ 1,7k | Lucro total: R$ 1.285,39 | **Margem 75,7%**)\n` +
+          `4️⃣ **Monster Energy 473ml**: Lucro de **R$ 7,69/un** (Faturamento R$ 2,4k | Lucro total: R$ 1.252,30 | **Margem 51,6%**)\n` +
+          `5️⃣ **Brahma**: Lucro de **R$ 5,69/un** (Faturamento R$ 1,7k | Lucro total: R$ 983,70 | **Margem 56,9%**)\n\n` +
+          `> 🏆 *A Coca KS tem a maior margem percentual unitária (75,7%), enquanto o Refrigerante 350ml gera o maior lucro em volume bruto.* `;
+      }
+
       // 1. Pergunta sobre produtos mais vendidos
       if (
         p.includes('produto') ||
@@ -641,6 +706,11 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                 </div>
               </div>
               <div className="mt-2 text-[11px] space-y-0.5 font-medium text-slate-400">
+                {kpis.cmvConfirmado !== null && kpis.cmvConfirmado > 0 ? (
+                  <div className="text-[10px] text-emerald-400 font-semibold truncate">
+                    CMV Auditado: R$ {kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({kpis.coberturaCmvPercent}% cob.)
+                  </div>
+                ) : null}
                 {kpis.despesasPagas > 0 ? (
                   <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
                     <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
@@ -980,6 +1050,18 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
           {/* Quick Pills Conforme a Imagem de Referência - Flex-wrap responsivo sem barra de rolagem */}
           <div className="px-3 sm:px-4 py-2 border-t border-border/30 bg-slate-950/40 flex flex-wrap items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => handleSelectPill('Quais os custos de atacado e CMV confirmado?')}
+              className="text-[11px] bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-700/50 transition-colors"
+            >
+              Custos de atacado (CMV)
+            </button>
+            <button
+              onClick={() => handleSelectPill('Quais os produtos com maiores margens de lucro?')}
+              className="text-[11px] bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 px-2.5 py-1 rounded-full border border-amber-700/50 transition-colors"
+            >
+              Produtos mais lucrativos
+            </button>
             <button
               onClick={() => handleSelectPill('Quanto vendemos ontem?')}
               className="text-[11px] bg-slate-800/80 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700/50 transition-colors"

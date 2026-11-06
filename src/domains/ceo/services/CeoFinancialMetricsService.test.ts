@@ -598,6 +598,147 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
       expect(top[2].quantidade).toBe(5);
     });
 
+    it('Cenário 16: getCommercialProfitability calcula CMV real, lucro bruto e margens por produto', async () => {
+      const wsId = 'ws-test-cmv';
+      setupDefaultMockSupabase({
+        produtos_eyemobile: [
+          { workspace_id: wsId, codigo: '2032394', descricao: 'REFRIGERANTE 350ML', custo_atual: 1.83, preco_venda: 7.00 },
+          { workspace_id: wsId, codigo: '2032242', descricao: 'Coca ks', custo_atual: 1.70, preco_venda: 7.00 },
+          { workspace_id: wsId, codigo: 'PAO_QUEIJO', descricao: 'Pão de Queijo', custo_atual: 0, preco_venda: 5.00 },
+        ],
+      });
+
+      const customTx: TransacaoReceitaItem[] = [
+        {
+          id: 'tx-1',
+          valor: 70,
+          data: '2026-11-01',
+          itens: [
+            { product_id: '2032394', product_name: 'REFRIGERANTE 350ML', quantity: 10, price: 7.00, total: 70.00 },
+          ],
+        },
+        {
+          id: 'tx-2',
+          valor: 35,
+          data: '2026-11-02',
+          itens: [
+            { product_id: '2032242', product_name: 'Coca ks', quantity: 5, price: 7.00, total: 35.00 },
+          ],
+        },
+        {
+          id: 'tx-3',
+          valor: 50,
+          data: '2026-11-02',
+          itens: [
+            { product_id: 'PAO_QUEIJO', product_name: 'Pão de Queijo', quantity: 10, price: 5.00, total: 50.00 },
+          ],
+        },
+      ];
+
+      const report = await CeoFinancialMetricsService.getCommercialProfitability(wsId, {
+        customTransactions: customTx,
+      });
+
+      expect(report.receitaTotal).toBe(155.00);
+      expect(report.receitaComCusto).toBe(105.00);
+      expect(report.receitaSemCusto).toBe(50.00);
+      // CMV: (10 * 1.83) + (5 * 1.70) = 18.30 + 8.50 = 26.80
+      expect(report.cmvTotal).toBe(26.80);
+      // Lucro Bruto: 105.00 - 26.80 = 78.20
+      expect(report.lucroBrutoTotal).toBe(78.20);
+      // Margem Bruta: (78.20 / 105.00) * 100 = 74.5%
+      expect(report.margemBrutaMedia).toBe(74.5);
+      // Cobertura: (105 / 155) * 100 = 67.7%
+      expect(report.coberturaReceitaPercent).toBe(67.7);
+
+      expect(report.maisLucrativos).toHaveLength(2);
+      expect(report.maisLucrativos[0].produto).toBe('REFRIGERANTE 350ML');
+      expect(report.maisLucrativos[0].lucroBrutoTotal).toBe(51.70); // 70 - 18.30
+      expect(report.maisLucrativos[0].margemBrutaPercent).toBe(73.9);
+
+      expect(report.semCusto).toHaveLength(1);
+      expect(report.semCusto[0].produto).toBe('Pão de Queijo');
+      expect(report.semCusto[0].statusCusto).toBe('sem_nota');
+    });
+
+    it('Cenário 17 (Gate A & B): Segregação contábil de Vendas PDV, Despesas Pagas, Pendentes e Resultado Preliminar', async () => {
+      const empty = CeoFinancialMetricsService.getEmptyKpis();
+      expect(empty.vendasBrutasPdv).toBe(0);
+      expect(empty.despesasPagas).toBe(0);
+      expect(empty.despesasPendentes).toBe(0);
+      expect(empty.despesasTotalCompetencia).toBe(0);
+      expect(empty.resultadoPreliminarCompetencia).toBe(0);
+      expect(empty.diferencaVendasDespesasPagas).toBe(0);
+      expect(empty.statusConciliacao03Nov).toBe('pendente_fechamento_pdv');
+
+      const wsId = 'ws-acct-test';
+      const refDate = new Date('2026-11-04T12:00:00.000Z');
+
+      setupDefaultMockSupabase({
+        transacoes: [
+          { id: 'tx-venda-1', valor: 4500, data: '2026-11-02', tipo: 'receita', workspace_id: wsId },
+          { id: 'tx-desp-paga-1', valor: 2000, data: '2026-11-02', tipo: 'despesa', workspace_id: wsId },
+        ],
+        despesas: [
+          { id: 'desp-pend-1', valor: 1000, data: '2026-11-10', status: 'pendente', workspace_id: wsId },
+        ],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(wsId, refDate);
+      expect(kpis.vendasBrutasPdv).toBe(4500);
+      expect(kpis.despesasPagas).toBeGreaterThanOrEqual(0);
+      expect(kpis.despesasTotalCompetencia).toBeGreaterThanOrEqual(kpis.despesasPagas);
+      expect(kpis.resultadoPreliminarCompetencia).toBe(kpis.vendasBrutasPdv - kpis.despesasTotalCompetencia);
+      expect(kpis.statusConciliacao03Nov).toBe('pendente_fechamento_pdv');
+    });
+
+    it('Cenário 18 (Gate 4): Resolução temporal de custos históricos e preço médio ponderado', async () => {
+      const wsId = 'ws-temporal-cmv';
+      setupDefaultMockSupabase({
+        produtos_eyemobile: [
+          { workspace_id: wsId, codigo: 'PROD_HIST', descricao: 'Produto com Historico', custo_atual: 5.00, preco_venda: 10.00 },
+        ],
+        historico_custo_produto: [
+          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.00, data_compra: '2026-08-01', fornecedor: 'Fornecedor Antigo' },
+          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.50, data_compra: '2026-09-01', fornecedor: 'Fornecedor Novo' },
+        ],
+      });
+
+      const customTx: TransacaoReceitaItem[] = [
+        // Venda em agosto: deve pegar custo histórico de 4.00
+        {
+          id: 'tx-1',
+          valor: 100,
+          data: '2026-08-15',
+          itens: [
+            { product_id: 'PROD_HIST', product_name: 'Produto com Historico', quantity: 10, price: 10.00, total: 100.00 },
+          ],
+        },
+        // Venda em setembro: deve pegar custo histórico de 4.50
+        {
+          id: 'tx-2',
+          valor: 200,
+          data: '2026-09-15',
+          itens: [
+            { product_id: 'PROD_HIST', product_name: 'Produto com Historico', quantity: 20, price: 10.00, total: 200.00 },
+          ],
+        },
+      ];
+
+      const report = await CeoFinancialMetricsService.getCommercialProfitability(wsId, {
+        customTransactions: customTx,
+      });
+
+      expect(report.receitaTotal).toBe(300.00);
+      expect(report.receitaComCusto).toBe(300.00);
+      // CMV: (10 * 4.00) + (20 * 4.50) = 40.00 + 90.00 = 130.00
+      expect(report.cmvTotal).toBe(130.00);
+      expect(report.lucroBrutoTotal).toBe(170.00); // 300 - 130
+      expect(report.itens[0].precoVendaMedio).toBe(10.00); // Preço médio ponderado: 300 / 30 = 10.00
+      expect(report.itens[0].statusCusto).toBe('confirmado');
+      expect(report.itens[0].tipoCustoLabel).toBe('Auditado por NF');
+    });
+
     it('Cenário 16 (Gate A & B): Segregação contábil de Vendas PDV, Despesas Pagas, Pendentes e Resultado Preliminar', async () => {
       const empty = CeoFinancialMetricsService.getEmptyKpis();
       expect(empty.vendasBrutasPdv).toBe(0);

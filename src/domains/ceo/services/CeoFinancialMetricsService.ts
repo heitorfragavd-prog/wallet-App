@@ -71,6 +71,14 @@ export interface CeoExecutiveKpis {
   cmvPercent: number | null; // null se dados insuficientes
   cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes';
   coberturaFichasPercent: number;
+  cmvConfirmado: number | null;
+  receitaComCustoConhecido: number;
+  receitaComCustoPendente: number;
+  coberturaCmvPercent: number;
+  lucroBrutoConfirmado: number | null;
+  margemBrutaConfirmadaPercent: number | null;
+  produtosComCustoCadastrado: number;
+  totalProdutosCatalogo: number;
   acoesHoje: {
     numero: number;
     titulo: string;
@@ -171,6 +179,54 @@ export interface TopProdutoFaturamento {
   faturamento: number;
   percentualFaturamento: number;
   margemEstimada: number | null;
+  custoUnitario?: number | null;
+  cmvTotal?: number | null;
+  lucroBrutoTotal?: number | null;
+  margemBrutaPercent?: number | null;
+  statusCusto?: 'confirmado' | 'pendente_ficha' | 'sem_nota';
+}
+
+export interface ProdutoRentabilidadeItem {
+  id: string;
+  codigo: string;
+  produto: string;
+  quantidade: number;
+  faturamento: number;
+  precoVendaMedio: number;
+  custoUnitario: number | null;
+  cmvTotal: number | null;
+  lucroBrutoTotal: number | null;
+  margemBrutaPercent: number | null;
+  statusCusto: 'confirmado' | 'historico_comprovado' | 'referencia_atual' | 'pendente_ficha' | 'sem_nota';
+  tipoCustoLabel?: string;
+  isCombo?: boolean;
+}
+
+export interface RelatorioRentabilidadeComercial {
+  receitaTotal: number;
+  receitaComCusto: number;
+  receitaComprovada: number;
+  receitaEstimada: number;
+  receitaSemCusto: number;
+  cmvTotal: number;
+  cmvComprovado: number;
+  cmvEstimado: number;
+  lucroBrutoTotal: number;
+  lucroBrutoComprovado: number;
+  lucroBrutoEstimado: number;
+  margemBrutaMedia: number;
+  margemBrutaComprovada: number;
+  coberturaReceitaPercent: number;
+  coberturaComprovadaPercent: number;
+  produtosComCustoQtd: number;
+  produtosTotalQtd: number;
+  itens: ProdutoRentabilidadeItem[];
+  maisLucrativos: ProdutoRentabilidadeItem[];
+  maioresMargens: ProdutoRentabilidadeItem[];
+  menoresMargens: ProdutoRentabilidadeItem[];
+  semCusto: ProdutoRentabilidadeItem[];
+  dadosIndisponiveis?: boolean;
+  erroMensagem?: string;
 }
 
 export class CeoFinancialMetricsService {
@@ -454,27 +510,94 @@ export class CeoFinancialMetricsService {
           ? Math.round((resultadoOperacional / faturamentoMes) * 1000) / 10
           : null;
 
-      // 6. CMV Status: checa se há fichas técnicas reais e cobertura efetiva
-      const { count: countFichas } = await supabase
-        .from('fichas_tecnicas')
-        .select('*', { count: 'exact', head: true });
+      // 6. CMV e Rentabilidade Real: apuração sobre custos de atacado comprovados e produtos_eyemobile
+      let totalFichas = 0;
+      let totalProdutos = 0;
+      let hasFichas = false;
+      let coberturaFichas = 0;
+      let cmvPercent: number | null = null;
+      let cmvStatus: 'saudavel' | 'atencao' | 'critico' | 'dados_insuficientes' = 'dados_insuficientes';
+      let motivoIndisponibilidadeCmv: string | null = null;
+      let cmvConfirmado: number | null = null;
+      let receitaComCustoConhecido = 0;
+      let receitaComCustoPendente = 0;
+      let coberturaCmvPercent = 0;
+      let lucroBrutoConfirmado: number | null = null;
+      let margemBrutaConfirmadaPercent: number | null = null;
+      let produtosComCustoCadastrado = 0;
+      let totalProdutosCatalogo = 0;
 
-      const { count: countProdutos } = await supabase
-        .from('produtos_eyemobile')
-        .select('*', { count: 'exact', head: true })
-        .eq('workspace_id', workspaceId);
+      try {
+        const { count: countFichas } = await supabase
+          .from('fichas_tecnicas')
+          .select('*', { count: 'exact', head: true });
+        totalFichas = countFichas ?? 0;
+        hasFichas = totalFichas > 0;
 
-      const totalFichas = countFichas ?? 0;
-      const totalProdutos = countProdutos ?? 0;
-      const hasFichas = totalFichas > 0;
-      const coberturaFichas = totalProdutos > 0 && totalFichas > 0
-        ? Math.min(100, Math.round((totalFichas / totalProdutos) * 100))
-        : 0;
-      const cmvPercent: number | null = null;
-      const cmvStatus = hasFichas ? 'atencao' : 'dados_insuficientes';
-      const motivoIndisponibilidadeCmv = !hasFichas
-        ? 'Fichas técnicas de produtos ainda não cadastradas no sistema'
-        : null;
+        const { data: prodsEyemobile } = await supabase
+          .from('produtos_eyemobile')
+          .select('codigo, descricao, custo_atual, preco_venda')
+          .eq('workspace_id', workspaceId);
+
+        const catalogo = prodsEyemobile || [];
+        totalProdutos = catalogo.length;
+        totalProdutosCatalogo = catalogo.length;
+        coberturaFichas = totalProdutos > 0 && totalFichas > 0
+          ? Math.min(100, Math.round((totalFichas / totalProdutos) * 100))
+          : 0;
+
+        const costMap = new Map<string, { custo: number; descricao: string }>();
+        for (const p of catalogo) {
+          const c = Number(p.custo_atual || 0);
+          if (c > 0 && p.codigo) {
+            costMap.set(String(p.codigo), { custo: c, descricao: p.descricao || '' });
+            produtosComCustoCadastrado++;
+          }
+        }
+
+        let cmvAcumulado = 0;
+        let temItens = false;
+
+        for (const t of txMes) {
+          if (!t.itens || !Array.isArray(t.itens)) continue;
+          for (const item of t.itens) {
+            if (!item || typeof item !== 'object') continue;
+            temItens = true;
+            const raw = item as Record<string, unknown>;
+            const pId = String(raw.product_id || raw.id || '');
+            const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+            const totalItem = Number(raw.total ?? raw.valor ?? (Number(raw.price || 0) * qtd));
+
+            const matchCusto = costMap.get(pId);
+            if (matchCusto && matchCusto.custo > 0) {
+              const custoItem = matchCusto.custo * qtd;
+              cmvAcumulado += custoItem;
+              receitaComCustoConhecido += totalItem;
+            } else {
+              receitaComCustoPendente += totalItem;
+            }
+          }
+        }
+
+        if (receitaComCustoConhecido > 0 && cmvAcumulado > 0) {
+          cmvConfirmado = Math.round(cmvAcumulado * 100) / 100;
+          lucroBrutoConfirmado = Math.round((receitaComCustoConhecido - cmvAcumulado) * 100) / 100;
+          cmvPercent = Math.round((cmvAcumulado / receitaComCustoConhecido) * 1000) / 10;
+          margemBrutaConfirmadaPercent = Math.round(((receitaComCustoConhecido - cmvAcumulado) / receitaComCustoConhecido) * 1000) / 10;
+          const receitaTotalApurada = receitaComCustoConhecido + receitaComCustoPendente;
+          coberturaCmvPercent = receitaTotalApurada > 0 ? Math.round((receitaComCustoConhecido / receitaTotalApurada) * 1000) / 10 : 0;
+          cmvStatus = cmvPercent <= 40 ? 'saudavel' : 'atencao';
+        } else if (!temItens || costMap.size === 0) {
+          cmvStatus = 'dados_insuficientes';
+          motivoIndisponibilidadeCmv = costMap.size === 0
+            ? 'Custos unitários de produtos ainda não cadastrados no sistema'
+            : 'Transações sem detalhamento de itens no período';
+        }
+      } catch (errCmv) {
+        console.warn('[CeoFinancialMetricsService] Aviso ao apurar CMV:', errCmv);
+        cmvStatus = 'dados_insuficientes';
+        motivoIndisponibilidadeCmv = 'Falha ao consultar custos no banco de dados';
+      }
 
       // 7. Evolução diária de vendas (últimos 30 dias reais com deduplicação)
       const limite30Dias = new Date(hoje.getTime() - 29 * 24 * 60 * 60 * 1000);
@@ -578,6 +701,14 @@ export class CeoFinancialMetricsService {
         cmvPercent,
         cmvStatus,
         coberturaFichasPercent: coberturaFichas,
+        cmvConfirmado,
+        receitaComCustoConhecido,
+        receitaComCustoPendente,
+        coberturaCmvPercent,
+        lucroBrutoConfirmado,
+        margemBrutaConfirmadaPercent,
+        produtosComCustoCadastrado,
+        totalProdutosCatalogo,
         acoesHoje,
         dataAtualizacao: 'atualizado agora',
         dailySales30Days,
@@ -967,6 +1098,375 @@ export class CeoFinancialMetricsService {
     }
   }
 
+  /**
+   * Obtém relatório completo de rentabilidade comercial e margens brutas
+   * cruzando os itens de vendas com custos de atacado reais comprovados por data
+   * e custos de referência estimados quando aplicável.
+   */
+  static async getCommercialProfitability(
+    workspaceId: string,
+    options?: {
+      startDate?: string;
+      endDate?: string;
+      customTransactions?: TransacaoReceitaItem[];
+    }
+  ): Promise<RelatorioRentabilidadeComercial> {
+    if (!workspaceId) {
+      return {
+        receitaTotal: 0,
+        receitaComCusto: 0,
+        receitaComprovada: 0,
+        receitaEstimada: 0,
+        receitaSemCusto: 0,
+        cmvTotal: 0,
+        cmvComprovado: 0,
+        cmvEstimado: 0,
+        lucroBrutoTotal: 0,
+        lucroBrutoComprovado: 0,
+        lucroBrutoEstimado: 0,
+        margemBrutaMedia: 0,
+        margemBrutaComprovada: 0,
+        coberturaReceitaPercent: 0,
+        coberturaComprovadaPercent: 0,
+        produtosComCustoQtd: 0,
+        produtosTotalQtd: 0,
+        itens: [],
+        maisLucrativos: [],
+        maioresMargens: [],
+        menoresMargens: [],
+        semCusto: [],
+      };
+    }
+
+    try {
+      // 1. Carrega catálogo de produtos com custos atuais E histórico temporal auditado
+      const [prodsRes, histRes] = await Promise.all([
+        supabase
+          .from('produtos_eyemobile')
+          .select('codigo, descricao, custo_atual, preco_venda')
+          .eq('workspace_id', workspaceId),
+        supabase
+          .from('historico_custo_produto')
+          .select('produto_codigo, custo_unitario, data_compra, fornecedor, created_at')
+          .eq('workspace_id', workspaceId)
+          .order('data_compra', { ascending: true }),
+      ]);
+
+      const catalogo = prodsRes.data || [];
+      const costMap = new Map<string, { custo: number; descricao: string; precoVenda: number }>();
+      let prodsComCusto = 0;
+
+      for (const p of catalogo) {
+        const c = Number(p.custo_atual || 0);
+        const pv = Number(p.preco_venda || 0);
+        if (p.codigo) {
+          costMap.set(String(p.codigo), { custo: c, descricao: p.descricao || '', precoVenda: pv });
+          if (c > 0) prodsComCusto++;
+        }
+      }
+
+      // Histórico temporal por código de produto
+      const historyByCode = new Map<string, { custo: number; dataCompra: string; fornecedor?: string }[]>();
+      for (const h of histRes.data || []) {
+        if (!h.produto_codigo || Number(h.custo_unitario) <= 0) continue;
+        const list = historyByCode.get(String(h.produto_codigo)) || [];
+        list.push({
+          custo: Number(h.custo_unitario),
+          dataCompra: h.data_compra || (h.created_at ? h.created_at.slice(0, 10) : '2026-01-01'),
+          fornecedor: h.fornecedor || undefined,
+        });
+        historyByCode.set(String(h.produto_codigo), list);
+      }
+
+      // 2. Carrega ou utiliza transações do período
+      let tx: TransacaoReceitaItem[] = [];
+      if (options?.customTransactions && options.customTransactions.length > 0) {
+        tx = options.customTransactions;
+      } else {
+        let queryStart = options?.startDate;
+        const queryEnd = options?.endDate;
+        if (!queryStart) {
+          const hoje = new Date();
+          const d30 = new Date(hoje.getTime() - 30 * 24 * 60 * 60 * 1000);
+          queryStart = d30.toISOString().slice(0, 10);
+        }
+
+        const raw = await this.fetchAllPaginated<TransacaoReceitaItem>((from, to) => {
+          let q = supabase
+            .from('transacoes')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
+            .eq('workspace_id', workspaceId)
+            .eq('tipo', 'receita')
+            .gte('data', queryStart!)
+            .not('itens', 'is', null)
+            .order('data', { ascending: false });
+
+          if (queryEnd) {
+            q = q.lte('data', `${queryEnd}T23:59:59.999Z`);
+          }
+          return q.range(from, to);
+        });
+
+        tx = deduplicateRevenues(raw);
+      }
+
+      // 3. Agrega itens vendidos considerando histórico temporal e tratamento rigoroso de devoluções/cancelamentos
+      const itemAgg = new Map<string, {
+        id: string;
+        produto: string;
+        quantidade: number;
+        faturamento: number;
+        cmvAcumulado: number;
+        temComprovado: boolean;
+        temEstimado: boolean;
+        temSemCusto: boolean;
+        isCombo: boolean;
+        custoMaisRecente: number | null;
+      }>();
+
+      for (const t of tx) {
+        if (!t.itens || !Array.isArray(t.itens)) continue;
+        const saleDateStr = t.data ? t.data.slice(0, 10) : '2026-11-01';
+
+        for (const item of t.itens) {
+          if (!item || typeof item !== 'object') continue;
+          const raw = item as Record<string, unknown>;
+
+          // Ignora itens expressamente cancelados
+          if (raw.cancelled === true || raw.status === 'cancelled') continue;
+
+          const pId = String(raw.product_id || raw.id || 'sem_id');
+          const name = (raw.product_name as string) || (raw.name as string) || (raw.descricao as string) || 'Item sem nome';
+          const qtd = Number(raw.quantity ?? raw.quantidade ?? 1);
+          const pr = Number(raw.price || 0);
+          const disc = Number(raw.discount || 0);
+
+          let totalItem = Number(raw.total ?? raw.valor ?? 0);
+          if (totalItem === 0 && pr > 0 && qtd > 0) {
+            totalItem = pr * qtd - disc;
+          }
+
+          // Identificação de Combo / Receita composta própria
+          const isComboItem =
+            (raw.transaction_combo_id !== null && raw.transaction_combo_id !== undefined) ||
+            name.toUpperCase().includes('COMBO') ||
+            name.includes('+');
+
+          // Resolução temporal de custo
+          let custoLinha: number | null = null;
+          let tipoLinha: 'comprovado' | 'estimado' | 'sem_custo' = 'sem_custo';
+
+          const histList = historyByCode.get(pId);
+          if (histList && histList.length > 0) {
+            const purchaseMatch = histList.filter((h) => h.dataCompra <= saleDateStr).pop();
+            if (purchaseMatch && purchaseMatch.custo > 0) {
+              custoLinha = purchaseMatch.custo;
+              tipoLinha = 'comprovado';
+            }
+          }
+
+          if (custoLinha === null) {
+            const refCost = costMap.get(pId);
+            if (refCost && refCost.custo > 0) {
+              custoLinha = refCost.custo;
+              tipoLinha = 'estimado';
+            }
+          }
+
+          // Combos sem ficha unitária comprovada não recebem custo arbitrário
+          if (isComboItem && tipoLinha === 'sem_custo') {
+            custoLinha = null;
+            tipoLinha = 'sem_custo';
+          }
+
+          const cur = itemAgg.get(pId) || {
+            id: pId,
+            produto: name,
+            quantidade: 0,
+            faturamento: 0,
+            cmvAcumulado: 0,
+            temComprovado: false,
+            temEstimado: false,
+            temSemCusto: false,
+            isCombo: isComboItem,
+            custoMaisRecente: null,
+          };
+
+          cur.quantidade += qtd;
+          cur.faturamento += totalItem;
+
+          if (custoLinha !== null && custoLinha > 0) {
+            cur.cmvAcumulado += custoLinha * qtd;
+            cur.custoMaisRecente = custoLinha;
+            if (tipoLinha === 'comprovado') cur.temComprovado = true;
+            else if (tipoLinha === 'estimado') cur.temEstimado = true;
+          } else {
+            cur.temSemCusto = true;
+          }
+
+          itemAgg.set(pId, cur);
+        }
+      }
+
+      let receitaTotal = 0;
+      let receitaComCusto = 0;
+      let receitaComprovada = 0;
+      let receitaEstimada = 0;
+      let receitaSemCusto = 0;
+      let cmvTotal = 0;
+      let cmvComprovado = 0;
+      let cmvEstimado = 0;
+
+      const itensRelatorio: ProdutoRentabilidadeItem[] = [];
+
+      for (const [pId, agg] of itemAgg.entries()) {
+        receitaTotal += agg.faturamento;
+
+        // Preço médio ponderado pela quantidade vendida: Faturamento / Quantidade
+        const precoVendaMedio = agg.quantidade > 0
+          ? Math.round((agg.faturamento / agg.quantidade) * 100) / 100
+          : 0;
+
+        if (agg.cmvAcumulado > 0 && agg.custoMaisRecente !== null) {
+          const cmvItem = Math.round(agg.cmvAcumulado * 100) / 100;
+          const lucroTotal = Math.round((agg.faturamento - cmvItem) * 100) / 100;
+          const custoUnit = agg.quantidade > 0 ? Math.round((cmvItem / agg.quantidade) * 10000) / 10000 : agg.custoMaisRecente;
+          const margemPct = agg.faturamento > 0 ? Math.round((lucroTotal / agg.faturamento) * 1000) / 10 : 0;
+
+          const isStrictlyProven = agg.temComprovado && !agg.temEstimado;
+          const statusCusto = isStrictlyProven ? 'confirmado' : 'referencia_atual';
+          const tipoCustoLabel = isStrictlyProven
+            ? 'Auditado por NF'
+            : 'Custo de Referência (Estimado)';
+
+          receitaComCusto += agg.faturamento;
+          cmvTotal += cmvItem;
+
+          if (isStrictlyProven) {
+            receitaComprovada += agg.faturamento;
+            cmvComprovado += cmvItem;
+          } else {
+            receitaEstimada += agg.faturamento;
+            cmvEstimado += cmvItem;
+          }
+
+          itensRelatorio.push({
+            id: pId,
+            codigo: pId,
+            produto: agg.produto,
+            quantidade: agg.quantidade,
+            faturamento: Math.round(agg.faturamento * 100) / 100,
+            precoVendaMedio,
+            custoUnitario: custoUnit,
+            cmvTotal: cmvItem,
+            lucroBrutoTotal: lucroTotal,
+            margemBrutaPercent: margemPct,
+            statusCusto,
+            tipoCustoLabel,
+            isCombo: agg.isCombo,
+          });
+        } else {
+          receitaSemCusto += agg.faturamento;
+          itensRelatorio.push({
+            id: pId,
+            codigo: pId,
+            produto: agg.produto,
+            quantidade: agg.quantidade,
+            faturamento: Math.round(agg.faturamento * 100) / 100,
+            precoVendaMedio,
+            custoUnitario: null,
+            cmvTotal: null,
+            lucroBrutoTotal: null,
+            margemBrutaPercent: null,
+            statusCusto: 'sem_nota',
+            tipoCustoLabel: agg.isCombo ? 'Combo (Pendente Composição)' : 'Sem NF / Composição',
+            isCombo: agg.isCombo,
+          });
+        }
+      }
+
+      // Arredondamento e consolidação financeira consistente (Zero centavo de divergência)
+      receitaTotal = Math.round(receitaTotal * 100) / 100;
+      receitaComCusto = Math.round(receitaComCusto * 100) / 100;
+      receitaComprovada = Math.round(receitaComprovada * 100) / 100;
+      receitaEstimada = Math.round(receitaEstimada * 100) / 100;
+      receitaSemCusto = Math.round((receitaTotal - receitaComCusto) * 100) / 100;
+
+      cmvTotal = Math.round(cmvTotal * 100) / 100;
+      cmvComprovado = Math.round(cmvComprovado * 100) / 100;
+      cmvEstimado = Math.round(cmvEstimado * 100) / 100;
+
+      const lucroBrutoTotal = Math.round((receitaComCusto - cmvTotal) * 100) / 100;
+      const lucroBrutoComprovado = Math.round((receitaComprovada - cmvComprovado) * 100) / 100;
+      const lucroBrutoEstimado = Math.round((receitaEstimada - cmvEstimado) * 100) / 100;
+
+      const margemBrutaMedia = receitaComCusto > 0 ? Math.round((lucroBrutoTotal / receitaComCusto) * 1000) / 10 : 0;
+      const margemBrutaComprovada = receitaComprovada > 0 ? Math.round((lucroBrutoComprovado / receitaComprovada) * 1000) / 10 : 0;
+      const coberturaReceitaPercent = receitaTotal > 0 ? Math.round((receitaComCusto / receitaTotal) * 1000) / 10 : 0;
+      const coberturaComprovadaPercent = receitaTotal > 0 ? Math.round((receitaComprovada / receitaTotal) * 1000) / 10 : 0;
+
+      const comCusto = itensRelatorio.filter((i) => i.custoUnitario !== null && i.cmvTotal !== null);
+      const semCusto = itensRelatorio.filter((i) => i.custoUnitario === null || i.cmvTotal === null);
+
+      const maisLucrativos = [...comCusto].sort((a, b) => (b.lucroBrutoTotal || 0) - (a.lucroBrutoTotal || 0));
+      const maioresMargens = [...comCusto].sort((a, b) => (b.margemBrutaPercent || 0) - (a.margemBrutaPercent || 0));
+      const menoresMargens = [...comCusto].sort((a, b) => (a.margemBrutaPercent || 0) - (b.margemBrutaPercent || 0));
+
+      return {
+        receitaTotal,
+        receitaComCusto,
+        receitaComprovada,
+        receitaEstimada,
+        receitaSemCusto,
+        cmvTotal,
+        cmvComprovado,
+        cmvEstimado,
+        lucroBrutoTotal,
+        lucroBrutoComprovado,
+        lucroBrutoEstimado,
+        margemBrutaMedia,
+        margemBrutaComprovada,
+        coberturaReceitaPercent,
+        coberturaComprovadaPercent,
+        produtosComCustoQtd: prodsComCusto,
+        produtosTotalQtd: catalogo.length,
+        itens: itensRelatorio,
+        maisLucrativos,
+        maioresMargens,
+        menoresMargens,
+        semCusto,
+      };
+    } catch (err) {
+      console.warn('[CeoFinancialMetricsService] Erro ao calcular rentabilidade:', err);
+      return {
+        receitaTotal: 0,
+        receitaComCusto: 0,
+        receitaComprovada: 0,
+        receitaEstimada: 0,
+        receitaSemCusto: 0,
+        cmvTotal: 0,
+        cmvComprovado: 0,
+        cmvEstimado: 0,
+        lucroBrutoTotal: 0,
+        lucroBrutoComprovado: 0,
+        lucroBrutoEstimado: 0,
+        margemBrutaMedia: 0,
+        margemBrutaComprovada: 0,
+        coberturaReceitaPercent: 0,
+        coberturaComprovadaPercent: 0,
+        produtosComCustoQtd: 0,
+        produtosTotalQtd: 0,
+        itens: [],
+        maisLucrativos: [],
+        maioresMargens: [],
+        menoresMargens: [],
+        semCusto: [],
+        dadosIndisponiveis: true,
+        erroMensagem: err instanceof Error ? err.message : 'Falha ao consultar rentabilidade',
+      };
+    }
+  }
+
   static getEmptyKpis(): CeoExecutiveKpis {
     return {
       faturamentoMes: 0,
@@ -995,6 +1495,14 @@ export class CeoFinancialMetricsService {
       cmvPercent: null,
       cmvStatus: 'dados_insuficientes',
       coberturaFichasPercent: 0,
+      cmvConfirmado: null,
+      receitaComCustoConhecido: 0,
+      receitaComCustoPendente: 0,
+      coberturaCmvPercent: 0,
+      lucroBrutoConfirmado: null,
+      margemBrutaConfirmadaPercent: null,
+      produtosComCustoCadastrado: 0,
+      totalProdutosCatalogo: 0,
       acoesHoje: [
         {
           numero: 1,

@@ -186,13 +186,26 @@ export class CeoIntelligenceEngine {
       }
     }
 
-    // 7. CMV e Fichas Técnicas
-    if (kpis.cmvStatus === "dados_insuficientes") {
+    // 7. CMV e Rentabilidade Real Auditada
+    if (kpis.cmvConfirmado !== null && kpis.cmvConfirmado > 0) {
+      citacoes.push({
+        dimensao: "Rentabilidade e Custos Reais",
+        conteudo: `CMV auditado por notas fiscais: R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${kpis.cmvPercent}% da receita apurada com custo). Lucro bruto comprovado: R$ ${kpis.lucroBrutoConfirmado?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'} com margem bruta média de ${kpis.margemBrutaConfirmadaPercent}%.`,
+        fonteDado: "produtos_eyemobile (custo_atual) e nf_itens (Notas Fiscais SPAL/Brasnorte)",
+        criterioCalculo: `Cruzamento determinístico de compras auditadas com vendas PDV. Cobertura atual: ${kpis.coberturaCmvPercent}% da receita.`,
+      });
+
+      if (kpis.coberturaCmvPercent < 100) {
+        oportunidadesPrioritarias.push(
+          `Cadastrar ficha técnica de receitas próprias (como pão de queijo e combos) para elevar a cobertura de CMV de ${kpis.coberturaCmvPercent}% para 100%.`
+        );
+      }
+    } else if (kpis.cmvStatus === "dados_insuficientes") {
       alertasQualidadeDados.push(
-        "Ausência de fichas técnicas cadastradas. O custo real de mercadorias (CMV) não pôde ser aferido."
+        "Ausência de custos unitários e fichas técnicas cadastradas. O custo real de mercadorias (CMV) não pôde ser aferido."
       );
       oportunidadesPrioritarias.push(
-        "Cadastrar fichas técnicas dos 5 produtos de maior giro para viabilizar controle de margem de contribuição."
+        "Vincular notas fiscais de atacado aos produtos para viabilizar controle de margem de contribuição."
       );
     }
 
