@@ -29,6 +29,7 @@ import {
   CalendarX2,
   BarChart3,
   Layers,
+  Coins,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ControleOrcamentoCard } from "@/domains/finance/components/ControleOrcamentoCard";
@@ -49,6 +50,7 @@ import { useDespesas } from "@/domains/finance/hooks/useDespesas";
 import { usePontoEquilibrio } from "@/domains/finance/hooks/usePontoEquilibrio";
 import { useBurnRate } from "@/domains/finance/hooks/useBurnRate";
 import { usePrivacy } from "@/contexts/PrivacyContext";
+import { useRealNetProfit } from "@/domains/ceo/hooks/useRealNetProfit";
 
 
 // Função para formatar a data corretamente
@@ -105,6 +107,7 @@ const Dashboard = () => {
 
   const { pontoEquilibrio, vendasHoje, percentual: percentualPontoEquilibrio } = usePontoEquilibrio();
   const { burnRate, runway, saldoAtual: saldoAtualBurn } = useBurnRate();
+  const { relatorio: relatorioLucro, loading: loadingLucro } = useRealNetProfit();
 
   // Receitas consolidadas — MESMA regra da tela Receitas:
   // dinheiro do PDV (Eyemobile) + entradas liquidadas da Divipay (valor líquido,
@@ -479,7 +482,7 @@ const Dashboard = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Receitas */}
           <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-green-500/10 to-green-500/5">
             <CardContent className="p-5">
@@ -527,7 +530,7 @@ const Dashboard = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Saldo</p>
+                  <p className="text-sm text-muted-foreground">Saldo em Caixa</p>
                   {loadingTransacoes || loadingReceitas || loadingDespesas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
@@ -538,6 +541,111 @@ const Dashboard = () => {
                 </div>
                 <div className="p-3 rounded-xl bg-blue-500/20">
                   <Wallet className="w-5 h-5 text-blue-500" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Lucro Líquido Real — Mês Atual */}
+          <Card
+            onClick={() => navigate('/wallet-ceo?tab=analyses&subtab=lucro')}
+            className={`relative overflow-hidden border transition-all cursor-pointer hover:shadow-md ${
+              relatorioLucro && relatorioLucro.lucroLiquido > 0
+                ? "bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/30 hover:border-emerald-500/50"
+                : relatorioLucro && relatorioLucro.lucroLiquido < 0
+                ? "bg-gradient-to-br from-red-500/10 to-red-500/5 border-red-500/30 hover:border-red-500/50"
+                : "bg-gradient-to-br from-amber-500/10 to-amber-500/5 border-amber-500/30 hover:border-amber-500/50"
+            }`}
+          >
+            <CardContent className="p-5">
+              <div className="flex items-start justify-between">
+                <div className="space-y-1.5 flex-1 min-w-0 pr-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-medium text-muted-foreground">💰 Lucro Líquido</p>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border/60 text-muted-foreground font-normal">
+                      Mês Atual
+                    </Badge>
+                  </div>
+
+                  {loadingLucro ? (
+                    <Skeleton className="h-8 w-32" />
+                  ) : (
+                    <div className="space-y-1">
+                      <p
+                        className={`text-2xl font-bold tracking-tight ${
+                          (relatorioLucro?.lucroLiquido ?? 0) > 0
+                            ? "text-emerald-400"
+                            : (relatorioLucro?.lucroLiquido ?? 0) < 0
+                            ? "text-red-400"
+                            : "text-foreground"
+                        }`}
+                      >
+                        {formatCurrency(relatorioLucro?.lucroLiquido ?? 0)}
+                      </p>
+
+                      <div className="flex items-center gap-2 flex-wrap text-xs">
+                        {relatorioLucro?.margemLiquidaPercent !== null && relatorioLucro?.margemLiquidaPercent !== undefined && (
+                          <span className="font-semibold text-muted-foreground">
+                            {relatorioLucro.margemLiquidaPercent.toFixed(1)}% margem
+                          </span>
+                        )}
+
+                        {relatorioLucro?.comparativoMesAnterior?.variacaoPercent !== null &&
+                          relatorioLucro?.comparativoMesAnterior?.variacaoPercent !== undefined && (
+                            <span
+                              className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${
+                                relatorioLucro.comparativoMesAnterior.variacaoPercent >= 0
+                                  ? "text-emerald-400"
+                                  : "text-red-400"
+                              }`}
+                            >
+                              {relatorioLucro.comparativoMesAnterior.variacaoPercent >= 0 ? (
+                                <ArrowUpRight className="w-3 h-3" />
+                              ) : (
+                                <ArrowDownRight className="w-3 h-3" />
+                              )}
+                              {relatorioLucro.comparativoMesAnterior.variacaoPercent > 0 ? "+" : ""}
+                              {relatorioLucro.comparativoMesAnterior.variacaoPercent.toFixed(1)}% vs anterior
+                            </span>
+                          )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-1">
+                    {loadingLucro ? (
+                      <Skeleton className="h-4 w-24" />
+                    ) : (
+                      <Badge
+                        variant="secondary"
+                        className={`text-[10px] px-1.5 py-0 font-medium ${
+                          relatorioLucro?.statusConfiabilidade === "confirmado"
+                            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                            : relatorioLucro?.statusConfiabilidade === "parcial"
+                            ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                            : "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                        }`}
+                      >
+                        {relatorioLucro?.statusConfiabilidade === "confirmado"
+                          ? "Confirmado (100% custos)"
+                          : relatorioLucro?.statusConfiabilidade === "parcial"
+                          ? `Parcial (${relatorioLucro.coberturaCustosPercent}% cob.)`
+                          : "Estimado (sem CMV)"}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div
+                  className={`p-3 rounded-xl shrink-0 ${
+                    (relatorioLucro?.lucroLiquido ?? 0) > 0
+                      ? "bg-emerald-500/20 text-emerald-400"
+                      : (relatorioLucro?.lucroLiquido ?? 0) < 0
+                      ? "bg-red-500/20 text-red-400"
+                      : "bg-amber-500/20 text-amber-400"
+                  }`}
+                >
+                  <Coins className="w-5 h-5" />
                 </div>
               </div>
             </CardContent>
