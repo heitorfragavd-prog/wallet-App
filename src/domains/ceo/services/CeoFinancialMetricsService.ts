@@ -1931,7 +1931,7 @@ export class CeoFinancialMetricsService {
         this.fetchAllPaginated<DespesaInput>((from, to) =>
           supabase
             .from('despesas')
-            .select('id, valor, data, descricao, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id, categoria_id, categorias(nome, cor, icone)')
+            .select('id, valor, data, descricao, status, metodo_pagamento, deduplication_key, observacoes, fatura_id, workspace_id, categoria_id, categorias:categorias!despesas_categoria_id_fkey(nome, cor, icone)')
             .eq('workspace_id', workspaceId)
             .gte('data', startDate)
             .lte('data', endDate)
@@ -2136,7 +2136,7 @@ export class CeoFinancialMetricsService {
           this.fetchAllPaginated<DespesaInput>((from, to) =>
             supabase
               .from('despesas')
-              .select('id, valor, data, descricao, status, categoria_id, categorias(nome)')
+              .select('id, valor, data, descricao, status, categoria_id, categorias:categorias!despesas_categoria_id_fkey(nome)')
               .eq('workspace_id', workspaceId)
               .gte('data', startAnt)
               .lte('data', endAnt)
