@@ -150,6 +150,7 @@ function App() {
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
                   <Route path="/ceo"           element={<ProtectedRoute><DeliveryRoleGuard><WalletCeoPage /></DeliveryRoleGuard></ProtectedRoute>} />
+                  <Route path="/wallet-ceo"    element={<ProtectedRoute><DeliveryRoleGuard><WalletCeoPage /></DeliveryRoleGuard></ProtectedRoute>} />
                   <Route path="/delivery"      element={<ProtectedRoute><WalletDeliveryPage /></ProtectedRoute>} />
                   <Route path="/delivery/kds"  element={<ProtectedRoute><DeliveryKDSPage /></ProtectedRoute>} />
 

@@ -4,26 +4,19 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useDRE } from './useDRE';
 
-vi.mock('@/integrations/supabase/client', () => ({
-  supabase: {
-    from: vi.fn(),
-  },
-}));
-
 vi.mock('@/contexts/WorkspaceContext', () => ({
   useWorkspace: vi.fn(() => ({
     activeWorkspace: { id: 'ws-dre-test', nome: 'Empresa DRE' },
   })),
 }));
 
-vi.mock('@/domains/divipay/services/DivipayService', () => ({
-  divipayService: {
-    listMovements: vi.fn().mockResolvedValue({ items: [] }),
+vi.mock('@/domains/ceo/services/CeoFinancialMetricsService', () => ({
+  CeoFinancialMetricsService: {
+    getRealNetProfit: vi.fn(),
   },
 }));
 
-import { supabase } from '@/integrations/supabase/client';
-import { divipayService } from '@/domains/divipay/services/DivipayService';
+import { CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -35,41 +28,61 @@ const createWrapper = () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
 
-const makeChain = (data: unknown[]) => ({
-  select: vi.fn().mockReturnThis(),
-  gte: vi.fn().mockReturnThis(),
-  lte: vi.fn().mockReturnThis(),
-  eq: vi.fn().mockReturnThis(),
-  range: vi.fn().mockResolvedValue({ data, error: null }),
-});
-
-describe('useDRE Hook & Demonstração do Resultado', () => {
+describe('useDRE Hook — Demonstração do Resultado Canônica e Unificada', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('calcula DRE gerencial com receitas, impostos, CMV estimado, EBITDA e lucro líquido', async () => {
-    const mockReceitas = [{ valor: 10000, workspace_id: 'ws-dre-test' }];
-    const mockTransReceitas = [{ valor: 0, workspace_id: 'ws-dre-test' }];
-    const mockDespesas = [
-      { valor: 1500, descricao: 'Aluguel', workspace_id: 'ws-dre-test', metodo_pagamento: 'boleto' },
-      { valor: 500, descricao: 'Salários', workspace_id: 'ws-dre-test', metodo_pagamento: 'pix' },
-      // Despesa de cartão (não deve compor despesa operacional direta)
-      { valor: 800, descricao: 'Equipamento', workspace_id: 'ws-dre-test', cartao_id: 'card-1' },
-    ];
-
-    vi.mocked(supabase.from).mockImplementation((table: string) => {
-      if (table === 'receitas') return makeChain(mockReceitas) as never;
-      if (table === 'transacoes') return makeChain(mockTransReceitas) as never;
-      if (table === 'despesas') return makeChain(mockDespesas) as never;
-      if (table === 'fichas_tecnicas') {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-          }),
-        } as never;
-      }
-      return makeChain([]) as never;
+  it('calcula DRE gerencial unificada com receitas reais, CMV auditado, despesas por competência e lucro líquido', async () => {
+    vi.mocked(CeoFinancialMetricsService.getRealNetProfit).mockResolvedValue({
+      periodoFormatado: 'Agosto de 2026',
+      mes: 8,
+      ano: 2026,
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      faturamentoBruto: 10000,
+      deducoesVendas: 0,
+      receitaLiquida: 10000,
+      cmvReal: 3200,
+      cmvComprovado: 3200,
+      cmvEstimado: 0,
+      coberturaCustosPercent: 100,
+      produtosComCustoQtd: 15,
+      produtosTotalQtd: 15,
+      produtosVendidosSemCusto: [],
+      faturamentoVendasSemCusto: 0,
+      lucroBruto: 6800,
+      lucroBrutoComprovado: 6800,
+      margemBrutaPercent: 68.0,
+      despesasOperacionais: 2000,
+      despesasOperacionaisPagas: 2000,
+      despesasOperacionaisPendentes: 0,
+      despesasPorCategoria: [],
+      despesasExcluidasDuplicidade: {
+        comprasEstoqueExcluidas: 1200,
+        transferenciasInternas: 0,
+        faturasCartaoDuplicadas: 0,
+        retiradasSocios: 0,
+      },
+      resultadoOperacional: 4800,
+      margemOperacionalPercent: 48.0,
+      despesasFinanceiras: 300,
+      tributosSobreResultado: 0,
+      lucroLiquido: 4500,
+      margemLiquidaPercent: 45.0,
+      statusConfiabilidade: 'confirmado',
+      motivoConfiabilidade: 'Auditado por NF',
+      comparativoMesAnterior: {
+        faturamentoMesAnterior: 9000,
+        despesasMesAnterior: 1800,
+        lucroLiquidoMesAnterior: 4000,
+        variacaoValor: 500,
+        variacaoPercent: 12.5,
+        tendencia: 'crescimento',
+      },
+      evolucaoMensal: [],
+      fatoresExplicativos: [],
+      lancamentos: [],
     });
 
     const { result } = renderHook(() => useDRE(8, 2026), {
@@ -81,64 +94,91 @@ describe('useDRE Hook & Demonstração do Resultado', () => {
     const dre = result.current.dre;
     expect(dre).toBeDefined();
 
-    // 1. Receita Bruta: 10.000
+    // 1. Receita Bruta real: 10.000
     expect(dre.receitaBruta).toBe(10000);
 
-    // 2. Impostos: ICMS Simples (7%) = 700, PIS/COFINS (3.65%) = 365, ISS (2%) = 200 -> Total = 1265
-    expect(dre.impostosSimples).toBeCloseTo(700, 2);
-    expect(dre.pisCofinsSobreReceita).toBeCloseTo(365, 2);
-    expect(dre.issServicos).toBeCloseTo(200, 2);
+    // 2. Não deve aplicar alíquotas fictícias genéricas (7% ICMS, 3.65% PIS, etc.)
+    expect(dre.impostosSimples).toBe(0);
+    expect(dre.pisCofinsSobreReceita).toBe(0);
+    expect(dre.issServicos).toBe(0);
 
-    // 3. Receita Líquida: 10000 - 1265 = 8735
-    expect(dre.receitaLiquida).toBeCloseTo(8735, 2);
+    // 3. Receita Líquida real: 10.000
+    expect(dre.receitaLiquida).toBe(10000);
 
-    // 4. CMV estimado (30% da RB na ausência de fichas técnicas) = 3000
-    expect(dre.cmv).toBeCloseTo(3000, 2);
+    // 4. CMV real auditado por NF: 3.200 (não 3.000 arbitrário)
+    expect(dre.cmv).toBe(3200);
 
-    // 5. Lucro Bruto: 8735 - 3000 = 5735
-    expect(dre.lucroBruto).toBeCloseTo(5735, 2);
+    // 5. Lucro Bruto real: 6.800
+    expect(dre.lucroBruto).toBe(6800);
 
-    // 6. Despesas Operacionais: 1500 (aluguel) + 500 (salários) = 2000
-    expect(dre.despesasOperacionais).toBeCloseTo(2000, 2);
+    // 6. Despesas Operacionais e Financeiras
+    expect(dre.despesasOperacionais).toBe(2000);
+    expect(dre.despesasCartao).toBe(300);
 
-    // Despesa de cartão separada = 800
-    expect(dre.despesasCartao).toBeCloseTo(800, 2);
+    // 7. EBITDA: 4.800
+    expect(dre.ebitda).toBe(4800);
 
-    // 7. EBITDA: 5735 - 2000 = 3735
-    expect(dre.ebitda).toBeCloseTo(3735, 2);
+    // 8. Lucro Líquido Real: 4.500
+    expect(dre.lucroLiquido).toBe(4500);
+    expect(dre.margemLiquida).toBe(45.0);
 
-    // 8. Depreciação (1% de 10000) = 100 -> LAIR = 3635
-    expect(dre.depreciacao).toBeCloseTo(100, 2);
-    expect(dre.lair).toBeCloseTo(3635, 2);
-
-    // 9. IRPJ (15% de 3635) = 545.25 -> Lucro Líquido = 3089.75
-    expect(dre.irpj).toBeCloseTo(545.25, 2);
-    expect(dre.lucroLiquido).toBeCloseTo(3089.75, 2);
-
-    // 10. Margens
-    expect(dre.margemBruta).toBeCloseTo(57.35, 2);
-    expect(dre.margemEbitda).toBeCloseTo(37.35, 2);
-    expect(dre.margemLiquida).toBeCloseTo(30.9, 1);
+    // 9. Linha de tributos identificada com transparência sem alíquotas fictícias
+    const linhaTributos = dre.linhas.find((l) => l.label.includes('Tributos sobre Vendas'));
+    expect(linhaTributos).toBeDefined();
+    expect(linhaTributos?.label).toContain('Pendente de apuração fiscal');
   });
 
-  it('não calcula IRPJ quando a empresa opera em prejuízo (LAIR <= 0)', async () => {
-    const mockReceitas = [{ valor: 1000, workspace_id: 'ws-dre-test' }];
-    const mockDespesas = [
-      { valor: 5000, descricao: 'Despesa Alta', workspace_id: 'ws-dre-test', metodo_pagamento: 'pix' },
-    ];
-
-    vi.mocked(supabase.from).mockImplementation((table: string) => {
-      if (table === 'receitas') return makeChain(mockReceitas) as never;
-      if (table === 'transacoes') return makeChain([]) as never;
-      if (table === 'despesas') return makeChain(mockDespesas) as never;
-      if (table === 'fichas_tecnicas') {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-          }),
-        } as never;
-      }
-      return makeChain([]) as never;
+  it('trata adequadamente quando a empresa opera com lucro negativo (prejuízo)', async () => {
+    vi.mocked(CeoFinancialMetricsService.getRealNetProfit).mockResolvedValue({
+      periodoFormatado: 'Agosto de 2026',
+      mes: 8,
+      ano: 2026,
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+      faturamentoBruto: 1000,
+      deducoesVendas: 0,
+      receitaLiquida: 1000,
+      cmvReal: 800,
+      cmvComprovado: 800,
+      cmvEstimado: 0,
+      coberturaCustosPercent: 100,
+      produtosComCustoQtd: 5,
+      produtosTotalQtd: 5,
+      produtosVendidosSemCusto: [],
+      faturamentoVendasSemCusto: 0,
+      lucroBruto: 200,
+      lucroBrutoComprovado: 200,
+      margemBrutaPercent: 20.0,
+      despesasOperacionais: 2500,
+      despesasOperacionaisPagas: 2500,
+      despesasOperacionaisPendentes: 0,
+      despesasPorCategoria: [],
+      despesasExcluidasDuplicidade: {
+        comprasEstoqueExcluidas: 0,
+        transferenciasInternas: 0,
+        faturasCartaoDuplicadas: 0,
+        retiradasSocios: 0,
+      },
+      resultadoOperacional: -2300,
+      margemOperacionalPercent: -230.0,
+      despesasFinanceiras: 50,
+      tributosSobreResultado: 0,
+      lucroLiquido: -2350,
+      margemLiquidaPercent: -235.0,
+      statusConfiabilidade: 'confirmado',
+      motivoConfiabilidade: 'Prejuízo auditado',
+      comparativoMesAnterior: {
+        faturamentoMesAnterior: 0,
+        despesasMesAnterior: 0,
+        lucroLiquidoMesAnterior: 0,
+        variacaoValor: 0,
+        variacaoPercent: null,
+        tendencia: 'estavel',
+        mesAnteriorSemMovimentacao: true,
+      },
+      evolucaoMensal: [],
+      fatoresExplicativos: [],
+      lancamentos: [],
     });
 
     const { result } = renderHook(() => useDRE(8, 2026), {
@@ -147,40 +187,8 @@ describe('useDRE Hook & Demonstração do Resultado', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(result.current.dre.lair).toBeLessThan(0);
+    expect(result.current.dre.ebitda).toBeLessThan(0);
     expect(result.current.dre.irpj).toBe(0);
-    expect(result.current.dre.lucroLiquido).toBe(result.current.dre.lair);
-  });
-
-  it('filtra saques e transações não-liquidadas da Divipay para não inflar a receita', async () => {
-    vi.mocked(supabase.from).mockImplementation((table: string) => {
-      if (table === 'fichas_tecnicas') {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-          }),
-        } as never;
-      }
-      return makeChain([]) as never;
-    });
-
-    vi.mocked(divipayService.listMovements).mockResolvedValueOnce({
-      items: [
-        { type: 'PIX_IN', status: 'SETTLED', amountLiquid: 500, amount: 500 },
-        // Saque: não é receita
-        { type: 'SAQUE', status: 'SETTLED', amountLiquid: 300, amount: 300 },
-        // Cancelado: não é receita
-        { type: 'PIX_IN', status: 'CANCELED', amountLiquid: 200, amount: 200 },
-      ] as never,
-    });
-
-    const { result } = renderHook(() => useDRE(8, 2026), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    // Apenas os R$ 500 settled de PIX_IN entram na receita bruta
-    expect(result.current.dre.receitaBruta).toBe(500);
+    expect(result.current.dre.lucroLiquido).toBe(-2350);
   });
 });

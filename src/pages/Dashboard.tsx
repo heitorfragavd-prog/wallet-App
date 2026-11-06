@@ -548,7 +548,8 @@ const Dashboard = () => {
 
           {/* Lucro Líquido Real — Mês Atual */}
           <Card
-            onClick={() => navigate('/wallet-ceo?tab=analyses&subtab=lucro')}
+            data-testid="card-lucro-liquido"
+            onClick={() => navigate('/ceo?tab=analyses&subtab=lucro')}
             className={`relative overflow-hidden border transition-all cursor-pointer hover:shadow-md ${
               relatorioLucro && relatorioLucro.lucroLiquido > 0
                 ? "bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/30 hover:border-emerald-500/50"

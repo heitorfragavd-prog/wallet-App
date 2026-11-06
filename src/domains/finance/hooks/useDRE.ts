@@ -1,23 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { divipayService } from "@/domains/divipay/services/DivipayService";
 import { CeoFinancialMetricsService, RelatorioLucroLiquidoReal } from "@/domains/ceo/services/CeoFinancialMetricsService";
 import type { DREGerencial, LinhaDRE } from "@/domains/finance/types/foodCost";
 
 export const DRE_QUERY_KEY = ["dre_gerencial"] as const;
-
-const ALIQUOTA_ICMS_SIMPLES = 0.07;
-const ALIQUOTA_PIS_COFINS = 0.0365;
-const ALIQUOTA_ISS = 0.02;
-const ALIQUOTA_CMV_ESTIMADO = 0.30;
-const ALIQUOTA_IR = 0.15;
-
-const DIVIPAY_NON_SETTLED_STATUSES = [
-  "PENDING", "PROCESSING", "FAILED", "ERROR", "REJECTED",
-  "CANCELED", "CANCELLED", "EXPIRED", "REFUNDED", "CHARGEBACK",
-];
-const DIVIPAY_CASH_OUT_TYPES = ["CASH_OUT", "CASHOUT", "WITHDRAW", "SAQUE", "TRANSFER_OUT"];
 
 interface FetchDREParams {
   mes: number;
@@ -42,185 +28,159 @@ interface DREHistoricoMes {
   margemLiquida: number;
 }
 
-interface DREDatabaseRow {
-  valor?: number | string | null;
-  descricao?: string | null;
-  workspace_id?: string | null;
-  conta_id?: string | null;
-  cartao_id?: string | null;
-  fatura_id?: string | null;
-  metodo_pagamento?: string | null;
-}
-
-async function fetchAllRows(
-  table: string,
-  columns: string,
-  inicioStr: string,
-  fimStr: string,
-  tipo?: string,
-  workspaceId?: string | null
-): Promise<DREDatabaseRow[]> {
-  const PAGE_SIZE = 1000;
-  let allRows: DREDatabaseRow[] = [];
-  let from = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    let q = supabase
-      .from(table)
-      .select(columns)
-      .gte("data", inicioStr)
-      .lte("data", fimStr);
-
-    if (tipo) {
-      q = q.eq("tipo", tipo);
-    }
-
-    if (workspaceId) {
-      q = q.eq("workspace_id", workspaceId);
-    }
-
-    const { data, error } = await q.range(from, from + PAGE_SIZE - 1);
-    if (error || !data || data.length === 0) {
-      break;
-    }
-    allRows = allRows.concat(data as unknown as DREDatabaseRow[]);
-    if (data.length < PAGE_SIZE) {
-      hasMore = false;
-    } else {
-      from += PAGE_SIZE;
-    }
-  }
-
-  return allRows;
-}
-
+/**
+ * Apura a DRE Gerencial canônica unificada a partir do motor central
+ * CeoFinancialMetricsService.getRealNetProfit, garantindo paridade numérica
+ * estrita entre Dashboard, Wallet CEO e DRE, sem alíquotas ou estimativas arbitrárias.
+ */
 async function calcularDRE({ mes, ano, workspaceId }: FetchDREParams): Promise<DREGerencial> {
-  const ultimoDia = new Date(ano, mes, 0).getDate();
-  const mesPad = String(mes).padStart(2, "0");
-  const inicioStr = `${ano}-${mesPad}-01`;
-  const fimStr = `${ano}-${mesPad}-${String(ultimoDia).padStart(2, "0")}`;
+  const meses = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+  const periodo = `${meses[mes - 1]}/${ano}`;
 
-  const [recRows, transRecRows, despRows, transDespRows] = await Promise.all([
-    fetchAllRows("receitas", "valor, workspace_id", inicioStr, fimStr, undefined, workspaceId),
-    fetchAllRows("transacoes", "valor, workspace_id", inicioStr, fimStr, "receita", workspaceId),
-    fetchAllRows("despesas", "valor, descricao, workspace_id, conta_id, metodo_pagamento, fatura_id", inicioStr, fimStr, undefined, workspaceId),
-    fetchAllRows("transacoes", "valor, descricao, workspace_id, cartao_id, metodo_pagamento", inicioStr, fimStr, "despesa", workspaceId),
-  ]);
-
-  const soma = (rows: DREDatabaseRow[] | null) =>
-    (rows ?? []).reduce((acc: number, r: DREDatabaseRow) => acc + Number(r.valor || 0), 0);
-
-  const somaReceitasBanco = soma(recRows) + soma(transRecRows);
-
-  let somaDivipay = 0;
-  if (workspaceId) {
-    try {
-      const divipayResp = await divipayService.listMovements({
-        initialDate: `${inicioStr}T00:00:00`,
-        finalDate: `${fimStr}T23:59:59`,
-        limit: 1000,
-      }, workspaceId);
-      const items = divipayResp.items ?? [];
-      somaDivipay = items
-        .filter((m) => {
-          const tp = String(m.type || "").toUpperCase();
-          const st = String(m.status || "").toUpperCase();
-          if (DIVIPAY_CASH_OUT_TYPES.some((t) => tp.includes(t))) return false;
-          if (st && DIVIPAY_NON_SETTLED_STATUSES.some((s) => st.includes(s))) return false;
-          return true;
-        })
-        .reduce((acc, m) => acc + (m.amountLiquid > 0 ? m.amountLiquid : Number(m.amount || 0)), 0);
-    } catch (err) {
-      console.warn("DRE: Erro ao buscar movimentações Divipay", err);
-    }
+  if (!workspaceId) {
+    return {
+      periodo,
+      mes, ano,
+      receitaBruta: 0,
+      impostosSimples: 0,
+      pisCofinsSobreReceita: 0,
+      issServicos: 0,
+      receitaLiquida: 0,
+      cmv: 0,
+      lucroBruto: 0,
+      despesasOperacionais: 0,
+      ebitda: 0,
+      depreciacao: 0,
+      lair: 0,
+      irpj: 0,
+      lucroLiquido: 0,
+      margemBruta: 0,
+      margemEbitda: 0,
+      margemLiquida: 0,
+      linhas: [],
+      despesasCartao: 0,
+    };
   }
 
-  const receitaBruta = somaReceitasBanco + somaDivipay;
-
-  const impostosSimples = receitaBruta * ALIQUOTA_ICMS_SIMPLES;
-  const pisCofinsSobreReceita = receitaBruta * ALIQUOTA_PIS_COFINS;
-  const issServicos = receitaBruta * ALIQUOTA_ISS;
-  const totalImpostos = impostosSimples + pisCofinsSobreReceita + issServicos;
-  const receitaLiquida = receitaBruta - totalImpostos;
-
-  let relatorioLucroCanonica: RelatorioLucroLiquidoReal | null = null;
-  if (workspaceId) {
-    try {
-      relatorioLucroCanonica = await CeoFinancialMetricsService.getRealNetProfit(workspaceId, { mes, ano });
-    } catch (e) {
-      console.warn("DRE: Falha ao obter lucro canônico:", e);
-    }
+  let relatorio: RelatorioLucroLiquidoReal;
+  try {
+    relatorio = await CeoFinancialMetricsService.getRealNetProfit(workspaceId, { mes, ano });
+  } catch (err) {
+    console.warn("[useDRE] Falha ao obter dados canônicos do CEO:", err);
+    return {
+      periodo,
+      mes, ano,
+      receitaBruta: 0,
+      impostosSimples: 0,
+      pisCofinsSobreReceita: 0,
+      issServicos: 0,
+      receitaLiquida: 0,
+      cmv: 0,
+      lucroBruto: 0,
+      despesasOperacionais: 0,
+      ebitda: 0,
+      depreciacao: 0,
+      lair: 0,
+      irpj: 0,
+      lucroLiquido: 0,
+      margemBruta: 0,
+      margemEbitda: 0,
+      margemLiquida: 0,
+      linhas: [],
+      despesasCartao: 0,
+    };
   }
 
-  const { data: fichasData } = await (workspaceId
-    ? supabase.from("fichas_tecnicas").select("quantidade, custo_unitario").eq("workspace_id", workspaceId)
-    : supabase.from("fichas_tecnicas").select("quantidade, custo_unitario"));
-
-  let cmv: number;
-  let labelCMV = "(-) CMV — Custo de Mercadoria Vendida";
-  if (relatorioLucroCanonica && !relatorioLucroCanonica.dadosIndisponiveis && relatorioLucroCanonica.cmvReal > 0) {
-    cmv = relatorioLucroCanonica.cmvReal;
-    labelCMV = relatorioLucroCanonica.cmvComprovado > 0
-      ? "(-) CMV Real (Auditado por NF)"
-      : "(-) CMV Real (Referência de Atacado)";
-  } else if (fichasData && fichasData.length > 0) {
-    cmv = fichasData.reduce((acc: number, f: { quantidade?: number | string | null; custo_unitario?: number | string | null }) => acc + Number(f.quantidade) * Number(f.custo_unitario), 0);
-    labelCMV = "(-) CMV Real (Fichas Técnicas)";
-  } else {
-    cmv = receitaBruta * ALIQUOTA_CMV_ESTIMADO;
-    labelCMV = "(-) CMV Estimado (Pendente de Custos Reais)";
-  }
-
-  const lucroBruto = receitaLiquida - cmv;
-
-  // SEPARAÇÃO CORRETA: Despesas Operacionais do Negócio vs Cartão de Crédito
-  const isCartao = (r: DREDatabaseRow) =>
-    Boolean(r.cartao_id) || Boolean(r.fatura_id) || String(r.metodo_pagamento || "").toLowerCase().includes("credito");
-
-  const despesasOperacionais =
-    despRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0) +
-    transDespRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc : acc + Number(r.valor || 0)), 0);
-
-  const despesasCartao =
-    despRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0) +
-    transDespRows.reduce((acc: number, r: DREDatabaseRow) => (isCartao(r) ? acc + Number(r.valor || 0) : acc), 0);
-
-  const ebitda = lucroBruto - despesasOperacionais;
-  const depreciacao = receitaBruta * 0.01;
+  const receitaBruta = relatorio.faturamentoBruto;
+  const deducoesVendas = relatorio.deducoesVendas;
+  const receitaLiquida = relatorio.receitaLiquida;
+  const cmv = relatorio.cmvReal;
+  const lucroBruto = relatorio.lucroBruto;
+  const despesasOperacionais = relatorio.despesasOperacionais;
+  const despesasCartao = relatorio.despesasFinanceiras; // Taxas de adquirência, cartões e bancos
+  const ebitda = relatorio.resultadoOperacional;
+  const depreciacao = 0; // Depreciação contábil não arbitrada
   const lair = ebitda - depreciacao;
-  const irpj = lair > 0 ? lair * ALIQUOTA_IR : 0;
-  const lucroLiquido = lair - irpj;
+  const irpj = relatorio.tributosSobreResultado;
+  const lucroLiquido = relatorio.lucroLiquido;
 
   const pct = (v: number) =>
     receitaBruta > 0 ? Math.round((v / receitaBruta) * 10000) / 100 : 0;
 
+  let labelCMV = "(-) CMV — Custo de Mercadoria Vendida";
+  if (relatorio.cmvComprovado > 0) {
+    labelCMV = `(-) CMV Real (Auditado por NF — ${relatorio.coberturaCustosPercent}% cob.)`;
+  } else if (relatorio.cmvReal > 0) {
+    labelCMV = "(-) CMV Real (Referência de Atacado)";
+  } else {
+    labelCMV = "(-) CMV (Pendente de Custos Reais)";
+  }
+
   const linhas: LinhaDRE[] = [
     { label: "Receita Bruta", valor: receitaBruta, tipo: "total" },
-    { label: "(-) Simples Nacional ICMS (7%)", valor: -impostosSimples, percentualSobreReceita: pct(impostosSimples), tipo: "negativo", indent: 1 },
-    { label: "(-) PIS/COFINS (3,65%)", valor: -pisCofinsSobreReceita, percentualSobreReceita: pct(pisCofinsSobreReceita), tipo: "negativo", indent: 1 },
-    { label: "(-) ISS Serviços (2%)", valor: -issServicos, percentualSobreReceita: pct(issServicos), tipo: "negativo", indent: 1 },
+  ];
+
+  if (deducoesVendas > 0) {
+    linhas.push({
+      label: "(-) Devoluções e Cancelamentos de Vendas",
+      valor: -deducoesVendas,
+      percentualSobreReceita: pct(deducoesVendas),
+      tipo: "negativo",
+      indent: 1,
+    });
+  }
+
+  // Linha informativa de tributos sobre receita (sem estimativas fixas arbitrárias)
+  linhas.push({
+    label: "(-) Tributos sobre Vendas (Pendente de apuração fiscal)",
+    valor: 0,
+    percentualSobreReceita: 0,
+    tipo: "negativo",
+    indent: 1,
+  });
+
+  linhas.push(
     { label: "= Receita Líquida", valor: receitaLiquida, percentualSobreReceita: pct(receitaLiquida), tipo: "subtotal" },
     { label: labelCMV, valor: -cmv, percentualSobreReceita: pct(cmv), tipo: "negativo" },
     { label: "= Lucro Bruto", valor: lucroBruto, percentualSobreReceita: pct(lucroBruto), tipo: "subtotal" },
-    { label: "(-) Despesas Operacionais", valor: -despesasOperacionais, percentualSobreReceita: pct(despesasOperacionais), tipo: "negativo" },
-    { label: "(-) Despesas com Cartão de Crédito", valor: -despesasCartao, percentualSobreReceita: pct(despesasCartao), tipo: "negativo", indent: 1 },
-    { label: "= EBITDA", valor: ebitda, percentualSobreReceita: pct(ebitda), tipo: "subtotal" },
-    { label: "(-) Depreciação estimada (1%)", valor: -depreciacao, percentualSobreReceita: pct(depreciacao), tipo: "negativo", indent: 1 },
-    { label: "= LAIR (Lucro antes do IR)", valor: lair, percentualSobreReceita: pct(lair), tipo: "subtotal" },
-    { label: "(-) IRPJ (15%)", valor: -irpj, percentualSobreReceita: pct(irpj), tipo: "negativo", indent: 1 },
-    { label: "= Lucro Líquido", valor: lucroLiquido, percentualSobreReceita: pct(lucroLiquido), tipo: "total" },
-  ];
+    { label: "(-) Despesas Operacionais (por Competência)", valor: -despesasOperacionais, percentualSobreReceita: pct(despesasOperacionais), tipo: "negativo" },
+    { label: "(-) Despesas Financeiras e Taxas de Meios de Pagamento", valor: -despesasCartao, percentualSobreReceita: pct(despesasCartao), tipo: "negativo", indent: 1 },
+    { label: "= EBITDA / Resultado Operacional", valor: ebitda, percentualSobreReceita: pct(ebitda), tipo: "subtotal" },
+    { label: "= LAIR (Lucro antes do IR)", valor: lair, percentualSobreReceita: pct(lair), tipo: "subtotal" }
+  );
 
-  const meses = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+  if (irpj > 0) {
+    linhas.push({
+      label: "(-) IRPJ / CSLL (Comprovados)",
+      valor: -irpj,
+      percentualSobreReceita: pct(irpj),
+      tipo: "negativo",
+      indent: 1,
+    });
+  } else {
+    linhas.push({
+      label: "(-) IRPJ / CSLL (Pendente de escrituração fiscal)",
+      valor: 0,
+      percentualSobreReceita: 0,
+      tipo: "negativo",
+      indent: 1,
+    });
+  }
+
+  linhas.push({
+    label: "= Lucro Líquido",
+    valor: lucroLiquido,
+    percentualSobreReceita: pct(lucroLiquido),
+    tipo: "total",
+  });
 
   return {
-    periodo: `${meses[mes - 1]}/${ano}`,
+    periodo,
     mes, ano,
     receitaBruta,
-    impostosSimples,
-    pisCofinsSobreReceita,
-    issServicos,
+    impostosSimples: 0,
+    pisCofinsSobreReceita: 0,
+    issServicos: 0,
     receitaLiquida,
     cmv,
     lucroBruto,
