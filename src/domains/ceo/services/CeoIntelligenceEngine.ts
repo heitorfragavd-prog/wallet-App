@@ -26,6 +26,7 @@ import { GrowthOpportunity, CommercialExperiment } from "../types";
 export interface BriefingSection {
   titulo: string;
   destaque: string;
+  valor?: string;
   conteudo: string;
   fonte: string;
   periodo: string;
@@ -188,10 +189,12 @@ export class CeoIntelligenceEngine {
 
     // 7. CMV e Rentabilidade Real Auditada
     if (kpis.cmvConfirmado !== null && kpis.cmvConfirmado > 0) {
+      const valorFormatado = `R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
       secoes.push({
         titulo: "Rentabilidade e Custos Reais",
-        destaque: `R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
-        conteudo: `CMV auditado por notas fiscais: R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${kpis.cmvPercent}% da receita apurada com custo). Lucro bruto comprovado: R$ ${kpis.lucroBrutoConfirmado?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'} com margem bruta média de ${kpis.margemBrutaConfirmadaPercent}%.`,
+        destaque: valorFormatado,
+        valor: valorFormatado,
+        conteudo: `CMV auditado por notas fiscais: ${valorFormatado} (${kpis.cmvPercent}% da receita apurada com custo). Lucro bruto comprovado: R$ ${kpis.lucroBrutoConfirmado?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'} com margem bruta média de ${kpis.margemBrutaConfirmadaPercent}%.`,
         fonte: "produtos_eyemobile (custo_atual) e nf_itens (Notas Fiscais SPAL/Brasnorte)",
         periodo: `${range.inicioStr} a ${range.fimStr}`,
         criterioCalculo: `Cruzamento determinístico de compras auditadas com vendas PDV. Cobertura atual: ${kpis.coberturaCmvPercent}% da receita.`,

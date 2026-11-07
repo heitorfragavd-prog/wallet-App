@@ -2,11 +2,15 @@ import fs from 'fs';
 import https from 'https';
 
 const token = fs.readFileSync('C:/Users/Heitor/.supabase/mcp-token.txt', 'utf8').trim();
-const query = process.argv[2];
+let query = process.argv[2];
 
 if (!query) {
-  console.error('Please provide a SQL query as argument.');
+  console.error('Please provide a SQL query or .sql file path as argument.');
   process.exit(1);
+}
+
+if (fs.existsSync(query) && query.endsWith('.sql')) {
+  query = fs.readFileSync(query, 'utf8');
 }
 
 function runQuery(sql) {

@@ -1622,8 +1622,8 @@ async function syncUserEyemobile(
         }
       }
 
-      // Salva o progresso final de forma segura
-      const finalOffsetToSave = Math.max(config.last_synced_offset || 0, offset);
+      // Salva o progresso final de forma segura (preservando o offset real dos itens lidos, sem avançar cegamente além do final)
+      const finalOffsetToSave = config.last_synced_offset || 0;
       await supabaseAdmin
         .from("eyemobile_config")
         .update({ last_synced_offset: finalOffsetToSave, updated_at: new Date().toISOString() })
