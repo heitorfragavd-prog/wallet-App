@@ -9,6 +9,9 @@ export interface InsumoFichaTecnica {
   custoTotal: number;
 }
 
+export type StatusMargemFicha = 'excelente' | 'boa' | 'atencao' | 'perigoso' | 'sem_ficha' | 'sem_preco' | 'incompleta';
+export type StatusFichaTecnica = 'comprovada' | 'com_estimativas' | 'incompleta' | 'sem_ficha';
+
 export interface FichaTecnicaCardapio {
   id: string;
   produtoCardapioId: string;
@@ -17,29 +20,119 @@ export interface FichaTecnicaCardapio {
   categoria: string;
   precoVenda: number;
   custoTotal: number;
-  margemBrutaPercent: number;
-  statusMargem: 'excelente' | 'boa' | 'atencao' | 'perigoso' | 'sem_ficha' | 'sem_preco';
+  margemBrutaPercent: number | null;
+  statusMargem: StatusMargemFicha;
+  statusFicha: StatusFichaTecnica;
   qtdInsumos: number;
+  qtdInsumosSemCusto: number;
+  temInsumoSemCusto: boolean;
   insumos: InsumoFichaTecnica[];
 }
 
 export class CeoRecipeCardService {
   /**
-   * Calcula o custo total e a margem percentual de um produto a partir de seus insumos
+   * Calcula o custo total e a margem percentual de um produto a partir de seus insumos,
+   * garantindo que insumos sem custo NÃO sejam tratados como custo zero.
    */
   public static calculateRecipeCost(
-    insumos: { quantidade: number; custo_unitario: number }[],
+    insumos: { quantidade: number; custo_unitario?: number | null; insumoNome?: string }[],
     precoVenda: number = 0
-  ): { custoTotal: number; margemBrutaPercent: number } {
-    const custoTotal = Math.round(
-      insumos.reduce((acc, item) => acc + (Number(item.quantidade) || 0) * (Number(item.custo_unitario) || 0), 0) * 100
-    ) / 100;
+  ): {
+    custoTotal: number;
+    margemBrutaPercent: number | null;
+    temInsumoSemCusto: boolean;
+    qtdInsumosSemCusto: number;
+    statusMargem: StatusMargemFicha;
+    statusFicha: StatusFichaTecnica;
+  } {
+    if (!insumos || insumos.length === 0) {
+      return {
+        custoTotal: 0,
+        margemBrutaPercent: precoVenda === 0 ? 0 : 0,
+        temInsumoSemCusto: false,
+        qtdInsumosSemCusto: 0,
+        statusMargem: precoVenda === 0 ? 'sem_preco' : 'sem_ficha',
+        statusFicha: 'sem_ficha',
+      };
+    }
 
-    const margemBrutaPercent = precoVenda > 0
-      ? Math.round(((precoVenda - custoTotal) / precoVenda) * 1000) / 10
-      : 0;
+    let qtdSemCusto = 0;
+    let custoTotal = 0;
+    let temEstimativa = false;
 
-    return { custoTotal, margemBrutaPercent };
+    for (const item of insumos) {
+      const q = Number(item.quantidade) || 0;
+      const c = Number(item.custo_unitario);
+      if (item.custo_unitario === null || item.custo_unitario === undefined || isNaN(c) || c <= 0) {
+        qtdSemCusto++;
+      } else {
+        custoTotal += q * c;
+      }
+
+      const nome = (item.insumoNome || '').toUpperCase();
+      if (
+        nome.includes('ESTIMAD') ||
+        nome.includes('COTAÇ') ||
+        nome.includes('GERSON') ||
+        nome.includes('ALIMENTOS') ||
+        nome.includes('CAFÉ') ||
+        nome.includes('LEITE') ||
+        nome.includes('QUEIJO') ||
+        nome.includes('SELLPACK')
+      ) {
+        temEstimativa = true;
+      }
+    }
+
+    custoTotal = Math.round(custoTotal * 100) / 100;
+    const temInsumoSemCusto = qtdSemCusto > 0;
+
+    if (precoVenda === 0) {
+      return {
+        custoTotal,
+        margemBrutaPercent: 0,
+        temInsumoSemCusto,
+        qtdInsumosSemCusto: qtdSemCusto,
+        statusMargem: 'sem_preco',
+        statusFicha: temInsumoSemCusto ? 'incompleta' : temEstimativa ? 'com_estimativas' : 'comprovada',
+      };
+    }
+
+    if (temInsumoSemCusto) {
+      // Insumo sem custo NÃO pode ser tratado como custo zero para inflar a margem
+      return {
+        custoTotal,
+        margemBrutaPercent: null,
+        temInsumoSemCusto: true,
+        qtdInsumosSemCusto: qtdSemCusto,
+        statusMargem: 'incompleta',
+        statusFicha: 'incompleta',
+      };
+    }
+
+    const margemBrutaPercent = Math.round(((precoVenda - custoTotal) / precoVenda) * 1000) / 10;
+    let statusMargem: StatusMargemFicha = 'perigoso';
+
+    if (margemBrutaPercent >= 65) {
+      statusMargem = 'excelente';
+    } else if (margemBrutaPercent >= 50) {
+      statusMargem = 'boa';
+    } else if (margemBrutaPercent >= 30) {
+      statusMargem = 'atencao';
+    } else {
+      statusMargem = 'perigoso';
+    }
+
+    const statusFicha: StatusFichaTecnica = temEstimativa ? 'com_estimativas' : 'comprovada';
+
+    return {
+      custoTotal,
+      margemBrutaPercent,
+      temInsumoSemCusto: false,
+      qtdInsumosSemCusto: 0,
+      statusMargem,
+      statusFicha,
+    };
   }
 
   /**
@@ -87,25 +180,21 @@ export class CeoRecipeCardService {
     return produtos.map((p) => {
       const insumos = fichasPorProduto.get(p.id) || [];
       const precoVenda = Number(p.preco_venda) || 0;
-      const { custoTotal, margemBrutaPercent } = this.calculateRecipeCost(
-        insumos.map((i) => ({ quantidade: i.quantidade, custo_unitario: i.custoUnitario })),
+      const {
+        custoTotal,
+        margemBrutaPercent,
+        temInsumoSemCusto,
+        qtdInsumosSemCusto,
+        statusMargem,
+        statusFicha,
+      } = this.calculateRecipeCost(
+        insumos.map((i) => ({
+          quantidade: i.quantidade,
+          custo_unitario: i.custoUnitario,
+          insumoNome: i.insumoNome,
+        })),
         precoVenda
       );
-
-      let statusMargem: FichaTecnicaCardapio['statusMargem'] = 'sem_ficha';
-      if (precoVenda === 0) {
-        statusMargem = 'sem_preco';
-      } else if (insumos.length === 0) {
-        statusMargem = 'sem_ficha';
-      } else if (margemBrutaPercent >= 65) {
-        statusMargem = 'excelente';
-      } else if (margemBrutaPercent >= 50) {
-        statusMargem = 'boa';
-      } else if (margemBrutaPercent >= 30) {
-        statusMargem = 'atencao';
-      } else {
-        statusMargem = 'perigoso';
-      }
 
       return {
         id: p.id,
@@ -117,7 +206,10 @@ export class CeoRecipeCardService {
         custoTotal,
         margemBrutaPercent,
         statusMargem,
+        statusFicha,
         qtdInsumos: insumos.length,
+        qtdInsumosSemCusto,
+        temInsumoSemCusto,
         insumos,
       };
     });

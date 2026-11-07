@@ -191,12 +191,14 @@ const items = [
 ];
 
 async function seed() {
-  console.log('--- ETAPA 4: Cadastrando Produtos do Cardápio e Fichas Técnicas ---');
+  console.log('--- ETAPA 02: Cadastrando Produtos do Cardápio e Fichas Técnicas (Cafeteria / Salgados) ---');
 
   for (const item of items) {
     // 1. Inserir ou atualizar em produtos_cardapio
     const existing = await runQuery(`
-      SELECT id FROM produtos_cardapio WHERE eyemobile_product_id = '${item.eyemobile_code}';
+      SELECT id FROM produtos_cardapio 
+      WHERE eyemobile_product_id = '${item.eyemobile_code}' 
+        AND workspace_id = '${workspaceId}';
     `);
 
     let cardapioId;
@@ -209,7 +211,7 @@ async function seed() {
             categoria = '${item.categoria}',
             ativo = true,
             updated_at = NOW()
-        WHERE id = '${cardapioId}';
+        WHERE id = '${cardapioId}' AND workspace_id = '${workspaceId}';
       `);
     } else {
       const insRes = await runQuery(`
@@ -219,15 +221,19 @@ async function seed() {
           '${userId}', '${workspaceId}', '${item.nome.replace(/'/g, "''")}', ${item.preco_venda}, '${item.eyemobile_code}', '${item.categoria}', true, NOW(), NOW()
         ) RETURNING id;
       `);
-      if (!insRes || !insRes[0]) {
+      if (!insRes || !insRes[0] || insRes.error) {
         console.error('Erro criando produto cardapio:', item.nome, insRes);
         continue;
       }
       cardapioId = insRes[0].id;
     }
 
-    // 2. Limpar e recriar insumos em fichas_tecnicas
-    await runQuery(`DELETE FROM fichas_tecnicas WHERE produto_id = '${cardapioId}';`);
+    // 2. Atualizar insumos de forma idempotente em fichas_tecnicas (DELETE apenas do produto no workspace)
+    await runQuery(`
+      DELETE FROM fichas_tecnicas 
+      WHERE produto_id = '${cardapioId}' 
+        AND workspace_id = '${workspaceId}';
+    `);
 
     const values = item.insumos.map(ins => 
       `('${userId}', '${workspaceId}', '${cardapioId}', '${ins.nome.replace(/'/g, "''")}', ${ins.qtd}, '${ins.unidade}', ${ins.custo_unit}, NOW(), NOW())`
@@ -245,32 +251,34 @@ async function seed() {
       console.log(`[OK] Ficha técnica criada para: ${item.nome} (${item.insumos.length} insumos)`);
     }
 
-    // 3. Registrar no historico_custo_produto
+    // 3. Registrar no historico_custo_produto (com nf_id = NULL estrito para não violar tipo UUID)
     const custoTotalItem = item.insumos.reduce((acc, i) => acc + (i.qtd * i.custo_unit), 0);
     const histExist = await runQuery(`
-      SELECT id FROM historico_custo_produto WHERE produto_codigo = '${item.eyemobile_code}';
+      SELECT id FROM historico_custo_produto 
+      WHERE produto_codigo = '${item.eyemobile_code}' 
+        AND workspace_id = '${workspaceId}';
     `);
 
     if (!histExist || histExist.length === 0) {
       await runQuery(`
         INSERT INTO historico_custo_produto (
-          workspace_id, produto_codigo, produto_descricao, fornecedor, custo_unitario, data_compra, nf_id, created_at
+          user_id, workspace_id, produto_codigo, produto_descricao, fornecedor, custo_unitario, data_compra, nf_id, created_at
         ) VALUES (
-          '${workspaceId}', '${item.eyemobile_code}', '${item.nome.replace(/'/g, "''")}', 'Ficha Técnica Auditada (Gerson Salgados / NF Sellpack)', ${custoTotalItem.toFixed(4)}, '2026-11-01', 'FICHA-TECNICA-ETAPA-4', NOW()
+          '${userId}', '${workspaceId}', '${item.eyemobile_code}', '${item.nome.replace(/'/g, "''")}', 'Ficha Técnica Estimada (Gerson Salgados / NF Sellpack / SPAL)', ${custoTotalItem.toFixed(4)}, '2026-11-01', NULL, NOW()
         );
       `);
     }
   }
 
-  // Verificar na view v_produtos_custo
+  // 4. Verificar na view v_produtos_custo
   const viewRes = await runQuery(`
-    SELECT nome, preco_venda, custo_total, margem_percentual, status_margem, qtd_insumos
+    SELECT nome, preco_venda, custo_total, margem_percentual, status_margem, qtd_insumos, qtd_insumos_sem_custo, status_ficha
     FROM v_produtos_custo
     WHERE workspace_id = '${workspaceId}'
     ORDER BY nome;
   `);
 
-  console.log('\n--- View v_produtos_custo (Resultado Etapa 4) ---');
+  console.log('\n--- View v_produtos_custo (Resultado Etapa 02) ---');
   console.table(viewRes);
 }
 
