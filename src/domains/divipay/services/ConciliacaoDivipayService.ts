@@ -4,6 +4,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/core/logging/LoggerService";
+import { divipayService } from "./DivipayService";
 import type { DivipayTransacao } from "@/domains/divipay/types";
 import type { Database } from "@/integrations/supabase/types";
 import {
@@ -307,7 +308,19 @@ async function criarDespesaFornecedor(
   const wsId = requireWorkspaceId(workspaceId);
   const marcador = `divipay-saque:${saque.externalId}`;
   const existente = await despesaJaExiste(userId, marcador);
-  if (existente) return existente;
+  if (existente) {
+    await dynamicDb
+      .from("despesas")
+      .update({
+        contato_id: fornecedor.id,
+        categoria_id: categoriaId || fornecedor.categoria_padrao_id || undefined,
+        subcategoria_id: subcategoriaId || fornecedor.subcategoria_padrao_id || undefined,
+        conciliado: true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existente);
+    return existente;
+  }
 
   const descEfetiva = saque.descricao || `${metodoPagamento === "boleto" ? "Pagamento Boleto" : "Pagamento Pix"} - ${fornecedor.nome}`;
   const effectiveCatId = categoriaId || fornecedor.categoria_padrao_id || (await findOrCreateCategoria(userId, "Compra de Mercadorias", "ShoppingBag", "#10b981"));
@@ -575,6 +588,29 @@ export class ConciliacaoDivipayService {
       }
 
       // Avalia saque com motor avançado (Pix e Boletos)
+      const rawTipo = String(saque.tipo || "").toUpperCase();
+      const recipientDigits = String(t.recipient_key || "").replace(/\D/g, "");
+      const isBoletoBarcode = /^\d{44,48}$/.test(recipientDigits) && !String(t.recipient_key || "").includes("@") && !String(t.recipient_key || "").includes("-");
+      const isBoleto = rawTipo === "BILLET" || rawTipo === "BOLETO" || isBoletoBarcode;
+
+      let linhaDigitavel = (localMeta?.billetCode as string) || (t.metadata as Record<string, unknown>)?.billetCode as string || (isBoletoBarcode ? t.recipient_key : null);
+      let codigoBarras = (localMeta?.billetCode as string) || (t.metadata as Record<string, unknown>)?.billetCode as string || null;
+
+      if (isBoleto && (!linhaDigitavel || String(linhaDigitavel).length < 20)) {
+        try {
+          const detail = await divipayService.getWithdraw(saque.externalId, wsId);
+          if (detail) {
+            const detailBilletCode = (detail as Record<string, unknown>).billetCode as string;
+            if (detailBilletCode) {
+              linhaDigitavel = detailBilletCode;
+              codigoBarras = detailBilletCode;
+            }
+          }
+        } catch (err) {
+          logger.warn(COMPONENT, "Não foi possível carregar detalhes do saque para boleto", { externalId: saque.externalId, err });
+        }
+      }
+
       const match = ConciliacaoFinanceiraAvancada.avaliarSaque({
         saque: {
           externalId: saque.externalId,
@@ -586,8 +622,8 @@ export class ConciliacaoDivipayService {
           favorecidoDocumento: saque.favorecidoDocumento,
           recipientKey: t.recipient_key,
           descricao: saque.descricao,
-          linhaDigitavel: (localMeta?.billetCode as string) || t.recipient_key,
-          codigoBarras: (localMeta?.billetCode as string) || null,
+          linhaDigitavel: linhaDigitavel || undefined,
+          codigoBarras: codigoBarras || undefined,
         },
         colaboradores,
         acertos,
@@ -695,11 +731,21 @@ export class ConciliacaoDivipayService {
             continue;
           }
           match.dividaSugerida.valor_restante = Math.max(0, match.dividaSugerida.valor_restante - saque.valor);
+          const despesaId = await criarDespesaFornecedor(
+            userId,
+            saque,
+            match.fornecedor,
+            match.categoriaIdSugerida,
+            match.subcategoriaIdSugerida,
+            match.metodoPagamento,
+            wsId,
+          );
           await criarDespesaTaxa(userId, saque, wsId);
           await this.registrarConciliacao(userId, wsId, saque, "conciliada", {
             beneficiarioTipo: "fornecedor",
             contatoId: match.fornecedor.id,
             dividaId: match.dividaSugerida.id,
+            despesaId: despesaId ?? undefined,
             categoriaId: match.categoriaIdSugerida,
             subcategoriaId: match.subcategoriaIdSugerida,
             metodoPagamento: match.metodoPagamento,

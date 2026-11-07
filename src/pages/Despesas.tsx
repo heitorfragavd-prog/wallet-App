@@ -347,8 +347,10 @@ const Despesas = () => {
     });
 
     const total = despesas.reduce((sum, d) => sum + d.valor, 0);
+    const totalPago = despesas.filter((d) => d.status === "pago" || d.status === "quitada").reduce((sum, d) => sum + d.valor, 0);
 
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
+    const totalPagoFiltrado = filtradas.filter((d) => d.status === "pago" || d.status === "quitada").reduce((sum, d) => sum + d.valor, 0);
 
     // Previsto para pagar (dívidas em aberto no período filtrado)
     const previstoParaPagar = (todasDividas ?? [])
@@ -454,10 +456,12 @@ const Despesas = () => {
 
     return { 
       despesasFiltradas: filtradas, 
-      totalDespesas: total, 
+      totalDespesas: totalPago, 
       categoriaList,
       dailyData,
-      totalFiltrado,
+      totalFiltrado: totalPagoFiltrado,
+      totalGeral: total,
+      totalGeralFiltrado: totalFiltrado,
       previstoParaPagar,
       metodoList
     };
