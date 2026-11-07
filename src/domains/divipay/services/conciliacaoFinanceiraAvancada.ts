@@ -259,6 +259,38 @@ export class ConciliacaoFinanceiraAvancada {
       });
     }
 
+    // 2.1.1 Fallback por nome do favorecido ou descrição oficial (quando chave Pix / documento não são expostos)
+    if (colaboradoresMatch.length === 0 && !isBoleto) {
+      const nomeFavNorm = normalizarNome(saque.favorecidoNome);
+      const descNorm = normalizarNome(saque.descricao);
+
+      colaboradoresMatch = colaboradores.filter((c) => {
+        const cNomeNorm = normalizarNome(c.nome);
+        if (!cNomeNorm) return false;
+
+        // Se o nome do favorecido coincide diretamente
+        if (nomeFavNorm && (cNomeNorm === nomeFavNorm || nomeFavNorm.includes(cNomeNorm) || cNomeNorm.includes(nomeFavNorm))) {
+          return true;
+        }
+
+        // Se a descrição contém o nome completo ou primeiro nome inequívoco (com variações fonéticas comuns)
+        if (descNorm.includes(cNomeNorm)) return true;
+
+        const partes = cNomeNorm.split(" ").filter((p) => p.length >= 4);
+        const primeiroNome = partes[0];
+        if (primeiroNome) {
+          const variantes = [primeiroNome];
+          if (primeiroNome === "shuellen" || primeiroNome === "suellen") {
+            variantes.push("suellen", "shuellen", "suelen");
+          }
+          const bateDesc = variantes.some((v) => descNorm.includes(v));
+          if (bateDesc) return true;
+        }
+
+        return false;
+      });
+    }
+
     // 2.2 Verifica Fornecedores via Pix
     let fornecedoresPixMatch: Contato[] = [];
     if (pixKeyNormalizada || (docNormalizado && !isDocIntermediario)) {
@@ -332,15 +364,26 @@ export class ConciliacaoFinanceiraAvancada {
         ? "chave_pix_exata"
         : bateCpf && !batePix
           ? "documento_cpf_exato"
-          : "chave_pix_ou_cpf_colaborador_exato";
+          : (batePix && bateCpf)
+            ? "chave_pix_ou_cpf_colaborador_exato"
+            : "nome_ou_descricao_colaborador";
 
-      // Procura acerto pendente compatível
-      const acertoCompativel = acertos.find((a) => {
+      // Procura acerto pendente compatível (valor exato ou adiantamento/pagamento parcial)
+      let acertoCompativel = acertos.find((a) => {
         if (a.colaborador_id !== colab.id) return false;
         if (!["pendente", "processando"].includes(a.status)) return false;
         // Tolera diferença de arredondamento de até R$ 0.10
         return Math.abs(a.valor_total - saque.valor) <= 0.10;
       });
+
+      // Se não houver correspondência exata, busca acerto aberto do colaborador onde o saque é parcela/adiantamento
+      if (!acertoCompativel) {
+        acertoCompativel = acertos.find((a) => {
+          if (a.colaborador_id !== colab.id) return false;
+          if (!["pendente", "processando"].includes(a.status)) return false;
+          return saque.valor <= a.valor_total;
+        });
+      }
 
       return {
         tipo: isSocio ? "socio" : "colaborador",

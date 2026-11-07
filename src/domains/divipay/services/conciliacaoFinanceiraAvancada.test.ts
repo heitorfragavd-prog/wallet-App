@@ -438,4 +438,75 @@ describe("ConciliacaoFinanceiraAvancada — Testes Rigorosos (ETAPA 11)", () => 
       expect(res.evidencia).not.toBe("chave_pix_exata");
     }
   });
+
+  it("15. Identifica colaborador por descrição com termo de adiantamento ('suellen adiantamento') sem Pix explícito", () => {
+    const saque: SaqueMovimento = {
+      externalId: "tx-pix-suellen-adiantamento",
+      tipo: "DICT",
+      valor: 800.0,
+      taxa: 3.5,
+      dataPagamento: "2026-10-27T12:30:14Z",
+      descricao: "suellen adiantamento",
+    };
+
+    const acertoOutubro: AcertoEquipeCandidato = {
+      id: "acerto-outubro-2026",
+      colaborador_id: "colab-func-1",
+      tipo: "mensal_funcionario",
+      valor_total: 2069.0,
+      vencimento: "2026-11-06",
+      status: "pendente",
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [mockFuncionario],
+      acertos: [acertoOutubro],
+      fornecedores: [],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("colaborador");
+    if (res.tipo === "colaborador") {
+      expect(res.colaborador.id).toBe("colab-func-1");
+      expect(res.evidencia).toBe("nome_ou_descricao_colaborador");
+      expect(res.acertoSugerido?.id).toBe("acerto-outubro-2026");
+      expect(res.confianca).toBe("alta");
+    }
+  });
+
+  it("16. Identifica colaborador por variação na descrição ('pagamento suelen') e vincula acerto", () => {
+    const saque: SaqueMovimento = {
+      externalId: "tx-pix-suelen-complemento",
+      tipo: "DICT",
+      valor: 1269.0,
+      taxa: 3.5,
+      dataPagamento: "2026-11-06T20:06:50Z",
+      descricao: "pagamento suelen",
+    };
+
+    const acertoOutubro: AcertoEquipeCandidato = {
+      id: "acerto-outubro-2026",
+      colaborador_id: "colab-func-1",
+      tipo: "mensal_funcionario",
+      valor_total: 2069.0,
+      vencimento: "2026-11-06",
+      status: "pendente",
+    };
+
+    const res = ConciliacaoFinanceiraAvancada.avaliarSaque({
+      saque,
+      colaboradores: [mockFuncionario],
+      acertos: [acertoOutubro],
+      fornecedores: [],
+      dividas: [],
+    });
+
+    expect(res.tipo).toBe("colaborador");
+    if (res.tipo === "colaborador") {
+      expect(res.colaborador.id).toBe("colab-func-1");
+      expect(res.evidencia).toBe("nome_ou_descricao_colaborador");
+      expect(res.acertoSugerido?.id).toBe("acerto-outubro-2026");
+    }
+  });
 });

@@ -388,7 +388,7 @@ export default function EquipeDetalhePage() {
             ) : (
               acertos.map((acerto) => {
                 const isHighlighted = acerto.id === highlightedAcertoId;
-                const pagamentoConfirmado = acerto.colaborador_pagamentos?.find(
+                const pagamentosConfirmados = (acerto.colaborador_pagamentos || []).filter(
                   (p) => p.status === "pago"
                 );
 
@@ -430,43 +430,77 @@ export default function EquipeDetalhePage() {
                       </div>
 
                       {/* Dados de Quitação Efetiva quando Pago */}
-                      {acerto.status === "pago" && pagamentoConfirmado && (
-                        <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-200 space-y-1">
-                          <p className="font-semibold text-emerald-300">
-                            Pagamento quitado com sucesso
-                          </p>
-                          <p>
-                            Data do pagamento:{" "}
-                            <strong>
-                              {formatDateTime(
-                                pagamentoConfirmado.paid_at || pagamentoConfirmado.created_at
+                      {(acerto.status === "pago" || pagamentosConfirmados.length > 0) &&
+                        pagamentosConfirmados.length > 0 && (
+                          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-200 space-y-2">
+                            <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                              <p className="font-semibold text-emerald-300">
+                                {pagamentosConfirmados.length > 1
+                                  ? `Quitação realizada em ${pagamentosConfirmados.length} pagamentos`
+                                  : "Pagamento quitado com sucesso"}
+                              </p>
+                              {pagamentosConfirmados.length > 1 && (
+                                <span className="font-bold text-emerald-200">
+                                  Total pago:{" "}
+                                  {money.format(
+                                    pagamentosConfirmados.reduce((sum, p) => sum + Number(p.valor), 0)
+                                  )}
+                                </span>
                               )}
-                            </strong>
-                          </p>
-                          <p>
-                            Origem:{" "}
-                            <strong>
-                              {origemPagamentoLabels[pagamentoConfirmado.origem] ||
-                                pagamentoConfirmado.origem}
-                            </strong>
-                          </p>
-                          {pagamentoConfirmado.divipay_external_id && (
-                            <p>
-                              ID externo: <code>{pagamentoConfirmado.divipay_external_id}</code>
-                            </p>
-                          )}
-                          {pagamentoConfirmado.comprovante_url && (
-                            <a
-                              href={pagamentoConfirmado.comprovante_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-primary underline"
-                            >
-                              Ver comprovante <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
-                        </div>
-                      )}
+                            </div>
+
+                            <div className="space-y-2">
+                              {pagamentosConfirmados.map((pag, idx) => (
+                                <div
+                                  key={pag.id || idx}
+                                  className={`space-y-1 ${
+                                    pagamentosConfirmados.length > 1
+                                      ? "rounded-lg bg-emerald-950/30 p-2.5 border border-emerald-500/20"
+                                      : ""
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between font-medium">
+                                    <span>
+                                      {pagamentosConfirmados.length > 1
+                                        ? `Pagamento ${idx + 1}:`
+                                        : "Valor comprovado:"}
+                                    </span>
+                                    <span className="font-bold text-emerald-100">
+                                      {money.format(Number(pag.valor))}
+                                    </span>
+                                  </div>
+                                  <p>
+                                    Data:{" "}
+                                    <strong>
+                                      {formatDateTime(pag.paid_at || pag.created_at)}
+                                    </strong>
+                                  </p>
+                                  <p>
+                                    Origem:{" "}
+                                    <strong>
+                                      {origemPagamentoLabels[pag.origem] || pag.origem}
+                                    </strong>
+                                  </p>
+                                  {pag.divipay_external_id && (
+                                    <p>
+                                      ID externo: <code>{pag.divipay_external_id}</code>
+                                    </p>
+                                  )}
+                                  {pag.comprovante_url && (
+                                    <a
+                                      href={pag.comprovante_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center gap-1 text-primary underline"
+                                    >
+                                      Ver comprovante <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
                       {/* Ações para Acertos Pendentes */}
                       {["pendente", "falhou"].includes(acerto.status) && (

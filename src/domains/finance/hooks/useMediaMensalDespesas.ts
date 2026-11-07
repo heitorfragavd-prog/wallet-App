@@ -11,29 +11,39 @@ export function useMediaMensalDespesas() {
     queryFn: async () => {
       if (!activeWorkspace?.id) return 0;
 
-      // Coexistência de tabelas:
-      // O sistema possui histórico legado e registros na tabela 'transacoes' (tipo 'despesa')
-      // e registros estruturados na tabela 'despesas'. Ambos são consultados e consolidados
-      // para calcular a média mensal dos últimos 6 meses.
+      // Coexistência e consolidação financeira gerencial:
+      // A média mensal deve refletir as saídas operacionais reais e quitadas (status = 'pago').
+      // Para evitar distorções de mês corrente incompleto e flutuação de dias parciais,
+      // a média avalia os últimos 6 meses fechados completos (ou os meses com dados existentes).
       const hojeSP = getHojeSaoPaulo();
-      const [ano, mes, dia] = hojeSP.split("-").map(Number);
-      const seisMesesAtras = new Date(ano, mes - 1 - 6, dia);
-      const dataFormatada = formatarDataParaSaoPaulo(seisMesesAtras);
+      const [ano, mes] = hojeSP.split("-").map(Number);
 
-      // Busca despesas dos últimos 6 meses
+      // Início: 1º dia de 6 meses atrás
+      // Fim: Último dia do mês anterior ao corrente
+      const inicioData = new Date(ano, mes - 1 - 6, 1);
+      const fimData = new Date(ano, mes - 1, 0);
+
+      const dataInicioFormatada = formatarDataParaSaoPaulo(inicioData);
+      const dataFimFormatada = formatarDataParaSaoPaulo(fimData);
+
+      // Busca despesas quitadas dos últimos 6 meses fechados
       const despesasQuery = supabase
         .from("despesas")
-        .select("valor")
+        .select("valor, data")
         .eq("workspace_id", activeWorkspace.id)
-        .gte("data", dataFormatada);
+        .eq("status", "pago")
+        .gte("data", dataInicioFormatada)
+        .lte("data", dataFimFormatada);
 
-      // Busca transações de despesa dos últimos 6 meses
+      // Busca transações de despesa quitadas dos últimos 6 meses fechados (excluindo faturas de cartão)
       const transacoesQuery = supabase
         .from("transacoes")
-        .select("valor")
+        .select("valor, data")
         .eq("workspace_id", activeWorkspace.id)
         .eq("tipo", "despesa")
-        .gte("data", dataFormatada);
+        .is("fatura_id", null)
+        .gte("data", dataInicioFormatada)
+        .lte("data", dataFimFormatada);
 
       const [despesasResp, transacoesResp] = await Promise.all([
         despesasQuery,
@@ -51,9 +61,22 @@ export function useMediaMensalDespesas() {
 
       const totalDespesasVal = (despesasResp.data ?? []).reduce((acc, curr) => acc + Number(curr.valor), 0);
       const totalTransacoesVal = (transacoesResp.data ?? []).reduce((acc, curr) => acc + Number(curr.valor), 0);
+      const totalGeral = totalDespesasVal + totalTransacoesVal;
 
-      // Soma todos os gastos e divide por 6 meses para obter a média mensal real
-      return (totalDespesasVal + totalTransacoesVal) / 6;
+      if (totalGeral === 0) return 0;
+
+      // Conta quantos meses distintos possuem dados para normalizar a média
+      const mesesComDados = new Set<string>();
+      (despesasResp.data ?? []).forEach((d) => {
+        if (d.data) mesesComDados.add(String(d.data).slice(0, 7));
+      });
+      (transacoesResp.data ?? []).forEach((t) => {
+        if (t.data) mesesComDados.add(String(t.data).slice(0, 7));
+      });
+
+      const divisorMeses = Math.min(6, Math.max(1, mesesComDados.size));
+
+      return totalGeral / divisorMeses;
     },
     enabled: !!activeWorkspace?.id,
   });
