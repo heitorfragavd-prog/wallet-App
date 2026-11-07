@@ -430,4 +430,124 @@ describe('CeoNetProfit — Auditoria Canônica do Lucro Líquido Real (Hotfix 6)
       expect(relatorioConfirmado.lucroLiquidoDefinitivo).toBeCloseTo(27.98, 2); // 32.98 - 5.0
     });
   });
+
+  describe('3. HOTFIX 7 — Segregação Contábil Canônica e Confronto Temporal', () => {
+    it('classifica boletos bancários de fornecedores/atacado e salgados como compra_estoque', () => {
+      expect(classificarNaturezaResultado('Geral', 'Pagamento de boleto')).toBe('compra_estoque');
+      expect(classificarNaturezaResultado('Operacional', 'Pagamento de boleto Brasnorte')).toBe('compra_estoque');
+      expect(classificarNaturezaResultado('Fornecedor', 'Gerson salgados entrega')).toBe('compra_estoque');
+      expect(classificarNaturezaResultado('Fornecedores', 'Biscoito fardo atacado')).toBe('compra_estoque');
+    });
+
+    it('calcula corretamente as 3 visões: Resultado Realizado, Visão de Caixa e Projeção do Mês', async () => {
+      setupMockDatabase({
+        produtos_eyemobile: [
+          {
+            workspace_id: testWorkspaceId,
+            codigo: '2032242',
+            descricao: 'Coca ks',
+            custo_atual: 1.7017,
+            preco_venda: 7.00,
+          },
+        ],
+        historico_custo_produto: [
+          {
+            workspace_id: testWorkspaceId,
+            produto_codigo: '2032242',
+            custo_unitario: 1.7017,
+            data_compra: '2026-08-21',
+          },
+        ],
+        transacoes: [
+          {
+            id: 't-1',
+            workspace_id: testWorkspaceId,
+            tipo: 'receita',
+            valor: 4491.90,
+            data: '2026-11-02T18:00:00Z',
+            itens: [
+              { id: '2032242', product_name: 'Coca ks', quantity: 100, total: 700.0 },
+              { id: 'prod-sem-custo', product_name: 'Pão de Queijo', quantity: 50, total: 250.0 },
+            ],
+          },
+        ],
+        despesas: [
+          // 1. Compra de estoque paga (não deve entrar como despesa operacional na DRE)
+          {
+            id: 'd-est-1',
+            workspace_id: testWorkspaceId,
+            valor: 13264.67,
+            data: '2026-11-03',
+            descricao: 'Pagamento de boleto SPAL',
+            categoria_id: 'cat-est',
+            categorias: { nome: 'Geral' },
+            status: 'pago',
+          },
+          // 2. Despesa operacional incorrida nos primeiros dias
+          {
+            id: 'd-op-1',
+            workspace_id: testWorkspaceId,
+            valor: 2767.48,
+            data: '2026-11-02',
+            descricao: 'Equipe e suprimentos primeiros dias',
+            categoria_id: 'cat-pess',
+            categorias: { nome: 'RH' },
+            status: 'pago',
+          },
+          // 3. Despesa financeira (tarifas de saque)
+          {
+            id: 'd-fin-1',
+            workspace_id: testWorkspaceId,
+            valor: 52.50,
+            data: '2026-11-02',
+            descricao: 'Tarifa bancária saque',
+            categoria_id: 'cat-fin',
+            categorias: { nome: 'Bancário' },
+            status: 'pago',
+          },
+          // 4. Obrigação futura agendada para 25/11 (Pró-labore não incorrido até o dia 02)
+          {
+            id: 'd-fut-1',
+            workspace_id: testWorkspaceId,
+            valor: 10000.00,
+            data: '2026-11-25',
+            descricao: 'Pró-labore Sócios agendado',
+            categoria_id: 'cat-soc',
+            categorias: { nome: 'Sócios' },
+            status: 'pendente',
+          },
+        ],
+      });
+
+      const relatorio = await CeoFinancialMetricsService.getRealNetProfit(testWorkspaceId, {
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        mes: 11,
+        ano: 2026,
+      });
+
+      // 1. Visão de Resultado Realizado até a Data
+      expect(relatorio.resultadoRealizadoAteData).toBeDefined();
+      expect(relatorio.resultadoRealizadoAteData?.receitaRealizada).toBe(4491.90);
+      expect(relatorio.resultadoRealizadoAteData?.despesasIncorridas).toBe(2767.48);
+      expect(relatorio.resultadoRealizadoAteData?.despesasFinanceiras).toBe(52.50);
+      expect(relatorio.resultadoRealizadoAteData?.resultadoOperacional).toBeCloseTo(1554.25, 1); // 4491.90 - 170.17 - 2767.48
+      expect(relatorio.resultadoRealizadoAteData?.resultadoLiquidoPreliminar).toBeCloseTo(1501.75, 1); // 1554.25 - 52.50
+
+      // 2. Visão de Caixa Realizado
+      expect(relatorio.visaoCaixa).toBeDefined();
+      expect(relatorio.visaoCaixa?.entradasRealizadas).toBe(4491.90);
+      expect(relatorio.visaoCaixa?.saidasFornecedoresEstoquePagas).toBe(13264.67);
+      expect(relatorio.visaoCaixa?.saidasPagasTotal).toBeCloseTo(13264.67 + 2767.48 + 52.50, 2);
+      expect(relatorio.visaoCaixa?.saldoCaixaPeriodo).toBeCloseTo(4491.90 - (13264.67 + 2767.48 + 52.50), 2);
+
+      // 3. Bloqueio de margem líquida percentual absurda com cobertura parcial
+      expect(relatorio.coberturaCustosPercent).toBeLessThan(95);
+      expect(relatorio.margemLiquidaPercent).toBeNull();
+
+      // 4. Visão de Fechamento Projetado do Mês
+      expect(relatorio.resultadoProjetadoMes).toBeDefined();
+      expect(relatorio.resultadoProjetadoMes?.receitaProjetada).toBeGreaterThan(0);
+    });
+  });
 });

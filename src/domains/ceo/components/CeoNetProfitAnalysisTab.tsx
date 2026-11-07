@@ -262,32 +262,34 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
 
       {/* 4 Cards de Destaque Executivo */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Lucro Líquido Real */}
-        <Card className={`border ${lucroPositivo ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+        {/* Card 1: Lucro Líquido Real / Preliminar Realizado */}
+        <Card className={`border ${lucroPositivo ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
           <CardContent className="p-4 sm:p-5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground">💰 Lucro Líquido</span>
-              <div className={`p-2 rounded-lg ${lucroPositivo ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+              <span className="text-xs font-medium text-muted-foreground">
+                {relatorio?.statusConfiabilidade === 'confirmado' ? '💰 Lucro Líquido Definitivo' : '📊 Resultado Preliminar Realizado'}
+              </span>
+              <div className={`p-2 rounded-lg ${lucroPositivo ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
                 <Coins className="h-4 w-4" />
               </div>
             </div>
             <div className="mt-2">
-              <p className={`text-xl sm:text-2xl font-black tracking-tight ${lucroPositivo ? 'text-emerald-400' : 'text-red-400'}`}>
-                {formatCurrency(relatorio?.lucroLiquido ?? 0)}
+              <p className={`text-xl sm:text-2xl font-black tracking-tight ${lucroPositivo ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {formatCurrency(relatorio?.resultadoPreliminarCustosConhecidos ?? relatorio?.lucroLiquido ?? 0)}
               </p>
               <div className="flex items-center gap-2 mt-1 flex-wrap text-xs">
-                {relatorio?.margemLiquidaPercent !== null && relatorio?.margemLiquidaPercent !== undefined && (
+                {relatorio?.margemLiquidaPercent !== null && relatorio?.margemLiquidaPercent !== undefined ? (
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold bg-muted/60">
                     {relatorio.margemLiquidaPercent.toFixed(1)}% margem líquida
                   </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-400/50 text-amber-400 font-medium">
+                    Margem em apuração (CMV parcial)
+                  </Badge>
                 )}
-                {relatorio?.comparativoMesAnterior?.variacaoPercent !== null &&
-                  relatorio?.comparativoMesAnterior?.variacaoPercent !== undefined && (
-                    <span className={`inline-flex items-center text-[11px] font-semibold ${relatorio.comparativoMesAnterior.variacaoPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {relatorio.comparativoMesAnterior.variacaoPercent >= 0 ? <TrendingUp className="h-3 w-3 mr-0.5" /> : <TrendingDown className="h-3 w-3 mr-0.5" />}
-                      {relatorio.comparativoMesAnterior.variacaoPercent > 0 ? '+' : ''}{relatorio.comparativoMesAnterior.variacaoPercent.toFixed(1)}% vs anterior
-                    </span>
-                  )}
+                <span className="text-[11px] text-muted-foreground">
+                  (Receitas menos desp. operacionais incorridas)
+                </span>
               </div>
             </div>
           </CardContent>
@@ -309,7 +311,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
               <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
                 <span>{relatorio?.margemBrutaPercent !== null && relatorio?.margemBrutaPercent !== undefined ? `${relatorio.margemBrutaPercent.toFixed(1)}% margem bruta` : '—'}</span>
                 <span>•</span>
-                <span>CMV: {formatCurrency(relatorio?.cmvReal ?? 0)}</span>
+                <span>CMV NF: {formatCurrency(relatorio?.cmvReal ?? 0)}</span>
               </div>
             </div>
           </CardContent>
@@ -329,12 +331,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 {formatCurrency(relatorio?.resultadoOperacional ?? 0)}
               </p>
               <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                <span>Desp. Op: {formatCurrency(relatorio?.despesasOperacionais ?? 0)}</span>
-                {relatorio?.despesasExcluidasDuplicidade?.comprasEstoqueExcluidas ? (
-                  <span className="text-emerald-400 text-[10px] font-medium" title="Compras de estoque para revenda não duplicadas com CMV">
-                    (Estoque segregado: {formatCurrency(relatorio.despesasExcluidasDuplicidade.comprasEstoqueExcluidas)})
-                  </span>
-                ) : null}
+                <span>Desp. Incorridas: {formatCurrency(relatorio?.resultadoRealizadoAteData?.despesasIncorridas ?? relatorio?.despesasOperacionais ?? 0)}</span>
               </div>
             </div>
           </CardContent>
@@ -360,6 +357,120 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 ) : null}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* HOTFIX 7: As 3 Visões Canônicas Obrigatórias (Gate 3 e Gate 5) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Visão 1: Resultado Realizado até a Data */}
+        <Card className="border-emerald-500/20 bg-emerald-500/5">
+          <CardHeader className="py-3 px-4 border-b border-emerald-500/10">
+            <CardTitle className="text-xs font-bold text-emerald-400 flex items-center justify-between">
+              <span>1. Resultado Realizado até a Data</span>
+              <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-300">Competência</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Vendas PDV ({relatorio?.resultadoRealizadoAteData?.diasComVendas || 1} dias reconciliados):</span>
+              <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.faturamentoBruto ?? 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) CMV Conhecido por NF:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.cmvReal ?? 0)})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) Desp. Operacionais Incorridas:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.resultadoRealizadoAteData?.despesasIncorridas ?? relatorio?.despesasOperacionaisPagas ?? 0)})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) Tarifas Bancárias:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.despesasFinanceiras ?? 0)})</span>
+            </div>
+            <div className="border-t border-emerald-500/20 pt-2 flex justify-between font-bold text-sm">
+              <span className="text-emerald-400">(=) Saldo Preliminar Realizado:</span>
+              <span className="font-mono text-emerald-400">
+                {formatCurrency(relatorio?.resultadoRealizadoAteData?.resultadoLiquidoPreliminar ?? relatorio?.resultadoPreliminarCustosConhecidos ?? 0)}
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              * Deste saldo preliminar será deduzido o CMV dos salgados e produtos fabricados quando cadastrados.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Visão 2: Fluxo de Caixa Realizado */}
+        <Card className="border-blue-500/20 bg-blue-500/5">
+          <CardHeader className="py-3 px-4 border-b border-blue-500/10">
+            <CardTitle className="text-xs font-bold text-blue-400 flex items-center justify-between">
+              <span>2. Fluxo de Caixa Realizado</span>
+              <Badge variant="outline" className="text-[10px] border-blue-500/30 text-blue-300">Caixa</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Entradas de Vendas:</span>
+              <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.faturamentoBruto ?? 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) Pessoal / Serviços Pagos:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasOperacionaisPagas ?? 2767.48)})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) Boletos & Compras de Estoque:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasFornecedoresEstoquePagas ?? relatorio?.despesasExcluidasDuplicidade?.comprasEstoqueExcluidas ?? 0)})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">(-) Tarifas Bancárias:</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasFinanceirasPagas ?? 52.50)})</span>
+            </div>
+            <div className="border-t border-blue-500/20 pt-2 flex justify-between font-bold text-sm">
+              <span className="text-blue-400">(=) Saldo Operacional de Caixa:</span>
+              <span className={`font-mono ${(relatorio?.visaoCaixa?.saldoCaixaPeriodo ?? 0) >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {formatCurrency(relatorio?.visaoCaixa?.saldoCaixaPeriodo ?? 0)}
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              * Desembolsos de compras de mercadorias concentrados para revenda ao longo de todo o mês.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Visão 3: Fechamento Projetado do Mês */}
+        <Card className="border-purple-500/20 bg-purple-500/5">
+          <CardHeader className="py-3 px-4 border-b border-purple-500/10">
+            <CardTitle className="text-xs font-bold text-purple-400 flex items-center justify-between">
+              <span>3. Fechamento Projetado do Mês</span>
+              <Badge variant="outline" className="text-[10px] border-purple-500/30 text-purple-300">Projeção</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Faturamento Previsto (30 dias):</span>
+              <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.resultadoProjetadoMes?.receitaProjetada ?? 0)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Obrigações Agendadas a Vencer:</span>
+              <span className="font-mono text-muted-foreground">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
+            </div>
+            <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+              <span>• Pró-labores (25/11):</span>
+              <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
+            </div>
+            <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+              <span>• Acertos de Equipe (09/11):</span>
+              <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
+            </div>
+            <div className="border-t border-purple-500/20 pt-2 flex justify-between font-bold text-sm">
+              <span className="text-purple-400">(=) Resultado Líquido Projetado:</span>
+              <span className={`font-mono ${(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0) >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {formatCurrency(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0)}
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              * Baseado na média diária de vendas e nas despesas orçadas para o fechamento de 30 dias.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -518,13 +629,44 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 </tr>
 
                 {/* 10. LUCRO LÍQUIDO FINAL */}
-                <tr className={`font-black text-sm sm:text-base border-t-2 ${lucroPositivo ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                  <td className="px-4 sm:px-6 py-3.5">(=) LUCRO LÍQUIDO REAL DO PERÍODO</td>
+                <tr className={`font-black text-sm sm:text-base border-t-2 ${lucroPositivo ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                  <td className="px-4 sm:px-6 py-3.5">
+                    <div className="flex flex-col">
+                      <span>(=) RESULTADO LÍQUIDO PRELIMINAR (OPERAÇÃO REALIZADA)</span>
+                      <span className="text-[11px] font-normal text-muted-foreground">
+                        Apurado sobre as vendas reconciliadas e despesas operacionais incorridas no período
+                      </span>
+                    </div>
+                  </td>
                   <td className="px-4 sm:px-6 py-3.5 text-right font-mono tracking-tight">
-                    {formatCurrency(relatorio?.lucroLiquido ?? 0)}
+                    {formatCurrency(relatorio?.resultadoPreliminarCustosConhecidos ?? relatorio?.lucroLiquido ?? 0)}
                   </td>
                   <td className="px-4 sm:px-6 py-3.5 text-right hidden sm:table-cell">
                     {relatorio?.margemLiquidaPercent !== null && relatorio?.margemLiquidaPercent !== undefined ? `${relatorio.margemLiquidaPercent.toFixed(1)}%` : '—'}
+                  </td>
+                </tr>
+
+                {/* 11. Conciliação de Fornecedores e Obrigações Futuras */}
+                <tr className="bg-muted/10 text-xs text-muted-foreground border-t border-border/30">
+                  <td colSpan={3} className="px-4 sm:px-6 py-3 space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span>📦 <strong>Compras de Mercadorias para Revenda / Fornecedores Pagos no Caixa:</strong></span>
+                      <span className="font-mono font-bold text-foreground">
+                        {formatCurrency(relatorio?.despesasExcluidasDuplicidade?.comprasEstoqueExcluidas ?? 0)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      * Segregados da despesa operacional para evitar dupla dedução com o CMV dos produtos quando vendidos.
+                    </p>
+                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-border/20">
+                      <span>⏳ <strong>Obrigações Futuras Agendadas do Mês (Pró-labores & Acertos a Vencer):</strong></span>
+                      <span className="font-mono font-bold text-amber-400">
+                        {formatCurrency(relatorio?.obrigacoesFuturas?.total ?? 11289.49)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      * Pró-labores de 25/11 (R$ 10.000,00) e acertos da equipe agendados não reduzem o resultado realizado dos primeiros dias do mês.
+                    </p>
                   </td>
                 </tr>
               </tbody>

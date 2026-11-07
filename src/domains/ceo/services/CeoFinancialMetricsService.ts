@@ -318,6 +318,48 @@ export interface RelatorioLucroLiquidoReal {
     faturasCartaoDuplicadas: number;
     retiradasSocios: number;
   };
+  // HOTFIX 7: Segregação Canônica dos Períodos e Visões Executivas (Gates 1, 3 e 5)
+  resultadoRealizadoAteData?: {
+    dataLimite: string;
+    receitaRealizada: number;
+    cmvRealizado: number;
+    lucroBrutoRealizado: number;
+    despesasIncorridas: number;
+    despesasFinanceiras: number;
+    resultadoOperacional: number;
+    resultadoLiquidoPreliminar: number;
+    diasComVendas: number;
+    diasNaoSincronizados: number;
+    statusIntegridadeVendas: 'completo' | 'parcial_dias_pendentes';
+  };
+  visaoCaixa?: {
+    entradasRealizadas: number;
+    saidasPagasTotal: number;
+    saidasOperacionaisPagas: number;
+    saidasFornecedoresEstoquePagas: number;
+    saidasFinanceirasPagas: number;
+    saldoCaixaPeriodo: number;
+  };
+  resultadoProjetadoMes?: {
+    receitaProjetada: number;
+    despesasProjetadasTotal: number;
+    obrigacoesFuturasAgendadas: number;
+    resultadoProjetado: number;
+    premissaProjecao: string;
+  };
+  obrigacoesFuturas?: {
+    total: number;
+    proLabores: number;
+    acertosEquipe: number;
+    outrasObrigacoes: number;
+    itens: { data: string; descricao: string; valor: number; status: string }[];
+  };
+  comprasFornecedoresEstoque?: {
+    totalPago: number;
+    boletosTotal: number;
+    mercadoriasTotal: number;
+    itens: { data: string; descricao: string; valor: number; status: string }[];
+  };
   // Resultados Intermediários
   resultadoOperacional: number; // EBITDA
   margemOperacionalPercent: number | null;
@@ -429,16 +471,15 @@ export function classificarNaturezaResultado(
     return 'tributo_resultado';
   }
 
-  // 6. Compras de Estoque para Revenda
+  // 6. Compras de Estoque para Revenda / Fornecedores de Mercadorias / Boletos de Atacado
   // O custo entra via CMV no momento da venda, evitando duplicidade contábil.
-  // Regra Estrita: NÃO classificar qualquer "fornecedor" como compra de estoque.
-  // Apenas categorias ou descrições explícitas de mercadorias/bebidas/insumos para revenda ou atacadistas de bebidas/alimentos confirmados.
+  // Regra Estrita: NÃO classificar serviços e despesas operacionais normais como compra de estoque.
   const isCategoriaEstoque = /estoque|mercadorias?\s*(para\s*revenda)?|insumos?\s*(para\s*revenda)?|bebidas?\s*(para\s*revenda)?|alimentos?\s*(para\s*revenda)?/i.test(cat);
-  const isFornecedorBebidaAtacado = /spal\s*ind|ambev|brasnorte|coca-?cola\s*femsa|fardo|engradado|caixa\s*de\s*bebida/i.test(desc);
-  const isDescricaoMercadoriaEstoque = /(compra|aquisi[cç][aã]o)\s*(de\s*)?(mercadorias?|estoque|bebidas?|refrigerantes?|cervejas?)/i.test(desc);
+  const isFornecedorBebidaAtacado = /spal\s*ind|ambev|brasnorte|coca-?cola\s*femsa|fardo|engradado|caixa\s*de\s*bebida|gerson\s*salgados?|biscoito/i.test(desc);
+  const isDescricaoMercadoriaEstoque = /(compra|aquisi[cç][aã]o)\s*(de\s*)?(mercadorias?|estoque|bebidas?|refrigerantes?|cervejas?)|pagamento\s*de\s*boleto/i.test(desc);
 
   // Excluir expressamente serviços e despesas operacionais que contenham a palavra fornecedor
-  const isServicoOuOperacional = /servi[cç]o|software|sistema|\bti\b|internet|energia|aluguel|limpeza|contab|honor[aá]rio|consultoria|manuten[cç]/i.test(texto);
+  const isServicoOuOperacional = /servi[cç]o|software|sistema|\bti\b|internet|energia|aluguel|limpeza|contab|honor[aá]rio|consultoria|manuten[cç]|uniforme/i.test(texto);
 
   if ((isCategoriaEstoque || isFornecedorBebidaAtacado || isDescricaoMercadoriaEstoque) && !isServicoOuOperacional) {
     return 'compra_estoque';
@@ -1961,7 +2002,26 @@ export class CeoFinancialMetricsService {
         },
       });
 
+      // HOTFIX 7: Identificação da data limite de operações realizadas
+      let dataUltimaVenda: string | null = null;
+      const diasVendasSet = new Set<string>();
+      for (const t of txReceitas) {
+        const d = t.data ? t.data.slice(0, 10) : '';
+        if (d) {
+          diasVendasSet.add(d);
+          if (!dataUltimaVenda || d > dataUltimaVenda) {
+            dataUltimaVenda = d;
+          }
+        }
+      }
+
+      const spHoje = getSaoPauloParts(new Date());
+      const hojeStr = `${spHoje.year}-${String(spHoje.month).padStart(2, '0')}-${String(spHoje.day).padStart(2, '0')}`;
+      const isMesAtualEmAndamento = ano === spHoje.year && mes === spHoje.month;
+      const dataLimiteRealizada = isMesAtualEmAndamento ? (dataUltimaVenda && dataUltimaVenda <= hojeStr ? dataUltimaVenda : hojeStr) : endDate;
+
       let despesasOperacionais = 0;
+      let despesasOperacionaisIncorridas = 0;
       let despesasOperacionaisPagas = 0;
       let despesasOperacionaisPendentes = 0;
       let comprasEstoqueExcluidas = 0;
@@ -1970,25 +2030,74 @@ export class CeoFinancialMetricsService {
       let despesasFinanceiras = 0;
       let tributosSobreResultado = 0;
 
+      // Visão de Caixa Realizado
+      let saidasCaixaTotal = 0;
+      let saidasOperacionaisPagas = 0;
+      let saidasEstoquePagas = 0;
+      let saidasFinanceirasPagas = 0;
+
+      // Obrigações Futuras Agendadas do Mês
+      let obrigacoesFuturasTotal = 0;
+      let proLaboresFuturos = 0;
+      let acertosEquipeFuturos = 0;
+      let outrasObrigacoesFuturas = 0;
+      const obrigacoesFuturasItens: { data: string; descricao: string; valor: number; status: string }[] = [];
+      const comprasEstoqueItens: { data: string; descricao: string; valor: number; status: string }[] = [];
+
+      // Prevenção de duplicidade: pagamentos de pessoal já efetuados via Divipay
+      let adiantamentoShuellenPago = 0;
+      for (const item of consolidado.itensConsolidados) {
+        const d = (item.descricao || '').toLowerCase();
+        if (d.includes('pagamento suelen') && item.status === 'pago') {
+          adiantamentoShuellenPago += Number(item.valor || 0);
+        }
+      }
+
       const categoriaMap = new Map<string, { valor: number; cor?: string; icone?: string }>();
 
       for (const item of consolidado.itensConsolidados) {
         const val = Number(item.valor || 0);
         const catNome = item.categoriaNome || 'Sem categoria';
         const desc = item.descricao || '';
+        const dataItem = item.data ? item.data.slice(0, 10) : '';
         const natureza = classificarNaturezaResultado(catNome, desc);
 
         if (natureza === 'compra_estoque') {
           // Prevenção de duplicidade contábil: compras de estoque para revenda não entram em despesas operacionais
           // porque o custo já é reconhecido no CMV quando a mercadoria é vendida
           comprasEstoqueExcluidas += val;
+          comprasEstoqueItens.push({
+            data: dataItem,
+            descricao: item.descricao,
+            valor: val,
+            status: item.status || 'pago',
+          });
+          if (item.status === 'pago') {
+            saidasCaixaTotal += val;
+            saidasEstoquePagas += val;
+          }
         } else if (natureza === 'retirada_socios') {
-          // Destinação de resultado contábil, não despesa do exercício
+          // Destinação de resultado contábil / remuneração de sócios
           retiradasSocios += val;
+          if (isMesAtualEmAndamento && (dataItem > dataLimiteRealizada || item.status === 'pendente')) {
+            obrigacoesFuturasTotal += val;
+            proLaboresFuturos += val;
+            obrigacoesFuturasItens.push({
+              data: dataItem,
+              descricao: item.descricao,
+              valor: val,
+              status: item.status || 'pendente',
+            });
+          }
         } else if (natureza === 'amortizacao_emprestimo') {
           _amortizacaoEmprestimo += val;
+          if (item.status === 'pago') saidasCaixaTotal += val;
         } else if (natureza === 'financeira') {
           despesasFinanceiras += val;
+          if (item.status === 'pago') {
+            saidasCaixaTotal += val;
+            saidasFinanceirasPagas += val;
+          }
           lancamentos.push({
             id: item.id,
             data: item.data,
@@ -2013,23 +2122,56 @@ export class CeoFinancialMetricsService {
           });
         } else {
           // Despesa Operacional legítima
-          despesasOperacionais += val;
-          if (item.status === 'pago') {
-            despesasOperacionaisPagas += val;
+          const descLower = desc.toLowerCase();
+
+          // Detecção de obrigação futura agendada ou pró-labore agendado no mês
+          const isObrigacaoFutura = isMesAtualEmAndamento && (
+            dataItem > dataLimiteRealizada ||
+            (item.status === 'pendente' && (descLower.includes('pró-labore') || descLower.includes('pro-labore') || descLower.includes('acerto equipe')))
+          );
+
+          // Conciliação de salário duplicado (Shuellen)
+          let valorEfetivoItem = val;
+          if (item.status === 'pendente' && descLower.includes('salário: shuellen') && adiantamentoShuellenPago > 0) {
+            valorEfetivoItem = Math.max(0, val - adiantamentoShuellenPago);
+          }
+
+          if (isObrigacaoFutura) {
+            obrigacoesFuturasTotal += valorEfetivoItem;
+            if (descLower.includes('pró-labore')) proLaboresFuturos += valorEfetivoItem;
+            else if (descLower.includes('acerto equipe')) acertosEquipeFuturos += valorEfetivoItem;
+            else outrasObrigacoesFuturas += valorEfetivoItem;
+
+            obrigacoesFuturasItens.push({
+              data: dataItem,
+              descricao: valorEfetivoItem < val ? `${desc} (Saldo a conciliar após adiantamento)` : desc,
+              valor: valorEfetivoItem,
+              status: item.status || 'pendente',
+            });
+            despesasOperacionaisPendentes += valorEfetivoItem;
           } else {
-            despesasOperacionaisPendentes += val;
+            despesasOperacionaisIncorridas += valorEfetivoItem;
+            despesasOperacionais += valorEfetivoItem;
+
+            if (item.status === 'pago') {
+              despesasOperacionaisPagas += valorEfetivoItem;
+              saidasCaixaTotal += valorEfetivoItem;
+              saidasOperacionaisPagas += valorEfetivoItem;
+            } else {
+              despesasOperacionaisPendentes += valorEfetivoItem;
+            }
           }
 
           const centroCusto = classificarCentroCustoOperacional(catNome, desc);
           const curCat = categoriaMap.get(centroCusto) || { valor: 0, cor: item.categoriaCor };
-          curCat.valor += val;
+          curCat.valor += valorEfetivoItem;
           categoriaMap.set(centroCusto, curCat);
 
           lancamentos.push({
             id: item.id,
             data: item.data,
             descricao: item.descricao,
-            valor: -val,
+            valor: -valorEfetivoItem,
             grupo: 'despesa_operacional',
             categoria: centroCusto,
             origem: item.origem,
@@ -2039,6 +2181,7 @@ export class CeoFinancialMetricsService {
       }
 
       despesasOperacionais = Math.round(despesasOperacionais * 100) / 100;
+      despesasOperacionaisIncorridas = Math.round(despesasOperacionaisIncorridas * 100) / 100;
       despesasOperacionaisPagas = Math.round(despesasOperacionaisPagas * 100) / 100;
       despesasOperacionaisPendentes = Math.round(despesasOperacionaisPendentes * 100) / 100;
       comprasEstoqueExcluidas = Math.round(comprasEstoqueExcluidas * 100) / 100;
@@ -2051,7 +2194,9 @@ export class CeoFinancialMetricsService {
         .map(([categoria, info]) => ({
           categoria,
           valor: Math.round(info.valor * 100) / 100,
-          percentual: despesasOperacionais > 0 ? Math.round((info.valor / despesasOperacionais) * 1000) / 10 : 0,
+          percentual: (despesasOperacionais + obrigacoesFuturasTotal) > 0
+            ? Math.round((info.valor / (despesasOperacionais + obrigacoesFuturasTotal)) * 1000) / 10
+            : 0,
           cor: info.cor,
         }))
         .sort((a, b) => b.valor - a.valor);
@@ -2061,15 +2206,78 @@ export class CeoFinancialMetricsService {
       const margemOperacionalPercent = receitaLiquida > 0 ? Math.round((resultadoOperacional / receitaLiquida) * 1000) / 10 : null;
 
       const lucroLiquido = Math.round((resultadoOperacional - despesasFinanceiras - tributosSobreResultado) * 100) / 100;
-      const margemLiquidaPercent = receitaLiquida > 0 ? Math.round((lucroLiquido / receitaLiquida) * 1000) / 10 : null;
 
-      // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica (GATE 2)
+      // HOTFIX 7: Nunca exibir margem líquida absurda definitiva de -387% enquanto houver cobertura parcial de CMV
+      const margemLiquidaPercent = (coberturaCustosPercent >= 95 && receitaLiquida > 0)
+        ? Math.round((lucroLiquido / receitaLiquida) * 1000) / 10
+        : null;
+
+      // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica (GATE 2 e GATE 3)
       const faturamentoVendasSemCusto = Math.round(
         produtosVendidosSemCusto.reduce((acc, p) => acc + Number(p.faturamento || 0), 0) * 100
       ) / 100;
       const receitaComCustoConhecido = relatorioComercial.receitaComprovada;
       const receitaComCustoPendente = faturamentoVendasSemCusto;
-      const resultadoPreliminarCustosConhecidos = Math.round((lucroBrutoComprovado - despesasOperacionais) * 100) / 100;
+
+      // Resultado Preliminar das Operações Realizadas:
+      const resultadoPreliminarCustosConhecidos = Math.round((resultadoOperacional - despesasFinanceiras) * 100) / 100;
+
+      // HOTFIX 7: Três Visões Canônicas Obrigatórias (Gate 3)
+      const diasComVendas = diasVendasSet.size || 1;
+      const diasNaoSincronizados = isMesAtualEmAndamento ? Math.max(0, spHoje.day - diasComVendas) : 0;
+      const statusIntegridadeVendas = diasNaoSincronizados > 0 ? 'parcial_dias_pendentes' : 'completo';
+
+      const resultadoRealizadoAteData = {
+        dataLimite: dataLimiteRealizada,
+        receitaRealizada: faturamentoBruto,
+        cmvRealizado: cmvReal,
+        lucroBrutoRealizado: lucroBruto,
+        despesasIncorridas: despesasOperacionaisIncorridas,
+        despesasFinanceiras,
+        resultadoOperacional,
+        resultadoLiquidoPreliminar: resultadoPreliminarCustosConhecidos,
+        diasComVendas,
+        diasNaoSincronizados,
+        statusIntegridadeVendas: statusIntegridadeVendas as 'completo' | 'parcial_dias_pendentes',
+      };
+
+      const visaoCaixa = {
+        entradasRealizadas: faturamentoBruto,
+        saidasPagasTotal: Math.round(saidasCaixaTotal * 100) / 100,
+        saidasOperacionaisPagas: Math.round(saidasOperacionaisPagas * 100) / 100,
+        saidasFornecedoresEstoquePagas: Math.round(saidasEstoquePagas * 100) / 100,
+        saidasFinanceirasPagas: Math.round(saidasFinanceirasPagas * 100) / 100,
+        saldoCaixaPeriodo: Math.round((faturamentoBruto - saidasCaixaTotal) * 100) / 100,
+      };
+
+      const faturamentoDiarioMedio = diasComVendas > 0 ? faturamentoBruto / diasComVendas : 0;
+      const receitaProjetada = Math.round(faturamentoDiarioMedio * 30 * 100) / 100;
+      const despesasProjetadasTotal = Math.round(((despesasOperacionaisIncorridas * 4.3) + obrigacoesFuturasTotal + despesasFinanceiras) * 100) / 100;
+      const cmvProjetado = coberturaCustosPercent > 0 ? (receitaProjetada * (relatorioComercial.cmvTotal / (relatorioComercial.receitaTotal || 1))) : (receitaProjetada * 0.45);
+      const resultadoProjetado = Math.round((receitaProjetada - cmvProjetado - despesasProjetadasTotal) * 100) / 100;
+
+      const resultadoProjetadoMes = {
+        receitaProjetada,
+        despesasProjetadasTotal,
+        obrigacoesFuturasAgendadas: Math.round(obrigacoesFuturasTotal * 100) / 100,
+        resultadoProjetado,
+        premissaProjecao: `Projeção linear baseada no faturamento médio apurado nos dias operacionais (${faturamentoDiarioMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia).`,
+      };
+
+      const obrigacoesFuturas = {
+        total: Math.round(obrigacoesFuturasTotal * 100) / 100,
+        proLabores: Math.round(proLaboresFuturos * 100) / 100,
+        acertosEquipe: Math.round(acertosEquipeFuturos * 100) / 100,
+        outrasObrigacoes: Math.round(outrasObrigacoesFuturas * 100) / 100,
+        itens: obrigacoesFuturasItens,
+      };
+
+      const comprasFornecedoresEstoque = {
+        totalPago: Math.round(saidasEstoquePagas * 100) / 100,
+        boletosTotal: Math.round(comprasEstoqueExcluidas * 100) / 100,
+        mercadoriasTotal: Math.round(saidasEstoquePagas * 100) / 100,
+        itens: comprasEstoqueItens,
+      };
 
       // Tributos comprovados vs pendentes de escrituração:
       const tributosApurados = tributosSobreResultado > 0 || deducoesVendas > 0;
@@ -2410,6 +2618,11 @@ export class CeoFinancialMetricsService {
           faturasCartaoDuplicadas: consolidado.faturasCartao,
           retiradasSocios,
         },
+        resultadoRealizadoAteData,
+        visaoCaixa,
+        resultadoProjetadoMes,
+        obrigacoesFuturas,
+        comprasFornecedoresEstoque,
         resultadoOperacional,
         margemOperacionalPercent,
         despesasFinanceiras,
