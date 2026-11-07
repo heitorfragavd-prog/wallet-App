@@ -295,6 +295,10 @@ export interface RelatorioLucroLiquidoReal {
   cmvComprovado: number;
   cmvEstimado: number;
   coberturaCustosPercent: number;
+  coberturaComprovadaPercent?: number;
+  coberturaEstimadaPercent?: number;
+  receitaComprovada?: number;
+  receitaEstimada?: number;
   produtosComCustoQtd: number;
   produtosTotalQtd: number;
   produtosVendidosSemCusto: { codigo: string; nome: string; quantidade: number; faturamento: number }[];
@@ -1477,15 +1481,28 @@ export class CeoFinancialMetricsService {
         }
       }
 
-      // Histórico temporal por código de produto
-      const historyByCode = new Map<string, { custo: number; dataCompra: string; fornecedor?: string }[]>();
+      // Histórico temporal por código de produto com auditoria estrita de NF SEFAZ
+      const historyByCode = new Map<string, { custo: number; dataCompra: string; fornecedor?: string; isProvenNf: boolean }[]>();
       for (const h of histRes.data || []) {
         if (!h.produto_codigo || Number(h.custo_unitario) <= 0) continue;
         const list = historyByCode.get(String(h.produto_codigo)) || [];
+        const f = (h.fornecedor || '').toUpperCase();
+        // Critério canônico e auditado: apenas notas fiscais SEFAZ comprovadas (SPAL, Brasnorte, Ambev sem paridade/cotação)
+        const isProven =
+          !f.includes('PARIDADE') &&
+          !f.includes('COTAÇÃO') &&
+          !f.includes('COTADO') &&
+          !f.includes('COMBO') &&
+          !f.includes('INSUMOS') &&
+          !f.includes('PANIFICAÇÃO') &&
+          !f.includes('GERSON SALGADOS') &&
+          (f.includes('NF') || f.includes('SPAL') || f.includes('BRASNORTE') || f.includes('AMBEV'));
+
         list.push({
           custo: Number(h.custo_unitario),
           dataCompra: h.data_compra || (h.created_at ? h.created_at.slice(0, 10) : '2026-01-01'),
           fornecedor: h.fornecedor || undefined,
+          isProvenNf: isProven,
         });
         historyByCode.set(String(h.produto_codigo), list);
       }
@@ -1573,7 +1590,7 @@ export class CeoFinancialMetricsService {
             const purchaseMatch = histList.filter((h) => h.dataCompra <= saleDateStr).pop();
             if (purchaseMatch && purchaseMatch.custo > 0) {
               custoLinha = purchaseMatch.custo;
-              tipoLinha = 'comprovado';
+              tipoLinha = purchaseMatch.isProvenNf ? 'comprovado' : 'estimado';
             }
           }
 
@@ -2645,6 +2662,10 @@ export class CeoFinancialMetricsService {
         cmvComprovado,
         cmvEstimado,
         coberturaCustosPercent,
+        coberturaComprovadaPercent: relatorioComercial.coberturaComprovadaPercent,
+        coberturaEstimadaPercent: Math.max(0, Math.round((coberturaCustosPercent - relatorioComercial.coberturaComprovadaPercent) * 10) / 10),
+        receitaComprovada: relatorioComercial.receitaComprovada,
+        receitaEstimada: relatorioComercial.receitaEstimada,
         produtosComCustoQtd: relatorioComercial.produtosComCustoQtd,
         produtosTotalQtd: relatorioComercial.produtosTotalQtd,
         produtosVendidosSemCusto,

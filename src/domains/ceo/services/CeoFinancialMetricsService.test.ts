@@ -699,8 +699,8 @@ describe('CeoFinancialMetricsService — Auditoria de Dados 100% Reais', () => {
           { workspace_id: wsId, codigo: 'PROD_HIST', descricao: 'Produto com Historico', custo_atual: 5.00, preco_venda: 10.00 },
         ],
         historico_custo_produto: [
-          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.00, data_compra: '2026-08-01', fornecedor: 'Fornecedor Antigo' },
-          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.50, data_compra: '2026-09-01', fornecedor: 'Fornecedor Novo' },
+          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.00, data_compra: '2026-08-01', fornecedor: 'SPAL INDUSTRIA (NF 013.664.150)' },
+          { workspace_id: wsId, produto_codigo: 'PROD_HIST', custo_unitario: 4.50, data_compra: '2026-09-01', fornecedor: 'SPAL INDUSTRIA (NF 013.790.902)' },
         ],
       });
 

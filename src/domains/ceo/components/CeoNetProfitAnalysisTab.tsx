@@ -205,7 +205,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                   Qualidade dos Dados: {relatorio.statusConfiabilidade === 'confirmado' ? 'Lucro Líquido Definitivo' : relatorio.statusConfiabilidade === 'parcial' ? 'Resultado Preliminar com Custos Conhecidos' : 'Resultado Estimado'}
                 </span>
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-current font-semibold">
-                  {relatorio.coberturaCustosPercent}% de cobertura de CMV
+                  {relatorio.coberturaCustosPercent}% de cobertura total ({relatorio.coberturaComprovadaPercent ?? 0}% NF | {relatorio.coberturaEstimadaPercent ?? 0}% Cotado/Estimado)
                 </Badge>
                 {relatorio.tributosStatus === 'pendente_escrituracao' && (
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-400 text-amber-400 font-semibold">
@@ -376,9 +376,19 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
               <span className="text-muted-foreground">Vendas PDV ({relatorio?.resultadoRealizadoAteData?.diasComVendas || 1} dias reconciliados):</span>
               <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.faturamentoBruto ?? 0)}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">(-) CMV Conhecido por NF:</span>
-              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.cmvReal ?? 0)})</span>
+            <div className="space-y-1 py-1 border-y border-border/20">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground font-medium">(-) CMV dos Produtos Vendidos:</span>
+                <span className="font-mono text-rose-400 font-semibold">({formatCurrency(relatorio?.cmvReal ?? 0)})</span>
+              </div>
+              <div className="flex justify-between text-[11px] pl-2 text-muted-foreground">
+                <span>↳ Comprovado por NF SEFAZ:</span>
+                <span className="font-mono text-rose-300">({formatCurrency(relatorio?.cmvComprovado ?? 0)})</span>
+              </div>
+              <div className="flex justify-between text-[11px] pl-2 text-muted-foreground">
+                <span>↳ Cotado / Estimativa Operacional:</span>
+                <span className="font-mono text-amber-300/80">({formatCurrency(relatorio?.cmvEstimado ?? 0)})</span>
+              </div>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">(-) Desp. Operacionais Incorridas:</span>
@@ -562,11 +572,16 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
 
                 {/* 4. CMV */}
                 <tr className="hover:bg-muted/30 text-muted-foreground">
-                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10 flex items-center gap-1.5 flex-wrap">
-                    <span>(-) CMV Real dos Produtos Efetivamente Vendidos</span>
-                    {relatorio?.cmvComprovado && relatorio.cmvComprovado > 0 ? (
-                      <span className="text-[10px] text-emerald-400 font-semibold">(NF Auditada)</span>
-                    ) : null}
+                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10 flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>(-) CMV Real dos Produtos Efetivamente Vendidos</span>
+                      <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-400">
+                        {relatorio?.coberturaCustosPercent || 0}% de cobertura
+                      </Badge>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      NF SEFAZ: {formatCurrency(relatorio?.cmvComprovado ?? 0)} ({relatorio?.coberturaComprovadaPercent ?? 0}%) | Cotado/Estimado: {formatCurrency(relatorio?.cmvEstimado ?? 0)} ({relatorio?.coberturaEstimadaPercent ?? 0}%)
+                    </span>
                   </td>
                   <td className="px-4 sm:px-6 py-2.5 text-right font-mono text-rose-400">
                     {relatorio?.cmvReal ? `(${formatCurrency(relatorio.cmvReal)})` : 'R$ 0,00'}

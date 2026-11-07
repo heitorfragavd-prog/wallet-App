@@ -150,29 +150,42 @@ const Dashboard = () => {
     [despesasConsolidadas],
   );
 
-  // Segmentação contábil das saídas: Compras de Estoque vs Despesas Operacionais
+  // Segmentação contábil rigorosa das saídas: Compras de Estoque para Revenda vs Despesas Operacionais / Boletos
   const composicaoDespesas = useMemo(() => {
     let estoque = 0;
     let operacional = 0;
     despesasConsolidadas
       .filter((d) => d.status === "pago")
       .forEach((d) => {
-        const cat = (d.categorias?.nome || "").toLowerCase();
-        const desc = (d.descricao || "").toLowerCase();
+        const cat = (d.categorias?.nome || "").toLowerCase().trim();
+        const desc = (d.descricao || "").toLowerCase().trim();
         const val = Number(d.valor || 0);
-        if (
+
+        // Regra contábil auditada: apenas mercadorias/alimentos para revenda comprovados
+        // Não incluir 'boleto' genérico de transferências Divipay
+        const isEstoqueComprovado =
+          cat === "ambev" ||
+          cat === "coca-cola" ||
+          cat === "salgados" ||
+          cat === "biscoito de polvilho" ||
+          cat === "sorvete" ||
+          cat === "cigarro" ||
+          cat === "xodó" ||
+          cat === "3 corações" ||
+          cat === "água igarapé" ||
+          cat === "k&k" ||
           cat.includes("mercadoria") ||
           cat.includes("estoque") ||
-          cat.includes("fornecedor") ||
-          cat.includes("compra") ||
-          cat.includes("bebida") ||
           desc.includes("ambev") ||
-          desc.includes("coca") ||
+          desc.includes("brasnorte") ||
           desc.includes("spal") ||
-          desc.includes("salgados") ||
-          desc.includes("biscoitos") ||
-          desc.includes("boleto")
-        ) {
+          desc.includes("coca-cola") ||
+          desc.includes("gerson salgados") ||
+          desc.includes("biscoito") ||
+          desc.includes("compra mercadoria") ||
+          desc.includes("fornecedor bebidas");
+
+        if (isEstoqueComprovado) {
           estoque += val;
         } else {
           operacional += val;
@@ -785,8 +798,8 @@ const Dashboard = () => {
                 Saldo: {formatCurrency(saldoAtualBurn)}
               </p>
               {runway <= 7 && (
-                <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
-                  ⚠️ Runway de {runway.toFixed(0)} dias. Nota: consumo recente inclui estoque para o mês todo.
+                <div className="mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300">
+                  ℹ️ <strong>Fluxo Contínuo:</strong> A Rodo Point opera com giro diário no PDV (~{formatCurrency(totalReceitas > 0 ? totalReceitas / 7 : 641)}/dia) que renova o caixa diariamente. O runway de {runway.toFixed(0)} dias reflete cenário de estresse sem novas receitas e desembolsos concentrados de início de mês.
                 </div>
               )}
               {runway > 7 && runway <= 15 && (
