@@ -529,10 +529,13 @@ describe('CeoNetProfit — Auditoria Canônica do Lucro Líquido Real (Hotfix 6)
       // 1. Visão de Resultado Realizado até a Data
       expect(relatorio.resultadoRealizadoAteData).toBeDefined();
       expect(relatorio.resultadoRealizadoAteData?.receitaRealizada).toBe(4491.90);
+      expect(relatorio.resultadoRealizadoAteData?.receitaComCustoConhecido).toBe(700.00);
+      expect(relatorio.resultadoRealizadoAteData?.cmvRealizado).toBe(170.17);
+      expect(relatorio.resultadoRealizadoAteData?.lucroBrutoRealizado).toBeCloseTo(529.83, 2); // 700.00 - 170.17
       expect(relatorio.resultadoRealizadoAteData?.despesasIncorridas).toBe(2767.48);
       expect(relatorio.resultadoRealizadoAteData?.despesasFinanceiras).toBe(52.50);
-      expect(relatorio.resultadoRealizadoAteData?.resultadoOperacional).toBeCloseTo(1554.25, 1); // 4491.90 - 170.17 - 2767.48
-      expect(relatorio.resultadoRealizadoAteData?.resultadoLiquidoPreliminar).toBeCloseTo(1501.75, 1); // 1554.25 - 52.50
+      expect(relatorio.resultadoRealizadoAteData?.resultadoOperacional).toBeCloseTo(529.83 - 2767.48, 2);
+      expect(relatorio.resultadoRealizadoAteData?.resultadoLiquidoPreliminar).toBeCloseTo(529.83 - 2767.48 - 52.50, 2);
 
       // 2. Visão de Caixa Realizado
       expect(relatorio.visaoCaixa).toBeDefined();
@@ -579,7 +582,7 @@ describe('CeoNetProfit — Auditoria Canônica do Lucro Líquido Real (Hotfix 6)
             valor: 4491.90,
             data: '2026-11-02T18:00:00Z',
             itens: [
-              { id: '2032242', product_name: 'Coca ks', quantity: 100, total: 700.0 },
+              { id: '2032242', product_name: 'Coca ks', quantity: 300, total: 2100.0 },
               { id: 'prod-sem-custo', product_name: 'Salgado Forno', quantity: 50, total: 400.0 },
             ],
           },

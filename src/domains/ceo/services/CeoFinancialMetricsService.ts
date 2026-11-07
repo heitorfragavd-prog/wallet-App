@@ -305,6 +305,7 @@ export interface RelatorioLucroLiquidoReal {
   faturamentoVendasSemCusto: number;
   // Lucro Bruto
   lucroBruto: number;
+  lucroBrutoCoberto?: number;
   lucroBrutoComprovado: number;
   receitaComCustoConhecido: number;
   receitaComCustoPendente: number;
@@ -481,7 +482,7 @@ export function classificarNaturezaResultado(
   // O custo entra via CMV no momento da venda, evitando duplicidade contábil.
   // Regra Estrita: NÃO classificar serviços e despesas operacionais normais como compra de estoque.
   const isCategoriaEstoque = /estoque|mercadorias?\s*(para\s*revenda)?|insumos?\s*(para\s*revenda)?|bebidas?\s*(para\s*revenda)?|alimentos?\s*(para\s*revenda)?/i.test(cat);
-  const isFornecedorBebidaAtacado = /spal\s*ind|ambev|brasnorte|coca-?cola\s*femsa|fardo|engradado|caixa\s*de\s*bebida|gerson\s*salgados?|biscoito/i.test(desc);
+  const isFornecedorBebidaAtacado = /\bspal\b|ambev|brasnorte|coca-?cola\s*femsa|fardo|engradado|caixa\s*de\s*bebida|gerson\s*salgados?|biscoito/i.test(desc);
   const isDescricaoMercadoriaEstoque = /(compra|aquisi[cç][aã]o)\s*(de\s*)?(mercadorias?|estoque|bebidas?|refrigerantes?|cervejas?)|pagamento\s*de\s*boleto/i.test(desc);
 
   // Excluir expressamente serviços e despesas operacionais que contenham a palavra fornecedor
@@ -1975,14 +1976,23 @@ export class CeoFinancialMetricsService {
       deducoesVendas = Math.round(deducoesVendas * 100) / 100;
       const receitaLiquida = Math.round(Math.max(0, faturamentoBruto - deducoesVendas) * 100) / 100;
 
-      // 4. CMV Real
+      // 4. CMV Real e Lucro Bruto Rigoroso (Não considerar produtos sem custo como custo zero)
       const cmvReal = relatorioComercial.cmvTotal;
       const cmvComprovado = relatorioComercial.cmvComprovado;
       const cmvEstimado = relatorioComercial.cmvEstimado;
       const coberturaCustosPercent = relatorioComercial.coberturaReceitaPercent;
-      const lucroBruto = Math.round((receitaLiquida - cmvReal) * 100) / 100;
+
+      const receitaComCustoConhecido = relatorioComercial.receitaComCusto;
+      const faturamentoVendasSemCusto = relatorioComercial.receitaSemCusto;
+
+      // Lucro bruto dos produtos cobertos (Receita com custo conhecido menos CMV real)
+      const lucroBrutoCoberto = Math.round((receitaComCustoConhecido - cmvReal) * 100) / 100;
       const lucroBrutoComprovado = Math.round((relatorioComercial.receitaComprovada - cmvComprovado) * 100) / 100;
-      const margemBrutaPercent = receitaLiquida > 0 ? Math.round((lucroBruto / receitaLiquida) * 1000) / 10 : null;
+      // Lucro bruto não definitivo reportado como lucro dos produtos cobertos
+      const lucroBruto = lucroBrutoCoberto;
+      const margemBrutaPercent = receitaComCustoConhecido > 0
+        ? Math.round((lucroBrutoCoberto / receitaComCustoConhecido) * 1000) / 10
+        : null;
 
       if (cmvReal > 0) {
         lancamentos.push({
@@ -2239,21 +2249,17 @@ export class CeoFinancialMetricsService {
         .sort((a, b) => b.valor - a.valor);
 
       // 6. Resultados Intermediários e Lucro Líquido
-      const resultadoOperacional = Math.round((lucroBruto - despesasOperacionais) * 100) / 100;
-      const margemOperacionalPercent = receitaLiquida > 0 ? Math.round((resultadoOperacional / receitaLiquida) * 1000) / 10 : null;
+      const resultadoOperacional = Math.round((lucroBruto - despesasOperacionaisIncorridas) * 100) / 100;
+      const margemOperacionalPercent = receitaComCustoConhecido > 0 ? Math.round((resultadoOperacional / receitaComCustoConhecido) * 1000) / 10 : null;
 
       const lucroLiquido = Math.round((resultadoOperacional - despesasFinanceiras - tributosSobreResultado) * 100) / 100;
 
       // HOTFIX 7: Nunca exibir margem líquida absurda definitiva de -387% enquanto houver cobertura parcial de CMV
-      const margemLiquidaPercent = (coberturaCustosPercent >= 95 && receitaLiquida > 0)
-        ? Math.round((lucroLiquido / receitaLiquida) * 1000) / 10
+      const margemLiquidaPercent = (coberturaCustosPercent >= 95 && receitaComCustoConhecido > 0)
+        ? Math.round((lucroLiquido / receitaComCustoConhecido) * 1000) / 10
         : null;
 
       // 7. Qualidade dos Dados, Transparência e Confiabilidade Canônica (GATE 2 e GATE 3)
-      const faturamentoVendasSemCusto = Math.round(
-        produtosVendidosSemCusto.reduce((acc, p) => acc + Number(p.faturamento || 0), 0) * 100
-      ) / 100;
-      const receitaComCustoConhecido = relatorioComercial.receitaComprovada;
       const receitaComCustoPendente = faturamentoVendasSemCusto;
 
       // Resultado Preliminar das Operações Realizadas:
@@ -2267,6 +2273,8 @@ export class CeoFinancialMetricsService {
       const resultadoRealizadoAteData = {
         dataLimite: dataLimiteRealizada,
         receitaRealizada: faturamentoBruto,
+        receitaComCustoConhecido,
+        receitaSemCusto: faturamentoVendasSemCusto,
         cmvRealizado: cmvReal,
         lucroBrutoRealizado: lucroBruto,
         despesasIncorridas: despesasOperacionaisIncorridas,
@@ -2671,6 +2679,7 @@ export class CeoFinancialMetricsService {
         produtosVendidosSemCusto,
         faturamentoVendasSemCusto,
         lucroBruto,
+        lucroBrutoCoberto,
         lucroBrutoComprovado,
         receitaComCustoConhecido,
         receitaComCustoPendente,

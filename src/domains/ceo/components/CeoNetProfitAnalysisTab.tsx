@@ -295,11 +295,13 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
           </CardContent>
         </Card>
 
-        {/* Card 2: Lucro Bruto Comercial */}
+        {/* Card 2: Lucro Bruto dos Produtos Cobertos */}
         <Card className="border-border/50 bg-card/60">
           <CardContent className="p-4 sm:p-5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground">📈 Lucro Bruto (Vendas - CMV)</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                📈 {relatorio?.faturamentoVendasSemCusto ? 'Lucro Bruto (Produtos Cobertos)' : 'Lucro Bruto Comercial'}
+              </span>
               <div className="p-2 rounded-lg bg-blue-500/20 text-blue-400">
                 <TrendingUp className="h-4 w-4" />
               </div>
@@ -308,10 +310,20 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
               <p className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
                 {formatCurrency(relatorio?.lucroBruto ?? 0)}
               </p>
-              <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                <span>{relatorio?.margemBrutaPercent !== null && relatorio?.margemBrutaPercent !== undefined ? `${relatorio.margemBrutaPercent.toFixed(1)}% margem bruta` : '—'}</span>
+              <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground flex-wrap">
+                <span>
+                  {relatorio?.margemBrutaPercent !== null && relatorio?.margemBrutaPercent !== undefined
+                    ? `${relatorio.margemBrutaPercent.toFixed(1)}% margem produtos c/ custo`
+                    : '—'}
+                </span>
                 <span>•</span>
-                <span>CMV NF: {formatCurrency(relatorio?.cmvReal ?? 0)}</span>
+                <span>CMV: {formatCurrency(relatorio?.cmvReal ?? 0)}</span>
+                {relatorio && relatorio.faturamentoVendasSemCusto > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-amber-400">Em apuração: {formatCurrency(relatorio.faturamentoVendasSemCusto)}</span>
+                  </>
+                )}
               </div>
             </div>
           </CardContent>
@@ -595,11 +607,21 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 <tr className="bg-muted/40 font-bold border-y border-border/40">
                   <td className="px-4 sm:px-6 py-2.5 text-foreground">
                     <div className="flex flex-col">
-                      <span>(=) LUCRO BRUTO COMERCIAL</span>
-                      {relatorio && relatorio.faturamentoVendasSemCusto > 0 && (
+                      <span>
+                        {relatorio && relatorio.faturamentoVendasSemCusto > 0
+                          ? '(=) LUCRO BRUTO DOS PRODUTOS COBERTOS'
+                          : '(=) LUCRO BRUTO COMERCIAL'}
+                      </span>
+                      {relatorio && relatorio.faturamentoVendasSemCusto > 0 ? (
                         <span className="text-[11px] font-normal text-amber-400">
-                          Comprovado por NF: {formatCurrency(relatorio.lucroBrutoComprovado)} | Faturamento sem custo cadastrado: {formatCurrency(relatorio.faturamentoVendasSemCusto)}
+                          Receita c/ Custo Conhecido: {formatCurrency(relatorio.receitaComCustoConhecido ?? 0)} | CMV: {formatCurrency(relatorio.cmvReal)} | Vendas em apuração de custo: {formatCurrency(relatorio.faturamentoVendasSemCusto)}
                         </span>
+                      ) : (
+                        relatorio && (
+                          <span className="text-[11px] font-normal text-muted-foreground">
+                            Comprovado por NF SEFAZ: {formatCurrency(relatorio.lucroBrutoComprovado)}
+                          </span>
+                        )
                       )}
                     </div>
                   </td>
@@ -703,7 +725,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      * Segregados da despesa operacional para evitar dupla dedução com o CMV dos produtos quando vendidos.
+                      * Segregados da despesa operacional na DRE por competência para evitar dupla dedução com o CMV dos produtos quando vendidos (R$ 2.665,00 em compras diretas de revenda + boletos de atacado).
                     </p>
                     <div className="flex items-center justify-between text-[11px] pt-1 border-t border-border/20">
                       <span>⏳ <strong>Obrigações Futuras Agendadas do Mês (Pró-labores & Acertos a Vencer):</strong></span>
