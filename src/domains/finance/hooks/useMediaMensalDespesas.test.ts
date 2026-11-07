@@ -101,4 +101,27 @@ describe('useMediaMensalDespesas', () => {
 
     expect(result.current.data).toBe(0);
   });
+
+  it('sinaliza isError como true quando a consulta do Supabase falha com erro', async () => {
+    const errorQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      then: (resolve: (val: { data: null; error: { message: string } }) => void) =>
+        resolve({ data: null, error: { message: 'column "fatura_id" does not exist' } }),
+    };
+
+    vi.mocked(supabase.from)
+      .mockReturnValueOnce(errorQuery as never)
+      .mockReturnValueOnce(createMockQuery([]) as never);
+
+    const { Wrapper } = createWrapper();
+    const { result } = renderHook(() => useMediaMensalDespesas(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.isError).toBe(true);
+  });
 });

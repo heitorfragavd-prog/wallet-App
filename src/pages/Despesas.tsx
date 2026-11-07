@@ -115,7 +115,7 @@ const Despesas = () => {
     endDate: dateRange.endDate,
   });
 
-  const { data: mediaMensalCalculada = 0, isLoading: loadingMedia } = useMediaMensalDespesas();
+  const { data: mediaMensalCalculada = 0, isLoading: loadingMedia, isError: errorMedia } = useMediaMensalDespesas();
 
   // Busca as despesas do dia atual de forma independente (sempre do dia de hoje no fuso America/Sao_Paulo)
   const hojeLocal = useMemo(() => getHojeSaoPaulo(), []);
@@ -324,6 +324,8 @@ const Despesas = () => {
     dailyData,
     totalFiltrado,
     previstoParaPagar,
+    totalPendentesFiltrado,
+    qtdPendentesFiltradas,
     metodoList
   } = useMemo(() => {
     const filtradas = despesas
@@ -346,18 +348,23 @@ const Despesas = () => {
       grupos[dataKey].push(d);
     });
 
+    // Saídas efetivas de caixa vs obrigações pendentes/agendadas
+    const pagasFiltradas = filtradas.filter((d) => d.status === "pago" || d.status === "quitada");
+    const pendentesFiltradas = filtradas.filter((d) => d.status !== "pago" && d.status !== "quitada");
+    const totalPendentesFiltrado = pendentesFiltradas.reduce((sum, d) => sum + d.valor, 0);
+
     const total = despesas.reduce((sum, d) => sum + d.valor, 0);
     const totalPago = despesas.filter((d) => d.status === "pago" || d.status === "quitada").reduce((sum, d) => sum + d.valor, 0);
 
     const totalFiltrado = filtradas.reduce((sum, d) => sum + d.valor, 0);
-    const totalPagoFiltrado = filtradas.filter((d) => d.status === "pago" || d.status === "quitada").reduce((sum, d) => sum + d.valor, 0);
+    const totalPagoFiltrado = pagasFiltradas.reduce((sum, d) => sum + d.valor, 0);
 
     // Previsto para pagar (dívidas em aberto no período filtrado)
     const previstoParaPagar = (todasDividas ?? [])
       .filter((d) => d.status !== "quitada")
       .reduce((sum, d) => sum + (d.valor_restante || 0), 0);
 
-    // 1. Distribuição por Categoria
+    // 1. Distribuição por Categoria (exclusivo para saídas efetivas de caixa)
     const cores = [
       "bg-red-500", "bg-orange-500", "bg-amber-500", "bg-yellow-500",
       "bg-lime-500", "bg-emerald-500", "bg-cyan-500", "bg-sky-500",
@@ -366,7 +373,7 @@ const Despesas = () => {
     const categoriaStats: { [key: string]: { label: string, valor: number, cor: string } } = {};
     let corIndex = 0;
 
-    filtradas.forEach((d) => {
+    pagasFiltradas.forEach((d) => {
       const catNome = d.categorias?.nome?.trim() || "Sem Categoria";
       if (!categoriaStats[catNome]) {
         categoriaStats[catNome] = {
@@ -381,7 +388,7 @@ const Despesas = () => {
 
     const rawCategoriaList = Object.values(categoriaStats)
       .map((item) => {
-        const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
+        const porcentagem = totalPagoFiltrado > 0 ? (item.valor / totalPagoFiltrado) * 100 : 0;
         return { ...item, porcentagem };
       })
       .sort((a, b) => b.valor - a.valor);
@@ -399,7 +406,7 @@ const Despesas = () => {
         ]
       : rawCategoriaList;
 
-    // 2. Distribuição por Meio de Pagamento
+    // 2. Distribuição por Meio de Pagamento (exclusivo para saídas efetivas de caixa)
     const metodoStats = {
       pix: { label: "PIX", valor: 0, cor: "bg-emerald-500" },
       boleto: { label: "BOLETO", valor: 0, cor: "bg-blue-500" },
@@ -409,7 +416,7 @@ const Despesas = () => {
       outros: { label: "OUTROS", valor: 0, cor: "bg-slate-500" },
     };
 
-    filtradas.forEach((d) => {
+    pagasFiltradas.forEach((d) => {
       const metodo = String(d.metodo_pagamento ?? "").toLowerCase();
       if (metodo === "pix") {
         metodoStats.pix.valor += d.valor;
@@ -428,14 +435,14 @@ const Despesas = () => {
 
     const metodoList = Object.values(metodoStats)
       .map((item) => {
-        const porcentagem = totalFiltrado > 0 ? (item.valor / totalFiltrado) * 100 : 0;
+        const porcentagem = totalPagoFiltrado > 0 ? (item.valor / totalPagoFiltrado) * 100 : 0;
         return { ...item, porcentagem };
       })
       .sort((a, b) => b.valor - a.valor);
 
-    // 3. Fluxo por dia
+    // 3. Fluxo por dia (exclusivo para saídas efetivas de caixa)
     const dailyMap = new Map<string, number>();
-    filtradas.forEach((d) => {
+    pagasFiltradas.forEach((d) => {
       const dateStr = formatarDataParaSaoPaulo(d.data); // YYYY-MM-DD
       if (dateStr) {
         dailyMap.set(dateStr, (dailyMap.get(dateStr) || 0) + d.valor);
@@ -463,6 +470,8 @@ const Despesas = () => {
       totalGeral: total,
       totalGeralFiltrado: totalFiltrado,
       previstoParaPagar,
+      totalPendentesFiltrado,
+      qtdPendentesFiltradas: pendentesFiltradas.length,
       metodoList
     };
   }, [despesas, todasDividas, filtro, categoriaFiltro]);
@@ -580,6 +589,10 @@ const Despesas = () => {
                   <p className="text-xs sm:text-sm text-muted-foreground truncate" title="Média Mensal (6 Meses)">Média Mensal (6M)</p>
                   {loadingMedia ? (
                     <Skeleton className="h-7 sm:h-8 w-24 sm:w-32" />
+                  ) : errorMedia ? (
+                    <p className="text-xs font-semibold text-rose-500 leading-tight" title="Dados indisponíveis — verificar integração">
+                      Dados indisponíveis — verificar integração
+                    </p>
                   ) : (
                     <p className="text-base sm:text-lg xl:text-2xl font-bold text-foreground truncate" title={formatCurrency(mediaMensalCalculada)}>
                       {formatCurrency(mediaMensalCalculada)}
@@ -710,11 +723,21 @@ const Despesas = () => {
 
             {/* Performance de despesas da operação Dashboard */}
             <Card className="border border-border/50 bg-card overflow-hidden">
-              <CardHeader className="pb-3 border-b border-border/50">
+              <CardHeader className="pb-3 border-b border-border/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <CardTitle className="text-base font-bold flex items-center gap-2 text-foreground">
                   <TrendingDown className="w-4.5 h-4.5 text-red-500" />
-                  Análise e distribuição de despesas
+                  <span>Análise e distribuição de despesas</span>
                 </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium">
+                    Saídas Efetivas
+                  </Badge>
+                  {qtdPendentesFiltradas > 0 && (
+                    <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/20 font-medium" title={`${qtdPendentesFiltradas} obrigação(ões) pendente(s) no período`}>
+                      {qtdPendentesFiltradas} pendente{qtdPendentesFiltradas > 1 ? "s" : ""} ({formatCurrency(totalPendentesFiltrado)})
+                    </Badge>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="p-6">
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
