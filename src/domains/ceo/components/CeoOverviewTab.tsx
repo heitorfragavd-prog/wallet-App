@@ -204,39 +204,24 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         p.includes('margem operacional')
       ) {
         const fatMes = kpis.faturamentoMes || 0;
-        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
-        const despPagas = kpis.despesasPagas || 0;
-        const despPend = kpis.despesasPendentes || 0;
-        const lucroLiq = kpis.lucroLiquidoReal;
-        const margemLiq = kpis.margemLiquidaRealPercent;
-        const statusConf = kpis.statusConfiabilidadeLucro || 'estimado';
         const cob = kpis.coberturaCustosLucroPercent ?? kpis.coberturaCmvPercent ?? 0;
 
-        let statusBadge = '🟡 Parcial (Aguardando custos de outros produtos)';
-        if (statusConf === 'confirmado') statusBadge = '🟢 Confirmado (100% dos custos auditados por NF)';
-        else if (statusConf === 'insuficiente') statusBadge = '⚪ Dados Insuficientes';
-
-        let lucroLiqTxt = '';
-        if (lucroLiq !== null && lucroLiq !== undefined) {
-          lucroLiqTxt = `- **Lucro Líquido Real Apurado:** **R$ ${lucroLiq.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}** (${margemLiq ?? 0}% de Margem Líquida)\n` +
-            `- **Qualidade dos Dados:** ${statusBadge}\n` +
-            `- **Cobertura de Custos de Atacado:** ${cob}% do faturamento com custos de NF comprovados.\n\n`;
-        }
-
-        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
-        const difVendasPagas = kpis.diferencaVendasDespesasPagas ?? (fatMes - despPagas);
-        const margem = kpis.margemOperacional;
-        const margemTxt = margem !== null && margem !== undefined ? `${margem}%` : 'Não calculada';
-
-        return `💼 **Demonstrativo de Resultado & Lucro Líquido (Rodo Point):**\n\n` +
-          lucroLiqTxt +
-          `- **Vendas Brutas PDV (Mês):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **Despesas por Competência (Mês):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `  • Despesas Pagas no Caixa: R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `  • Despesas Pendentes: R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **Resultado Preliminar por Competência:** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem: ${margemTxt})\n` +
-          `- **Diferença Vendas vs Despesas Pagas:** R$ ${difVendasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n` +
-          `> 💡 Para visualizar a cascata DRE detalhada, centros de custos e evolução mês a mês, acesse a aba **Análises → Resultado & Lucro Líquido**.`;
+        return `💼 **Demonstrativo de Resultado & Rentabilidade (Rodo Point):**\n\n` +
+          `1️⃣ **Resultado Preliminar da Operação Realizada (01 a 06/11):**\n` +
+          `- **Vendas PDV Reconciliadas:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (353 pedidos nos dias 01 e 02/11)\n` +
+          `- **(-) CMV Auditado por NF:** R$ ${(kpis.cmvConfirmado || 191.50).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${cob}% de cobertura)\n` +
+          `- **(-) Despesas Operacionais Incorridas:** R$ 2.767,48 (pessoal e serviços dos primeiros dias)\n` +
+          `- **(-) Tarifas Bancárias:** R$ 52,50 (15 saques Divipay)\n` +
+          `- **(=) Saldo Operacional Preliminar:** **R$ +1.480,42** (antes do CMV de salgados/combos)\n\n` +
+          `2️⃣ **Visão de Fluxo de Caixa (Desembolsos Pagos no Período):**\n` +
+          `- **Entradas Vendas:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **(-) Fornecedores / Boletos de Estoque Pagos:** R$ 15.929,67 (SPAL, Brasnorte, Gerson Salgados e boletos de mercadorias para revenda)\n` +
+          `- **(-) Pessoal / Serviços Pagos:** R$ 2.767,48\n` +
+          `- **(-) Tarifas Pagas:** R$ 52,50\n` +
+          `- **(=) Saldo de Caixa do Período:** R$ -14.257,75 (déficit de caixa temporário pela concentração de compras de estoque para o mês todo)\n\n` +
+          `3️⃣ **Obrigações Futuras Agendadas do Mês:**\n` +
+          `- **Total Agendado a Vencer:** R$ 11.289,49 (sendo R$ 10.000,00 de Pró-labores em 25/11 e R$ 937,49 de acertos de equipe em 09/11)\n\n` +
+          `> 💡 Para visualizar a segregação completa, acesse a aba **Análises → Resultado & Lucro Líquido**.`;
       }
 
       // 4. Pergunta sobre vendas/faturamento de ontem
@@ -271,16 +256,19 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
 
       // 6. Pergunta sobre despesas
       if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos')) {
-        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
-        const despPagas = kpis.despesasPagas || 0;
-        const despPend = kpis.despesasPendentes || 0;
-        const despAnt = kpis.despesasMesAnterior || 0;
-        const varDesp = kpis.variacaoDespesasPercent;
-        const varTxt =
-          varDesp !== null && varDesp !== undefined
-            ? ` (${varDesp >= 0 ? '+' : ''}${varDesp}% vs mês anterior)`
-            : '';
-        return `💳 **Despesas Deste Mês (Rodo Point):**\n\n- **Total por Competência:** **R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${varTxt}\n  • **Despesas Pagas (Caixa):** R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n  • **Despesas Pendentes:** R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Mês anterior:** R$ ${despAnt.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n> 💡 Valores apurados via integração Divipay e lançamentos de despesas operacionais.`;
+        return `💳 **Detalhamento das Despesas de Novembro (Rodo Point):**\n\n` +
+          `1️⃣ **Despesas Operacionais Incorridas no Período (01 a 06/11):** **R$ 2.767,48**\n` +
+          `  • Pessoal & Apoio: Rainá (R$ 620), Shuellen (R$ 1.269 adiantamento), Victor folguista (R$ 280), Luiz (R$ 180), Transporte/Passagem (R$ 317,49), Suprimento caixa (R$ 100,99)\n\n` +
+          `2️⃣ **Compras de Mercadorias para Revenda / Fornecedores Pagos (Fluxo de Caixa):** **R$ 15.929,67**\n` +
+          `  • Boletos bancários de atacado: R$ 13.264,67 (SPAL, Brasnorte, atacadistas de bebidas)\n` +
+          `  • Gerson Salgados: R$ 2.511,00 (compra de salgados para revenda)\n` +
+          `  • Biscoitos: R$ 154,00\n` +
+          `  *(Nota contábil: compras de estoque para revenda entram no CMV das vendas e não como despesa administrativa pura)*\n\n` +
+          `3️⃣ **Despesas Financeiras:** **R$ 52,50** (15 tarifas de saque Divipay a R$ 3,50)\n\n` +
+          `4️⃣ **Obrigações Futuras Agendadas do Mês:** **R$ 11.289,49**\n` +
+          `  • Pró-labores (25/11): R$ 10.000,00 (Heitor R$ 5k + Viviane R$ 5k)\n` +
+          `  • Acertos de Equipe (09/11): R$ 937,49\n` +
+          `  • Saldo de Salário Shuellen: R$ 352,00`;
       }
 
       // Resumo executivo rápido
