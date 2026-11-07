@@ -93,11 +93,14 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         p.includes('quanto custa') ||
         p.includes('preco de custo') ||
         p.includes('preço de custo') ||
+        p.includes('cotação') ||
+        p.includes('cotacao') ||
         p.includes('fornecedor') ||
         p.includes('spal') ||
         p.includes('brasnorte') ||
         p.includes('ambev') ||
-        p.includes('coca-cola')
+        p.includes('coca-cola') ||
+        p.includes('coca ks')
       ) {
         const cmvConf = kpis.cmvConfirmado;
         const recConf = kpis.receitaComCustoConhecido;
@@ -116,7 +119,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         return `🛒 **Custos de Atacado & CMV Comprovado (Rodo Point):**\n\n` +
           cmvInfo +
           `📋 **Preços de Custo Unitários Auditados (NF SPAL e Brasnorte):**\n` +
-          `  • **Coca KS**: Custo R$ 1,70 | Venda R$ 7,00 | **Margem 75,7%** (SPAL)\n` +
+          `  • **Coca KS**: Custo Histórico Auditado **R$ 1,7017** (NF SPAL) | Cotação Recente Atacado **R$ 2,54** (Caixa R$ 60,96 c/ 24) | Venda R$ 7,00 | **Margem Histórica 75,7% (Margem Cotada 63,7%)**\n` +
           `  • **Refrigerante 350ml**: Custo R$ 1,83 | Venda R$ 7,00 | **Margem 73,9%** (SPAL)\n` +
           `  • **Refrigerante 200ml**: Custo R$ 1,34 | Venda R$ 4,00 | **Margem 66,5%** (SPAL)\n` +
           `  • **Kapo**: Custo R$ 1,64 | Venda R$ 4,50 | **Margem 63,6%** (SPAL)\n` +
@@ -124,9 +127,12 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
           `  • **Brahma**: Custo R$ 4,31 | Venda R$ 10,00 | **Margem 56,9%** (Brasnorte)\n` +
           `  • **Suco Del Valle**: Custo R$ 2,86 | Venda R$ 6,00 | **Margem 52,3%** (SPAL)\n` +
           `  • **Monster Energy LT 473ml**: Custo R$ 7,21 | Venda R$ 14,90 | **Margem 51,6%** (SPAL)\n` +
+          `  • **Gatorade**: Custo R$ 4,52 | Venda R$ 8,90 | **Margem 49,3%** (Brasnorte)\n` +
+          `  • **Original (Cerveja)**: Custo R$ 5,08 | Venda R$ 10,00 | **Margem 49,2%** (Brasnorte)\n` +
+          `  • **H2OH Limoneto**: Custo R$ 4,15 | Venda R$ 7,90 | **Margem 47,5%** (Brasnorte)\n` +
           `  • **Red Bull 250ml**: Custo R$ 8,13 | Venda R$ 14,90 | **Margem 45,5%** (Brasnorte)\n` +
           `  • **Corona**: Custo R$ 6,77 | Venda R$ 12,00 | **Margem 43,6%** (Brasnorte)\n\n` +
-          `> 💡 *Atenção aos produtos de fabricação própria (como Pão de Queijo): o pó de queijo isolado não compõe o custo total e aguarda ficha técnica completa.* `;
+          `> 💡 *Salgados (Gerson) e Pão de Queijo: aguardam custo unitário e ficha técnica para atingir 100% de cobertura.* `;
       }
 
       // 0.1 Pergunta sobre produtos mais lucrativos ou maiores margens

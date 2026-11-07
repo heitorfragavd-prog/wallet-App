@@ -2342,6 +2342,24 @@ export class CeoFinancialMetricsService {
         });
       }
 
+      // Fator Defasagem Temporal de Mês em Andamento e Obrigações Futuras Agendadas
+      if (despesasOperacionaisPendentes > 0) {
+        fatoresExplicativos.push({
+          tipo: 'informativo',
+          titulo: 'Defasagem Temporal e Obrigações Futuras Agendadas',
+          descricao: `Das despesas operacionais do mês (${despesasOperacionais.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}), ${despesasOperacionaisPendentes.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} são obrigações agendadas para o restante do período (como pró-labores do dia 25 e salários a vencer). Despesas já quitadas até o momento somam ${despesasOperacionaisPagas.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`,
+        });
+      }
+
+      // Fator Vendas Aguardando Custo de Atacado
+      if (faturamentoVendasSemCusto > 0) {
+        fatoresExplicativos.push({
+          tipo: 'alerta',
+          titulo: 'Faturamento com Custo de Atacado em Aberto',
+          descricao: `${faturamentoVendasSemCusto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} em vendas (${produtosVendidosSemCusto.length} produtos, principalmente salgados e combos) ainda aguardam cadastramento de custos unitários. Por rigor contábil, esse valor não é tratado como lucro líquido definitivo.`,
+        });
+      }
+
       // Fator Resultado Final
       if (lucroLiquido >= 0) {
         fatoresExplicativos.push({
@@ -2353,8 +2371,8 @@ export class CeoFinancialMetricsService {
       } else {
         fatoresExplicativos.push({
           tipo: 'alerta',
-          titulo: 'Prejuízo Operacional no Período',
-          descricao: `As despesas operacionais superaram as receitas no período em ${Math.abs(lucroLiquido).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`,
+          titulo: 'Prejuízo Preliminar no Período',
+          descricao: `As despesas operacionais superaram as receitas no período em ${Math.abs(lucroLiquido).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}. Observe que este resultado inclui despesas agendadas para o mês todo e receitas parciais com CMV em aberto.`,
           impactoFinanceiro: lucroLiquido,
         });
       }

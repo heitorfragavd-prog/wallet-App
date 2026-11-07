@@ -455,7 +455,16 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
 
                 {/* 6. Despesas Operacionais */}
                 <tr className="hover:bg-muted/30 text-muted-foreground">
-                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10">(-) Despesas Operacionais por Competência</td>
+                  <td className="px-4 sm:px-6 py-2.5 pl-8 sm:pl-10">
+                    <div className="flex flex-col">
+                      <span>(-) Despesas Operacionais por Competência</span>
+                      {relatorio && relatorio.despesasOperacionaisPendentes > 0 && (
+                        <span className="text-[11px] font-normal text-muted-foreground">
+                          Quitadas até a data: {formatCurrency(relatorio.despesasOperacionaisPagas)} | Agendadas/Pendentes no mês: {formatCurrency(relatorio.despesasOperacionaisPendentes)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 sm:px-6 py-2.5 text-right font-mono text-rose-400">
                     {relatorio?.despesasOperacionais ? `(${formatCurrency(relatorio.despesasOperacionais)})` : 'R$ 0,00'}
                   </td>
