@@ -545,9 +545,88 @@ describe('CeoNetProfit — Auditoria Canônica do Lucro Líquido Real (Hotfix 6)
       expect(relatorio.coberturaCustosPercent).toBeLessThan(95);
       expect(relatorio.margemLiquidaPercent).toBeNull();
 
-      // 4. Visão de Fechamento Projetado do Mês
+      // 4. Visão de Fechamento Projetado do Mês (Hotfix 8 - Modelo com Rigor Estatístico)
       expect(relatorio.resultadoProjetadoMes).toBeDefined();
-      expect(relatorio.resultadoProjetadoMes?.receitaProjetada).toBeGreaterThan(0);
+      expect(relatorio.resultadoProjetadoMes?.projecaoDisponivel).toBe(false);
+      expect(relatorio.resultadoProjetadoMes?.resultadoProjetado).toBeNull();
+      expect(relatorio.resultadoProjetadoMes?.motivoIndisponibilidade).toContain('Projeção indisponível');
+    });
+
+    it('HOTFIX 8: unifica getExecutiveKpis com getRealNetProfit eliminando divergências e prejuízo artificial', async () => {
+      setupMockDatabase({
+        produtos_eyemobile: [
+          {
+            workspace_id: testWorkspaceId,
+            codigo: '2032242',
+            descricao: 'Coca ks',
+            custo_atual: 1.7017,
+            preco_venda: 7.00,
+          },
+        ],
+        historico_custo_produto: [
+          {
+            workspace_id: testWorkspaceId,
+            produto_codigo: '2032242',
+            custo_unitario: 1.7017,
+            data_compra: '2026-08-21',
+          },
+        ],
+        transacoes: [
+          {
+            id: 't-1',
+            workspace_id: testWorkspaceId,
+            tipo: 'receita',
+            valor: 4491.90,
+            data: '2026-11-02T18:00:00Z',
+            itens: [
+              { id: '2032242', product_name: 'Coca ks', quantity: 100, total: 700.0 },
+              { id: 'prod-sem-custo', product_name: 'Salgado Forno', quantity: 50, total: 400.0 },
+            ],
+          },
+        ],
+        despesas: [
+          {
+            id: 'd-est-1',
+            workspace_id: testWorkspaceId,
+            valor: 15929.67,
+            data: '2026-11-03',
+            descricao: 'Pagamento de boleto fornecedor estoque',
+            categoria_id: 'cat-est',
+            categorias: { nome: 'Geral' },
+            status: 'pago',
+          },
+          {
+            id: 'd-op-1',
+            workspace_id: testWorkspaceId,
+            valor: 1057.49,
+            data: '2026-11-02',
+            descricao: 'Pessoal e operacao inicial',
+            categoria_id: 'cat-rh',
+            categorias: { nome: 'RH' },
+            status: 'pago',
+          },
+          {
+            id: 'd-fut-1',
+            workspace_id: testWorkspaceId,
+            valor: 10000.00,
+            data: '2026-11-25',
+            descricao: 'Pró-labore Sócios agendado',
+            categoria_id: 'cat-soc',
+            categorias: { nome: 'Sócios' },
+            status: 'pendente',
+          },
+        ],
+      });
+
+      const kpis = await CeoFinancialMetricsService.getExecutiveKpis(
+        testWorkspaceId,
+        new Date('2026-11-07T12:00:00Z')
+      );
+
+      // Não pode mais ser -27.103,80! Deve refletir o resultado preliminar positivo com estoque segregado
+      expect(kpis.lucroLiquidoReal).toBeGreaterThan(0);
+      expect(kpis.statusConfiabilidadeLucro).toBe('parcial');
+      expect(kpis.margemLiquidaRealPercent).toBeNull(); // Suprimido de exibir -603%
     });
   });
 });

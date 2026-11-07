@@ -341,11 +341,13 @@ export interface RelatorioLucroLiquidoReal {
     saldoCaixaPeriodo: number;
   };
   resultadoProjetadoMes?: {
+    projecaoDisponivel: boolean;
     receitaProjetada: number;
     despesasProjetadasTotal: number;
     obrigacoesFuturasAgendadas: number;
-    resultadoProjetado: number;
+    resultadoProjetado: number | null;
     premissaProjecao: string;
+    motivoIndisponibilidade?: string;
   };
   obrigacoesFuturas?: {
     total: number;
@@ -934,15 +936,10 @@ export class CeoFinancialMetricsService {
         });
       }
 
-      const cmvAbatimento = cmvConfirmado ?? 0;
-      const lucroLiquidoReal = Math.round((resultadoPreliminarCompetencia - cmvAbatimento) * 100) / 100;
-      const margemLiquidaRealPercent = faturamentoMes > 0 ? Math.round((lucroLiquidoReal / faturamentoMes) * 1000) / 10 : null;
-      const lucroLiquidoMesAnterior = Math.round((faturamentoMesAnt - totalDespesasMesAnt) * 100) / 100;
-      const crescimentoLucroLiquidoPercent =
-        lucroLiquidoMesAnterior !== 0
-          ? Math.round(((lucroLiquidoReal - lucroLiquidoMesAnterior) / Math.abs(lucroLiquidoMesAnterior)) * 1000) / 10
-          : null;
-      const statusConfiabilidadeLucro: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes' =
+      // HOTFIX 8: Unificação Canônica do Lucro Líquido Real entre Visão Geral, Análises, Dashboard e DRE
+      let lucroLiquidoReal = Math.round((resultadoPreliminarCompetencia - (cmvConfirmado ?? 0)) * 100) / 100;
+      let margemLiquidaRealPercent: number | null = null;
+      let statusConfiabilidadeLucro: 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes' =
         faturamentoMes === 0 && totalDespesasMes === 0
           ? 'dados_insuficientes'
           : coberturaCmvPercent >= 90
@@ -950,14 +947,37 @@ export class CeoFinancialMetricsService {
           : coberturaCmvPercent > 0
           ? 'parcial'
           : 'estimado';
-      const motivoConfiabilidadeLucro =
+      let motivoConfiabilidadeLucro =
         statusConfiabilidadeLucro === 'confirmado'
           ? 'Apuração integral com CMV e despesas operacionais.'
           : statusConfiabilidadeLucro === 'parcial'
-          ? `Resultado parcial: ${produtosComCustoCadastrado} produtos com custo cadastrado cobrindo ${coberturaCmvPercent}% das vendas.`
+          ? `Resultado preliminar: ${produtosComCustoCadastrado} produtos com custo cadastrado cobrindo ${coberturaCmvPercent}% das vendas.`
           : statusConfiabilidadeLucro === 'estimado'
           ? 'Custos de aquisição ainda não cadastrados para o período.'
           : 'Sem movimentação financeira no período.';
+
+      try {
+        const netProfitReport = await this.getRealNetProfit(workspaceId, {
+          mes: mesAtual,
+          ano: anoAtual,
+        });
+        if (!netProfitReport.dadosIndisponiveis) {
+          lucroLiquidoReal = netProfitReport.resultadoRealizadoAteData?.resultadoLiquidoPreliminar
+            ?? netProfitReport.resultadoPreliminarCustosConhecidos
+            ?? netProfitReport.lucroLiquido;
+          margemLiquidaRealPercent = netProfitReport.margemLiquidaPercent;
+          statusConfiabilidadeLucro = netProfitReport.statusConfiabilidade;
+          motivoConfiabilidadeLucro = netProfitReport.motivoConfiabilidade;
+        }
+      } catch (errNetProfit) {
+        console.warn('[CeoFinancialMetricsService] Aviso ao unificar KPIs executivos com getRealNetProfit:', errNetProfit);
+      }
+
+      const lucroLiquidoMesAnterior = Math.round((faturamentoMesAnt - totalDespesasMesAnt) * 100) / 100;
+      const crescimentoLucroLiquidoPercent =
+        lucroLiquidoMesAnterior !== 0
+          ? Math.round(((lucroLiquidoReal - lucroLiquidoMesAnterior) / Math.abs(lucroLiquidoMesAnterior)) * 1000) / 10
+          : null;
 
       return {
         faturamentoMes,
@@ -2250,19 +2270,46 @@ export class CeoFinancialMetricsService {
         saldoCaixaPeriodo: Math.round((faturamentoBruto - saidasCaixaTotal) * 100) / 100,
       };
 
-      const faturamentoDiarioMedio = diasComVendas > 0 ? faturamentoBruto / diasComVendas : 0;
-      const receitaProjetada = Math.round(faturamentoDiarioMedio * 30 * 100) / 100;
-      const despesasProjetadasTotal = Math.round(((despesasOperacionaisIncorridas * 4.3) + obrigacoesFuturasTotal + despesasFinanceiras) * 100) / 100;
-      const cmvProjetado = coberturaCustosPercent > 0 ? (receitaProjetada * (relatorioComercial.cmvTotal / (relatorioComercial.receitaTotal || 1))) : (receitaProjetada * 0.45);
-      const resultadoProjetado = Math.round((receitaProjetada - cmvProjetado - despesasProjetadasTotal) * 100) / 100;
+      // PROBLEMA 3: Rigor no Modelo de Projeção Financeira
+      // Exige maturidade estatística: ao menos 7 dias com vendas concluídas E cobertura de custos >= 80%
+      const temDadosSuficientesParaProjecao = diasComVendas >= 7 && coberturaCustosPercent >= 80;
 
-      const resultadoProjetadoMes = {
-        receitaProjetada,
-        despesasProjetadasTotal,
-        obrigacoesFuturasAgendadas: Math.round(obrigacoesFuturasTotal * 100) / 100,
-        resultadoProjetado,
-        premissaProjecao: `Projeção linear baseada no faturamento médio apurado nos dias operacionais (${faturamentoDiarioMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia).`,
+      let resultadoProjetadoMes: {
+        projecaoDisponivel: boolean;
+        receitaProjetada: number;
+        despesasProjetadasTotal: number;
+        obrigacoesFuturasAgendadas: number;
+        resultadoProjetado: number | null;
+        premissaProjecao: string;
+        motivoIndisponibilidade?: string;
       };
+
+      if (!temDadosSuficientesParaProjecao) {
+        resultadoProjetadoMes = {
+          projecaoDisponivel: false,
+          receitaProjetada: 0,
+          despesasProjetadasTotal: 0,
+          obrigacoesFuturasAgendadas: Math.round(obrigacoesFuturasTotal * 100) / 100,
+          resultadoProjetado: null,
+          premissaProjecao: 'Projeção pausada para evitar distorções prematuras.',
+          motivoIndisponibilidade: `Projeção indisponível — dados insuficientes no período (${diasComVendas} dias com vendas concluídas e ${coberturaCustosPercent}% de cobertura de CMV). São necessários ao menos 7 dias operacionais e 80% de cobertura de custos por NF para projeção com rigor financeiro.`,
+        };
+      } else {
+        const faturamentoDiarioMedio = diasComVendas > 0 ? faturamentoBruto / diasComVendas : 0;
+        const receitaProjetada = Math.round(faturamentoDiarioMedio * 30 * 100) / 100;
+        const despesasProjetadasTotal = Math.round(((despesasOperacionaisIncorridas * (30 / diasComVendas)) + obrigacoesFuturasTotal + despesasFinanceiras) * 100) / 100;
+        const cmvProjetado = (receitaProjetada * (relatorioComercial.cmvTotal / (relatorioComercial.receitaTotal || 1)));
+        const resultadoProjetado = Math.round((receitaProjetada - cmvProjetado - despesasProjetadasTotal) * 100) / 100;
+
+        resultadoProjetadoMes = {
+          projecaoDisponivel: true,
+          receitaProjetada,
+          despesasProjetadasTotal,
+          obrigacoesFuturasAgendadas: Math.round(obrigacoesFuturasTotal * 100) / 100,
+          resultadoProjetado,
+          premissaProjecao: `Projeção linear baseada no faturamento médio apurado em ${diasComVendas} dias operacionais (${faturamentoDiarioMedio.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/dia) com cobertura de custos de ${coberturaCustosPercent}%.`,
+        };
+      }
 
       const obrigacoesFuturas = {
         total: Math.round(obrigacoesFuturasTotal * 100) / 100,

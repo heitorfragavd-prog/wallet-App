@@ -437,40 +437,72 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
           </CardContent>
         </Card>
 
-        {/* Visão 3: Fechamento Projetado do Mês */}
+        {/* Visão 3: Fechamento Projetado do Mês (Hotfix 8 - Modelo com Rigor Estatístico) */}
         <Card className="border-purple-500/20 bg-purple-500/5">
           <CardHeader className="py-3 px-4 border-b border-purple-500/10">
             <CardTitle className="text-xs font-bold text-purple-400 flex items-center justify-between">
               <span>3. Fechamento Projetado do Mês</span>
-              <Badge variant="outline" className="text-[10px] border-purple-500/30 text-purple-300">Projeção</Badge>
+              <Badge variant="outline" className={`text-[10px] ${
+                relatorio?.resultadoProjetadoMes?.projecaoDisponivel === false
+                  ? 'border-amber-500/40 text-amber-300'
+                  : 'border-purple-500/30 text-purple-300'
+              }`}>
+                {relatorio?.resultadoProjetadoMes?.projecaoDisponivel === false ? 'Dados Insuficientes' : 'Projeção'}
+              </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4 space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Faturamento Previsto (30 dias):</span>
-              <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.resultadoProjetadoMes?.receitaProjetada ?? 0)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Obrigações Agendadas a Vencer:</span>
-              <span className="font-mono text-muted-foreground">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
-            </div>
-            <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-              <span>• Pró-labores (25/11):</span>
-              <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
-            </div>
-            <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-              <span>• Acertos de Equipe (09/11):</span>
-              <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
-            </div>
-            <div className="border-t border-purple-500/20 pt-2 flex justify-between font-bold text-sm">
-              <span className="text-purple-400">(=) Resultado Líquido Projetado:</span>
-              <span className={`font-mono ${(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0) >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {formatCurrency(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0)}
-              </span>
-            </div>
-            <p className="text-[10px] text-muted-foreground mt-1">
-              * Baseado na média diária de vendas e nas despesas orçadas para o fechamento de 30 dias.
-            </p>
+            {relatorio?.resultadoProjetadoMes?.projecaoDisponivel === false ? (
+              <div className="space-y-2.5 py-1">
+                <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs leading-relaxed">
+                  <div className="font-semibold text-amber-400 mb-1 flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    Projeção Indisponível
+                  </div>
+                  {relatorio?.resultadoProjetadoMes?.motivoIndisponibilidade || 'São necessários ao menos 7 dias operacionais e 80% de cobertura de custos por NF para projeção com rigor financeiro.'}
+                </div>
+                <div className="flex justify-between text-muted-foreground pt-1 border-t border-purple-500/10">
+                  <span>Obrigações Agendadas a Vencer:</span>
+                  <span className="font-mono text-foreground font-semibold">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
+                </div>
+                <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+                  <span>• Pró-labores (25/11):</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
+                </div>
+                <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+                  <span>• Acertos de Equipe (09/11):</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Faturamento Previsto (30 dias):</span>
+                  <span className="font-bold text-foreground font-mono">{formatCurrency(relatorio?.resultadoProjetadoMes?.receitaProjetada ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Obrigações Agendadas a Vencer:</span>
+                  <span className="font-mono text-muted-foreground">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
+                </div>
+                <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+                  <span>• Pró-labores (25/11):</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
+                </div>
+                <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
+                  <span>• Acertos de Equipe (09/11):</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
+                </div>
+                <div className="border-t border-purple-500/20 pt-2 flex justify-between font-bold text-sm">
+                  <span className="text-purple-400">(=) Resultado Líquido Projetado:</span>
+                  <span className={`font-mono ${(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0) >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {formatCurrency(relatorio?.resultadoProjetadoMes?.resultadoProjetado ?? 0)}
+                  </span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  * Baseado na média diária ponderada e na cobertura de custos auditada.
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
