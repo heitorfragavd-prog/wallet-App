@@ -14,7 +14,14 @@ export type StatusMargem =
   | "atencao"     // margem >= 30%
   | "perigoso"    // margem < 30%
   | "sem_ficha"   // sem insumos cadastrados
-  | "sem_preco";  // preço zerado
+  | "sem_preco"   // preço zerado
+  | "incompleta"; // insumo sem custo
+
+export type StatusFicha =
+  | "comprovada"
+  | "com_estimativas"
+  | "incompleta"
+  | "sem_ficha";
 
 export interface ProdutoCardapio {
   id: string;
@@ -49,8 +56,10 @@ export interface FichaTecnica {
 export interface ProdutoComCusto extends ProdutoCardapio {
   custo_total: number;
   qtd_insumos: number;
-  margem_percentual: number;
+  qtd_insumos_sem_custo?: number;
+  margem_percentual: number | null;
   status_margem: StatusMargem;
+  status_ficha?: StatusFicha;
 }
 
 /** Resumo agregado para o painel de Food Cost */
