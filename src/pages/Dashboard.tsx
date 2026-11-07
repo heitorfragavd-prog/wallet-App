@@ -150,6 +150,37 @@ const Dashboard = () => {
     [despesasConsolidadas],
   );
 
+  // Segmentação contábil das saídas: Compras de Estoque vs Despesas Operacionais
+  const composicaoDespesas = useMemo(() => {
+    let estoque = 0;
+    let operacional = 0;
+    despesasConsolidadas
+      .filter((d) => d.status === "pago")
+      .forEach((d) => {
+        const cat = (d.categorias?.nome || "").toLowerCase();
+        const desc = (d.descricao || "").toLowerCase();
+        const val = Number(d.valor || 0);
+        if (
+          cat.includes("mercadoria") ||
+          cat.includes("estoque") ||
+          cat.includes("fornecedor") ||
+          cat.includes("compra") ||
+          cat.includes("bebida") ||
+          desc.includes("ambev") ||
+          desc.includes("coca") ||
+          desc.includes("spal") ||
+          desc.includes("salgados") ||
+          desc.includes("biscoitos") ||
+          desc.includes("boleto")
+        ) {
+          estoque += val;
+        } else {
+          operacional += val;
+        }
+      });
+    return { estoque, operacional };
+  }, [despesasConsolidadas]);
+
   const saldoPeriodo = totalReceitas - totalDespesas;
   const percentualDespesas = totalReceitas > 0 ? (totalDespesas / totalReceitas) * 100 : 0;
 
@@ -488,13 +519,23 @@ const Dashboard = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Receitas</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-medium text-muted-foreground">Entradas de Caixa</p>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border/60 text-muted-foreground font-normal">
+                      Caixa / Depósitos
+                    </Badge>
+                  </div>
                   {loadingTransacoes || loadingReceitas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
-                      {formatCurrency(totalReceitas)}
-                    </p>
+                    <>
+                      <p className="text-2xl font-bold text-foreground">
+                        {formatCurrency(totalReceitas)}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Dinheiro PDV + Liquidações Divipay
+                      </p>
+                    </>
                   )}
                 </div>
                 <div className="p-3 rounded-xl bg-green-500/20">
@@ -509,13 +550,23 @@ const Dashboard = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Despesas</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-medium text-muted-foreground">Saídas Pagas</p>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border/60 text-muted-foreground font-normal">
+                      Desembolsos
+                    </Badge>
+                  </div>
                   {loadingTransacoes || loadingDespesas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
-                    <p className="text-2xl font-bold text-foreground">
-                      {formatCurrency(totalDespesas)}
-                    </p>
+                    <>
+                      <p className="text-2xl font-bold text-foreground">
+                        {formatCurrency(totalDespesas)}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground" title="Estoque vs Custos Operacionais">
+                        Estoque: {formatCurrency(composicaoDespesas.estoque)} • Operação: {formatCurrency(composicaoDespesas.operacional)}
+                      </p>
+                    </>
                   )}
                 </div>
                 <div className="p-3 rounded-xl bg-red-500/20">
@@ -530,13 +581,23 @@ const Dashboard = () => {
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Saldo em Caixa</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-sm font-medium text-muted-foreground">Movimentação Líquida</p>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border/60 text-muted-foreground font-normal">
+                      Período
+                    </Badge>
+                  </div>
                   {loadingTransacoes || loadingReceitas || loadingDespesas ? (
                     <Skeleton className="h-8 w-32" />
                   ) : (
-                    <p className={`text-2xl font-bold ${saldoPeriodo >= 0 ? "text-foreground" : "text-red-500"}`}>
-                      {formatCurrency(saldoPeriodo)}
-                    </p>
+                    <>
+                      <p className={`text-2xl font-bold ${saldoPeriodo >= 0 ? "text-foreground" : "text-red-500"}`}>
+                        {formatCurrency(saldoPeriodo)}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Entradas − Saídas (saldo em conta abaixo)
+                      </p>
+                    </>
                   )}
                 </div>
                 <div className="p-3 rounded-xl bg-blue-500/20">
@@ -562,7 +623,7 @@ const Dashboard = () => {
               <div className="flex items-start justify-between">
                 <div className="space-y-1.5 flex-1 min-w-0 pr-2">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <p className="text-sm font-medium text-muted-foreground">💰 Lucro Líquido</p>
+                    <p className="text-sm font-medium text-muted-foreground">Resultado Preliminar</p>
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border/60 text-muted-foreground font-normal">
                       Mês Atual
                     </Badge>
@@ -700,7 +761,7 @@ const Dashboard = () => {
               </div>
               <p className="text-xs mt-2 text-muted-foreground">
                 {pontoEquilibrio === 0
-                  ? "Nenhum custo fixo cadastrado neste mês (Aluguel, Folha, Luz, etc.)."
+                  ? "Pendente de cadastro: nenhum custo fixo estrutural (Aluguel, Folha CLT) parametrizado neste mês."
                   : percentualPontoEquilibrio >= 100
                   ? "✅ Já pagou as contas de hoje!"
                   : `Faltam ${formatCurrency(Math.max(0, pontoEquilibrio - vendasHoje))} para lucrar.`}
@@ -725,7 +786,7 @@ const Dashboard = () => {
               </p>
               {runway <= 7 && (
                 <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
-                  ⚠️ Runway crítico. Acaba em {runway.toFixed(0)} dias se nada entrar.
+                  ⚠️ Runway de {runway.toFixed(0)} dias. Nota: consumo recente inclui estoque para o mês todo.
                 </div>
               )}
               {runway > 7 && runway <= 15 && (
