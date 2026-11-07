@@ -614,7 +614,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     )}.
                   </>
                 ) : (
-                  <>Aqui está o resumo executivo da sua operação com dados 100% reais apurados.</>
+                  <>Aqui está o resumo executivo da sua operação com dados reais disponíveis (apuração preliminar com custos conhecidos).</>
                 )}
               </p>
             </div>
@@ -631,7 +631,9 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-full self-start md:self-auto shrink-0">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="text-xs font-semibold text-emerald-400">
-                  Dados atualizados com o banco
+                  {kpis.statusConfiabilidadeLucro === 'confirmado'
+                    ? 'Dados 100% auditados'
+                    : 'Dados reais disponíveis (CMV parcial)'}
                 </span>
               </div>
             )}
@@ -706,34 +708,37 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               </div>
             </div>
 
-            {/* Card 4: Lucro Líquido Real / Resultado por Competência */}
-            <div className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between">
+            {/* Card 4: Lucro Líquido Real / Resultado Preliminar Realizado (Unificado com getRealNetProfit) */}
+            <div
+              onClick={() => onSelectTab && onSelectTab('analyses')}
+              className="bg-slate-900/60 p-4 rounded-xl border border-border/40 hover:border-border/80 transition-colors flex flex-col justify-between cursor-pointer"
+            >
               <div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-                  <span>Lucro Líquido Real</span>
+                  <span>{kpis.statusConfiabilidadeLucro === 'confirmado' ? 'Lucro Líquido Definitivo' : 'Resultado Preliminar Realizado'}</span>
                   <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ${
                     kpis.statusConfiabilidadeLucro === 'confirmado'
                       ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                      : kpis.statusConfiabilidadeLucro === 'insuficiente'
+                      : kpis.statusConfiabilidadeLucro === 'dados_insuficientes'
                       ? 'text-slate-400 bg-slate-500/10 border-slate-500/20'
                       : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
                   }`}>
                     {kpis.statusConfiabilidadeLucro === 'confirmado'
                       ? 'Confirmado (100% NF)'
-                      : kpis.statusConfiabilidadeLucro === 'insuficiente'
+                      : kpis.statusConfiabilidadeLucro === 'dados_insuficientes'
                       ? 'Insuficiente'
                       : 'Parcial (NF)'}
                   </span>
                 </div>
                 <div className={`text-xl sm:text-2xl font-bold mt-1 truncate ${
-                  (kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional) >= 0
+                  (kpis.lucroLiquidoReal ?? 0) >= 0
                     ? 'text-emerald-400'
                     : 'text-rose-400'
                 }`}>
                   {kpis.despesasMes === 0 && !kpis.despesasTotalCompetencia && kpis.lucroLiquidoReal === null ? (
                     <span className="text-sm font-normal text-slate-400">Não apurado</span>
                   ) : (
-                    `R$ ${(kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                    `R$ ${(kpis.lucroLiquidoReal ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
                   )}
                 </div>
               </div>
@@ -747,7 +752,11 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                   <div className="text-[10px] text-slate-300">
                     Margem Líquida Real: <span className="font-semibold">{kpis.margemLiquidaRealPercent}%</span>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="text-[10px] text-amber-400/90 font-medium">
+                    Margem em apuração (CMV parcial)
+                  </div>
+                )}
                 {kpis.despesasPagas > 0 ? (
                   <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
                     <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>

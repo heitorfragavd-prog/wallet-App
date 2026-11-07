@@ -1,4 +1,8 @@
-import { CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
+import {
+  CeoFinancialMetricsService,
+  deduplicateRevenues,
+  TransacaoReceitaItem,
+} from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { getCeoPeriodRange } from '@/domains/ceo/utils/ceoDateRanges';
 import {
   FinancialConsolidationService,
@@ -74,12 +78,12 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
       const inicioAntStr = range.inicioAntStr;
       const fimAntStr = range.fimAntStr;
 
-      // 1. Receitas do período com paginação integral
-      const rec = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number; data: string }>(
+      // 1. Receitas do período com paginação integral e deduplicação canônica unificada (Hotfix 8 - Problema 2)
+      const recRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor, data')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioStr)
@@ -87,13 +91,14 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .order('data', { ascending: true })
             .range(from, to)
       );
+      const rec = deduplicateRevenues(recRaw);
 
-      // 2. Receitas do período anterior
-      const recAnt = await CeoFinancialMetricsService.fetchAllPaginated<{ valor: number }>(
+      // 2. Receitas do período anterior com deduplicação
+      const recAntRaw = await CeoFinancialMetricsService.fetchAllPaginated<TransacaoReceitaItem>(
         (from, to) =>
           supabase
             .from('transacoes')
-            .select('valor')
+            .select('id, valor, data, created_at, descricao, observacoes, deduplication_key, itens')
             .eq('workspace_id', workspaceId)
             .eq('tipo', 'receita')
             .gte('data', inicioAntStr)
@@ -101,6 +106,7 @@ export const CeoExpenseAnalysisTab: React.FC<CeoExpenseAnalysisTabProps> = ({
             .order('data', { ascending: true })
             .range(from, to)
       );
+      const recAnt = deduplicateRevenues(recAntRaw);
 
       // 3. Despesas do período com paginação integral (consolidação canônica anti-duplicidade)
       const despContas = await CeoFinancialMetricsService.fetchAllPaginated<DespesaInput>(
