@@ -4,6 +4,7 @@ export const documentTypeSchema = z.enum([
   "boleto",
   "nota_fiscal",
   "comprovante",
+  "orcamento_pedido",
   "desconhecido",
 ]);
 
@@ -47,6 +48,28 @@ export const comprovanteFieldsSchema = z.object({
   cnpj_cpf_recebedor: z.string().optional(),
   valor: z.number().optional(),
   data_hora: z.string().optional(),
+});
+
+export const orcamentoPedidoFieldsSchema = z.object({
+  numero_documento: z.string().optional(),
+  fornecedor_nome: z.string().optional(),
+  fornecedor_endereco: z.string().optional(),
+  fornecedor_telefone: z.string().optional(),
+  fornecedor_email: z.string().optional(),
+  cliente_nome: z.string().optional(),
+  data_documento: z.string().optional(),
+  previsao_entrega: z.string().optional(),
+  valor_original_produtos: z.number().optional(),
+  abatimento_desconto: z.number().optional(),
+  valor_total_final: z.number().optional(),
+  forma_pagamento: z.string().optional(),
+  categoria_sugerida: z.string().optional(),
+  itens: z.array(z.object({
+    descricao: z.string(),
+    quantidade: z.number().optional(),
+    valor_unitario: z.number().optional(),
+    valor_total: z.number().optional(),
+  })).optional().default([]),
 });
 
 export interface DocumentExtractionResult {

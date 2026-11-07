@@ -1835,6 +1835,23 @@ serve(async (req) => {
               return { isDuplicate: true, existingRecordId: data[0].id, type: "proposal" };
             }
           }
+
+          // 4. Checa Orçamento Comercial / Pedido de Compra por número ou descrição
+          const numDoc = (params as any).numeroDocumento || (params as any).numeroOrcamento;
+          if (numDoc) {
+            const { data: orcData, error: orcErr } = await supabase
+              .from("dividas")
+              .select("id, status")
+              .eq("workspace_id", params.workspaceId)
+              .ilike("descricao", `%${numDoc}%`)
+              .limit(1);
+            if (orcErr) {
+              throw new Error(`Erro na consulta de orçamento em duplicidade: ${orcErr.message}`);
+            }
+            if (orcData && orcData.length > 0) {
+              return { isDuplicate: true, existingRecordId: orcData[0].id, type: "divida" };
+            }
+          }
         } catch (err: unknown) {
           console.error("[telegram-webhook] Falha na consulta de duplicidade (fail-closed):", err);
           throw err;

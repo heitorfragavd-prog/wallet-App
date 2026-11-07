@@ -380,12 +380,12 @@ async function baixarDivida(
   const novoValorRestante = todasPagas ? 0 : Math.max(0, Number(divida.valor_total) - novoValorPago);
   const novoStatus = todasPagas
     ? "quitada"
-    : new Date(divida.data_vencimento) < new Date()
+    : (divida.data_vencimento && new Date(divida.data_vencimento) < new Date())
       ? "vencida"
       : "pendente";
 
   let novaDataVencimento = divida.data_vencimento;
-  if (!todasPagas) {
+  if (!todasPagas && divida.data_vencimento) {
     const venc = new Date(`${divida.data_vencimento}T00:00:00`);
     venc.setMonth(venc.getMonth() + 1);
     novaDataVencimento = venc.toISOString().split("T")[0];
