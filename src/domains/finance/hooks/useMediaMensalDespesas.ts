@@ -26,22 +26,22 @@ export function useMediaMensalDespesas() {
       const dataInicioFormatada = formatarDataParaSaoPaulo(inicioData);
       const dataFimFormatada = formatarDataParaSaoPaulo(fimData);
 
-      // Busca despesas quitadas dos últimos 6 meses fechados
+      // Busca despesas quitadas dos últimos 6 meses fechados (excluindo faturas de cartão)
       const despesasQuery = supabase
         .from("despesas")
         .select("valor, data")
         .eq("workspace_id", activeWorkspace.id)
         .eq("status", "pago")
+        .is("fatura_id", null)
         .gte("data", dataInicioFormatada)
         .lte("data", dataFimFormatada);
 
-      // Busca transações de despesa quitadas dos últimos 6 meses fechados (excluindo faturas de cartão)
+      // Busca transações de despesa quitadas dos últimos 6 meses fechados
       const transacoesQuery = supabase
         .from("transacoes")
         .select("valor, data")
         .eq("workspace_id", activeWorkspace.id)
         .eq("tipo", "despesa")
-        .is("fatura_id", null)
         .gte("data", dataInicioFormatada)
         .lte("data", dataFimFormatada);
 
