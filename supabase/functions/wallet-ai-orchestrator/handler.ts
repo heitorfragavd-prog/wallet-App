@@ -31,6 +31,8 @@ import {
   type LlmMessage,
   type LlmRunner,
   FINANCIAL_AGENT_SYSTEM_PROMPT,
+  WALLET_CEO_SYSTEM_PROMPT,
+  WALLET_OPERATIONAL_SYSTEM_PROMPT,
 } from "../_shared/ai/orchestrator-core.ts";
 import {
   createQueryToolCatalog,
@@ -203,6 +205,8 @@ export async function handleOrchestratorHttpRequest(
     const workspaceId = typeof body.workspace_id === "string" ? body.workspace_id.trim() : "";
     const conversationId = typeof body.conversation_id === "string" ? body.conversation_id.trim() : undefined;
     const messages = Array.isArray(body.messages) ? (body.messages as LlmMessage[]) : [];
+    const agentType: "ceo" | "operational" = body.agent_type === "ceo" ? "ceo" : "operational";
+    const chosenSystemPrompt = agentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
 
     // Seleção de Modelo por Complexidade (Nível 1, 2, 3) e Roteamento Departamental
     const lastUserMessage = messages.filter((m) => m.role === "user").pop();
@@ -670,7 +674,9 @@ export async function handleOrchestratorHttpRequest(
     }
 
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)
-    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner);
+    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner, {
+      systemPromptOverride: chosenSystemPrompt,
+    });
     const durationMs = Date.now() - startTime;
 
     const estimatedCostUsd = calculateEstimatedCost(selectedModel, turnResult.usage);

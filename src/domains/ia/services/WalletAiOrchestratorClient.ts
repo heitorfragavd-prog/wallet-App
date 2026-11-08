@@ -5,6 +5,7 @@ export interface SendMessagePayload {
   workspaceId: string;
   messages: LlmMessage[];
   model?: string;
+  agentType?: "ceo" | "operational";
   conversationId?: string;
   correlationId?: string;
 }
@@ -75,6 +76,9 @@ export class WalletAiOrchestratorClient {
       messages: payload.messages,
       model: payload.model,
     };
+    if (payload.agentType) {
+      requestBody.agent_type = payload.agentType;
+    }
     if (payload.conversationId) {
       requestBody.conversation_id = payload.conversationId;
     }

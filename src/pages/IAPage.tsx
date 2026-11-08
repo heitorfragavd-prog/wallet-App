@@ -666,7 +666,7 @@ export default function IAPage() {
           </TabsList>
 
           <TabsContent value="agent_v2" className="mt-0">
-            <AgentV2Tab />
+            <AgentV2Tab agentType="operational" />
           </TabsContent>
 
           <TabsContent value="rapida" className="mt-0">
