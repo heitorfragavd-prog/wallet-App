@@ -2,6 +2,7 @@ import {
   AiAuthorizationError,
   authorizeAiRequest,
   canRoleAccessFinancialData,
+  canRoleAccessCeoBrain,
   type AiExecutionContext,
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
@@ -98,6 +99,7 @@ export interface OrchestratorHandlerDependencies {
       conversationId?: string;
       channel?: string;
       model: string;
+      agentBrain?: "ceo" | "operational";
       promptTokens: number;
       completionTokens: number;
       totalTokens: number;
@@ -205,8 +207,7 @@ export async function handleOrchestratorHttpRequest(
     const workspaceId = typeof body.workspace_id === "string" ? body.workspace_id.trim() : "";
     const conversationId = typeof body.conversation_id === "string" ? body.conversation_id.trim() : undefined;
     const messages = Array.isArray(body.messages) ? (body.messages as LlmMessage[]) : [];
-    const agentType: "ceo" | "operational" = body.agent_type === "ceo" ? "ceo" : "operational";
-    const chosenSystemPrompt = agentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
+    const requestedAgentType: "ceo" | "operational" = body.agent_type === "ceo" ? "ceo" : "operational";
 
     // Seleção de Modelo por Complexidade (Nível 1, 2, 3) e Roteamento Departamental
     const lastUserMessage = messages.filter((m) => m.role === "user").pop();
@@ -580,6 +581,39 @@ export async function handleOrchestratorHttpRequest(
       ? await dependencies.authDeps.getUserRole(workspaceId, context.userId)
       : "owner");
 
+    // ─── GATE 0: AUTORIZAÇÃO EXECUTIVA SERVER-SIDE PARA O CÉREBRO CEO ───
+    if (requestedAgentType === "ceo") {
+      if (!canRoleAccessCeoBrain(userRole)) {
+        if (dependencies.auditLogger) {
+          await dependencies.auditLogger.logEvent({
+            userId: context.userId,
+            workspaceId: context.workspaceId,
+            toolName: "wallet_ai_ceo_access_denied",
+            durationMs: Date.now() - startTime,
+            status: "error",
+            errorCode: "WALLET_AI_FORBIDDEN",
+            metadata: {
+              correlationId,
+              requestedAgentType: "ceo",
+              userRole,
+              reason: "unauthorized_ceo_brain_access",
+            },
+          });
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_ceo_access",
+            code: "WALLET_AI_FORBIDDEN",
+            message: `Acesso negado: o papel '${userRole}' não possui prerrogativa executiva para acessar o WALLET CEO. Apenas o proprietário e administradores executivos possuem autorização.`,
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+    }
+
     if (!canRoleAccessFinancialData(userRole)) {
       const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
       const financialTerms = [
@@ -601,21 +635,7 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
-    const repository = dependencies.repoFactory(context);
-    const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
-    let catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
-
-    if (!canRoleAccessFinancialData(userRole)) {
-      const safeCatalog: QueryToolCatalog = {};
-      for (const [toolName, handler] of Object.entries(catalog)) {
-        if (!FINANCIAL_TOOLS.has(toolName)) {
-          safeCatalog[toolName] = handler;
-        }
-      }
-      catalog = safeCatalog;
-    }
-
-    const runner = dependencies.runnerFactory(selectedModel);
+    let effectiveAgentType: "ceo" | "operational" = requestedAgentType;
 
     // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico
     let turnInputMessages = messages;
@@ -630,6 +650,22 @@ export async function handleOrchestratorHttpRequest(
           context.userId,
         );
         if (conv) {
+          if (conv.agent_type) {
+            // Conversa do CEO exige autorização executiva
+            if (conv.agent_type === "ceo" && !canRoleAccessCeoBrain(userRole)) {
+              return new Response(
+                JSON.stringify({
+                  success: false,
+                  error: "forbidden_ceo_access",
+                  code: "WALLET_AI_FORBIDDEN",
+                  message: `Acesso negado: histórico executivo protegido. O papel '${userRole}' não possui autorização para acessar esta conversa do WALLET CEO.`,
+                  correlation_id: correlationId,
+                }),
+                { status: 403, headers: responseHeaders },
+              );
+            }
+            effectiveAgentType = conv.agent_type === "ceo" ? "ceo" : "operational";
+          }
           loadedSummary = conv.summary;
           const recent = await dependencies.conversationRepo.listRecentMessages(
             conversationId,
@@ -642,8 +678,9 @@ export async function handleOrchestratorHttpRequest(
             tool_calls: m.tool_calls as LlmMessage["tool_calls"],
           }));
           const currentMsg = messages[messages.length - 1];
+          const activePromptForTurn = effectiveAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
           const ctxResult = buildTurnContext({
-            systemPrompt: FINANCIAL_AGENT_SYSTEM_PROMPT,
+            systemPrompt: activePromptForTurn,
             summary: loadedSummary,
             historyMessages: historyAsLlm,
             currentMessage: currentMsg,
@@ -655,6 +692,48 @@ export async function handleOrchestratorHttpRequest(
         console.warn("[handler] Falha ao carregar memória canônica:", err);
       }
     }
+
+    const chosenSystemPrompt = effectiveAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
+
+    // Salvaguarda de Modelo: para cérebro operacional, modelos econômicos protegem orçamento
+    let effectiveModel = selectedModel;
+    if (effectiveAgentType === "operational" && effectiveModel === "gpt-4o") {
+      effectiveModel = "gpt-4o-mini";
+    }
+
+    const repository = dependencies.repoFactory(context);
+    const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
+    let catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
+
+    // Filtragem de ferramentas executivas exclusivas do CEO
+    const CEO_EXCLUSIVE_TOOLS = new Set([
+      "consultar_resumo_executivo_ceo",
+      "consultar_analise_despesas_ceo",
+      "consultar_oportunidades_ceo",
+      "propor_experimento_comercial",
+    ]);
+
+    if (effectiveAgentType !== "ceo" || !canRoleAccessCeoBrain(userRole)) {
+      const nonCeoCatalog: QueryToolCatalog = {};
+      for (const [toolName, handler] of Object.entries(catalog)) {
+        if (!CEO_EXCLUSIVE_TOOLS.has(toolName)) {
+          nonCeoCatalog[toolName] = handler;
+        }
+      }
+      catalog = nonCeoCatalog;
+    }
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const safeCatalog: QueryToolCatalog = {};
+      for (const [toolName, handler] of Object.entries(catalog)) {
+        if (!FINANCIAL_TOOLS.has(toolName)) {
+          safeCatalog[toolName] = handler;
+        }
+      }
+      catalog = safeCatalog;
+    }
+
+    const runner = dependencies.runnerFactory(effectiveModel);
 
     // Verificação de Limite de Orçamento de IA ($10 USD mensal)
     if (dependencies.telemetryLogger?.checkBudget) {
@@ -793,7 +872,8 @@ export async function handleOrchestratorHttpRequest(
           userId: context.userId,
           conversationId,
           channel: typeof body.channel === "string" ? body.channel : "web",
-          model: selectedModel,
+          model: effectiveModel,
+          agentBrain: effectiveAgentType,
           promptTokens: turnResult.usage.promptTokens,
           completionTokens: turnResult.usage.completionTokens,
           totalTokens: turnResult.usage.totalTokens,

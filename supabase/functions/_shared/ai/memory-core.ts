@@ -56,6 +56,7 @@ export interface ConversationRepository {
     userId: string;
     title?: string;
     channel?: "web" | "telegram";
+    agentType?: "ceo" | "operational";
   }): Promise<ConversationRecord>;
 
   listRecentMessages(
@@ -331,12 +332,14 @@ export class SupabaseConversationRepository implements ConversationRepository {
     userId: string;
     title?: string;
     channel?: "web" | "telegram";
+    agentType?: "ceo" | "operational";
   }): Promise<ConversationRecord> {
     const insertPayload: Record<string, unknown> = {
       workspace_id: data.workspaceId,
       user_id: data.userId,
       title: data.title ?? (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
       is_archived: false,
+      agent_type: data.agentType ?? "operational",
     };
 
     const { data: created, error } = await this.client
@@ -364,10 +367,9 @@ export class SupabaseConversationRepository implements ConversationRepository {
       .eq("is_archived", false)
       .order("updated_at", { ascending: false });
 
-    if (agentType === "ceo") {
-      query = query.eq("agent_type", "ceo").eq("user_id", userId);
-    } else if (agentType === "operational") {
-      query = query.eq("agent_type", "operational");
+    query = query.eq("user_id", userId);
+    if (agentType) {
+      query = query.eq("agent_type", agentType);
     }
 
     const { data, error } = await query;

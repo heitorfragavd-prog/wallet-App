@@ -37,6 +37,18 @@ export const FINANCIAL_AUTHORIZED_ROLES = new Set([
 ]);
 
 /**
+ * Papéis com autorização executiva explícita para o cérebro WALLET CEO.
+ * Apenas o proprietário (owner/proprietario) e administradores executivos (admin/administrador).
+ * Perfis operacionais, sócias sem papel executivo, garçons, caixas e delivery não têm acesso.
+ */
+export const CEO_AUTHORIZED_ROLES = new Set([
+  "owner",
+  "proprietario",
+  "admin",
+  "administrador",
+]);
+
+/**
  * Validação de autorização RBAC para dados e ferramentas financeiras com lista explícita.
  * Nega acesso caso o papel esteja ausente, inválido ou não autorizado (whitelist estrita).
  */
@@ -45,6 +57,17 @@ export function canRoleAccessFinancialData(role?: string): boolean {
   const normalized = role.toLowerCase().trim();
   if (!normalized) return false;
   return FINANCIAL_AUTHORIZED_ROLES.has(normalized);
+}
+
+/**
+ * Validação de autorização server-side para acesso ao cérebro executivo WALLET CEO.
+ * Retorna true exclusivamente para proprietários ou administradores com autorização executiva formal.
+ */
+export function canRoleAccessCeoBrain(role?: string): boolean {
+  if (!role || typeof role !== "string") return false;
+  const normalized = role.toLowerCase().trim();
+  if (!normalized) return false;
+  return CEO_AUTHORIZED_ROLES.has(normalized);
 }
 
 export type AiAuthorizationErrorCode =
