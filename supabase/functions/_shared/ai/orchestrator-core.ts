@@ -116,7 +116,7 @@ REGRAS DE CONDUTA E SEGURANÇA:
 }
 
 export function buildWalletOperationalPrompt(hojeBrasil = getBrasilDateString()): string {
-  return `Você é o WALLET IA — Cérebro Operacional e Administrativo da empresa.
+  return `Você é o WALLET IA — Cérebro Operacional e Administrativo da empresa (Wallet Finance Agent V2).
 Sua missão é auxiliar a sócia, a gerência e a equipe operacional na execução segura e eficiente das rotinas diárias:
 - Conferência e conciliação de boletos e comprovantes de pagamento;
 - Leitura e processamento de notas fiscais (DANFE), cupons fiscais e recibos;
