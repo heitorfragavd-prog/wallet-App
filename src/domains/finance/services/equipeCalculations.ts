@@ -161,24 +161,67 @@ export function dataCivilSaoPaulo(clock: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export function quintoDiaUtil(year: number, month: number, holidays: string[] = []): string {
+export interface QuintoDiaUtilOptions {
+  /**
+   * Se true, inclui o sábado na contagem dos dias úteis (conforme CLT art. 459 e IN SRT nº 01/1989).
+   * Padrão: true (regra legal trabalhista).
+   */
+  incluirSabado?: boolean;
+  /**
+   * Se o 5º dia útil apurado recair em um sábado, antecipa para a sexta-feira imediatamente anterior.
+   * Recomendado para meios de pagamento que dependem de compensação bancária tradicional (TED/DOC/boleto).
+   * Padrão: false (mantém o sábado como vencimento legal da obrigação, apto para Pix).
+   */
+  anteciparSeSabado?: boolean;
+}
+
+export function quintoDiaUtil(
+  year: number,
+  month: number,
+  holidays: string[] = [],
+  options?: QuintoDiaUtilOptions
+): string {
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
     throw new RangeError('Ano ou mes invalido');
   }
+
+  const incluirSabado = options?.incluirSabado ?? true;
+  const anteciparSeSabado = options?.anteciparSeSabado ?? false;
 
   const holidaySet = new Set(holidays);
   const monthIndex = month - 1;
   const totalDays = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
   let businessDays = 0;
+  let ultimoDiaBancario: string | null = null;
 
   for (let day = 1; day <= totalDays; day += 1) {
     const current = new Date(Date.UTC(year, monthIndex, day));
     const weekDay = current.getUTCDay();
     const currentIso = isoDate(year, monthIndex, day);
 
-    if (weekDay !== 0 && weekDay !== 6 && !holidaySet.has(currentIso)) {
-      businessDays += 1;
-      if (businessDays === 5) return currentIso;
+    // Domingo e feriados nunca são dias úteis trabalhistas
+    if (weekDay === 0 || holidaySet.has(currentIso)) {
+      continue;
+    }
+
+    // Se a opção desativar o sábado expressamente, pula
+    if (!incluirSabado && weekDay === 6) {
+      continue;
+    }
+
+    businessDays += 1;
+
+    // Registra o último dia útil bancário (segunda a sexta)
+    if (weekDay >= 1 && weekDay <= 5) {
+      ultimoDiaBancario = currentIso;
+    }
+
+    if (businessDays === 5) {
+      // Se caiu em sábado e foi solicitada antecipação operacional para dia útil bancário
+      if (weekDay === 6 && anteciparSeSabado) {
+        return ultimoDiaBancario || currentIso;
+      }
+      return currentIso;
     }
   }
 

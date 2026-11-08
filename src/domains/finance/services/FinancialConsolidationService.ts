@@ -206,28 +206,32 @@ export class FinancialConsolidationService {
     // FASE 1: Indexação de vínculos canônicos e chaves explícitas
     // ─────────────────────────────────────────────────────────────────
     const existingDivipayIds = new Set<string>();
+    const despesaByDivipayId = new Map<string, DespesaInput>();
     const despesaByLinkKey = new Map<string, DespesaInput>();
     const despesasById = new Map<string, DespesaInput>();
 
-    const registerDivipayId = (id?: string | null) => {
+    const registerDivipayId = (id?: string | null, d?: DespesaInput) => {
       if (!id) return;
       const clean = id.trim().replace(/^divipay-/, "");
-      if (clean) existingDivipayIds.add(clean);
+      if (clean) {
+        existingDivipayIds.add(clean);
+        if (d) despesaByDivipayId.set(clean, d);
+      }
     };
 
     rawDespesas.forEach((d) => {
       if (d.id) despesasById.set(d.id, d);
       if (d.deduplication_key) despesaByLinkKey.set(d.deduplication_key.trim(), d);
-      if (d.divipay_external_id) registerDivipayId(d.divipay_external_id);
+      if (d.divipay_external_id) registerDivipayId(d.divipay_external_id, d);
 
       const obs = String(d.observacoes || "");
       if (obs.includes("divipay-saque:")) {
         const id = obs.split("divipay-saque:")[1]?.split(")")[0]?.trim();
-        registerDivipayId(id);
+        registerDivipayId(id, d);
       }
       if (obs.includes("Pago via Divipay") && obs.includes(" - ")) {
         const id = obs.split(" - ").pop()?.trim();
-        registerDivipayId(id);
+        registerDivipayId(id, d);
       }
       if (obs.includes("transacao_id:")) {
         const txId = obs.split("transacao_id:")[1]?.trim().split(/\s+/)[0];
@@ -419,6 +423,22 @@ export class FinancialConsolidationService {
       // Por chave reversa cadastrada na despesa
       if (!matchedDespesa) {
         matchedDespesa = despesaByLinkKey.get(`transacao:${txId}`);
+      }
+
+      // Por vínculo Divipay compartilhado
+      if (!matchedDespesa) {
+        let divipayId = tx.divipay_external_id?.trim().replace(/^divipay-/, "");
+        if (!divipayId && tx.observacoes) {
+          const obs = tx.observacoes;
+          if (obs.includes("divipay-saque:")) {
+            divipayId = obs.split("divipay-saque:")[1]?.split(")")[0]?.trim().replace(/^divipay-/, "");
+          } else if (obs.includes("Pago via Divipay") && obs.includes(" - ")) {
+            divipayId = obs.split(" - ").pop()?.trim().replace(/^divipay-/, "");
+          }
+        }
+        if (divipayId) {
+          matchedDespesa = despesaByDivipayId.get(divipayId);
+        }
       }
 
       if (matchedDespesa) {

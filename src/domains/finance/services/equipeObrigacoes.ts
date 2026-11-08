@@ -1,10 +1,12 @@
-import { quintoDiaUtil, type TipoColaborador } from "./equipeCalculations";
+import { quintoDiaUtil, type QuintoDiaUtilOptions, type TipoColaborador } from "./equipeCalculations";
 
-type VencimentoInput = {
+export type VencimentoInput = {
   tipo: TipoColaborador;
   competencia: string;
   diaPagamento?: number | null;
   feriados?: string[];
+  incluirSabado?: boolean;
+  anteciparSeSabado?: boolean;
 };
 
 export function vencimentoObrigacaoMensal({
@@ -12,13 +14,20 @@ export function vencimentoObrigacaoMensal({
   competencia,
   diaPagamento,
   feriados = [],
+  incluirSabado,
+  anteciparSeSabado,
 }: VencimentoInput): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(competencia);
   if (!match) throw new RangeError("Competência inválida");
 
   const year = Number(match[1]);
   const month = Number(match[2]);
-  if (tipo === "funcionario") return quintoDiaUtil(year, month, feriados);
+  if (tipo === "funcionario") {
+    const opts: QuintoDiaUtilOptions = {};
+    if (incluirSabado !== undefined) opts.incluirSabado = incluirSabado;
+    if (anteciparSeSabado !== undefined) opts.anteciparSeSabado = anteciparSeSabado;
+    return quintoDiaUtil(year, month, feriados, opts);
+  }
 
   if (tipo !== "socio") throw new RangeError("Folguista não possui obrigação mensal fixa");
   if (!Number.isInteger(diaPagamento) || Number(diaPagamento) < 1 || Number(diaPagamento) > 28) {

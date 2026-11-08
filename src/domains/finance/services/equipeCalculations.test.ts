@@ -14,8 +14,25 @@ import {
 } from './equipeCalculations';
 
 describe('equipeCalculations', () => {
-  it('calcula o quinto dia util ignorando fins de semana e feriados', () => {
-    expect(quintoDiaUtil(2026, 8, ['2026-08-07'])).toBe('2026-08-10');
+  describe('quintoDiaUtil (CLT art. 459 e IN SRT 01/1989)', () => {
+    it('calcula o quinto dia util incluindo sabado na contagem (regra CLT)', () => {
+      // Dezembro/2026: 01(ter), 02(qua), 03(qui), 04(sex), 05(sab) -> 5º dia util = 05/12/2026
+      expect(quintoDiaUtil(2026, 12)).toBe('2026-12-05');
+    });
+
+    it('antecipa para a sexta-feira anterior quando cai no sabado e anteciparSeSabado=true', () => {
+      // Dezembro/2026: 5º dia util e sabado 05/12/2026, antecipa para sexta 04/12/2026
+      expect(quintoDiaUtil(2026, 12, [], { anteciparSeSabado: true })).toBe('2026-12-04');
+    });
+
+    it('calcula o quinto dia util em mes com feriado nacional (ex: Novembro/2026 com 02/11 Finados)', () => {
+      // Novembro/2026: 01(domingo), 02(feriado Finados), 03(ter-1), 04(qua-2), 05(qui-3), 06(sex-4), 07(sab-5)
+      expect(quintoDiaUtil(2026, 11, ['2026-11-02'])).toBe('2026-11-07');
+    });
+
+    it('permite modo legado desconsiderando sabados quando incluirSabado=false', () => {
+      expect(quintoDiaUtil(2026, 8, ['2026-08-07'], { incluirSabado: false })).toBe('2026-08-10');
+    });
   });
 
   it('agrupa Uber e passagem em transporte e mantem meta separada', () => {
