@@ -1,4 +1,5 @@
 import { DeliveryRoleGuard } from "./domains/delivery/DeliveryRoleGuard";
+import { CeoRoleGuard } from "./domains/ceo/components/CeoRoleGuard";
 import { Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ProtectedRoute } from "./domains/auth/components/ProtectedRoute";
@@ -149,8 +150,8 @@ function App() {
                   <Route path="/ia-metrics"    element={<ProtectedRoute><AIMetricsDashboard /></ProtectedRoute>} />
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
-                  <Route path="/ceo"           element={<ProtectedRoute><DeliveryRoleGuard><WalletCeoPage /></DeliveryRoleGuard></ProtectedRoute>} />
-                  <Route path="/wallet-ceo"    element={<ProtectedRoute><DeliveryRoleGuard><WalletCeoPage /></DeliveryRoleGuard></ProtectedRoute>} />
+                  <Route path="/ceo"           element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
+                  <Route path="/wallet-ceo"    element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
                   <Route path="/delivery"      element={<ProtectedRoute><WalletDeliveryPage /></ProtectedRoute>} />
                   <Route path="/delivery/kds"  element={<ProtectedRoute><DeliveryKDSPage /></ProtectedRoute>} />
 

@@ -316,7 +316,7 @@ export class SupabaseConversationRepository implements ConversationRepository {
   ): Promise<ConversationRecord | null> {
     const { data, error } = await this.client
       .from("wallet_ai_conversations")
-      .select("id, workspace_id, user_id, title, summary, is_archived, created_at, updated_at")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, created_at, updated_at")
       .eq("id", conversationId)
       .eq("workspace_id", workspaceId)
       .eq("user_id", userId)
@@ -350,6 +350,29 @@ export class SupabaseConversationRepository implements ConversationRepository {
     }
 
     return created as ConversationRecord;
+  }
+
+  async listConversations(
+    workspaceId: string,
+    userId: string,
+    agentType?: "ceo" | "operational",
+  ): Promise<ConversationRecord[]> {
+    let query = this.client
+      .from("wallet_ai_conversations")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, created_at, updated_at")
+      .eq("workspace_id", workspaceId)
+      .eq("is_archived", false)
+      .order("updated_at", { ascending: false });
+
+    if (agentType === "ceo") {
+      query = query.eq("agent_type", "ceo").eq("user_id", userId);
+    } else if (agentType === "operational") {
+      query = query.eq("agent_type", "operational");
+    }
+
+    const { data, error } = await query;
+    if (error || !data) return [];
+    return data as ConversationRecord[];
   }
 
   async listRecentMessages(

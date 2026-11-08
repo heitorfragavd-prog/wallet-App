@@ -33,6 +33,8 @@ import { CeoCommercialAnalysisTab } from '@/domains/ceo/components/CeoCommercial
 import { CeoExpenseAnalysisTab } from '@/domains/ceo/components/CeoExpenseAnalysisTab';
 import { CeoNetProfitAnalysisTab } from '@/domains/ceo/components/CeoNetProfitAnalysisTab';
 import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTab';
+import { AgentV2Tab } from '@/domains/ia/components/AgentV2Tab';
+import { Bot } from 'lucide-react';
 import {
   CeoFinancialMetricsService,
   CeoExecutiveKpis,
@@ -354,6 +356,13 @@ export const WalletCeoPage: React.FC = () => {
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold leading-none">
                 {experiments.length}
               </span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="brain-ceo"
+              className="h-11 sm:h-10 text-xs font-semibold gap-2 px-3 py-2 rounded-lg flex items-center justify-center transition-all duration-200 data-[state=active]:bg-amber-500 data-[state=active]:text-amber-950 data-[state=active]:shadow-sm data-[state=active]:font-bold border border-amber-500/30 text-amber-400 hover:text-amber-300"
+            >
+              <Bot className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Cérebro CEO</span>
             </TabsTrigger>
             <TabsTrigger
               value="departments"

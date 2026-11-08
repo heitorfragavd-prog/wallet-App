@@ -22,7 +22,7 @@ export interface UseWalletAgentChatOptions {
 }
 
 export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
-  const { workspaceId, client, model, onError } = options;
+  const { workspaceId, client, model, agentType = "operational", onError } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<string>("");

@@ -670,7 +670,9 @@ export async function handleOrchestratorHttpRequest(
     }
 
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)
-    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner);
+    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner, {
+      systemPromptOverride: chosenSystemPrompt,
+    });
     const durationMs = Date.now() - startTime;
 
     const estimatedCostUsd = calculateEstimatedCost(selectedModel, turnResult.usage);
