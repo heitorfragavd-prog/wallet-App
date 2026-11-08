@@ -18,11 +18,20 @@ export interface UseWalletAgentChatOptions {
   workspaceId?: string;
   client?: WalletAiOrchestratorClient;
   model?: string;
+  agentType?: "ceo" | "operational";
+  conversationId?: string;
   onError?: (error: Error) => void;
 }
 
 export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
-  const { workspaceId, client, model, onError } = options;
+  const {
+    workspaceId,
+    client,
+    model,
+    agentType = "operational",
+    conversationId,
+    onError,
+  } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<string>("");
@@ -66,7 +75,8 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
           workspaceId,
           messages: outgoingMessages,
           model,
-          agentType: options.agentType ?? "operational",
+          agentType,
+          conversationId,
         });
 
         const assistantMessage: ChatMessage = {
@@ -100,7 +110,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
         setCurrentStatus("");
       }
     },
-    [workspaceId, client, messages, model, options.agentType, onError],
+    [workspaceId, client, messages, model, agentType, conversationId, onError],
   );
 
   const clearChat = useCallback(() => {

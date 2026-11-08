@@ -88,6 +88,7 @@ const telemetryLogger = {
     conversationId?: string;
     channel?: string;
     model: string;
+    agentBrain?: "ceo" | "operational";
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
@@ -109,6 +110,7 @@ const telemetryLogger = {
         conversation_id: telemetry.conversationId || null,
         channel: telemetry.channel || "web",
         model: telemetry.model,
+        agent_brain: telemetry.agentBrain || "operational",
         provider,
         prompt_tokens: telemetry.promptTokens,
         completion_tokens: telemetry.completionTokens,

@@ -1,5 +1,5 @@
 import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useToast } from "@/shared/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -60,11 +60,14 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
     });
   }, []);
 
-  const { messages, isLoading, currentStatus, sendMessage, clearChat } =
+  const [conversationId, setConversationId] = useState<string | null>(null);
+
+  const { messages, setMessages, isLoading, currentStatus, sendMessage, clearChat } =
     useWalletAgentChat({
       workspaceId: activeWorkspace?.id,
       client,
       agentType,
+      conversationId: conversationId || undefined,
       onError: (err) => {
         toast({
           title: "Aviso do Assistente",
@@ -73,6 +76,80 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
         });
       },
     });
+
+  const initChatMemory = useCallback(async () => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentUserId = sessionData.session?.user?.id;
+    if (!activeWorkspace?.id || !currentUserId) return;
+
+    try {
+      const { data: convs, error: convErr } = await supabase
+        .from("wallet_ai_conversations")
+        .select("id, title, updated_at")
+        .eq("workspace_id", activeWorkspace.id)
+        .eq("user_id", currentUserId)
+        .eq("agent_type", agentType)
+        .eq("is_archived", false)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+      if (convErr) {
+        console.warn("[AgentV2Tab] Erro ao carregar conversa:", convErr);
+        return;
+      }
+
+      let activeConvId: string;
+      if (convs && convs.length > 0) {
+        activeConvId = convs[0].id;
+      } else {
+        const { data: newConv, error: createErr } = await supabase
+          .from("wallet_ai_conversations")
+          .insert({
+            workspace_id: activeWorkspace.id,
+            user_id: currentUserId,
+            title: isCeoBrain ? "Sessão Executiva CEO" : "Atendimento Operacional",
+            agent_type: agentType,
+            is_shared: false,
+          })
+          .select("id")
+          .single();
+
+        if (createErr || !newConv) {
+          console.warn("[AgentV2Tab] Erro ao criar conversa inicial:", createErr);
+          return;
+        }
+        activeConvId = newConv.id;
+      }
+
+      setConversationId(activeConvId);
+
+      // Carrega histórico de mensagens persistidas
+      const { data: msgs, error: msgsErr } = await supabase
+        .from("wallet_ai_messages")
+        .select("id, role, content, created_at")
+        .eq("conversation_id", activeConvId)
+        .eq("workspace_id", activeWorkspace.id)
+        .eq("user_id", currentUserId)
+        .order("created_at", { ascending: true });
+
+      if (!msgsErr && msgs && msgs.length > 0) {
+        setMessages(
+          msgs.map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant" | "system",
+            content: m.content || "",
+            createdAt: new Date(m.created_at),
+          }))
+        );
+      }
+    } catch (err) {
+      console.warn("[AgentV2Tab] Falha ao recuperar memória:", err);
+    }
+  }, [activeWorkspace?.id, agentType, isCeoBrain, setMessages]);
+
+  useEffect(() => {
+    initChatMemory();
+  }, [initChatMemory]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });

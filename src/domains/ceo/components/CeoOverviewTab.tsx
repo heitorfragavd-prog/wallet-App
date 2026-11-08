@@ -377,6 +377,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         .select('id, title, created_at, updated_at')
         .eq('workspace_id', workspaceId)
         .eq('user_id', user.id)
+        .eq('agent_type', 'ceo')
         .eq('is_archived', false)
         .order('updated_at', { ascending: false })
         .limit(20);
@@ -399,6 +400,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
             workspace_id: workspaceId,
             user_id: user.id,
             title: 'Conversa com CEO',
+            agent_type: 'ceo',
           })
           .select('id, title, created_at, updated_at')
           .single();
@@ -438,6 +440,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
           workspace_id: workspaceId,
           user_id: user.id,
           title: `Conversa ${dataFormatada}`,
+          agent_type: 'ceo',
         })
         .select('id, title, created_at, updated_at')
         .single();

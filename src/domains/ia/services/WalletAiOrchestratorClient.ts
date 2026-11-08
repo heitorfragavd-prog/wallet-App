@@ -94,6 +94,12 @@ export class WalletAiOrchestratorClient {
         body: JSON.stringify(requestBody),
       });
     } catch {
+      if (payload.agentType === "ceo") {
+        throw new WalletAiOrchestratorError(
+          "WALLET_AI_NETWORK_ERROR",
+          "O serviço Wallet CEO está temporariamente inacessível. O fallback automático foi bloqueado por segurança executiva.",
+        );
+      }
       // Fallback gracioso para openai-proxy se o endpoint principal apresentar erro de rede
       const proxyUrl = this.baseUrl.replace("wallet-ai-orchestrator", "openai-proxy");
       response = await this.fetchImpl(proxyUrl, {
@@ -106,8 +112,15 @@ export class WalletAiOrchestratorClient {
       });
     }
 
-    // Se o orchestrator V2 ainda não estiver publicado no Supabase (404), usa proxy existente
+    // Se o orchestrator V2 ainda não estiver publicado no Supabase (404), usa proxy existente apenas para operacional
     if (response.status === 404) {
+      if (payload.agentType === "ceo") {
+        throw new WalletAiOrchestratorError(
+          "WALLET_AI_NOT_FOUND",
+          "O serviço Wallet CEO não está disponível nesta versão.",
+          404,
+        );
+      }
       const proxyUrl = this.baseUrl.replace("wallet-ai-orchestrator", "openai-proxy");
       const fallbackResp = await this.fetchImpl(proxyUrl, {
         method: "POST",
