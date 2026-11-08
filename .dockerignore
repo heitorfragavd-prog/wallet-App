@@ -9,3 +9,10 @@ dist
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+scripts/backups/
+backups/
+*backup*.json
+*.dump
+*.sql.bak
+*.bak
