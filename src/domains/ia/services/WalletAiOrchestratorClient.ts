@@ -75,8 +75,10 @@ export class WalletAiOrchestratorClient {
       workspace_id: payload.workspaceId,
       messages: payload.messages,
       model: payload.model,
-      agent_type: payload.agentType ?? "operational",
     };
+    if (payload.agentType) {
+      requestBody.agent_type = payload.agentType;
+    }
     if (payload.conversationId) {
       requestBody.conversation_id = payload.conversationId;
     }
