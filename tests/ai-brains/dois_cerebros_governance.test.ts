@@ -73,10 +73,10 @@ describe("👑 WALLET CEO 3.0 — Governança dos Dois Cérebros (Etapa 03)", ()
     });
 
     it("WalletAiOrchestratorClient deve serializar agent_type no payload da requisição", async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> | null = null;
 
-      const mockFetch = async (_url: any, init?: any) => {
-        capturedBody = JSON.parse(init.body);
+      const mockFetch = async (_url: RequestInfo | URL, init?: RequestInit) => {
+        capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
         return new Response(
           JSON.stringify({
             message: { role: "assistant", content: "Ok" },
@@ -94,7 +94,7 @@ describe("👑 WALLET CEO 3.0 — Governança dos Dois Cérebros (Etapa 03)", ()
       const client = new WalletAiOrchestratorClient({
         baseUrl: "https://test.supabase.co/functions/v1/wallet-ai-orchestrator",
         getAccessToken: async () => "fake-jwt-token",
-        fetchImpl: mockFetch as any,
+        fetchImpl: mockFetch as unknown as typeof fetch,
       });
 
       await client.sendMessage({

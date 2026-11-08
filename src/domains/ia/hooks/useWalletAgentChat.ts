@@ -22,11 +22,11 @@ export interface UseWalletAgentChatOptions {
 }
 
 export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
-  const { workspaceId, client, model, agentType = "operational", onError } = options;
+  const { workspaceId, client, model, onError } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState<string>("");
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const _abortControllerRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -66,6 +66,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
           workspaceId,
           messages: outgoingMessages,
           model,
+          agentType: options.agentType ?? "operational",
         });
 
         const assistantMessage: ChatMessage = {
@@ -99,7 +100,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
         setCurrentStatus("");
       }
     },
-    [workspaceId, client, messages, model, onError],
+    [workspaceId, client, messages, model, options.agentType, onError],
   );
 
   const clearChat = useCallback(() => {

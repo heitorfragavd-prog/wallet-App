@@ -1,3 +1,4 @@
+import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -222,7 +223,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
                             tc.tool === "propor_cadastro_despesa" ||
                             tc.tool === "propor_cadastro_receita" ||
                             tc.tool === "propor_experimento_comercial"
-                              ? (tc.output as any)
+                              ? (tc.output as ActionProposal)
                               : null;
 
                           return (

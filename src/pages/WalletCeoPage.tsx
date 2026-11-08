@@ -484,6 +484,11 @@ export const WalletCeoPage: React.FC = () => {
             )}
           </TabsContent>
 
+          {/* ABA: Cérebro CEO Estratégico (Gate 2 - Etapa 03) */}
+          <TabsContent value="brain-ceo" className="space-y-6 focus-visible:outline-none">
+            <AgentV2Tab agentType="ceo" />
+          </TabsContent>
+
           {/* ABA 5: Os 7 Departamentos do CEO */}
           <TabsContent value="departments" className="space-y-4 focus-visible:outline-none">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

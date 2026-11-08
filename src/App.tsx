@@ -1,4 +1,3 @@
-import { DeliveryRoleGuard } from "./domains/delivery/DeliveryRoleGuard";
 import { CeoRoleGuard } from "./domains/ceo/components/CeoRoleGuard";
 import { Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
