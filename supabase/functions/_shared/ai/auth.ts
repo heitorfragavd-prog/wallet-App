@@ -20,6 +20,7 @@ export interface AiExecutionContext {
   readonly conversationId?: string;
   readonly correlationId?: string;
   readonly role?: string;
+  readonly isOwner?: boolean;
 }
 
 /**
@@ -48,6 +49,11 @@ export const CEO_AUTHORIZED_ROLES = new Set([
   "administrador",
 ]);
 
+export interface CeoAuthorizationOptions {
+  isOwner?: boolean;
+  isExecutiveDelegated?: boolean;
+}
+
 /**
  * Validação de autorização RBAC para dados e ferramentas financeiras com lista explícita.
  * Nega acesso caso o papel esteja ausente, inválido ou não autorizado (whitelist estrita).
@@ -61,12 +67,31 @@ export function canRoleAccessFinancialData(role?: string): boolean {
 
 /**
  * Validação de autorização server-side para acesso ao cérebro executivo WALLET CEO.
- * Retorna true exclusivamente para proprietários ou administradores com autorização executiva formal.
+ * Adota acesso restrito ao proprietário do workspace como padrão.
+ * Administradores técnicos (admin/administrador) não-proprietários só acessam com delegação explícita.
  */
-export function canRoleAccessCeoBrain(role?: string): boolean {
+export function canRoleAccessCeoBrain(role?: string, options?: CeoAuthorizationOptions): boolean {
   if (!role || typeof role !== "string") return false;
   const normalized = role.toLowerCase().trim();
   if (!normalized) return false;
+
+  // Papéis executivos natos do proprietário
+  if (normalized === "owner" || normalized === "proprietario") {
+    return true;
+  }
+
+  // Se options foi fornecido (contexto do workspace real):
+  if (options) {
+    if (options.isOwner || options.isExecutiveDelegated) {
+      return CEO_AUTHORIZED_ROLES.has(normalized);
+    }
+    // Administrador técnico sem prerrogativa executiva nem proprietário -> BLOQUEADO
+    if (normalized === "admin" || normalized === "administrador") {
+      return false;
+    }
+  }
+
+  // Fallback para chamadas unitárias sem contexto de workspace
   return CEO_AUTHORIZED_ROLES.has(normalized);
 }
 
@@ -183,6 +208,13 @@ export async function authorizeAiRequest(
   } else if ((workspace as Record<string, unknown>).role) {
     result.role = (workspace as Record<string, unknown>).role as string;
   }
+
+  const isOwner =
+    (workspace as Record<string, unknown>).owner_id === user.id ||
+    (workspace as Record<string, unknown>).user_id === user.id ||
+    result.role === "owner" ||
+    result.role === "proprietario";
+  result.isOwner = isOwner;
 
   return Object.freeze(result as unknown as AiExecutionContext);
 }

@@ -584,7 +584,10 @@ export async function handleOrchestratorHttpRequest(
 
     // ─── GATE 0: AUTORIZAÇÃO EXECUTIVA SERVER-SIDE PARA O CÉREBRO CEO ───
     if (requestedAgentType === "ceo") {
-      if (!canRoleAccessCeoBrain(userRole)) {
+      const isOwner = context.isOwner ?? (userRole === "owner" || userRole === "proprietario");
+      const isExecutiveDelegated = userRole === "executive" || userRole === "ceo";
+
+      if (!canRoleAccessCeoBrain(userRole, { isOwner, isExecutiveDelegated })) {
         if (dependencies.auditLogger) {
           await dependencies.auditLogger.logEvent({
             userId: context.userId,
@@ -597,6 +600,7 @@ export async function handleOrchestratorHttpRequest(
               correlationId,
               requestedAgentType: "ceo",
               userRole,
+              isOwner,
               reason: "unauthorized_ceo_brain_access",
             },
           });
@@ -607,7 +611,7 @@ export async function handleOrchestratorHttpRequest(
             success: false,
             error: "forbidden_ceo_access",
             code: "WALLET_AI_FORBIDDEN",
-            message: `Acesso negado: o papel '${userRole}' não possui prerrogativa executiva para acessar o WALLET CEO. Apenas o proprietário e administradores executivos possuem autorização.`,
+            message: `Acesso negado: o Wallet CEO é o assistente executivo privado do proprietário do workspace. O papel '${userRole}' não possui prerrogativa executiva delegada neste workspace.`,
             correlation_id: correlationId,
           }),
           { status: 403, headers: responseHeaders },
