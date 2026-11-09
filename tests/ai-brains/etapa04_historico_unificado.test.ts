@@ -1,14 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, it, expect, vi } from "vitest";
 import {
   SupabaseConversationRepository,
   type ConversationRecord,
   type MessageRecord,
 } from "../../supabase/functions/_shared/ai/memory-core";
-import {
-  handleTelegramTextMessage,
-  type TelegramAdapterDependencies,
-} from "../../supabase/functions/_shared/ai/telegram-channel-adapter";
-import type { FinancialAgentContext } from "../../supabase/functions/_shared/ai/agent-types";
 
 describe("👑 WALLET CEO 3.0 — ETAPA 04: Histórico Unificado App + Telegram", () => {
   const workspaceId = "2af415b6-76aa-4134-8133-a9b405671c1c";
