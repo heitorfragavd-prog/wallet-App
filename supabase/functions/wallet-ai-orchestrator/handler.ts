@@ -801,6 +801,7 @@ export async function handleOrchestratorHttpRequest(
             userId: context.userId,
             role: "user",
             content: lastUserMsg.content,
+            channel: "web",
           });
         }
         if (turnResult.finalMessage?.content) {
@@ -811,6 +812,7 @@ export async function handleOrchestratorHttpRequest(
             role: "assistant",
             content: turnResult.finalMessage.content,
             tokensCount: turnResult.usage.totalTokens,
+            channel: "web",
           });
         }
 

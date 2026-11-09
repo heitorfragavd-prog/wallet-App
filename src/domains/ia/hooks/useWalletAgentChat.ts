@@ -9,6 +9,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  channel?: "web" | "telegram";
   toolCalls?: ExecutedToolRecord[];
   createdAt: Date;
   isError?: boolean;
@@ -58,6 +59,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
         id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
         role: "user",
         content: trimmedText,
+        channel: "web",
         createdAt: new Date(),
       };
 
@@ -83,6 +85,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
           id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + 1),
           role: "assistant",
           content: response.message?.content ?? (typeof response.message === "string" ? response.message : ""),
+          channel: "web",
           toolCalls: response.toolCalls,
           createdAt: new Date(),
         };
@@ -99,6 +102,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
           id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + 2),
           role: "assistant",
           content: `Desculpe, ocorreu um erro ao processar sua solicitação: ${error.message}`,
+          channel: "web",
           createdAt: new Date(),
           isError: true,
         };
@@ -121,6 +125,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
 
   return {
     messages,
+    setMessages,
     isLoading,
     currentStatus,
     sendMessage,

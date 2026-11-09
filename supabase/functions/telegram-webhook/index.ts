@@ -856,6 +856,98 @@ serve(async (req) => {
       }
     }
 
+    // ─── CASO 0A: Chamada da Web App para gerar token/link efêmero (10 min TTL) ───
+    if (body?.action === "create_link_token") {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const userJwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const token = generateToken();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      const workspaceId = body.workspace_id || null;
+
+      const { error: insertErr } = await supabase.from("telegram_link_tokens").insert({
+        token,
+        user_id: user.id,
+        workspace_id: workspaceId,
+        expires_at: expiresAt,
+        usado: false,
+      });
+
+      if (insertErr) {
+        return new Response(JSON.stringify({ error: insertErr.message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const botUsername = Deno.env.get("TELEGRAM_BOT_USERNAME") || "WalletCortexxBot";
+      const link = `https://t.me/${botUsername}?start=${token}`;
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          token,
+          expires_at: expiresAt,
+          bot_username: botUsername,
+          link,
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // ─── CASO 0B: Consulta de status de vínculo Telegram do usuário autenticado ───
+    if (body?.action === "get_status") {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const userJwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { data: vinculo } = await supabase
+        .from("usuarios_telegram")
+        .select("telegram_chat_id, telegram_username, ativo, created_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      return new Response(
+        JSON.stringify({
+          connected: !!vinculo?.ativo,
+          chat_id: vinculo?.telegram_chat_id ? String(vinculo.telegram_chat_id) : null,
+          username: vinculo?.telegram_username ?? null,
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     // ─── CASO 1: Chamada da Web App para vincular a conta via Token ───
     if (body?.action === "vincular") {
       const authHeader = req.headers.get("Authorization");
@@ -892,9 +984,13 @@ serve(async (req) => {
         .eq("usado", false)
         .maybeSingle();
 
-      if (tokenErr || !linkToken) {
+      const isExpired = linkToken?.expires_at
+        ? new Date(linkToken.expires_at).getTime() < Date.now()
+        : false;
+
+      if (tokenErr || !linkToken || isExpired) {
         return new Response(
-          JSON.stringify({ error: "Código inválido ou já utilizado. Envie /start para o bot no Telegram para gerar um novo." }),
+          JSON.stringify({ error: "Código inválido ou expirado. Envie /start para o bot no Telegram para gerar um novo." }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -917,14 +1013,28 @@ serve(async (req) => {
         });
       }
 
+      // Se houver workspace associado, vincula no channel_mappings
+      const targetWorkspaceId = body.workspace_id || linkToken.workspace_id;
+      if (targetWorkspaceId && linkToken.telegram_chat_id) {
+        await supabase.from("channel_mappings").upsert(
+          {
+            channel: "telegram",
+            external_channel_id: String(linkToken.telegram_chat_id),
+            workspace_id: targetWorkspaceId,
+            is_active: true,
+          },
+          { onConflict: "channel,external_channel_id" }
+        );
+      }
+
       // Marcar token como usado
       await supabase
         .from("telegram_link_tokens")
-        .update({ usado: true })
+        .update({ usado: true, user_id: authenticatedUserId })
         .eq("token", linkToken.token);
 
       // Notifica no Telegram que o vínculo foi realizado com sucesso
-      if (telegramBotToken) {
+      if (telegramBotToken && linkToken.telegram_chat_id) {
         fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3225,20 +3335,92 @@ serve(async (req) => {
 
     // Comando /start
     if (text.startsWith("/start")) {
+      const parts = text.split(/\s+/);
+      const startArg = parts[1]?.trim().toUpperCase();
+
+      if (startArg) {
+        // Fluxo de pareamento criptográfico via link gerado no app:
+        // /start WLT-XXXXXX
+        const { data: linkToken, error: tokenErr } = await supabase
+          .from("telegram_link_tokens")
+          .select("*")
+          .eq("token", startArg)
+          .eq("usado", false)
+          .maybeSingle();
+
+        const isExpired = linkToken?.expires_at
+          ? new Date(linkToken.expires_at).getTime() < Date.now()
+          : false;
+
+        if (tokenErr || !linkToken || isExpired) {
+          await sendReply(
+            `⚠️ <b>Código de pareamento inválido ou expirado.</b>\n\n` +
+            `Os links de conexão gerados no aplicativo possuem validade de 10 minutos por segurança.\n` +
+            `Por favor, acesse o aplicativo Wallet em <b>Wallet IA</b> ou <b>Notificações</b> e gere um novo link.`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+
+        if (linkToken.user_id) {
+          // Atualiza vínculo seguro na tabela usuarios_telegram
+          await supabase.from("usuarios_telegram").upsert(
+            {
+              user_id: linkToken.user_id,
+              telegram_chat_id: chatId,
+              telegram_username: username,
+              ativo: true,
+            },
+            { onConflict: "user_id" }
+          );
+
+          // Se vinculado a um workspace específico, atualiza ou cria o channel_mapping
+          if (linkToken.workspace_id) {
+            await supabase.from("channel_mappings").upsert(
+              {
+                channel: "telegram",
+                external_channel_id: String(chatId),
+                workspace_id: linkToken.workspace_id,
+                is_active: true,
+              },
+              { onConflict: "channel,external_channel_id" }
+            );
+          }
+
+          // Marca o token como consumido e armazena metadados
+          await supabase
+            .from("telegram_link_tokens")
+            .update({
+              usado: true,
+              telegram_chat_id: chatId,
+              telegram_username: username,
+            })
+            .eq("token", startArg);
+
+          await sendReply(
+            `✅ <b>Conta Wallet conectada com sucesso!</b>\n\n` +
+            `O seu Telegram agora está sincronizado com o cérebro operacional da Wallet.\n\n` +
+            `💡 <i>Suas conversas no aplicativo e aqui no Telegram agora continuam no mesmo histórico unificado.</i>\n\n` +
+            `Experimente enviar uma mensagem ou dúvida financeira agora!`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
+        }
+      }
+
       const token = generateToken();
       await supabase.from("telegram_link_tokens").insert({
         token,
         telegram_chat_id: chatId,
         telegram_username: username,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
       });
 
       await sendReply(
         `👋 <b>Olá! Seja bem-vindo ao Bot da Wallet.</b>\n\n` +
         `Para conectar este Telegram à sua conta no aplicativo:\n\n` +
         `1. Copie este código: <code>${token}</code>\n` +
-        `2. Abra o aplicativo Wallet em <b>Notificações</b>\n` +
+        `2. Abra o aplicativo Wallet em <b>Notificações</b> ou <b>Wallet IA</b>\n` +
         `3. Cole o código e clique em <b>Vincular</b>\n\n` +
-        `<i>O código é válido para uma única conexão.</i>`
+        `<i>O código é válido por 10 minutos para uma única conexão.</i>`
       );
       return new Response("OK", { status: 200, headers: corsHeaders });
     }

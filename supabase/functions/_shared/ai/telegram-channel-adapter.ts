@@ -1535,12 +1535,24 @@ export async function handleTelegramTextMessage(
 
   if (deps.conversationRepo) {
     try {
-      const conv = await deps.conversationRepo.createConversation({
-        workspaceId: identity.workspaceId,
-        userId: identity.userId,
-        title: `Telegram Chat ${params.chatId}`,
-        channel: "telegram",
-      });
+      const conv = deps.conversationRepo.getOrCreateActiveConversation
+        ? await deps.conversationRepo.getOrCreateActiveConversation({
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            channel: "telegram",
+            agentType: "operational",
+            externalChatId: String(params.chatId),
+            maxInactiveHours: 4,
+            title: `Telegram Chat ${params.chatId}`,
+          })
+        : await deps.conversationRepo.createConversation({
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            title: `Telegram Chat ${params.chatId}`,
+            channel: "telegram",
+            agentType: "operational",
+            externalChatId: String(params.chatId),
+          });
       conversationId = conv.id;
       const recent = await deps.conversationRepo.listRecentMessages(
         conversationId,
@@ -1580,6 +1592,8 @@ export async function handleTelegramTextMessage(
         userId: identity.userId,
         role: "user",
         content: text,
+        channel: "telegram",
+        externalMessageId: params.messageId ? String(params.messageId) : undefined,
       });
       if (turnResult.finalMessage?.content) {
         await deps.conversationRepo.appendMessage({
@@ -1589,6 +1603,7 @@ export async function handleTelegramTextMessage(
           role: "assistant",
           content: turnResult.finalMessage.content,
           tokensCount: turnResult.usage?.totalTokens ?? 0,
+          channel: "telegram",
         });
       }
 
@@ -2527,7 +2542,7 @@ export async function processTelegramUpdate(
       const trimmed = msg.text.trim();
 
       // Deixa comandos administrativos básicos para manipulação legada/onboarding se necessário
-      if (trimmed === "/start" || trimmed === "/help" || trimmed === "/ajuda" || trimmed.startsWith("/vincular")) {
+      if (trimmed.startsWith("/start") || trimmed === "/help" || trimmed === "/ajuda" || trimmed.startsWith("/vincular")) {
         return { handled: false };
       }
 
