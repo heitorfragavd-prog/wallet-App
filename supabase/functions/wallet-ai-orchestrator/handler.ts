@@ -3,6 +3,7 @@ import {
   authorizeAiRequest,
   canRoleAccessFinancialData,
   canRoleAccessCeoBrain,
+  isCeoExecutiveAuthorized,
   type AiExecutionContext,
   type AuthorizationDependencies,
 } from "../_shared/ai/auth.ts";
@@ -614,6 +615,8 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
+
+
     if (!canRoleAccessFinancialData(userRole)) {
       const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
       const financialTerms = [
@@ -664,7 +667,19 @@ export async function handleOrchestratorHttpRequest(
                 { status: 403, headers: responseHeaders },
               );
             }
-            effectiveAgentType = conv.agent_type === "ceo" ? "ceo" : "operational";
+            if (conv.agent_type !== requestedAgentType) {
+              return new Response(
+                JSON.stringify({
+                  success: false,
+                  error: "conversation_agent_mismatch",
+                  code: "WALLET_AI_INVALID_CONVERSATION",
+                  message: `A conversa solicitada é do tipo '${conv.agent_type}' e não pode ser acessada pelo cérebro '${requestedAgentType}'.`,
+                  correlation_id: correlationId,
+                }),
+                { status: 400, headers: responseHeaders },
+              );
+            }
+                        effectiveAgentType = conv.agent_type === "ceo" ? "ceo" : "operational";
           }
           loadedSummary = conv.summary;
           const recent = await dependencies.conversationRepo.listRecentMessages(
