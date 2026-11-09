@@ -28,6 +28,9 @@ export interface ConversationRecord {
   is_archived: boolean;
   agent_type?: "ceo" | "operational";
   is_shared?: boolean;
+  channel?: "web" | "telegram" | "omnichannel";
+  last_channel?: "web" | "telegram";
+  external_chat_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +46,8 @@ export interface MessageRecord {
   tool_results: unknown | null;
   sources: unknown | null;
   tokens_count: number;
+  channel?: "web" | "telegram";
+  external_message_id?: string | null;
   created_at: string;
 }
 
@@ -57,9 +62,20 @@ export interface ConversationRepository {
     workspaceId: string;
     userId: string;
     title?: string;
-    channel?: "web" | "telegram";
+    channel?: "web" | "telegram" | "omnichannel";
+    externalChatId?: string;
     agentType?: "ceo" | "operational";
     isShared?: boolean;
+  }): Promise<ConversationRecord>;
+
+  getOrCreateActiveConversation?(data: {
+    workspaceId: string;
+    userId: string;
+    channel: "web" | "telegram";
+    agentType?: "ceo" | "operational";
+    externalChatId?: string;
+    maxInactiveHours?: number;
+    title?: string;
   }): Promise<ConversationRecord>;
 
   listRecentMessages(
@@ -334,16 +350,22 @@ export class SupabaseConversationRepository implements ConversationRepository {
     workspaceId: string;
     userId: string;
     title?: string;
-    channel?: "web" | "telegram";
+    channel?: "web" | "telegram" | "omnichannel";
+    externalChatId?: string;
     agentType?: "ceo" | "operational";
+    isShared?: boolean;
   }): Promise<ConversationRecord> {
+    const channel = data.channel ?? "web";
     const insertPayload: Record<string, unknown> = {
       workspace_id: data.workspaceId,
       user_id: data.userId,
-      title: data.title ?? (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
+      title: data.title ?? (channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
       is_archived: false,
       agent_type: data.agentType ?? "operational",
       is_shared: data.isShared ?? false,
+      channel,
+      last_channel: channel,
+      external_chat_id: data.externalChatId ?? null,
     };
 
     const { data: created, error } = await this.client
@@ -359,6 +381,63 @@ export class SupabaseConversationRepository implements ConversationRepository {
     return created as ConversationRecord;
   }
 
+  async getOrCreateActiveConversation(data: {
+    workspaceId: string;
+    userId: string;
+    channel: "web" | "telegram";
+    agentType?: "ceo" | "operational";
+    externalChatId?: string;
+    maxInactiveHours?: number;
+    title?: string;
+  }): Promise<ConversationRecord> {
+    const maxHours = data.maxInactiveHours ?? 4;
+    const cutoffIso = new Date(Date.now() - maxHours * 3600 * 1000).toISOString();
+    const agentType = data.agentType ?? "operational";
+
+    // 1. Busca conversa não-arquivada do mesmo workspace e usuário atualizada há menos de maxHours
+    const { data: activeConv, error: searchError } = await this.client
+      .from("wallet_ai_conversations")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, is_shared, channel, last_channel, external_chat_id, created_at, updated_at")
+      .eq("workspace_id", data.workspaceId)
+      .eq("user_id", data.userId)
+      .eq("agent_type", agentType)
+      .eq("is_archived", false)
+      .gte("updated_at", cutoffIso)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!searchError && activeConv) {
+      const updates: Record<string, unknown> = {
+        last_channel: data.channel,
+        updated_at: new Date().toISOString(),
+      };
+      if (data.externalChatId && !activeConv.external_chat_id) {
+        updates.external_chat_id = data.externalChatId;
+      }
+      if (activeConv.channel !== data.channel && activeConv.channel !== "omnichannel") {
+        updates.channel = "omnichannel";
+      }
+
+      await this.client
+        .from("wallet_ai_conversations")
+        .update(updates)
+        .eq("id", activeConv.id);
+
+      return { ...activeConv, ...updates } as ConversationRecord;
+    }
+
+    // 2. Se inativa há mais de 4 horas ou inexistente: cria nova sessão canônica
+    return await this.createConversation({
+      workspaceId: data.workspaceId,
+      userId: data.userId,
+      agentType,
+      channel: data.channel,
+      externalChatId: data.externalChatId,
+      title: data.title ?? (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
+    });
+  }
+
   async listConversations(
     workspaceId: string,
     userId: string,
@@ -366,7 +445,7 @@ export class SupabaseConversationRepository implements ConversationRepository {
   ): Promise<ConversationRecord[]> {
     let query = this.client
       .from("wallet_ai_conversations")
-      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, created_at, updated_at")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, is_shared, channel, last_channel, external_chat_id, created_at, updated_at")
       .eq("workspace_id", workspaceId)
       .eq("is_archived", false)
       .order("updated_at", { ascending: false });
@@ -388,7 +467,7 @@ export class SupabaseConversationRepository implements ConversationRepository {
   ): Promise<MessageRecord[]> {
     const { data, error } = await this.client
       .from("wallet_ai_messages")
-      .select("id, conversation_id, workspace_id, user_id, role, content, tool_calls, tool_results, sources, tokens_count, created_at")
+      .select("id, conversation_id, workspace_id, user_id, role, content, tool_calls, tool_results, sources, tokens_count, channel, external_message_id, created_at")
       .eq("conversation_id", conversationId)
       .eq("workspace_id", workspaceId)
       .order("created_at", { ascending: false })
@@ -420,7 +499,10 @@ export class SupabaseConversationRepository implements ConversationRepository {
     toolResults?: unknown;
     sources?: unknown;
     tokensCount?: number;
+    channel?: "web" | "telegram";
+    externalMessageId?: string;
   }): Promise<MessageRecord> {
+    const channel = data.channel ?? "web";
     const { data: inserted, error } = await this.client
       .from("wallet_ai_messages")
       .insert({
@@ -433,6 +515,8 @@ export class SupabaseConversationRepository implements ConversationRepository {
         tool_results: data.toolResults ?? null,
         sources: data.sources ?? null,
         tokens_count: data.tokensCount ?? 0,
+        channel,
+        external_message_id: data.externalMessageId ?? null,
       })
       .select()
       .single();
@@ -441,10 +525,13 @@ export class SupabaseConversationRepository implements ConversationRepository {
       throw new Error(`Erro ao persistir mensagem na memória: ${error?.message || "falha desconhecida"}`);
     }
 
-    // Atualiza o updated_at da conversa
+    // Atualiza o updated_at e last_channel da conversa
     await this.client
       .from("wallet_ai_conversations")
-      .update({ updated_at: new Date().toISOString() })
+      .update({
+        updated_at: new Date().toISOString(),
+        last_channel: channel,
+      })
       .eq("id", data.conversationId)
       .eq("workspace_id", data.workspaceId);
 

@@ -4,12 +4,22 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useToast } from "@/shared/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useWalletAgentChat } from "../hooks/useWalletAgentChat";
+import { useTelegram } from "@/domains/finance/hooks/useTelegram";
 import { WalletAiOrchestratorClient } from "../services/WalletAiOrchestratorClient";
 import { AgentVisualizationRenderer } from "./AgentVisualizationRenderer";
 import { AgentActionProposalCard } from "./AgentActionProposalCard";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent } from "@/shared/components/ui/card";
 import { Input } from "@/shared/components/ui/input";
+import { Badge } from "@/shared/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/shared/components/ui/dialog";
 import {
   Send,
   Sparkles,
@@ -21,6 +31,10 @@ import {
   Zap,
   CheckCircle2,
   Crown,
+  Smartphone,
+  ExternalLink,
+  Copy,
+  Layers,
 } from "lucide-react";
 
 export interface AgentV2TabProps {
@@ -44,6 +58,7 @@ const OPERATIONAL_QUICK_PROMPTS = [
 export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational" }) => {
   const { activeWorkspace } = useWorkspace();
   const { toast } = useToast();
+  const telegram = useTelegram();
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -61,6 +76,14 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
   }, []);
 
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [convChannel, setConvChannel] = useState<string>("web");
+  const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
+  const [pairingData, setPairingData] = useState<{
+    token: string;
+    expires_at: string;
+    link: string;
+  } | null>(null);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
 
   const { messages, setMessages, isLoading, currentStatus, sendMessage, clearChat } =
     useWalletAgentChat({
@@ -85,7 +108,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
     try {
       const { data: convs, error: convErr } = await supabase
         .from("wallet_ai_conversations")
-        .select("id, title, updated_at")
+        .select("id, title, channel, last_channel, updated_at")
         .eq("workspace_id", activeWorkspace.id)
         .eq("user_id", currentUserId)
         .eq("agent_type", agentType)
@@ -101,6 +124,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
       let activeConvId: string;
       if (convs && convs.length > 0) {
         activeConvId = convs[0].id;
+        setConvChannel(convs[0].channel || "web");
       } else {
         const { data: newConv, error: createErr } = await supabase
           .from("wallet_ai_conversations")
@@ -109,9 +133,11 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
             user_id: currentUserId,
             title: isCeoBrain ? "Sessão Executiva CEO" : "Atendimento Operacional",
             agent_type: agentType,
+            channel: "web",
+            last_channel: "web",
             is_shared: false,
           })
-          .select("id")
+          .select("id, channel")
           .single();
 
         if (createErr || !newConv) {
@@ -119,6 +145,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
           return;
         }
         activeConvId = newConv.id;
+        setConvChannel(newConv.channel || "web");
       }
 
       setConversationId(activeConvId);
@@ -126,7 +153,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
       // Carrega histórico de mensagens persistidas
       const { data: msgs, error: msgsErr } = await supabase
         .from("wallet_ai_messages")
-        .select("id, role, content, created_at")
+        .select("id, role, content, channel, created_at")
         .eq("conversation_id", activeConvId)
         .eq("workspace_id", activeWorkspace.id)
         .eq("user_id", currentUserId)
@@ -138,6 +165,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
             id: m.id,
             role: m.role as "user" | "assistant" | "system",
             content: m.content || "",
+            channel: (m.channel as "web" | "telegram") || "web",
             createdAt: new Date(m.created_at),
           }))
         );
@@ -151,6 +179,52 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
     initChatMemory();
   }, [initChatMemory]);
 
+  // Real-time synchronization com mensagens da mesma conversa (ex: Telegram <-> App)
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const channel = supabase
+      .channel(`wallet_ai_messages_sync_${conversationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "wallet_ai_messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as {
+            id: string;
+            role: "user" | "assistant" | "system";
+            content: string;
+            channel?: "web" | "telegram";
+            created_at: string;
+          };
+          if (!newMsg || !newMsg.id) return;
+
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [
+              ...prev,
+              {
+                id: newMsg.id,
+                role: newMsg.role,
+                content: newMsg.content || "",
+                channel: newMsg.channel || "web",
+                createdAt: new Date(newMsg.created_at),
+              },
+            ];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId, setMessages]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [messages, isLoading]);
@@ -161,6 +235,33 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
     setInputText("");
     await sendMessage(text);
   };
+
+  const handleGerarLinkTelegram = async () => {
+    setIsGeneratingLink(true);
+    try {
+      const res = await telegram.gerarLinkConexao(activeWorkspace?.id);
+      setPairingData(res);
+      toast({
+        title: "Código de conexão gerado! ✈️",
+        description: `Código ${res.token} válido por 10 minutos.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Erro ao gerar conexão",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
+  const hasBothChannels = useMemo(() => {
+    if (convChannel === "omnichannel") return true;
+    const hasTg = messages.some((m) => m.channel === "telegram");
+    const hasWeb = messages.some((m) => m.channel === "web" || !m.channel);
+    return hasTg && hasWeb;
+  }, [convChannel, messages]);
 
   return (
     <div className="space-y-4">
@@ -183,7 +284,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
             {isCeoBrain ? <Crown className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-sm text-foreground">
                 {isCeoBrain ? "Wallet CEO — Cérebro Executivo" : "Wallet IA — Cérebro Operacional"}
               </span>
@@ -196,6 +297,13 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
               >
                 {isCeoBrain ? "Raciocínio Estratégico · Isolamento Privado" : "Rotinas & Conciliação"}
               </span>
+
+              {!isCeoBrain && hasBothChannels && (
+                <Badge variant="outline" className="text-[10px] bg-sky-500/10 text-sky-400 border-sky-500/30 gap-1">
+                  <Layers className="h-2.5 w-2.5" />
+                  Omnichannel (App + Telegram)
+                </Badge>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
               Workspace ativo:{" "}
@@ -205,6 +313,134 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Botão de Conexão com Telegram apenas no cérebro Operacional */}
+          {!isCeoBrain && (
+            <Dialog open={telegramDialogOpen} onOpenChange={setTelegramDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={`h-8 text-xs gap-1.5 border ${
+                    telegram.isVinculado
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                      : "border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20"
+                  }`}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  {telegram.isVinculado
+                    ? `Telegram Conectado ${telegram.vinculo?.telegram_username ? `(@${telegram.vinculo.telegram_username})` : ""}`
+                    : "Conectar Telegram"}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Send className="h-5 w-5 text-sky-400" />
+                    Conexão Unificada com Telegram
+                  </DialogTitle>
+                  <DialogDescription>
+                    Conecte sua conta do Telegram para continuar suas conversas operacionais a qualquer momento com contexto e histórico unificados.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 py-2">
+                  {telegram.isVinculado ? (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-4 w-4" /> Vínculo Ativo
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          Chat ID: {telegram.vinculo?.telegram_chat_id}
+                        </span>
+                      </div>
+                      {telegram.vinculo?.telegram_username && (
+                        <p className="text-xs text-foreground">
+                          Usuário: <strong>@{telegram.vinculo.telegram_username}</strong>
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Suas mensagens enviadas pelo Telegram continuam perfeitamente nesta aba e vice-versa.
+                      </p>
+                      <div className="pt-2 flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs h-8"
+                          onClick={() => telegram.testarMensagem()}
+                        >
+                          Enviar Mensagem de Teste
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs h-8 text-destructive hover:text-destructive"
+                          onClick={() => telegram.desvincularConta()}
+                        >
+                          Desconectar
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-muted-foreground">
+                        Gere um link temporário seguro para parear sua conta do Telegram com a Wallet. Válido por 10 minutos.
+                      </p>
+
+                      {pairingData ? (
+                        <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium text-foreground">Código de 6 dígitos:</span>
+                            <Badge variant="outline" className="font-mono text-sm tracking-wider px-2.5 py-0.5 bg-background">
+                              {pairingData.token}
+                            </Badge>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Expira em 10 minutos. Clique no botão abaixo para abrir a conversa no Telegram e conectar automaticamente:
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 text-xs gap-1.5 bg-sky-600 hover:bg-sky-700 text-white"
+                              onClick={() => window.open(pairingData.link, "_blank")}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Abrir no Telegram
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs gap-1"
+                              onClick={() => {
+                                navigator.clipboard.writeText(pairingData.token);
+                                toast({ title: "Código copiado!", description: pairingData.token });
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button
+                          className="w-full text-xs gap-1.5 bg-sky-600 hover:bg-sky-700 text-white"
+                          onClick={handleGerarLinkTelegram}
+                          disabled={isGeneratingLink}
+                        >
+                          {isGeneratingLink ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Send className="h-3.5 w-3.5" />
+                          )}
+                          Gerar Link de Conexão (10 min)
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+
           <Button
             variant="outline"
             size="sm"
@@ -279,12 +515,32 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
                 )}
 
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 space-y-2.5 leading-relaxed ${
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 space-y-2 leading-relaxed ${
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground font-medium rounded-tr-xs"
                       : "bg-muted/60 text-foreground border border-border/40 rounded-tl-xs shadow-xs"
                   }`}
                 >
+                  {/* Badge de identificação da origem do canal */}
+                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground pb-0.5">
+                    {msg.channel === "telegram" ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                        <Send className="h-2.5 w-2.5" /> Telegram
+                      </span>
+                    ) : (
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium ${
+                        msg.role === "user"
+                          ? "bg-primary-foreground/15 text-primary-foreground/90 border border-primary-foreground/20"
+                          : "bg-background/80 text-muted-foreground border border-border/40"
+                      }`}>
+                        <Smartphone className="h-2.5 w-2.5" /> Aplicativo
+                      </span>
+                    )}
+                    <span className={msg.role === "user" ? "text-primary-foreground/75" : "text-muted-foreground/75"}>
+                      {msg.createdAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+
                   <div className="whitespace-pre-wrap">{msg.content}</div>
 
                   {/* Visualização rica de ferramentas executadas */}

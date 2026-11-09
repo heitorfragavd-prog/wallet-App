@@ -12,6 +12,14 @@ export interface UsuarioTelegram {
   created_at?: string;
 }
 
+export interface TelegramLinkTokenResponse {
+  success: boolean;
+  token: string;
+  expires_at: string;
+  link: string;
+  bot_username: string;
+}
+
 const TELEGRAM_QUERY_KEY = ["usuarios-telegram"] as const;
 
 export const useTelegram = () => {
@@ -95,6 +103,25 @@ export const useTelegram = () => {
     },
   });
 
+  const gerarLinkConexao = useMutation({
+    mutationFn: async (workspaceId?: string): Promise<TelegramLinkTokenResponse> => {
+      const { data, error } = await supabase.functions.invoke("telegram-webhook", {
+        body: { action: "create_link_token", workspace_id: workspaceId },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data as TelegramLinkTokenResponse;
+    },
+    onError: (error) => {
+      logger.error("useTelegram", "Erro ao gerar link de pareamento do Telegram", { error: String(error) });
+      toast({
+        title: "Erro ao gerar link",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    },
+  });
+
   return {
     vinculo,
     isVinculado: !!vinculo?.ativo,
@@ -102,5 +129,6 @@ export const useTelegram = () => {
     vincularConta: (token: string) => vincularConta.mutateAsync(token),
     desvincularConta: () => desvincularConta.mutateAsync(),
     testarMensagem: () => testarMensagem.mutateAsync(),
+    gerarLinkConexao: (workspaceId?: string) => gerarLinkConexao.mutateAsync(workspaceId),
   };
 };
