@@ -239,4 +239,56 @@ describe("👑 WALLET CEO 3.0 — Hardening Final da Etapa 03 (Gates 0 a 5)", ()
       expect(handlerContent).toContain("agentBrain: effectiveAgentType");
     });
   });
+
+  describe("👑 WALLET CEO 3.0 — Gate 0 da Etapa 04: Hardening de Imutabilidade e Acesso Executivo", () => {
+    it("0.2 — Migration 79 deve conter trigger bloqueando reclassificação de conversas e imutabilidade de agent_type", () => {
+      const sqlContent = fs.readFileSync(
+        path.resolve("supabase/migrations/79_hardening_imutabilidade_conversas_mensagens.sql"),
+        "utf8",
+      );
+
+      expect(sqlContent).toContain("trg_protect_wallet_ai_conversations_update");
+      expect(sqlContent).toContain("NEW.agent_type <> OLD.agent_type");
+      expect(sqlContent).toContain("a identidade do cérebro (agent_type) é imutável durante toda a vida da conversa");
+      expect(sqlContent).toContain("NEW.user_id <> OLD.user_id");
+      expect(sqlContent).toContain("NEW.workspace_id <> OLD.workspace_id");
+      expect(sqlContent).toContain("NEW.agent_type = 'ceo' AND NEW.is_shared = true");
+    });
+
+    it("0.3 — Migration 79 deve conter trigger protegendo integridade de wallet_ai_messages", () => {
+      const sqlContent = fs.readFileSync(
+        path.resolve("supabase/migrations/79_hardening_imutabilidade_conversas_mensagens.sql"),
+        "utf8",
+      );
+
+      expect(sqlContent).toContain("trg_protect_wallet_ai_messages_update");
+      expect(sqlContent).toContain("NEW.conversation_id <> OLD.conversation_id");
+      expect(sqlContent).toContain("NEW.workspace_id <> OLD.workspace_id");
+      expect(sqlContent).toContain("NEW.user_id <> OLD.user_id");
+      expect(sqlContent).toContain("wallet_ai_messages_select_strict");
+    });
+
+    it("0.4 — Distinção entre Administração Técnica e Autorização Executiva do CEO", () => {
+      // 1. Administrador técnico que NÃO é proprietário nem possui delegação executiva explícita -> BLOQUEADO
+      expect(canRoleAccessCeoBrain("admin", { isOwner: false })).toBe(false);
+      expect(canRoleAccessCeoBrain("administrador", { isOwner: false })).toBe(false);
+
+      // 2. Proprietário do workspace (mesmo com role gravada como admin) -> AUTORIZADO
+      expect(canRoleAccessCeoBrain("admin", { isOwner: true })).toBe(true);
+      expect(canRoleAccessCeoBrain("administrador", { isOwner: true })).toBe(true);
+
+      // 3. Papéis executivos natos (owner, proprietario) -> SEMPRE AUTORIZADOS
+      expect(canRoleAccessCeoBrain("owner", { isOwner: false })).toBe(true);
+      expect(canRoleAccessCeoBrain("proprietario", { isOwner: false })).toBe(true);
+
+      // 4. Administrador com delegação executiva explícita -> AUTORIZADO
+      expect(canRoleAccessCeoBrain("admin", { isExecutiveDelegated: true })).toBe(true);
+      expect(canRoleAccessCeoBrain("administrador", { isExecutiveDelegated: true })).toBe(true);
+
+      // 5. Papéis puramente operacionais -> SEMPRE BLOQUEADOS
+      expect(canRoleAccessCeoBrain("member", { isOwner: true })).toBe(false);
+      expect(canRoleAccessCeoBrain("delivery_staff", { isOwner: false })).toBe(false);
+      expect(canRoleAccessCeoBrain("caixa", { isOwner: false })).toBe(false);
+    });
+  });
 });
