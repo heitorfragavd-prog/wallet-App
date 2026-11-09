@@ -70,12 +70,20 @@ export function canRoleAccessCeoBrain(role?: string): boolean {
   return CEO_AUTHORIZED_ROLES.has(normalized);
 }
 
+/**
+ * Alias canônico para canRoleAccessCeoBrain (Gate 0).
+ */
+export const isCeoExecutiveAuthorized = canRoleAccessCeoBrain;
+
 export type AiAuthorizationErrorCode =
   | "missing_authorization"
   | "invalid_authorization"
   | "invalid_workspace"
   | "invalid_token"
   | "workspace_forbidden"
+  | "ceo_access_forbidden"
+  | "premium_model_forbidden"
+  | "conversation_agent_mismatch"
   | "WALLET_AI_AUTH_ERROR"
   | "WALLET_AI_FORBIDDEN"
   | "WALLET_AI_INVALID_WORKSPACE"
@@ -172,6 +180,8 @@ export async function authorizeAiRequest(
     (workspace as Record<string, unknown>).user_id === user.id
   ) {
     result.role = "owner";
+  } else if ((workspace as Record<string, unknown>).role) {
+    result.role = (workspace as Record<string, unknown>).role as string;
   }
 
   return Object.freeze(result as unknown as AiExecutionContext);

@@ -26,6 +26,8 @@ export interface ConversationRecord {
   title: string;
   summary: string | null;
   is_archived: boolean;
+  agent_type?: "ceo" | "operational";
+  is_shared?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +59,7 @@ export interface ConversationRepository {
     title?: string;
     channel?: "web" | "telegram";
     agentType?: "ceo" | "operational";
+    isShared?: boolean;
   }): Promise<ConversationRecord>;
 
   listRecentMessages(
@@ -317,7 +320,7 @@ export class SupabaseConversationRepository implements ConversationRepository {
   ): Promise<ConversationRecord | null> {
     const { data, error } = await this.client
       .from("wallet_ai_conversations")
-      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, created_at, updated_at")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, is_shared, created_at, updated_at")
       .eq("id", conversationId)
       .eq("workspace_id", workspaceId)
       .eq("user_id", userId)
@@ -340,6 +343,7 @@ export class SupabaseConversationRepository implements ConversationRepository {
       title: data.title ?? (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
       is_archived: false,
       agent_type: data.agentType ?? "operational",
+      is_shared: data.isShared ?? false,
     };
 
     const { data: created, error } = await this.client
