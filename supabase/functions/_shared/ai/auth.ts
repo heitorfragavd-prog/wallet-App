@@ -214,7 +214,13 @@ export async function authorizeAiRequest(
     (workspace as Record<string, unknown>).user_id === user.id ||
     result.role === "owner" ||
     result.role === "proprietario";
-  result.isOwner = isOwner;
+
+  Object.defineProperty(result, "isOwner", {
+    value: isOwner,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
 
   return Object.freeze(result as unknown as AiExecutionContext);
 }
