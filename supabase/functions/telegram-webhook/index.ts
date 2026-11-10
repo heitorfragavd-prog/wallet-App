@@ -82,13 +82,114 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function generateToken(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generateSecureToken(length = 6): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Base32 Crockford (sem ambiguidades)
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
   let token = "WLT-";
-  for (let i = 0; i < 6; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  for (let i = 0; i < length; i++) {
+    token += chars.charAt(bytes[i] % chars.length);
   }
   return token;
+}
+
+function generateToken(): string {
+  return generateSecureToken(6);
+}
+
+function maskToken(token: string): string {
+  if (!token || token.length < 4) return "***";
+  return token.slice(0, 4) + "****";
+}
+
+async function checkRateLimit(
+  supabase: SupabaseClient,
+  identifier: string
+): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+  try {
+    const { data } = await supabase
+      .from("telegram_link_rate_limits")
+      .select("failed_count, locked_until, last_attempt_at")
+      .eq("identifier", identifier)
+      .maybeSingle();
+
+    const now = Date.now();
+    if (data?.locked_until && new Date(data.locked_until).getTime() > now) {
+      const remaining = Math.ceil((new Date(data.locked_until).getTime() - now) / 1000);
+      return { allowed: false, remainingSeconds: remaining };
+    }
+  } catch (err) {
+    console.warn("[telegram-webhook] Aviso ao consultar rate limit (fail-open):", err);
+  }
+  return { allowed: true };
+}
+
+async function recordRateLimitAttempt(
+  supabase: SupabaseClient,
+  identifier: string,
+  success: boolean
+): Promise<void> {
+  try {
+    if (success) {
+      await supabase.from("telegram_link_rate_limits").delete().eq("identifier", identifier);
+      return;
+    }
+
+    const { data } = await supabase
+      .from("telegram_link_rate_limits")
+      .select("failed_count")
+      .eq("identifier", identifier)
+      .maybeSingle();
+
+    const newCount = (data?.failed_count || 0) + 1;
+    const updates: Record<string, unknown> = {
+      identifier,
+      failed_count: newCount,
+      last_attempt_at: new Date().toISOString(),
+    };
+    if (newCount >= 5) {
+      // Bloqueia por 15 minutos após 5 tentativas incorretas consecutivas
+      updates.locked_until = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    }
+
+    await supabase.from("telegram_link_rate_limits").upsert(updates, { onConflict: "identifier" });
+  } catch (err) {
+    console.warn("[telegram-webhook] Aviso ao registrar rate limit:", err);
+  }
+}
+
+async function verifyWorkspaceMembership(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  userId: string
+): Promise<{ isMember: boolean; role?: string }> {
+  try {
+    const { data: wsOwner } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("id", workspaceId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (wsOwner) {
+      return { isMember: true, role: "admin" };
+    }
+
+    const { data: wsMember } = await supabase
+      .from("workspace_members")
+      .select("role, active")
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", userId)
+      .eq("active", true)
+      .maybeSingle();
+
+    if (wsMember) {
+      return { isMember: true, role: wsMember.role || "user" };
+    }
+  } catch (err) {
+    console.warn("[telegram-webhook] Erro ao validar associação a workspace:", err);
+  }
+  return { isMember: false };
 }
 
 interface CategoriaRow {
@@ -875,9 +976,19 @@ serve(async (req) => {
         });
       }
 
+      const workspaceId = body.workspace_id || null;
+      if (workspaceId) {
+        const { isMember } = await verifyWorkspaceMembership(supabase, workspaceId, user.id);
+        if (!isMember) {
+          return new Response(
+            JSON.stringify({ error: "Acesso negado: Usuário não pertence ao workspace informado." }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
       const token = generateToken();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      const workspaceId = body.workspace_id || null;
 
       const { error: insertErr } = await supabase.from("telegram_link_tokens").insert({
         token,
@@ -893,6 +1004,8 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
+      console.log(`[telegram-webhook] Token de pareamento seguro gerado para user ${user.id}: ${maskToken(token)}`);
 
       const botUsername = Deno.env.get("TELEGRAM_BOT_USERNAME") || "WalletCortexxBot";
       const link = `https://t.me/${botUsername}?start=${token}`;
@@ -948,6 +1061,48 @@ serve(async (req) => {
       );
     }
 
+    // ─── CASO 0C: Desvincular conta Telegram ───
+    if (body?.action === "desvincular") {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return new Response(JSON.stringify({ error: "Token de autenticação ausente" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const userJwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser(userJwt);
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Usuário não autenticado" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Desativa vínculo em usuarios_telegram
+      const { data: vinculo } = await supabase
+        .from("usuarios_telegram")
+        .update({ ativo: false })
+        .eq("user_id", user.id)
+        .select("telegram_chat_id")
+        .maybeSingle();
+
+      if (vinculo?.telegram_chat_id) {
+        await supabase
+          .from("channel_mappings")
+          .update({ is_active: false })
+          .eq("channel_type", "telegram")
+          .eq("channel_id", String(vinculo.telegram_chat_id));
+      }
+
+      console.log(`[telegram-webhook] Conta Telegram desvinculada para user ${user.id}`);
+
+      return new Response(JSON.stringify({ success: true, message: "Conta desvinculada com sucesso." }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // ─── CASO 1: Chamada da Web App para vincular a conta via Token ───
     if (body?.action === "vincular") {
       const authHeader = req.headers.get("Authorization");
@@ -967,6 +1122,17 @@ serve(async (req) => {
         });
       }
 
+      const rateLimitId = `user:${user.id}`;
+      const rlCheck = await checkRateLimit(supabase, rateLimitId);
+      if (!rlCheck.allowed) {
+        return new Response(
+          JSON.stringify({
+            error: `Muitas tentativas inválidas. Bloqueado por segurança. Tente novamente em ${rlCheck.remainingSeconds || 900} segundos.`,
+          }),
+          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       const { token } = body;
       if (!token) {
         return new Response(JSON.stringify({ error: "Token é obrigatório" }), {
@@ -976,23 +1142,44 @@ serve(async (req) => {
       }
 
       const authenticatedUserId = user.id;
+      const cleanToken = String(token).toUpperCase().trim();
+      const nowIso = new Date().toISOString();
 
+      // Consumo ATÔMICO do token prevenindo race conditions
       const { data: linkToken, error: tokenErr } = await supabase
         .from("telegram_link_tokens")
-        .select("*")
-        .eq("token", String(token).toUpperCase().trim())
+        .update({
+          usado: true,
+          user_id: authenticatedUserId,
+          updated_at: nowIso,
+        })
+        .eq("token", cleanToken)
         .eq("usado", false)
+        .gte("expires_at", nowIso)
+        .select("*")
         .maybeSingle();
 
-      const isExpired = linkToken?.expires_at
-        ? new Date(linkToken.expires_at).getTime() < Date.now()
-        : false;
-
-      if (tokenErr || !linkToken || isExpired) {
+      if (tokenErr || !linkToken) {
+        await recordRateLimitAttempt(supabase, rateLimitId, false);
         return new Response(
           JSON.stringify({ error: "Código inválido ou expirado. Envie /start para o bot no Telegram para gerar um novo." }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
+      }
+
+      // Sucesso na validação do token -> limpa contadores de rate limit
+      await recordRateLimitAttempt(supabase, rateLimitId, true);
+
+      // Validação de workspace se informado
+      const targetWorkspaceId = body.workspace_id || linkToken.workspace_id;
+      if (targetWorkspaceId) {
+        const { isMember } = await verifyWorkspaceMembership(supabase, targetWorkspaceId, authenticatedUserId);
+        if (!isMember) {
+          return new Response(
+            JSON.stringify({ error: "Acesso negado ao workspace informado." }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
       }
 
       // Upsert no usuários_telegram usando authenticatedUserId garantido
@@ -1013,25 +1200,20 @@ serve(async (req) => {
         });
       }
 
-      // Se houver workspace associado, vincula no channel_mappings
-      const targetWorkspaceId = body.workspace_id || linkToken.workspace_id;
+      // Vínculo canônico na tabela channel_mappings
       if (targetWorkspaceId && linkToken.telegram_chat_id) {
         await supabase.from("channel_mappings").upsert(
           {
-            channel: "telegram",
-            external_channel_id: String(linkToken.telegram_chat_id),
+            channel_type: "telegram",
+            channel_id: String(linkToken.telegram_chat_id),
             workspace_id: targetWorkspaceId,
+            user_id: authenticatedUserId,
+            access_level: "user",
             is_active: true,
           },
-          { onConflict: "channel,external_channel_id" }
+          { onConflict: "channel_type,channel_id" }
         );
       }
-
-      // Marcar token como usado
-      await supabase
-        .from("telegram_link_tokens")
-        .update({ usado: true, user_id: authenticatedUserId })
-        .eq("token", linkToken.token);
 
       // Notifica no Telegram que o vínculo foi realizado com sucesso
       if (telegramBotToken && linkToken.telegram_chat_id) {
@@ -3335,24 +3517,41 @@ serve(async (req) => {
 
     // Comando /start
     if (text.startsWith("/start")) {
+      const rateLimitId = `chat:${chatId}`;
+      const rlCheck = await checkRateLimit(supabase, rateLimitId);
+      if (!rlCheck.allowed) {
+        await sendReply(
+          `⚠️ <b>Muitas tentativas inválidas.</b>\n\n` +
+          `Por segurança, aguarde ${rlCheck.remainingSeconds || 900} segundos antes de tentar novamente.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
       const parts = text.split(/\s+/);
       const startArg = parts[1]?.trim().toUpperCase();
 
       if (startArg) {
         // Fluxo de pareamento criptográfico via link gerado no app:
         // /start WLT-XXXXXX
+        const nowIso = new Date().toISOString();
+
+        // Consumo ATÔMICO do token prevenindo race conditions
         const { data: linkToken, error: tokenErr } = await supabase
           .from("telegram_link_tokens")
-          .select("*")
+          .update({
+            usado: true,
+            telegram_chat_id: chatId,
+            telegram_username: username,
+            updated_at: nowIso,
+          })
           .eq("token", startArg)
           .eq("usado", false)
+          .gte("expires_at", nowIso)
+          .select("*")
           .maybeSingle();
 
-        const isExpired = linkToken?.expires_at
-          ? new Date(linkToken.expires_at).getTime() < Date.now()
-          : false;
-
-        if (tokenErr || !linkToken || isExpired) {
+        if (tokenErr || !linkToken || !linkToken.user_id) {
+          await recordRateLimitAttempt(supabase, rateLimitId, false);
           await sendReply(
             `⚠️ <b>Código de pareamento inválido ou expirado.</b>\n\n` +
             `Os links de conexão gerados no aplicativo possuem validade de 10 minutos por segurança.\n` +
@@ -3361,58 +3560,88 @@ serve(async (req) => {
           return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
-        if (linkToken.user_id) {
-          // Atualiza vínculo seguro na tabela usuarios_telegram
-          await supabase.from("usuarios_telegram").upsert(
-            {
-              user_id: linkToken.user_id,
-              telegram_chat_id: chatId,
-              telegram_username: username,
-              ativo: true,
-            },
-            { onConflict: "user_id" }
+        // Sucesso no pareamento: reseta rate limit
+        await recordRateLimitAttempt(supabase, rateLimitId, true);
+
+        // Prevenção contra takeover silencioso de chat_id previamente associado
+        const { data: existingBinding } = await supabase
+          .from("usuarios_telegram")
+          .select("user_id, ativo")
+          .eq("telegram_chat_id", chatId)
+          .eq("ativo", true)
+          .maybeSingle();
+
+        if (existingBinding && existingBinding.user_id !== linkToken.user_id) {
+          console.warn(
+            `[telegram-webhook] Reatribuindo telegram_chat_id ${chatId} de usuário ${existingBinding.user_id} para ${linkToken.user_id}`
           );
-
-          // Se vinculado a um workspace específico, atualiza ou cria o channel_mapping
-          if (linkToken.workspace_id) {
-            await supabase.from("channel_mappings").upsert(
-              {
-                channel: "telegram",
-                external_channel_id: String(chatId),
-                workspace_id: linkToken.workspace_id,
-                is_active: true,
-              },
-              { onConflict: "channel,external_channel_id" }
-            );
-          }
-
-          // Marca o token como consumido e armazena metadados
           await supabase
-            .from("telegram_link_tokens")
-            .update({
-              usado: true,
-              telegram_chat_id: chatId,
-              telegram_username: username,
-            })
-            .eq("token", startArg);
-
-          await sendReply(
-            `✅ <b>Conta Wallet conectada com sucesso!</b>\n\n` +
-            `O seu Telegram agora está sincronizado com o cérebro operacional da Wallet.\n\n` +
-            `💡 <i>Suas conversas no aplicativo e aqui no Telegram agora continuam no mesmo histórico unificado.</i>\n\n` +
-            `Experimente enviar uma mensagem ou dúvida financeira agora!`
-          );
-          return new Response("OK", { status: 200, headers: corsHeaders });
+            .from("usuarios_telegram")
+            .update({ ativo: false })
+            .eq("user_id", existingBinding.user_id);
         }
+
+        // Se o token tiver workspace vinculado, valida integridade
+        if (linkToken.workspace_id) {
+          const { isMember } = await verifyWorkspaceMembership(
+            supabase,
+            linkToken.workspace_id,
+            linkToken.user_id
+          );
+          if (!isMember) {
+            await sendReply(
+              `⚠️ <b>Erro de associação de workspace.</b>\n\n` +
+              `Sua conta não tem mais permissão para acessar o workspace informado no link.`
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+        }
+
+        // Atualiza vínculo seguro na tabela usuarios_telegram
+        await supabase.from("usuarios_telegram").upsert(
+          {
+            user_id: linkToken.user_id,
+            telegram_chat_id: chatId,
+            telegram_username: username,
+            ativo: true,
+          },
+          { onConflict: "user_id" }
+        );
+
+        // Se vinculado a um workspace específico, atualiza ou cria o channel_mapping canônico
+        if (linkToken.workspace_id) {
+          await supabase.from("channel_mappings").upsert(
+            {
+              channel_type: "telegram",
+              channel_id: String(chatId),
+              workspace_id: linkToken.workspace_id,
+              user_id: linkToken.user_id,
+              access_level: "user",
+              is_active: true,
+            },
+            { onConflict: "channel_type,channel_id" }
+          );
+        }
+
+        await sendReply(
+          `✅ <b>Conta Wallet conectada com sucesso!</b>\n\n` +
+          `O seu Telegram agora está sincronizado com o cérebro operacional da Wallet.\n\n` +
+          `💡 <i>Suas conversas no aplicativo e aqui no Telegram agora continuam no mesmo histórico unificado.</i>\n\n` +
+          `Experimente enviar uma mensagem ou dúvida financeira agora!`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
       }
 
-      const token = generateToken();
+      const token = generateSecureToken(6);
       await supabase.from("telegram_link_tokens").insert({
         token,
         telegram_chat_id: chatId,
         telegram_username: username,
         expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        usado: false,
       });
+
+      console.log(`[telegram-webhook] Token seguro de /start gerado para chat ${chatId}: ${maskToken(token)}`);
 
       await sendReply(
         `👋 <b>Olá! Seja bem-vindo ao Bot da Wallet.</b>\n\n` +
