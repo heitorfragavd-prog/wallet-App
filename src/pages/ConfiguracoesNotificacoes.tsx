@@ -4,6 +4,7 @@ import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { useNotificacoesPush } from "@/domains/notifications/hooks/useNotificacoesPush";
 import { useTelegram } from "@/domains/finance/hooks/useTelegram";
+import { useToast } from "@/shared/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import { Button } from "@/shared/components/ui/button";
 import { Input } from "@/shared/components/ui/input";
@@ -21,6 +22,7 @@ interface NotificacaoLog {
 }
 
 const ConfiguracoesNotificacoes = () => {
+  const { toast } = useToast();
   const push = useNotificacoesPush();
   const telegram = useTelegram();
   const [tokenVinculo, setTokenVinculo] = useState("");
@@ -70,37 +72,43 @@ const ConfiguracoesNotificacoes = () => {
     try { await telegram.testarMensagem(); } finally { setTestandoTelegram(false); }
   };
 
-  const handleCriarDividaETestarCron = async () => {
+  const handleSimularNotificacaoVencimento = async () => {
     setTestandoPush(true);
     try {
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) throw new Error("Usuário não autenticado");
 
-      const amanha = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-
-      // 1. Cria dívida de teste para amanhã
-      const { error: insertErr } = await supabase.from("dividas").insert({
-        user_id: user.id,
-        descricao: "Fatura Cartão - Teste Alerta Push",
-        credor: "Banco Teste",
-        valor_total: 250,
-        valor_pago: 0,
-        valor_restante: 250,
-        data_vencimento: amanha,
-        status: "pendente",
+      // SIMULAÇÃO SEGURA: NUNCA grava dados financeiros (dividas, despesas, etc) no banco de dados.
+      // 1. Notificação In-App visual
+      toast({
+        title: "🔔 Alerta D+1 (Simulação)",
+        description: "Exemplo: Fatura de R$ 250,00 vence amanhã. (Nenhum registro financeiro foi criado)",
       });
 
-      if (insertErr) {
-        console.warn("Aviso ao criar dívida de teste:", insertErr.message);
+      // 2. Dispara teste Push se autorizado no navegador
+      if (push.isSubscribed) {
+        await push.testarPush(
+          "🔔 Alerta de Vencimento D+1 (Simulação)",
+          "Fatura Exemplo no valor de R$ 250,00 vence amanhã! (Simulação sem impacto financeiro)"
+        );
       }
 
-      // 2. Dispara teste individual no canal do usuário (sem chamar rotina global de cron)
-      await push.testarPush(
-        "🔔 Alerta de Vencimento D+1 (Simulação)",
-        "Fatura Cartão - Teste Alerta Push no valor de R$ 250,00 vence amanhã!"
-      );
+      // 3. Dispara teste Telegram se o usuário estiver vinculado
+      if (telegram.isVinculado) {
+        await supabase.functions.invoke("enviar-telegram", {
+          body: {
+            user_id: user.id,
+            mensagem: "🔔 <b>Simulação de Alerta de Vencimento (D+1)</b>\n\nUma conta de exemplo de R$ 250,00 venceria amanhã.\n<i>(Nenhum registro real foi criado em contas a pagar ou no DRE).</i>",
+          },
+        });
+      }
     } catch (err: unknown) {
-      console.error("Erro ao simular tarefa:", err);
+      console.error("Erro ao simular notificação:", err);
+      toast({
+        title: "Erro na simulação",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
     } finally {
       setTestandoPush(false);
     }
@@ -152,9 +160,9 @@ const ConfiguracoesNotificacoes = () => {
                 {testandoPush ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Send className="h-4 w-4 mr-1" />}
                 Testar notificação
               </Button>
-              <Button onClick={handleCriarDividaETestarCron} disabled={testandoPush} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <Button onClick={handleSimularNotificacaoVencimento} disabled={testandoPush} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                 {testandoPush ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Clock className="h-4 w-4 mr-1" />}
-                ⚡ Simular Tarefa D+1 & Testar Notificação
+                ⚡ Simular Alerta D+1 (Sem gravação financeira)
               </Button>
             </div>
             <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg p-3 space-y-1">
