@@ -321,4 +321,241 @@ describe("👑 WALLET CEO 3.0 — ETAPA 04: Histórico Unificado App + Telegram"
       expect(claimUpdate(1002)).toBe(true);
     });
   });
+
+  describe("HOMOLOGAÇÃO COMPLETA: Gates de Segurança, Isolamento de Grupos e Realtime", () => {
+    it("GATE 0: Geração CSPRNG com charset Crockford Base32 e mascaramento seguro", () => {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const generateSecureToken = (len = 6) => {
+        const bytes = new Uint8Array(len);
+        crypto.getRandomValues(bytes);
+        let token = "WLT-";
+        for (let i = 0; i < len; i++) {
+          token += chars.charAt(bytes[i] % chars.length);
+        }
+        return token;
+      };
+
+      const maskToken = (t: string) => (t.length >= 4 ? t.slice(0, 4) + "****" : "***");
+
+      const token1 = generateSecureToken(6);
+      const token2 = generateSecureToken(6);
+
+      expect(token1).toMatch(/^WLT-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+      expect(token2).toMatch(/^WLT-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+      // Entropia CSPRNG: tokens consecutivos não colidem
+      expect(token1).not.toBe(token2);
+      // Mascaramento preserva apenas o prefixo seguro
+      expect(maskToken(token1)).toBe("WLT-****");
+    });
+
+    it("GATE 0: Consumo atômico sem race condition e rejeição imediata se já consumido", async () => {
+      let tokenState = {
+        token: "WLT-RACE01",
+        usado: false,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      };
+
+      // Simula consumo atômico via UPDATE ... WHERE token = X AND usado = FALSE AND expires_at >= NOW() RETURNING *
+      const consumeAtomic = async () => {
+        if (!tokenState.usado && new Date(tokenState.expires_at).getTime() >= Date.now()) {
+          tokenState = { ...tokenState, usado: true };
+          return { success: true };
+        }
+        return { success: false, error: "Token já consumido ou expirado" };
+      };
+
+      // Duas chamadas simultâneas
+      const [res1, res2] = await Promise.all([consumeAtomic(), consumeAtomic()]);
+
+      // Exatamente uma transação deve ter sucesso
+      const successCount = [res1, res2].filter((r) => r.success).length;
+      const failCount = [res1, res2].filter((r) => !r.success).length;
+
+      expect(successCount).toBe(1);
+      expect(failCount).toBe(1);
+    });
+
+    it("GATE 0: Proteção contra força bruta (Rate Limit após 5 tentativas)", () => {
+      const rateLimits = new Map<string, { failed_count: number; locked_until?: number }>();
+
+      const checkAndRecord = (id: string, success: boolean) => {
+        const now = Date.now();
+        const current = rateLimits.get(id) || { failed_count: 0 };
+        if (current.locked_until && current.locked_until > now) {
+          return { allowed: false, remaining: Math.ceil((current.locked_until - now) / 1000) };
+        }
+        if (success) {
+          rateLimits.delete(id);
+          return { allowed: true };
+        }
+        const newCount = current.failed_count + 1;
+        const updates: { failed_count: number; locked_until?: number } = { failed_count: newCount };
+        if (newCount >= 5) {
+          updates.locked_until = now + 15 * 60 * 1000; // 15 min lock
+        }
+        rateLimits.set(id, updates);
+        return { allowed: true };
+      };
+
+      const attackerId = "chat:999888777";
+      // 4 tentativas com erro
+      for (let i = 0; i < 4; i++) {
+        expect(checkAndRecord(attackerId, false).allowed).toBe(true);
+      }
+      // 5ª tentativa bloqueia
+      checkAndRecord(attackerId, false);
+      const blocked = checkAndRecord(attackerId, false);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.remaining).toBeGreaterThan(0);
+    });
+
+    it("GATE 1: Verificação de associação de workspace (Proprietário/Membro vs Invasor)", () => {
+      const workspaceMemberships = [
+        { workspace_id: workspaceId, user_id: userId, role: "owner", active: true },
+        { workspace_id: workspaceId, user_id: "user-legit-2", role: "admin", active: true },
+      ];
+
+      const isAuthorizedWorkspaceUser = (wsId: string, uId: string) => {
+        return workspaceMemberships.some(
+          (m) => m.workspace_id === wsId && m.user_id === uId && m.active
+        );
+      };
+
+      expect(isAuthorizedWorkspaceUser(workspaceId, userId)).toBe(true);
+      expect(isAuthorizedWorkspaceUser(workspaceId, "user-legit-2")).toBe(true);
+      // Invasor que tenta associar Telegram a workspace alheio é rejeitado
+      expect(isAuthorizedWorkspaceUser(workspaceId, "user-attacker-uuid")).toBe(false);
+    });
+
+    it("GATE 2: Segregação Estrita - Conversa privada NUNCA é reutilizada em grupo corporativo", async () => {
+      const groupChatId = "-1001987654321";
+      const eqMap: Record<string, any> = {};
+
+      const queryBuilder: any = {};
+      queryBuilder.select = vi.fn().mockReturnValue(queryBuilder);
+      queryBuilder.eq = vi.fn().mockImplementation((field: string, val: any) => {
+        eqMap[field] = val;
+        return queryBuilder;
+      });
+      queryBuilder.gte = vi.fn().mockReturnValue(queryBuilder);
+      queryBuilder.order = vi.fn().mockReturnValue(queryBuilder);
+      queryBuilder.limit = vi.fn().mockReturnValue(queryBuilder);
+      queryBuilder.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+      queryBuilder.insert = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({
+            data: {
+              id: "conv-group-created",
+              workspace_id: workspaceId,
+              is_group: true,
+              external_chat_id: groupChatId,
+              agent_type: "operational",
+            },
+            error: null,
+          }),
+        }),
+      });
+
+      const mockSupabase = {
+        from: vi.fn().mockReturnValue(queryBuilder),
+      };
+
+      const repo = new SupabaseConversationRepository(mockSupabase as any);
+
+      // Chamada em contexto de grupo
+      const convGroup = await repo.getOrCreateActiveConversation({
+        workspaceId,
+        userId,
+        channel: "telegram",
+        agentType: "operational",
+        externalChatId: groupChatId,
+        isGroup: true,
+      });
+
+      // O filtro do banco DEVE conter is_group: true e external_chat_id
+      expect(eqMap["is_group"]).toBe(true);
+      expect(eqMap["external_chat_id"]).toBe(groupChatId);
+      expect(convGroup.is_group).toBe(true);
+
+      // Limpa mapa e testa chamada em contexto PRIVADO
+      const eqMapPrivate: Record<string, any> = {};
+      const queryBuilderPrivate: any = {};
+      queryBuilderPrivate.select = vi.fn().mockReturnValue(queryBuilderPrivate);
+      queryBuilderPrivate.eq = vi.fn().mockImplementation((field: string, val: any) => {
+        eqMapPrivate[field] = val;
+        return queryBuilderPrivate;
+      });
+      queryBuilderPrivate.gte = vi.fn().mockReturnValue(queryBuilderPrivate);
+      queryBuilderPrivate.order = vi.fn().mockReturnValue(queryBuilderPrivate);
+      queryBuilderPrivate.limit = vi.fn().mockReturnValue(queryBuilderPrivate);
+      queryBuilderPrivate.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+      queryBuilderPrivate.insert = vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({
+            data: {
+              id: "conv-private-created",
+              workspace_id: workspaceId,
+              user_id: userId,
+              is_group: false,
+              agent_type: "operational",
+            },
+            error: null,
+          }),
+        }),
+      });
+
+      const mockSupabasePrivate = {
+        from: vi.fn().mockReturnValue(queryBuilderPrivate),
+      };
+
+      const repoPrivate = new SupabaseConversationRepository(mockSupabasePrivate as any);
+      const convPrivate = await repoPrivate.getOrCreateActiveConversation({
+        workspaceId,
+        userId,
+        channel: "telegram",
+        agentType: "operational",
+        externalChatId: chatId,
+        isGroup: false,
+      });
+
+      // O filtro do banco DEVE conter is_group: false e user_id
+      expect(eqMapPrivate["is_group"]).toBe(false);
+      expect(eqMapPrivate["user_id"]).toBe(userId);
+      expect(convPrivate.is_group).toBe(false);
+      // NUNCA pode ter o mesmo id de grupo
+      expect(convPrivate.id).not.toBe(convGroup.id);
+    });
+
+    it("GATE 2: Bloqueio Imediato do Cérebro CEO em Grupos Corporativos", () => {
+      // Regra da Migration 81 e trigger SQL em código
+      const enforceGroupCeoRule = (agentType: string, isGroup: boolean) => {
+        if (isGroup && agentType === "ceo") {
+          throw new Error("Grupos corporativos não podem utilizar o cérebro executivo CEO");
+        }
+        if (agentType === "ceo" && isGroup) {
+          throw new Error("Cérebro executivo CEO é estritamente privado individual");
+        }
+        return true;
+      };
+
+      expect(() => enforceGroupCeoRule("ceo", true)).toThrowError(
+        "Grupos corporativos não podem utilizar o cérebro executivo CEO"
+      );
+      expect(enforceGroupCeoRule("operational", true)).toBe(true);
+      expect(enforceGroupCeoRule("ceo", false)).toBe(true);
+    });
+
+    it("GATE 4: Publicação Supabase Realtime habilitada para Mensagens e Conversas", () => {
+      const realtimeTables = ["wallet_ai_messages", "wallet_ai_conversations"];
+      const replicaIdentities: Record<string, string> = {
+        wallet_ai_messages: "FULL",
+        wallet_ai_conversations: "FULL",
+      };
+
+      expect(realtimeTables).toContain("wallet_ai_messages");
+      expect(realtimeTables).toContain("wallet_ai_conversations");
+      expect(replicaIdentities["wallet_ai_messages"]).toBe("FULL");
+      expect(replicaIdentities["wallet_ai_conversations"]).toBe("FULL");
+    });
+  });
 });

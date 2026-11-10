@@ -28,6 +28,7 @@ export interface ConversationRecord {
   is_archived: boolean;
   agent_type?: "ceo" | "operational";
   is_shared?: boolean;
+  is_group?: boolean;
   channel?: "web" | "telegram" | "omnichannel";
   last_channel?: "web" | "telegram";
   external_chat_id?: string | null;
@@ -66,6 +67,7 @@ export interface ConversationRepository {
     externalChatId?: string;
     agentType?: "ceo" | "operational";
     isShared?: boolean;
+    isGroup?: boolean;
   }): Promise<ConversationRecord>;
 
   getOrCreateActiveConversation?(data: {
@@ -74,6 +76,8 @@ export interface ConversationRepository {
     channel: "web" | "telegram";
     agentType?: "ceo" | "operational";
     externalChatId?: string;
+    isGroup?: boolean;
+    isShared?: boolean;
     maxInactiveHours?: number;
     title?: string;
   }): Promise<ConversationRecord>;
@@ -354,15 +358,18 @@ export class SupabaseConversationRepository implements ConversationRepository {
     externalChatId?: string;
     agentType?: "ceo" | "operational";
     isShared?: boolean;
+    isGroup?: boolean;
   }): Promise<ConversationRecord> {
     const channel = data.channel ?? "web";
+    const isGroup = Boolean(data.isGroup || (data.externalChatId && Number(data.externalChatId) < 0));
     const insertPayload: Record<string, unknown> = {
       workspace_id: data.workspaceId,
       user_id: data.userId,
-      title: data.title ?? (channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
+      title: data.title ?? (isGroup ? `Grupo Telegram ${data.externalChatId}` : (channel === "telegram" ? "Conversa Telegram" : "Nova Conversa")),
       is_archived: false,
       agent_type: data.agentType ?? "operational",
-      is_shared: data.isShared ?? false,
+      is_shared: isGroup ? true : (data.isShared ?? false),
+      is_group: isGroup,
       channel,
       last_channel: channel,
       external_chat_id: data.externalChatId ?? null,
@@ -387,23 +394,41 @@ export class SupabaseConversationRepository implements ConversationRepository {
     channel: "web" | "telegram";
     agentType?: "ceo" | "operational";
     externalChatId?: string;
+    isGroup?: boolean;
+    isShared?: boolean;
     maxInactiveHours?: number;
     title?: string;
   }): Promise<ConversationRecord> {
     const maxHours = data.maxInactiveHours ?? 4;
     const cutoffIso = new Date(Date.now() - maxHours * 3600 * 1000).toISOString();
     const agentType = data.agentType ?? "operational";
+    const isGroup = Boolean(data.isGroup || (data.externalChatId && Number(data.externalChatId) < 0));
 
-    // 1. Busca conversa não-arquivada do mesmo workspace e usuário atualizada há menos de maxHours
-    const { data: activeConv, error: searchError } = await this.client
+    // 1. Busca conversa não-arquivada segregada
+    let query = this.client
       .from("wallet_ai_conversations")
-      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, is_shared, channel, last_channel, external_chat_id, created_at, updated_at")
+      .select("id, workspace_id, user_id, title, summary, is_archived, agent_type, is_shared, is_group, channel, last_channel, external_chat_id, created_at, updated_at")
       .eq("workspace_id", data.workspaceId)
-      .eq("user_id", data.userId)
       .eq("agent_type", agentType)
       .eq("is_archived", false)
       .gte("updated_at", cutoffIso)
-      .order("updated_at", { ascending: false })
+      .order("updated_at", { ascending: false });
+
+    if (isGroup) {
+      // GRUPO CORPORATIVO: busca exclusiva pelo external_chat_id do grupo
+      // NUNCA cruza com conversas privadas individuais (is_group = false)
+      query = query
+        .eq("is_group", true)
+        .eq("external_chat_id", String(data.externalChatId));
+    } else {
+      // CHAT PRIVADO: busca exclusiva pelo user_id do usuário autenticado
+      // NUNCA cruza com conversas de grupos corporativos (is_group = true)
+      query = query
+        .eq("is_group", false)
+        .eq("user_id", data.userId);
+    }
+
+    const { data: activeConv, error: searchError } = await query
       .limit(1)
       .maybeSingle();
 
@@ -412,11 +437,13 @@ export class SupabaseConversationRepository implements ConversationRepository {
         last_channel: data.channel,
         updated_at: new Date().toISOString(),
       };
-      if (data.externalChatId && !activeConv.external_chat_id) {
-        updates.external_chat_id = data.externalChatId;
-      }
-      if (activeConv.channel !== data.channel && activeConv.channel !== "omnichannel") {
-        updates.channel = "omnichannel";
+      if (!isGroup) {
+        if (data.externalChatId && !activeConv.external_chat_id) {
+          updates.external_chat_id = data.externalChatId;
+        }
+        if (activeConv.channel !== data.channel && activeConv.channel !== "omnichannel") {
+          updates.channel = "omnichannel";
+        }
       }
 
       await this.client
@@ -427,14 +454,16 @@ export class SupabaseConversationRepository implements ConversationRepository {
       return { ...activeConv, ...updates } as ConversationRecord;
     }
 
-    // 2. Se inativa há mais de 4 horas ou inexistente: cria nova sessão canônica
+    // 2. Se inativa há mais de 4 horas ou inexistente: cria nova sessão canônica segregada
     return await this.createConversation({
       workspaceId: data.workspaceId,
       userId: data.userId,
       agentType,
       channel: data.channel,
       externalChatId: data.externalChatId,
-      title: data.title ?? (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa"),
+      isGroup,
+      isShared: isGroup ? true : (data.isShared ?? false),
+      title: data.title ?? (isGroup ? `Grupo Telegram ${data.externalChatId}` : (data.channel === "telegram" ? "Conversa Telegram" : "Nova Conversa")),
     });
   }
 

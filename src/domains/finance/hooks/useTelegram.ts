@@ -68,8 +68,17 @@ export const useTelegram = () => {
     mutationFn: async () => {
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
-      const { error } = await supabase.from("usuarios_telegram").delete().eq("user_id", userId);
-      if (error) throw error;
+
+      // Invoca revogação segura no backend (desativa usuarios_telegram e channel_mappings)
+      const { data, error } = await supabase.functions.invoke("telegram-webhook", {
+        body: { action: "desvincular" },
+      });
+      if (error) {
+        // Fallback local se a Edge Function falhar
+        await supabase.from("usuarios_telegram").delete().eq("user_id", userId);
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: TELEGRAM_QUERY_KEY });

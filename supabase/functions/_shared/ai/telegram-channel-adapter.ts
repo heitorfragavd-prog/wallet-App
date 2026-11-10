@@ -720,10 +720,10 @@ export async function resolveTelegramIdentity(
     // Valida se o usuário que enviou a mensagem pertence ao workspace do grupo
     const { data: member } = await supabase
       .from("workspace_members")
-      .select("role, status")
+      .select("role, active")
       .eq("workspace_id", matchedWorkspaceId)
       .eq("user_id", matchedUserId)
-      .eq("status", "active")
+      .eq("active", true)
       .maybeSingle();
 
     const { data: wsOwner } = await supabase
@@ -1220,6 +1220,7 @@ export async function handleTelegramTextMessage(
     identity: ResolvedTelegramIdentity;
     chatId: string | number;
     correlationId?: string;
+    isGroup?: boolean;
   },
   deps: TelegramAdapterDependencies,
 ): Promise<{
@@ -1524,12 +1525,21 @@ export async function handleTelegramTextMessage(
   const catalog = createQueryToolCatalog(repo, { extended: true, operationsAgent });
   const runner = deps.runnerFactory();
 
+  const isGroup = params.isGroup ?? (params.chatId ? Number(params.chatId) < 0 : false);
+
   let conversationId: string | undefined;
   let normalizedPrompt = text.trim();
-  if (normalizedPrompt.toLowerCase() === "/ceo") {
-    normalizedPrompt = "Apresente o resumo executivo oficial do Wallet CEO 2.0 para a Rodo Point com faturamento, despesas, margem, ações prioritárias de hoje e status dos departamentos.";
-  } else if (normalizedPrompt.toLowerCase().startsWith("/ceo ")) {
-    normalizedPrompt = normalizedPrompt.slice(5).trim();
+  if (normalizedPrompt.toLowerCase() === "/ceo" || normalizedPrompt.toLowerCase().startsWith("/ceo ")) {
+    if (isGroup) {
+      return {
+        text: "🔒 <b>Acesso Restrito:</b> O Cérebro Executivo (Wallet CEO) é de uso estritamente privado e individual. Por diretrizes de segurança da empresa, resumos estratégicos e DREs confidenciais não estão disponíveis em grupos corporativos.",
+      };
+    }
+    if (normalizedPrompt.toLowerCase() === "/ceo") {
+      normalizedPrompt = "Apresente o resumo executivo oficial do Wallet CEO 2.0 para a Rodo Point com faturamento, despesas, margem, ações prioritárias de hoje e status dos departamentos.";
+    } else {
+      normalizedPrompt = normalizedPrompt.slice(5).trim();
+    }
   }
   let turnMessages: LlmMessage[] = [{ role: "user", content: normalizedPrompt }];
 
@@ -1542,16 +1552,19 @@ export async function handleTelegramTextMessage(
             channel: "telegram",
             agentType: "operational",
             externalChatId: String(params.chatId),
+            isGroup,
             maxInactiveHours: 4,
-            title: `Telegram Chat ${params.chatId}`,
+            title: isGroup ? `Grupo Telegram ${params.chatId}` : `Telegram Chat ${params.chatId}`,
           })
         : await deps.conversationRepo.createConversation({
             workspaceId: identity.workspaceId,
             userId: identity.userId,
-            title: `Telegram Chat ${params.chatId}`,
+            title: isGroup ? `Grupo Telegram ${params.chatId}` : `Telegram Chat ${params.chatId}`,
             channel: "telegram",
             agentType: "operational",
             externalChatId: String(params.chatId),
+            isGroup,
+            isShared: isGroup,
           });
       conversationId = conv.id;
       const recent = await deps.conversationRepo.listRecentMessages(
@@ -2521,7 +2534,7 @@ export async function processTelegramUpdate(
         const transcript = await api.transcribeAudio(audio.file_id, audio.mime_type);
         if (transcript) {
           const textResult = await handleTelegramTextMessage(
-            { text: transcript, identity, chatId, correlationId: options?.correlationId },
+            { text: transcript, identity, chatId, isGroup, correlationId: options?.correlationId },
             deps,
           );
 
@@ -2547,7 +2560,7 @@ export async function processTelegramUpdate(
       }
 
       const textResult = await handleTelegramTextMessage(
-        { text: trimmed, identity, chatId, correlationId: options?.correlationId },
+        { text: trimmed, identity, chatId, isGroup, correlationId: options?.correlationId },
         deps,
       );
 
