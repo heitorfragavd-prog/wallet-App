@@ -16,7 +16,7 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseServiceKey = getSupabaseSecretKey();
+  const supabaseServiceKey = getSupabaseSecretKey() || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { persistSession: false },
   });
@@ -56,56 +56,107 @@ serve(async (req) => {
   const userAlerts = new Map<string, string[]>();
 
   const addAlert = (userId: string, msg: string) => {
+    if (!userId) return;
     if (!userAlerts.has(userId)) userAlerts.set(userId, []);
     userAlerts.get(userId)!.push(msg);
   };
 
   (dividasD1 || []).forEach((d) => {
     const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `⚠️ Dívida "${d.descricao || 'Dívida'}" (${val}) vence AMANHÃ!`);
+    addAlert(d.user_id, `⚠️ Dívida "${d.descricao || "Dívida"}" (${val}) vence AMANHÃ!`);
   });
 
   (dividasD3 || []).forEach((d) => {
     const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `📅 Lembrete: Dívida "${d.descricao || 'Dívida'}" (${val}) vence em 3 dias.`);
+    addAlert(d.user_id, `📅 Lembrete: Dívida "${d.descricao || "Dívida"}" (${val}) vence em 3 dias.`);
   });
 
   (despesasHoje || []).forEach((d) => {
     const val = Number(d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `⏰ Conta "${d.descricao || 'Despesa'}" (${val}) vence HOJE!`);
+    addAlert(d.user_id, `⏰ Conta "${d.descricao || "Despesa"}" (${val}) vence HOJE!`);
   });
 
   let notificacoesDisparadas = 0;
+  const resultadosEnvio: Array<{ userId: string; sucesso: boolean; error?: string }> = [];
 
-  // Dispara notificações push e Telegram para cada usuário afetado
+  // 3. Dispara através do NOTIFICATION-DISPATCHER centralizado
   for (const [userId, msgs] of userAlerts.entries()) {
     const textoMensagem = msgs.join("\n");
     const titulo = "🔔 Alerta de Compromissos Wallet";
 
-    // 1. Tenta enviar Push
-    try {
-      await supabaseAdmin.functions.invoke("enviar-push", {
-        body: { user_id: userId, titulo, mensagem: textoMensagem, url: "/dividas" },
-      });
-    } catch (e) {
-      console.warn("Erro ao invocar enviar-push:", e);
+    // Descobrir workspace do usuário
+    const { data: wsData } = await supabaseAdmin
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle();
+
+    let workspaceId = wsData?.id;
+
+    if (!workspaceId) {
+      const { data: memberWs } = await supabaseAdmin
+        .from("workspace_members")
+        .select("workspace_id")
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle();
+      workspaceId = memberWs?.workspace_id;
     }
 
-    // 2. Tenta enviar Telegram
-    try {
-      const htmlTelegram = `🔔 <b>Alerta de Compromissos Wallet</b>\n\n` + msgs.join("\n\n");
-      await supabaseAdmin.functions.invoke("enviar-telegram", {
-        body: { user_id: userId, titulo, mensagem: htmlTelegram },
+    if (!workspaceId) {
+      // Fallback sem workspace cadastrado: insere direto em notificacoes in-app
+      await supabaseAdmin.from("notificacoes").insert({
+        user_id: userId,
+        titulo,
+        mensagem: textoMensagem,
+        lida: false,
+        link_redirecionamento: "/dividas",
       });
-    } catch (e) {
-      console.warn("Erro ao invocar enviar-telegram:", e);
+      notificacoesDisparadas++;
+      continue;
     }
 
-    notificacoesDisparadas++;
+    try {
+      // Roteia via notification-dispatcher respeitando RBAC, quiet hours e canais autorizados
+      const dispatchRes = await supabaseAdmin.functions.invoke("notification-dispatcher", {
+        body: {
+          workspace_id: workspaceId,
+          target_user_ids: [userId],
+          categoria: "boletos",
+          prioridade: "normal",
+          titulo,
+          mensagem: textoMensagem,
+          link_redirecionamento: "/dividas",
+        },
+      });
+
+      if (dispatchRes.error) {
+        // Fallback resiliente: grava na central in-app
+        await supabaseAdmin.from("notificacoes").insert({
+          user_id: userId,
+          titulo,
+          mensagem: textoMensagem,
+          lida: false,
+          link_redirecionamento: "/dividas",
+        });
+      }
+
+      resultadosEnvio.push({ userId, sucesso: true });
+      notificacoesDisparadas++;
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      resultadosEnvio.push({ userId, sucesso: false, error: errMsg });
+    }
   }
 
   return new Response(
-    JSON.stringify({ success: true, usuariosNotificados: notificacoesDisparadas }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
+    JSON.stringify({
+      success: true,
+      usuariosNotificados: notificacoesDisparadas,
+      detalhes: resultadosEnvio,
+    }),
+    { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );
 });
