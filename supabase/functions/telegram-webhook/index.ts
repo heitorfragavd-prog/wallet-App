@@ -102,10 +102,21 @@ function maskToken(token: string): string {
   return token.slice(0, 4) + "****";
 }
 
+const MEMORY_RATE_LIMITS = new Map<string, { failedCount: number; lockedUntil?: number }>();
+
 async function checkRateLimit(
   supabase: SupabaseClient,
   identifier: string
 ): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+  const now = Date.now();
+  // 1. Fail-Safe local em memória contra indisponibilidade do banco
+  const mem = MEMORY_RATE_LIMITS.get(identifier);
+  if (mem?.lockedUntil && mem.lockedUntil > now) {
+    const remaining = Math.ceil((mem.lockedUntil - now) / 1000);
+    return { allowed: false, remainingSeconds: remaining };
+  }
+
+  // 2. Consulta distribuída no PostgreSQL
   try {
     const { data } = await supabase
       .from("telegram_link_rate_limits")
@@ -113,13 +124,20 @@ async function checkRateLimit(
       .eq("identifier", identifier)
       .maybeSingle();
 
-    const now = Date.now();
     if (data?.locked_until && new Date(data.locked_until).getTime() > now) {
       const remaining = Math.ceil((new Date(data.locked_until).getTime() - now) / 1000);
+      MEMORY_RATE_LIMITS.set(identifier, {
+        failedCount: data.failed_count || 5,
+        lockedUntil: new Date(data.locked_until).getTime(),
+      });
       return { allowed: false, remainingSeconds: remaining };
     }
   } catch (err) {
-    console.warn("[telegram-webhook] Aviso ao consultar rate limit (fail-open):", err);
+    console.warn("[telegram-webhook] Aviso ao consultar rate limit no banco (usando fallback em memória):", err);
+    if (mem && mem.failedCount >= 5) {
+      const remaining = Math.ceil(((mem.lockedUntil || (now + 15 * 60 * 1000)) - now) / 1000);
+      return { allowed: false, remainingSeconds: Math.max(remaining, 1) };
+    }
   }
   return { allowed: true };
 }
@@ -129,32 +147,36 @@ async function recordRateLimitAttempt(
   identifier: string,
   success: boolean
 ): Promise<void> {
-  try {
-    if (success) {
+  const now = Date.now();
+  if (success) {
+    MEMORY_RATE_LIMITS.delete(identifier);
+    try {
       await supabase.from("telegram_link_rate_limits").delete().eq("identifier", identifier);
-      return;
+    } catch {
+      // Ignora falha de exclusão
     }
+    return;
+  }
 
-    const { data } = await supabase
-      .from("telegram_link_rate_limits")
-      .select("failed_count")
-      .eq("identifier", identifier)
-      .maybeSingle();
+  // Falha: atualiza cache de memória fail-safe
+  const currentMem = MEMORY_RATE_LIMITS.get(identifier) || { failedCount: 0 };
+  const newCount = currentMem.failedCount + 1;
+  const lockedUntil = newCount >= 5 ? now + 15 * 60 * 1000 : undefined;
+  MEMORY_RATE_LIMITS.set(identifier, { failedCount: newCount, lockedUntil });
 
-    const newCount = (data?.failed_count || 0) + 1;
+  try {
     const updates: Record<string, unknown> = {
       identifier,
       failed_count: newCount,
       last_attempt_at: new Date().toISOString(),
     };
-    if (newCount >= 5) {
-      // Bloqueia por 15 minutos após 5 tentativas incorretas consecutivas
-      updates.locked_until = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    if (lockedUntil) {
+      updates.locked_until = new Date(lockedUntil).toISOString();
     }
 
     await supabase.from("telegram_link_rate_limits").upsert(updates, { onConflict: "identifier" });
   } catch (err) {
-    console.warn("[telegram-webhook] Aviso ao registrar rate limit:", err);
+    console.warn("[telegram-webhook] Aviso ao registrar rate limit no banco:", err);
   }
 }
 
@@ -1144,6 +1166,42 @@ serve(async (req) => {
       const authenticatedUserId = user.id;
       const cleanToken = String(token).toUpperCase().trim();
       const nowIso = new Date().toISOString();
+
+      // 1. Verificação prévia de segurança e autorização de fluxo
+      const { data: existingToken, error: checkErr } = await supabase
+        .from("telegram_link_tokens")
+        .select("*")
+        .eq("token", cleanToken)
+        .eq("usado", false)
+        .gte("expires_at", nowIso)
+        .maybeSingle();
+
+      if (checkErr || !existingToken) {
+        await recordRateLimitAttempt(supabase, rateLimitId, false);
+        return new Response(
+          JSON.stringify({ error: "Código inválido ou expirado. Envie /start para o bot no Telegram para gerar um novo." }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Proteção contra troca indevida de usuário:
+      // Se o token foi gerado com user_id vinculado e difere do usuário logado, rejeita tentativa de apropriação
+      if (existingToken.user_id && existingToken.user_id !== authenticatedUserId) {
+        console.warn(`[telegram-webhook] Tentativa indevida de consumir token de outro usuário (dono: ${existingToken.user_id}, chamador: ${authenticatedUserId})`);
+        await recordRateLimitAttempt(supabase, rateLimitId, false);
+        return new Response(
+          JSON.stringify({ error: "Este código de conexão pertence a outra conta e não pode ser reutilizado." }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // O Fluxo B (consumo na Web App) exige que o token tenha originado no Telegram com telegram_chat_id
+      if (!existingToken.telegram_chat_id) {
+        return new Response(
+          JSON.stringify({ error: "Este link foi gerado pelo app. Para conectá-lo, envie /start no Telegram utilizando o link fornecido." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
       // Consumo ATÔMICO do token prevenindo race conditions
       const { data: linkToken, error: tokenErr } = await supabase
@@ -3486,7 +3544,7 @@ serve(async (req) => {
     let respLower = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
     console.log("[telegram-webhook] ===== MENSAGEM RECEBIDA =====");
-    console.log("[telegram-webhook] chatId:", chatId, "username:", username, "text:", text.slice(0, 100));
+    console.log("[telegram-webhook] chatId:", chatId, "username:", username, "textLength:", text.length);
 
     const sendReply = async (replyText: string) => {
       if (!telegramBotToken) return;
@@ -3579,6 +3637,12 @@ serve(async (req) => {
             .from("usuarios_telegram")
             .update({ ativo: false })
             .eq("user_id", existingBinding.user_id);
+
+          await supabase
+            .from("channel_mappings")
+            .update({ is_active: false })
+            .eq("channel_type", "telegram")
+            .eq("channel_id", String(chatId));
         }
 
         // Se o token tiver workspace vinculado, valida integridade
