@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { isAuthorizedCronCaller, timingSafeEqual } from "../_shared/auth-guard.ts";
+import { checkSharedRateLimit } from "../_shared/ai-rate-limiter.ts";
 import {
   evaluateChannelDelivery,
   NotificationCategory,
@@ -46,6 +47,45 @@ const VALID_PRIORITIES: NotificationPriority[] = [
 ];
 
 const VALID_CHANNELS: NotificationChannel[] = ["app", "push", "telegram", "whatsapp"];
+
+/**
+ * Sanitizador seguro de links para prevenção de Phishing e Open Redirect
+ */
+export function sanitizeRedirectLink(link?: string): string | undefined {
+  if (!link || typeof link !== "string") return undefined;
+  const trimmed = link.trim();
+  if (!trimmed) return undefined;
+
+  // Bloquear esquemas perigosos explicitamente
+  if (/^(javascript|data|vbscript|file):/i.test(trimmed)) {
+    return undefined;
+  }
+
+  // Caminho relativo seguro: começa com "/", mas não com "//" (evita protocol-relative url)
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return trimmed;
+  }
+
+  // Se for URL absoluta, valida que o domínio pertence à infraestrutura autorizada
+  try {
+    const parsed = new URL(trimmed);
+    const allowedHosts = [
+      "wallet.wonderwold.com.br",
+      "localhost",
+      "127.0.0.1",
+    ];
+    if (
+      allowedHosts.includes(parsed.hostname) ||
+      parsed.hostname.endsWith(".wonderwold.com.br")
+    ) {
+      return trimmed;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -134,6 +174,30 @@ serve(async (req: Request) => {
       );
     }
 
+    // Rate Limiting para emissões originadas de usuários autenticados
+    if (callerUserId) {
+      try {
+        const rateCheck = await checkSharedRateLimit(supabaseAdmin, {
+          userId: callerUserId,
+          workspaceId: workspace_id,
+          action: "notif_dispatch",
+          maxRequestsPerMinute: 30,
+        });
+
+        if (!rateCheck.allowed) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: rateCheck.reason || "Limite de envio de notificações excedido. Aguarde antes de tentar novamente.",
+            }),
+            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      } catch (rateErr) {
+        console.warn("[notification-dispatcher] Rate limiter ignorado por falha:", rateErr);
+      }
+    }
+
     // 1. Validar existência do Workspace e obter Owner
     const { data: workspaceData, error: wsError } = await supabaseAdmin
       .from("workspaces")
@@ -150,36 +214,36 @@ serve(async (req: Request) => {
 
     const ownerUserId = workspaceData.user_id;
 
-    // 2. Se for chamado por usuário comum, validar associação com o workspace
-    if (callerUserId) {
-      const isCallerOwner = callerUserId === ownerUserId;
-      let isCallerMember = isCallerOwner;
+    // 2. Se for chamado por usuário comum, validar associação com o workspace e autorização por papel
+    let callerRole: "owner" | "admin" | "manager" | "member" = "member";
+    const isCallerOwner = callerUserId ? callerUserId === ownerUserId : false;
 
-      if (!isCallerMember) {
+    if (callerUserId) {
+      if (isCallerOwner) {
+        callerRole = "owner";
+      } else {
         const { data: memberData } = await supabaseAdmin
           .from("workspace_members")
-          .select("id, role, status")
+          .select("role, active")
           .eq("workspace_id", workspace_id)
           .eq("user_id", callerUserId)
-          .eq("status", "active")
+          .eq("active", true)
           .maybeSingle();
 
-        if (memberData) {
-          isCallerMember = true;
+        if (!memberData) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "Usuário não possui autorização neste workspace.",
+            }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
+
+        callerRole = (memberData.role as "admin" | "manager" | "member") || "member";
       }
 
-      if (!isCallerMember) {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "Usuário não possui autorização neste workspace.",
-          }),
-          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Se categoria for ceo_executivo, chamador DEVE ser o proprietário
+      // Regra A: ceo_executivo é exclusivo do proprietário
       if (categoria === "ceo_executivo" && !isCallerOwner) {
         return new Response(
           JSON.stringify({
@@ -189,14 +253,60 @@ serve(async (req: Request) => {
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+
+      // Regra B: Categorias privilegiadas (financeiro, fechamento_caixa, seguranca)
+      const isPrivilegedCategory = ["financeiro", "fechamento_caixa", "seguranca"].includes(categoria);
+      const isPrivilegedRole = isCallerOwner || callerRole === "admin" || callerRole === "manager";
+      const isSelfTargetOnly =
+        Array.isArray(target_user_ids) &&
+        target_user_ids.length === 1 &&
+        target_user_ids[0] === callerUserId &&
+        (!target_role || target_role === "member");
+
+      if (isPrivilegedCategory && !isPrivilegedRole && !isSelfTargetOnly) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error:
+              "Usuários com perfil de membro não possuem autorização para disparar alertas financeiros, de fechamento de caixa ou de segurança para terceiros ou para a equipe.",
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Regra C: Broadcast para a equipe exige owner ou admin
+      const isBroadcast = target_role === "all" || (!target_user_ids && !target_role);
+      const isMultiTargetOther =
+        Array.isArray(target_user_ids) &&
+        (target_user_ids.length > 1 || (target_user_ids.length === 1 && target_user_ids[0] !== callerUserId));
+
+      if (isBroadcast && !isCallerOwner && callerRole !== "admin") {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Apenas administradores e proprietários podem disparar notificações em massa ou para toda a equipe.",
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (isMultiTargetOther && !isCallerOwner && callerRole !== "admin" && callerRole !== "manager") {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Usuários comuns não podem enviar notificações para outros membros do workspace.",
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // 3. Obter todos os membros elegíveis do Workspace
     const { data: membersList } = await supabaseAdmin
       .from("workspace_members")
-      .select("user_id, role, status")
+      .select("user_id, role, active")
       .eq("workspace_id", workspace_id)
-      .eq("status", "active");
+      .eq("active", true);
 
     const validWorkspaceUserIds = new Set<string>();
     validWorkspaceUserIds.add(ownerUserId);
@@ -233,6 +343,9 @@ serve(async (req: Request) => {
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Sanitização de link para prevenir open-redirect e phishing
+    const safeRedirectLink = sanitizeRedirectLink(link_redirecionamento);
 
     // 5. Canais a considerar
     const activeChannels: NotificationChannel[] = (canais || ["app", "push", "telegram"]).filter(
@@ -318,7 +431,7 @@ serve(async (req: Request) => {
             titulo,
             mensagem,
             lida: false,
-            link_redirecionamento,
+            link_redirecionamento: safeRedirectLink,
           });
 
           deliverySummary.push({
@@ -343,7 +456,7 @@ serve(async (req: Request) => {
                 user_id: userId,
                 titulo,
                 mensagem,
-                url: link_redirecionamento || "/",
+                url: safeRedirectLink || "/",
               },
             });
 

@@ -27,7 +27,7 @@ vi.mock("@/integrations/supabase/client", () => ({
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
-          eq: vi.fn(() => Promise.resolve({ data: [{ id: "m1", user_id: "user-team-1", role: "member", status: "active" }], error: null })),
+          eq: vi.fn(() => Promise.resolve({ data: [{ workspace_id: "ws-1", user_id: "user-team-1", role: "member", active: true }], error: null })),
         })),
       })),
     })),

@@ -218,9 +218,9 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
               if (
                 queryBuilder._filters["workspace_id"] === TEST_WORKSPACE_ID &&
                 queryBuilder._filters["user_id"] === TEST_USER_ID &&
-                queryBuilder._filters["status"] === "active"
+                (queryBuilder._filters["active"] === true || queryBuilder._filters["status"] === "active")
               ) {
-                return { data: [{ role: "admin", status: "active", workspace_id: TEST_WORKSPACE_ID }], error: null };
+                return { data: [{ role: "admin", active: true, status: "active", workspace_id: TEST_WORKSPACE_ID }], error: null };
               }
               return { data: [], error: null };
             }
@@ -1276,7 +1276,7 @@ describe("Telegram Channel Adapter — Suite Canônica da Wallet IA (Etapa 9.5A)
                 return { data: [{ id: "ws-alpha" }, { id: "ws-beta" }], error: null };
               }
               if (table === "workspace_members") {
-                return { data: [{ workspace_id: "ws-beta", role: "member", status: "active" }], error: null };
+                return { data: [{ workspace_id: "ws-beta", role: "member", active: true, status: "active" }], error: null };
               }
               return { data: [], error: null };
             },

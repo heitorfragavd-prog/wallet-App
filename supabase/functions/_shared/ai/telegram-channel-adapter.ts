@@ -781,7 +781,7 @@ export async function resolveTelegramIdentity(
       .from("workspace_members")
       .select("workspace_id, role")
       .eq("user_id", matchedUserId)
-      .eq("status", "active");
+      .eq("active", true);
 
     const allWorkspaces = new Map<string, string>(); // wsId -> role
 
