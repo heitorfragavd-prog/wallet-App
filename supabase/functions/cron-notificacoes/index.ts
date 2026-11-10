@@ -8,6 +8,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
+interface AlertGroup {
+  workspaceId: string | null;
+  userId: string;
+  messages: string[];
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -35,77 +41,85 @@ serve(async (req) => {
   // 1. Busca dívidas com vencimento em D+1 e D+3 (status pendente ou vencida)
   const { data: dividasD1 } = await supabaseAdmin
     .from("dividas")
-    .select("id, user_id, descricao, valor_total, data_vencimento")
+    .select("id, user_id, workspace_id, descricao, valor_total, data_vencimento")
     .neq("status", "quitada")
     .eq("data_vencimento", d1);
 
   const { data: dividasD3 } = await supabaseAdmin
     .from("dividas")
-    .select("id, user_id, descricao, valor_total, data_vencimento")
+    .select("id, user_id, workspace_id, descricao, valor_total, data_vencimento")
     .neq("status", "quitada")
     .eq("data_vencimento", d3);
 
   // 2. Busca despesas a vencer hoje (D+0)
   const { data: despesasHoje } = await supabaseAdmin
     .from("despesas")
-    .select("id, user_id, descricao, valor, data")
+    .select("id, user_id, workspace_id, descricao, valor, data")
     .eq("pago", false)
     .eq("data", hoje);
 
-  // Agrupa alertas por usuário
-  const userAlerts = new Map<string, string[]>();
+  // Agrupa alertas por chave (workspace_id + user_id)
+  const alertMap = new Map<string, AlertGroup>();
 
-  const addAlert = (userId: string, msg: string) => {
+  const addAlert = (userId: string, workspaceId: string | null | undefined, msg: string) => {
     if (!userId) return;
-    if (!userAlerts.has(userId)) userAlerts.set(userId, []);
-    userAlerts.get(userId)!.push(msg);
+    const ws = workspaceId || null;
+    const key = `${ws || "none"}:${userId}`;
+    if (!alertMap.has(key)) {
+      alertMap.set(key, { workspaceId: ws, userId, messages: [] });
+    }
+    alertMap.get(key)!.messages.push(msg);
   };
 
   (dividasD1 || []).forEach((d) => {
     const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `⚠️ Dívida "${d.descricao || "Dívida"}" (${val}) vence AMANHÃ!`);
+    addAlert(d.user_id, d.workspace_id, `⚠️ Dívida "${d.descricao || "Dívida"}" (${val}) vence AMANHÃ!`);
   });
 
   (dividasD3 || []).forEach((d) => {
     const val = Number(d.valor_total || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `📅 Lembrete: Dívida "${d.descricao || "Dívida"}" (${val}) vence em 3 dias.`);
+    addAlert(d.user_id, d.workspace_id, `📅 Lembrete: Dívida "${d.descricao || "Dívida"}" (${val}) vence em 3 dias.`);
   });
 
   (despesasHoje || []).forEach((d) => {
     const val = Number(d.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    addAlert(d.user_id, `⏰ Conta "${d.descricao || "Despesa"}" (${val}) vence HOJE!`);
+    addAlert(d.user_id, d.workspace_id, `⏰ Conta "${d.descricao || "Despesa"}" (${val}) vence HOJE!`);
   });
 
   let notificacoesDisparadas = 0;
-  const resultadosEnvio: Array<{ userId: string; sucesso: boolean; error?: string }> = [];
+  const resultadosEnvio: Array<{ userId: string; workspaceId?: string | null; sucesso: boolean; error?: string }> = [];
 
   // 3. Dispara através do NOTIFICATION-DISPATCHER centralizado
-  for (const [userId, msgs] of userAlerts.entries()) {
-    const textoMensagem = msgs.join("\n");
+  for (const group of alertMap.values()) {
+    const { userId, messages } = group;
+    let effectiveWorkspaceId = group.workspaceId;
+    const textoMensagem = messages.join("\n");
     const titulo = "🔔 Alerta de Compromissos Wallet";
 
-    // Descobrir workspace do usuário
-    const { data: wsData } = await supabaseAdmin
-      .from("workspaces")
-      .select("id")
-      .eq("user_id", userId)
-      .limit(1)
-      .maybeSingle();
-
-    let workspaceId = wsData?.id;
-
-    if (!workspaceId) {
-      const { data: memberWs } = await supabaseAdmin
-        .from("workspace_members")
-        .select("workspace_id")
+    // Se o workspace não estiver definido no registro financeiro, busca workspace ativo associado
+    if (!effectiveWorkspaceId) {
+      const { data: wsData } = await supabaseAdmin
+        .from("workspaces")
+        .select("id")
         .eq("user_id", userId)
-        .eq("status", "active")
         .limit(1)
         .maybeSingle();
-      workspaceId = memberWs?.workspace_id;
+
+      effectiveWorkspaceId = wsData?.id;
+
+      if (!effectiveWorkspaceId) {
+        const { data: memberWs } = await supabaseAdmin
+          .from("workspace_members")
+          .select("workspace_id")
+          .eq("user_id", userId)
+          .eq("active", true)
+          .limit(1)
+          .maybeSingle();
+        effectiveWorkspaceId = memberWs?.workspace_id;
+      }
     }
 
-    if (!workspaceId) {
+    if (!effectiveWorkspaceId) {
       // Fallback sem workspace cadastrado: insere direto em notificacoes in-app
       await supabaseAdmin.from("notificacoes").insert({
         user_id: userId,
@@ -115,6 +129,7 @@ serve(async (req) => {
         link_redirecionamento: "/dividas",
       });
       notificacoesDisparadas++;
+      resultadosEnvio.push({ userId, workspaceId: null, sucesso: true });
       continue;
     }
 
@@ -122,7 +137,7 @@ serve(async (req) => {
       // Roteia via notification-dispatcher respeitando RBAC, quiet hours e canais autorizados
       const dispatchRes = await supabaseAdmin.functions.invoke("notification-dispatcher", {
         body: {
-          workspace_id: workspaceId,
+          workspace_id: effectiveWorkspaceId,
           target_user_ids: [userId],
           categoria: "boletos",
           prioridade: "normal",
@@ -143,11 +158,11 @@ serve(async (req) => {
         });
       }
 
-      resultadosEnvio.push({ userId, sucesso: true });
+      resultadosEnvio.push({ userId, workspaceId: effectiveWorkspaceId, sucesso: true });
       notificacoesDisparadas++;
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      resultadosEnvio.push({ userId, sucesso: false, error: errMsg });
+      resultadosEnvio.push({ userId, workspaceId: effectiveWorkspaceId, sucesso: false, error: errMsg });
     }
   }
 

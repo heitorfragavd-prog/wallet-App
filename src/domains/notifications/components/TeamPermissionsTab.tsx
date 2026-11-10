@@ -23,10 +23,10 @@ import {
 } from "lucide-react";
 
 interface TeamMember {
-  id: string;
+  workspace_id?: string;
   user_id: string;
   role: string;
-  status: string;
+  active: boolean;
   user_email?: string;
   user_name?: string;
 }
@@ -49,9 +49,9 @@ export const TeamPermissionsTab: React.FC<TeamPermissionsTabProps> = ({
     queryFn: async (): Promise<TeamMember[]> => {
       const { data, error } = await supabase
         .from("workspace_members")
-        .select("id, user_id, role, status")
+        .select("workspace_id, user_id, role, active")
         .eq("workspace_id", workspaceId)
-        .eq("status", "active");
+        .eq("active", true);
 
       if (error) throw error;
       return (data || []) as TeamMember[];
