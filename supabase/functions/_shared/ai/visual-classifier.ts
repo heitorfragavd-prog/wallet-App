@@ -12,7 +12,7 @@
  * 5. Observabilidade segura (sem base64, tokens ou chaves em logs).
  */
 
-export type VisualDocumentType = "BOLETO" | "DANFE" | "COMPROVANTE" | "DESCONHECIDO";
+export type VisualDocumentType = "BOLETO" | "DANFE" | "COMPROVANTE" | "ORCAMENTO_PEDIDO" | "DESCONHECIDO";
 
 export interface VisualClassifierTechnicalError {
   code:
@@ -87,16 +87,28 @@ Analise a imagem fornecida e determine a classificação correta entre exatament
    - NÃO contém Ficha de Compensação bancária com código de barras a ser liquidado.
    - Se o documento apresentar código de barras legível, linha digitável para pagamento ou estrutura de ficha de compensação bancária, a classificação CORRETA É "BOLETO", NUNCA "COMPROVANTE".
 
-4. "DESCONHECIDO":
+4. "ORCAMENTO_PEDIDO":
+   Orçamento comercial, pedido de venda, pedido de compra, comanda de fornecedor, cotação de produtos ou romaneio comercial.
+   ELEMENTOS CARACTERÍSTICOS:
+   - Títulos como "Orçamento", "Pedido", "Pedido de Compra", "Pedido de Venda", "Orçamento Comercial", "Cotação", "Pedido nº".
+   - Dados de fornecedor/vendedor e cliente/destinatário.
+   - Relação de mercadorias/produtos com quantidades, preços unitários e subtotais.
+   - Total dos produtos, eventuais descontos/fretes e total líquido a pagar.
+   - NÃO contém Ficha de Compensação Bancária nem Linha Digitável FEBRABAN (não é boleto).
+   - NÃO contém Chave de Acesso de 44 dígitos da SEFAZ nem QR Code fiscal (não é DANFE/NFC-e).
+   - NÃO é comprovante de transferência bancária consumada (não é COMPROVANTE).
+
+5. "DESCONHECIDO":
    Fotografias do cotidiano, pessoas, animais, produtos avulsos, capturas sem relação fiscal/financeira, ou imagens completamente borradas/ilegíveis sem elementos reconhecíveis.
 
 Regras Estritas de Decisão:
 - Em caso de dúvida entre BOLETO e COMPROVANTE: se houver linha digitável, código de barras, ficha de compensação, logotipo de banco com campos de vencimento/valor ou o termo "Recibo do Pagador", a precedência é ABSOLUTA de "BOLETO".
 - Só classifique como COMPROVANTE se for evidente a comprovação de liquidação bancária concluída (comprovante de transferência/PIX/débito já realizado), sem presença de boleto de cobrança com código de barras/linha digitável a pagar.
+- Se for pedido comercial, orçamento ou pedido de compra de mercadorias sem código de barras bancário, classifique como "ORCAMENTO_PEDIDO".
 - NUNCA invente informações.
 - Responda ESTRITAMENTE um objeto JSON válido, sem texto adicional, no seguinte formato:
 {
-  "documentType": "BOLETO" | "DANFE" | "COMPROVANTE" | "DESCONHECIDO",
+  "documentType": "BOLETO" | "DANFE" | "COMPROVANTE" | "ORCAMENTO_PEDIDO" | "DESCONHECIDO",
   "confidence": <número inteiro de 0 a 100>,
   "reasoning": "<explicação de uma linha sobre os elementos visuais detectados>",
   "evidence": {
@@ -428,7 +440,7 @@ function parseClassificationJson(
     if (!obj || typeof obj !== "object") return null;
 
     let docTypeRaw = String(obj.documentType || "").trim().toUpperCase();
-    if (!["BOLETO", "DANFE", "COMPROVANTE", "DESCONHECIDO"].includes(docTypeRaw)) {
+    if (!["BOLETO", "DANFE", "COMPROVANTE", "ORCAMENTO_PEDIDO", "DESCONHECIDO"].includes(docTypeRaw)) {
       docTypeRaw = "DESCONHECIDO";
     }
 

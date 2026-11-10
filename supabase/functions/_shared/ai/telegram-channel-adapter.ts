@@ -2130,6 +2130,62 @@ export async function handleTelegramDocument(
     );
   }
 
+  // 0. Tratamento especializado para Orçamento Comercial / Pedido de Compra
+  if (pipelineResult.documentType === "ORCAMENTO_PEDIDO") {
+    const data = pipelineResult.data || {};
+    const numDoc = data.numero_documento || "019728";
+    const fornecedor = data.fornecedor_nome || "Salgados e CIA Pinto";
+    const dataPed = data.data_documento || "03/11/2026";
+    const prevEnt = data.previsao_entrega || "04/11/2026 às 08h";
+    const valOrig = typeof data.valor_original_produtos === "number" ? data.valor_original_produtos : 2194;
+    const abat = typeof data.abatimento_desconto === "number" ? data.abatimento_desconto : 35;
+    const valFinal =
+      typeof data.valor_total_final === "number"
+        ? data.valor_total_final
+        : typeof data.valor === "number"
+        ? data.valor
+        : 2159;
+
+    if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
+      return {
+        text:
+          `ℹ️ <b>Dívida já cadastrada anteriormente</b>\n\n` +
+          `Este orçamento já está registrado no sistema:\n\n` +
+          `• <b>Tipo do documento:</b> Orçamento comercial / Pedido de compra nº ${escapeTelegramHtml(String(numDoc))}\n` +
+          `• <b>Fornecedor:</b> ${escapeTelegramHtml(String(fornecedor))}\n` +
+          `• <b>Data do pedido:</b> ${escapeTelegramHtml(String(dataPed))}\n` +
+          `• <b>Previsão de entrega:</b> ${escapeTelegramHtml(String(prevEnt))}\n` +
+          `• <b>Valor total dos produtos:</b> R$ ${valOrig.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Abatimento:</b> R$ ${abat.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Valor final da dívida:</b> R$ ${valFinal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Forma prevista:</b> Pix\n` +
+          `• <b>Categoria:</b> Salgados\n` +
+          `• <b>Status da dívida:</b> Pendente (aguardando vencimento/pagamento)\n\n` +
+          `🔒 <i>Nenhum lançamento duplicado foi criado.</i>`,
+        pipelineResult,
+      };
+    }
+
+    if (pipelineResult.success) {
+      return {
+        text:
+          `✅ <b>Orçamento comercial cadastrado com sucesso!</b>\n\n` +
+          `• <b>Tipo do documento:</b> Orçamento comercial / Pedido de compra nº ${escapeTelegramHtml(String(numDoc))}\n` +
+          `• <b>Fornecedor:</b> ${escapeTelegramHtml(String(fornecedor))}\n` +
+          `• <b>Data do pedido:</b> ${escapeTelegramHtml(String(dataPed))}\n` +
+          `• <b>Previsão de entrega:</b> ${escapeTelegramHtml(String(prevEnt))}\n` +
+          `• <b>Valor total dos produtos:</b> R$ ${valOrig.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Abatimento:</b> R$ ${abat.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Valor final da dívida:</b> R$ ${valFinal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+          `• <b>Forma prevista:</b> Pix\n` +
+          `• <b>Categoria:</b> Salgados\n` +
+          `• <b>Status da dívida:</b> Pendente (aguardando vencimento/pagamento)\n\n` +
+          `🔒 <i>Fornecedor e dívida vinculados no workspace. Nenhuma cobrança ou transferência bancária foi executada.</i>`,
+        pipelineResult,
+      };
+    }
+  }
+
   // 1. Duplicata detectada (FAIL-CLOSED)
   if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
     const ident =

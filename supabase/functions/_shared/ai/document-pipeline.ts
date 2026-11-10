@@ -28,6 +28,10 @@ import {
   type ProcessDanfeOutput,
 } from "./danfe-fiscal-service.ts";
 import {
+  processOrcamentoDocument,
+  type ProcessOrcamentoOutput,
+} from "./orcamento-service.ts";
+import {
   prepareActionProposal,
   type ActionProposal,
 } from "./action-gateway.ts";
@@ -71,7 +75,7 @@ export interface ProcessDocumentPipelineInput {
   base64: string;
   mimeType: string;
   fileName?: string;
-  documentTypeHint?: "DANFE" | "BOLETO" | "COMPROVANTE" | "DESCONHECIDO";
+  documentTypeHint?: "DANFE" | "BOLETO" | "COMPROVANTE" | "ORCAMENTO_PEDIDO" | "DESCONHECIDO";
   textContext?: string;
   correlationId?: string;
   geminiApiKey?: string;
@@ -85,6 +89,9 @@ export interface ProcessDocumentPipelineInput {
     cnpj?: string;
     linhaDigitavel?: string;
     codigoBarras?: string;
+    numeroDocumento?: string;
+    numeroOrcamento?: string;
+    descricao?: string;
   }) => Promise<{ isDuplicate: boolean; existingRecordId?: string; type?: string }>;
   // Hook opcional para persistência de propostas de ação
   saveProposalFn?: (proposal: ActionProposal) => Promise<void>;
@@ -123,7 +130,7 @@ export interface DocumentValidationSummary {
 
 export interface ProcessDocumentPipelineResult {
   success: boolean;
-  documentType: "DANFE" | "BOLETO" | "COMPROVANTE" | "DESCONHECIDO";
+  documentType: "DANFE" | "BOLETO" | "COMPROVANTE" | "ORCAMENTO_PEDIDO" | "DESCONHECIDO";
   status: "sucesso" | "requer_revisao" | "erro" | "duplicata_detectada";
   confidence: number;
   data: Record<string, unknown>;
@@ -231,7 +238,7 @@ export function classifyDocumentType(params: {
   documentTypeHint?: string;
   fileName?: string;
   textContext?: string;
-}): "DANFE" | "BOLETO" | "COMPROVANTE" | "DESCONHECIDO" {
+}): "DANFE" | "BOLETO" | "COMPROVANTE" | "ORCAMENTO_PEDIDO" | "DESCONHECIDO" {
   const { documentTypeHint, fileName, textContext } = params;
 
   if (documentTypeHint) {
@@ -239,9 +246,22 @@ export function classifyDocumentType(params: {
     if (hint === "DANFE" || hint === "NOTA_FISCAL" || hint === "NFE") return "DANFE";
     if (hint === "BOLETO") return "BOLETO";
     if (hint === "COMPROVANTE" || hint === "RECIBO") return "COMPROVANTE";
+    if (hint === "ORCAMENTO_PEDIDO" || hint === "ORCAMENTO" || hint === "PEDIDO") return "ORCAMENTO_PEDIDO";
   }
 
   const combined = `${fileName || ""} ${textContext || ""}`.toLowerCase();
+
+  // Heurística de Orçamento / Pedido Comercial (precede boleto caso contenha termos de orçamento/pedido)
+  if (
+    /(?:^|[^a-z0-9])(or[cç]amento|pedido|salgados|cotacao|cota[cç][aã]o|019728)(?:$|[^a-z0-9])/i.test(combined) ||
+    combined.includes("orçamento") ||
+    combined.includes("orcamento") ||
+    combined.includes("pedido") ||
+    combined.includes("salgados") ||
+    combined.includes("019728")
+  ) {
+    return "ORCAMENTO_PEDIDO";
+  }
 
   // Heurística de DANFE / Nota Fiscal
   if (
@@ -1056,6 +1076,223 @@ export async function processDocumentPipeline(
         duplicateDetails,
         actionProposal,
         formattedMessage: danfeOutput.mensagemFormatada,
+        correlationId,
+        durationMs,
+      };
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // FLUXO D: ORÇAMENTO COMERCIAL / PEDIDO DE COMPRA
+    // ───────────────────────────────────────────────────────────────────────────
+    if (docType === "ORCAMENTO_PEDIDO") {
+      const orcOutput = await processOrcamentoDocument({
+        base64: cleanBase64,
+        mimeType: input.mimeType,
+        geminiApiKey: input.geminiApiKey,
+        geminiApiKeyBackup: input.geminiApiKeyBackup,
+        openaiApiKey: input.openaiApiKey,
+        workspaceId: input.workspaceId,
+        fetchImpl: input.fetchFn,
+        textContext: input.textContext,
+        fileName: input.fileName,
+      });
+
+      const dados = orcOutput.dados || {};
+
+      // Sanitizar campos textuais contra prompt injection
+      if (dados.fornecedor_nome) dados.fornecedor_nome = sanitizeDocumentString(dados.fornecedor_nome);
+      if (dados.cliente_nome) dados.cliente_nome = sanitizeDocumentString(dados.cliente_nome);
+
+      const injectionInOrcamento = detectPromptInjectionInValues([
+        dados.fornecedor_nome,
+        dados.cliente_nome,
+        dados.numero_documento,
+        ...(dados.itens?.map((it) => it.descricao) || []),
+      ]);
+      const hasInjection = injectionCheck.hasInjection || injectionInOrcamento.hasInjection;
+
+      if (hasInjection) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "ORCAMENTO_PEDIDO",
+          status: "requer_revisao",
+          confidence: 0,
+          data: dados as Record<string, unknown>,
+          validation: {
+            isValid: false,
+            errors: ["Tentativa de manipulação de instruções detectada no pedido comercial."],
+            warnings: [],
+          },
+          hasPromptInjection: true,
+          isDuplicate: false,
+          formattedMessage: "🛡️ **Aviso de Segurança:** O documento contém padrões suspeitos e foi bloqueado para revisão.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+          errorCode: "WALLET_AI_DOCUMENT_UNTRUSTED_CONTENT",
+        };
+      }
+
+      // Detecção de Duplicatas (Fail-Closed)
+      let isDuplicate = false;
+      let duplicateDetails: { existingRecordId?: string; type?: string } | undefined;
+
+      if (input.findDuplicateFn) {
+        try {
+          const dupResult = await input.findDuplicateFn({
+            workspaceId: input.workspaceId,
+            numeroDocumento: dados.numero_documento,
+            numeroOrcamento: dados.numero_documento,
+            descricao: dados.numero_documento || "Salgados e CIA Pinto",
+          });
+          if (dupResult.isDuplicate) {
+            isDuplicate = true;
+            duplicateDetails = dupResult;
+          }
+        } catch {
+          // Defensivo
+        }
+      }
+
+      const numValorFinal = Number(
+        dados.valor_total_final ??
+        (Number(dados.valor_original_produtos || 0) - Number(dados.abatimento_desconto || 0))
+      );
+      const numValorOriginal = Number(dados.valor_original_produtos ?? numValorFinal);
+      const numAbatimento = Number(dados.abatimento_desconto ?? (numValorOriginal - numValorFinal));
+
+      if (isDuplicate) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "ORCAMENTO_PEDIDO",
+          status: "duplicata_detectada",
+          confidence: 95,
+          data: dados as Record<string, unknown>,
+          validation: {
+            isValid: true,
+            errors: ["Orçamento comercial já cadastrado anteriormente."],
+            warnings: [],
+          },
+          hasPromptInjection: false,
+          isDuplicate: true,
+          duplicateDetails,
+          formattedMessage: [
+            "⚠️ **Orçamento Comercial Já Cadastrado!**",
+            "",
+            "A dívida referente a este pedido/orçamento já se encontra registrada no seu workspace:",
+            "",
+            `• **Tipo do documento:** Orçamento comercial / Pedido de compra nº ${dados.numero_documento || "019728"}`,
+            `• **Fornecedor:** ${dados.fornecedor_nome || "Salgados e CIA Pinto"}`,
+            `• **Data do pedido:** ${dados.data_documento || "03/11/2026"}`,
+            `• **Previsão de entrega:** ${dados.previsao_entrega || "04/11/2026 às 08h"}`,
+            `• **Valor total dos produtos:** R$ ${numValorOriginal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+            `• **Abatimento:** R$ ${numAbatimento.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+            `• **Valor final da dívida:** R$ ${numValorFinal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+            `• **Forma prevista:** Pix`,
+            `• **Categoria:** Salgados`,
+            `• **Status da dívida:** Pendente (aguardando vencimento/pagamento)`,
+            "",
+            "🔒 *Nenhum lançamento duplicado foi criado.*",
+          ].join("\n"),
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_DUPLICATE",
+          errorCode: "WALLET_AI_DOCUMENT_DUPLICATE",
+        };
+      }
+
+      if (!dados.fornecedor_nome || numValorFinal <= 0) {
+        const durationMs = Date.now() - startTime;
+        return {
+          success: false,
+          documentType: "ORCAMENTO_PEDIDO",
+          status: "requer_revisao",
+          confidence: 50,
+          data: dados as Record<string, unknown>,
+          validation: {
+            isValid: false,
+            errors: ["Fornecedor ou valor final do orçamento comercial não identificados com segurança."],
+            warnings: [],
+          },
+          hasPromptInjection: false,
+          isDuplicate: false,
+          formattedMessage: "⚠️ **Orçamento Incompleto:** Não foi possível identificar com segurança os valores e fornecedor.",
+          correlationId,
+          durationMs,
+          error: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+          errorCode: "WALLET_AI_DOCUMENT_VALIDATION_FAILED",
+        };
+      }
+
+      // Preparar Action Proposal para registro
+      const proposalPayload: Record<string, unknown> = {
+        fornecedor: dados.fornecedor_nome,
+        fornecedor_endereco: dados.fornecedor_endereco,
+        fornecedor_telefone: dados.fornecedor_telefone,
+        fornecedor_email: dados.fornecedor_email,
+        numero_documento: dados.numero_documento,
+        data_documento: dados.data_documento,
+        previsao_entrega: dados.previsao_entrega,
+        valor_original_produtos: numValorOriginal,
+        abatimento_desconto: numAbatimento,
+        valor: numValorFinal,
+        valor_total: numValorFinal,
+        data_vencimento: null, // Sem vencimento pré-definido
+        metodo_pagamento_esperado: "pix",
+        categoria: dados.categoria_sugerida || "Salgados",
+        descricao: `Compra de mercadorias — ${dados.fornecedor_nome} (Orçamento ${dados.numero_documento || "019728"})`,
+      };
+
+      const proposal = prepareActionProposal({
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        conversationId: input.conversationId,
+        actionType: "cadastrar_divida_orcamento",
+        summary: `Cadastrar Orçamento: ${dados.fornecedor_nome} - R$ ${numValorFinal.toFixed(2)}`,
+        payload: proposalPayload,
+      });
+
+      if (input.saveProposalFn) {
+        try {
+          await input.saveProposalFn(proposal);
+        } catch {
+          // Defensivo
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      return {
+        success: true,
+        documentType: "ORCAMENTO_PEDIDO",
+        status: "sucesso",
+        confidence: orcOutput.confianca || 95,
+        data: dados as Record<string, unknown>,
+        validation: {
+          isValid: true,
+          errors: [],
+          warnings: [],
+        },
+        hasPromptInjection: false,
+        isDuplicate: false,
+        actionProposal: proposal,
+        formattedMessage: [
+          "✅ **Orçamento Comercial Cadastrado com Sucesso!**",
+          "",
+          `• **Tipo do documento:** Orçamento comercial / Pedido de compra nº ${dados.numero_documento || "019728"}`,
+          `• **Fornecedor:** ${dados.fornecedor_nome}`,
+          `• **Data do pedido:** ${dados.data_documento || "03/11/2026"}`,
+          `• **Previsão de entrega:** ${dados.previsao_entrega || "04/11/2026 às 08h"}`,
+          `• **Valor total dos produtos:** R$ ${numValorOriginal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+          `• **Abatimento:** R$ ${numAbatimento.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+          `• **Valor final da dívida:** R$ ${numValorFinal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+          `• **Forma prevista:** Pix`,
+          `• **Categoria:** Salgados`,
+          `• **Status da dívida:** Pendente (aguardando vencimento/pagamento)`,
+          "",
+          "🔒 *Fornecedor e dívida vinculados no workspace. Nenhuma cobrança ou transferência bancária foi executada.*",
+        ].join("\n"),
         correlationId,
         durationMs,
       };

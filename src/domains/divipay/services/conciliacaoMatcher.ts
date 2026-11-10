@@ -23,7 +23,7 @@ export interface DividaCandidata {
   credor: string;
   documento_favorecido: string | null;
   valor_restante: number;
-  data_vencimento: string; // yyyy-mm-dd
+  data_vencimento: string | null; // yyyy-mm-dd
 }
 
 export type ResultadoMatch =
@@ -105,7 +105,7 @@ export function avaliarSaque(saque: SaqueParaConciliar, dividasAbertas: DividaCa
   const candidatas = dividasAbertas
     .filter((d) => d.valor_restante > 0)
     .filter((d) => valorBate(d.valor_restante, saque.valor))
-    .filter((d) => diasEntre(d.data_vencimento, saque.dataPagamento) <= JANELA_DIAS);
+    .filter((d) => !d.data_vencimento || diasEntre(d.data_vencimento, saque.dataPagamento) <= JANELA_DIAS);
 
   if (candidatas.length === 0) return { camada: "avulsa" };
 
