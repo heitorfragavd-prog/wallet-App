@@ -27,6 +27,9 @@ import type {
   InventoryItemRecord,
   RecipeCardRecord,
   SupplierRecord,
+  EmployeeRecord,
+  EmployeeScheduleRecord,
+  EmployeePaymentRecord,
 } from "./query-tools.ts";
 import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
@@ -77,9 +80,13 @@ export function getSaoPauloDateStrings(referenceDate = new Date()) {
   const mondayUtc = new Date(todayUtc.getTime() - dayOfWeek * 24 * 3600 * 1000);
   const startOfWeekStr = formatter.format(mondayUtc);
 
+  const tomorrowUtc = new Date(todayUtc.getTime() + 24 * 3600 * 1000);
+  const tomorrowStr = formatter.format(tomorrowUtc);
+
   return {
     todayStr,
     yesterdayStr,
+    tomorrowStr,
     startOfMonthStr,
     startOfPrevMonthStr,
     endOfPrevMonthStr,
@@ -269,23 +276,67 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   }
 
   // 5. Especialista de Pessoal e RH
-  if (
+  const isRhQuery =
     p.includes("funcionário") ||
     p.includes("funcionario") ||
+    p.includes("funcionários") ||
+    p.includes("funcionarios") ||
+    p.includes("colaborador") ||
+    p.includes("colaboradores") ||
     p.includes("equipe") ||
     p.includes("escala") ||
+    p.includes("escalas") ||
+    p.includes("escalado") ||
+    p.includes("escalados") ||
     p.includes("salário") ||
     p.includes("salario") ||
-    p.includes("hora extra") ||
-    p.includes("colaborador")
-  ) {
+    p.includes("salários") ||
+    p.includes("salarios") ||
+    p.includes("folha de pagamento") ||
+    p.includes("vale-transporte") ||
+    p.includes("vale transporte") ||
+    p.includes("vale-alimentação") ||
+    p.includes("vale alimentação") ||
+    p.includes("vale refeição") ||
+    p.includes("vale refeicao") ||
+    p.includes("pagamentos de funcionários") ||
+    p.includes("pagamentos de funcionarios") ||
+    p.includes("pagamentos duplicados") ||
+    p.includes("pagamentos pendentes") ||
+    p.includes("ainda estão pendentes") ||
+    p.includes("ainda estao pendentes") ||
+    p.includes("receberam pagamento");
+
+  if (isRhQuery) {
+    const isRhDeterministic =
+      p.includes("receberam pagamento") ||
+      p.includes("pagamento neste mês") ||
+      p.includes("pagamentos neste mês") ||
+      p.includes("pagamentos pendentes") ||
+      p.includes("ainda estão pendentes") ||
+      p.includes("ainda estao pendentes") ||
+      p.includes("escalado para amanhã") ||
+      p.includes("escalado para amanha") ||
+      p.includes("escala de amanhã") ||
+      p.includes("escala de amanha") ||
+      p.includes("escala de hoje") ||
+      p.includes("escalados") ||
+      p.includes("vale-transporte") ||
+      p.includes("vale transporte") ||
+      p.includes("vale-alimentação") ||
+      p.includes("vale alimentacao") ||
+      p.includes("vale refeição") ||
+      p.includes("vale refeicao") ||
+      p.includes("pagamentos duplicados") ||
+      p.includes("duplicidade");
+
     return {
       primarySpecialist: "rh",
       coordinatingCeo: false,
       contributingSpecialists: ["rh"],
       complexityLevel: 2,
       model: "gemini-2.5-flash",
-      isDeterministicPossible: false,
+      isDeterministicPossible: isRhDeterministic,
       rationale: "Consulta direcionada ao Especialista de Pessoal e RH.",
     };
   }
@@ -1760,6 +1811,321 @@ export async function fetchAndExecuteInventorySpecialist(
   };
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGENTE DE PESSOAL E RH — RESPOSTAS DETERMINÍSTICAS (Gate 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface RhDeterministicData {
+  colaboradores?: EmployeeRecord[];
+  pagamentosMes?: EmployeePaymentRecord[];
+  pagamentosPendentes?: EmployeePaymentRecord[];
+  escalasAmanha?: EmployeeScheduleRecord[];
+  escalasHoje?: EmployeeScheduleRecord[];
+  pagamentosDuplicados?: Array<{
+    descricao: string;
+    quantidade: number;
+    valor: number;
+  }>;
+  totalVales?: {
+    valeTransporte: number;
+    valeRefeicao: number;
+    total: number;
+  };
+  isMemberRole?: boolean;
+}
+
+export function buildRhSpecialistDeterministicResponse(
+  userPrompt: string,
+  data: RhDeterministicData
+): { handled: boolean; answer?: string; specialist: string } {
+  const p = userPrompt.toLowerCase().trim();
+
+  // Sigilo salarial e proteção estrita de dados individuais (Gate 2.2)
+  if (data.isMemberRole) {
+    return {
+      handled: true,
+      answer:
+        "🔒 *Acesso Restrito — Agente de Pessoal e RH:*\n\n" +
+        "Informações sobre folha de pagamento, remunerações, escalas detalhadas e dados contratuais da equipe " +
+        "são restritos exclusivamente aos administradores e ao proprietário da empresa.",
+      specialist: "rh",
+    };
+  }
+
+  // Caso 1: "Quais funcionários receberam pagamento neste mês?"
+  if (
+    p.includes("receberam pagamento") ||
+    p.includes("pagamento neste mês") ||
+    p.includes("pagamentos neste mês") ||
+    p.includes("pagamentos do mês")
+  ) {
+    if (data.pagamentosMes === null || data.pagamentosMes === undefined) {
+      return {
+        handled: true,
+        answer: "👥 *Agente de Pessoal e RH — Pagamentos do Mês:*\n\nDados de pagamentos não disponíveis no momento.",
+        specialist: "rh",
+      };
+    }
+
+    if (data.pagamentosMes.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "👥 *Agente de Pessoal e RH — Pagamentos do Mês:*\n\n" +
+          "Nenhum pagamento liquidado registrado para colaboradores até o momento neste mês.",
+        specialist: "rh",
+      };
+    }
+
+    const total = data.pagamentosMes.reduce((acc, pg) => acc + pg.valor, 0);
+    let msg = `👥 *Agente de Pessoal e RH — Pagamentos Realizados no Mês (${data.pagamentosMes.length}):*\n\n`;
+    msg += `• *Total Liquidado:* R$ ${total.toFixed(2)}\n\n`;
+    data.pagamentosMes.slice(0, 10).forEach((pg, idx) => {
+      const dataStr = pg.paidAt ? pg.paidAt.slice(0, 10) : pg.createdAt.slice(0, 10);
+      msg += `${idx + 1}. *Pagamento:* R$ ${pg.valor.toFixed(2)} — Status: ${pg.status} (${dataStr})\n`;
+    });
+    msg += `\n_Dados conciliados dos comprovantes e lançamentos de acerto de equipe._`;
+
+    return { handled: true, answer: msg, specialist: "rh" };
+  }
+
+  // Caso 2: "Quais pagamentos ainda estão pendentes?"
+  if (
+    p.includes("pagamentos pendentes") ||
+    p.includes("ainda estão pendentes") ||
+    p.includes("ainda estao pendentes") ||
+    p.includes("o que falta pagar")
+  ) {
+    if (data.pagamentosPendentes === null || data.pagamentosPendentes === undefined) {
+      return {
+        handled: true,
+        answer: "👥 *Agente de Pessoal e RH — Pagamentos Pendentes:*\n\nInformações de pagamentos pendentes não disponíveis.",
+        specialist: "rh",
+      };
+    }
+
+    if (data.pagamentosPendentes.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "👥 *Agente de Pessoal e RH — Pagamentos Pendentes:*\n\n" +
+          "✅ Não constam pagamentos de equipe pendentes de quitação no momento. Todas as rotinas estão regularizadas.",
+        specialist: "rh",
+      };
+    }
+
+    const totalPend = data.pagamentosPendentes.reduce((acc, pg) => acc + pg.valor, 0);
+    let msg = `👥 *Agente de Pessoal e RH — Pagamentos de Equipe Pendentes (${data.pagamentosPendentes.length}):*\n\n`;
+    msg += `• *Total a Regularizar:* R$ ${totalPend.toFixed(2)}\n\n`;
+    data.pagamentosPendentes.slice(0, 10).forEach((pg, idx) => {
+      msg += `${idx + 1}. *Valor:* R$ ${pg.valor.toFixed(2)} — Origem: ${pg.origem || "Acerto operacional"} [Status: ${pg.status}]\n`;
+    });
+    msg += `\n_Recomenda-se aprovação e conciliação bancária no módulo financeiro._`;
+
+    return { handled: true, answer: msg, specialist: "rh" };
+  }
+
+  // Caso 3: "Quem está escalado para amanhã?" (ou "escala de hoje")
+  if (
+    p.includes("escalado para amanhã") ||
+    p.includes("escalado para amanha") ||
+    p.includes("escala de amanhã") ||
+    p.includes("escala de amanha") ||
+    p.includes("escala de hoje") ||
+    p.includes("escalados")
+  ) {
+    const isAmanha = p.includes("amanhã") || p.includes("amanha");
+    const listaEscalas = isAmanha ? data.escalasAmanha : data.escalasHoje;
+    const diaLabel = isAmanha ? "Amanhã" : "Hoje";
+
+    if (listaEscalas === null || listaEscalas === undefined) {
+      return {
+        handled: true,
+        answer: `👥 *Agente de Pessoal e RH — Escala de ${diaLabel}:*\n\nDados de escala não disponíveis no momento.`,
+        specialist: "rh",
+      };
+    }
+
+    if (listaEscalas.length === 0) {
+      return {
+        handled: true,
+        answer:
+          `👥 *Agente de Pessoal e RH — Escala de ${diaLabel}:*\n\n` +
+          `Nenhum colaborador com escala ativa registrada para ${diaLabel.toLowerCase()}.`,
+        specialist: "rh",
+      };
+    }
+
+    const nomesMap = new Map((data.colaboradores || []).map((c) => [c.id, c.nome]));
+    let msg = `👥 *Agente de Pessoal e RH — Escala de Trabalho de ${diaLabel} (${listaEscalas.length} colaboradores):*\n\n`;
+
+    listaEscalas.forEach((esc, idx) => {
+      const nome = nomesMap.get(esc.colaboradorId) || "Colaborador";
+      const turnoStr = esc.turno ? ` | Turno: ${esc.turno}` : "";
+      const obsStr = esc.observacao ? ` (${esc.observacao})` : "";
+      msg += `${idx + 1}. *${nome}*${turnoStr} [Diária: R$ ${esc.valorDiaria.toFixed(2)}]${obsStr}\n`;
+    });
+
+    msg += `\n_Escala apurada do módulo de gestão de turnos da equipe Rodo Point._`;
+    return { handled: true, answer: msg, specialist: "rh" };
+  }
+
+  // Caso 4: "Quanto já paguei de vale-transporte / vale-alimentação?"
+  if (
+    p.includes("vale-transporte") ||
+    p.includes("vale transporte") ||
+    p.includes("vale-alimentação") ||
+    p.includes("vale alimentacao") ||
+    p.includes("vale refeição") ||
+    p.includes("vale refeicao")
+  ) {
+    if (data.totalVales === null || data.totalVales === undefined) {
+      return {
+        handled: true,
+        answer: "👥 *Agente de Pessoal e RH — Benefícios e Vales:*\n\nDados de benefícios não disponíveis.",
+        specialist: "rh",
+      };
+    }
+
+    const { valeTransporte, valeRefeicao, total } = data.totalVales;
+    const msg =
+      `👥 *Agente de Pessoal e RH — Provisão Mensal de Vales da Equipe:*\n\n` +
+      `• *Vale-Transporte:* R$ ${valeTransporte.toFixed(2)}\n` +
+      `• *Vale-Alimentação / Refeição:* R$ ${valeRefeicao.toFixed(2)}\n` +
+      `• *Total Consolidado de Vales:* R$ ${total.toFixed(2)}\n\n` +
+      `_Apurado com base nos cadastros ativos de colaboradores e dias úteis acordados._`;
+
+    return { handled: true, answer: msg, specialist: "rh" };
+  }
+
+  // Caso 5: "Existem pagamentos duplicados?"
+  if (p.includes("pagamentos duplicados") || p.includes("duplicidade")) {
+    if (data.pagamentosDuplicados === null || data.pagamentosDuplicados === undefined) {
+      return {
+        handled: true,
+        answer: "👥 *Agente de Pessoal e RH — Auditoria de Duplicidades:*\n\nHistórico de pagamentos não disponível.",
+        specialist: "rh",
+      };
+    }
+
+    if (data.pagamentosDuplicados.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "👥 *Agente de Pessoal e RH — Auditoria de Duplicidades:*\n\n" +
+          "✅ Nenhum pagamento duplicado ou inconsistente identificado nos lançamentos de colaboradores.",
+        specialist: "rh",
+      };
+    }
+
+    let msg = `⚠️ *Agente de Pessoal e RH — Possíveis Duplicidades Detectadas (${data.pagamentosDuplicados.length}):*\n\n`;
+    data.pagamentosDuplicados.forEach((dup) => {
+      msg += `• *${dup.descricao}*: ${dup.quantidade} lançamentos de R$ ${dup.valor.toFixed(2)}\n`;
+    });
+    msg += `\n_Recomenda-se estorno ou conciliação antes do fechamento da folha contábil._`;
+
+    return { handled: true, answer: msg, specialist: "rh" };
+  }
+
+  return { handled: false, specialist: "rh" };
+}
+
+export async function fetchAndExecuteRhSpecialist(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  nowOverride?: Date
+): Promise<{
+  handled: boolean;
+  answer?: string;
+  specialist: string;
+  routingPlan: SpecialistRoutingPlan;
+}> {
+  const routingPlan = routeUserQueryToSpecialists(userPrompt);
+
+  if (!routingPlan.isDeterministicPossible || routingPlan.primarySpecialist !== "rh") {
+    return {
+      handled: false,
+      specialist: "rh",
+      routingPlan,
+    };
+  }
+
+  const { todayStr, tomorrowStr, startOfMonthStr } = getSaoPauloDateStrings(nowOverride);
+  const collectedData: RhDeterministicData = {
+    isMemberRole: context.role === "member",
+  };
+
+  try {
+    const [employees, monthPayments, tomorrowSchedules, todaySchedules] = await Promise.all([
+      repository.listEmployees ? repository.listEmployees(context) : Promise.resolve([]),
+      repository.listEmployeePayments
+        ? repository.listEmployeePayments(context, { start: startOfMonthStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listEmployeeSchedules
+        ? repository.listEmployeeSchedules(context, { start: tomorrowStr, end: tomorrowStr })
+        : Promise.resolve([]),
+      repository.listEmployeeSchedules
+        ? repository.listEmployeeSchedules(context, { start: todayStr, end: todayStr })
+        : Promise.resolve([]),
+    ]);
+
+    collectedData.colaboradores = employees;
+
+    // Pagamentos do mês e pendentes
+    collectedData.pagamentosMes = monthPayments.filter(
+      (p) => p.status.toLowerCase() === "pago" || p.status.toLowerCase() === "concluido" || p.status.toLowerCase() === "paid"
+    );
+    collectedData.pagamentosPendentes = monthPayments.filter(
+      (p) => p.status.toLowerCase() === "pendente" || p.status.toLowerCase() === "pending" || p.status.toLowerCase() === "agendado"
+    );
+
+    // Escalas de amanhã e hoje (filtrando canceladas)
+    collectedData.escalasAmanha = tomorrowSchedules.filter((e) => (e.status || "").toLowerCase() !== "cancelada");
+    collectedData.escalasHoje = todaySchedules.filter((e) => (e.status || "").toLowerCase() !== "cancelada");
+
+    // Vales da equipe ativa
+    const activeEmployees = employees.filter((e) => (e.status || "").toLowerCase() === "ativo");
+    const vt = activeEmployees.reduce((acc, e) => acc + (e.valeTransporte || 0), 0);
+    const vr = activeEmployees.reduce((acc, e) => acc + (e.valeRefeicao || 0), 0);
+    collectedData.totalVales = {
+      valeTransporte: vt,
+      valeRefeicao: vr,
+      total: vt + vr,
+    };
+
+    // Auditoria de pagamentos duplicados
+    const dupMap = new Map<string, { count: number; valor: number; desc: string }>();
+    monthPayments.forEach((pg) => {
+      const key = `${pg.acertoId || "sem_acerto"}_${pg.valor.toFixed(2)}`;
+      const cur = dupMap.get(key) || { count: 0, valor: pg.valor, desc: pg.origem || "Lançamento de acerto" };
+      cur.count += 1;
+      dupMap.set(key, cur);
+    });
+
+    const duplicados: NonNullable<typeof collectedData.pagamentosDuplicados> = [];
+    dupMap.forEach((v) => {
+      if (v.count > 1) {
+        duplicados.push({
+          descricao: v.desc,
+          quantidade: v.count,
+          valor: v.valor,
+        });
+      }
+    });
+    collectedData.pagamentosDuplicados = duplicados;
+  } catch (err) {
+    console.warn("[specialist-router] Erro ao consultar repositório de RH:", err);
+  }
+
+  const result = buildRhSpecialistDeterministicResponse(userPrompt, collectedData);
+  return {
+    ...result,
+    routingPlan,
+  };
+}
+
 export async function fetchAndExecuteSpecialistTurn(
   userPrompt: string,
   context: AiExecutionContext,
@@ -1803,6 +2169,17 @@ export async function fetchAndExecuteSpecialistTurn(
       answer: res.answer,
       specialist: "estoque",
       department: SPECIALIST_AGENTS_REGISTRY.estoque.department,
+      routingPlan: res.routingPlan,
+    };
+  }
+
+  if (routingPlan.primarySpecialist === "rh") {
+    const res = await fetchAndExecuteRhSpecialist(userPrompt, context, repository, nowOverride);
+    return {
+      handled: res.handled,
+      answer: res.answer,
+      specialist: "rh",
+      department: SPECIALIST_AGENTS_REGISTRY.rh.department,
       routingPlan: res.routingPlan,
     };
   }
