@@ -47,7 +47,28 @@ export function useExecutiveReports(workspaceId?: string) {
         }
       );
 
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ctx = (invokeError as any).context;
+        if (ctx && typeof ctx.json === "function") {
+          try {
+            const body = await ctx.json();
+            if (body?.error) {
+              throw new Error(body.error);
+            }
+          } catch (e) {
+            if (e instanceof Error && e.message !== invokeError.message) {
+              throw e;
+            }
+          }
+        }
+        throw invokeError;
+      }
+
+      if (data && data.success === false) {
+        throw new Error(data.error || "Falha ao processar relatório executivo.");
+      }
+
       return data;
     },
     onSuccess: () => {
