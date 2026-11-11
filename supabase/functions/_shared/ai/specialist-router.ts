@@ -25,7 +25,7 @@ import type {
   DocumentSessionRecord,
   SalesPdvDetailRecord,
 } from "./query-tools.ts";
-import type { AiExecutionContext } from "./auth.ts";
+import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
 export interface SpecialistRoutingPlan {
   primarySpecialist: SpecialistAgentId;
@@ -696,33 +696,42 @@ export function buildFiscalSpecialistDeterministicResponse(
     return { handled: true, answer: msg, specialist: "fiscal" };
   }
 
-  // Caso 5: "Existe divergência entre nota fiscal e lançamento?"
-  if (p.includes("divergência entre nota") || p.includes("divergencia entre nota") || p.includes("divergencia fiscal")) {
+  // Caso 5: "Existe alguma divergência nas notas fiscais?"
+  if (p.includes("divergência") || p.includes("divergencia") || p.includes("auditoria fiscal") || p.includes("conferencia fiscal") || p.includes("conferência fiscal")) {
     if (data.divergencias === null || data.divergencias === undefined) {
       return {
         handled: true,
-        answer: "📄 *Agente Fiscal — Conciliação Fiscal vs Lançamentos:*\n\nAuditoria de divergências não disponível.",
+        answer: "⚖️ *Agente Fiscal — Conferência de Documentos:*\n\nDados de divergências fiscais não disponíveis.",
         specialist: "fiscal",
       };
     }
 
     if (data.divergencias.length === 0) {
+      const stats = data.documentosAuditados || {
+        totalNotas: (data.notasMes || []).length,
+        totalSefaz: 0,
+        totalSessoes: (data.documentosErro || []).length,
+      };
       return {
         handled: true,
         answer:
-          "📄 *Agente Fiscal — Conciliação Fiscal vs Lançamentos:*\n\n" +
-          "✅ Nenhuma divergência detectada entre as notas fiscais registradas e os lançamentos financeiros do período.",
+          `⚖️ *Agente Fiscal — Conferência Fiscal Realizada:*\n\n` +
+          `Conferência fiscal realizada com sucesso em ${stats.totalNotas} nota(s) fiscal(is) de compra, ` +
+          `${stats.totalSefaz} documento(s) Sefaz e ${stats.totalSessoes} sessão(ões) de processamento.\n\n` +
+          `• Nenhuma divergência de valor, duplicidade ou pendência fiscal identificada no período.\n` +
+          `• Todas as notas fiscais e documentos conferem com os lançamentos contábeis.`,
         specialist: "fiscal",
       };
     }
 
-    let msg = `📄 *Agente Fiscal — Divergências Identificadas:*\n\n`;
-    data.divergencias.forEach((div) => {
-      msg += `• *${div.descricao}:* ${div.detalhe}\n`;
+    let msg = `⚖️ *Agente Fiscal — Divergências Fiscais Identificadas (${data.divergencias.length}):*\n\n`;
+    data.divergencias.forEach((d) => {
+      msg += `• *${d.tipo.toUpperCase()}:* ${d.descricao}\n`;
     });
+    msg += `\n_Recomenda-se verificação junto aos fornecedores e conciliação das despesas vinculadas._`;
+
     return { handled: true, answer: msg, specialist: "fiscal" };
   }
-
   return { handled: false, specialist: "fiscal" };
 }
 
@@ -751,43 +760,108 @@ export async function fetchAndExecuteFiscalSpecialist(
   const collectedData: FiscalDeterministicData = {};
 
   try {
-    if (repository.listFiscalNotes) {
-      const [semanaNotes, mesNotes] = await Promise.all([
-        repository.listFiscalNotes(context, { start: startOfWeekStr, end: todayStr }),
-        repository.listFiscalNotes(context, { start: startOfMonthStr, end: todayStr }),
-      ]);
+    const [semanaNotes, mesNotes, sefazDocs, sessions, expenses] = await Promise.all([
+      repository.listFiscalNotes
+        ? repository.listFiscalNotes(context, { start: startOfWeekStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listFiscalNotes
+        ? repository.listFiscalNotes(context, { start: startOfMonthStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listSefazDocuments
+        ? repository.listSefazDocuments(context, { start: startOfMonthStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listDocumentSessions
+        ? repository.listDocumentSessions(context, {
+            start: `${startOfMonthStr}T00:00:00Z`,
+            end: `${todayStr}T23:59:59Z`,
+          })
+        : Promise.resolve([]),
+      repository.listExpenses
+        ? repository.listExpenses(context, { start: startOfMonthStr, end: todayStr })
+        : Promise.resolve([]),
+    ]);
 
-      collectedData.notasSemana = semanaNotes;
-      collectedData.notasMes = mesNotes;
-      collectedData.notasPendentes = mesNotes.filter(
-        (n) => n.status.toLowerCase() === "pendente" || n.status.toLowerCase() === "processando"
-      );
-      collectedData.valorTotalNotasMes = mesNotes.reduce((acc, n) => acc + (n.valorTotal || 0), 0);
-    } else {
-      collectedData.notasSemana = [];
-      collectedData.notasMes = [];
-      collectedData.notasPendentes = [];
-      collectedData.valorTotalNotasMes = 0;
-    }
+    collectedData.notasSemana = semanaNotes;
+    collectedData.notasMes = mesNotes;
+    collectedData.notasPendentes = mesNotes.filter(
+      (n) => n.status.toLowerCase() === "pendente" || n.status.toLowerCase() === "processando"
+    );
+    collectedData.valorTotalNotasMes = mesNotes.reduce((acc, n) => acc + (n.valorTotal || 0), 0);
 
-    if (repository.listDocumentSessions) {
-      const sessions = await repository.listDocumentSessions(context, {
-        start: `${startOfMonthStr}T00:00:00Z`,
-        end: `${todayStr}T23:59:59Z`,
-      });
-      const errorSessions = sessions.filter(
-        (s) => s.status.toLowerCase() === "erro" || s.status.toLowerCase() === "falha"
-      );
-      collectedData.documentosErro = errorSessions.map((s) => ({
-        id: s.id,
-        tipo: s.documentoTipo || "Documento Fiscal",
-        descricao: `Falha na sessão do documento NF ${s.numeroNf || "S/N"} (${s.fornecedor || "Fornecedor não identificado"})`,
-      }));
-    } else {
-      collectedData.documentosErro = [];
-    }
+    const errorSessions = sessions.filter(
+      (s) => s.status.toLowerCase() === "erro" || s.status.toLowerCase() === "falha"
+    );
+    collectedData.documentosErro = errorSessions.map((s) => ({
+      id: s.id,
+      tipo: s.documentoTipo || "Documento Fiscal",
+      descricao: `Falha na sessão do documento NF ${s.numeroNf || "S/N"} (${s.fornecedor || "Fornecedor não identificado"})`,
+    }));
 
-    collectedData.divergencias = [];
+    // Auditoria e conferência fiscal real (Gate 0.2)
+    const divergencias: Array<{ id: string; tipo: string; descricao: string }> = [];
+
+    // 1. Documentos Sefaz com status com erro ou divergente
+    sefazDocs.forEach((doc) => {
+      const st = (doc.statusProcessamento || "").toLowerCase();
+      if (st === "divergente" || st === "erro" || st === "rejeitado") {
+        divergencias.push({
+          id: doc.id,
+          tipo: "Sefaz com Erro",
+          descricao: `Documento Sefaz chave ${doc.chaveAcesso ? doc.chaveAcesso.substring(0, 15) + "..." : doc.id} (${doc.emitenteNome || "Emitente Desconhecido"}) com status '${doc.statusProcessamento}'.`,
+        });
+      }
+    });
+
+    // 2. Documentos Sefaz sem entrada correspondente em notas_fiscais_compra
+    const chavesCompra = new Set(mesNotes.map((n) => n.chaveAcesso).filter(Boolean));
+    sefazDocs.forEach((doc) => {
+      if (doc.chaveAcesso && !chavesCompra.has(doc.chaveAcesso)) {
+        divergencias.push({
+          id: doc.id,
+          tipo: "Sefaz Não Registrado",
+          descricao: `Documento Sefaz emitido por ${doc.emitenteNome || "Fornecedor"} no valor de R$ ${doc.valorTotal.toFixed(2)} ainda não possui nota fiscal de compra escriturada.`,
+        });
+      }
+    });
+
+    // 3. Notas fiscais de compra com status divergente ou erro
+    mesNotes.forEach((n) => {
+      const st = (n.status || "").toLowerCase();
+      if (st === "divergente" || st === "erro" || st === "rejeitada") {
+        divergencias.push({
+          id: n.id,
+          tipo: "NF Divergente",
+          descricao: `Nota Fiscal ${n.numeroNf || "S/N"} (${n.fornecedor || "Fornecedor"}) marcada com status '${n.status}'.`,
+        });
+      }
+    });
+
+    // 4. Conferência de valor entre Nota Fiscal e Despesa lançada
+    mesNotes.forEach((n) => {
+      if (n.valorTotal > 0) {
+        const matchingExpense = expenses.find((exp) => {
+          const desc = (exp.description || "").toLowerCase();
+          return (
+            (n.numeroNf && desc.includes(n.numeroNf)) ||
+            (n.fornecedor && desc.includes(n.fornecedor.toLowerCase().slice(0, 8)))
+          );
+        });
+        if (matchingExpense && Math.abs(n.valorTotal - matchingExpense.amount) > 0.05) {
+          divergencias.push({
+            id: n.id,
+            tipo: "Divergência de Valor",
+            descricao: `Nota Fiscal ${n.numeroNf || n.id} (R$ ${n.valorTotal.toFixed(2)}) difere do lançamento financeiro correspondente (R$ ${matchingExpense.amount.toFixed(2)}).`,
+          });
+        }
+      }
+    });
+
+    collectedData.divergencias = divergencias;
+    collectedData.documentosAuditados = {
+      totalNotas: mesNotes.length,
+      totalSefaz: sefazDocs.length,
+      totalSessoes: sessions.length,
+    };
   } catch (err) {
     console.warn("[specialist-router] Erro ao consultar repositório fiscal:", err);
   }
@@ -819,6 +893,31 @@ export function buildSalesPdvSpecialistDeterministicResponse(
   data: SalesPdvDeterministicData
 ): { handled: boolean; answer?: string; specialist: string } {
   const p = userPrompt.toLowerCase().trim();
+
+  // Restrição server-side para colaboradores sem permissão financeira (Gate 0.1)
+  if (data.isMemberRole) {
+    if (
+      p.includes("quanto faturou") ||
+      p.includes("quanto faturei") ||
+      p.includes("quanto vendemos") ||
+      p.includes("quanto vendi") ||
+      p.includes("faturamento de ontem") ||
+      p.includes("mes anterior") ||
+      p.includes("mês anterior") ||
+      p.includes("formas de pagamento") ||
+      p.includes("divisao por forma de pagamento") ||
+      p.includes("divisão por forma de pagamento")
+    ) {
+      return {
+        handled: true,
+        answer:
+          "🔒 *Acesso Restrito — Agente de Vendas e PDV:*\n\n" +
+          "O seu perfil possui autorização para consultas operacionais de balcão (produtos mais vendidos, horários de pico e volume de pedidos). " +
+          "Valores de faturamento monetário em R$, comparativos de receita e detalhamento financeiro por forma de pagamento são restritos ao proprietário e administradores.",
+        specialist: "vendas_pdv",
+      };
+    }
+  }
 
   // Caso 1: "Quanto faturamos ontem no balcão?"
   if (
@@ -872,7 +971,11 @@ export function buildSalesPdvSpecialistDeterministicResponse(
 
     let msg = `📊 *Agente de Vendas e PDV — Top 5 Produtos Mais Vendidos Ontem:*\n\n`;
     data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
-      msg += `${idx + 1}. *${prod.nome}* — ${prod.quantidade} un. (Total: R$ ${prod.total.toFixed(2)})\n`;
+      if (data.isMemberRole) {
+        msg += `${idx + 1}. *${prod.nome}* — ${prod.quantidade} unidade(s) vendida(s)\n`;
+      } else {
+        msg += `${idx + 1}. *${prod.nome}* — ${prod.quantidade} un. (Total: R$ ${prod.total.toFixed(2)})\n`;
+      }
     });
     msg += `\n_Ranking extraído dos itens discriminados nas comandas do caixa._`;
 
@@ -894,7 +997,7 @@ export function buildSalesPdvSpecialistDeterministicResponse(
         handled: true,
         answer:
           "📊 *Agente de Vendas e PDV — Horário de Pico de Ontem:*\n\n" +
-          "Nenhum movimento registrado no caixa durante o dia de ontem.",
+          "Nenhum movimento ou venda registrada no caixa durante o dia de ontem.",
         specialist: "vendas_pdv",
       };
     }
@@ -997,7 +1100,9 @@ export async function fetchAndExecuteSalesPdvSpecialist(
 
   const { todayStr, yesterdayStr, startOfMonthStr, startOfPrevMonthStr, endOfPrevMonthStr } =
     getSaoPauloDateStrings(nowOverride);
-  const collectedData: SalesPdvDeterministicData = {};
+  const collectedData: SalesPdvDeterministicData = {
+    isMemberRole: !canRoleAccessFinancialData(context.role),
+  };
 
   try {
     if (repository.listSalesPdvDetails) {
@@ -1007,12 +1112,30 @@ export async function fetchAndExecuteSalesPdvSpecialist(
         repository.listSalesPdvDetails(context, { start: startOfPrevMonthStr, end: endOfPrevMonthStr }),
       ]);
 
-      const filterValid = (list: SalesPdvDetailRecord[]) =>
-        list.filter((s) => {
+      const filterValid = (list: SalesPdvDetailRecord[]) => {
+        const seenKeys = new Set<string>();
+        return list.filter((s) => {
           const st = (s.status || "").toLowerCase();
           const desc = (s.description || "").toLowerCase();
-          return st !== "cancelada" && st !== "cancelled" && st !== "estornada" && !desc.includes("cancelad");
+          if (
+            st === "cancelada" ||
+            st === "cancelled" ||
+            st === "estornada" ||
+            st === "estorno" ||
+            desc.includes("cancelad") ||
+            desc.includes("estorno")
+          ) {
+            return false;
+          }
+          const match = desc.match(/#(\d+)/);
+          const dedupKey = match ? `eyemobile_${match[1]}` : (s.id ? `id_${s.id}` : null);
+          if (dedupKey) {
+            if (seenKeys.has(dedupKey)) return false;
+            seenKeys.add(dedupKey);
+          }
+          return true;
         });
+      };
 
       const validYesterday = filterValid(yesterdaySales);
       const validMonth = filterValid(monthSales);
@@ -1081,12 +1204,21 @@ export async function fetchAndExecuteSalesPdvSpecialist(
       else if (bestHour >= 18 && bestHour <= 23) turno = "Noite / Jantar";
       else turno = "Madrugada";
 
-      collectedData.horarioPicoOntem = {
-        faixa: faixaStr,
-        turnos: turno,
-        totalVendas: maxTotal > 0 ? maxTotal : 0,
-        quantidadePedidos: maxPedidos,
-      };
+      if (validYesterday.length === 0) {
+        collectedData.horarioPicoOntem = {
+          faixa: "Sem movimento",
+          turnos: "Nenhum",
+          totalVendas: 0,
+          quantidadePedidos: 0,
+        };
+      } else {
+        collectedData.horarioPicoOntem = {
+          faixa: faixaStr,
+          turnos: turno,
+          totalVendas: maxTotal > 0 ? maxTotal : 0,
+          quantidadePedidos: maxPedidos,
+        };
+      }
 
       // 4. Comparativo mensal
       const fatAtual = validMonth.reduce((acc, s) => acc + (s.amount || 0), 0);
@@ -1105,12 +1237,24 @@ export async function fetchAndExecuteSalesPdvSpecialist(
       validMonth.forEach((s) => {
         const rawMethod = (s.paymentMethod || "outros").toLowerCase();
         let label = "Outros";
-        if (rawMethod.includes("debito") || rawMethod.includes("débito")) label = "Cartão de Débito";
-        else if (rawMethod.includes("credito") || rawMethod.includes("crédito")) label = "Cartão de Crédito";
-        else if (rawMethod.includes("dinheiro")) label = "Dinheiro";
-        else if (rawMethod.includes("pix")) label = "Pix";
-        else if (rawMethod.includes("voucher") || rawMethod.includes("vale")) label = "Voucher";
-
+        if (
+          rawMethod.includes("misto") ||
+          rawMethod.includes("dividido") ||
+          rawMethod.includes("multiplo") ||
+          rawMethod.includes("múltiplo")
+        ) {
+          label = "Pagamento Misto / Dividido";
+        } else if (rawMethod.includes("debito") || rawMethod.includes("débito")) {
+          label = "Cartão de Débito";
+        } else if (rawMethod.includes("credito") || rawMethod.includes("crédito")) {
+          label = "Cartão de Crédito";
+        } else if (rawMethod.includes("dinheiro")) {
+          label = "Dinheiro";
+        } else if (rawMethod.includes("pix")) {
+          label = "Pix";
+        } else if (rawMethod.includes("voucher") || rawMethod.includes("vale")) {
+          label = "Voucher";
+        }
         const cur = payMap.get(label) || 0;
         payMap.set(label, cur + s.amount);
         totalPay += s.amount;
