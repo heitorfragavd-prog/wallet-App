@@ -6,8 +6,11 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     vi.clearAllMocks();
   });
 
-  const createMockDb = (existingReport: any = null, dispatcherMock: any = null) => {
-    let currentReport = existingReport ? { ...existingReport } : null;
+  const createMockDb = (
+    existingReport: Record<string, unknown> | null = null,
+    dispatcherMock: unknown = null
+  ) => {
+    let currentReport: Record<string, unknown> | null = existingReport ? { ...existingReport } : null;
 
     const mockAdmin = {
       from: vi.fn((table: string) => {
@@ -27,7 +30,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
                 }),
               }),
             }),
-            upsert: vi.fn().mockImplementation((data: any) => {
+            upsert: vi.fn().mockImplementation((data: Record<string, unknown>) => {
               currentReport = { ...currentReport, ...data, id: currentReport?.id || "rep-uuid-1" };
               return {
                 select: vi.fn().mockReturnValue({
@@ -38,7 +41,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
                 }),
               };
             }),
-            update: vi.fn().mockImplementation((data: any) => {
+            update: vi.fn().mockImplementation((data: Record<string, unknown>) => {
               currentReport = { ...currentReport, ...data };
               return {
                 eq: vi.fn().mockResolvedValue({ data: currentReport, error: null }),
@@ -47,7 +50,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
           };
         }
         // Outras tabelas do coletor retornam builder encadeável com mockReturnThis
-        const builder: any = {
+        const builder = {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
           neq: vi.fn().mockReturnThis(),
