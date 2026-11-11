@@ -13,7 +13,7 @@ import {
 import { handleOrchestratorHttpRequest } from "../../supabase/functions/wallet-ai-orchestrator/handler";
 import type { FinancialQueryRepository } from "../../supabase/functions/_shared/ai/query-tools";
 import type { AiExecutionContext, AuthorizationDependencies } from "../../supabase/functions/_shared/ai/auth";
-import type { LlmMessage, LlmRunner } from "../../supabase/functions/_shared/ai/orchestrator-core";
+import type { LlmRunner } from "../../supabase/functions/_shared/ai/orchestrator-core";
 
 describe("Etapa 07 — Entrega B: Agentes Fiscal, Vendas/PDV e Hardening Prioritário", () => {
   const validWorkspaceId = "11111111-1111-4111-8111-111111111111";
@@ -417,6 +417,154 @@ describe("Etapa 07 — Entrega B: Agentes Fiscal, Vendas/PDV e Hardening Priorit
       expect(SPECIALIST_AGENTS_REGISTRY.fiscal.canMutateState).toBe(false);
       expect(SPECIALIST_AGENTS_REGISTRY.vendas_pdv.canMutateState).toBe(false);
       expect(SPECIALIST_AGENTS_REGISTRY.financeiro.canMutateState).toBe(false);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // GATE 0: HARDENING FISCAL, VENDAS E PERMISSÕES DE COLABORADOR (PR A)
+  // ───────────────────────────────────────────────────────────────────────────
+  describe("Gate 0: Hardening Prioritário de Fiscal, Vendas e Permissões", () => {
+    it("20. Colaborador (member) pode consultar dados operacionais de vendas (5 produtos mais vendidos) com 200 OK", async () => {
+      const req = new Request("http://localhost/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-member",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          messages: [{ role: "user", content: "Quais os 5 produtos mais vendidos ontem?" }],
+        }),
+      });
+
+      const mockRepo: FinancialQueryRepository = {
+        listRevenues: vi.fn().mockResolvedValue([]),
+        listExpenses: vi.fn().mockResolvedValue([]),
+        listTransactions: vi.fn().mockResolvedValue([]),
+        listBalances: vi.fn().mockResolvedValue([]),
+        listDebts: vi.fn().mockResolvedValue([]),
+        listSalesPDV: vi.fn().mockResolvedValue([]),
+        listFiscalNotes: vi.fn().mockResolvedValue([]),
+        listDocumentSessions: vi.fn().mockResolvedValue([]),
+        listSalesPdvDetails: vi.fn().mockResolvedValue([
+          {
+            id: "tx-1",
+            workspaceId: validWorkspaceId,
+            date: "2026-11-10",
+            amount: 50.0,
+            status: "concluida",
+            paymentMethod: "pix",
+            items: [{ productName: "Pão de Queijo", quantity: 10, unitPrice: 5.0, total: 50.0 }],
+          },
+        ]),
+      };
+
+      const runner = createMockRunner();
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("member"),
+        repoFactory: () => mockRepo,
+        runnerFactory: () => runner,
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.success).toBe(true);
+      expect(data.specialist).toBe("vendas_pdv");
+      expect(data.text).toContain("Pão de Queijo");
+      expect(data.text).toContain("10 unidade(s) vendida(s)");
+    });
+
+    it("21. Colaborador (member) tem acesso bloqueado (403 Forbidden) para consultas de faturamento financeiro", async () => {
+      const req = new Request("http://localhost/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-member",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          messages: [{ role: "user", content: "Quanto faturamos ontem?" }],
+        }),
+      });
+
+      const runner = createMockRunner();
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("member"),
+        repoFactory: () => ({} as FinancialQueryRepository),
+        runnerFactory: () => runner,
+      });
+
+      expect(res.status).toBe(403);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("WALLET_AI_FORBIDDEN");
+    });
+
+    it("22. Auditoria Fiscal Real: Detecta documentos Sefaz não escriturados e divergência de valores", () => {
+      const res = buildFiscalSpecialistDeterministicResponse("Existe alguma divergência nas notas fiscais?", {
+        divergencias: [
+          {
+            id: "sef-1",
+            tipo: "Sefaz Não Registrado",
+            descricao: "Documento Sefaz emitido por Distribuidora ABC no valor de R$ 1.250,00 ainda não possui nota fiscal de compra escriturada.",
+          },
+          {
+            id: "nf-2",
+            tipo: "Divergência de Valor",
+            descricao: "Nota Fiscal 9874 (R$ 500,00) difere do lançamento financeiro correspondente (R$ 480,00).",
+          },
+        ],
+      });
+
+      expect(res.handled).toBe(true);
+      expect(res.answer).toContain("Divergências Fiscais Identificadas (2)");
+      expect(res.answer).toContain("SEFAZ NÃO REGISTRADO");
+      expect(res.answer).toContain("DIVERGÊNCIA DE VALOR");
+    });
+
+    it("23. Auditoria Fiscal Real: Quando 0 divergências, exibe contagem auditada real", () => {
+      const res = buildFiscalSpecialistDeterministicResponse("Existe alguma divergência nas notas fiscais?", {
+        divergencias: [],
+        documentosAuditados: {
+          totalNotas: 12,
+          totalSefaz: 15,
+          totalSessoes: 10,
+        },
+      });
+
+      expect(res.handled).toBe(true);
+      expect(res.answer).toContain("Conferência Fiscal Realizada");
+      expect(res.answer).toContain("12 nota(s) fiscal(is) de compra");
+      expect(res.answer).toContain("15 documento(s) Sefaz");
+      expect(res.answer).toContain("10 sessão(ões) de processamento");
+      expect(res.answer).toContain("Nenhuma divergência de valor");
+    });
+
+    it("24. Confiabilidade do PDV: Horário de pico com 0 vendas no dia não alucina horário fictício", () => {
+      const res = buildSalesPdvSpecialistDeterministicResponse("Qual foi o horário de pico ontem?", {
+        horarioPicoOntem: {
+          faixa: "Sem movimento",
+          turnos: "Nenhum",
+          totalVendas: 0,
+          quantidadePedidos: 0,
+        },
+      });
+
+      expect(res.handled).toBe(true);
+      expect(res.answer).toContain("Nenhum movimento ou venda registrada no caixa durante o dia de ontem.");
+    });
+
+    it("25. Confiabilidade do PDV: Identifica pagamentos mistos / divididos e deduplica registros", () => {
+      const res = buildSalesPdvSpecialistDeterministicResponse("Como foi a divisão por forma de pagamento?", {
+        divisaoFormasPagamento: [
+          { metodo: "Cartão de Débito", valor: 1000.0, percentual: 50.0 },
+          { metodo: "Pagamento Misto / Dividido", valor: 600.0, percentual: 30.0 },
+          { metodo: "Pix", valor: 400.0, percentual: 20.0 },
+        ],
+      });
+
+      expect(res.handled).toBe(true);
+      expect(res.answer).toContain("Pagamento Misto / Dividido:* R$ 600.00 (30.0%)");
     });
   });
 });

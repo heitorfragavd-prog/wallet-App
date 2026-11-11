@@ -636,27 +636,6 @@ export async function handleOrchestratorHttpRequest(
 
 
 
-    if (!canRoleAccessFinancialData(userRole)) {
-      const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
-      const financialTerms = [
-        "faturamento", "lucro", "despesa", "saldo", "dre", "margem",
-        "custo", "investimento", "receita", "cmv", "venda"
-      ];
-      const hasFinancialTerms = financialTerms.some((term) => promptText.includes(term));
-      if (hasFinancialTerms) {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "forbidden_financial_access",
-            code: "WALLET_AI_FORBIDDEN",
-            message: `O papel '${userRole}' não possui autorização para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
-            correlation_id: correlationId,
-          }),
-          { status: 403, headers: responseHeaders },
-        );
-      }
-    }
-
     // ─── GATE 0 & GATE 10: AUTORIZAÇÃO DO ESPECIALISTA SERVER-SIDE ───
     const rawRoleStr = String(userRole).toLowerCase();
     const isOwnerRole = (context.isOwner === true) || (rawRoleStr === "owner" || rawRoleStr === "proprietario" || rawRoleStr === "ceo");
@@ -694,6 +673,32 @@ export async function handleOrchestratorHttpRequest(
         }),
         { status: 403, headers: responseHeaders },
       );
+    }
+
+
+    if (!canRoleAccessFinancialData(userRole)) {
+      const promptText = messages.map((m) => m.content).join(" ").toLowerCase();
+      const financialTerms = [
+        "faturamento", "lucro", "despesa", "saldo", "dre", "margem",
+        "custo", "investimento", "receita", "cmv",
+        "quanto faturei", "quanto faturou", "quanto faturamos",
+        "quanto vendi", "quanto vendemos", "total vendido",
+        "forma de pagamento", "formas de pagamento", "salario", "salário",
+        "folha de pagamento"
+      ];
+      const hasFinancialTerms = financialTerms.some((term) => promptText.includes(term));
+      if (hasFinancialTerms) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_financial_access",
+            code: "WALLET_AI_FORBIDDEN",
+            message: `O papel '${userRole}' não possui autorização para consultar dados financeiros (faturamento, lucro, despesas, saldos, DRE, margens, custos e receitas).`,
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
     }
 
     if (routingPlan.coordinatingCeo) {
