@@ -14,6 +14,7 @@ import {
   PieChart as PieChartIcon,
   ShoppingCart,
   Coins,
+  ClipboardList,
 } from 'lucide-react';
 import {
   calculateEffectiveWeightedCMV,
@@ -33,6 +34,7 @@ import { CeoCommercialAnalysisTab } from '@/domains/ceo/components/CeoCommercial
 import { CeoExpenseAnalysisTab } from '@/domains/ceo/components/CeoExpenseAnalysisTab';
 import { CeoNetProfitAnalysisTab } from '@/domains/ceo/components/CeoNetProfitAnalysisTab';
 import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTab';
+import { ExecutiveReportsTab } from '@/domains/ceo/components/ExecutiveReportsTab';
 import { AgentV2Tab } from '@/domains/ia/components/AgentV2Tab';
 import { Bot } from 'lucide-react';
 import {
@@ -365,6 +367,13 @@ export const WalletCeoPage: React.FC = () => {
               <span>Cérebro CEO</span>
             </TabsTrigger>
             <TabsTrigger
+              value="reports"
+              className="col-span-2 sm:col-span-1 h-11 sm:h-10 text-xs font-semibold gap-2 px-3 py-2 rounded-lg flex items-center justify-center transition-all duration-200 data-[state=active]:bg-orange-500 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:font-bold"
+            >
+              <ClipboardList className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Relatórios Diários</span>
+            </TabsTrigger>
+            <TabsTrigger
               value="departments"
               className="col-span-2 sm:col-span-1 h-11 sm:h-10 text-xs font-semibold gap-2 px-3 py-2 rounded-lg flex items-center justify-center transition-all duration-200 data-[state=active]:bg-orange-500 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:font-bold"
             >
@@ -487,6 +496,11 @@ export const WalletCeoPage: React.FC = () => {
           {/* ABA: Cérebro CEO Estratégico (Gate 2 - Etapa 03) */}
           <TabsContent value="brain-ceo" className="space-y-6 focus-visible:outline-none">
             <AgentV2Tab agentType="ceo" />
+          </TabsContent>
+
+          {/* ABA 6: Relatórios Executivos Diários às 10h */}
+          <TabsContent value="reports" className="space-y-6 focus-visible:outline-none">
+            <ExecutiveReportsTab workspaceId={workspaceId} />
           </TabsContent>
 
           {/* ABA 5: Os 7 Departamentos do CEO */}
