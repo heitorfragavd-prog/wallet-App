@@ -4,7 +4,8 @@ import { useToast } from "@/shared/hooks/use-toast";
 import { logger } from "@/core/logging/LoggerService";
 
 // Chave pública VAPID (a privada fica SOMENTE nos secrets do Supabase)
-const DEFAULT_VAPID_PUBLIC_KEY = "BEtwvFLl-HHwPmp6nm6DuH-ja-ZLw4krGin8Dr4V6Iwzgvw761rqRf5Lh9V9zq9Xgy3a2HqNyzmqI6dX0nRvAmw";
+const DEFAULT_VAPID_PUBLIC_KEY =
+  "BEM0rflmqkKKDz4KymrZyF8ADQa6cpYk8VBF_LLstTzhntGDAkUdIesDCAwGCjjDeqfI3NLgU1LY6bm1uXk9Mj0";
 const VAPID_PUBLIC_KEY = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined) || DEFAULT_VAPID_PUBLIC_KEY;
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -20,11 +21,100 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 export type PushPermission = "granted" | "denied" | "default" | "unsupported";
 
+const areUint8ArraysEqual = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+};
+
+const requestNotificationPermission = (): Promise<NotificationPermission> => {
+  if (Notification.requestPermission.length > 0) {
+    return new Promise((resolve) => {
+      Notification.requestPermission((perm) => resolve(perm));
+    });
+  }
+  return Notification.requestPermission();
+};
+
+const subscribeWithVapidKey = async (
+  reg: ServiceWorkerRegistration,
+  vapidPublicKey: string,
+  forceFresh = false
+): Promise<PushSubscription> => {
+  const expectedKey = urlBase64ToUint8Array(vapidPublicKey);
+  const existingSub = await reg.pushManager.getSubscription();
+
+  if (existingSub) {
+    const currentKeyBuffer = existingSub.options?.applicationServerKey;
+    const keyMatches =
+      !forceFresh &&
+      currentKeyBuffer instanceof ArrayBuffer &&
+      areUint8ArraysEqual(new Uint8Array(currentKeyBuffer), expectedKey);
+
+    if (keyMatches) {
+      return existingSub;
+    }
+
+    await existingSub.unsubscribe();
+  }
+
+  try {
+    return await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: expectedKey as BufferSource,
+    });
+  } catch (err: unknown) {
+    const errName = err instanceof DOMException ? err.name : (err as { name?: string })?.name;
+    if (errName === "InvalidStateError") {
+      const staleSub = await reg.pushManager.getSubscription();
+      if (staleSub) await staleSub.unsubscribe();
+      return await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: expectedKey as BufferSource,
+      });
+    }
+    throw err;
+  }
+};
+
+const savePushSubscription = async (userId: string, subscription: PushSubscription): Promise<void> => {
+  const json = subscription.toJSON();
+  const { data: existing } = await supabase
+    .from("push_subscriptions")
+    .select("id")
+    .eq("endpoint", subscription.endpoint)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase
+      .from("push_subscriptions")
+      .update({
+        user_id: userId,
+        p256dh: json.keys?.p256dh ?? "",
+        auth: json.keys?.auth ?? "",
+      })
+      .eq("id", existing.id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase.from("push_subscriptions").insert({
+    user_id: userId,
+    endpoint: subscription.endpoint,
+    p256dh: json.keys?.p256dh ?? "",
+    auth: json.keys?.auth ?? "",
+  });
+  if (error) throw error;
+};
+
 export const useNotificacoesPush = () => {
   const { toast } = useToast();
   const [permission, setPermission] = useState<PushPermission>("default");
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [promptDismissed, setPromptDismissed] = useState(false);
 
   const isSupported = useCallback((): boolean => {
     return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -35,15 +125,59 @@ export const useNotificacoesPush = () => {
     return Notification.permission as PushPermission;
   }, [isSupported]);
 
-  // Atualiza estado inicial: permissão + subscription existente
-  useEffect(() => {
-    setPermission(getPermissionStatus());
-    if (!isSupported()) return;
-    navigator.serviceWorker.ready
-      .then((reg) => reg.pushManager.getSubscription())
-      .then((sub) => setIsSubscribed(!!sub))
-      .catch(() => setIsSubscribed(false));
+  const syncPushState = useCallback(async () => {
+    const currentPerm = getPermissionStatus();
+    setPermission(currentPerm);
+    if (currentPerm === "granted") {
+      setPromptDismissed(false);
+    }
+    if (!isSupported()) {
+      setIsSubscribed(false);
+      return;
+    }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      setIsSubscribed(!!sub);
+    } catch {
+      setIsSubscribed(false);
+    }
   }, [getPermissionStatus, isSupported]);
+
+  // Atualiza estado inicial e acompanha mudanças de permissão no navegador
+  useEffect(() => {
+    void syncPushState();
+    if (!isSupported()) return;
+
+    let permStatus: PermissionStatus | null = null;
+    let active = true;
+
+    const handleChange = () => {
+      if (active) void syncPushState();
+    };
+
+    if ("permissions" in navigator && typeof navigator.permissions?.query === "function") {
+      navigator.permissions
+        .query({ name: "notifications" as PermissionName })
+        .then((status) => {
+          if (!active) return;
+          permStatus = status;
+          status.addEventListener("change", handleChange);
+        })
+        .catch(() => {
+          // Alguns navegadores não expõem query("notifications")
+        });
+    }
+
+    window.addEventListener("focus", handleChange);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", handleChange);
+      if (permStatus) {
+        permStatus.removeEventListener("change", handleChange);
+      }
+    };
+  }, [isSupported, syncPushState]);
 
   const registerPush = useCallback(async (): Promise<boolean> => {
     if (!isSupported()) {
@@ -55,60 +189,74 @@ export const useNotificacoesPush = () => {
       return false;
     }
 
+    if (Notification.permission === "denied") {
+      setPermission("denied");
+      setPromptDismissed(false);
+      toast({
+        title: "Notificações bloqueadas no navegador",
+        description: "Clique no ícone ao lado do endereço do site e altere Notificações para Permitir.",
+        variant: "destructive",
+      });
+      return false;
+    }
+
     setLoading(true);
     try {
-      const perm = await Notification.requestPermission();
+      const perm = await requestNotificationPermission();
       setPermission(perm as PushPermission);
       if (perm !== "granted") {
-        toast({ title: "Permissão negada", description: "Habilite as notificações nas configurações do navegador.", variant: "destructive" });
+        if (perm === "denied") {
+          setPromptDismissed(false);
+          toast({
+            title: "Notificações bloqueadas no navegador",
+            description: "Clique no ícone ao lado do endereço do site e altere Notificações para Permitir.",
+            variant: "destructive",
+          });
+        } else {
+          setPromptDismissed(true);
+          toast({
+            title: "Confirmação pendente no navegador",
+            description:
+              "O aviso foi fechado ou silenciado pelo navegador. Clique no ícone ao lado do endereço do site e mude Notificações para Permitir.",
+          });
+        }
         return false;
       }
 
+      setPromptDismissed(false);
+
       // Garante que o service worker está registrado
-      const reg = await navigator.serviceWorker.register("/sw.js");
-      await navigator.serviceWorker.ready;
+      await navigator.serviceWorker.register("/sw.js");
+      const reg = await navigator.serviceWorker.ready;
 
-      const subscription = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
-      });
-
-      const json = subscription.toJSON();
+      let subscription = await subscribeWithVapidKey(reg, VAPID_PUBLIC_KEY);
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) throw new Error("Usuário não autenticado");
 
-      // Evita falha de constraint onConflict do PostgREST usando busca prévia
-      const { data: existing } = await supabase
-        .from("push_subscriptions")
-        .select("id")
-        .eq("endpoint", subscription.endpoint)
-        .maybeSingle();
-
-      if (existing) {
-        const { error } = await supabase
-          .from("push_subscriptions")
-          .update({
-            user_id: userId,
-            p256dh: json.keys?.p256dh ?? "",
-            auth: json.keys?.auth ?? "",
-          })
-          .eq("id", existing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("push_subscriptions").insert({
-          user_id: userId,
-          endpoint: subscription.endpoint,
-          p256dh: json.keys?.p256dh ?? "",
-          auth: json.keys?.auth ?? "",
-        });
-        if (error) throw error;
+      try {
+        await savePushSubscription(userId, subscription);
+      } catch (saveErr: unknown) {
+        const code = (saveErr as { code?: string })?.code;
+        if (code === "23505") {
+          // Endpoint já vinculado a outra conta neste navegador: renova subscription para gerar endpoint único
+          await subscription.unsubscribe();
+          subscription = await subscribeWithVapidKey(reg, VAPID_PUBLIC_KEY, true);
+          await savePushSubscription(userId, subscription);
+        } else {
+          throw saveErr;
+        }
       }
 
       setIsSubscribed(true);
       toast({ title: "Notificações ativadas! 🔔", description: "Você receberá alertas de dívidas e compromissos." });
       return true;
     } catch (err: unknown) {
-      const errorMsg = err?.message || (typeof err === "object" ? JSON.stringify(err) : String(err));
+      const errorMsg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "object"
+            ? JSON.stringify(err)
+            : String(err);
       logger.error("useNotificacoesPush", "Erro ao registrar push", { error: errorMsg });
       toast({ title: "Erro ao ativar", description: errorMsg, variant: "destructive" });
       return false;
@@ -183,5 +331,5 @@ export const useNotificacoesPush = () => {
     }
   }, [toast]);
 
-  return { isSupported, permission, isSubscribed, loading, registerPush, unregisterPush, testarPush, getPermissionStatus };
+  return { isSupported, permission, isSubscribed, loading, promptDismissed, registerPush, unregisterPush, testarPush, getPermissionStatus };
 };
