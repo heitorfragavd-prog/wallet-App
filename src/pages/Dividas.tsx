@@ -62,23 +62,39 @@ import { ptBR } from "date-fns/locale";
 import { usePrivacy } from "@/contexts/PrivacyContext";
 
 // Função para formatar data
-const formatarData = (dataString: string) => {
-  if (!dataString) return "";
-  const [ano, mes, dia] = dataString.split("T")[0].split("-");
-  return `${dia}/${mes}/${ano}`;
+const formatarData = (dataString: string | null | undefined) => {
+  if (!dataString) return "Sem vencimento";
+  try {
+    const parts = dataString.split("T")[0].split("-");
+    if (parts.length === 3) {
+      const [ano, mes, dia] = parts;
+      return `${dia}/${mes}/${ano}`;
+    }
+    return dataString;
+  } catch {
+    return "Sem vencimento";
+  }
 };
 
 // Calcula dias até o vencimento (negativo = já venceu)
-const calcularDiasAteVencimento = (dataVencimento: string): number => {
-  const hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-  const vencimento = new Date(dataVencimento.split("T")[0] + "T00:00:00");
-  return Math.ceil((vencimento.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
+const calcularDiasAteVencimento = (dataVencimento: string | null | undefined): number | null => {
+  if (!dataVencimento) return null;
+  try {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const datePart = dataVencimento.split("T")[0];
+    const vencimento = new Date(datePart + "T00:00:00");
+    if (isNaN(vencimento.getTime())) return null;
+    return Math.ceil((vencimento.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
+  } catch {
+    return null;
+  }
 };
 
-const DiasVencimentoBadge = ({ dataVencimento, status }: { dataVencimento: string; status: string }) => {
-  if (status === "quitada") return null;
+const DiasVencimentoBadge = ({ dataVencimento, status }: { dataVencimento: string | null | undefined; status: string }) => {
+  if (status === "quitada" || !dataVencimento) return null;
   const dias = calcularDiasAteVencimento(dataVencimento);
+  if (dias === null) return null;
   if (dias < 0) return <span className="text-xs font-medium text-red-500">{Math.abs(dias)}d vencida</span>;
   if (dias === 0) return <span className="text-xs font-medium text-red-500">Vence hoje!</span>;
   if (dias <= 7) return <span className="text-xs font-medium text-orange-500">{dias}d restantes</span>;
@@ -213,7 +229,7 @@ const Dividas = () => {
   const { dividasFiltradas, totalDividas, dividasVencidas, dividasPendentes, dividasQuitadas, categorias, totalPago, progressoGeral } = useMemo(() => {
     const filtradas = dividas
       .filter((d) => {
-        const matchDescricao = d.descricao.toLowerCase().includes(filtro.toLowerCase());
+        const matchDescricao = (d.descricao || "").toLowerCase().includes(filtro.toLowerCase());
         const matchStatus = statusFiltro === "" || d.status === statusFiltro;
         const matchCategoria = categoriaFiltro === "" || d.categorias?.nome === categoriaFiltro;
         return matchDescricao && matchStatus && matchCategoria;
@@ -226,8 +242,10 @@ const Dividas = () => {
         
         if (priorityA !== priorityB) return priorityA - priorityB;
         
-        // Dentro do mesmo status, ordenar por data de vencimento (mais próxima primeiro)
-        return new Date(a.data_vencimento).getTime() - new Date(b.data_vencimento).getTime();
+        // Dentro do mesmo status, ordenar por data de vencimento (mais próxima primeiro, sem data por último)
+        const timeA = a.data_vencimento ? new Date(a.data_vencimento).getTime() : Infinity;
+        const timeB = b.data_vencimento ? new Date(b.data_vencimento).getTime() : Infinity;
+        return timeA - timeB;
       });
 
     const total = dividas.reduce((sum, d) => sum + d.valor_restante, 0);
@@ -334,7 +352,7 @@ const Dividas = () => {
       setEditDescricao(divida.descricao);
       setEditValorTotal(divida.valor_total.toString());
       setEditValorPago(divida.valor_pago.toString());
-      setEditDataVencimento(divida.data_vencimento.split('T')[0]);
+      setEditDataVencimento(divida.data_vencimento ? divida.data_vencimento.split('T')[0] : "");
       setEditParcelas(divida.parcelas.toString());
       setEditParcelasPagas(divida.parcelas_pagas.toString());
       setEditCategoria(divida.categorias?.nome || "");

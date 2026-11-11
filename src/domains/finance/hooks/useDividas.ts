@@ -23,7 +23,7 @@ export interface Divida {
   valor_total: number;
   valor_pago: number;
   valor_restante: number;
-  data_vencimento: string;
+  data_vencimento: string | null;
   parcelas: number;
   parcelas_pagas: number;
   parcela_atual?: number;
@@ -68,10 +68,17 @@ function resolveDividaStatus(d: any): Divida {
     return { ...d, status: "quitada" };
   }
   
+  if (!d.data_vencimento) {
+    return { ...d, status: d.status || "pendente" };
+  }
+
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
   
-  const venc = new Date(d.data_vencimento + "T12:00:00");
+  const venc = new Date(String(d.data_vencimento).split("T")[0] + "T12:00:00");
+  if (isNaN(venc.getTime())) {
+    return { ...d, status: d.status || "pendente" };
+  }
   venc.setHours(0, 0, 0, 0);
   
   const status = venc < hoje ? "vencida" : "pendente";

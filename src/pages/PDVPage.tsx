@@ -1,3 +1,17 @@
+const KIBON_METADATA = [
+  { pattern: /magnum.*cl[aá]ssico/i, price: 10.99, barcode: "7891075403215", image: "https://assets.unileversolutions.com/v1/125248040.png" },
+  { pattern: /magnum.*cookie/i, price: 10.99, barcode: "7891150041042", image: "https://assets.unileversolutions.com/v1/125527195.png" },
+  { pattern: /magnum.*branco/i, price: 10.99, barcode: "7891150023093", image: "https://assets.unileversolutions.com/v1/125248276.png" },
+  { pattern: /magnum.*pistache/i, price: 10.99, barcode: "7891150100053", image: "https://assets.unileversolutions.com/v1/128263912.png" },
+  { pattern: /tablito/i, price: 10.49, barcode: "7891075060210", image: "https://assets.unileversolutions.com/v1/142685571.png" },
+  { pattern: /cornetto.*crocante/i, price: 10.99, barcode: "7891150051973", image: "https://assets.unileversolutions.com/v1/144963715.png" },
+  { pattern: /eski-bon|eskibon/i, price: 15.99, barcode: "7891075081215", image: "https://assets.unileversolutions.com/v1/144962724.png" },
+  { pattern: /pink\s*lemonade/i, price: 10.99, barcode: "8721274712360", image: "https://grupoebd.agilecdn.com.br/24171_1.jpg" },
+  { pattern: /menos\s*a[cç][uú]car/i, price: 10.99, barcode: "7891150081963", image: "https://assets.unileversolutions.com/v1/125607226.png" },
+  { pattern: /fruttare.*lim[aã]o/i, price: 7.99, barcode: "7891075010161", image: "https://assets.unileversolutions.com/v1/111373714.png" },
+  { pattern: /magnum.*avel[aã]/i, price: 10.99, barcode: "7891150064904", image: "https://assets.unileversolutions.com/v1/128178756.png" },
+];
+
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { PDVHeader } from "@/domains/pdv/components/PDVHeader";
 import { PDVSearchInput } from "@/domains/pdv/components/PDVSearchInput";
@@ -26,6 +40,8 @@ interface EyemobileRawProduct {
   default_price?: number;
   price?: number;
   image?: string;
+  gtin?: string;
+  barcode?: string;
 }
 
 interface Movimentacao {
@@ -46,6 +62,18 @@ interface Venda {
 function getProductCategory(name: string): string {
   const n = name.toLowerCase();
   
+  if (
+    n.includes("sorvete") ||
+    n.includes("kibon") ||
+    n.includes("magnum") ||
+    n.includes("tablito") ||
+    n.includes("cornetto") ||
+    n.includes("fruttare") ||
+    n.includes("eski-bon") ||
+    n.includes("eskibon")
+  ) {
+    return "sorvetes / kibon";
+  }
   if (n.includes("combo") || n.includes("funcion") || n.includes("promoc") || n.includes("promoção")) return "promoção funcion.";
   if (n.includes("café") || n.includes("cafe") || n.includes("c/leite") || n.includes("expresso") || n.includes("pingado")) return "café";
   if (n.includes("cerveja") || n.includes("skol") || n.includes("brahma") || n.includes("original") || n.includes("corona") || n.includes("spaten") || n.includes("stella") || n.includes("eisenbahn")) return "cerveja";
@@ -177,15 +205,30 @@ const PDVPage: React.FC = () => {
       if (data?.products && Array.isArray(data.products)) {
         const rawProducts = data.products as EyemobileRawProduct[];
         const mapped: PDVProduct[] = rawProducts.map((p) => {
-          const cat = getProductCategory(String(p.name ?? ""));
+          const rawName = String(p.name ?? "Produto sem nome").trim();
+          const cat = getProductCategory(rawName);
+          const kibonMatch = KIBON_METADATA.find(k => k.pattern.test(rawName));
+          const barcode = p.gtin || p.barcode ? String(p.gtin || p.barcode) : kibonMatch?.barcode;
+          
+          let price = Number(p.default_price ?? p.price ?? 0);
+          if (price <= 0 && kibonMatch) {
+            price = kibonMatch.price;
+          }
+
+          let imageUrl: string | undefined = undefined;
+          if (p.image && p.image !== "default") {
+            imageUrl = p.image.startsWith("http") ? p.image : `https://images.eyemobile.com.br/products/512x512/${p.image}`;
+          } else if (kibonMatch) {
+            imageUrl = kibonMatch.image;
+          }
+
           return {
             id: String(p.id ?? p.sku ?? ""),
-            name: String(p.name ?? "Produto sem nome").trim(),
-            price: Number(p.default_price ?? p.price ?? 0),
+            name: rawName,
+            price,
             category: cat,
-            image: p.image
-              ? (p.image.startsWith("http") ? p.image : `https://images.eyemobile.com.br/products/512x512/${p.image}`)
-              : undefined,
+            image: imageUrl,
+            barcode,
           };
         });
 
@@ -306,7 +349,12 @@ const PDVPage: React.FC = () => {
   const handleSearch = useCallback(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return;
-    const match = products.find((p) => p.id === query || p.name.toLowerCase().includes(query));
+    const match = products.find(
+      (p) =>
+        p.id === query ||
+        (p.barcode && p.barcode.toLowerCase() === query) ||
+        p.name.toLowerCase().includes(query)
+    );
     if (match) handleAddToCart(match);
   }, [searchQuery, products, handleAddToCart]);
 
