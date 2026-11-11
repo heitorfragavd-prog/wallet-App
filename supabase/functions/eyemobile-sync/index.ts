@@ -7,6 +7,11 @@ import {
   planProductSync,
   isTrustedServiceRoleCaller,
 } from "../_shared/eyemobile-product-identity.ts";
+import {
+  isAbruptStreamRewind,
+  isArchivedTailTransaction,
+  toSaoPauloDateString,
+} from "../_shared/eyemobile-sequence-guard.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,18 +20,7 @@ const corsHeaders = {
 
 /** Converte timestamp ISO (UTC) para data local America/Sao_Paulo (yyyy-MM-dd) */
 function toSaoPauloDate(isoTimestamp: string): string {
-  try {
-    const date = new Date(isoTimestamp);
-    // Converte para timezone America/Sao_Paulo (GMT-3)
-    const saoPauloDate = new Date(date.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-    const y = saoPauloDate.getFullYear();
-    const m = String(saoPauloDate.getMonth() + 1).padStart(2, "0");
-    const d = String(saoPauloDate.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  } catch {
-    // Fallback para UTC se falhar
-    return isoTimestamp.split("T")[0];
-  }
+  return toSaoPauloDateString(isoTimestamp);
 }
 
 // Helper function to resolve start offset using database-guided page-based binary search
@@ -66,8 +60,7 @@ async function findStartOffsetParallel(
     return null;
   };
 
-  // Limite superior conhecido: a esteira contemporânea de 2026 encerra em torno de 85278
-  // Qualquer offset além disso na API Eyemobile cai na cauda arquivada antiga de 2025 ou vazio
+  // Limite superior conhecido: se knownMaxOffset for fornecido, usa-o com margem
   const maxSafeOffset = Math.max(knownMaxOffset, 85278);
   let lowPage = 0;
   let highPage = Math.ceil(maxSafeOffset / limit);
@@ -83,17 +76,16 @@ async function findStartOffsetParallel(
     }
     const rawTime = checkTx.time || checkTx.created_at || "";
     const txDate = toSaoPauloDate(rawTime);
-    const txYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
 
-    // Proteção de fronteira: se a transação for de ano anterior (ex: 2025 arquivado),
-    // significa que ultrapassamos o fluxo ativo contemporâneo de 2026 e devemos recuar.
-    if (txYear < 2026) {
+    // Proteção de fronteira agnóstica a anos: se a transação for da cauda arquivada antiga
+    // (salto retroativo em relação à data alvo de início), sabemos que ultrapassamos a esteira contemporânea.
+    if (isArchivedTailTransaction(rawTime, startDateStr)) {
       highPage = midPage - 1;
       continue;
     }
     
-    // Busca temporal estrita por data: vendas canceladas/incompletas NÃO devem
-    // distorcer a posição cronológica do cursor.
+    // Busca temporal estrita por data: vendas canceladas/incompletas NÃO distorcem
+    // a posição cronológica do cursor.
     if (txDate >= startDateStr) {
       ansPage = midPage;
       highPage = midPage - 1;
@@ -127,8 +119,7 @@ async function findStartOffsetParallel(
       const tx = txs[i];
       const rawTime = tx.time || tx.created_at || "";
       const txDate = toSaoPauloDate(rawTime);
-      const txYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
-      if (txYear >= 2026 && txDate >= startDateStr) {
+      if (!isArchivedTailTransaction(rawTime, startDateStr) && txDate >= startDateStr) {
         return prevPage * limit + i;
       }
     }
@@ -1039,7 +1030,8 @@ serve(async (req) => {
         store_id,
         offset,
         pageSize,
-        false // isExternalPagination = false para trazer todos os dados do período em lotes paralelos
+        false, // isExternalPagination
+        requestBody.workspace_id
       );
       return new Response(JSON.stringify({ success: true, ...dashboard, pagination: { hasMore: dashboard.hasMore, page, pageSize } }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1085,6 +1077,7 @@ async function fetchDashboardData(
   customOffset: number = 0,
   customLimit: number = 100,
   isExternalPagination: boolean = false,
+  workspaceId?: string,
 ) {
   const { data: config, error: configError } = await supabaseAdmin
     .from("eyemobile_config")
@@ -1097,6 +1090,114 @@ async function fetchDashboardData(
     return { configured: false, sales: [], products: [], stores: [], hasMore: false };
   }
 
+  // 1. Resolução segura de workspace (garante isolamento estrito PJ)
+  let syncWorkspaceId: string | null = null;
+  if (workspaceId) {
+    const { data: ws } = await supabaseAdmin
+      .from("workspaces")
+      .select("id, tipo, user_id")
+      .eq("id", workspaceId)
+      .eq("user_id", user_id)
+      .maybeSingle();
+    if (ws && ws.tipo === "PJ") {
+      syncWorkspaceId = ws.id;
+    }
+  }
+
+  if (!syncWorkspaceId) {
+    const { data: wsPj } = await supabaseAdmin
+      .from("workspaces")
+      .select("id")
+      .eq("user_id", user_id)
+      .eq("tipo", "PJ")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (wsPj) syncWorkspaceId = wsPj.id;
+  }
+
+  const effectiveStartDate = startDate || toSaoPauloDate(new Date().toISOString());
+  const effectiveEndDate = endDate || effectiveStartDate;
+
+  // 2. OTIMIZAÇÃO DE ALTA VELOCIDADE: Consulta primeiro o banco consolidado local
+  // Se o período já possui vendas sincronizadas, responde em <100ms sem demorar 44s na API externa
+  let dbQuery = supabaseAdmin
+    .from("transacoes")
+    .select("id, valor, data, created_at, metodo_pagamento, itens, observacoes")
+    .eq("user_id", user_id)
+    .eq("tipo", "receita")
+    .like("descricao", "Venda Eyemobile %")
+    .gte("data", effectiveStartDate)
+    .lte("data", effectiveEndDate)
+    .order("created_at", { ascending: true });
+
+  if (syncWorkspaceId) {
+    dbQuery = dbQuery.eq("workspace_id", syncWorkspaceId);
+  }
+
+  const { data: dbRows, error: dbErr } = await dbQuery.limit(15000);
+
+  if (!dbErr && dbRows && dbRows.length > 0) {
+    const seenIds = new Set<string>();
+    const localSales = [];
+
+    for (const r of dbRows) {
+      const obs = r.observacoes || "";
+      const match = obs.match(/Venda:\s*#(\d+)/i);
+      const sid = match ? match[1] : r.id;
+      if (seenIds.has(sid)) continue;
+      seenIds.add(sid);
+
+      const storeMatch = obs.match(/Loja:\s*([^|]+)/i);
+      const storeName = storeMatch ? storeMatch[1].trim() : null;
+      const payMatch = obs.match(/Pagamento:\s*([^|]+)/i);
+      const payName = payMatch ? payMatch[1].trim() : (r.metodo_pagamento || "Desconhecido");
+
+      if (storeId && storeId !== "all" && storeName && storeName !== storeId) {
+        continue;
+      }
+
+      localSales.push({
+        id: sid,
+        total: Number(r.valor || 0),
+        time: r.created_at || r.data,
+        transaction_pays: [{ pay_type_name: payName }],
+        transaction_items: Array.isArray(r.itens) ? r.itens : [],
+        event_point: storeName ? { point: { name: storeName } } : undefined,
+      });
+    }
+
+    // Busca rápida de produtos e lojas na API ou fallback seguro
+    const baseUrl = config.environment === "staging"
+      ? "https://staging-api.eyemobile.com.br/v1"
+      : "https://api.eyemobile.com.br/v1";
+    const headers = {
+      "X-EYEMOBILE-ACCESS-KEY": config.access_key,
+      "X-EYEMOBILE-SECRET-KEY": config.secret_key,
+      "Content-Type": "application/json",
+    };
+
+    let products: unknown[] = [];
+    let stores: unknown[] = [];
+    try {
+      const pResp = await fetch(`${baseUrl}/products?limit=100&offset=0`, { headers });
+      if (pResp.ok) {
+        const pJson = await pResp.json();
+        products = pJson.data || [];
+      }
+      const sResp = await fetch(`${baseUrl}/stores`, { headers });
+      if (sResp.ok) {
+        const sJson = await sResp.json();
+        stores = sJson.data || [];
+      }
+    } catch (_) {
+      // Ignora falha de produtos/lojas para manter o retorno instantâneo das vendas
+    }
+
+    return { configured: true, sales: localSales, products, stores, hasMore: false, isTruncated: false };
+  }
+
+  // 3. Fallback para busca na API externa (se o banco ainda não possuir vendas do período)
   const baseUrl = config.environment === "staging"
     ? "https://staging-api.eyemobile.com.br/v1"
     : "https://api.eyemobile.com.br/v1";
@@ -1143,11 +1244,7 @@ async function fetchDashboardData(
     return { data: [], has_more: false, partialError: true };
   };
 
-  const effectiveStartDate = startDate || toSaoPauloDate(new Date().toISOString());
-  const effectiveEndDate = endDate || effectiveStartDate;
-
-  // Busca vendas com paginação completa (iterando todas as páginas até que acabe o período)
-  // Eyemobile standard endpoint é /transactions (/sales não existe)
+  // Eyemobile standard endpoint é /transactions
   const buildUrl = (off: number) => {
     const params = new URLSearchParams({ limit: String(customLimit), offset: String(off) });
     if (selectedStoreId) params.set("store_id", selectedStoreId);
@@ -1179,7 +1276,7 @@ async function fetchDashboardData(
         .ilike("observacoes", "%Integrado via Eyemobile API.%")
         .lt("data", effectiveStartDate);
 
-      const maxOffsetHint = Number(config.last_synced_offset || 85000);
+      const maxOffsetHint = Number(config.last_synced_offset || 85278);
       startOffset = await findStartOffsetParallel(
         baseUrl,
         headers,
@@ -1207,13 +1304,13 @@ async function fetchDashboardData(
     allSales = salesResult.data || [];
     hasMore = salesResult.has_more === true;
   } else {
-    // Busca paralela em lotes de 10 páginas para cobrir o período rapidamente
     let currentOffset = offset;
-    const batchSize = 10; // Voltou de 20 para 10
-    const maxPages = 150; // Suporta até 15.000 vendas por período no dashboard
+    const batchSize = 10;
+    const maxPages = 150;
     let pagesFetched = 0;
 
     const seenPageSignatures = new Set<string>();
+    let lastValidDashboardTime: string | undefined = undefined;
 
     while (hasMore && pagesFetched < maxPages) {
       const pageOffsets: number[] = [];
@@ -1238,7 +1335,6 @@ async function fetchDashboardData(
           break;
         }
 
-        // Proteção contra loops e repetição de páginas
         const firstSaleId = String(sales[0]?.id || "");
         const lastSaleId = String(sales[sales.length - 1]?.id || "");
         const pageSignature = `${firstSaleId}:${lastSaleId}`;
@@ -1249,19 +1345,34 @@ async function fetchDashboardData(
         }
         if (firstSaleId) seenPageSignatures.add(pageSignature);
 
-        allSales.push(...sales);
-        pagesFetched++;
+        let reachedArchivedOrBeyondEnd = false;
+        const validSalesInPage: any[] = [];
 
-        // Checagem segura de data final (apenas se toda a página ultrapassar endDate)
-        if (endDate) {
-          const allBeyondEnd = sales.every((s: any) => {
-            const dt = String(s.time || s.created_at || "").split("T")[0];
-            return dt && dt > endDate;
-          });
-          if (allBeyondEnd) {
-            hasMore = false;
+        for (const s of sales) {
+          const rawTime = String(s.time || s.created_at || "");
+          const dt = rawTime.split("T")[0];
+
+          // Proteção contra retrocesso abrupto agnóstica a anos
+          if (isAbruptStreamRewind(rawTime, lastValidDashboardTime)) {
+            reachedArchivedOrBeyondEnd = true;
             break;
           }
+          lastValidDashboardTime = rawTime;
+
+          if (effectiveEndDate && dt && dt > effectiveEndDate) {
+            reachedArchivedOrBeyondEnd = true;
+            break;
+          }
+
+          validSalesInPage.push(s);
+        }
+
+        allSales.push(...validSalesInPage);
+        pagesFetched++;
+
+        if (reachedArchivedOrBeyondEnd) {
+          hasMore = false;
+          break;
         }
 
         if (!res || res.has_more === false) {
@@ -1278,7 +1389,6 @@ async function fetchDashboardData(
 
       if (hasMore) {
         currentOffset += batchSize * customLimit;
-        // Pausa segura de 50ms entre lotes
         await new Promise((r) => setTimeout(r, 50));
       } else {
         break;
@@ -1465,6 +1575,7 @@ async function syncUserEyemobile(
       const maxPages = isExternalPagination ? 1 : (mode === "HISTORY" ? 100 : 15);
 
       let fetchedHasMore = false;
+      let lastValidContemporaryTime: string | undefined = undefined;
 
       while (hasMore && pagesFetched < maxPages) {
         // Build URL directly to /transactions with resilient fetch and retry
@@ -1570,14 +1681,14 @@ async function syncUserEyemobile(
           for (let sIdx = 0; sIdx < salesData.data.length; sIdx++) {
             const sale = salesData.data[sIdx];
             const rawTime = sale.time || sale.created_at || "";
-            const saleYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
 
-            // Se encontramos dados arquivados antigos (< 2026), significa que a esteira contemporânea encerrou
-            if (saleYear < 2026) {
-              console.log(`[eyemobile-sync] Fronteira contemporânea atingida no offset ${offset + sIdx} (ano ${saleYear}). Encerrando paginação incremental.`);
+            // Proteção agnóstica a anos: detecta salto abrupto retroativo para a cauda legada arquivada
+            if (isAbruptStreamRewind(rawTime, lastValidContemporaryTime)) {
+              console.log(`[eyemobile-sync] Fronteira contemporânea atingida no offset ${offset + sIdx} (salto retroativo de ${lastValidContemporaryTime} para ${rawTime}). Encerrando paginação incremental.`);
               reachedArchivedData = true;
               break;
             }
+            lastValidContemporaryTime = rawTime;
 
             validItemsInPageCount++;
 
