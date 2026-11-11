@@ -6,6 +6,8 @@
  * - Perguntas de diagnóstico executivo complexo (ex: "faturamento subiu mas lucro caiu") coordenam
  *   múltiplos especialistas (Vendas + Estoque + Financeiro) de forma estruturada.
  * - Prioriza consultas determinísticas para respostas matemáticas exatas e economia de tokens.
+ * - Distinção estrita de valores zero vs dados ausentes: R$ 0,00 para zero confirmado; "Não disponível" para ausência.
+ * - Proibido contar vendas canceladas. Proibido apresentar despesas pendentes como pagas.
  */
 
 import {
@@ -13,6 +15,8 @@ import {
   SpecialistAgentId,
   authorizeSpecialistAccess,
 } from "./specialist-registry.ts";
+import type { FinancialQueryRepository } from "./query-tools.ts";
+import type { AiExecutionContext } from "./auth.ts";
 
 export interface SpecialistRoutingPlan {
   primarySpecialist: SpecialistAgentId;
@@ -182,10 +186,13 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   const isDirectDeterministic =
     p.includes("quanto faturei ontem") ||
     p.includes("faturamento de ontem") ||
+    p.includes("vendas de ontem") ||
     p.includes("quais contas vencem") ||
     p.includes("contas a vencer") ||
-    p.includes("qual meu saldo") ||
+    p.includes("contas vencem nesta semana") ||
     p.includes("saldo atual") ||
+    p.includes("situacao do meu saldo") ||
+    p.includes("situação do meu saldo") ||
     p.includes("fluxo de caixa");
 
   return {
@@ -199,37 +206,72 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   };
 }
 
+export interface FinancialDeterministicData {
+  faturamentoOntem?: number | null;
+  pedidosOntem?: number | null;
+  faturamentoMes?: number | null;
+  contasVencer7Dias?: Array<{ descricao: string; valor: number; vencimento: string }>;
+  contasVencidas?: Array<{ descricao: string; valor: number; vencimento: string }>;
+  saldoTotal?: number | null;
+  resultadoOperacionalMes?: number | null;
+  despesasMes?: number | null;
+}
+
 /**
- * Respostas determinísticas estruturadas para o Especialista Financeiro (Gate 6).
+ * Respostas determinísticas estruturadas para o Especialista Financeiro (Gate 1 & 6).
  * Responde instantaneamente perguntas financeiras frequentes a partir de dados reais já apurados,
  * com zero alucinação e zero custo de IA.
+ * 
+ * Regra Estrita:
+ * Se um valor for 0, exibe R$ 0.00.
+ * Se for null ou undefined, exibe explicitamente "Saldo não disponível" ou "Dado não disponível".
+ * Nunca mascara ausência de dados com `|| 0`.
  */
 export function buildFinancialSpecialistDeterministicResponse(
   userPrompt: string,
-  data: {
-    faturamentoOntem?: number;
-    pedidosOntem?: number;
-    faturamentoMes?: number;
-    contasVencer7Dias?: Array<{ descricao: string; valor: number; vencimento: string }>;
-    contasVencidas?: Array<{ descricao: string; valor: number; vencimento: string }>;
-    saldoTotal?: number;
-    resultadoOperacionalMes?: number;
-    despesasMes?: number;
-  }
+  data: FinancialDeterministicData
 ): { handled: boolean; answer?: string; specialist: string } {
   const p = userPrompt.toLowerCase().trim();
 
+  // Helper para formatação de moeda com distinção estrita de zero vs ausente
+  const formatCurrency = (val: number | null | undefined, labelUnavailable = "Dado não disponível"): string => {
+    if (val === null || val === undefined) {
+      return labelUnavailable;
+    }
+    return `R$ ${Number(val).toFixed(2)}`;
+  };
+
   // Caso A: "Quanto faturei ontem?"
   if (p.includes("quanto faturei ontem") || p.includes("faturamento de ontem") || p.includes("vendas de ontem")) {
-    const fat = Number(data.faturamentoOntem || 0);
-    const ped = data.pedidosOntem || 0;
-    const ticket = ped > 0 ? (fat / ped).toFixed(2) : "0.00";
+    const hasFat = data.faturamentoOntem !== null && data.faturamentoOntem !== undefined;
+    const hasPed = data.pedidosOntem !== null && data.pedidosOntem !== undefined;
+
+    let fatStr: string;
+    let pedStr: string;
+    let ticketStr: string;
+
+    if (hasFat) {
+      const fat = Number(data.faturamentoOntem);
+      fatStr = `R$ ${fat.toFixed(2)}`;
+      if (hasPed) {
+        const ped = Number(data.pedidosOntem);
+        pedStr = `${ped}`;
+        ticketStr = ped > 0 ? `R$ ${(fat / ped).toFixed(2)}` : "R$ 0.00";
+      } else {
+        pedStr = "Dado não disponível";
+        ticketStr = "Dado não disponível";
+      }
+    } else {
+      fatStr = "Dados não disponíveis";
+      pedStr = "Dados não disponíveis";
+      ticketStr = "Dados não disponíveis";
+    }
 
     const msg =
       `💰 *Agente Financeiro — Faturamento de Ontem:*\n\n` +
-      `• *Faturamento Bruto:* R$ ${fat.toFixed(2)}\n` +
-      `• *Total de Pedidos:* ${ped}\n` +
-      `• *Ticket Médio:* R$ ${ticket}\n\n` +
+      `• *Faturamento Bruto:* ${fatStr}\n` +
+      `• *Total de Pedidos:* ${pedStr}\n` +
+      `• *Ticket Médio:* ${ticketStr}\n\n` +
       `_Dados apurados diretamente das transações registradas no PDV._`;
 
     return { handled: true, answer: msg, specialist: "financeiro" };
@@ -237,8 +279,8 @@ export function buildFinancialSpecialistDeterministicResponse(
 
   // Caso B: "Quais contas vencem nesta semana?"
   if (p.includes("quais contas vencem") || p.includes("contas a vencer") || p.includes("contas vencem nesta semana")) {
-    const contas = data.contasVencer7Dias || [];
-    const vencidas = data.contasVencidas || [];
+    const contas = data.contasVencer7Dias ?? [];
+    const vencidas = data.contasVencidas ?? [];
 
     let msg = `📅 *Agente Financeiro — Compromissos da Semana:*\n\n`;
 
@@ -265,22 +307,148 @@ export function buildFinancialSpecialistDeterministicResponse(
   }
 
   // Caso C: "Qual é a situação do meu saldo / fluxo de caixa?"
-  if (p.includes("saldo atual") || p.includes("qual meu saldo") || p.includes("fluxo de caixa")) {
-    const saldo = Number(data.saldoTotal || 0);
-    const fatMes = Number(data.faturamentoMes || 0);
-    const despMes = Number(data.despesasMes || 0);
-    const resOp = Number(data.resultadoOperacionalMes || fatMes - despMes);
+  if (p.includes("saldo atual") || p.includes("situacao do meu saldo") || p.includes("situação do meu saldo") || p.includes("fluxo de caixa")) {
+    const saldoStr = formatCurrency(data.saldoTotal, "Saldo não disponível");
+    const fatMesStr = formatCurrency(data.faturamentoMes, "Faturamento não disponível");
+    const despMesStr = formatCurrency(data.despesasMes, "Despesas não disponíveis");
+    const resOpStr = formatCurrency(data.resultadoOperacionalMes, "Resultado não disponível");
 
     const msg =
       `📊 *Agente Financeiro — Posição de Caixa e Liquidez:*\n\n` +
-      `• *Saldo Disponível em Contas:* R$ ${saldo.toFixed(2)}\n` +
-      `• *Faturamento Acumulado no Mês:* R$ ${fatMes.toFixed(2)}\n` +
-      `• *Despesas Acumuladas no Mês:* R$ ${despMes.toFixed(2)}\n` +
-      `• *Resultado Operacional Preliminar:* R$ ${resOp.toFixed(2)}\n\n` +
+      `• *Saldo Disponível em Contas:* ${saldoStr}\n` +
+      `• *Faturamento Acumulado no Mês:* ${fatMesStr}\n` +
+      `• *Despesas Acumuladas no Mês:* ${despMesStr}\n` +
+      `• *Resultado Operacional Preliminar:* ${resOpStr}\n\n` +
       `_Posição consolidada das contas bancárias e conciliação em tempo real._`;
 
     return { handled: true, answer: msg, specialist: "financeiro" };
   }
 
   return { handled: false, specialist: "financeiro" };
+}
+
+/**
+ * Consulta os dados reais no repositório financeiro e sintetiza a resposta determinística.
+ * Não inventa números, não conta vendas canceladas e não apresenta despesas pendentes como pagas.
+ */
+export async function fetchAndExecuteFinancialSpecialist(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  nowOverride?: Date
+): Promise<{
+  handled: boolean;
+  answer?: string;
+  specialist: string;
+  routingPlan: SpecialistRoutingPlan;
+}> {
+  const routingPlan = routeUserQueryToSpecialists(userPrompt);
+
+  if (!routingPlan.isDeterministicPossible || routingPlan.primarySpecialist !== "financeiro") {
+    return {
+      handled: false,
+      specialist: "financeiro",
+      routingPlan,
+    };
+  }
+
+  const p = userPrompt.toLowerCase().trim();
+
+  // Cálculo das datas de referência em fuso horário de Brasília (UTC-3)
+  const now = nowOverride || new Date();
+  const brtOffsetMinutes = -180;
+  const localTime = new Date(now.getTime() + (now.getTimezoneOffset() + brtOffsetMinutes) * 60000);
+
+  const todayStr = localTime.toISOString().slice(0, 10);
+  const yesterdayTime = new Date(localTime.getTime() - 24 * 3600 * 1000);
+  const yesterdayStr = yesterdayTime.toISOString().slice(0, 10);
+  const startOfMonthStr = `${todayStr.slice(0, 7)}-01`;
+  const in7DaysTime = new Date(localTime.getTime() + 7 * 24 * 3600 * 1000);
+  const in7DaysStr = in7DaysTime.toISOString().slice(0, 10);
+
+  const collectedData: FinancialDeterministicData = {};
+
+  try {
+    // 1. Caso Faturamento de Ontem
+    if (p.includes("quanto faturei ontem") || p.includes("faturamento de ontem") || p.includes("vendas de ontem")) {
+      const sales = await repository.listSalesPDV(context, {
+        start: yesterdayStr,
+        end: yesterdayStr,
+      });
+
+      // Filtra vendas estritamente válidas (ignora cancelamentos)
+      const validSales = sales.filter((s) => {
+        const desc = (s.description || "").toLowerCase();
+        return !desc.includes("cancelad");
+      });
+
+      collectedData.faturamentoOntem = validSales.reduce((acc, s) => acc + (s.amount || 0), 0);
+      collectedData.pedidosOntem = validSales.length;
+    }
+
+    // 2. Caso Contas a Vencer
+    if (p.includes("quais contas vencem") || p.includes("contas a vencer") || p.includes("contas vencem nesta semana")) {
+      // Busca dívidas/contas a pagar no período relevante
+      const debts = await repository.listDebts(context, {
+        start: startOfMonthStr,
+        end: in7DaysStr,
+      });
+
+      // Filtra dívidas em aberto / pendentes (não pagas)
+      const pendingDebts = debts.filter((d) => {
+        const remaining = (d.originalAmount || 0) - (d.paidAmount || 0);
+        const statusLower = (d.status || "").toLowerCase();
+        return remaining > 0 && statusLower !== "paga" && statusLower !== "pago" && statusLower !== "liquidada";
+      });
+
+      collectedData.contasVencidas = pendingDebts
+        .filter((d) => d.dueOn && d.dueOn < todayStr)
+        .map((d) => ({
+          descricao: d.description,
+          valor: (d.originalAmount || 0) - (d.paidAmount || 0),
+          vencimento: d.dueOn!,
+        }));
+
+      collectedData.contasVencer7Dias = pendingDebts
+        .filter((d) => d.dueOn && d.dueOn >= todayStr && d.dueOn <= in7DaysStr)
+        .map((d) => ({
+          descricao: d.description,
+          valor: (d.originalAmount || 0) - (d.paidAmount || 0),
+          vencimento: d.dueOn!,
+        }));
+    }
+
+    // 3. Caso Saldo Atual / Fluxo de Caixa
+    if (p.includes("saldo atual") || p.includes("situacao do meu saldo") || p.includes("situação do meu saldo") || p.includes("fluxo de caixa")) {
+      const balances = await repository.listBalances(context);
+      if (Array.isArray(balances)) {
+        collectedData.saldoTotal = balances.reduce((acc, b) => acc + (b.amount || 0), 0);
+      } else {
+        collectedData.saldoTotal = null; // Dado indisponível
+      }
+
+      const revenues = await repository.listRevenues(context, {
+        start: startOfMonthStr,
+        end: todayStr,
+      });
+      const validRevs = revenues.filter((r) => !(r.description || "").toLowerCase().includes("cancelad"));
+      collectedData.faturamentoMes = validRevs.reduce((acc, r) => acc + (r.amount || 0), 0);
+
+      const expenses = await repository.listExpenses(context, {
+        start: startOfMonthStr,
+        end: todayStr,
+      });
+      collectedData.despesasMes = expenses.reduce((acc, e) => acc + (e.amount || 0), 0);
+      collectedData.resultadoOperacionalMes = (collectedData.faturamentoMes || 0) - (collectedData.despesasMes || 0);
+    }
+  } catch (err) {
+    console.warn("[specialist-router] Erro ao consultar repositório financeiro para resposta determinística:", err);
+    // Em caso de erro na coleta, deixa os campos ausentes para o formatador exibir "Não disponível"
+  }
+
+  const result = buildFinancialSpecialistDeterministicResponse(userPrompt, collectedData);
+  return {
+    ...result,
+    routingPlan,
+  };
 }
