@@ -658,10 +658,10 @@ export async function handleOrchestratorHttpRequest(
 
     // ─── GATE 0 & GATE 10: AUTORIZAÇÃO DO ESPECIALISTA SERVER-SIDE ───
     const rawRoleStr = String(userRole).toLowerCase();
-    const isOwnerRole = context.isOwner ?? (rawRoleStr === "owner" || rawRoleStr === "proprietario" || rawRoleStr === "ceo");
+    const isOwnerRole = (context.isOwner === true) || (rawRoleStr === "owner" || rawRoleStr === "proprietario" || rawRoleStr === "ceo");
     const normSpecialistRole: "owner" | "admin" | "member" = isOwnerRole
       ? "owner"
-      : (rawRoleStr === "admin" || rawRoleStr === "gerente" || rawRoleStr === "executive")
+      : (rawRoleStr === "admin" || rawRoleStr === "administrador" || rawRoleStr === "gerente" || rawRoleStr === "executive")
       ? "admin"
       : "member";
 

@@ -190,8 +190,9 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("quais contas vencem") ||
     p.includes("contas a vencer") ||
     p.includes("contas vencem nesta semana") ||
-    p.includes("qual meu saldo") ||
     p.includes("saldo atual") ||
+    p.includes("situacao do meu saldo") ||
+    p.includes("situação do meu saldo") ||
     p.includes("fluxo de caixa");
 
   return {
@@ -306,7 +307,7 @@ export function buildFinancialSpecialistDeterministicResponse(
   }
 
   // Caso C: "Qual é a situação do meu saldo / fluxo de caixa?"
-  if (p.includes("saldo atual") || p.includes("qual meu saldo") || p.includes("fluxo de caixa")) {
+  if (p.includes("saldo atual") || p.includes("situacao do meu saldo") || p.includes("situação do meu saldo") || p.includes("fluxo de caixa")) {
     const saldoStr = formatCurrency(data.saldoTotal, "Saldo não disponível");
     const fatMesStr = formatCurrency(data.faturamentoMes, "Faturamento não disponível");
     const despMesStr = formatCurrency(data.despesasMes, "Despesas não disponíveis");
@@ -418,7 +419,7 @@ export async function fetchAndExecuteFinancialSpecialist(
     }
 
     // 3. Caso Saldo Atual / Fluxo de Caixa
-    if (p.includes("saldo atual") || p.includes("qual meu saldo") || p.includes("fluxo de caixa")) {
+    if (p.includes("saldo atual") || p.includes("situacao do meu saldo") || p.includes("situação do meu saldo") || p.includes("fluxo de caixa")) {
       const balances = await repository.listBalances(context);
       if (Array.isArray(balances)) {
         collectedData.saldoTotal = balances.reduce((acc, b) => acc + (b.amount || 0), 0);
