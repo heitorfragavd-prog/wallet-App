@@ -235,13 +235,31 @@ async function getOwnerDeliveryRequirements(
   ownerId: string
 ): Promise<{ telegramRequired: boolean; pushRequired: boolean }> {
   try {
-    const { data: tgConfig } = await supabaseAdmin
-      .from("telegram_config")
-      .select("chat_id")
-      .eq("user_id", ownerId)
-      .maybeSingle();
+    let hasTelegramChat = false;
+    try {
+      const { data: tgConfig, error: tgConfigError } = await supabaseAdmin
+        .from("telegram_config")
+        .select("chat_id")
+        .eq("user_id", ownerId)
+        .maybeSingle();
 
-    const hasTelegramChat = !!(tgConfig?.chat_id);
+      if (!tgConfigError && tgConfig?.chat_id) {
+        hasTelegramChat = true;
+      }
+    } catch {
+      // Fallback para schema canônico telegram_usuarios caso telegram_config não exista
+    }
+
+    if (!hasTelegramChat) {
+      const { data: tgUsuario } = await supabaseAdmin
+        .from("telegram_usuarios")
+        .select("telegram_chat_id")
+        .eq("user_id", ownerId)
+        .eq("ativo", true)
+        .maybeSingle();
+
+      hasTelegramChat = !!(tgUsuario?.telegram_chat_id);
+    }
 
     const { data: prefs } = await supabaseAdmin
       .from("user_notification_preferences")
