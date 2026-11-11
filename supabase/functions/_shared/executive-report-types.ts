@@ -4,7 +4,7 @@
  * Tipos do Relatório Executivo Diário compartilhados com Supabase Edge Functions (Deno).
  */
 
-export type ReportStatus = 'generating' | 'completed' | 'failed' | 'fallback_deterministic';
+export type ReportStatus = 'generating' | 'completed' | 'failed' | 'fallback_deterministic' | 'pending_dispatch';
 export type PeriodType = 'daily' | 'weekly' | 'monthly';
 export type ProfitReliability = 'confirmado' | 'parcial' | 'estimado' | 'dados_insuficientes';
 
@@ -123,6 +123,8 @@ export interface CeoExecutiveReport {
     push?: boolean;
     telegram?: boolean;
     dispatched_at?: string;
+    attempts?: number;
+    failures?: Array<{ channel: string; reason: string; attempted_at?: string }>;
   };
   error_message?: string | null;
   version: number;

@@ -55,6 +55,23 @@ const normalizeStores = (stores: unknown): EyemobileStore[] => {
     .filter((store) => store.id);
 };
 
+async function checkEyemobileConfigured(workspaceId?: string): Promise<boolean> {
+  try {
+    let q = supabase.from("eyemobile_config").select("id").eq("is_active", true);
+    if (workspaceId) {
+      q = q.eq("workspace_id", workspaceId);
+    }
+    const { data, error } = await q.limit(1);
+    if (error || !data || data.length === 0) {
+      const { data: fallbackData } = await supabase.from("eyemobile_config").select("id").limit(1);
+      return Boolean(fallbackData && fallbackData.length > 0);
+    }
+    return Boolean(data && data.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 async function fetchLiveProducts(): Promise<unknown[]> {
   try {
     const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -79,19 +96,20 @@ async function buildLocalFallbackDashboard(
     .eq("tipo", "receita")
     .like("descricao", "Venda Eyemobile %")
     .gte("data", filters.startDate)
-    .lte("data", filters.endDate)
-    .order("data", { ascending: false })
-    .limit(2000);
+    .lte("data", filters.endDate);
 
   if (workspaceId) {
     query = query.eq("workspace_id", workspaceId);
   }
 
-  const { data: transacoes, error: queryError } = await query;
+  const { data: transacoes, error: queryError } = await query
+    .order("data", { ascending: false })
+    .limit(2000);
 
   if (queryError || !transacoes?.length) {
+    const configured = await checkEyemobileConfigured(workspaceId);
     return {
-      configured: false,
+      configured,
       stores: [],
       isLocalFallback: true,
       ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
@@ -161,18 +179,10 @@ export async function fetchLiveDashboard(
 
   if (invokeError || data?.success === false) {
     console.warn("Edge Function indisponivel, usando fallback local...", invokeError || data?.error);
-    if (data?.configured || !data) {
-      return buildLocalFallbackDashboard(
-        { ...filters, startDate: isoStartDate, endDate: isoEndDate },
-        workspaceId,
-      );
-    }
-    return {
-      configured: false,
-      stores: [],
-      isLocalFallback: true,
-      ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
-    };
+    return buildLocalFallbackDashboard(
+      { ...filters, startDate: isoStartDate, endDate: isoEndDate },
+      workspaceId,
+    );
   }
 
   const dashboard = buildEyemobileDashboard({
