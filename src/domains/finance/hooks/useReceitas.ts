@@ -255,6 +255,8 @@ export async function fetchReceitas(
   // 1. Eyemobile/PDV: aceitar SOMENTE pagamentos em dinheiro (espécie).
   //    Pix/Cartão do PDV entram pela Divipay (valor líquido) — nunca aqui.
   //    Demais transações (manuais, Pluggy/Open Finance) entram normalmente.
+  //    Também deduplica registros históricos duplicados de uma mesma Venda Eyemobile #<id>.
+  const seenEyemobileSaleIds = new Set<string>();
   const filteredTransacoes = (transacoesResp ?? []).map((t) => ({
     ...t,
     metodo_pagamento: normalizeMetodoPagamento(t.metodo_pagamento),
@@ -272,8 +274,15 @@ export async function fetchReceitas(
       return false;
     }
 
-    if (regime !== "bruto" && isEyemobilePDVTransaction(t)) {
-      return t.metodo_pagamento === "dinheiro";
+    if (isEyemobilePDVTransaction(t)) {
+      const idMatch = (t.observacoes || t.descricao || "").match(/Venda Eyemobile #(\d+)/i);
+      if (idMatch?.[1]) {
+        if (seenEyemobileSaleIds.has(idMatch[1])) return false;
+        seenEyemobileSaleIds.add(idMatch[1]);
+      }
+      if (regime !== "bruto") {
+        return t.metodo_pagamento === "dinheiro";
+      }
     }
     return true;
   });
