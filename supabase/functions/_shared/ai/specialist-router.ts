@@ -134,6 +134,7 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("divergência fiscal") ||
     p.includes("documento fiscal") ||
     p.includes("documentos fiscais") ||
+    p.includes("notas fiscais") ||
     p.includes("notas de fornecedor") ||
     p.includes("notas de fornecedores") ||
     p.includes("notas de compras") ||
@@ -145,8 +146,11 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   if (isFiscalQuery) {
     const isFiscalDeterministic =
       p.includes("quais notas fiscais") ||
+      p.includes("quantas notas fiscais") ||
       p.includes("notas fiscais recebi") ||
       p.includes("notas fiscais desta semana") ||
+      p.includes("notas fiscais deste mês") ||
+      p.includes("notas fiscais neste mês") ||
       p.includes("nota pendente") ||
       p.includes("pendente de processamento") ||
       p.includes("erro na leitura") ||
@@ -673,31 +677,42 @@ export function buildFiscalSpecialistDeterministicResponse(
 ): { handled: boolean; answer?: string; specialist: string } {
   const p = userPrompt.toLowerCase().trim();
 
-  // Caso 1: "Quais notas fiscais recebi nesta semana?"
-  if (p.includes("quais notas fiscais") || p.includes("notas fiscais recebi") || p.includes("notas fiscais desta semana")) {
-    if (data.notasSemana === null || data.notasSemana === undefined) {
+  // Caso 1: "Quais notas fiscais recebi nesta semana?" ou "Quantas notas fiscais recebemos neste mês?"
+  if (
+    p.includes("quais notas fiscais") ||
+    p.includes("quantas notas fiscais") ||
+    p.includes("notas fiscais recebi") ||
+    p.includes("notas fiscais desta semana") ||
+    p.includes("notas fiscais deste mês") ||
+    p.includes("notas fiscais neste mês")
+  ) {
+    const isMonthScope = p.includes("mês") || p.includes("mes");
+    const targetNotes = isMonthScope ? data.notasMes ?? data.notasSemana : data.notasSemana;
+    const scopeLabel = isMonthScope ? "no Mês" : "na Semana";
+
+    if (targetNotes === null || targetNotes === undefined) {
       return {
         handled: true,
-        answer: "📄 *Agente Fiscal — Documentos Recebidos na Semana:*\n\nInformações de notas fiscais não disponíveis no momento.",
+        answer: `📄 *Agente Fiscal — Documentos Recebidos ${scopeLabel}:*\n\nInformações de notas fiscais não disponíveis no momento.`,
         specialist: "fiscal",
       };
     }
 
-    if (data.notasSemana.length === 0) {
+    if (targetNotes.length === 0) {
       return {
         handled: true,
         answer:
-          "📄 *Agente Fiscal — Documentos Recebidos na Semana:*\n\n" +
+          `📄 *Agente Fiscal — Documentos Recebidos ${scopeLabel}:*\n\n` +
           "✅ Nenhuma nota fiscal de compra recebida no período consultado (R$ 0,00).\n\n" +
           "_Acompanhamento contínuo de entradas fiscais e integração Sefaz._",
         specialist: "fiscal",
       };
     }
 
-    const total = data.notasSemana.reduce((acc, n) => acc + n.valorTotal, 0);
-    let msg = `📄 *Agente Fiscal — Documentos Recebidos na Semana:*\n\n`;
-    msg += `Foram recebidas ${data.notasSemana.length} nota(s) fiscal(is), totalizando *R$ ${total.toFixed(2)}*:\n\n`;
-    data.notasSemana.slice(0, 5).forEach((n) => {
+    const total = targetNotes.reduce((acc, n) => acc + n.valorTotal, 0);
+    let msg = `📄 *Agente Fiscal — Documentos Recebidos ${scopeLabel}:*\n\n`;
+    msg += `Foram recebidas ${targetNotes.length} nota(s) fiscal(is), totalizando *R$ ${total.toFixed(2)}*:\n\n`;
+    targetNotes.slice(0, 5).forEach((n) => {
       msg += `• *NF ${n.numeroNf || "S/N"}* (${n.fornecedor || "Fornecedor não informado"}): R$ ${n.valorTotal.toFixed(2)} — Emissão: ${n.dataEmissao || "N/A"}\n`;
     });
     msg += `\n_Todas as notas foram registradas no repositório fiscal do workspace._`;
@@ -1761,7 +1776,7 @@ export async function fetchAndExecuteInventorySpecialist(
 
     const salesVolumeMap = new Map<string, number>();
     validYesterday.forEach((s) => {
-      s.items.forEach((it) => {
+      (s.items || []).forEach((it) => {
         const name = (it.productName || "").trim().toLowerCase();
         salesVolumeMap.set(name, (salesVolumeMap.get(name) || 0) + it.quantity);
       });
