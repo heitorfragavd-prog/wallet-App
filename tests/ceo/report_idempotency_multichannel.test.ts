@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeExecutiveReportWorkflow } from "../../supabase/functions/cron-relatorio-executivo/index";
 
-describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
+describe("Gate 1 — Idempotência Real, Concorrência e Entrega Multicanal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  const createMockDb = (
-    existingReport: Record<string, unknown> | null = null,
-    dispatcherMock: unknown = null
-  ) => {
-    let currentReport: Record<string, unknown> | null = existingReport ? { ...existingReport } : null;
+  const createMockDb = (opts?: {
+    existingReport?: Record<string, unknown> | null;
+    dispatcherMock?: unknown;
+    telegramChatId?: string | null;
+    userNotificationPrefs?: Array<{ canal: string; habilitado: boolean }>;
+    simulateInsertConflict?: boolean;
+  }) => {
+    let currentReport: Record<string, unknown> | null = opts?.existingReport ? { ...opts.existingReport } : null;
 
     const mockAdmin = {
       from: vi.fn((table: string) => {
@@ -30,6 +33,27 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
                 }),
               }),
             }),
+            insert: vi.fn().mockImplementation((data: Record<string, unknown>) => {
+              if (opts?.simulateInsertConflict) {
+                return {
+                  select: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: null,
+                      error: { code: "23505", message: "duplicate key value violates unique constraint" },
+                    }),
+                  }),
+                };
+              }
+              currentReport = { ...data, id: "rep-uuid-1" };
+              return {
+                select: vi.fn().mockReturnValue({
+                  maybeSingle: vi.fn().mockResolvedValue({
+                    data: { id: currentReport.id },
+                    error: null,
+                  }),
+                }),
+              };
+            }),
             upsert: vi.fn().mockImplementation((data: Record<string, unknown>) => {
               currentReport = { ...currentReport, ...data, id: currentReport?.id || "rep-uuid-1" };
               return {
@@ -44,11 +68,46 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
             update: vi.fn().mockImplementation((data: Record<string, unknown>) => {
               currentReport = { ...currentReport, ...data };
               return {
-                eq: vi.fn().mockResolvedValue({ data: currentReport, error: null }),
+                eq: vi.fn().mockReturnValue({
+                  select: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({ data: { id: currentReport?.id }, error: null }),
+                  }),
+                  eq: vi.fn().mockResolvedValue({ data: currentReport, error: null }),
+                  then: (resolve: (val: unknown) => void) => resolve({ data: currentReport, error: null }),
+                }),
               };
             }),
           };
         }
+
+        if (table === "telegram_config") {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: opts?.telegramChatId !== undefined ? (opts.telegramChatId ? { chat_id: opts.telegramChatId } : null) : { chat_id: "123456" },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+
+        if (table === "user_notification_preferences") {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockResolvedValue({
+                    data: opts?.userNotificationPrefs || [{ canal: "telegram", habilitado: true }],
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+
         // Outras tabelas do coletor retornam builder encadeável com mockReturnThis
         const builder = {
           select: vi.fn().mockReturnThis(),
@@ -63,7 +122,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
         return builder;
       }),
       functions: {
-        invoke: dispatcherMock || vi.fn().mockResolvedValue({
+        invoke: opts?.dispatcherMock || vi.fn().mockResolvedValue({
           data: {
             success: true,
             entregas: [
@@ -93,7 +152,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
       executive_summary: "Resumo executivo completo.",
     };
 
-    const { mockAdmin } = createMockDb(existing);
+    const { mockAdmin } = createMockDb({ existingReport: existing });
 
     const result = await executeExecutiveReportWorkflow(mockAdmin, {
       workspaceId: "ws-1",
@@ -105,7 +164,6 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     expect(result.status).toBe("skipped_already_completed");
     expect(result.reportId).toBe("rep-comp-1");
     expect(result.notified).toBe(true);
-    // Não deve chamar o dispatcher
     expect(mockAdmin.functions.invoke).not.toHaveBeenCalled();
   });
 
@@ -122,7 +180,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
       executive_summary: "Resumo determinístico consolidado.",
     };
 
-    const { mockAdmin } = createMockDb(existing);
+    const { mockAdmin } = createMockDb({ existingReport: existing });
 
     const result = await executeExecutiveReportWorkflow(mockAdmin, {
       workspaceId: "ws-1",
@@ -136,7 +194,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     expect(mockAdmin.functions.invoke).not.toHaveBeenCalled();
   });
 
-  it("3. Se o relatório foi concluído mas a entrega falhou, deve retentar apenas o despacho", async () => {
+  it("3. Se o relatório foi concluído mas a entrega falhou, deve retentar apenas o despacho do canal pendente", async () => {
     const existing = {
       id: "rep-pending-disp",
       workspace_id: "ws-1",
@@ -153,14 +211,13 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
       data: {
         success: true,
         entregas: [
-          { channel: "app", delivered: true },
           { channel: "telegram", delivered: true },
         ],
       },
       error: null,
     });
 
-    const { mockAdmin } = createMockDb(existing, mockDispatcher);
+    const { mockAdmin } = createMockDb({ existingReport: existing, dispatcherMock: mockDispatcher });
 
     const result = await executeExecutiveReportWorkflow(mockAdmin, {
       workspaceId: "ws-1",
@@ -172,6 +229,10 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     expect(result.reDispatched).toBe(true);
     expect(result.status).toBe("completed");
     expect(mockDispatcher).toHaveBeenCalledTimes(1);
+    // Verifica que solicitou somente o canal telegram na retentativa
+    expect(mockDispatcher).toHaveBeenCalledWith("notification-dispatcher", expect.objectContaining({
+      body: expect.objectContaining({ canais: ["telegram"] }),
+    }));
     expect(result.dispatchDetails?.app).toBe(true);
     expect(result.dispatchDetails?.telegram).toBe(true);
     expect(result.dispatchDetails?.attempts).toBe(2);
@@ -188,7 +249,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
       updated_at: new Date(Date.now() - 30_000).toISOString(), // 30 segundos atrás
     };
 
-    const { mockAdmin } = createMockDb(recentGenerating);
+    const { mockAdmin } = createMockDb({ existingReport: recentGenerating });
 
     const result = await executeExecutiveReportWorkflow(mockAdmin, {
       workspaceId: "ws-1",
@@ -202,7 +263,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     expect(mockAdmin.functions.invoke).not.toHaveBeenCalled();
   });
 
-  it("5. Deve auditar falha individual no Telegram e marcar 'pending_dispatch'", async () => {
+  it("5. Deve auditar falha individual no Telegram e marcar 'pending_dispatch' quando Telegram for obrigatório", async () => {
     const mockDispatcherWithTgFail = vi.fn().mockResolvedValue({
       data: {
         success: true,
@@ -215,7 +276,7 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
       error: null,
     });
 
-    const { mockAdmin } = createMockDb(null, mockDispatcherWithTgFail);
+    const { mockAdmin } = createMockDb({ dispatcherMock: mockDispatcherWithTgFail });
 
     const result = await executeExecutiveReportWorkflow(mockAdmin, {
       workspaceId: "ws-1",
@@ -229,5 +290,98 @@ describe("Gate 1 — Idempotência Real e Entrega Multicanal", () => {
     expect(result.dispatchDetails?.telegram).toBe(false);
     expect(result.dispatchDetails?.failures).toHaveLength(2);
     expect(result.dispatchDetails?.failures[1].channel).toBe("telegram");
+  });
+
+  it("6. Deve considerar entrega concluída se o usuário utiliza apenas o App (sem Telegram conectado)", async () => {
+    const mockDispatcherAppOnly = vi.fn().mockResolvedValue({
+      data: {
+        success: true,
+        entregas: [
+          { channel: "app", delivered: true },
+          { channel: "telegram", delivered: false, reason: "Usuário sem Telegram configurado" },
+        ],
+      },
+      error: null,
+    });
+
+    // Usuário sem telegram (telegramChatId = null)
+    const { mockAdmin } = createMockDb({
+      dispatcherMock: mockDispatcherAppOnly,
+      telegramChatId: null,
+      userNotificationPrefs: [{ canal: "telegram", habilitado: false }],
+    });
+
+    const result = await executeExecutiveReportWorkflow(mockAdmin, {
+      workspaceId: "ws-1",
+      ownerId: "owner-app-only",
+      ownerName: "Restaurante App Only",
+      referenceDate: "2026-11-09",
+    });
+
+    // Como Telegram não é requerido, o relatório é completado com sucesso com base no App (não fica em pending_dispatch)
+    expect(["completed", "fallback_deterministic"]).toContain(result.status);
+    expect(result.notified).toBe(true);
+    expect(result.dispatchDetails?.app).toBe(true);
+  });
+
+  it("7. Concorrência: Deve tratar colisão de chave única (corrida atômica simultânea)", async () => {
+    const winnerReport = {
+      id: "rep-winner-1",
+      status: "completed",
+      dispatch_status: { app: true, telegram: true },
+    };
+
+    const { mockAdmin } = createMockDb({
+      existingReport: null,
+      simulateInsertConflict: true,
+    });
+
+    // Mock para retornar o winner criado na corrida
+    mockAdmin.from = vi.fn((table: string) => {
+      if (table === "ceo_executive_reports") {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: winnerReport,
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+          insert: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: null,
+                error: { message: "duplicate key value violates unique constraint" },
+              }),
+            }),
+          }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockResolvedValue({ data: winnerReport, error: null }),
+          }),
+        };
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null }),
+      };
+    });
+
+    const result = await executeExecutiveReportWorkflow(mockAdmin, {
+      workspaceId: "ws-1",
+      ownerId: "owner-1",
+      ownerName: "Restaurante",
+      referenceDate: "2026-11-09",
+    });
+
+    expect(result.status).toBe("skipped_already_completed");
+    expect(result.reportId).toBe("rep-winner-1");
   });
 });

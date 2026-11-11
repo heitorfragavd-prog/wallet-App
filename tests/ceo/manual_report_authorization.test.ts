@@ -11,7 +11,7 @@ describe("Gate 0 — Autorização Executiva e Geração Manual de Relatórios",
   const createMockSupabase = (opts: {
     user?: { id: string } | null;
     workspace?: { id: string; user_id: string; nome: string } | null;
-    member?: { role: string; ativo: boolean } | null;
+    member?: { role: string; active?: boolean; ativo?: boolean } | null;
   }) => {
     return {
       auth: {

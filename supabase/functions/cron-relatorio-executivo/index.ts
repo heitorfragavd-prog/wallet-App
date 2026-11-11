@@ -147,10 +147,10 @@ export async function authorizeReportExecution(
       // 3. Se não for proprietário direto, consulta papel na workspace_members
       const { data: member } = await supabaseAdmin
         .from("workspace_members")
-        .select("role, ativo")
+        .select("role, active")
         .eq("workspace_id", targetWsId)
         .eq("user_id", authenticatedUserId)
-        .eq("ativo", true)
+        .eq("active", true)
         .maybeSingle();
 
       const isExecutiveOwner = member?.role === "owner";
@@ -225,6 +225,59 @@ export async function authorizeReportExecution(
   };
 }
 
+/**
+ * Consulta se o Telegram ou Push são efetivamente esperados/habilitados para o proprietário.
+ */
+async function getOwnerDeliveryRequirements(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabaseAdmin: any,
+  workspaceId: string,
+  ownerId: string
+): Promise<{ telegramRequired: boolean; pushRequired: boolean }> {
+  try {
+    const { data: tgConfig } = await supabaseAdmin
+      .from("telegram_config")
+      .select("chat_id")
+      .eq("user_id", ownerId)
+      .maybeSingle();
+
+    const hasTelegramChat = !!(tgConfig?.chat_id);
+
+    const { data: prefs } = await supabaseAdmin
+      .from("user_notification_preferences")
+      .select("canal, habilitado")
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", ownerId)
+      .eq("categoria", "ceo_executivo");
+
+    let tgEnabled = hasTelegramChat;
+    let pushEnabled = false;
+
+    if (Array.isArray(prefs)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tgPref = prefs.find((p: any) => p.canal === "telegram");
+      if (tgPref) {
+        tgEnabled = hasTelegramChat && tgPref.habilitado !== false;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pushPref = prefs.find((p: any) => p.canal === "push");
+      if (pushPref) {
+        pushEnabled = pushPref.habilitado === true;
+      }
+    }
+
+    return {
+      telegramRequired: tgEnabled,
+      pushRequired: pushEnabled,
+    };
+  } catch {
+    return {
+      telegramRequired: false,
+      pushRequired: false,
+    };
+  }
+}
+
 export interface WorkflowExecutionResult {
   workspaceId: string;
   ownerId: string;
@@ -246,9 +299,9 @@ export interface WorkflowExecutionResult {
  * Executa o fluxo atômico e idempotente de geração e entrega do Relatório Executivo.
  * - Reconhece tanto 'completed' quanto 'fallback_deterministic' como relatórios finalizados válidos.
  * - Impede chamadas duplicadas à IA.
- * - Protege contra concorrência através do estado atômico 'generating'.
- * - Separa o controle de geração da entrega (permite retentativa exclusiva de despacho).
- * - Audita individualmente a entrega de cada canal (app, push, telegram).
+ * - Protege contra concorrência através do estado atômico 'generating' e reserva condicional.
+ * - Respeita os canais individualmente habilitados sem exigir canais desativados.
+ * - Retenta apenas os canais pendentes sem reenviar notificações in-app duplicadas.
  */
 export async function executeExecutiveReportWorkflow(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -263,6 +316,8 @@ export async function executeExecutiveReportWorkflow(
   }
 ): Promise<WorkflowExecutionResult> {
   const { workspaceId, ownerId, ownerName, referenceDate, geminiApiKey, forceRegenerate } = options;
+
+  const requirements = await getOwnerDeliveryRequirements(supabaseAdmin, workspaceId, ownerId);
 
   // 1. Consulta existência de relatório para (workspace, reference_date, 'daily', v1)
   const { data: existingReport } = await supabaseAdmin
@@ -280,22 +335,28 @@ export async function executeExecutiveReportWorkflow(
       existingReport.status === "completed" ||
       existingReport.status === "fallback_deterministic";
 
-    if (isCompleted) {
+    if (isCompleted || existingReport.status === "pending_dispatch") {
       const prevDispatch = existingReport.dispatch_status || {};
-      const needsDispatchRetry = prevDispatch.app !== true || prevDispatch.telegram !== true;
+      const isAppPending = prevDispatch.app !== true;
+      const isTelegramPending = requirements.telegramRequired && prevDispatch.telegram !== true;
+      const needsDispatchRetry = isAppPending || isTelegramPending;
 
-      if (!needsDispatchRetry) {
+      if (!needsDispatchRetry && isCompleted) {
         return {
           workspaceId,
           ownerId,
           status: "skipped_already_completed",
           reportId: existingReport.id,
           notified: true,
-          motivo: `Relatório para ${referenceDate} já finalizado (${existingReport.status}) e entregue.`,
+          motivo: `Relatório para ${referenceDate} já finalizado (${existingReport.status}) e canais habilitados entregues.`,
         };
       }
 
-      // Se a geração está concluída mas a entrega falhou, reexecuta APENAS a entrega multicanal
+      // Se a geração está concluída mas algum canal falhou, reexecuta APENAS os canais pendentes
+      const channelsToRetry: ("app" | "push" | "telegram")[] = [];
+      if (isAppPending) channelsToRetry.push("app");
+      if (isTelegramPending) channelsToRetry.push("telegram");
+
       const dispatchOutcome = await dispatchExecutiveNotification(supabaseAdmin, {
         workspaceId,
         ownerId,
@@ -303,18 +364,33 @@ export async function executeExecutiveReportWorkflow(
         indicators: existingReport.financial_indicators,
         executiveSummary: existingReport.executive_summary,
         previousAttempts: prevDispatch.attempts || 0,
+        channelsToDispatch: channelsToRetry.length > 0 ? channelsToRetry : undefined,
       });
 
-      const finalStatus =
-        dispatchOutcome.app && dispatchOutcome.telegram
-          ? existingReport.status
-          : "pending_dispatch";
+      const mergedDispatch = {
+        app: prevDispatch.app || dispatchOutcome.app,
+        push: prevDispatch.push || dispatchOutcome.push,
+        telegram: prevDispatch.telegram || dispatchOutcome.telegram,
+        attempts: (prevDispatch.attempts || 0) + 1,
+        dispatched_at: new Date().toISOString(),
+        failures: dispatchOutcome.failures,
+      };
+
+      const isFullyDelivered =
+        mergedDispatch.app && (!requirements.telegramRequired || mergedDispatch.telegram);
+
+      const baseStatus =
+        existingReport.status === "pending_dispatch"
+          ? "completed"
+          : existingReport.status;
+
+      const finalStatus = isFullyDelivered ? baseStatus : "pending_dispatch";
 
       await supabaseAdmin
         .from("ceo_executive_reports")
         .update({
           status: finalStatus,
-          dispatch_status: dispatchOutcome,
+          dispatch_status: mergedDispatch,
         })
         .eq("id", existingReport.id);
 
@@ -323,19 +399,19 @@ export async function executeExecutiveReportWorkflow(
         ownerId,
         status: finalStatus,
         reportId: existingReport.id,
-        notified: dispatchOutcome.app || dispatchOutcome.telegram,
+        notified: isFullyDelivered,
         reDispatched: true,
-        motivo: "Retentativa de entrega multicanal executada com sucesso.",
-        dispatchDetails: dispatchOutcome,
+        motivo: "Retentativa seletiva de entrega multicanal executada com sucesso.",
+        dispatchDetails: mergedDispatch,
       };
     }
 
-    // Se estiver em 'generating', verifica se há bloqueio ativo (menos de 2 minutos)
+    // Se estiver em 'generating', verifica se há bloqueio ativo (menos de 5 minutos)
     if (existingReport.status === "generating") {
       const updatedAtMs = new Date(existingReport.updated_at || Date.now()).getTime();
       const ageMs = Date.now() - updatedAtMs;
 
-      if (ageMs < 120_000) {
+      if (ageMs < 300_000) {
         return {
           workspaceId,
           ownerId,
@@ -345,17 +421,48 @@ export async function executeExecutiveReportWorkflow(
           motivo: "Relatório em geração por outra requisição concorrente. Aguardando conclusão.",
         };
       }
+
+      // Se for lock antigo (> 5 min), assume a execução de forma atômica (Compare-and-Swap)
+      const { data: reclaimed } = await supabaseAdmin
+        .from("ceo_executive_reports")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", existingReport.id)
+        .eq("status", "generating")
+        .select("id")
+        .maybeSingle();
+
+      if (!reclaimed) {
+        return {
+          workspaceId,
+          ownerId,
+          status: "in_progress_concurrent",
+          reportId: existingReport.id,
+          notified: false,
+          motivo: "Outra requisição assumiu o processamento concorrente.",
+        };
+      }
     }
   }
 
-  // 3. Reserva Atômica com status 'generating' para mitigar condições de corrida
+  // 3. Reserva Atômica com status 'generating' via INSERT condicional
   const periodStart = `${referenceDate}T00:00:00.000Z`;
   const periodEnd = `${referenceDate}T23:59:59.999Z`;
 
-  const { data: lockRecord, error: lockError } = await supabaseAdmin
-    .from("ceo_executive_reports")
-    .upsert(
-      {
+  let reportId: string;
+
+  if (existingReport?.id) {
+    reportId = existingReport.id;
+    await supabaseAdmin
+      .from("ceo_executive_reports")
+      .update({
+        status: "generating",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", reportId);
+  } else {
+    const { data: insertRecord, error: insertError } = await supabaseAdmin
+      .from("ceo_executive_reports")
+      .insert({
         workspace_id: workspaceId,
         owner_id: ownerId,
         reference_date: referenceDate,
@@ -368,19 +475,41 @@ export async function executeExecutiveReportWorkflow(
         recommendations: [],
         sources_consulted: [],
         data_quality_alerts: [],
-        dispatch_status: { app: false, telegram: false, attempts: 0 },
+        dispatch_status: { app: false, telegram: false, push: false, attempts: 0, failures: [] },
         version: 1,
-      },
-      { onConflict: "workspace_id,reference_date,period_type,version" }
-    )
-    .select("id")
-    .single();
+      })
+      .select("id")
+      .maybeSingle();
 
-  if (lockError) {
-    throw new Error(`Falha no lock atômico de geração: ${lockError.message}`);
+    if (insertError) {
+      // Em caso de colisão de chave única (corrida concorrente), busca o registro criado
+      const { data: raceWinner } = await supabaseAdmin
+        .from("ceo_executive_reports")
+        .select("id, status")
+        .eq("workspace_id", workspaceId)
+        .eq("reference_date", referenceDate)
+        .eq("period_type", "daily")
+        .eq("version", 1)
+        .maybeSingle();
+
+      if (raceWinner) {
+        return {
+          workspaceId,
+          ownerId,
+          status:
+            raceWinner.status === "completed" || raceWinner.status === "fallback_deterministic"
+              ? "skipped_already_completed"
+              : "in_progress_concurrent",
+          reportId: raceWinner.id,
+          notified: false,
+          motivo: "Requisição concorrente reservou a geração deste relatório.",
+        };
+      }
+      throw new Error(`Falha na reserva atômica de geração: ${insertError.message}`);
+    }
+
+    reportId = insertRecord?.id || "temp-report-id";
   }
-
-  const reportId = lockRecord.id;
 
   try {
     // 4. Coleta determinística dos 6 blocos
@@ -399,7 +528,7 @@ export async function executeExecutiveReportWorkflow(
       geminiApiKey,
     });
 
-    // 6. Entrega Multicanal verificando individualmente app, push e telegram
+    // 6. Entrega Multicanal verificando individualmente os canais requeridos
     const dispatchOutcome = await dispatchExecutiveNotification(supabaseAdmin, {
       workspaceId,
       ownerId,
@@ -409,7 +538,8 @@ export async function executeExecutiveReportWorkflow(
       previousAttempts: 0,
     });
 
-    const isFullyDelivered = dispatchOutcome.app && dispatchOutcome.telegram;
+    const isFullyDelivered =
+      dispatchOutcome.app && (!requirements.telegramRequired || dispatchOutcome.telegram);
     const finalReportStatus = isFullyDelivered ? synthesis.status : "pending_dispatch";
 
     const reportToUpdate: Partial<CeoExecutiveReport> = {
@@ -470,9 +600,10 @@ async function dispatchExecutiveNotification(
     indicators: any;
     executiveSummary: string;
     previousAttempts: number;
+    channelsToDispatch?: ("app" | "push" | "telegram")[];
   }
 ) {
-  const { workspaceId, ownerId, referenceDate, indicators, executiveSummary, previousAttempts } = options;
+  const { workspaceId, ownerId, referenceDate, indicators, executiveSummary, previousAttempts, channelsToDispatch } = options;
 
   let appDelivered = false;
   let pushDelivered = false;
@@ -497,17 +628,23 @@ async function dispatchExecutiveNotification(
     `🔗 *Acesse o relatório completo no Wallet:* /ceo`;
 
   try {
+    const payloadBody: Record<string, unknown> = {
+      workspace_id: workspaceId,
+      categoria: "ceo_executivo",
+      prioridade: "importante",
+      titulo: `👑 Relatório Executivo Diário — ${referenceDate}`,
+      mensagem: resumoTelegram,
+      link_redirecionamento: `/ceo`,
+      target_user_ids: [ownerId],
+      target_role: "owner",
+    };
+
+    if (channelsToDispatch && channelsToDispatch.length > 0) {
+      payloadBody.canais = channelsToDispatch;
+    }
+
     const dispatchRes = await supabaseAdmin.functions.invoke("notification-dispatcher", {
-      body: {
-        workspace_id: workspaceId,
-        categoria: "ceo_executivo",
-        prioridade: "importante",
-        titulo: `👑 Relatório Executivo Diário — ${referenceDate}`,
-        mensagem: resumoTelegram,
-        link_redirecionamento: `/ceo`,
-        target_user_ids: [ownerId],
-        target_role: "owner",
-      },
+      body: payloadBody,
     });
 
     if (dispatchRes.error) {

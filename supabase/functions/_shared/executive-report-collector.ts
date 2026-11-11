@@ -399,7 +399,7 @@ export async function collectExecutiveReportIndicators(
   let statusConfiabilidadeLucro: "confirmado" | "parcial" | "estimado" | "dados_insuficientes" =
     "dados_insuficientes";
 
-  if (totalFichas > 0 && coberturaFichasPercent >= 70) {
+  if (totalFichas > 0 && coberturaFichasPercent >= 80 && cmvTotal !== null) {
     statusConfiabilidadeLucro = "confirmado";
   } else if (totalFichas > 0 && coberturaFichasPercent > 0) {
     statusConfiabilidadeLucro = "parcial";
@@ -409,9 +409,9 @@ export async function collectExecutiveReportIndicators(
 
   const motivoConfiabilidade =
     statusConfiabilidadeLucro === "confirmado"
-      ? "Custos apurados com base em fichas técnicas e notas fiscais comprovadas."
+      ? "Custos e CMV apurados com base em fichas técnicas ativas e lançamentos contábeis comprovados."
       : statusConfiabilidadeLucro === "parcial"
-      ? `Custos apurados parcialmente (${coberturaFichasPercent}% de cobertura de fichas sobre catálogo de ${totalProdutosCatalogo} itens).`
+      ? `Resultado operacional preliminar (${coberturaFichasPercent}% de cobertura de fichas sobre catálogo de ${totalProdutosCatalogo} itens). CMV e lucro líquido definitivo dependem de conciliação contábil integral.`
       : "Fichas técnicas não cadastradas no catálogo; CMV e lucro líquido confirmado indisponíveis.";
 
   const resultado: ResultadoOperacionalIndicators = {
