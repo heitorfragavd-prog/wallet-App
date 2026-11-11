@@ -145,6 +145,12 @@ export async function collectExecutiveReportIndicators(
   const inicioMesAnterior = `${prevYearStr}-${prevMonthStr}-01`;
   const fimMesAnteriorDate = new Date(Date.UTC(refYear, refMonth - 1, 0, 12, 0, 0));
   const fimMesAnterior = fimMesAnteriorDate.toISOString().split("T")[0];
+  const daysInPrevMonth = fimMesAnteriorDate.getUTCDate();
+
+  // Período equivalente no mês anterior para comparação justa (MTD vs MTD equivalente)
+  const diaRef = parseInt(refDayStr, 10);
+  const diaLimiteEquivalente = Math.min(diaRef, daysInPrevMonth);
+  const fimMesAnteriorEquivalente = `${prevYearStr}-${prevMonthStr}-${String(diaLimiteEquivalente).padStart(2, "0")}`;
 
   // 1. FATURAMENTO (transacoes tipo = 'receita')
   const { data: transacoesRaw, error: transacoesError } = await supabaseAdmin
@@ -169,15 +175,15 @@ export async function collectExecutiveReportIndicators(
   const pedidosOntem = receitasOntem.length;
   const ticketMedioOntem = pedidosOntem > 0 ? faturamentoOntem / pedidosOntem : null;
 
-  // Receitas do mês acumulado até ontem
+  // Receitas do mês acumulado até ontem (MTD)
   const receitasMes = todasReceitas.filter((t) => t.data >= inicioMes && t.data <= referenceDate);
   const faturamentoMesAcumulado = receitasMes.reduce((acc, t) => acc + Number(t.valor || 0), 0);
   const pedidosMesAcumulado = receitasMes.length;
   const ticketMedioMes = pedidosMesAcumulado > 0 ? faturamentoMesAcumulado / pedidosMesAcumulado : null;
 
-  // Receitas do mês anterior
+  // Receitas do mês anterior no período equivalente (MTD equivalente)
   const receitasMesAnterior = todasReceitas.filter(
-    (t) => t.data >= inicioMesAnterior && t.data <= fimMesAnterior
+    (t) => t.data >= inicioMesAnterior && t.data <= fimMesAnteriorEquivalente
   );
   const faturamentoMesAnterior = receitasMesAnterior.reduce((acc, t) => acc + Number(t.valor || 0), 0);
 
@@ -332,46 +338,7 @@ export async function collectExecutiveReportIndicators(
   const margemOperacionalPercent =
     receitaCompetencia > 0 ? (resultadoOperacional / receitaCompetencia) * 100 : null;
 
-  // Tentativa de consulta de CMV/fichas técnicas se disponíveis
-  let cmvTotal: number | null = null;
-  let cmvPercent: number | null = null;
-  let lucroBrutoConfirmado: number | null = null;
-  let margemBrutaConfirmadaPercent: number | null = null;
-  let coberturaFichasPercent = 0;
-  let statusConfiabilidadeLucro: "confirmado" | "parcial" | "estimado" | "dados_insuficientes" =
-    "estimado";
-
-  const { data: fichasData } = await supabaseAdmin
-    .from("fichas_tecnicas")
-    .select("id, produto_id, custo_total")
-    .eq("workspace_id", workspaceId);
-
-  if (fichasData && fichasData.length > 0) {
-    sourcesConsulted.push("fichas_tecnicas");
-    coberturaFichasPercent = Math.min(100, Math.round((fichasData.length / 50) * 100));
-    statusConfiabilidadeLucro = coberturaFichasPercent >= 70 ? "confirmado" : "parcial";
-  } else {
-    statusConfiabilidadeLucro = "parcial";
-  }
-
-  const resultado: ResultadoOperacionalIndicators = {
-    receitaCompetencia,
-    despesasCompetencia,
-    resultadoOperacional,
-    margemOperacionalPercent,
-    lucroBrutoConfirmado,
-    margemBrutaConfirmadaPercent,
-    cmvTotal,
-    cmvPercent,
-    coberturaFichasPercent,
-    statusConfiabilidadeLucro,
-    motivoConfiabilidade:
-      statusConfiabilidadeLucro === "confirmado"
-        ? "Custos apurados com base em fichas técnicas e notas fiscais."
-        : "Custos operacionais apurados parcialmente; despesas baseadas em lançamentos reais.",
-  };
-
-  // 4. PRODUTOS E RENTABILIDADE
+  // 4. PRODUTOS E RENTABILIDADE (processamento inicial para correlação contábil)
   const productAggMap = new Map<string, { nome: string; quantidade: number; faturamento: number }>();
 
   receitasMes.forEach((t) => {
@@ -391,6 +358,86 @@ export async function collectExecutiveReportIndicators(
     }
   });
 
+  // Consulta do catálogo real: produtos_eyemobile e produtos gerais
+  const { data: prodsEyemobile } = await supabaseAdmin
+    .from("produtos_eyemobile")
+    .select("codigo, descricao, custo_atual, preco_venda")
+    .eq("workspace_id", workspaceId);
+
+  const { data: prodsGerais } = await supabaseAdmin
+    .from("produtos")
+    .select("id, nome, preco, preco_custo")
+    .eq("workspace_id", workspaceId);
+
+  const totalProdutosCatalogo = Math.max(
+    (prodsEyemobile || []).length,
+    (prodsGerais || []).length,
+    productAggMap.size
+  );
+
+  // Consulta real de fichas técnicas cadastradas
+  const { data: fichasData } = await supabaseAdmin
+    .from("fichas_tecnicas")
+    .select("id, produto_id, custo_total")
+    .eq("workspace_id", workspaceId);
+
+  if (fichasData && fichasData.length > 0) {
+    sourcesConsulted.push("fichas_tecnicas");
+  }
+
+  const totalFichas = fichasData?.length || 0;
+  const coberturaFichasPercent =
+    totalProdutosCatalogo > 0 && totalFichas > 0
+      ? Math.min(100, Math.round((totalFichas / totalProdutosCatalogo) * 100))
+      : 0;
+
+  let cmvTotal: number | null = null;
+  let cmvPercent: number | null = null;
+  let lucroBrutoConfirmado: number | null = null;
+  let margemBrutaConfirmadaPercent: number | null = null;
+
+  let statusConfiabilidadeLucro: "confirmado" | "parcial" | "estimado" | "dados_insuficientes" =
+    "dados_insuficientes";
+
+  if (totalFichas > 0 && coberturaFichasPercent >= 70) {
+    statusConfiabilidadeLucro = "confirmado";
+  } else if (totalFichas > 0 && coberturaFichasPercent > 0) {
+    statusConfiabilidadeLucro = "parcial";
+  } else {
+    statusConfiabilidadeLucro = "dados_insuficientes";
+  }
+
+  const motivoConfiabilidade =
+    statusConfiabilidadeLucro === "confirmado"
+      ? "Custos apurados com base em fichas técnicas e notas fiscais comprovadas."
+      : statusConfiabilidadeLucro === "parcial"
+      ? `Custos apurados parcialmente (${coberturaFichasPercent}% de cobertura de fichas sobre catálogo de ${totalProdutosCatalogo} itens).`
+      : "Fichas técnicas não cadastradas no catálogo; CMV e lucro líquido confirmado indisponíveis.";
+
+  const resultado: ResultadoOperacionalIndicators = {
+    receitaCompetencia,
+    despesasCompetencia,
+    resultadoOperacional,
+    margemOperacionalPercent,
+    lucroBrutoConfirmado,
+    margemBrutaConfirmadaPercent,
+    cmvTotal,
+    cmvPercent,
+    coberturaFichasPercent,
+    statusConfiabilidadeLucro,
+    motivoConfiabilidade,
+  };
+
+  const produtosComCusto = new Set<string>();
+  (fichasData || []).forEach((f: any) => {
+    if (f.produto_id) produtosComCusto.add(String(f.produto_id).toLowerCase().trim());
+  });
+  (prodsEyemobile || []).forEach((p: any) => {
+    if (Number(p.custo_atual || 0) > 0 && p.descricao) {
+      produtosComCusto.add(String(p.descricao).toLowerCase().trim());
+    }
+  });
+
   const sortedByFat = Array.from(productAggMap.values())
     .sort((a, b) => b.faturamento - a.faturamento)
     .slice(0, 5)
@@ -400,7 +447,7 @@ export async function collectExecutiveReportIndicators(
         nome: p.nome,
         quantidade: p.quantidade,
         faturamento: p.faturamento,
-        custoComprovadoNota: false,
+        custoComprovadoNota: produtosComCusto.has(p.nome.toLowerCase().trim()),
       })
     );
 
@@ -413,17 +460,17 @@ export async function collectExecutiveReportIndicators(
         nome: p.nome,
         quantidade: p.quantidade,
         faturamento: p.faturamento,
-        custoComprovadoNota: false,
+        custoComprovadoNota: produtosComCusto.has(p.nome.toLowerCase().trim()),
       })
     );
 
   const produtos: ProdutosRentabilidadeIndicators = {
     top5Faturamento: sortedByFat,
     top5Quantidade: sortedByQtd,
-    produtosComCustoCadastrado: fichasData?.length || 0,
-    totalProdutosCatalogo: Math.max(productAggMap.size, fichasData?.length || 0),
+    produtosComCustoCadastrado: totalFichas,
+    totalProdutosCatalogo,
     coberturaCustosPercent: coberturaFichasPercent,
-    produtosSemCustoConhecido: Math.max(0, productAggMap.size - (fichasData?.length || 0)),
+    produtosSemCustoConhecido: Math.max(0, totalProdutosCatalogo - totalFichas),
     oportunidadesComerciais:
       sortedByFat.length > 0
         ? [

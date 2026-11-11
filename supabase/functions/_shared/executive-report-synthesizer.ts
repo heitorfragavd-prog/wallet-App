@@ -212,6 +212,11 @@ Analise os indicadores financeiros reais e produza:
    - "grauConfianca": "alto", "medio" ou "baixo"
    - "acaoRecomendada": instrução prática e clara
 
+REGRA DE FIDELIDADE NUMÉRICA ABSOLUTA:
+- NUNCA invente, modifique ou recalcule números financeiros que divirjam dos dados do payload.
+- Utilize estritamente os números apurados pelo coletor contábil.
+- Toda recomendação deve ser diretamente acionável e relevante para o proprietário da empresa.
+
 Responda ESTRITAMENTE em formato JSON puro:
 {
   "executiveSummary": "...",
@@ -219,9 +224,9 @@ Responda ESTRITAMENTE em formato JSON puro:
 }`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000); // 12 segundos timeout
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15 segundos timeout
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
     const response = await fetch(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -246,6 +251,9 @@ Responda ESTRITAMENTE em formato JSON puro:
     clearTimeout(timeout);
 
     if (!response.ok) {
+      if (response.status === 429 || response.status === 503) {
+        throw new Error(`Gemini temporariamente indisponível ou limite de cota atingido: HTTP ${response.status}`);
+      }
       throw new Error(`Falha no Gemini: HTTP ${response.status}`);
     }
 
@@ -260,14 +268,23 @@ Responda ESTRITAMENTE em formato JSON puro:
       throw new Error("Estrutura JSON da IA incompatível");
     }
 
-    const tokensUsed = resJson.usageMetadata?.totalTokenCount || 450;
-    const estimatedCost = (tokensUsed / 1_000_000) * 0.15; // Custo estimado Flash
+    const promptTokens = resJson.usageMetadata?.promptTokenCount || 350;
+    const candidatesTokens = resJson.usageMetadata?.candidatesTokenCount || 150;
+    const tokensUsed = resJson.usageMetadata?.totalTokenCount || (promptTokens + candidatesTokens);
+
+    // Custo oficial gemini-2.5-flash: $0.075 / milhão input, $0.30 / milhão output
+    const estimatedCost =
+      (promptTokens / 1_000_000) * 0.075 + (candidatesTokens / 1_000_000) * 0.30;
+
+    console.log(
+      `[executive-report-synthesizer] model=gemini-2.5-flash tokens=${tokensUsed} costUsd=${estimatedCost.toFixed(6)} status=completed`
+    );
 
     return {
       executiveSummary: parsed.executiveSummary,
       recommendations: parsed.recommendations.slice(0, 5),
       status: "completed",
-      aiModel: "gemini-1.5-flash",
+      aiModel: "gemini-2.5-flash",
       aiTokensUsed: tokensUsed,
       aiEstimatedCostUsd: Number(estimatedCost.toFixed(6)),
       dataQualityAlerts,
