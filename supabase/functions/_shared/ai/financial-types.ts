@@ -242,3 +242,31 @@ export interface CommercialExperimentRecord {
   createdAt: string;
 }
 
+export interface CashClosingRecord {
+  id: string;
+  workspaceId: string;
+  dataFechamento: string;
+  status: string;
+  sobra: number | null;
+  totalInformado: Record<string, number>;
+  eyemobileTotal: Record<string, number>;
+  envelopeTotal: Record<string, number>;
+  observacao: string | null;
+  createdAt: string;
+}
+
+export interface OperationalReminderRecord {
+  id: string;
+  userId: string;
+  workspaceId?: string | null;
+  sourceTable: "lembretes" | "compromissos";
+  titulo: string;
+  descricao: string | null;
+  data: string | null;
+  hora: string | null;
+  tipo: string | null;
+  status: string;
+  local: string | null;
+  createdAt: string;
+}
+

@@ -17,6 +17,8 @@ import type {
   EmployeePaymentRecord,
   GrowthOpportunityRecord,
   CommercialExperimentRecord,
+  CashClosingRecord,
+  OperationalReminderRecord,
 } from "./financial-types.ts";
 import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./query-tools.ts";
 
@@ -38,9 +40,12 @@ export interface FinancialDataQuery {
     | "colaborador_pagamentos"
     | "colaborador_acertos"
     | "wallet_growth_opportunities"
-    | "wallet_commercial_experiments";
+    | "wallet_commercial_experiments"
+    | "fechamentos_caixa"
+    | "lembretes"
+    | "compromissos";
   columns: string;
-  equals: { workspace_id: string; user_id?: string; [key: string]: unknown };
+  equals: { workspace_id?: string; user_id?: string; [key: string]: unknown };
   dateRange?: {
     column: "data" | "data_vencimento" | "data_emissao" | "created_at";
     start: string;
@@ -601,6 +606,115 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           createdAt: String(row.created_at ?? ""),
         };
       });
+    },
+    async listCashClosings(context, period) {
+      const normalizeMethodMap = (raw: unknown): Record<string, number> => {
+        if (!raw || typeof raw !== "object") return {};
+        const out: Record<string, number> = {};
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          const num = Number(v ?? 0);
+          if (Number.isFinite(num)) out[k] = num;
+        }
+        return out;
+      };
+      const normalizeClosingDate = (raw: string, fallbackIso: string): string => {
+        const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+        return fallbackIso.slice(0, 10);
+      };
+
+      const rows = await execute({
+        table: "fechamentos_caixa",
+        columns:
+          "id,workspace_id,data_fechamento,status,sobra,total,eyemobile_total,envelope_total,observacao,created_at",
+        equals: { workspace_id: context.workspaceId },
+      });
+
+      const mapped = rows.map((row): CashClosingRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          dataFechamento: String(row.data_fechamento ?? ""),
+          status: String(row.status ?? "pendente"),
+          sobra: row.sobra !== null && row.sobra !== undefined ? amount(row.sobra) : null,
+          totalInformado: normalizeMethodMap(row.total),
+          eyemobileTotal: normalizeMethodMap(row.eyemobile_total),
+          envelopeTotal: normalizeMethodMap(row.envelope_total),
+          observacao: row.observacao ? String(row.observacao) : null,
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+
+      if (!period) return mapped;
+      return mapped.filter((rec) => {
+        const isoDate = normalizeClosingDate(rec.dataFechamento, rec.createdAt);
+        return (!period.start || isoDate >= period.start) && (!period.end || isoDate <= period.end);
+      });
+    },
+    async listOperationalReminders(context, period) {
+      const results: OperationalReminderRecord[] = [];
+
+      try {
+        const lembreteRows = await execute({
+          table: "lembretes",
+          columns: "id,user_id,titulo,descricao,data,hora,tipo,status,created_at",
+          equals: { user_id: context.userId },
+          dateRange: period ? { column: "data", ...period } : undefined,
+        });
+        lembreteRows.forEach((row) => {
+          if (row.user_id !== context.userId) {
+            throw new Error("repository_scope_mismatch");
+          }
+          results.push({
+            id: String(row.id),
+            userId: String(row.user_id),
+            workspaceId: null,
+            sourceTable: "lembretes",
+            titulo: String(row.titulo ?? ""),
+            descricao: row.descricao ? String(row.descricao) : null,
+            data: row.data ? String(row.data).slice(0, 10) : null,
+            hora: row.hora ? String(row.hora) : null,
+            tipo: row.tipo ? String(row.tipo) : null,
+            status: String(row.status ?? "pendente"),
+            local: null,
+            createdAt: String(row.created_at ?? ""),
+          });
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === "repository_scope_mismatch") throw err;
+      }
+
+      try {
+        const compRows = await execute({
+          table: "compromissos",
+          columns: "id,user_id,workspace_id,titulo,local,data,hora,repetir,created_at",
+          equals: { workspace_id: context.workspaceId },
+          dateRange: period ? { column: "data", ...period } : undefined,
+        });
+        compRows.forEach((row) => {
+          assertScope(row, context);
+          results.push({
+            id: String(row.id),
+            userId: String(row.user_id ?? context.userId),
+            workspaceId: String(row.workspace_id),
+            sourceTable: "compromissos",
+            titulo: String(row.titulo ?? ""),
+            descricao: row.repetir ? `Repetição: ${String(row.repetir)}` : null,
+            data: row.data ? String(row.data).slice(0, 10) : null,
+            hora: row.hora ? String(row.hora) : null,
+            tipo: "compromisso",
+            status: "agendado",
+            local: row.local ? String(row.local) : null,
+            createdAt: String(row.created_at ?? ""),
+          });
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === "repository_scope_mismatch") throw err;
+      }
+
+      return results;
     },
   };
 }
