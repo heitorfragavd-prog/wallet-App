@@ -9,6 +9,12 @@ import type {
   DocumentSessionRecord,
   SalesPdvDetailRecord,
   SalesPdvItemRecord,
+  InventoryItemRecord,
+  RecipeCardRecord,
+  SupplierRecord,
+  EmployeeRecord,
+  EmployeeScheduleRecord,
+  EmployeePaymentRecord,
 } from "./financial-types.ts";
 import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./query-tools.ts";
 
@@ -21,7 +27,13 @@ export interface FinancialDataQuery {
     | "dividas"
     | "notas_fiscais_compra"
     | "sefaz_documentos_recebidos"
-    | "documento_sessoes";
+    | "documento_sessoes"
+    | "produtos_eyemobile"
+    | "v_produtos_custo"
+    | "fornecedores"
+    | "colaboradores"
+    | "colaborador_escalas"
+    | "colaborador_pagamentos";
   columns: string;
   equals: { workspace_id: string; user_id?: string; [key: string]: unknown };
   dateRange?: {
@@ -327,6 +339,146 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           items: itemsList,
           createdAt: String(row.created_at ?? ""),
           status: row.status_transacao ? String(row.status_transacao) : undefined,
+        };
+      });
+    },
+    async listInventoryItems(context, params) {
+      const rows = await execute({
+        table: "produtos_eyemobile",
+        columns: "id,user_id,workspace_id,codigo,descricao,categoria,preco_venda,custo_atual,estoque_atual,estoque_minimo,estoque_ideal,unidade_medida,multiplo_compra,fornecedor_padrao,margem_real_percentual,ativo",
+        equals: {
+          workspace_id: context.workspaceId,
+          ...(params?.categoria ? { categoria: params.categoria } : {}),
+        },
+      });
+      return rows.map((row): InventoryItemRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          codigo: row.codigo ? String(row.codigo) : null,
+          descricao: String(row.descricao ?? "Produto sem descrição"),
+          categoria: row.categoria ? String(row.categoria) : null,
+          precoVenda: amount(row.preco_venda),
+          custoAtual: amount(row.custo_atual),
+          estoqueAtual: amount(row.estoque_atual),
+          estoqueMinimo: amount(row.estoque_minimo),
+          estoqueIdeal: amount(row.estoque_ideal),
+          unidadeMedida: String(row.unidade_medida ?? "UN"),
+          multiploCompra: amount(row.multiplo_compra) || 1,
+          fornecedorPadrao: row.fornecedor_padrao ? String(row.fornecedor_padrao) : null,
+          margemRealPercentual: amount(row.margem_real_percentual),
+          ativo: row.ativo !== false,
+        };
+      });
+    },
+    async listRecipeCards(context) {
+      const rows = await execute({
+        table: "v_produtos_custo",
+        columns: "id,user_id,workspace_id,nome,preco_venda,custo_total,margem_percentual,status_margem,status_ficha,qtd_insumos,qtd_insumos_sem_custo,ativo",
+        equals: { workspace_id: context.workspaceId },
+      });
+      return rows.map((row): RecipeCardRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          nome: String(row.nome ?? ""),
+          precoVenda: amount(row.preco_venda),
+          custoTotal: amount(row.custo_total),
+          margemPercentual: row.margem_percentual !== null && row.margem_percentual !== undefined ? amount(row.margem_percentual) : null,
+          statusMargem: String(row.status_margem ?? "perigoso"),
+          statusFicha: String(row.status_ficha ?? "sem_ficha"),
+          qtdInsumos: Number(row.qtd_insumos ?? 0),
+          qtdInsumosSemCusto: Number(row.qtd_insumos_sem_custo ?? 0),
+          ativo: row.ativo !== false,
+        };
+      });
+    },
+    async listSuppliers(context) {
+      const rows = await execute({
+        table: "fornecedores",
+        columns: "id,user_id,workspace_id,nome,cnpj,telefone,email,contato_nome,prazo_pagamento_dias",
+        equals: { workspace_id: context.workspaceId },
+      });
+      return rows.map((row): SupplierRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          nome: String(row.nome ?? ""),
+          cnpj: row.cnpj ? String(row.cnpj) : null,
+          telefone: row.telefone ? String(row.telefone) : null,
+          email: row.email ? String(row.email) : null,
+          contatoNome: row.contato_nome ? String(row.contato_nome) : null,
+          prazoPagamentoDias: Number(row.prazo_pagamento_dias ?? 30),
+        };
+      });
+    },
+    async listEmployees(context) {
+      const rows = await execute({
+        table: "colaboradores",
+        columns: "id,workspace_id,nome,cargo,tipo,status,salario_bruto,vale_transporte,vale_refeicao,dia_pagamento,valor_diaria,data_admissao",
+        equals: { workspace_id: context.workspaceId },
+      });
+      return rows.map((row): EmployeeRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          nome: String(row.nome ?? ""),
+          cargo: row.cargo ? String(row.cargo) : null,
+          tipo: row.tipo ? String(row.tipo) : null,
+          status: String(row.status ?? "ativo"),
+          salarioBruto: amount(row.salario_bruto),
+          valeTransporte: amount(row.vale_transporte),
+          valeRefeicao: amount(row.vale_refeicao),
+          diaPagamento: row.dia_pagamento !== null && row.dia_pagamento !== undefined ? Number(row.dia_pagamento) : null,
+          valorDiaria: amount(row.valor_diaria),
+          dataAdmissao: row.data_admissao ? String(row.data_admissao) : null,
+        };
+      });
+    },
+    async listEmployeeSchedules(context, period) {
+      const rows = await execute({
+        table: "colaborador_escalas",
+        columns: "id,workspace_id,colaborador_id,data,turno,valor_diaria,valor_total,status,observacao",
+        equals: { workspace_id: context.workspaceId },
+        dateRange: period ? { column: "data" as any, ...period } : undefined,
+      });
+      return rows.map((row): EmployeeScheduleRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          colaboradorId: String(row.colaborador_id),
+          data: String(row.data),
+          turno: row.turno ? String(row.turno) : null,
+          valorDiaria: amount(row.valor_diaria),
+          valorTotal: amount(row.valor_total),
+          status: String(row.status ?? "agendado"),
+          observacao: row.observacao ? String(row.observacao) : null,
+        };
+      });
+    },
+    async listEmployeePayments(context, period) {
+      const rows = await execute({
+        table: "colaborador_pagamentos",
+        columns: "id,workspace_id,acerto_id,valor,status,origem,paid_at,created_at",
+        equals: { workspace_id: context.workspaceId },
+        dateRange: period ? { column: "created_at" as any, ...period } : undefined,
+      });
+      return rows.map((row): EmployeePaymentRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          acertoId: row.acerto_id ? String(row.acerto_id) : null,
+          valor: amount(row.valor),
+          status: String(row.status ?? "pendente"),
+          origem: row.origem ? String(row.origem) : null,
+          paidAt: row.paid_at ? String(row.paid_at) : null,
+          createdAt: String(row.created_at ?? ""),
         };
       });
     },
