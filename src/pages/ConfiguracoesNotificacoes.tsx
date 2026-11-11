@@ -262,6 +262,21 @@ const ConfiguracoesNotificacoes = () => {
                     </Badge>
                   )}
                 </div>
+                {(push.permission === "denied" || (push.permission === "default" && push.promptDismissed)) && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-1">
+                    <p className="font-medium text-amber-100">
+                      {push.permission === "denied"
+                        ? "Notificações bloqueadas neste navegador"
+                        : "O navegador fechou ou silenciou o pedido de permissão"}
+                    </p>
+                    <p>
+                      Clique no ícone de ajustes/cadeado ao lado do endereço do site na barra do navegador, altere{" "}
+                      <strong>Notificações</strong> para <strong>Permitir</strong> e clique novamente em{" "}
+                      <strong>Ativar notificações no navegador</strong>. Se estiver no Windows, confirme também que
+                      as notificações do navegador não estão silenciadas no sistema.
+                    </p>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   {push.isSubscribed ? (
                     <Button variant="outline" onClick={push.unregisterPush} disabled={push.loading}>
