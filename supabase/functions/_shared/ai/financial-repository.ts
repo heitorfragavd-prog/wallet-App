@@ -4,14 +4,31 @@ import type {
   CanonicalFinancialRecord,
   FinancialRecordKind,
   FinancialSourceType,
+  FiscalNoteRecord,
+  SefazDocumentRecord,
+  DocumentSessionRecord,
+  SalesPdvDetailRecord,
+  SalesPdvItemRecord,
 } from "./financial-types.ts";
 import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./query-tools.ts";
 
 export interface FinancialDataQuery {
-  table: "receitas" | "despesas" | "transacoes" | "contas_usuario" | "dividas";
+  table:
+    | "receitas"
+    | "despesas"
+    | "transacoes"
+    | "contas_usuario"
+    | "dividas"
+    | "notas_fiscais_compra"
+    | "sefaz_documentos_recebidos"
+    | "documento_sessoes";
   columns: string;
-  equals: { user_id: string; workspace_id: string; [key: string]: unknown };
-  dateRange?: { column: "data" | "data_vencimento"; start: string; end: string };
+  equals: { workspace_id: string; user_id?: string; [key: string]: unknown };
+  dateRange?: {
+    column: "data" | "data_vencimento" | "data_emissao" | "created_at";
+    start: string;
+    end: string;
+  };
   /** Optional LIKE filter: { column, pattern }. Applied with SQL LIKE operator. */
   like?: { column: string; pattern: string };
 }
@@ -66,6 +83,11 @@ function normalizeRecords(
       occurredOn: String(row.data),
       deduplicationKey: dedup,
       description: desc,
+      status: typeof row.status_transacao === "string"
+        ? String(row.status_transacao)
+        : typeof row.status === "string"
+          ? String(row.status)
+          : undefined,
     };
   });
 }
@@ -194,12 +216,119 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       // Consulta todas as vendas da loja no workspace_id (inclui sincronizações por usuário integrador).
       const rows = await execute({
         table: "transacoes",
-        columns: "id,user_id,workspace_id,descricao,valor,data,tipo",
+        columns: "id,user_id,workspace_id,descricao,valor,data,tipo,status_transacao",
         equals: { workspace_id: context.workspaceId, tipo: "receita" },
         dateRange: period ? { column: "data", ...period } : undefined,
         like: { column: "descricao", pattern: "Venda Eyemobile %" },
       });
       return deduplicateCanonicalRecords(normalizeRecords(rows, context, "transacao", "income"));
+    },
+    async listFiscalNotes(context, period) {
+      const rows = await execute({
+        table: "notas_fiscais_compra",
+        columns: "id,user_id,workspace_id,numero_nf,serie_nf,fornecedor,cnpj_fornecedor,data_emissao,data_entrada,valor_total,valor_icms,valor_produtos,chave_acesso,status,origem,created_at",
+        equals: { workspace_id: context.workspaceId },
+        dateRange: period ? { column: "data_emissao", ...period } : undefined,
+      });
+      return rows.map((row): FiscalNoteRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          numeroNf: row.numero_nf ? String(row.numero_nf) : null,
+          serieNf: row.serie_nf ? String(row.serie_nf) : null,
+          fornecedor: row.fornecedor ? String(row.fornecedor) : null,
+          cnpjFornecedor: row.cnpj_fornecedor ? String(row.cnpj_fornecedor) : null,
+          dataEmissao: row.data_emissao ? String(row.data_emissao) : null,
+          dataEntrada: row.data_entrada ? String(row.data_entrada) : null,
+          valorTotal: amount(row.valor_total),
+          valorIcms: amount(row.valor_icms),
+          valorProdutos: amount(row.valor_produtos),
+          chaveAcesso: row.chave_acesso ? String(row.chave_acesso) : null,
+          status: String(row.status ?? "pendente"),
+          origem: row.origem ? String(row.origem) : null,
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+    },
+    async listSefazDocuments(context, period) {
+      const rows = await execute({
+        table: "sefaz_documentos_recebidos",
+        columns: "id,user_id,workspace_id,chave_acesso,tipo_documento,emitente_nome,emitente_cnpj,data_emissao,valor_total,status_processamento,created_at",
+        equals: { workspace_id: context.workspaceId },
+        dateRange: period ? { column: "data_emissao", ...period } : undefined,
+      });
+      return rows.map((row): SefazDocumentRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          chaveAcesso: row.chave_acesso ? String(row.chave_acesso) : null,
+          tipoDocumento: row.tipo_documento ? String(row.tipo_documento) : null,
+          emitenteNome: row.emitente_nome ? String(row.emitente_nome) : null,
+          emitenteCnpj: row.emitente_cnpj ? String(row.emitente_cnpj) : null,
+          dataEmissao: row.data_emissao ? String(row.data_emissao) : null,
+          valorTotal: amount(row.valor_total),
+          statusProcessamento: String(row.status_processamento ?? "pendente"),
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+    },
+    async listDocumentSessions(context, period) {
+      const rows = await execute({
+        table: "documento_sessoes",
+        columns: "id,user_id,workspace_id,documento_tipo,chave_acesso,numero_nf,fornecedor,status,created_at",
+        equals: { workspace_id: context.workspaceId },
+        dateRange: period ? { column: "created_at", ...period } : undefined,
+      });
+      return rows.map((row): DocumentSessionRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          documentoTipo: row.documento_tipo ? String(row.documento_tipo) : null,
+          chaveAcesso: row.chave_acesso ? String(row.chave_acesso) : null,
+          numeroNf: row.numero_nf ? String(row.numero_nf) : null,
+          fornecedor: row.fornecedor ? String(row.fornecedor) : null,
+          status: String(row.status ?? "iniciada"),
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+    },
+    async listSalesPdvDetails(context, period) {
+      const rows = await execute({
+        table: "transacoes",
+        columns: "id,user_id,workspace_id,descricao,valor,data,metodo_pagamento,itens,created_at,status_transacao",
+        equals: { workspace_id: context.workspaceId, tipo: "receita" },
+        dateRange: period ? { column: "data", ...period } : undefined,
+        like: { column: "descricao", pattern: "Venda Eyemobile %" },
+      });
+      return rows.map((row): SalesPdvDetailRecord => {
+        assertScope(row, context);
+        let itemsList: SalesPdvItemRecord[] = [];
+        if (Array.isArray(row.itens)) {
+          itemsList = (row.itens as any[]).map((it) => ({
+            id: it.id || "",
+            productName: String(it.product_name || it.name || "Item sem nome"),
+            quantity: Number(it.quantity || it.quantidade || 1),
+            price: Number(it.price || it.preco || 0),
+            total: Number(it.total || Number(it.quantity || 1) * Number(it.price || 0)),
+            productId: it.product_id,
+            time: it.time,
+          }));
+        }
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          description: String(row.descricao ?? ""),
+          amount: amount(row.valor),
+          date: String(row.data),
+          paymentMethod: row.metodo_pagamento ? String(row.metodo_pagamento) : null,
+          items: itemsList,
+          createdAt: String(row.created_at ?? ""),
+          status: row.status_transacao ? String(row.status_transacao) : undefined,
+        };
+      });
     },
   };
 }

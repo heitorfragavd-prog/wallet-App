@@ -180,10 +180,15 @@ export async function runOrchestratorTurn(
     totalTokens: 0,
   };
 
+  // Filtra definições de ferramentas expostas ao LLM estritamente pela allowlist do catalog (Gate 4)
+  const availableToolDefinitions = OPENAI_ALL_TOOLS.filter(
+    (toolDef) => catalog[toolDef.function.name] !== undefined
+  );
+
   while (iterations < maxIterations) {
     iterations++;
 
-    const response = await runner.generateCompletion(messages, OPENAI_ALL_TOOLS);
+    const response = await runner.generateCompletion(messages, availableToolDefinitions);
 
     if (response.usage) {
       totalUsage.promptTokens += response.usage.promptTokens;

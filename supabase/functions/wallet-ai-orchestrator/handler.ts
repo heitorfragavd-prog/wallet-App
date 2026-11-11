@@ -56,6 +56,7 @@ import {
 import {
   routeUserQueryToSpecialists,
   fetchAndExecuteFinancialSpecialist,
+  fetchAndExecuteSpecialistTurn,
   buildFinancialSpecialistDeterministicResponse,
 } from "../_shared/ai/specialist-router.ts";
 
@@ -729,10 +730,10 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
-    // ─── GATE 1: EXECUÇÃO DETERMINÍSTICA DO AGENTE FINANCEIRO (Zero Custo de IA) ───
-    if (routingPlan.isDeterministicPossible && routingPlan.primarySpecialist === "financeiro") {
+    // ─── GATE 1 & 2: EXECUÇÃO DETERMINÍSTICA DOS ESPECIALISTAS (Zero Custo de IA) ───
+    if (routingPlan.isDeterministicPossible) {
       const repository = dependencies.repoFactory(context);
-      const detResult = await fetchAndExecuteFinancialSpecialist(
+      const detResult = await fetchAndExecuteSpecialistTurn(
         userPromptText,
         context,
         repository,
@@ -740,13 +741,15 @@ export async function handleOrchestratorHttpRequest(
 
       if (detResult.handled && detResult.answer) {
         const durationMs = Date.now() - startTime;
+        const requestChannel = typeof body.channel === "string" && body.channel.trim() ? body.channel.trim() : "web";
+
         if (dependencies.telemetryLogger) {
           try {
             await dependencies.telemetryLogger.logTelemetry({
               workspaceId: context.workspaceId,
               userId: context.userId,
               conversationId,
-              channel: typeof body.channel === "string" ? body.channel : "web",
+              channel: requestChannel,
               model: "deterministic",
               agentBrain: requestedAgentType,
               promptTokens: 0,
@@ -755,10 +758,10 @@ export async function handleOrchestratorHttpRequest(
               estimatedCostUsd: 0,
               durationMs,
               complexityLevel: routingPlan.complexityLevel,
-              department: SPECIALIST_AGENTS_REGISTRY.financeiro.department,
+              department: detResult.department,
               status: "success",
               metadata: {
-                specialist_agent_id: "financeiro",
+                specialist_agent_id: detResult.specialist,
                 deterministic: true,
                 coordinating_ceo: false,
               },
@@ -772,14 +775,14 @@ export async function handleOrchestratorHttpRequest(
           await dependencies.auditLogger.logEvent({
             userId: context.userId,
             workspaceId: context.workspaceId,
-            toolName: "deterministic_financial_specialist",
+            toolName: `deterministic_${detResult.specialist}_specialist`,
             durationMs,
             status: "success",
             recordsCount: 1,
             metadata: {
               correlationId,
               conversationId,
-              specialist: "financeiro",
+              specialist: detResult.specialist,
               model: "deterministic",
             },
           });
@@ -795,7 +798,7 @@ export async function handleOrchestratorHttpRequest(
                 userId: context.userId,
                 role: "user",
                 content: lastUserMsg.content,
-                channel: "web",
+                channel: requestChannel,
               });
             }
             await dependencies.conversationRepo.appendMessage({
@@ -805,7 +808,7 @@ export async function handleOrchestratorHttpRequest(
               role: "assistant",
               content: detResult.answer,
               tokensCount: 0,
-              channel: "web",
+              channel: requestChannel,
             });
           } catch (mErr) {
             console.warn("[handler] Falha ao persistir mensagem determinística na memória:", mErr);
@@ -820,8 +823,8 @@ export async function handleOrchestratorHttpRequest(
               role: "assistant",
               content: detResult.answer,
             },
-            specialist: "financeiro",
-            department: SPECIALIST_AGENTS_REGISTRY.financeiro.department,
+            specialist: detResult.specialist,
+            department: detResult.department,
             model: "deterministic",
             usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
             estimatedCostUsd: 0,
@@ -1019,6 +1022,7 @@ export async function handleOrchestratorHttpRequest(
 
     // Persistência da mensagem do usuário e resposta do assistente na memória canônica
     if (dependencies.conversationRepo && conversationId) {
+      const memoryChannel = typeof body.channel === "string" && body.channel.trim() ? body.channel.trim() : "web";
       try {
         const lastUserMsg = messages.filter((m) => m.role === "user").pop();
         if (lastUserMsg) {
@@ -1028,7 +1032,7 @@ export async function handleOrchestratorHttpRequest(
             userId: context.userId,
             role: "user",
             content: lastUserMsg.content,
-            channel: "web",
+            channel: memoryChannel,
           });
         }
         if (turnResult.finalMessage?.content) {
@@ -1039,7 +1043,7 @@ export async function handleOrchestratorHttpRequest(
             role: "assistant",
             content: turnResult.finalMessage.content,
             tokensCount: turnResult.usage.totalTokens,
-            channel: "web",
+            channel: memoryChannel,
           });
         }
 

@@ -9,6 +9,10 @@ import type {
   CanonicalFinancialRecord,
   FinancialPeriodContext,
   FinancialSourceReference,
+  FiscalNoteRecord,
+  SefazDocumentRecord,
+  DocumentSessionRecord,
+  SalesPdvDetailRecord,
 } from "./financial-types.ts";
 import type { OperationsAgent } from "./operations-agent.ts";
 import type { PaymentMethod } from "./operations-types.ts";
@@ -41,6 +45,10 @@ export interface FinancialQueryRepository {
    * (que incluem Pix/Cartão líquidos, manuais etc.).
    */
   listSalesPDV(context: AiExecutionContext, period: DatePeriod): Promise<CanonicalFinancialRecord[]>;
+  listFiscalNotes?(context: AiExecutionContext, period?: DatePeriod): Promise<FiscalNoteRecord[]>;
+  listSefazDocuments?(context: AiExecutionContext, period?: DatePeriod): Promise<SefazDocumentRecord[]>;
+  listDocumentSessions?(context: AiExecutionContext, period?: DatePeriod): Promise<DocumentSessionRecord[]>;
+  listSalesPdvDetails?(context: AiExecutionContext, period?: DatePeriod): Promise<SalesPdvDetailRecord[]>;
   getAiTelemetryUsage?(context: AiExecutionContext): Promise<{
     orcamentoMensalUsd: number;
     custoAcumuladoMesUsd: number;
