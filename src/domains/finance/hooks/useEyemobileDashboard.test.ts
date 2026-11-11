@@ -22,7 +22,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) =>
   createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, children);
 
 function mockTransacoes(rows: unknown[], configs: unknown[] = [{ id: "cfg-1" }]) {
-  const transacoesChain: any = {
+  const transacoesChain: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     like: vi.fn().mockReturnThis(),
@@ -34,14 +34,14 @@ function mockTransacoes(rows: unknown[], configs: unknown[] = [{ id: "cfg-1" }])
       return Promise.resolve({ data: slice, error: null });
     }),
     limit: vi.fn().mockReturnThis(),
-    then: (resolve: any) => Promise.resolve({ data: rows, error: null }).then(resolve),
+    then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows, error: null }).then(resolve),
   };
 
-  const configChain: any = {
+  const configChain: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: configs, error: null }),
-    then: (resolve: any) => Promise.resolve({ data: configs, error: null }).then(resolve),
+    then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: configs, error: null }).then(resolve),
   };
 
   vi.mocked(supabase.from).mockImplementation(((table: string) => {

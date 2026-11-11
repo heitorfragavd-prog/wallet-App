@@ -92,7 +92,7 @@ async function buildLocalFallbackDashboard(
 
   // Paginação segura em lotes de 1000 registros para cobrir grandes períodos sem truncar em 2000
   const PAGE_SIZE = 1000;
-  const allTransacoes: any[] = [];
+  const allTransacoes: Array<Record<string, unknown>> = [];
   let from = 0;
   let hasMore = true;
 
