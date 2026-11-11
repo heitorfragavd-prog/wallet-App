@@ -38,7 +38,7 @@ async function findStartOffsetParallel(
   storeId?: string,
   dbCountBeforeDate: number = 0,
   totalDbCount: number = 0,
-  knownMaxOffset: number = 85000
+  knownMaxOffset: number = 85278
 ): Promise<number> {
   const getTxAtOffset = async (off: number) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(off) });
@@ -47,21 +47,30 @@ async function findStartOffsetParallel(
     // Eyemobile API standard endpoint is /transactions
     const txUrl = `${baseUrl}/transactions?${params.toString()}`;
     
-    try {
-      const response = await fetch(txUrl, { headers });
-      if (response.ok) {
-        const data = await response.json();
-        return data.data?.[0] || null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(txUrl, { headers });
+        if (response.ok) {
+          const data = await response.json();
+          return data.data?.[0] || null;
+        }
+        if (response.status === 429 || response.status >= 500) {
+          await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+          continue;
+        }
+        return null;
+      } catch {
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
       }
-      return null;
-    } catch {
-      return null;
     }
+    return null;
   };
 
-  // We search dynamically across the full range of completed sales without hardcoded page caps
+  // Limite superior conhecido: a esteira contemporânea de 2026 encerra em torno de 85278
+  // Qualquer offset além disso na API Eyemobile cai na cauda arquivada antiga de 2025 ou vazio
+  const maxSafeOffset = Math.max(knownMaxOffset, 85278);
   let lowPage = 0;
-  let highPage = Math.max(900, Math.ceil(knownMaxOffset / limit) + 20);
+  let highPage = Math.ceil(maxSafeOffset / limit);
   let ansPage = highPage;
   
   while (lowPage <= highPage) {
@@ -72,12 +81,20 @@ async function findStartOffsetParallel(
       ansPage = midPage;
       continue;
     }
-    const txDate = toSaoPauloDate(checkTx.time || checkTx.created_at || "");
-    const isCompleted = checkTx.completed && !checkTx.cancelled;
+    const rawTime = checkTx.time || checkTx.created_at || "";
+    const txDate = toSaoPauloDate(rawTime);
+    const txYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
+
+    // Proteção de fronteira: se a transação for de ano anterior (ex: 2025 arquivado),
+    // significa que ultrapassamos o fluxo ativo contemporâneo de 2026 e devemos recuar.
+    if (txYear < 2026) {
+      highPage = midPage - 1;
+      continue;
+    }
     
-    // If we hit an uncompleted or cancelled transaction, it means we have crossed the boundary of completed sales,
-    // so the completed transactions we seek must be to the left.
-    if (!isCompleted || txDate >= startDateStr) {
+    // Busca temporal estrita por data: vendas canceladas/incompletas NÃO devem
+    // distorcer a posição cronológica do cursor.
+    if (txDate >= startDateStr) {
       ansPage = midPage;
       highPage = midPage - 1;
     } else {
@@ -108,9 +125,10 @@ async function findStartOffsetParallel(
     
     for (let i = 0; i < txs.length; i++) {
       const tx = txs[i];
-      const txDate = toSaoPauloDate(tx.time || tx.created_at || "");
-      const isCompleted = tx.completed && !tx.cancelled;
-      if (isCompleted && txDate >= startDateStr) {
+      const rawTime = tx.time || tx.created_at || "";
+      const txDate = toSaoPauloDate(rawTime);
+      const txYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
+      if (txYear >= 2026 && txDate >= startDateStr) {
         return prevPage * limit + i;
       }
     }
@@ -1449,13 +1467,28 @@ async function syncUserEyemobile(
       let fetchedHasMore = false;
 
       while (hasMore && pagesFetched < maxPages) {
-        // Build URL directly to /transactions
+        // Build URL directly to /transactions with resilient fetch and retry
         const salesUrl = `${baseUrl}/transactions?limit=${limit}&offset=${offset}`;
         console.log(`Fetching sales: ${salesUrl}`);
-        const salesResp = await fetch(salesUrl, { headers: apiHeaders });
-        if (!salesResp.ok) {
-          const errorText = await salesResp.text();
-          throw new Error(`Eyemobile API Transactions error: ${salesResp.status} - ${errorText}`);
+        let salesResp: Response | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            salesResp = await fetch(salesUrl, { headers: apiHeaders });
+            if (salesResp.ok) break;
+            if (salesResp.status === 429 || salesResp.status >= 500) {
+              console.warn(`[eyemobile-sync] Retentativa de fetch (status ${salesResp.status}) tentativa ${attempt + 1}`);
+              await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
+              continue;
+            }
+            break;
+          } catch (fetchErr) {
+            if (attempt === 2) throw fetchErr;
+            await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
+          }
+        }
+        if (!salesResp || !salesResp.ok) {
+          const errorText = salesResp ? await salesResp.text() : "Network error";
+          throw new Error(`Eyemobile API Transactions error: ${salesResp?.status || "unknown"} - ${errorText}`);
         }
         const salesData = await salesResp.json();
         console.log(`Sales page ${pagesFetched + 1}: ${salesData.data?.length || 0} items, has_more: ${salesData.has_more}`);
@@ -1531,8 +1564,23 @@ async function syncUserEyemobile(
           }
 
           let completedInPage = 0;
+          let reachedArchivedData = false;
+          let validItemsInPageCount = 0;
+
           for (let sIdx = 0; sIdx < salesData.data.length; sIdx++) {
             const sale = salesData.data[sIdx];
+            const rawTime = sale.time || sale.created_at || "";
+            const saleYear = rawTime ? parseInt(rawTime.substring(0, 4), 10) : 2026;
+
+            // Se encontramos dados arquivados antigos (< 2026), significa que a esteira contemporânea encerrou
+            if (saleYear < 2026) {
+              console.log(`[eyemobile-sync] Fronteira contemporânea atingida no offset ${offset + sIdx} (ano ${saleYear}). Encerrando paginação incremental.`);
+              reachedArchivedData = true;
+              break;
+            }
+
+            validItemsInPageCount++;
+
             // Vendas canceladas ou não-completadas não geram receita, mas NÃO interrompem a paginação do stream
             if (sale.cancelled || !sale.completed) {
               console.log(`[eyemobile-sync] Venda cancelada/incompleta ignorada no offset ${offset + sIdx} (venda #${sale.id}).`);
@@ -1602,6 +1650,20 @@ async function syncUserEyemobile(
             }
             salesCount++;
           }
+
+          if (reachedArchivedData) {
+            hasMore = false;
+            fetchedHasMore = false;
+            const newHighestOffset = offset + validItemsInPageCount;
+            const safeOffsetToSave = Math.max(config.last_synced_offset || 0, newHighestOffset);
+            await supabaseAdmin
+              .from("eyemobile_config")
+              .update({ last_synced_offset: safeOffsetToSave, updated_at: new Date().toISOString() })
+              .eq("user_id", user_id);
+            config.last_synced_offset = safeOffsetToSave;
+            break;
+          }
+
           fetchedHasMore = salesData.has_more === true;
           hasMore = salesData.has_more === true;
           const newHighestOffset = offset + salesData.data.length;
