@@ -48,6 +48,16 @@ import {
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
 import type { IActionProposalRepository } from "../_shared/ai/action-repository.ts";
 import type { EyemobileLiveClient } from "../wallet-ai-query/supabase-adapter.ts";
+import {
+  SPECIALIST_AGENTS_REGISTRY,
+  SpecialistAgentId,
+  authorizeSpecialistAccess,
+} from "../_shared/ai/specialist-registry.ts";
+import {
+  routeUserQueryToSpecialists,
+  fetchAndExecuteFinancialSpecialist,
+  buildFinancialSpecialistDeterministicResponse,
+} from "../_shared/ai/specialist-router.ts";
 
 export interface AuditEventLogger {
   logEvent(event: {
@@ -214,9 +224,13 @@ export async function handleOrchestratorHttpRequest(
     const lastUserMessage = messages.filter((m) => m.role === "user").pop();
     const userPromptText = typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "";
 
-    let complexityLevel = 1;
-    let detectedDepartment = "geral";
-    let defaultModelForComplexity = "gpt-4o-mini";
+    // Roteamento oficial dos Sete Especialistas do Wallet CEO 3.0
+    const routingPlan = routeUserQueryToSpecialists(userPromptText);
+    const primarySpecialistContract = SPECIALIST_AGENTS_REGISTRY[routingPlan.primarySpecialist];
+
+    let complexityLevel: number = routingPlan.complexityLevel;
+    let detectedDepartment = primarySpecialistContract?.department || "geral";
+    let defaultModelForComplexity = routingPlan.model === "gemini-2.5-flash" ? "gpt-4o-mini" : routingPlan.model;
 
     const promptLower = userPromptText.toLowerCase();
     if (
@@ -642,6 +656,186 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
+    // ─── GATE 0 & GATE 10: AUTORIZAÇÃO DO ESPECIALISTA SERVER-SIDE ───
+    const rawRoleStr = String(userRole).toLowerCase();
+    const isOwnerRole = context.isOwner ?? (rawRoleStr === "owner" || rawRoleStr === "proprietario" || rawRoleStr === "ceo");
+    const normSpecialistRole: "owner" | "admin" | "member" = isOwnerRole
+      ? "owner"
+      : (rawRoleStr === "admin" || rawRoleStr === "gerente" || rawRoleStr === "executive")
+      ? "admin"
+      : "member";
+
+    const primaryAuth = authorizeSpecialistAccess(routingPlan.primarySpecialist, normSpecialistRole);
+    if (!primaryAuth.authorized) {
+      if (dependencies.auditLogger) {
+        await dependencies.auditLogger.logEvent({
+          userId: context.userId,
+          workspaceId: context.workspaceId,
+          toolName: "wallet_ai_specialist_access_denied",
+          durationMs: Date.now() - startTime,
+          status: "error",
+          errorCode: "WALLET_AI_FORBIDDEN",
+          metadata: {
+            correlationId,
+            specialist: routingPlan.primarySpecialist,
+            userRole,
+            reason: primaryAuth.reason,
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "forbidden_specialist_access",
+          code: "WALLET_AI_FORBIDDEN",
+          message: primaryAuth.reason,
+          correlation_id: correlationId,
+        }),
+        { status: 403, headers: responseHeaders },
+      );
+    }
+
+    if (routingPlan.coordinatingCeo) {
+      for (const contrib of routingPlan.contributingSpecialists) {
+        const cAuth = authorizeSpecialistAccess(contrib, normSpecialistRole);
+        if (!cAuth.authorized) {
+          if (dependencies.auditLogger) {
+            await dependencies.auditLogger.logEvent({
+              userId: context.userId,
+              workspaceId: context.workspaceId,
+              toolName: "wallet_ai_specialist_access_denied",
+              durationMs: Date.now() - startTime,
+              status: "error",
+              errorCode: "WALLET_AI_FORBIDDEN",
+              metadata: {
+                correlationId,
+                specialist: contrib,
+                userRole,
+                reason: cAuth.reason,
+              },
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "forbidden_specialist_access",
+              code: "WALLET_AI_FORBIDDEN",
+              message: cAuth.reason,
+              correlation_id: correlationId,
+            }),
+            { status: 403, headers: responseHeaders },
+          );
+        }
+      }
+    }
+
+    // ─── GATE 1: EXECUÇÃO DETERMINÍSTICA DO AGENTE FINANCEIRO (Zero Custo de IA) ───
+    if (routingPlan.isDeterministicPossible && routingPlan.primarySpecialist === "financeiro") {
+      const repository = dependencies.repoFactory(context);
+      const detResult = await fetchAndExecuteFinancialSpecialist(
+        userPromptText,
+        context,
+        repository,
+      );
+
+      if (detResult.handled && detResult.answer) {
+        const durationMs = Date.now() - startTime;
+        if (dependencies.telemetryLogger) {
+          try {
+            await dependencies.telemetryLogger.logTelemetry({
+              workspaceId: context.workspaceId,
+              userId: context.userId,
+              conversationId,
+              channel: typeof body.channel === "string" ? body.channel : "web",
+              model: "deterministic",
+              agentBrain: requestedAgentType,
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+              estimatedCostUsd: 0,
+              durationMs,
+              complexityLevel: routingPlan.complexityLevel,
+              department: SPECIALIST_AGENTS_REGISTRY.financeiro.department,
+              status: "success",
+              metadata: {
+                specialist_agent_id: "financeiro",
+                deterministic: true,
+                coordinating_ceo: false,
+              },
+            });
+          } catch (telErr) {
+            console.warn("[handler] Falha na telemetria determinística:", telErr);
+          }
+        }
+
+        if (dependencies.auditLogger) {
+          await dependencies.auditLogger.logEvent({
+            userId: context.userId,
+            workspaceId: context.workspaceId,
+            toolName: "deterministic_financial_specialist",
+            durationMs,
+            status: "success",
+            recordsCount: 1,
+            metadata: {
+              correlationId,
+              conversationId,
+              specialist: "financeiro",
+              model: "deterministic",
+            },
+          });
+        }
+
+        if (dependencies.conversationRepo && conversationId) {
+          try {
+            const lastUserMsg = messages.filter((m) => m.role === "user").pop();
+            if (lastUserMsg) {
+              await dependencies.conversationRepo.appendMessage({
+                conversationId,
+                workspaceId: context.workspaceId,
+                userId: context.userId,
+                role: "user",
+                content: lastUserMsg.content,
+                channel: "web",
+              });
+            }
+            await dependencies.conversationRepo.appendMessage({
+              conversationId,
+              workspaceId: context.workspaceId,
+              userId: context.userId,
+              role: "assistant",
+              content: detResult.answer,
+              tokensCount: 0,
+              channel: "web",
+            });
+          } catch (mErr) {
+            console.warn("[handler] Falha ao persistir mensagem determinística na memória:", mErr);
+          }
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            text: detResult.answer,
+            message: {
+              role: "assistant",
+              content: detResult.answer,
+            },
+            specialist: "financeiro",
+            department: SPECIALIST_AGENTS_REGISTRY.financeiro.department,
+            model: "deterministic",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            estimatedCostUsd: 0,
+            toolCalls: [],
+            action_proposals: [],
+            iterations: 0,
+            conversation_id: conversationId,
+            correlation_id: correlationId,
+          }),
+          { status: 200, headers: responseHeaders },
+        );
+      }
+    }
+
     let effectiveAgentType: "ceo" | "operational" = requestedAgentType;
 
     // Context Management: se conversationRepo e conversationId fornecidos, constrói contexto canônico
@@ -712,7 +906,14 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
-    const chosenSystemPrompt = effectiveAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
+    let chosenSystemPrompt = effectiveAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
+
+    // Injeção de Contexto do Especialista Designado ou Coordenação Multidepartamental
+    if (routingPlan.coordinatingCeo) {
+      chosenSystemPrompt += `\n\n[COORDENAÇÃO EXECUTIVA WALLET CEO: MULTIDEPARTAMENTAL]\nVocê está coordenando os seguintes especialistas: ${routingPlan.contributingSpecialists.map((s) => SPECIALIST_AGENTS_REGISTRY[s]?.name || s).join(", ")}.\nSintetize a resposta com visão executiva holística cruzando faturamento bruto (PDV), CMV de insumos (Estoque) e despesas operacionais/lucro líquido (Financeiro).`;
+    } else if (primarySpecialistContract) {
+      chosenSystemPrompt += `\n\n[ESPECIALISTA DESIGNADO: ${primarySpecialistContract.name} — ${primarySpecialistContract.department}]\n${primarySpecialistContract.systemPromptSnippet}`;
+    }
 
     // Salvaguarda de Modelo: para cérebro operacional, modelos econômicos protegem orçamento
     let effectiveModel = selectedModel;
@@ -750,6 +951,32 @@ export async function handleOrchestratorHttpRequest(
         }
       }
       catalog = safeCatalog;
+    }
+
+    // Filtragem de ferramentas pela Allowlist do Especialista (Gate 10)
+    const allowedToolsSet = new Set<string>();
+    if (routingPlan.coordinatingCeo) {
+      for (const specId of routingPlan.contributingSpecialists) {
+        const spec = SPECIALIST_AGENTS_REGISTRY[specId];
+        if (spec) {
+          spec.allowedTools.forEach((t) => allowedToolsSet.add(t));
+        }
+      }
+      if (effectiveAgentType === "ceo" && canRoleAccessCeoBrain(userRole)) {
+        CEO_EXCLUSIVE_TOOLS.forEach((t) => allowedToolsSet.add(t));
+      }
+    } else if (primarySpecialistContract) {
+      primarySpecialistContract.allowedTools.forEach((t) => allowedToolsSet.add(t));
+    }
+
+    if (allowedToolsSet.size > 0) {
+      const specialistRestrictedCatalog: QueryToolCatalog = {};
+      for (const [toolName, handler] of Object.entries(catalog)) {
+        if (allowedToolsSet.has(toolName)) {
+          specialistRestrictedCatalog[toolName] = handler;
+        }
+      }
+      catalog = specialistRestrictedCatalog;
     }
 
     const runner = dependencies.runnerFactory(effectiveModel);
@@ -901,10 +1128,12 @@ export async function handleOrchestratorHttpRequest(
           estimatedCostUsd,
           durationMs,
           complexityLevel,
-          department: detectedDepartment,
+          department: primarySpecialistContract?.department || detectedDepartment,
           status: "success",
           metadata: {
             correlationId,
+            specialist_agent_id: routingPlan.primarySpecialist,
+            coordinating_ceo: routingPlan.coordinatingCeo,
             iterations: turnResult.iterations,
             toolCallsCount: turnResult.toolCallsExecuted.length,
             provider: turnResult.provider ?? "openai",
@@ -920,6 +1149,7 @@ export async function handleOrchestratorHttpRequest(
       const rawMetadata = {
         correlationId,
         conversationId,
+        specialist: routingPlan.primarySpecialist,
         model: selectedModel,
         iterations: turnResult.iterations,
         tokens: turnResult.usage.totalTokens,
@@ -949,6 +1179,9 @@ export async function handleOrchestratorHttpRequest(
       JSON.stringify({
         success: true,
         message: turnResult.finalMessage,
+        specialist: routingPlan.primarySpecialist,
+        department: primarySpecialistContract?.department || detectedDepartment,
+        coordinating_ceo: routingPlan.coordinatingCeo,
         toolCalls: turnResult.toolCallsExecuted,
         action_proposals: turnResult.actionProposals ?? [],
         iterations: turnResult.iterations,

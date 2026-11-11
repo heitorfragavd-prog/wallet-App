@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   SPECIALIST_AGENTS_REGISTRY,
   authorizeSpecialistAccess,
@@ -7,7 +7,12 @@ import {
 import {
   routeUserQueryToSpecialists,
   buildFinancialSpecialistDeterministicResponse,
+  fetchAndExecuteFinancialSpecialist,
 } from "../../supabase/functions/_shared/ai/specialist-router";
+import { handleOrchestratorHttpRequest } from "../../supabase/functions/wallet-ai-orchestrator/handler";
+import type { FinancialQueryRepository } from "../../supabase/functions/_shared/ai/query-tools";
+import type { AiExecutionContext, AuthorizationDependencies } from "../../supabase/functions/_shared/ai/auth";
+import type { LlmMessage, LlmRunner } from "../../supabase/functions/_shared/ai/orchestrator-core";
 
 describe("Etapa 07 — Sete Agentes Especializados do Wallet CEO 3.0", () => {
   describe("Gate 2 & 3: Contratos e Registro dos Sete Especialistas", () => {
@@ -119,7 +124,7 @@ describe("Etapa 07 — Sete Agentes Especializados do Wallet CEO 3.0", () => {
     });
   });
 
-  describe("Gate 6: Respostas Determinísticas do Agente Financeiro", () => {
+  describe("Gate 6: Respostas Determinísticas do Agente Financeiro & Regra Estrita de Valores", () => {
     const mockFinancialData = {
       faturamentoOntem: 2450.5,
       pedidosOntem: 42,
@@ -163,6 +168,274 @@ describe("Etapa 07 — Sete Agentes Especializados do Wallet CEO 3.0", () => {
       expect(res.answer).toContain("R$ 68500.00");
       expect(res.answer).toContain("R$ 41200.00");
       expect(res.answer).toContain("R$ 27300.00");
+    });
+
+    it("12. Regra Estrita: Se saldo for 0, exibe 'R$ 0.00'; se for nulo/ausente, exibe 'Saldo não disponível' (nunca mascarar com || 0)", () => {
+      // Caso 1: Saldo exatamente Zero
+      const zeroBalanceRes = buildFinancialSpecialistDeterministicResponse("Qual meu saldo atual?", {
+        saldoTotal: 0,
+        faturamentoMes: 0,
+        despesasMes: 0,
+        resultadoOperacionalMes: 0,
+      });
+      expect(zeroBalanceRes.answer).toContain("R$ 0.00");
+      expect(zeroBalanceRes.answer).not.toContain("Saldo não disponível");
+
+      // Caso 2: Saldo Nulo / Indisponível
+      const nullBalanceRes = buildFinancialSpecialistDeterministicResponse("Qual meu saldo atual?", {
+        saldoTotal: null,
+      });
+      expect(nullBalanceRes.answer).toContain("Saldo não disponível");
+      expect(nullBalanceRes.answer).not.toContain("R$ 0.00");
+    });
+  });
+
+  describe("Gate 1: Integração com Repositório Financeiro Real (fetchAndExecuteFinancialSpecialist)", () => {
+    const mockContext: AiExecutionContext = {
+      userId: "user-123",
+      workspaceId: "ws-test",
+      role: "owner",
+      isOwner: true,
+    };
+
+    const mockRepo: FinancialQueryRepository = {
+      listSalesPDV: vi.fn().mockResolvedValue([
+        { id: "sale-1", amount: 120.0, description: "Venda Eyemobile #1", occurredOn: "2026-11-10" },
+        { id: "sale-2", amount: 80.0, description: "Venda Eyemobile #2", occurredOn: "2026-11-10" },
+        { id: "sale-3", amount: 50.0, description: "Venda Eyemobile Cancelada", occurredOn: "2026-11-10" }, // Cancelada!
+      ]),
+      listRevenues: vi.fn().mockResolvedValue([
+        { id: "rev-1", amount: 5000.0, description: "Receita Pix", occurredOn: "2026-11-01" },
+      ]),
+      listExpenses: vi.fn().mockResolvedValue([
+        { id: "exp-1", amount: 2000.0, description: "Aluguel Pago", occurredOn: "2026-11-05" },
+      ]),
+      listBalances: vi.fn().mockResolvedValue([
+        { accountId: "acc-1", name: "Itaú Corrente", amount: 15400.0, type: "checking" },
+        { accountId: "acc-2", name: "Caixa Físico", amount: 600.0, type: "cash" },
+      ]),
+      listDebts: vi.fn().mockResolvedValue([
+        {
+          id: "debt-1",
+          description: "Fornecedor Carnes",
+          originalAmount: 1500.0,
+          paidAmount: 500.0,
+          dueOn: "2026-11-12",
+          status: "pendente",
+        },
+        {
+          id: "debt-2",
+          description: "Conta Vencida Energia",
+          originalAmount: 400.0,
+          paidAmount: 0.0,
+          dueOn: "2026-11-05",
+          status: "pendente",
+        },
+        {
+          id: "debt-3",
+          description: "Conta Já Liquidada",
+          originalAmount: 800.0,
+          paidAmount: 800.0,
+          dueOn: "2026-11-08",
+          status: "paga",
+        },
+      ]),
+    };
+
+    it("13. Deve consultar listSalesPDV e desconsiderar vendas canceladas para apurar faturamento de ontem", async () => {
+      const fixedDate = new Date("2026-11-11T12:00:00Z");
+      const res = await fetchAndExecuteFinancialSpecialist("Quanto faturei ontem?", mockContext, mockRepo, fixedDate);
+
+      expect(res.handled).toBe(true);
+      expect(res.specialist).toBe("financeiro");
+      // Venda 1 (120) + Venda 2 (80) = 200. Venda 3 (50 cancelada) deve ser ignorada!
+      expect(res.answer).toContain("R$ 200.00");
+      expect(res.answer).toContain("2"); // 2 pedidos válidos
+      expect(res.answer).toContain("R$ 100.00"); // Ticket médio 200 / 2
+    });
+
+    it("14. Deve consultar listDebts e apresentar apenas contas pendentes (ignorando liquidadas)", async () => {
+      const fixedDate = new Date("2026-11-11T12:00:00Z");
+      const res = await fetchAndExecuteFinancialSpecialist("Quais contas vencem nesta semana?", mockContext, mockRepo, fixedDate);
+
+      expect(res.handled).toBe(true);
+      expect(res.answer).toContain("Fornecedor Carnes");
+      expect(res.answer).toContain("R$ 1000.00"); // 1500 - 500 restante
+      expect(res.answer).toContain("Conta Vencida Energia");
+      expect(res.answer).not.toContain("Conta Já Liquidada"); // Não deve apresentar liquidada como pendente
+    });
+
+    it("15. Deve consolidar saldo bancário e caixa físico em tempo real", async () => {
+      const fixedDate = new Date("2026-11-11T12:00:00Z");
+      const res = await fetchAndExecuteFinancialSpecialist("Qual meu saldo atual?", mockContext, mockRepo, fixedDate);
+
+      expect(res.handled).toBe(true);
+      // 15400 + 600 = 16000.00
+      expect(res.answer).toContain("R$ 16000.00");
+      expect(res.answer).toContain("R$ 5000.00"); // Faturamento mês
+      expect(res.answer).toContain("R$ 2000.00"); // Despesas mês
+      expect(res.answer).toContain("R$ 3000.00"); // Resultado operacional
+    });
+  });
+
+  describe("Gate 0 & 10: Fluxo E2E no Wallet AI Orchestrator (handleOrchestratorHttpRequest)", () => {
+    const validWorkspaceId = "11111111-1111-4111-8111-111111111111";
+
+    const createMockAuthDeps = (role: "owner" | "admin" | "member"): AuthorizationDependencies => ({
+      getUser: vi.fn().mockResolvedValue({
+        id: role === "owner" ? "user-owner" : `user-${role}`,
+        email: `${role}@empresa.com`,
+      }),
+      findOwnedWorkspace: vi.fn().mockResolvedValue({ id: validWorkspaceId, user_id: "user-owner" }),
+      verifyConversationOwnership: vi.fn().mockResolvedValue(true),
+      getUserRole: vi.fn().mockResolvedValue(role),
+    });
+
+    const createMockRepo = (): FinancialQueryRepository => ({
+      listSalesPDV: vi.fn().mockResolvedValue([
+        { id: "sale-1", amount: 1500.0, description: "Venda PDV", occurredOn: "2026-11-10" },
+      ]),
+      listRevenues: vi.fn().mockResolvedValue([]),
+      listExpenses: vi.fn().mockResolvedValue([]),
+      listBalances: vi.fn().mockResolvedValue([{ accountId: "a1", name: "Banco", amount: 5000, type: "c" }]),
+      listDebts: vi.fn().mockResolvedValue([]),
+    });
+
+    const createMockRunner = (messagesCapture: LlmMessage[]): LlmRunner => ({
+      generateCompletion: vi.fn().mockImplementation(async (msgs: LlmMessage[]) => {
+        messagesCapture.push(...msgs);
+        return {
+          message: {
+            role: "assistant",
+            content: "Diagnóstico executivo multidepartamental concluído pelo Wallet CEO.",
+          },
+          toolCalls: [],
+          usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+        };
+      }),
+    });
+
+    it("16. Membro comum (member) tentando acionar o Agente Financeiro deve receber 403 Forbidden com mensagem clara", async () => {
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-member",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          messages: [{ role: "user", content: "Quanto faturei ontem?" }],
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("member"),
+        repoFactory: () => createMockRepo(),
+        runnerFactory: () => createMockRunner([]),
+      });
+
+      expect(res.status).toBe(403);
+      const data = (await res.json()) as { success: boolean; message: string; code: string };
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("WALLET_AI_FORBIDDEN");
+      expect(data.message).toContain("Agente Financeiro");
+      expect(data.message).toContain("exige permissão de admin");
+    });
+
+    it("17. Membro comum (member) tentando acionar o Agente de RH deve receber 403 Forbidden", async () => {
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-member",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          messages: [{ role: "user", content: "Como está a escala de equipe para o fim de semana?" }],
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("member"),
+        repoFactory: () => createMockRepo(),
+        runnerFactory: () => createMockRunner([]),
+      });
+
+      expect(res.status).toBe(403);
+      const data = (await res.json()) as { success: boolean; message: string; code: string };
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("WALLET_AI_FORBIDDEN");
+      expect(data.message).toContain("Agente de Pessoal e RH");
+    });
+
+    it("18. Proprietário (owner) perguntando 'Quanto faturei ontem?' deve receber resposta determinística instantânea com 0 custo de IA", async () => {
+      const runnerCapture: LlmMessage[] = [];
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-owner",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          messages: [{ role: "user", content: "Quanto faturei ontem?" }],
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("owner"),
+        repoFactory: () => createMockRepo(),
+        runnerFactory: () => createMockRunner(runnerCapture),
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        success: boolean;
+        specialist: string;
+        model: string;
+        estimatedCostUsd: number;
+        text: string;
+      };
+      expect(data.success).toBe(true);
+      expect(data.specialist).toBe("financeiro");
+      expect(data.model).toBe("deterministic");
+      expect(data.estimatedCostUsd).toBe(0);
+      expect(data.text).toContain("Agente Financeiro — Faturamento de Ontem");
+      expect(runnerCapture).toHaveLength(0); // Zero gasto de tokens de LLM!
+    });
+
+    it("19. Coordenação multiespecialista executiva: pergunta de diagnóstico aciona o Wallet CEO coordenando Vendas, Estoque e Financeiro", async () => {
+      const runnerCapture: LlmMessage[] = [];
+      const req = new Request("https://edge.test/wallet-ai-orchestrator", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token-owner",
+        },
+        body: JSON.stringify({
+          workspace_id: validWorkspaceId,
+          agent_type: "ceo",
+          messages: [{ role: "user", content: "Por que estou faturando mais, mas meu lucro diminuiu?" }],
+        }),
+      });
+
+      const res = await handleOrchestratorHttpRequest(req, {
+        authDeps: createMockAuthDeps("owner"),
+        repoFactory: () => createMockRepo(),
+        runnerFactory: () => createMockRunner(runnerCapture),
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        success: boolean;
+        specialist: string;
+        coordinating_ceo: boolean;
+      };
+      expect(data.success).toBe(true);
+      expect(data.specialist).toBe("financeiro");
+      expect(data.coordinating_ceo).toBe(true);
+      // Deve ter injetado no system prompt a instrução de coordenação executiva multidepartamental
+      expect(runnerCapture[0]?.content).toContain("COORDENAÇÃO EXECUTIVA WALLET CEO: MULTIDEPARTAMENTAL");
     });
   });
 });
