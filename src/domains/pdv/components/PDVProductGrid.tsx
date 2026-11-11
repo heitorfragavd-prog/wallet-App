@@ -1,6 +1,6 @@
 import React from "react";
 import { Button } from "@/shared/components/ui/button";
-import { Plus, Cookie, Coffee, CupSoda, Croissant, Sandwich, Package, Cigarette, Loader2, Beer, Pill, Box, Coins, Percent } from "lucide-react";
+import { Plus, Cookie, Coffee, CupSoda, Croissant, Sandwich, Package, Cigarette, Loader2, Beer, Pill, Box, Coins, Percent, IceCream } from "lucide-react";
 
 export interface PDVProduct {
   id: string;
@@ -9,10 +9,12 @@ export interface PDVProduct {
   category: string;
   icon?: React.ReactNode;
   image?: string;
+  barcode?: string;
 }
 
 const CATEGORIES = [
   { id: "todos", label: "Todos" },
+  { id: "sorvetes / kibon", label: "Sorvetes / Kibon" },
   { id: "café", label: "Café" },
   { id: "bebidas", label: "Bebidas" },
   { id: "doces", label: "Doces" },
@@ -32,6 +34,20 @@ export function getProductIcon(category: string, name: string): React.ReactNode 
   const c = category.toLowerCase();
   const n = name.toLowerCase();
   
+  if (
+    c.includes("sorvete") ||
+    c.includes("kibon") ||
+    n.includes("sorvete") ||
+    n.includes("kibon") ||
+    n.includes("magnum") ||
+    n.includes("tablito") ||
+    n.includes("cornetto") ||
+    n.includes("fruttare") ||
+    n.includes("eski-bon") ||
+    n.includes("eskibon")
+  ) {
+    return <IceCream className="w-6 h-6 text-pink-400" />;
+  }
   if (c.includes("promoção") || c.includes("promoc") || c.includes("funcion")) {
     return <Percent className="w-6 h-6 text-orange-400" />;
   }
@@ -89,11 +105,13 @@ export const PDVProductGrid: React.FC<Props> = ({
   isLoading = false
 }) => {
   const filtered = products.filter((p) => {
-    const matchesCat = activeCategory === "todos" || p.category === activeCategory;
+    const matchesCat = activeCategory === "todos" || p.category.toLowerCase() === activeCategory.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
     const matchesSearch =
-      searchQuery.trim() === "" ||
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.id.includes(searchQuery);
+      q === "" ||
+      p.name.toLowerCase().includes(q) ||
+      p.id.toLowerCase().includes(q) ||
+      Boolean(p.barcode && p.barcode.toLowerCase().includes(q));
     return matchesCat && matchesSearch;
   });
 

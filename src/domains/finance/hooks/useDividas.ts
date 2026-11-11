@@ -23,7 +23,7 @@ export interface Divida {
   valor_total: number;
   valor_pago: number;
   valor_restante: number;
-  data_vencimento: string;
+  data_vencimento: string | null;
   parcelas: number;
   parcelas_pagas: number;
   parcela_atual?: number;
@@ -63,19 +63,27 @@ export interface DividasQueryParams {
   workspaceId?: string | null;
 }
 
-function resolveDividaStatus(d: any): Divida {
-  if (d.status === "quitada" || Number(d.valor_restante || 0) <= 0) {
-    return { ...d, status: "quitada" };
+function resolveDividaStatus(d: Divida | Record<string, unknown>): Divida {
+  const divida = d as unknown as Divida;
+  if (divida.status === "quitada" || Number(divida.valor_restante || 0) <= 0) {
+    return { ...divida, status: "quitada" };
   }
   
+  if (!divida.data_vencimento) {
+    return { ...divida, status: divida.status || "pendente" };
+  }
+
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
   
-  const venc = new Date(d.data_vencimento + "T12:00:00");
+  const venc = new Date(String(divida.data_vencimento).split("T")[0] + "T12:00:00");
+  if (isNaN(venc.getTime())) {
+    return { ...divida, status: divida.status || "pendente" };
+  }
   venc.setHours(0, 0, 0, 0);
   
   const status = venc < hoje ? "vencida" : "pendente";
-  return { ...d, status };
+  return { ...divida, status };
 }
 
 // ─── Fetcher com fallback (debt_reminders pode não existir) ─────────────
@@ -109,11 +117,11 @@ async function fetchDividas(params: DividasQueryParams = {}): Promise<Divida[]> 
 
     const { data: fallback, error: fallbackError } = await fallbackQuery;
     if (fallbackError) throw fallbackError;
-    return ((fallback ?? []) as any[]).map(resolveDividaStatus) as Divida[];
+    return ((fallback ?? []) as Record<string, unknown>[]).map(resolveDividaStatus);
   }
 
   if (error) throw error;
-  return ((data ?? []) as any[]).map(resolveDividaStatus) as Divida[];
+  return ((data ?? []) as Record<string, unknown>[]).map(resolveDividaStatus);
 }
 
 // ─── Hook ──────────────────────────────────────────────────

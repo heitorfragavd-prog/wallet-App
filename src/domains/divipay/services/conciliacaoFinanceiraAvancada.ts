@@ -318,6 +318,31 @@ export class ConciliacaoFinanceiraAvancada {
       });
     }
 
+    // 2.2.1 Fallback por nome do fornecedor ou credor na descrição/favorecido
+    if (fornecedoresPixMatch.length === 0 && !isBoleto) {
+      const nomeFavNorm = normalizarNome(saque.favorecidoNome);
+      const descNorm = normalizarNome(saque.descricao);
+
+      fornecedoresPixMatch = fornecedores.filter((f) => {
+        const fNomeNorm = normalizarNome(f.nome);
+        const fFantasiaNorm = normalizarNome(f.nome_fantasia || "");
+        if (!fNomeNorm && !fFantasiaNorm) return false;
+
+        // Se o nome ou nome fantasia coincide ou está contido na descrição / favorecido
+        if (fNomeNorm && (descNorm.includes(fNomeNorm) || (nomeFavNorm && (fNomeNorm.includes(nomeFavNorm) || nomeFavNorm.includes(fNomeNorm))))) {
+          return true;
+        }
+        if (fFantasiaNorm && (descNorm.includes(fFantasiaNorm) || (nomeFavNorm && (fFantasiaNorm.includes(nomeFavNorm) || nomeFavNorm.includes(fFantasiaNorm))))) {
+          return true;
+        }
+
+        // Variantes de palavras-chave do fornecedor (mínimo 4 caracteres, ignorando stopwords comuns)
+        const stopwords = ["ltda", "distribuidora", "comercio", "industria", "alimentos", "servicos", "brasil"];
+        const partes = [...fNomeNorm.split(" "), ...fFantasiaNorm.split(" ")].filter((p) => p.length >= 4 && !stopwords.includes(p));
+        return partes.some((palavra) => descNorm.includes(palavra) || (nomeFavNorm && nomeFavNorm.includes(palavra)));
+      });
+    }
+
     // 2.3 Resolução de Ambiguidade / Conflito
     const temConflitoColabFornecedor = colaboradoresMatch.length > 0 && fornecedoresPixMatch.length > 0;
     if (temConflitoColabFornecedor) {
@@ -405,6 +430,12 @@ export class ConciliacaoFinanceiraAvancada {
         return mesmoCredor && valorOk;
       });
 
+      const batePix = Boolean(pixKeyNormalizada && (
+        (f.pix_chave && normalizarChavePix(f.pix_chave) === pixKeyNormalizada) ||
+        (f.chaves_pix_adicionais ?? []).some((k) => normalizarChavePix(k.chave) === pixKeyNormalizada)
+      ));
+      const evidencia = batePix ? "pix_chave_ou_documento_fornecedor_exato" : "nome_ou_descricao_fornecedor";
+
       return {
         tipo: "fornecedor",
         fornecedor: f,
@@ -412,7 +443,7 @@ export class ConciliacaoFinanceiraAvancada {
         subcategoriaIdSugerida: f.subcategoria_padrao_id,
         dividaSugerida: dividaCompativel || null,
         metodoPagamento: "pix",
-        evidencia: "pix_chave_ou_documento_fornecedor_exato",
+        evidencia,
         confianca: "alta",
       };
     }
