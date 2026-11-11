@@ -61,3 +61,30 @@ export function isArchivedTailTransaction(
   const diffDays = (tTarget - tCurr) / (1000 * 60 * 60 * 24);
   return diffDays > maxAllowedPastDays;
 }
+
+export interface EyemobileSaleStatusLike {
+  cancelled?: boolean | number | null;
+  completed?: boolean | number | null;
+}
+
+/**
+ * Retorna true quando a transação está cancelada ou não completada.
+ */
+export function isCancelledOrIncompleteSale(sale: EyemobileSaleStatusLike | null | undefined): boolean {
+  if (!sale) return true;
+  return Boolean(sale.cancelled) || !Boolean(sale.completed);
+}
+
+/**
+ * Na API Eyemobile /transactions, as vendas válidas são servidas primeiro em ordem
+ * cronológica, seguidas por uma cauda inteira de transações canceladas/incompletas
+ * (com datas que regridem e sobem até os dias atuais).
+ * Uma página inteiramente composta por itens cancelados/incompletos indica que
+ * o offset entrou na cauda arquivada de canceladas.
+ */
+export function isCancelledTailPage(
+  sales: EyemobileSaleStatusLike[] | null | undefined
+): boolean {
+  if (!Array.isArray(sales) || sales.length === 0) return false;
+  return sales.every((s) => isCancelledOrIncompleteSale(s));
+}

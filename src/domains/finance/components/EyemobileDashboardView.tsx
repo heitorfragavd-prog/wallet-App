@@ -12,15 +12,19 @@ import { useItensMercado } from "@/domains/market/hooks/useItensMercado";
 import { useEyemobileDashboard } from "@/domains/eyemobile/hooks/useEyemobileDashboard";
 import { DateRangePicker, useDateRangeFilter } from "@/shared/components/DateRangePicker";
 
-const getLocalDateString = (offsetDays: number = 0) => {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const getSaoPauloDateString = (offsetDays: number = 0) => {
+  const target = new Date(Date.now() + offsetDays * 86400000);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(target);
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const day = parts.find((p) => p.type === "day")?.value ?? "";
+  return `${year}-${month}-${day}`;
 };
-const today = getLocalDateString(0);
-const yesterday = getLocalDateString(-1);
-const last7Days = getLocalDateString(-6);
-const monthStart = `${today.slice(0, 8)}01`;
 const currency = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 function DashboardSkeleton() {
@@ -36,6 +40,11 @@ interface EyemobileDashboardViewProps {
 }
 
 export function EyemobileDashboardView({ onConfigure }: EyemobileDashboardViewProps) {
+  const today = getSaoPauloDateString(0);
+  const yesterday = getSaoPauloDateString(-1);
+  const last7Days = getSaoPauloDateString(-6);
+  const monthStart = `${today.slice(0, 8)}01`;
+
   const { dateRange, setRange } = useDateRangeFilter({ defaultPeriod: "today" });
   const startDate = dateRange.startDate || today;
   const endDate = dateRange.endDate || today;

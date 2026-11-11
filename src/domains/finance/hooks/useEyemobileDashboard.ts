@@ -145,13 +145,24 @@ async function buildLocalFallbackDashboard(
 
   // Deduplicação estrita por ID de venda para blindar contra duplicidades históricas
   const seenSaleIds = new Set<string>();
-  const transacoes = allTransacoes.filter((t) => {
+  let transacoes = allTransacoes.filter((t) => {
     const match = t.descricao?.match(/#(\d+)/) || t.observacoes?.match(/#(\d+)/);
     const saleId = match ? match[1] : t.id;
     if (seenSaleIds.has(saleId)) return false;
     seenSaleIds.add(saleId);
     return true;
   });
+
+  if (filters.storeId && filters.storeId !== "all") {
+    const isNumericStoreId = /^\d+$/.test(filters.storeId);
+    if (!isNumericStoreId) {
+      const targetStore = filters.storeId.toLowerCase();
+      transacoes = transacoes.filter((t) => {
+        const obs = String(t.observacoes ?? "").toLowerCase();
+        return obs.includes(`loja: ${targetStore}`);
+      });
+    }
+  }
 
   const isConfigured = await checkEyemobileConfigured(workspaceId);
 
@@ -221,7 +232,7 @@ export async function fetchLiveDashboard(
     });
 
     const timeoutPromise = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("Timeout ao consultar Edge Function")), 10000);
+      const timer = setTimeout(() => reject(new Error("Timeout ao consultar Edge Function")), 20000);
       invokePromise.finally(() => clearTimeout(timer));
     });
 
@@ -309,7 +320,18 @@ export function useEyemobileDashboard(filters: DashboardFilters) {
   });
 
   const syncLive = async (): Promise<EyemobileDashboardResult> => {
-    await qc.invalidateQueries({ queryKey: ["eyemobile-dashboard", workspaceId] });
+    try {
+      await supabase.functions.invoke("eyemobile-sync", {
+        body: { mode: "SALES", workspace_id: activeWorkspace?.id },
+      });
+    } catch {
+      // Sincronização de persistência best-effort; fallback segue buscando dados ao vivo
+    }
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["eyemobile-dashboard", workspaceId] }),
+      qc.invalidateQueries({ queryKey: ["transacoes"] }),
+      qc.invalidateQueries({ queryKey: ["receitas"] }),
+    ]);
     const live = await fetchLiveDashboard(filters, activeWorkspace?.id);
     qc.setQueryData(queryKey, live);
     return live;
