@@ -33,7 +33,8 @@ export interface FinancialDataQuery {
     | "fornecedores"
     | "colaboradores"
     | "colaborador_escalas"
-    | "colaborador_pagamentos";
+    | "colaborador_pagamentos"
+    | "colaborador_acertos";
   columns: string;
   equals: { workspace_id: string; user_id?: string; [key: string]: unknown };
   dateRange?: {
@@ -353,6 +354,14 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       });
       return rows.map((row): InventoryItemRecord => {
         assertScope(row, context);
+        const estoqueInformado = row.estoque_atual !== null && row.estoque_atual !== undefined;
+        const custoInformado = row.custo_atual !== null && row.custo_atual !== undefined;
+        const estoqueMinimoInformado = row.estoque_minimo !== null && row.estoque_minimo !== undefined;
+        const estoqueIdealInformado = row.estoque_ideal !== null && row.estoque_ideal !== undefined;
+        const fornecedor = typeof row.fornecedor_padrao === "string" && row.fornecedor_padrao.trim().length > 0
+          ? row.fornecedor_padrao.trim()
+          : null;
+
         return {
           id: String(row.id),
           workspaceId: String(row.workspace_id),
@@ -366,9 +375,13 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           estoqueIdeal: amount(row.estoque_ideal),
           unidadeMedida: String(row.unidade_medida ?? "UN"),
           multiploCompra: amount(row.multiplo_compra) || 1,
-          fornecedorPadrao: row.fornecedor_padrao ? String(row.fornecedor_padrao) : null,
+          fornecedorPadrao: fornecedor,
           margemRealPercentual: amount(row.margem_real_percentual),
           ativo: row.ativo !== false,
+          estoqueInformado,
+          custoInformado,
+          estoqueMinimoInformado,
+          estoqueIdealInformado,
         };
       });
     },
@@ -464,16 +477,52 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
     async listEmployeePayments(context, period) {
       const rows = await execute({
         table: "colaborador_pagamentos",
-        columns: "id,workspace_id,acerto_id,valor,status,origem,paid_at,created_at",
+        columns:
+          "id,workspace_id,acerto_id,valor,status,origem,paid_at,created_at,idempotency_key,divipay_external_id,comprovante_url",
         equals: { workspace_id: context.workspaceId },
         dateRange: period ? { column: "created_at" as any, ...period } : undefined,
       });
+
+      const hasAcertos = rows.some((r) => Boolean(r.acerto_id));
+      const acertoMap = new Map<
+        string,
+        { colaboradorId: string | null; periodoInicio: string | null; periodoFim: string | null }
+      >();
+
+      if (hasAcertos) {
+        try {
+          const acertoRows = await execute({
+            table: "colaborador_acertos",
+            columns: "id,workspace_id,colaborador_id,periodo_inicio,periodo_fim",
+            equals: { workspace_id: context.workspaceId },
+          });
+          acertoRows.forEach((ar) => {
+            assertScope(ar, context);
+            acertoMap.set(String(ar.id), {
+              colaboradorId: ar.colaborador_id ? String(ar.colaborador_id) : null,
+              periodoInicio: ar.periodo_inicio ? String(ar.periodo_inicio) : null,
+              periodoFim: ar.periodo_fim ? String(ar.periodo_fim) : null,
+            });
+          });
+        } catch {
+          // Ambiente/mock sem colaborador_acertos mantém mapa vazio sem quebrar consulta de pagamentos
+        }
+      }
+
       return rows.map((row): EmployeePaymentRecord => {
         assertScope(row, context);
+        const acertoId = row.acerto_id ? String(row.acerto_id) : null;
+        const acertoInfo = acertoId ? acertoMap.get(acertoId) : undefined;
         return {
           id: String(row.id),
           workspaceId: String(row.workspace_id),
-          acertoId: row.acerto_id ? String(row.acerto_id) : null,
+          acertoId,
+          colaboradorId: acertoInfo?.colaboradorId ?? (row.colaborador_id ? String(row.colaborador_id) : null),
+          competenciaInicio: acertoInfo?.periodoInicio ?? null,
+          competenciaFim: acertoInfo?.periodoFim ?? null,
+          idempotencyKey: row.idempotency_key ? String(row.idempotency_key) : null,
+          divipayExternalId: row.divipay_external_id ? String(row.divipay_external_id) : null,
+          comprovanteUrl: row.comprovante_url ? String(row.comprovante_url) : null,
           valor: amount(row.valor),
           status: String(row.status ?? "pendente"),
           origem: row.origem ? String(row.origem) : null,

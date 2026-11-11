@@ -129,6 +129,10 @@ export interface InventoryItemRecord {
   fornecedorPadrao: string | null;
   margemRealPercentual: number;
   ativo: boolean;
+  estoqueInformado?: boolean;
+  custoInformado?: boolean;
+  estoqueMinimoInformado?: boolean;
+  estoqueIdealInformado?: boolean;
 }
 
 export interface RecipeCardRecord {
@@ -187,6 +191,13 @@ export interface EmployeePaymentRecord {
   id: string;
   workspaceId: string;
   acertoId: string | null;
+  colaboradorId?: string | null;
+  colaboradorNome?: string | null;
+  competenciaInicio?: string | null;
+  competenciaFim?: string | null;
+  idempotencyKey?: string | null;
+  divipayExternalId?: string | null;
+  comprovanteUrl?: string | null;
   valor: number;
   status: string;
   origem: string | null;

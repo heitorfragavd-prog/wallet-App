@@ -1402,25 +1402,42 @@ export async function fetchAndExecuteSalesPdvSpecialist(
 export interface InventoryDeterministicData {
   itensEstoque?: InventoryItemRecord[];
   itensAbaixoMinimo?: InventoryItemRecord[];
+  itensEstoqueNaoInformado?: InventoryItemRecord[];
   sugestaoCompras?: Array<{
     produto: string;
     estoqueAtual: number;
-    estoqueIdeal: number;
+    estoqueIdeal: number | null;
+    estoqueMinimo?: number | null;
+    tipoReposicao?: "confirmada_ideal" | "estimada_minimo";
     quantidadeComprar: number;
     embalagem: string;
     multiploCompra: number;
     custoUnitario: number;
     custoTotalEstimado: number;
     fornecedor: string;
+    fornecedorCadastrado?: boolean;
+    custoIndisponivel?: boolean;
     prioridade: string;
     justificativa: string;
   }>;
+  itensSemReferencia?: Array<{
+    produto: string;
+    estoqueInformado: boolean;
+    estoqueAtual: number;
+    unidadeMedida: string;
+    motivosPendencia: string[];
+  }>;
   valorTotalEstoque?: number;
+  itensSemCustoOuEstoque?: number;
   fichasTecnicas?: RecipeCardRecord[];
   cmvInfo?: {
-    tipo: "confirmado" | "indisponivel" | "estimado";
+    tipo: "confirmado" | "teorico_fichas" | "teorico_vendas" | "indisponivel";
     cmvPercentual?: number;
+    cmvTeoricoCatalogoPercentual?: number;
+    coberturaFichasComprovadas?: number;
+    totalFichas?: number;
     detalhes?: string;
+    limitacoes?: string[];
   };
   previsaoRuptura?: Array<{
     produto: string;
@@ -1453,11 +1470,17 @@ export function buildInventorySpecialistDeterministicResponse(
     }
 
     if (data.itensAbaixoMinimo.length === 0) {
+      const naoInfCount = data.itensEstoqueNaoInformado?.length ?? 0;
+      const naoInfNote =
+        naoInfCount > 0
+          ? `\n\nℹ️ *Nota de Cadastro:* ${naoInfCount} produto(s) ativo(s) está(ão) com *estoque atual não informado* (sem saldo preenchido, distinto de saldo zerado).`
+          : "";
       return {
         handled: true,
         answer:
           "📦 *Agente de Estoque e Compras — Nível de Estoque:*\n\n" +
-          "✅ Todos os produtos cadastrados estão com estoque acima do nível mínimo de segurança. Nenhuma ruptura imediata identificada.",
+          "✅ Todos os produtos cadastrados estão com estoque acima do nível mínimo de segurança. Nenhuma ruptura imediata identificada." +
+          naoInfNote,
         specialist: "estoque",
       };
     }
@@ -1465,8 +1488,15 @@ export function buildInventorySpecialistDeterministicResponse(
     let msg = `📦 *Agente de Estoque e Compras — Itens em Nível Crítico (${data.itensAbaixoMinimo.length}):*\n\n`;
     data.itensAbaixoMinimo.slice(0, 10).forEach((item) => {
       const zeradoTag = item.estoqueAtual <= 0 ? " — ⚠️ *ESTOQUE ZERADO*" : "";
-      msg += `• *${item.descricao}*: ${item.estoqueAtual} ${item.unidadeMedida} (Mínimo: ${item.estoqueMinimo} ${item.unidadeMedida})${zeradoTag}\n`;
+      const minLabel =
+        item.estoqueMinimoInformado === false || item.estoqueMinimo <= 0
+          ? "Mínimo: não cadastrado"
+          : `Mínimo: ${item.estoqueMinimo} ${item.unidadeMedida}`;
+      msg += `• *${item.descricao}*: ${item.estoqueAtual} ${item.unidadeMedida} (${minLabel})${zeradoTag}\n`;
     });
+    if ((data.itensEstoqueNaoInformado?.length ?? 0) > 0) {
+      msg += `\nℹ️ *Estoque não informado (${data.itensEstoqueNaoInformado!.length}):* há itens sem contagem preenchida (não confundidos com estoque zerado).\n`;
+    }
     msg += `\n_Recomenda-se reposição imediata para evitar descontinuidade no atendimento do caixa._`;
 
     return { handled: true, answer: msg, specialist: "estoque" };
@@ -1488,7 +1518,8 @@ export function buildInventorySpecialistDeterministicResponse(
       };
     }
 
-    if (data.sugestaoCompras.length === 0) {
+    const semRef = data.itensSemReferencia ?? [];
+    if (data.sugestaoCompras.length === 0 && semRef.length === 0) {
       return {
         handled: true,
         answer:
@@ -1498,31 +1529,56 @@ export function buildInventorySpecialistDeterministicResponse(
       };
     }
 
-    // Agrupar por fornecedor
-    const bySupplier = new Map<string, typeof data.sugestaoCompras>();
-    data.sugestaoCompras.forEach((s) => {
-      const f = s.fornecedor || "Fornecedor não informado";
-      const list = bySupplier.get(f) || [];
-      list.push(s);
-      bySupplier.set(f, list);
-    });
-
     let msg = `📦 *Agente de Estoque e Compras — Sugestão de Compras Inteligente:*\n\n`;
-    let totalGeral = 0;
 
-    bySupplier.forEach((items, fornecedor) => {
-      let subtotal = 0;
-      msg += `🏢 *Fornecedor: ${fornecedor}*\n`;
-      items.forEach((it) => {
-        subtotal += it.custoTotalEstimado;
-        const embalagemNote = it.multiploCompra > 1 ? ` (Emb. c/ ${it.multiploCompra})` : "";
-        msg += `• *${it.produto}*: Comprar *${it.quantidadeComprar} ${it.embalagem}*${embalagemNote} | Atual: ${it.estoqueAtual} / Ideal: ${it.estoqueIdeal} | Est: R$ ${it.custoTotalEstimado.toFixed(2)} [Prioridade: ${it.prioridade}]\n`;
+    if (data.sugestaoCompras.length > 0) {
+      // Agrupar por fornecedor cadastrado (ou "Fornecedor não cadastrado")
+      const bySupplier = new Map<string, typeof data.sugestaoCompras>();
+      data.sugestaoCompras.forEach((s) => {
+        const f = s.fornecedor || "Fornecedor não cadastrado";
+        const list = bySupplier.get(f) || [];
+        list.push(s);
+        bySupplier.set(f, list);
       });
-      totalGeral += subtotal;
-      msg += `*Subtotal ${fornecedor}:* R$ ${subtotal.toFixed(2)}\n\n`;
-    });
 
-    msg += `*Total Geral Estimado:* R$ ${totalGeral.toFixed(2)}\n\n`;
+      let totalGeral = 0;
+      let hasUnpriced = false;
+
+      bySupplier.forEach((items, fornecedor) => {
+        let subtotal = 0;
+        msg += `🏢 *Fornecedor: ${fornecedor}*\n`;
+        items.forEach((it) => {
+          subtotal += it.custoTotalEstimado;
+          if (it.custoIndisponivel) hasUnpriced = true;
+          const embalagemNote = it.multiploCompra > 1 ? ` (Emb. c/ ${it.multiploCompra})` : "";
+          const refLabel =
+            it.tipoReposicao === "estimada_minimo"
+              ? `Reposição Estimada p/ Mínimo (${it.estoqueMinimo ?? "?"}; Ideal não cadastrado)`
+              : `Ideal Cadastrado: ${it.estoqueIdeal}`;
+          const qtyVerb = it.tipoReposicao === "estimada_minimo" ? "Reposição estimada:" : "Comprar";
+          const estCostLabel = it.custoIndisponivel
+            ? "Custo não cadastrado"
+            : `Est: R$ ${it.custoTotalEstimado.toFixed(2)}`;
+          msg += `• *${it.produto}*: ${qtyVerb} *${it.quantidadeComprar} ${it.embalagem}*${embalagemNote} | Atual: ${it.estoqueAtual} / ${refLabel} | ${estCostLabel} [Prioridade: ${it.prioridade}]\n`;
+        });
+        totalGeral += subtotal;
+        msg += `*Subtotal ${fornecedor}:* R$ ${subtotal.toFixed(2)}\n\n`;
+      });
+
+      msg += `*Total Geral Estimado:* R$ ${totalGeral.toFixed(2)}${hasUnpriced ? " _(parcial: há itens sem custo cadastrado)_" : ""}\n\n`;
+    } else {
+      msg += `Nenhuma quantidade de compra confirmada pôde ser calculada porque faltam referências mínimas nos produtos críticos.\n\n`;
+    }
+
+    if (semRef.length > 0) {
+      msg += `📋 *Produtos sem Referência Suficiente para Cálculo Automático (${semRef.length}):*\n`;
+      semRef.slice(0, 8).forEach((item) => {
+        const atualTxt = item.estoqueInformado ? `${item.estoqueAtual} ${item.unidadeMedida}` : "Estoque não informado";
+        msg += `• *${item.produto}* (${atualTxt}): pendência de *${item.motivosPendencia.join(", ")}*. Cadastre estoque mínimo, estoque ideal ou fornecedor antes de fechar o pedido.\n`;
+      });
+      msg += `\n`;
+    }
+
     msg += `⚠️ *Aviso Consultivo (canMutateState: false):* Nenhuma compra ou pedido foi gerado automaticamente. Verifique com a equipe de compras antes de confirmar os pedidos com os fornecedores.`;
 
     return { handled: true, answer: msg, specialist: "estoque" };
@@ -1539,7 +1595,9 @@ export function buildInventorySpecialistDeterministicResponse(
     }
 
     const totalSKUs = data.itensEstoque.length;
-    const volumeFisico = data.itensEstoque.reduce((acc, it) => acc + it.estoqueAtual, 0);
+    const informedItems = data.itensEstoque.filter((it) => it.estoqueInformado !== false);
+    const uninformedCount = totalSKUs - informedItems.length;
+    const volumeFisico = informedItems.reduce((acc, it) => acc + it.estoqueAtual, 0);
     const valorEstoque = data.valorTotalEstoque ?? 0;
 
     if (data.isMemberRole) {
@@ -1547,12 +1605,18 @@ export function buildInventorySpecialistDeterministicResponse(
         handled: true,
         answer:
           `📦 *Agente de Estoque e Compras — Posição Operacional de Estoque:*\n\n` +
-          `• *Total de Produtos/SKUs:* ${totalSKUs}\n` +
-          `• *Volume Físico Consolidado:* ${volumeFisico.toFixed(0)} unidade(s)\n\n` +
+          `• *Total de Produtos/SKUs:* ${totalSKUs}` +
+          (uninformedCount > 0 ? ` (${informedItems.length} com estoque informado; ${uninformedCount} sem estoque informado)` : "") +
+          `\n• *Volume Físico Consolidado:* ${volumeFisico.toFixed(0)} unidade(s)\n\n` +
           `_Valores monetários e custos financeiros de estoque são restritos a gestores._`,
         specialist: "estoque",
       };
     }
+
+    const obsParcial =
+      (data.itensSemCustoOuEstoque ?? 0) > 0 || uninformedCount > 0
+        ? `\n• *Itens sem estoque ou custo informado:* ${Math.max(uninformedCount, data.itensSemCustoOuEstoque ?? 0)} SKU(s) excluído(s) da valoração financeira.`
+        : "";
 
     return {
       handled: true,
@@ -1560,8 +1624,9 @@ export function buildInventorySpecialistDeterministicResponse(
         `📦 *Agente de Estoque e Compras — Posição Consolidada de Estoque:*\n\n` +
         `• *Valor Total em Estoque:* R$ ${valorEstoque.toFixed(2)}\n` +
         `• *Total de SKUs Ativos:* ${totalSKUs}\n` +
-        `• *Volume Físico Total:* ${volumeFisico.toFixed(0)} unidade(s)\n\n` +
-        `_Avaliação calculada pelo custo unitário de reposição cadastrado no Eyemobile._`,
+        `• *Volume Físico Total:* ${volumeFisico.toFixed(0)} unidade(s)` +
+        obsParcial +
+        `\n\n_Avaliação calculada apenas sobre itens com estoque e custo de reposição informados no sistema._`,
       specialist: "estoque",
     };
   }
@@ -1645,10 +1710,45 @@ export function buildInventorySpecialistDeterministicResponse(
       return {
         handled: true,
         answer:
-          `📦 *Agente de Estoque e Compras — Apuração de CMV:*\n\n` +
+          `📦 *Agente de Estoque e Compras — Apuração de CMV Efetivo:*\n\n` +
           `• *CMV Calculado:* *${data.cmvInfo.cmvPercentual.toFixed(1)}%* do faturamento bruto\n` +
           (data.cmvInfo.detalhes ? `• ${data.cmvInfo.detalhes}\n\n` : "\n") +
-          `_Apurado a partir do custo total das mercadorias vendidas e compras escrituradas._`,
+          `_Apurado a partir de estoque inicial, compras escrituradas, movimentações reais e estoque final auditado._`,
+        specialist: "estoque",
+      };
+    }
+
+    if (data.cmvInfo?.tipo === "teorico_fichas" && data.cmvInfo.cmvTeoricoCatalogoPercentual !== undefined) {
+      const coberturaStr =
+        data.cmvInfo.coberturaFichasComprovadas !== undefined && data.cmvInfo.totalFichas !== undefined
+          ? `${data.cmvInfo.coberturaFichasComprovadas} de ${data.cmvInfo.totalFichas} ficha(s) técnica(s) comprovada(s)`
+          : "fichas técnicas comprovadas no catálogo";
+      const limitacoes =
+        data.cmvInfo.limitacoes && data.cmvInfo.limitacoes.length > 0
+          ? data.cmvInfo.limitacoes.map((l) => `  - ${l}`).join("\n")
+          : "  - Não pondera o volume real vendido por item nem considera compras escrituradas e variação de estoque (inicial/final).";
+      return {
+        handled: true,
+        answer:
+          `📦 *Agente de Estoque e Compras — Custo Teórico por Fichas Técnicas (CMV Efetivo Indisponível):*\n\n` +
+          `• *Custo Teórico de Catálogo (Fichas Técnicas):* *${data.cmvInfo.cmvTeoricoCatalogoPercentual.toFixed(1)}%* sobre o preço de venda cadastrado (${coberturaStr})\n` +
+          `• *CMV Teórico Ponderado pelas Vendas:* Pendente de vinculação completa entre itens vendidos e fichas técnicas\n` +
+          `• *CMV Real / Efetivo Contábil:* *Indisponível para confirmação* no momento\n\n` +
+          `⚠️ *Distinção Obrigatória:* Este percentual reflete apenas a relação teórica entre custo e preço nas fichas de catálogo. Não equivale ao CMV real/efetivo:\n` +
+          `${limitacoes}`,
+        specialist: "estoque",
+      };
+    }
+
+    if (data.cmvInfo?.tipo === "teorico_vendas" && data.cmvInfo.cmvPercentual !== undefined) {
+      return {
+        handled: true,
+        answer:
+          `📦 *Agente de Estoque e Compras — CMV Teórico pelas Vendas (CMV Efetivo Pendente):*\n\n` +
+          `• *CMV Teórico das Vendas:* *${data.cmvInfo.cmvPercentual.toFixed(1)}%* do faturamento analisado\n` +
+          (data.cmvInfo.detalhes ? `• ${data.cmvInfo.detalhes}\n` : "") +
+          `• *CMV Real / Efetivo Contábil:* Pendente de apuração de estoque inicial, compras escrituradas e estoque final.\n\n` +
+          `_Indicador teórico baseado no mix vendido; não substitui a conciliação contábil completa._`,
         specialist: "estoque",
       };
     }
@@ -1658,7 +1758,7 @@ export function buildInventorySpecialistDeterministicResponse(
       answer:
         "⚠️ *Agente de Estoque e Compras — Apuração de CMV:*\n\n" +
         "Dados de CMV pendentes de conciliação completa. Não foram encontradas fichas técnicas comprovadas para 100% dos insumos " +
-        "ou notas fiscais suficientes no período para certificar um percentual exato sem margem de erro. " +
+        "ou notas fiscais / variação de estoque suficientes no período para certificar um percentual real sem margem de erro. " +
         "O Wallet CEO evita estimativas infundadas para proteger a governança financeira.",
       specialist: "estoque",
     };
@@ -1725,50 +1825,124 @@ export async function fetchAndExecuteInventorySpecialist(
 
     collectedData.itensEstoque = items;
     collectedData.fichasTecnicas = recipes;
-    collectedData.valorTotalEstoque = items.reduce((acc, it) => acc + it.estoqueAtual * it.custoAtual, 0);
+    const informedItems = items.filter((it) => it.estoqueInformado !== false);
+    const uninformedStockItems = items.filter((it) => it.estoqueInformado === false);
+    collectedData.itensEstoqueNaoInformado = uninformedStockItems;
 
-    // Itens abaixo do estoque mínimo
-    const criticalItems = items.filter((it) => it.estoqueAtual <= it.estoqueMinimo);
+    const valoredItems = informedItems.filter((it) => it.custoInformado !== false);
+    collectedData.valorTotalEstoque = valoredItems.reduce((acc, it) => acc + it.estoqueAtual * it.custoAtual, 0);
+    collectedData.itensSemCustoOuEstoque = items.length - valoredItems.length;
+
+    // Itens abaixo do estoque mínimo (apenas quando há estoque atual informado)
+    const criticalItems = informedItems.filter(
+      (it) => it.estoqueAtual <= 0 || (it.estoqueMinimo > 0 && it.estoqueAtual <= it.estoqueMinimo)
+    );
     collectedData.itensAbaixoMinimo = criticalItems;
 
-    // Sugestão de compras inteligente (Gate 1.2 & 1.3)
+    // Sugestão de compras inteligente (Gate 0.1 — sem inventar ideal nem fornecedor)
     const suggestions: NonNullable<typeof collectedData.sugestaoCompras> = [];
+    const semReferencia: NonNullable<typeof collectedData.itensSemReferencia> = [];
+
     items.forEach((it) => {
-      if (it.estoqueAtual <= it.estoqueMinimo || it.estoqueAtual <= 0) {
-        const estoqueIdeal = it.estoqueIdeal > it.estoqueMinimo ? it.estoqueIdeal : Math.max(10, it.estoqueMinimo * 2);
-        let qtd = Math.max(0, estoqueIdeal - it.estoqueAtual);
-        const multiplo = it.multiploCompra > 0 ? it.multiploCompra : 1;
-        if (multiplo > 1) {
-          qtd = Math.ceil(qtd / multiplo) * multiplo;
-        }
+      const hasEstoqueInformado = it.estoqueInformado !== false;
+      const hasMinimo = (it.estoqueMinimoInformado ?? it.estoqueMinimo > 0) && it.estoqueMinimo > 0;
+      const hasIdeal = (it.estoqueIdealInformado ?? it.estoqueIdeal > 0) && it.estoqueIdeal > Math.max(0, it.estoqueMinimo);
+      const hasFornecedor = Boolean(it.fornecedorPadrao && it.fornecedorPadrao.trim().length > 0);
+      const fornecedorLabel = hasFornecedor ? it.fornecedorPadrao!.trim() : "Fornecedor não cadastrado";
 
-        if (qtd > 0) {
-          const prioridade = it.estoqueAtual <= 0 ? "Urgente (Zerado)" : "Alta (Abaixo Mínimo)";
-          const justificativa =
-            it.estoqueAtual <= 0
-              ? "Estoque zerado no balcão"
-              : `Estoque atual (${it.estoqueAtual}) abaixo do mínimo (${it.estoqueMinimo})`;
+      if (!hasEstoqueInformado) {
+        semReferencia.push({
+          produto: it.descricao,
+          estoqueInformado: false,
+          estoqueAtual: 0,
+          unidadeMedida: it.unidadeMedida || "UN",
+          motivosPendencia: [
+            "estoque atual não informado",
+            ...(!hasMinimo ? ["estoque mínimo não cadastrado"] : []),
+            ...(!hasIdeal ? ["estoque ideal não cadastrado"] : []),
+            ...(!hasFornecedor ? ["fornecedor não cadastrado"] : []),
+          ],
+        });
+        return;
+      }
 
-          suggestions.push({
-            produto: it.descricao,
-            estoqueAtual: it.estoqueAtual,
-            estoqueIdeal,
-            quantidadeComprar: qtd,
-            embalagem: it.unidadeMedida || "UN",
-            multiploCompra: multiplo,
-            custoUnitario: it.custoAtual,
-            custoTotalEstimado: qtd * it.custoAtual,
-            fornecedor: it.fornecedorPadrao || "Distribuidor Padrão",
-            prioridade,
-            justificativa,
-          });
-        }
+      const needsReplenishment = it.estoqueAtual <= 0 || (hasMinimo && it.estoqueAtual <= it.estoqueMinimo);
+      if (!needsReplenishment) {
+        return;
+      }
+
+      // Sem estoque ideal e sem estoque mínimo cadastrados: nunca inventar quantidade
+      if (!hasIdeal && !hasMinimo) {
+        semReferencia.push({
+          produto: it.descricao,
+          estoqueInformado: true,
+          estoqueAtual: it.estoqueAtual,
+          unidadeMedida: it.unidadeMedida || "UN",
+          motivosPendencia: [
+            "estoque mínimo não cadastrado",
+            "estoque ideal não cadastrado",
+            ...(!hasFornecedor ? ["fornecedor não cadastrado"] : []),
+          ],
+        });
+        return;
+      }
+
+      const targetQty = hasIdeal ? it.estoqueIdeal : it.estoqueMinimo;
+      let qtd = Math.max(0, targetQty - it.estoqueAtual);
+      const multiplo = it.multiploCompra > 0 ? it.multiploCompra : 1;
+      if (multiplo > 1 && qtd > 0) {
+        qtd = Math.ceil(qtd / multiplo) * multiplo;
+      }
+
+      const tipoReposicao: "confirmada_ideal" | "estimada_minimo" = hasIdeal
+        ? "confirmada_ideal"
+        : "estimada_minimo";
+
+      if (!hasIdeal || !hasFornecedor) {
+        const motivos: string[] = [];
+        if (!hasIdeal) motivos.push("estoque ideal não cadastrado (usando mínimo como referência parcial)");
+        if (!hasFornecedor) motivos.push("fornecedor não cadastrado");
+        semReferencia.push({
+          produto: it.descricao,
+          estoqueInformado: true,
+          estoqueAtual: it.estoqueAtual,
+          unidadeMedida: it.unidadeMedida || "UN",
+          motivosPendencia: motivos,
+        });
+      }
+
+      if (qtd > 0) {
+        const custoIndisponivel = it.custoInformado === false || it.custoAtual <= 0;
+        const prioridade = it.estoqueAtual <= 0 ? "Urgente (Zerado)" : "Alta (Abaixo Mínimo)";
+        const justificativa =
+          it.estoqueAtual <= 0
+            ? "Estoque zerado no balcão"
+            : `Estoque atual (${it.estoqueAtual}) abaixo do mínimo (${it.estoqueMinimo})`;
+
+        suggestions.push({
+          produto: it.descricao,
+          estoqueAtual: it.estoqueAtual,
+          estoqueIdeal: hasIdeal ? it.estoqueIdeal : null,
+          estoqueMinimo: hasMinimo ? it.estoqueMinimo : null,
+          tipoReposicao,
+          quantidadeComprar: qtd,
+          embalagem: it.unidadeMedida || "UN",
+          multiploCompra: multiplo,
+          custoUnitario: custoIndisponivel ? 0 : it.custoAtual,
+          custoTotalEstimado: custoIndisponivel ? 0 : qtd * it.custoAtual,
+          fornecedor: fornecedorLabel,
+          fornecedorCadastrado: hasFornecedor,
+          custoIndisponivel,
+          prioridade,
+          justificativa,
+        });
       }
     });
 
     collectedData.sugestaoCompras = suggestions;
+    collectedData.itensSemReferencia = semReferencia;
 
-    // Previsão de ruptura baseada na saída recente
+    // Previsão de ruptura baseada na saída recente (somente com estoque atual informado > 0)
     const validYesterday = yesterdaySales.filter((s) => {
       const st = (s.status || "").toLowerCase();
       return st !== "cancelada" && st !== "cancelled" && st !== "estornada";
@@ -1783,7 +1957,7 @@ export async function fetchAndExecuteInventorySpecialist(
     });
 
     const rupturas: NonNullable<typeof collectedData.previsaoRuptura> = [];
-    items.forEach((it) => {
+    informedItems.forEach((it) => {
       const dailyConsumption = salesVolumeMap.get(it.descricao.toLowerCase()) || 0;
       if (dailyConsumption > 0 && it.estoqueAtual > 0) {
         const cobertura = it.estoqueAtual / dailyConsumption;
@@ -1799,16 +1973,24 @@ export async function fetchAndExecuteInventorySpecialist(
     });
     collectedData.previsaoRuptura = rupturas;
 
-    // CMV
-    const provenRecipes = recipes.filter((r) => r.statusFicha === "comprovada" && r.qtdInsumosSemCusto === 0);
-    if (provenRecipes.length > 0 && provenRecipes.length >= recipes.length * 0.8) {
+    // CMV (Gate 0.2 — separar custo teórico de ficha técnica, teórico de vendas e CMV efetivo real)
+    const provenRecipes = recipes.filter(
+      (r) => r.statusFicha === "comprovada" && r.qtdInsumosSemCusto === 0 && r.precoVenda > 0
+    );
+    if (provenRecipes.length > 0 && recipes.length > 0) {
       const totalVenda = provenRecipes.reduce((acc, r) => acc + r.precoVenda, 0);
       const totalCusto = provenRecipes.reduce((acc, r) => acc + r.custoTotal, 0);
-      const cmv = totalVenda > 0 ? (totalCusto / totalVenda) * 100 : 0;
+      const cmvTeorico = totalVenda > 0 ? (totalCusto / totalVenda) * 100 : 0;
       collectedData.cmvInfo = {
-        tipo: "confirmado",
-        cmvPercentual: Math.round(cmv * 10) / 10,
-        detalhes: `Baseado em ${provenRecipes.length} fichas técnicas auditadas e comprovadas.`,
+        tipo: "teorico_fichas",
+        cmvTeoricoCatalogoPercentual: Math.round(cmvTeorico * 10) / 10,
+        coberturaFichasComprovadas: provenRecipes.length,
+        totalFichas: recipes.length,
+        detalhes: `Baseado exclusivamente na relação custo/preço de catálogo em ${provenRecipes.length} de ${recipes.length} fichas técnicas comprovadas.`,
+        limitacoes: [
+          "Não considera mix real de quantidades vendidas no PDV.",
+          "Não inclui compras escrituradas (NF-e), estoque inicial e estoque final do período contábil.",
+        ],
       };
     } else {
       collectedData.cmvInfo = {
@@ -1841,6 +2023,13 @@ export interface RhDeterministicData {
     descricao: string;
     quantidade: number;
     valor: number;
+    nivel?: "comprovada" | "possivel";
+    colaboradorId?: string | null;
+    colaboradorNome?: string | null;
+    acertoId?: string | null;
+    competencia?: string | null;
+    criterio?: string;
+    paymentIds?: string[];
   }>;
   totalVales?: {
     valeTransporte: number;
@@ -2034,11 +2223,25 @@ export function buildRhSpecialistDeterministicResponse(
       };
     }
 
-    let msg = `⚠️ *Agente de Pessoal e RH — Possíveis Duplicidades Detectadas (${data.pagamentosDuplicados.length}):*\n\n`;
+    let msg = `⚠️ *Agente de Pessoal e RH — Auditoria: Possíveis Duplicidades Detectadas (${data.pagamentosDuplicados.length}):*\n\n`;
     data.pagamentosDuplicados.forEach((dup) => {
-      msg += `• *${dup.descricao}*: ${dup.quantidade} lançamentos de R$ ${dup.valor.toFixed(2)}\n`;
+      const nivelTag =
+        dup.nivel === "comprovada"
+          ? "🔴 [Duplicidade Comprovada]"
+          : dup.nivel === "possivel"
+            ? "🟡 [Possível Duplicidade p/ Conferência]"
+            : "⚠️ [Alerta]";
+      const colabTag = dup.colaboradorNome
+        ? ` (${dup.colaboradorNome})`
+        : dup.colaboradorId
+          ? ` (Colaborador ${dup.colaboradorId})`
+          : "";
+      const acertoTag = dup.acertoId ? ` | Acerto: ${dup.acertoId}` : "";
+      const compTag = dup.competencia ? ` | Competência: ${dup.competencia}` : "";
+      const motivoTag = dup.criterio ? ` — ${dup.criterio}` : "";
+      msg += `• ${nivelTag} *${dup.descricao}*${colabTag}: ${dup.quantidade} lançamentos de R$ ${dup.valor.toFixed(2)}${acertoTag}${compTag}${motivoTag}\n`;
     });
-    msg += `\n_Recomenda-se estorno ou conciliação antes do fechamento da folha contábil._`;
+    msg += `\n_Nota: Pagamentos de colaboradores diferentes, datas distintas ou competências distintas não são tratados como duplicidade. Recomenda-se conferência antes de qualquer estorno._`;
 
     return { handled: true, answer: msg, specialist: "rh" };
   }
@@ -2110,25 +2313,125 @@ export async function fetchAndExecuteRhSpecialist(
       total: vt + vr,
     };
 
-    // Auditoria de pagamentos duplicados
-    const dupMap = new Map<string, { count: number; valor: number; desc: string }>();
-    monthPayments.forEach((pg) => {
-      const key = `${pg.acertoId || "sem_acerto"}_${pg.valor.toFixed(2)}`;
-      const cur = dupMap.get(key) || { count: 0, valor: pg.valor, desc: pg.origem || "Lançamento de acerto" };
-      cur.count += 1;
-      dupMap.set(key, cur);
+    // Auditoria criteriosa de pagamentos duplicados (Gate 0.3 — com IDs reais e sem falsos positivos)
+    const employeeNamesById = new Map(employees.map((e) => [e.id, e.nome]));
+    const isCanceledOrFailed = (st: string) => {
+      const s = (st || "").toLowerCase();
+      return (
+        s === "cancelado" ||
+        s === "cancelled" ||
+        s === "estornado" ||
+        s === "estornada" ||
+        s === "falha" ||
+        s === "failed" ||
+        s === "rejeitado"
+      );
+    };
+    const isSettled = (st: string) => {
+      const s = (st || "").toLowerCase();
+      return s === "pago" || s === "concluido" || s === "concluído" || s === "paid";
+    };
+
+    const validPayments = monthPayments.filter((pg) => !isCanceledOrFailed(pg.status));
+    const duplicados: NonNullable<typeof collectedData.pagamentosDuplicados> = [];
+    const flaggedPaymentIds = new Set<string>();
+
+    // 1. Duplicidade comprovada por mesmo idempotencyKey ou divipayExternalId ou mesmo acertoId + valor + colaborador
+    const strongGroups = new Map<string, EmployeePaymentRecord[]>();
+    validPayments.forEach((pg) => {
+      const strongKeys: string[] = [];
+      if (pg.idempotencyKey) strongKeys.push(`idem:${pg.idempotencyKey}`);
+      if (pg.divipayExternalId) strongKeys.push(`ext:${pg.divipayExternalId}`);
+      if (pg.acertoId) {
+        const colabScope = pg.colaboradorId || "acerto";
+        strongKeys.push(`acerto:${pg.acertoId}:${colabScope}:${pg.valor.toFixed(2)}`);
+      }
+      for (const k of strongKeys) {
+        const arr = strongGroups.get(k) || [];
+        arr.push(pg);
+        strongGroups.set(k, arr);
+        break; // Cada pagamento entra na sua chave forte mais específica
+      }
     });
 
-    const duplicados: NonNullable<typeof collectedData.pagamentosDuplicados> = [];
-    dupMap.forEach((v) => {
-      if (v.count > 1) {
+    strongGroups.forEach((group, key) => {
+      if (group.length > 1) {
+        const uniqueIds = Array.from(new Set(group.map((g) => g.id)));
+        if (uniqueIds.length <= 1) return;
+
+        uniqueIds.forEach((id) => flaggedPaymentIds.add(id));
+        const sample = group[0];
+        const settledCount = group.filter((g) => isSettled(g.status)).length;
+        const nivel: "comprovada" | "possivel" =
+          key.startsWith("idem:") || key.startsWith("ext:") || settledCount >= 2 ? "comprovada" : "possivel";
+        const colabId = sample.colaboradorId ?? null;
+        const colabNome = sample.colaboradorNome || (colabId ? employeeNamesById.get(colabId) || null : null);
+        const comp =
+          sample.competenciaInicio && sample.competenciaFim
+            ? `${sample.competenciaInicio}..${sample.competenciaFim}`
+            : null;
         duplicados.push({
-          descricao: v.desc,
-          quantidade: v.count,
-          valor: v.valor,
+          descricao: sample.origem || "Lançamento de acerto",
+          quantidade: uniqueIds.length,
+          valor: sample.valor,
+          nivel,
+          colaboradorId: colabId,
+          colaboradorNome: colabNome,
+          acertoId: sample.acertoId,
+          competencia: comp,
+          criterio: key.startsWith("ext:")
+            ? "Mesmo ID externo Divipay"
+            : key.startsWith("idem:")
+              ? "Mesma chave de idempotência"
+              : "Mesmo acerto e valor",
+          paymentIds: uniqueIds,
         });
       }
     });
+
+    // 2. Possível duplicidade por mesmo colaborador identificado + mesma data + mesma competência + mesma origem + mesmo valor
+    const heuristicGroups = new Map<string, EmployeePaymentRecord[]>();
+    validPayments.forEach((pg) => {
+      if (flaggedPaymentIds.has(pg.id)) return;
+      if (!pg.colaboradorId) return; // Nunca agrupa pagamentos sem colaboradorId identificável
+
+      const dateStr = (pg.paidAt || pg.createdAt || "").slice(0, 10);
+      if (!dateStr) return;
+      const compStr = `${pg.competenciaInicio || ""}:${pg.competenciaFim || ""}`;
+      const origStr = (pg.origem || "acerto").trim().toLowerCase();
+      const key = `heur:${pg.colaboradorId}:${compStr}:${dateStr}:${origStr}:${pg.valor.toFixed(2)}`;
+      const arr = heuristicGroups.get(key) || [];
+      arr.push(pg);
+      heuristicGroups.set(key, arr);
+    });
+
+    heuristicGroups.forEach((group) => {
+      if (group.length > 1) {
+        const uniqueIds = Array.from(new Set(group.map((g) => g.id)));
+        if (uniqueIds.length <= 1) return;
+
+        const sample = group[0];
+        const colabId = sample.colaboradorId ?? null;
+        const colabNome = sample.colaboradorNome || (colabId ? employeeNamesById.get(colabId) || null : null);
+        const comp =
+          sample.competenciaInicio && sample.competenciaFim
+            ? `${sample.competenciaInicio}..${sample.competenciaFim}`
+            : null;
+        duplicados.push({
+          descricao: sample.origem || "Lançamento de acerto",
+          quantidade: uniqueIds.length,
+          valor: sample.valor,
+          nivel: "possivel",
+          colaboradorId: colabId,
+          colaboradorNome: colabNome,
+          acertoId: sample.acertoId,
+          competencia: comp,
+          criterio: `Mesmo colaborador, data (${(sample.paidAt || sample.createdAt).slice(0, 10)}) e origem`,
+          paymentIds: uniqueIds,
+        });
+      }
+    });
+
     collectedData.pagamentosDuplicados = duplicados;
   } catch (err) {
     console.warn("[specialist-router] Erro ao consultar repositório de RH:", err);
