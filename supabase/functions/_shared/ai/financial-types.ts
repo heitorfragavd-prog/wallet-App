@@ -112,3 +112,85 @@ export interface CanonicalFinancialSummary {
     availableBalance: string;
   };
 }
+
+export interface InventoryItemRecord {
+  id: string;
+  workspaceId: string;
+  codigo: string | null;
+  descricao: string;
+  categoria: string | null;
+  precoVenda: number;
+  custoAtual: number;
+  estoqueAtual: number;
+  estoqueMinimo: number;
+  estoqueIdeal: number;
+  unidadeMedida: string;
+  multiploCompra: number;
+  fornecedorPadrao: string | null;
+  margemRealPercentual: number;
+  ativo: boolean;
+}
+
+export interface RecipeCardRecord {
+  id: string;
+  workspaceId: string;
+  nome: string;
+  precoVenda: number;
+  custoTotal: number;
+  margemPercentual: number | null;
+  statusMargem: string;
+  statusFicha: string;
+  qtdInsumos: number;
+  qtdInsumosSemCusto: number;
+  ativo: boolean;
+}
+
+export interface SupplierRecord {
+  id: string;
+  workspaceId: string;
+  nome: string;
+  cnpj: string | null;
+  telefone: string | null;
+  email: string | null;
+  contatoNome: string | null;
+  prazoPagamentoDias: number;
+}
+
+export interface EmployeeRecord {
+  id: string;
+  workspaceId: string;
+  nome: string;
+  cargo: string | null;
+  tipo: string | null;
+  status: string;
+  salarioBruto: number;
+  valeTransporte: number;
+  valeRefeicao: number;
+  diaPagamento: number | null;
+  valorDiaria: number;
+  dataAdmissao: string | null;
+}
+
+export interface EmployeeScheduleRecord {
+  id: string;
+  workspaceId: string;
+  colaboradorId: string;
+  data: string;
+  turno: string | null;
+  valorDiaria: number;
+  valorTotal: number;
+  status: string;
+  observacao: string | null;
+}
+
+export interface EmployeePaymentRecord {
+  id: string;
+  workspaceId: string;
+  acertoId: string | null;
+  valor: number;
+  status: string;
+  origem: string | null;
+  paidAt: string | null;
+  createdAt: string;
+}
+

@@ -24,6 +24,9 @@ import type {
   SefazDocumentRecord,
   DocumentSessionRecord,
   SalesPdvDetailRecord,
+  InventoryItemRecord,
+  RecipeCardRecord,
+  SupplierRecord,
 } from "./query-tools.ts";
 import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
@@ -211,23 +214,56 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   }
 
   // 4. Especialista de Estoque e Compras
-  if (
+  const isEstoqueQuery =
     p.includes("estoque") ||
     p.includes("insumo") ||
+    p.includes("insumos") ||
+    p.includes("acabando") ||
     p.includes("ficha técnica") ||
+    p.includes("ficha tecnica") ||
     p.includes("fichas técnicas") ||
+    p.includes("fichas tecnicas") ||
     p.includes("compras") ||
+    p.includes("preciso comprar") ||
+    p.includes("o que comprar") ||
+    p.includes("sugestão de compras") ||
+    p.includes("sugestao de compras") ||
+    p.includes("lista de compras") ||
+    p.includes("maior custo") ||
+    p.includes("margem baixa") ||
     p.includes("falta de produto") ||
     p.includes("reposi") ||
-    p.includes("cmv")
-  ) {
+    p.includes("cmv") ||
+    p.includes("ruptura");
+
+  if (isEstoqueQuery) {
+    const isEstoqueDeterministic =
+      p.includes("acabando") ||
+      p.includes("abaixo do estoque") ||
+      p.includes("estoque mínimo") ||
+      p.includes("estoque minimo") ||
+      p.includes("preciso comprar") ||
+      p.includes("o que comprar") ||
+      p.includes("sugestão de compras") ||
+      p.includes("sugestao de compras") ||
+      p.includes("lista de compras") ||
+      p.includes("quanto tenho em estoque") ||
+      p.includes("total em estoque") ||
+      p.includes("maior custo") ||
+      p.includes("margem baixa") ||
+      p.includes("qual é meu cmv") ||
+      p.includes("qual o meu cmv") ||
+      p.includes("qual é o cmv") ||
+      p.includes("cmv") ||
+      p.includes("ruptura");
+
     return {
       primarySpecialist: "estoque",
       coordinatingCeo: false,
       contributingSpecialists: ["estoque"],
       complexityLevel: 2,
       model: "gemini-2.5-flash",
-      isDeterministicPossible: false,
+      isDeterministicPossible: isEstoqueDeterministic,
       rationale: "Consulta direcionada ao Especialista de Estoque e Compras.",
     };
   }
@@ -1292,6 +1328,438 @@ export async function fetchAndExecuteSalesPdvSpecialist(
 // COORDENADOR UNIFICADO DE RESPOSTAS DETERMINÍSTICAS (Gate 0, 1 & 2)
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGENTE DE ESTOQUE E COMPRAS — RESPOSTAS DETERMINÍSTICAS (Gate 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface InventoryDeterministicData {
+  itensEstoque?: InventoryItemRecord[];
+  itensAbaixoMinimo?: InventoryItemRecord[];
+  sugestaoCompras?: Array<{
+    produto: string;
+    estoqueAtual: number;
+    estoqueIdeal: number;
+    quantidadeComprar: number;
+    embalagem: string;
+    multiploCompra: number;
+    custoUnitario: number;
+    custoTotalEstimado: number;
+    fornecedor: string;
+    prioridade: string;
+    justificativa: string;
+  }>;
+  valorTotalEstoque?: number;
+  fichasTecnicas?: RecipeCardRecord[];
+  cmvInfo?: {
+    tipo: "confirmado" | "indisponivel" | "estimado";
+    cmvPercentual?: number;
+    detalhes?: string;
+  };
+  previsaoRuptura?: Array<{
+    produto: string;
+    estoqueAtual: number;
+    consumoDiario: number;
+    coberturaDias: number;
+  }>;
+  isMemberRole?: boolean;
+}
+
+export function buildInventorySpecialistDeterministicResponse(
+  userPrompt: string,
+  data: InventoryDeterministicData
+): { handled: boolean; answer?: string; specialist: string } {
+  const p = userPrompt.toLowerCase().trim();
+
+  // Caso 1: "Quais produtos estão acabando?" / "Quais itens estão abaixo do estoque mínimo?"
+  if (
+    p.includes("acabando") ||
+    p.includes("abaixo do estoque") ||
+    p.includes("estoque mínimo") ||
+    p.includes("estoque minimo")
+  ) {
+    if (data.itensAbaixoMinimo === null || data.itensAbaixoMinimo === undefined) {
+      return {
+        handled: true,
+        answer: "📦 *Agente de Estoque e Compras — Nível de Estoque:*\n\nInformações de estoque não disponíveis no momento.",
+        specialist: "estoque",
+      };
+    }
+
+    if (data.itensAbaixoMinimo.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "📦 *Agente de Estoque e Compras — Nível de Estoque:*\n\n" +
+          "✅ Todos os produtos cadastrados estão com estoque acima do nível mínimo de segurança. Nenhuma ruptura imediata identificada.",
+        specialist: "estoque",
+      };
+    }
+
+    let msg = `📦 *Agente de Estoque e Compras — Itens em Nível Crítico (${data.itensAbaixoMinimo.length}):*\n\n`;
+    data.itensAbaixoMinimo.slice(0, 10).forEach((item) => {
+      const zeradoTag = item.estoqueAtual <= 0 ? " — ⚠️ *ESTOQUE ZERADO*" : "";
+      msg += `• *${item.descricao}*: ${item.estoqueAtual} ${item.unidadeMedida} (Mínimo: ${item.estoqueMinimo} ${item.unidadeMedida})${zeradoTag}\n`;
+    });
+    msg += `\n_Recomenda-se reposição imediata para evitar descontinuidade no atendimento do caixa._`;
+
+    return { handled: true, answer: msg, specialist: "estoque" };
+  }
+
+  // Caso 2: "Quais produtos preciso comprar hoje?" / "Sugestão de compras"
+  if (
+    p.includes("preciso comprar") ||
+    p.includes("o que comprar") ||
+    p.includes("sugestão de compras") ||
+    p.includes("sugestao de compras") ||
+    p.includes("lista de compras")
+  ) {
+    if (data.sugestaoCompras === null || data.sugestaoCompras === undefined) {
+      return {
+        handled: true,
+        answer: "📦 *Agente de Estoque e Compras — Sugestão de Reposição:*\n\nDados de compras não disponíveis no momento.",
+        specialist: "estoque",
+      };
+    }
+
+    if (data.sugestaoCompras.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "📦 *Agente de Estoque e Compras — Sugestão de Compras:*\n\n" +
+          "✅ Todos os produtos estão com níveis suficientes de estoque. Nenhuma compra necessária para hoje.",
+        specialist: "estoque",
+      };
+    }
+
+    // Agrupar por fornecedor
+    const bySupplier = new Map<string, typeof data.sugestaoCompras>();
+    data.sugestaoCompras.forEach((s) => {
+      const f = s.fornecedor || "Fornecedor não informado";
+      const list = bySupplier.get(f) || [];
+      list.push(s);
+      bySupplier.set(f, list);
+    });
+
+    let msg = `📦 *Agente de Estoque e Compras — Sugestão de Compras Inteligente:*\n\n`;
+    let totalGeral = 0;
+
+    bySupplier.forEach((items, fornecedor) => {
+      let subtotal = 0;
+      msg += `🏢 *Fornecedor: ${fornecedor}*\n`;
+      items.forEach((it) => {
+        subtotal += it.custoTotalEstimado;
+        const embalagemNote = it.multiploCompra > 1 ? ` (Emb. c/ ${it.multiploCompra})` : "";
+        msg += `• *${it.produto}*: Comprar *${it.quantidadeComprar} ${it.embalagem}*${embalagemNote} | Atual: ${it.estoqueAtual} / Ideal: ${it.estoqueIdeal} | Est: R$ ${it.custoTotalEstimado.toFixed(2)} [Prioridade: ${it.prioridade}]\n`;
+      });
+      totalGeral += subtotal;
+      msg += `*Subtotal ${fornecedor}:* R$ ${subtotal.toFixed(2)}\n\n`;
+    });
+
+    msg += `*Total Geral Estimado:* R$ ${totalGeral.toFixed(2)}\n\n`;
+    msg += `⚠️ *Aviso Consultivo (canMutateState: false):* Nenhuma compra ou pedido foi gerado automaticamente. Verifique com a equipe de compras antes de confirmar os pedidos com os fornecedores.`;
+
+    return { handled: true, answer: msg, specialist: "estoque" };
+  }
+
+  // Caso 3: "Quanto tenho em estoque?"
+  if (p.includes("quanto tenho em estoque") || p.includes("total em estoque")) {
+    if (data.itensEstoque === null || data.itensEstoque === undefined) {
+      return {
+        handled: true,
+        answer: "📦 *Agente de Estoque e Compras — Posição de Estoque:*\n\nInformações de estoque não disponíveis.",
+        specialist: "estoque",
+      };
+    }
+
+    const totalSKUs = data.itensEstoque.length;
+    const volumeFisico = data.itensEstoque.reduce((acc, it) => acc + it.estoqueAtual, 0);
+    const valorEstoque = data.valorTotalEstoque ?? 0;
+
+    if (data.isMemberRole) {
+      return {
+        handled: true,
+        answer:
+          `📦 *Agente de Estoque e Compras — Posição Operacional de Estoque:*\n\n` +
+          `• *Total de Produtos/SKUs:* ${totalSKUs}\n` +
+          `• *Volume Físico Consolidado:* ${volumeFisico.toFixed(0)} unidade(s)\n\n` +
+          `_Valores monetários e custos financeiros de estoque são restritos a gestores._`,
+        specialist: "estoque",
+      };
+    }
+
+    return {
+      handled: true,
+      answer:
+        `📦 *Agente de Estoque e Compras — Posição Consolidada de Estoque:*\n\n` +
+        `• *Valor Total em Estoque:* R$ ${valorEstoque.toFixed(2)}\n` +
+        `• *Total de SKUs Ativos:* ${totalSKUs}\n` +
+        `• *Volume Físico Total:* ${volumeFisico.toFixed(0)} unidade(s)\n\n` +
+        `_Avaliação calculada pelo custo unitário de reposição cadastrado no Eyemobile._`,
+      specialist: "estoque",
+    };
+  }
+
+  // Caso 4: "Quais produtos têm maior custo?" / "Quais produtos estão com margem baixa?"
+  if (p.includes("maior custo") || p.includes("margem baixa") || p.includes("produtos mais caros")) {
+    if (data.isMemberRole) {
+      return {
+        handled: true,
+        answer:
+          "🔒 *Acesso Restrito — Agente de Estoque e Compras:*\n\n" +
+          "O seu perfil possui autorização para consultas operacionais de insumos e reposição. " +
+          "Custos de atacado, margens de lucro e precificação são restritos aos administradores e ao proprietário.",
+        specialist: "estoque",
+      };
+    }
+
+    if (data.itensEstoque === null || data.itensEstoque === undefined || data.itensEstoque.length === 0) {
+      return {
+        handled: true,
+        answer: "📦 *Agente de Estoque e Compras — Custos e Margens:*\n\nDados de custos de produtos não disponíveis.",
+        specialist: "estoque",
+      };
+    }
+
+    if (p.includes("margem baixa")) {
+      const margemBaixa = [...data.itensEstoque]
+        .filter((it) => it.precoVenda > 0 && it.custoAtual > 0)
+        .sort((a, b) => a.margemRealPercentual - b.margemRealPercentual)
+        .slice(0, 5);
+
+      if (margemBaixa.length === 0) {
+        return {
+          handled: true,
+          answer: "📦 *Agente de Estoque e Compras — Análise de Margens:*\n\nNenhum produto cadastrado com margem baixa ou em alerta.",
+          specialist: "estoque",
+        };
+      }
+
+      let msg = `📦 *Agente de Estoque e Compras — Produtos com Menor Margem:*\n\n`;
+      margemBaixa.forEach((it, idx) => {
+        msg += `${idx + 1}. *${it.descricao}*: Margem de *${it.margemRealPercentual.toFixed(1)}%* (Venda: R$ ${it.precoVenda.toFixed(2)} | Custo: R$ ${it.custoAtual.toFixed(2)})\n`;
+      });
+      msg += `\n_Recomenda-se renegociação com fornecedores ou revisão de precificação de venda._`;
+      return { handled: true, answer: msg, specialist: "estoque" };
+    }
+
+    const maisCaros = [...data.itensEstoque]
+      .filter((it) => it.custoAtual > 0)
+      .sort((a, b) => b.custoAtual - a.custoAtual)
+      .slice(0, 5);
+
+    let msg = `📦 *Agente de Estoque e Compras — Produtos de Maior Custo Unitário:*\n\n`;
+    maisCaros.forEach((it, idx) => {
+      msg += `${idx + 1}. *${it.descricao}*: Custo de *R$ ${it.custoAtual.toFixed(2)}* por ${it.unidadeMedida} (Preço de Venda: R$ ${it.precoVenda.toFixed(2)})\n`;
+    });
+    msg += `\n_Apurado com base no custo de reposição atual cadastrado no sistema._`;
+
+    return { handled: true, answer: msg, specialist: "estoque" };
+  }
+
+  // Caso 5: "Qual é meu CMV?"
+  if (
+    p.includes("qual é meu cmv") ||
+    p.includes("qual o meu cmv") ||
+    p.includes("qual é o cmv") ||
+    p.includes("qual o cmv") ||
+    p.includes("cmv")
+  ) {
+    if (data.isMemberRole) {
+      return {
+        handled: true,
+        answer:
+          "🔒 *Acesso Restrito — Agente de Estoque e Compras:*\n\n" +
+          "O indicador de CMV (Custo da Mercadoria Vendida) é uma métrica executiva restrita à diretoria e administração.",
+        specialist: "estoque",
+      };
+    }
+
+    if (data.cmvInfo?.tipo === "confirmado" && data.cmvInfo.cmvPercentual !== undefined) {
+      return {
+        handled: true,
+        answer:
+          `📦 *Agente de Estoque e Compras — Apuração de CMV:*\n\n` +
+          `• *CMV Calculado:* *${data.cmvInfo.cmvPercentual.toFixed(1)}%* do faturamento bruto\n` +
+          (data.cmvInfo.detalhes ? `• ${data.cmvInfo.detalhes}\n\n` : "\n") +
+          `_Apurado a partir do custo total das mercadorias vendidas e compras escrituradas._`,
+        specialist: "estoque",
+      };
+    }
+
+    return {
+      handled: true,
+      answer:
+        "⚠️ *Agente de Estoque e Compras — Apuração de CMV:*\n\n" +
+        "Dados de CMV pendentes de conciliação completa. Não foram encontradas fichas técnicas comprovadas para 100% dos insumos " +
+        "ou notas fiscais suficientes no período para certificar um percentual exato sem margem de erro. " +
+        "O Wallet CEO evita estimativas infundadas para proteger a governança financeira.",
+      specialist: "estoque",
+    };
+  }
+
+  // Caso 6: "Previsão de ruptura"
+  if (p.includes("ruptura") || p.includes("previsao de ruptura") || p.includes("previsão de ruptura")) {
+    if (data.previsaoRuptura === null || data.previsaoRuptura === undefined || data.previsaoRuptura.length === 0) {
+      return {
+        handled: true,
+        answer:
+          "📦 *Agente de Estoque e Compras — Previsão de Ruptura:*\n\n" +
+          "✅ Com base no ritmo recente de saída, nenhum item apresenta risco de ruptura nos próximos 3 dias de operação.",
+        specialist: "estoque",
+      };
+    }
+
+    let msg = `📦 *Agente de Estoque e Compras — Alerta de Previsão de Ruptura:*\n\n`;
+    data.previsaoRuptura.forEach((r) => {
+      msg += `• *${r.produto}*: Cobertura estimada de *${r.coberturaDias.toFixed(1)} dia(s)* de vendas (Saída média: ${r.consumoDiario.toFixed(0)} un./dia | Estoque atual: ${r.estoqueAtual})\n`;
+    });
+    msg += `\n_Projeção calculada pelo giro diário de vendas do PDV Eyemobile._`;
+
+    return { handled: true, answer: msg, specialist: "estoque" };
+  }
+
+  return { handled: false, specialist: "estoque" };
+}
+
+export async function fetchAndExecuteInventorySpecialist(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  nowOverride?: Date
+): Promise<{
+  handled: boolean;
+  answer?: string;
+  specialist: string;
+  routingPlan: SpecialistRoutingPlan;
+}> {
+  const routingPlan = routeUserQueryToSpecialists(userPrompt);
+
+  if (!routingPlan.isDeterministicPossible || routingPlan.primarySpecialist !== "estoque") {
+    return {
+      handled: false,
+      specialist: "estoque",
+      routingPlan,
+    };
+  }
+
+  const { yesterdayStr } = getSaoPauloDateStrings(nowOverride);
+  const collectedData: InventoryDeterministicData = {
+    isMemberRole: !canRoleAccessFinancialData(context.role),
+  };
+
+  try {
+    const [items, recipes, yesterdaySales] = await Promise.all([
+      repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+      repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
+      repository.listSalesPdvDetails
+        ? repository.listSalesPdvDetails(context, { start: yesterdayStr, end: yesterdayStr })
+        : Promise.resolve([]),
+    ]);
+
+    collectedData.itensEstoque = items;
+    collectedData.fichasTecnicas = recipes;
+    collectedData.valorTotalEstoque = items.reduce((acc, it) => acc + it.estoqueAtual * it.custoAtual, 0);
+
+    // Itens abaixo do estoque mínimo
+    const criticalItems = items.filter((it) => it.estoqueAtual <= it.estoqueMinimo);
+    collectedData.itensAbaixoMinimo = criticalItems;
+
+    // Sugestão de compras inteligente (Gate 1.2 & 1.3)
+    const suggestions: NonNullable<typeof collectedData.sugestaoCompras> = [];
+    items.forEach((it) => {
+      if (it.estoqueAtual <= it.estoqueMinimo || it.estoqueAtual <= 0) {
+        const estoqueIdeal = it.estoqueIdeal > it.estoqueMinimo ? it.estoqueIdeal : Math.max(10, it.estoqueMinimo * 2);
+        let qtd = Math.max(0, estoqueIdeal - it.estoqueAtual);
+        const multiplo = it.multiploCompra > 0 ? it.multiploCompra : 1;
+        if (multiplo > 1) {
+          qtd = Math.ceil(qtd / multiplo) * multiplo;
+        }
+
+        if (qtd > 0) {
+          const prioridade = it.estoqueAtual <= 0 ? "Urgente (Zerado)" : "Alta (Abaixo Mínimo)";
+          const justificativa =
+            it.estoqueAtual <= 0
+              ? "Estoque zerado no balcão"
+              : `Estoque atual (${it.estoqueAtual}) abaixo do mínimo (${it.estoqueMinimo})`;
+
+          suggestions.push({
+            produto: it.descricao,
+            estoqueAtual: it.estoqueAtual,
+            estoqueIdeal,
+            quantidadeComprar: qtd,
+            embalagem: it.unidadeMedida || "UN",
+            multiploCompra: multiplo,
+            custoUnitario: it.custoAtual,
+            custoTotalEstimado: qtd * it.custoAtual,
+            fornecedor: it.fornecedorPadrao || "Distribuidor Padrão",
+            prioridade,
+            justificativa,
+          });
+        }
+      }
+    });
+
+    collectedData.sugestaoCompras = suggestions;
+
+    // Previsão de ruptura baseada na saída recente
+    const validYesterday = yesterdaySales.filter((s) => {
+      const st = (s.status || "").toLowerCase();
+      return st !== "cancelada" && st !== "cancelled" && st !== "estornada";
+    });
+
+    const salesVolumeMap = new Map<string, number>();
+    validYesterday.forEach((s) => {
+      s.items.forEach((it) => {
+        const name = (it.productName || "").trim().toLowerCase();
+        salesVolumeMap.set(name, (salesVolumeMap.get(name) || 0) + it.quantity);
+      });
+    });
+
+    const rupturas: NonNullable<typeof collectedData.previsaoRuptura> = [];
+    items.forEach((it) => {
+      const dailyConsumption = salesVolumeMap.get(it.descricao.toLowerCase()) || 0;
+      if (dailyConsumption > 0 && it.estoqueAtual > 0) {
+        const cobertura = it.estoqueAtual / dailyConsumption;
+        if (cobertura <= 3.0) {
+          rupturas.push({
+            produto: it.descricao,
+            estoqueAtual: it.estoqueAtual,
+            consumoDiario: dailyConsumption,
+            coberturaDias: cobertura,
+          });
+        }
+      }
+    });
+    collectedData.previsaoRuptura = rupturas;
+
+    // CMV
+    const provenRecipes = recipes.filter((r) => r.statusFicha === "comprovada" && r.qtdInsumosSemCusto === 0);
+    if (provenRecipes.length > 0 && provenRecipes.length >= recipes.length * 0.8) {
+      const totalVenda = provenRecipes.reduce((acc, r) => acc + r.precoVenda, 0);
+      const totalCusto = provenRecipes.reduce((acc, r) => acc + r.custoTotal, 0);
+      const cmv = totalVenda > 0 ? (totalCusto / totalVenda) * 100 : 0;
+      collectedData.cmvInfo = {
+        tipo: "confirmado",
+        cmvPercentual: Math.round(cmv * 10) / 10,
+        detalhes: `Baseado em ${provenRecipes.length} fichas técnicas auditadas e comprovadas.`,
+      };
+    } else {
+      collectedData.cmvInfo = {
+        tipo: "indisponivel",
+      };
+    }
+  } catch (err) {
+    console.warn("[specialist-router] Erro ao consultar repositório de estoque:", err);
+  }
+
+  const result = buildInventorySpecialistDeterministicResponse(userPrompt, collectedData);
+  return {
+    ...result,
+    routingPlan,
+  };
+}
+
 export async function fetchAndExecuteSpecialistTurn(
   userPrompt: string,
   context: AiExecutionContext,
@@ -1324,6 +1792,17 @@ export async function fetchAndExecuteSpecialistTurn(
       answer: res.answer,
       specialist: "vendas_pdv",
       department: SPECIALIST_AGENTS_REGISTRY.vendas_pdv.department,
+      routingPlan: res.routingPlan,
+    };
+  }
+
+  if (routingPlan.primarySpecialist === "estoque") {
+    const res = await fetchAndExecuteInventorySpecialist(userPrompt, context, repository, nowOverride);
+    return {
+      handled: res.handled,
+      answer: res.answer,
+      specialist: "estoque",
+      department: SPECIALIST_AGENTS_REGISTRY.estoque.department,
       routingPlan: res.routingPlan,
     };
   }

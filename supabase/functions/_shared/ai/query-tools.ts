@@ -13,7 +13,22 @@ import type {
   SefazDocumentRecord,
   DocumentSessionRecord,
   SalesPdvDetailRecord,
+  InventoryItemRecord,
+  RecipeCardRecord,
+  SupplierRecord,
+  EmployeeRecord,
+  EmployeeScheduleRecord,
+  EmployeePaymentRecord,
 } from "./financial-types.ts";
+
+export type {
+  InventoryItemRecord,
+  RecipeCardRecord,
+  SupplierRecord,
+  EmployeeRecord,
+  EmployeeScheduleRecord,
+  EmployeePaymentRecord,
+};
 import type { OperationsAgent } from "./operations-agent.ts";
 import type { PaymentMethod } from "./operations-types.ts";
 import type { EyemobileLiveClient } from "../../wallet-ai-query/supabase-adapter.ts";
@@ -49,6 +64,12 @@ export interface FinancialQueryRepository {
   listSefazDocuments?(context: AiExecutionContext, period?: DatePeriod): Promise<SefazDocumentRecord[]>;
   listDocumentSessions?(context: AiExecutionContext, period?: DatePeriod): Promise<DocumentSessionRecord[]>;
   listSalesPdvDetails?(context: AiExecutionContext, period?: DatePeriod): Promise<SalesPdvDetailRecord[]>;
+  listInventoryItems?(context: AiExecutionContext, params?: { categoria?: string }): Promise<InventoryItemRecord[]>;
+  listRecipeCards?(context: AiExecutionContext): Promise<RecipeCardRecord[]>;
+  listSuppliers?(context: AiExecutionContext): Promise<SupplierRecord[]>;
+  listEmployees?(context: AiExecutionContext): Promise<EmployeeRecord[]>;
+  listEmployeeSchedules?(context: AiExecutionContext, period?: DatePeriod): Promise<EmployeeScheduleRecord[]>;
+  listEmployeePayments?(context: AiExecutionContext, period?: DatePeriod): Promise<EmployeePaymentRecord[]>;
   getAiTelemetryUsage?(context: AiExecutionContext): Promise<{
     orcamentoMensalUsd: number;
     custoAcumuladoMesUsd: number;
