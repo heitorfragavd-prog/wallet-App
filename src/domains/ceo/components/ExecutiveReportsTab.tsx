@@ -116,6 +116,31 @@ export const ExecutiveReportsTab: React.FC<ExecutiveReportsTabProps> = ({ worksp
               </span>
             )}
           </Badge>
+
+          {activeReport.dispatch_status && (
+            <div className="hidden sm:flex items-center gap-1.5 ml-1">
+              <Badge
+                variant="outline"
+                className={`text-[10px] font-medium py-0 ${
+                  activeReport.dispatch_status.app
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    : "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                }`}
+              >
+                App {activeReport.dispatch_status.app ? "✓" : "○"}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={`text-[10px] font-medium py-0 ${
+                  activeReport.dispatch_status.telegram
+                    ? "bg-sky-500/10 text-sky-400 border-sky-500/20"
+                    : "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                }`}
+              >
+                Telegram {activeReport.dispatch_status.telegram ? "✓" : "○"}
+              </Badge>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
