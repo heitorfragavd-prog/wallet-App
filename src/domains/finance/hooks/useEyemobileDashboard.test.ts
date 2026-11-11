@@ -21,7 +21,15 @@ beforeEach(() => vi.clearAllMocks());
 const wrapper = ({ children }: { children: React.ReactNode }) =>
   createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, children);
 
-function mockTransacoes(rows: unknown[], configs: unknown[] = [{ id: "cfg-1" }]) {
+function mockTransacoes(
+  rows: unknown[],
+  configs: unknown[] = [{ id: "cfg-1" }],
+  workspace: { id: string; tipo: string; user_id: string } | null = {
+    id: "ws-test-123",
+    tipo: "PJ",
+    user_id: "user-test",
+  },
+) {
   const transacoesChain: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
@@ -41,12 +49,23 @@ function mockTransacoes(rows: unknown[], configs: unknown[] = [{ id: "cfg-1" }])
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: configs, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: configs[0] ?? null, error: null }),
     then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: configs, error: null }).then(resolve),
+  };
+
+  const workspaceChain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn().mockResolvedValue({ data: workspace, error: null }),
+    then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: workspace, error: null }).then(resolve),
   };
 
   vi.mocked(supabase.from).mockImplementation(((table: string) => {
     if (table === "eyemobile_config") {
       return configChain;
+    }
+    if (table === "workspaces") {
+      return workspaceChain;
     }
     return transacoesChain;
   }) as never);
@@ -157,5 +176,26 @@ describe("useEyemobileDashboard", () => {
     // Deve conter apenas 2 transações após deduplicação, totalizando R$ 40
     expect(result.current.data?.kpis.totalTransactions).toBe(2);
     expect(result.current.data?.kpis.totalRevenue).toBe(40);
+  });
+
+  it("Isolamento de workspace: não considera configurado se o workspace for PF", async () => {
+    // Workspace PF não deve ter acesso à integração PJ
+    mockTransacoes([], [{ id: "cfg-1" }], {
+      id: "ws-pf-123",
+      tipo: "PF",
+      user_id: "user-test",
+    });
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: new Error("Network timeout"),
+    } as never);
+
+    const { result } = renderHook(
+      () => useEyemobileDashboard({ startDate: "2026-11-10", endDate: "2026-11-10" }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data?.configured).toBe(false);
   });
 });

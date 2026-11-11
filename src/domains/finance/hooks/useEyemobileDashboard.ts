@@ -57,16 +57,31 @@ const normalizeStores = (stores: unknown): EyemobileStore[] => {
 
 async function checkEyemobileConfigured(workspaceId?: string): Promise<boolean> {
   try {
-    let q = supabase.from("eyemobile_config").select("id").eq("is_active", true);
-    if (workspaceId) {
-      q = q.eq("workspace_id", workspaceId);
+    if (!workspaceId) return false;
+
+    // 1. Valida se o workspace existe, pertence ao usuário autenticado e é do tipo PJ
+    const { data: ws, error: wsErr } = await supabase
+      .from("workspaces")
+      .select("id, tipo, user_id")
+      .eq("id", workspaceId)
+      .maybeSingle();
+
+    if (wsErr || !ws || ws.tipo !== "PJ") {
+      return false;
     }
-    const { data, error } = await q.limit(1);
-    if (error || !data || data.length === 0) {
-      const { data: fallbackData } = await supabase.from("eyemobile_config").select("id").limit(1);
-      return Boolean(fallbackData && fallbackData.length > 0);
+
+    // 2. Consulta estrita de credenciais por user_id do workspace, sem expor access_key nem secret_key
+    const { data: config, error: configErr } = await supabase
+      .from("eyemobile_config")
+      .select("id, environment, store_id")
+      .eq("user_id", ws.user_id)
+      .maybeSingle();
+
+    if (configErr || !config) {
+      return false;
     }
-    return Boolean(data && data.length > 0);
+
+    return true;
   } catch {
     return false;
   }
@@ -195,7 +210,7 @@ export async function fetchLiveDashboard(
   let invokeError: Error | null = null;
 
   try {
-    const result = await supabase.functions.invoke("eyemobile-sync", {
+    const invokePromise = supabase.functions.invoke("eyemobile-sync", {
       body: {
         mode: "DASHBOARD",
         start_date: isoStartDate,
@@ -204,7 +219,17 @@ export async function fetchLiveDashboard(
         workspace_id: workspaceId,
       },
     });
-    data = result.data as EyemobileSyncResponse | null;
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timeout ao consultar Edge Function")), 10000);
+      invokePromise.finally(() => clearTimeout(timer));
+    });
+
+    const result = (await Promise.race([invokePromise, timeoutPromise])) as {
+      data: EyemobileSyncResponse | null;
+      error: Error | null;
+    };
+    data = result.data;
     invokeError = result.error;
   } catch (err: unknown) {
     invokeError = err instanceof Error ? err : new Error(String(err));
