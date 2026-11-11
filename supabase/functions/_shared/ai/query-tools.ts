@@ -19,6 +19,8 @@ import type {
   EmployeeRecord,
   EmployeeScheduleRecord,
   EmployeePaymentRecord,
+  GrowthOpportunityRecord,
+  CommercialExperimentRecord,
 } from "./financial-types.ts";
 
 export type {
@@ -28,6 +30,8 @@ export type {
   EmployeeRecord,
   EmployeeScheduleRecord,
   EmployeePaymentRecord,
+  GrowthOpportunityRecord,
+  CommercialExperimentRecord,
 };
 import type { OperationsAgent } from "./operations-agent.ts";
 import type { PaymentMethod } from "./operations-types.ts";
@@ -70,6 +74,8 @@ export interface FinancialQueryRepository {
   listEmployees?(context: AiExecutionContext): Promise<EmployeeRecord[]>;
   listEmployeeSchedules?(context: AiExecutionContext, period?: DatePeriod): Promise<EmployeeScheduleRecord[]>;
   listEmployeePayments?(context: AiExecutionContext, period?: DatePeriod): Promise<EmployeePaymentRecord[]>;
+  listGrowthOpportunities?(context: AiExecutionContext): Promise<GrowthOpportunityRecord[]>;
+  listCommercialExperiments?(context: AiExecutionContext): Promise<CommercialExperimentRecord[]>;
   getAiTelemetryUsage?(context: AiExecutionContext): Promise<{
     orcamentoMensalUsd: number;
     custoAcumuladoMesUsd: number;
