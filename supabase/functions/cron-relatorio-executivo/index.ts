@@ -26,12 +26,207 @@ export function getYesterdaySaoPauloString(referenceDate = new Date()): string {
   return fmt.format(yesterdayNoon);
 }
 
+export interface ReportAuthResult {
+  authorized: boolean;
+  status: number;
+  error?: string;
+  isCron: boolean;
+  authenticatedUserId?: string;
+  workspacesToProcess?: Array<{ id: string; user_id: string; nome: string }>;
+  referenceDate?: string;
+}
+
+/**
+ * Validação rigorosa de autorização para geração de relatórios executivos.
+ * Suporta:
+ * 1. Cron / Chamador de Serviço (CRON_SECRET ou SUPABASE_SERVICE_ROLE_KEY)
+ * 2. Geração Manual pelo Proprietário Legítimo via JWT
+ */
+export async function authorizeReportExecution(
+  req: Request,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabaseAdmin: any,
+  payload: { workspace_id?: string; reference_date?: string } = {}
+): Promise<ReportAuthResult> {
+  const isCron = isAuthorizedCronCaller(req);
+  let authenticatedUserId: string | null = null;
+
+  if (!isCron) {
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
+    const token = authHeader ? authHeader.replace(/^Bearer\s+/i, "").trim() : null;
+
+    if (!token) {
+      return {
+        authorized: false,
+        status: 401,
+        error: "Credenciais de autenticação ausentes (Bearer token ou Cron secret obrigatório).",
+        isCron: false,
+      };
+    }
+
+    const { data: userData, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !userData?.user) {
+      return {
+        authorized: false,
+        status: 401,
+        error: "Token de usuário inválido ou expirado.",
+        isCron: false,
+      };
+    }
+
+    authenticatedUserId = userData.user.id;
+  }
+
+  // Validação da data se informada
+  let validatedRefDate: string | null = null;
+  if (payload.reference_date) {
+    const trimmedDate = payload.reference_date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      return {
+        authorized: false,
+        status: 400,
+        error: "Formato de data inválido. Use o padrão YYYY-MM-DD.",
+        isCron,
+      };
+    }
+
+    const todaySaoPaulo = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    if (trimmedDate > todaySaoPaulo) {
+      return {
+        authorized: false,
+        status: 400,
+        error: "Data de referência não pode ser posterior à data atual.",
+        isCron,
+      };
+    }
+
+    validatedRefDate = trimmedDate;
+  }
+
+  const referenceDate = validatedRefDate || getYesterdaySaoPauloString();
+
+  // Caso 1: Chamada Manual do Usuário
+  if (!isCron) {
+    if (!payload.workspace_id) {
+      return {
+        authorized: false,
+        status: 400,
+        error: "workspace_id é obrigatório para execução manual.",
+        isCron: false,
+      };
+    }
+
+    const targetWsId = payload.workspace_id.trim();
+
+    // 1. Busca workspace
+    const { data: ws, error: wsError } = await supabaseAdmin
+      .from("workspaces")
+      .select("id, user_id, nome")
+      .eq("id", targetWsId)
+      .maybeSingle();
+
+    if (wsError || !ws) {
+      return {
+        authorized: false,
+        status: 404,
+        error: "Workspace não encontrado.",
+        isCron: false,
+      };
+    }
+
+    // 2. Verifica se o chamador é o proprietário direto
+    const isDirectOwner = ws.user_id === authenticatedUserId;
+
+    if (!isDirectOwner) {
+      // 3. Se não for proprietário direto, consulta papel na workspace_members
+      const { data: member } = await supabaseAdmin
+        .from("workspace_members")
+        .select("role, ativo")
+        .eq("workspace_id", targetWsId)
+        .eq("user_id", authenticatedUserId)
+        .eq("ativo", true)
+        .maybeSingle();
+
+      const isExecutiveOwner = member?.role === "owner";
+
+      if (!isExecutiveOwner) {
+        return {
+          authorized: false,
+          status: 403,
+          error: "Acesso negado: Apenas o proprietário executivo pode gerar relatórios deste workspace.",
+          isCron: false,
+        };
+      }
+    }
+
+    // Retorna estritamente o workspace solicitado (prevenção absoluta de processamento em lote acidental)
+    return {
+      authorized: true,
+      status: 200,
+      isCron: false,
+      authenticatedUserId: authenticatedUserId!,
+      workspacesToProcess: [ws],
+      referenceDate,
+    };
+  }
+
+  // Caso 2: Chamada do Cron / Service Role
+  if (payload.workspace_id) {
+    const { data: ws } = await supabaseAdmin
+      .from("workspaces")
+      .select("id, user_id, nome")
+      .eq("id", payload.workspace_id.trim());
+
+    if (!ws || ws.length === 0) {
+      return {
+        authorized: false,
+        status: 404,
+        error: "Workspace especificado no cron não foi encontrado.",
+        isCron: true,
+      };
+    }
+
+    return {
+      authorized: true,
+      status: 200,
+      isCron: true,
+      workspacesToProcess: ws,
+      referenceDate,
+    };
+  }
+
+  // Cron padrão: busca todos os workspaces
+  const { data: allWorkspaces, error: allWsError } = await supabaseAdmin
+    .from("workspaces")
+    .select("id, user_id, nome");
+
+  if (allWsError || !allWorkspaces || allWorkspaces.length === 0) {
+    return {
+      authorized: true,
+      status: 200,
+      isCron: true,
+      workspacesToProcess: [],
+      referenceDate,
+    };
+  }
+
+  return {
+    authorized: true,
+    status: 200,
+    isCron: true,
+    workspacesToProcess: allWorkspaces,
+    referenceDate,
+  };
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-
-  if (!isAuthorizedCronCaller(req)) {
-    return unauthorizedResponse("Unauthorized: Cron secret or service role key required", corsHeaders);
-  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseServiceKey = getSupabaseSecretKey() || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -42,28 +237,29 @@ serve(async (req: Request) => {
   });
 
   try {
-    let targetReferenceDate: string | null = null;
+    let payload: { workspace_id?: string; reference_date?: string } = {};
 
-    // Permite sobrescrever data para fins de homologação/reprocessamento autorizado
     if (req.headers.get("content-type")?.includes("application/json")) {
       try {
-        const body = await req.json();
-        if (body.reference_date && /^\d{4}-\d{2}-\d{2}$/.test(body.reference_date)) {
-          targetReferenceDate = body.reference_date;
-        }
+        payload = await req.json();
       } catch {
         // Ignora corpo se não for JSON válido
       }
     }
 
-    const referenceDate = targetReferenceDate || getYesterdaySaoPauloString();
+    // Autorização rigorosa (Cron Secret / Service Role OU Proprietário Autenticado)
+    const authResult = await authorizeReportExecution(req, supabaseAdmin, payload);
+    if (!authResult.authorized) {
+      return new Response(
+        JSON.stringify({ success: false, error: authResult.error }),
+        { status: authResult.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    // 1. Identificar todos os workspaces cadastrados
-    const { data: workspaces, error: wsError } = await supabaseAdmin
-      .from("workspaces")
-      .select("id, user_id, nome");
+    const referenceDate = authResult.referenceDate || getYesterdaySaoPauloString();
+    const workspaces = authResult.workspacesToProcess || [];
 
-    if (wsError || !workspaces || workspaces.length === 0) {
+    if (workspaces.length === 0) {
       return new Response(
         JSON.stringify({ success: true, message: "Nenhum workspace ativo encontrado para gerar relatórios." }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -79,7 +275,7 @@ serve(async (req: Request) => {
       motivo?: string;
     }> = [];
 
-    // 2. Processar cada workspace de forma isolada e idempotente
+    // Processar cada workspace de forma isolada e idempotente
     for (const ws of workspaces) {
       const workspaceId = ws.id;
       const ownerId = ws.user_id;
