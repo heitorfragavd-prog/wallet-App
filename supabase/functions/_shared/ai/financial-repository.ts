@@ -15,6 +15,8 @@ import type {
   EmployeeRecord,
   EmployeeScheduleRecord,
   EmployeePaymentRecord,
+  GrowthOpportunityRecord,
+  CommercialExperimentRecord,
 } from "./financial-types.ts";
 import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./query-tools.ts";
 
@@ -34,7 +36,9 @@ export interface FinancialDataQuery {
     | "colaboradores"
     | "colaborador_escalas"
     | "colaborador_pagamentos"
-    | "colaborador_acertos";
+    | "colaborador_acertos"
+    | "wallet_growth_opportunities"
+    | "wallet_commercial_experiments";
   columns: string;
   equals: { workspace_id: string; user_id?: string; [key: string]: unknown };
   dateRange?: {
@@ -527,6 +531,73 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           status: String(row.status ?? "pendente"),
           origem: row.origem ? String(row.origem) : null,
           paidAt: row.paid_at ? String(row.paid_at) : null,
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+    },
+    async listGrowthOpportunities(context) {
+      const rows = await execute({
+        table: "wallet_growth_opportunities",
+        columns:
+          "id,workspace_id,department,title,problem_description,hypothesis,recommended_action,estimated_financial_impact,confidence_score,status,evidence_data,limitations_notes,created_at",
+        equals: { workspace_id: context.workspaceId },
+      });
+      return rows.map((row): GrowthOpportunityRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          department: String(row.department ?? "mercado"),
+          title: String(row.title ?? ""),
+          problemDescription: row.problem_description ? String(row.problem_description) : null,
+          hypothesis: row.hypothesis ? String(row.hypothesis) : null,
+          recommendedAction: row.recommended_action ? String(row.recommended_action) : null,
+          estimatedFinancialImpact:
+            row.estimated_financial_impact !== null && row.estimated_financial_impact !== undefined
+              ? amount(row.estimated_financial_impact)
+              : null,
+          confidenceScore:
+            row.confidence_score !== null && row.confidence_score !== undefined ? Number(row.confidence_score) : null,
+          status: String(row.status ?? "identificada"),
+          evidenceData:
+            row.evidence_data && typeof row.evidence_data === "object"
+              ? (row.evidence_data as Record<string, unknown>)
+              : null,
+          limitationsNotes: row.limitations_notes ? String(row.limitations_notes) : null,
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
+    },
+    async listCommercialExperiments(context) {
+      const rows = await execute({
+        table: "wallet_commercial_experiments",
+        columns:
+          "id,workspace_id,opportunity_id,name,hypothesis,department,target_kpi,baseline_value,current_value,target_value,start_date,end_date,responsible_person,measured_financial_impact,decision,decision_rationale,status,created_at",
+        equals: { workspace_id: context.workspaceId },
+      });
+      return rows.map((row): CommercialExperimentRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          opportunityId: row.opportunity_id ? String(row.opportunity_id) : null,
+          name: String(row.name ?? ""),
+          hypothesis: String(row.hypothesis ?? ""),
+          department: String(row.department ?? "comercial"),
+          targetKpi: String(row.target_kpi ?? ""),
+          baselineValue: row.baseline_value !== null && row.baseline_value !== undefined ? amount(row.baseline_value) : null,
+          currentValue: row.current_value !== null && row.current_value !== undefined ? amount(row.current_value) : null,
+          targetValue: row.target_value !== null && row.target_value !== undefined ? amount(row.target_value) : null,
+          startDate: row.start_date ? String(row.start_date) : null,
+          endDate: row.end_date ? String(row.end_date) : null,
+          responsiblePerson: row.responsible_person ? String(row.responsible_person) : null,
+          measuredFinancialImpact:
+            row.measured_financial_impact !== null && row.measured_financial_impact !== undefined
+              ? amount(row.measured_financial_impact)
+              : null,
+          decision: row.decision ? String(row.decision) : null,
+          decisionRationale: row.decision_rationale ? String(row.decision_rationale) : null,
+          status: String(row.status ?? "proposto"),
           createdAt: String(row.created_at ?? ""),
         };
       });

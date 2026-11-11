@@ -30,6 +30,8 @@ import type {
   EmployeeRecord,
   EmployeeScheduleRecord,
   EmployeePaymentRecord,
+  GrowthOpportunityRecord,
+  CommercialExperimentRecord,
 } from "./query-tools.ts";
 import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
@@ -346,23 +348,54 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   }
 
   // 6. Especialista de Inteligência Competitiva e Mercado
-  if (
+  const isCompetitiveQuery =
     p.includes("concorrente") ||
     p.includes("mercado") ||
     p.includes("tendência") ||
     p.includes("tendencia") ||
     p.includes("benchmarking") ||
+    p.includes("benchmark") ||
     p.includes("precificação dinâmica") ||
-    p.includes("experimento comercial")
-  ) {
+    p.includes("precificacao dinamica") ||
+    p.includes("oportunidade de crescimento") ||
+    p.includes("oportunidades de crescimento") ||
+    p.includes("experimento comercial") ||
+    p.includes("experimento") ||
+    p.includes("promoção") ||
+    p.includes("promocao") ||
+    p.includes("promoções") ||
+    p.includes("promocoes") ||
+    p.includes("aumentar vendas") ||
+    p.includes("vender mais") ||
+    p.includes("destacar nas vendas") ||
+    p.includes("melhor margem para destacar") ||
+    p.includes("comparados ao mercado") ||
+    p.includes("comparado ao mercado");
+
+  if (isCompetitiveQuery) {
+    const isCompetitiveDeterministic =
+      p.includes("oportunidade") ||
+      p.includes("melhor margem") ||
+      p.includes("destacar") ||
+      p.includes("promoção") ||
+      p.includes("promocao") ||
+      p.includes("promoções") ||
+      p.includes("promocoes") ||
+      p.includes("aumentar vendas") ||
+      p.includes("vender mais") ||
+      p.includes("experimento") ||
+      p.includes("concorrente") ||
+      p.includes("mercado") ||
+      p.includes("benchmark");
+
     return {
       primarySpecialist: "inteligencia_competitiva",
       coordinatingCeo: false,
       contributingSpecialists: ["inteligencia_competitiva"],
       complexityLevel: 3,
       model: "gemini-2.5-flash",
-      isDeterministicPossible: false,
-      rationale: "Consulta direcionada ao Especialista de Inteligência Competitiva.",
+      isDeterministicPossible: isCompetitiveDeterministic,
+      rationale: "Consulta direcionada ao Especialista de Inteligência Competitiva (restrito ao proprietário).",
     };
   }
 
@@ -2444,6 +2477,319 @@ export async function fetchAndExecuteRhSpecialist(
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AGENTE DE INTELIGÊNCIA COMPETITIVA — RESPOSTAS DETERMINÍSTICAS (Entrega D — Gate 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CompetitiveIntelligenceDeterministicData {
+  oportunidades?: GrowthOpportunityRecord[];
+  experimentos?: CommercialExperimentRecord[];
+  itensEstoque?: InventoryItemRecord[];
+  fichasTecnicas?: RecipeCardRecord[];
+  vendasRecentes?: SalesPdvDetailRecord[];
+  canaisDelivery?: Array<{
+    id: string;
+    nome: string;
+    status: string;
+    comissaoContratual: string;
+  }>;
+  isNonOwner?: boolean;
+}
+
+export function buildCompetitiveIntelligenceDeterministicResponse(
+  userPrompt: string,
+  data: CompetitiveIntelligenceDeterministicData
+): { handled: boolean; answer?: string; specialist: string } {
+  const p = userPrompt.toLowerCase().trim();
+
+  if (data.isNonOwner) {
+    return {
+      handled: true,
+      answer:
+        "🔒 *Acesso Restrito — Agente de Inteligência Competitiva:*\n\n" +
+        "Análises de posicionamento competitivo, oportunidades estratégicas, elasticidade de preços e experimentos comerciais " +
+        "são exclusivas do proprietário do workspace.",
+      specialist: "inteligencia_competitiva",
+    };
+  }
+
+  const items = (data.itensEstoque || []).filter((it) => it.ativo !== false);
+  const pricedMarginItems = items
+    .filter((it) => it.precoVenda > 0 && it.custoAtual > 0 && it.custoInformado !== false && it.margemRealPercentual > 0)
+    .sort((a, b) => b.margemRealPercentual - a.margemRealPercentual);
+
+  const validSales = (data.vendasRecentes || []).filter((s) => {
+    const st = (s.status || "").toLowerCase();
+    return st !== "cancelada" && st !== "cancelled" && st !== "estornada";
+  });
+  const totalSalesAmount = validSales.reduce((acc, s) => acc + s.amount, 0);
+  const ticketMedioReal = validSales.length > 0 ? totalSalesAmount / validSales.length : null;
+
+  const productVolume = new Map<string, { qty: number; revenue: number }>();
+  validSales.forEach((s) => {
+    (s.items || []).forEach((it) => {
+      const key = (it.productName || "").trim();
+      if (!key) return;
+      const cur = productVolume.get(key) || { qty: 0, revenue: 0 };
+      cur.qty += it.quantity;
+      cur.revenue += it.totalPrice || it.unitPrice * it.quantity;
+      productVolume.set(key, cur);
+    });
+  });
+
+  // Caso 1: Mercado / Concorrentes / Benchmarking
+  if (p.includes("concorrente") || p.includes("mercado") || p.includes("benchmark")) {
+    const provenCount = (data.fichasTecnicas || []).filter((r) => r.statusFicha === "comprovada").length;
+    const activeChannels = (data.canaisDelivery || []).filter((c) => c.status.toLowerCase().includes("ativo"));
+
+    let msg = `🧭 *Agente de Inteligência Competitiva — Posicionamento Interno vs. Mercado:*\n\n`;
+    msg += `⚠️ *Limitação de Fonte Externa:* Este ambiente não possui monitoramento automatizado de cardápios, preços de concorrentes locais ou bases externas de benchmarking do setor. Nenhuma média concorrencial foi inventada.\n\n`;
+    msg += `📊 *Linhas de Base Internas Confirmadas (Últimos 14 dias):*\n`;
+    msg += `• *Pedidos Válidos Analisados:* ${validSales.length} (${totalSalesAmount > 0 ? `R$ ${totalSalesAmount.toFixed(2)}` : "R$ 0,00"})\n`;
+    msg += `• *Ticket Médio Interno Real:* ${ticketMedioReal !== null ? `R$ ${ticketMedioReal.toFixed(2)}` : "Não disponível (sem vendas válidas no período)"}\n`;
+    msg += `• *SKUs com Custo e Margem Auditáveis:* ${pricedMarginItems.length} de ${items.length} ativo(s) | *Fichas Comprovadas:* ${provenCount}\n`;
+    if (activeChannels.length > 0) {
+      msg += `• *Canais Ativos:* ${activeChannels.map((c) => `${c.nome} (${c.comissaoContratual})`).join(", ")}\n`;
+    }
+    msg += `\n_Próximo passo consultivo (canMutateState: false): informe preços de 3 concorrentes diretos da região para cruzarmos elasticidade com suas margens reais._`;
+
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  // Caso 2: Quais oportunidades de crescimento temos no momento?
+  if (p.includes("oportunidade")) {
+    const opportunities = data.oportunidades || [];
+    let msg = `🧭 *Agente de Inteligência Competitiva — Oportunidades de Crescimento:*\n\n`;
+
+    if (opportunities.length > 0) {
+      opportunities.slice(0, 6).forEach((op, idx) => {
+        const impactTag =
+          op.estimatedFinancialImpact !== null && op.estimatedFinancialImpact !== undefined
+            ? ` | Impacto Est.: R$ ${op.estimatedFinancialImpact.toFixed(2)}`
+            : "";
+        const confTag = op.confidenceScore !== null ? ` | Confiança: ${op.confidenceScore}%` : "";
+        msg += `${idx + 1}. *${op.title}* [${op.department} — ${op.status}]${impactTag}${confTag}\n`;
+        if (op.recommendedAction) msg += `   • Ação sugerida: ${op.recommendedAction}\n`;
+        if (op.limitationsNotes) msg += `   • Observação/Limitação: ${op.limitationsNotes}\n`;
+      });
+    } else if (pricedMarginItems.length > 0) {
+      const topHighlight = pricedMarginItems[0];
+      msg += `Nenhuma oportunidade formal pré-registrada em \`wallet_growth_opportunities\`. Com base nos dados reais internos:\n\n`;
+      msg += `• *Alavanca de Mix de Alta Margem:* *${topHighlight.descricao}* opera com margem real de *${topHighlight.margemRealPercentual.toFixed(1)}%* (R$ ${topHighlight.precoVenda.toFixed(2)}). Testar destaque visual/combo de balcão preserva caixa.\n`;
+      if (ticketMedioReal !== null) {
+        msg += `• *Expansão de Ticket Médio:* Base atual de *R$ ${ticketMedioReal.toFixed(2)}* em ${validSales.length} venda(s) recentes.\n`;
+      }
+    } else {
+      msg += `Sem dados suficientes no repositório comercial para quantificar oportunidades com precisão.\n\n`;
+      msg += `• Para destravar este diagnóstico, cadastre custos unitários em \`produtos_eyemobile\` ou fichas técnicas comprovadas.\n`;
+    }
+
+    msg += `\n⚠️ *Caráter Consultivo (canMutateState: false):* Nenhuma alteração comercial ou de preço foi aplicada automaticamente.`;
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  // Caso 3: Quais produtos têm melhor margem para destacar nas vendas?
+  if (p.includes("melhor margem") || p.includes("destacar")) {
+    if (pricedMarginItems.length === 0) {
+      return {
+        handled: true,
+        answer:
+          `🧭 *Agente de Inteligência Competitiva — Produtos para Destaque de Margem:*\n\n` +
+          `Não foi possível ranquear produtos por margem real porque nenhum SKU ativo possui preço de venda e custo unitário informados simultaneamente.\n\n` +
+          `_Cadastre custo de reposição e preço de venda em \`produtos_eyemobile\` ou fichas técnicas para habilitar este ranking sem estimativas._`,
+        specialist: "inteligencia_competitiva",
+      };
+    }
+
+    const topItems = pricedMarginItems.slice(0, 5);
+    let msg = `🧭 *Agente de Inteligência Competitiva — Top Produtos por Margem Real (${topItems.length}):*\n\n`;
+    topItems.forEach((it, idx) => {
+      const contrib = it.precoVenda - it.custoAtual;
+      msg += `${idx + 1}. *${it.descricao}*: Margem *${it.margemRealPercentual.toFixed(1)}%* | Venda: R$ ${it.precoVenda.toFixed(2)} | Custo: R$ ${it.custoAtual.toFixed(2)} | Lucro Bruto Unitário: R$ ${contrib.toFixed(2)}\n`;
+    });
+    const uncosted = items.length - pricedMarginItems.length;
+    if (uncosted > 0) {
+      msg += `\nℹ️ _${uncosted} SKU(s) ativo(s) foram omitidos do ranking por não terem custo unitário cadastrado._`;
+    }
+    msg += `\n\n⚠️ *Aviso Consultivo (canMutateState: false):* Destaque sugerido apenas para priorização de cardápio/balcão; nenhum preço foi alterado.`;
+
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  // Caso 4: Vale a pena fazer promoção em algum item?
+  if (p.includes("promoção") || p.includes("promocao") || p.includes("promoções") || p.includes("promocoes")) {
+    const candidates = pricedMarginItems.filter((it) => it.margemRealPercentual >= 45 && it.estoqueAtual > it.estoqueMinimo);
+    const blockedLowMargin = pricedMarginItems.filter((it) => it.margemRealPercentual > 0 && it.margemRealPercentual < 25);
+
+    let msg = `🧭 *Agente de Inteligência Competitiva — Análise de Promoção sem Destruição de Margem:*\n\n`;
+
+    if (pricedMarginItems.length === 0) {
+      msg += `❌ *Não é seguro recomendar desconto no momento:* não há custos unitários e margens reais cadastrados para validar folga financeira.\n\n`;
+    } else {
+      if (candidates.length > 0) {
+        msg += `✅ *Candidatos com Folga de Margem e Estoque (para teste em combo/cross-sell):*\n`;
+        candidates.slice(0, 3).forEach((it) => {
+          msg += `• *${it.descricao}*: Margem atual *${it.margemRealPercentual.toFixed(1)}%* (Estoque: ${it.estoqueAtual} ${it.unidadeMedida}) — preferível usar como âncora ou acompanhamento em combo em vez de corte linear de preço.\n`;
+        });
+      } else {
+        msg += `⚠️ *Nenhum item reúne margem >= 45% com estoque acima do mínimo para desconto agressivo.* Prefira combos de ticket maior em vez de reduzir preço unitário.\n`;
+      }
+
+      if (blockedLowMargin.length > 0) {
+        msg += `\n🚫 *Itens Contraindicados para Promoção (margem < 25%):* ${blockedLowMargin.slice(0, 4).map((i) => `${i.descricao} (${i.margemRealPercentual.toFixed(1)}%)`).join(", ")}.\n`;
+      }
+    }
+
+    msg += `\n⚠️ *Aviso Consultivo (canMutateState: false):* Nenhuma campanha ou tabela promocional foi ativada automaticamente.`;
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  // Caso 5: Qual experimento comercial podemos testar nesta semana?
+  if (p.includes("experimento")) {
+    const activeExps = (data.experimentos || []).filter(
+      (e) => e.status === "em_andamento" || e.status === "proposto" || e.status === "planejado"
+    );
+    const anchor = pricedMarginItems[0];
+    const directChannel = (data.canaisDelivery || []).find((c) => c.id === "direto");
+
+    let msg = `🧪 *Agente de Inteligência Competitiva — Experimento Comercial Estruturado:*\n\n`;
+
+    if (activeExps.length > 0) {
+      msg += `📋 *Experimentos já registrados no workspace (${activeExps.length}):*\n`;
+      activeExps.slice(0, 3).forEach((e, idx) => {
+        msg += `${idx + 1}. *${e.name}* [${e.status}] — KPI: ${e.targetKpi}${e.baselineValue !== null ? ` (Base: ${e.baselineValue} → Meta: ${e.targetValue ?? "N/D"})` : ""}\n   • Hipótese: ${e.hypothesis}\n`;
+      });
+      msg += `\n`;
+    }
+
+    const baseLineText =
+      ticketMedioReal !== null
+        ? `Ticket médio real recente: R$ ${ticketMedioReal.toFixed(2)} (${validSales.length} vendas válidas)`
+        : "Linha de base pendente de 7 dias de histórico completo do PDV";
+    const metaText =
+      ticketMedioReal !== null
+        ? `Elevar ticket médio do turno testado em +8% a +12% sobre R$ ${ticketMedioReal.toFixed(2)} preservando margem bruta`
+        : "Estabelecer linha de base de conversão e adesão ao combo nos primeiros 7 dias";
+    const focusName = anchor
+      ? `Combo Sugestivo com ${anchor.descricao} (Margem Real ${anchor.margemRealPercentual.toFixed(1)}%)`
+      : directChannel
+        ? `Conversão Direta sem Comissão (${directChannel.nome})`
+        : "Diagnóstico de Mix e Ticket Médio em Balcão";
+
+    msg += `🎯 *Proposta Completa de Experimento (8 campos — Aprovação Pendente):*\n`;
+    msg += `• *1. Nome do Experimento:* ${focusName}\n`;
+    msg += `• *2. Departamento:* Mercado & Comercial\n`;
+    msg += `• *3. Hipótese:* Oferta ativa de complemento de maior margem no momento do pedido eleva o ticket médio sem reduzir a margem percentual consolidada.\n`;
+    msg += `• *4. KPI Principal:* Ticket médio líquido e margem de contribuição por pedido\n`;
+    msg += `• *5. Linha de Base:* ${baseLineText}\n`;
+    msg += `• *6. Meta:* ${metaText}\n`;
+    msg += `• *7. Janela de Teste:* 7 dias consecutivos (comparando mesmo dia da semana contra histórico anterior)\n`;
+    msg += `• *8. Critério de Decisão (Escalar / Pausar):* Escalar se ticket médio crescer sem elevar cancelamentos nem reduzir margem; pausar se margem cair abaixo da linha de base.\n\n`;
+    msg += `⚠️ *Caráter Consultivo (canMutateState: false):* Experimento apenas proposto para revisão do proprietário — não gravado nem ativado automaticamente.`;
+
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  // Caso 6: Como aumentar vendas sem destruir margem?
+  if (p.includes("aumentar vendas") || p.includes("vender mais")) {
+    const directChannel = (data.canaisDelivery || []).find((c) => c.id === "direto");
+    const highMarginTop = pricedMarginItems.slice(0, 3);
+
+    let msg = `🧭 *Agente de Inteligência Competitiva — Crescimento de Vendas Preservando Margem:*\n\n`;
+    msg += `1. *Priorizar Mix de Maior Margem no Atendimento:*\n`;
+    if (highMarginTop.length > 0) {
+      highMarginTop.forEach((it) => {
+        msg += `   • *${it.descricao}* (${it.margemRealPercentual.toFixed(1)}% de margem | R$ ${it.precoVenda.toFixed(2)})\n`;
+      });
+    } else {
+      msg += `   • _Dados insuficientes de margem unitária (cadastre custos reais em \`produtos_eyemobile\` para priorização automática)._\n`;
+    }
+
+    msg += `2. *Migração Gradual para Canal Direto (Menor Taxa):*\n`;
+    if (directChannel) {
+      msg += `   • Canal *${directChannel.nome}* (${directChannel.comissaoContratual}) evita compressão de comissão de marketplaces.\n`;
+    } else {
+      msg += `   • Incentivar pedidos recorrentes no canal próprio para reduzir dependência de comissões.\n`;
+    }
+
+    msg += `3. *Aumento de Ticket via Combo em vez de Desconto Linear:*\n`;
+    msg += `   • ${ticketMedioReal !== null ? `Partindo do ticket médio real recente de *R$ ${ticketMedioReal.toFixed(2)}*, ` : ""}parear itens de alto giro com complementos de alta margem preserva lucro por pedido.\n\n`;
+    msg += `⚠️ *Aviso Consultivo (canMutateState: false):* Recomendações estratégicas sem alteração automática de preços ou cardápio.`;
+
+    return { handled: true, answer: msg, specialist: "inteligencia_competitiva" };
+  }
+
+  return { handled: false, specialist: "inteligencia_competitiva" };
+}
+
+export async function fetchAndExecuteCompetitiveIntelligenceSpecialist(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  nowOverride?: Date
+): Promise<{
+  handled: boolean;
+  answer?: string;
+  specialist: string;
+  routingPlan: SpecialistRoutingPlan;
+}> {
+  const routingPlan = routeUserQueryToSpecialists(userPrompt);
+
+  if (!routingPlan.isDeterministicPossible || routingPlan.primarySpecialist !== "inteligencia_competitiva") {
+    return {
+      handled: false,
+      specialist: "inteligencia_competitiva",
+      routingPlan,
+    };
+  }
+
+  const isOwner = context.isOwner === true || context.role === "owner";
+  if (!isOwner) {
+    const res = buildCompetitiveIntelligenceDeterministicResponse(userPrompt, { isNonOwner: true });
+    return {
+      ...res,
+      routingPlan,
+    };
+  }
+
+  const refNow = nowOverride ?? new Date();
+  const fourteenDaysAgo = new Date(refNow.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const { todayStr } = getSaoPauloDateStrings(refNow);
+  const { todayStr: start14Str } = getSaoPauloDateStrings(fourteenDaysAgo);
+
+  const collectedData: CompetitiveIntelligenceDeterministicData = {
+    isNonOwner: false,
+  };
+
+  try {
+    const [items, recipes, recentSales, opportunities, experiments, deliveryStatus] = await Promise.all([
+      repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+      repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
+      repository.listSalesPdvDetails
+        ? repository.listSalesPdvDetails(context, { start: start14Str, end: todayStr })
+        : Promise.resolve([]),
+      repository.listGrowthOpportunities ? repository.listGrowthOpportunities(context) : Promise.resolve([]),
+      repository.listCommercialExperiments ? repository.listCommercialExperiments(context) : Promise.resolve([]),
+      repository.getDeliveryChannelsStatus ? repository.getDeliveryChannelsStatus(context) : Promise.resolve(null),
+    ]);
+
+    collectedData.itensEstoque = items;
+    collectedData.fichasTecnicas = recipes;
+    collectedData.vendasRecentes = recentSales;
+    collectedData.oportunidades = opportunities;
+    collectedData.experimentos = experiments;
+    collectedData.canaisDelivery = deliveryStatus?.canais;
+  } catch (err) {
+    console.warn("[specialist-router] Erro ao consultar repositório de Inteligência Competitiva:", err);
+  }
+
+  const result = buildCompetitiveIntelligenceDeterministicResponse(userPrompt, collectedData);
+  return {
+    ...result,
+    routingPlan,
+  };
+}
+
 export async function fetchAndExecuteSpecialistTurn(
   userPrompt: string,
   context: AiExecutionContext,
@@ -2498,6 +2844,22 @@ export async function fetchAndExecuteSpecialistTurn(
       answer: res.answer,
       specialist: "rh",
       department: SPECIALIST_AGENTS_REGISTRY.rh.department,
+      routingPlan: res.routingPlan,
+    };
+  }
+
+  if (routingPlan.primarySpecialist === "inteligencia_competitiva") {
+    const res = await fetchAndExecuteCompetitiveIntelligenceSpecialist(
+      userPrompt,
+      context,
+      repository,
+      nowOverride
+    );
+    return {
+      handled: res.handled,
+      answer: res.answer,
+      specialist: "inteligencia_competitiva",
+      department: SPECIALIST_AGENTS_REGISTRY.inteligencia_competitiva.department,
       routingPlan: res.routingPlan,
     };
   }

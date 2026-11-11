@@ -205,3 +205,40 @@ export interface EmployeePaymentRecord {
   createdAt: string;
 }
 
+export interface GrowthOpportunityRecord {
+  id: string;
+  workspaceId: string;
+  department: string;
+  title: string;
+  problemDescription: string | null;
+  hypothesis: string | null;
+  recommendedAction: string | null;
+  estimatedFinancialImpact: number | null;
+  confidenceScore: number | null;
+  status: string;
+  evidenceData: Record<string, unknown> | null;
+  limitationsNotes: string | null;
+  createdAt: string;
+}
+
+export interface CommercialExperimentRecord {
+  id: string;
+  workspaceId: string;
+  opportunityId: string | null;
+  name: string;
+  hypothesis: string;
+  department: string;
+  targetKpi: string;
+  baselineValue: number | null;
+  currentValue: number | null;
+  targetValue: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  responsiblePerson: string | null;
+  measuredFinancialImpact: number | null;
+  decision: string | null;
+  decisionRationale: string | null;
+  status: string;
+  createdAt: string;
+}
+
