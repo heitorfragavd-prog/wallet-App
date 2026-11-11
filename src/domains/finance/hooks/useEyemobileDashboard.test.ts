@@ -21,17 +21,37 @@ beforeEach(() => vi.clearAllMocks());
 const wrapper = ({ children }: { children: React.ReactNode }) =>
   createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, children);
 
-// Mock encadeável do query builder do Supabase para a tabela transacoes
-function mockTransacoes(rows: unknown[]) {
-  const chain = {
+function mockTransacoes(rows: unknown[], configs: unknown[] = [{ id: "cfg-1" }]) {
+  const transacoesChain: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    like: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     lte: vi.fn().mockReturnThis(),
-    range: vi.fn().mockResolvedValue({ data: rows, error: null }),
+    order: vi.fn().mockReturnThis(),
+    range: vi.fn().mockImplementation((from: number, to: number) => {
+      const slice = rows.slice(from, to + 1);
+      return Promise.resolve({ data: slice, error: null });
+    }),
+    limit: vi.fn().mockReturnThis(),
+    then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows, error: null }).then(resolve),
   };
-  vi.mocked(supabase.from).mockReturnValue(chain as never);
-  return chain;
+
+  const configChain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue({ data: configs, error: null }),
+    then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: configs, error: null }).then(resolve),
+  };
+
+  vi.mocked(supabase.from).mockImplementation(((table: string) => {
+    if (table === "eyemobile_config") {
+      return configChain;
+    }
+    return transacoesChain;
+  }) as never);
+
+  return transacoesChain;
 }
 
 describe("useEyemobileDashboard", () => {
@@ -89,5 +109,53 @@ describe("useEyemobileDashboard", () => {
     expect(live.kpis.totalRevenue).toBe(999);
     await waitFor(() => expect(result.current.data?.kpis.totalRevenue).toBe(999));
   });
-});
 
+  it("Situação B: fallback local preserva configured: true quando integração existe mesmo com zero vendas no período", async () => {
+    mockTransacoes([], [{ id: "cfg-1" }]);
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: new Error("Network timeout"),
+    } as never);
+
+    const { result } = renderHook(() => useEyemobileDashboard({ startDate: "2026-11-10", endDate: "2026-11-10" }), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data?.configured).toBe(true);
+    expect(result.current.data?.kpis.totalTransactions).toBe(0);
+    expect(result.current.data?.kpis.totalRevenue).toBe(0);
+  });
+
+  it("Situação C: fallback local reporta configured: false quando eyemobile_config não existe", async () => {
+    mockTransacoes([], []);
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: new Error("Network timeout"),
+    } as never);
+
+    const { result } = renderHook(() => useEyemobileDashboard({ startDate: "2026-11-10", endDate: "2026-11-10" }), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data?.configured).toBe(false);
+  });
+
+  it("Situação A via Fallback: deduplica vendas históricas com mesmo ID", async () => {
+    const rawSales = [
+      { id: "row-1", valor: 15, data: "2026-11-10", descricao: "Venda Eyemobile #12345", observacoes: "Venda #12345" },
+      { id: "row-2", valor: 15, data: "2026-11-10", descricao: "Venda Eyemobile #12345", observacoes: "Venda #12345" }, // dupe
+      { id: "row-3", valor: 25, data: "2026-11-10", descricao: "Venda Eyemobile #67890", observacoes: "Venda #67890" },
+    ];
+    mockTransacoes(rawSales, [{ id: "cfg-1" }]);
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: new Error("Gateway 504"),
+    } as never);
+
+    const { result } = renderHook(() => useEyemobileDashboard({ startDate: "2026-11-10", endDate: "2026-11-10" }), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data?.configured).toBe(true);
+    // Deve conter apenas 2 transações após deduplicação, totalizando R$ 40
+    expect(result.current.data?.kpis.totalTransactions).toBe(2);
+    expect(result.current.data?.kpis.totalRevenue).toBe(40);
+  });
+});

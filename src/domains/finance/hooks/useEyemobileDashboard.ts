@@ -55,6 +55,23 @@ const normalizeStores = (stores: unknown): EyemobileStore[] => {
     .filter((store) => store.id);
 };
 
+async function checkEyemobileConfigured(workspaceId?: string): Promise<boolean> {
+  try {
+    let q = supabase.from("eyemobile_config").select("id").eq("is_active", true);
+    if (workspaceId) {
+      q = q.eq("workspace_id", workspaceId);
+    }
+    const { data, error } = await q.limit(1);
+    if (error || !data || data.length === 0) {
+      const { data: fallbackData } = await supabase.from("eyemobile_config").select("id").limit(1);
+      return Boolean(fallbackData && fallbackData.length > 0);
+    }
+    return Boolean(data && data.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 async function fetchLiveProducts(): Promise<unknown[]> {
   try {
     const { data, error } = await supabase.functions.invoke("eyemobile-sync", {
@@ -73,25 +90,59 @@ async function buildLocalFallbackDashboard(
 ): Promise<EyemobileDashboardResult> {
   const productsPromise = fetchLiveProducts();
 
-  let query = supabase
-    .from("transacoes")
-    .select("*")
-    .eq("tipo", "receita")
-    .like("descricao", "Venda Eyemobile %")
-    .gte("data", filters.startDate)
-    .lte("data", filters.endDate)
-    .order("data", { ascending: false })
-    .limit(2000);
+  // Paginação segura em lotes de 1000 registros para cobrir grandes períodos sem truncar em 2000
+  const PAGE_SIZE = 1000;
+  const allTransacoes: Array<Record<string, unknown>> = [];
+  let from = 0;
+  let hasMore = true;
 
-  if (workspaceId) {
-    query = query.eq("workspace_id", workspaceId);
+  while (hasMore) {
+    let query = supabase
+      .from("transacoes")
+      .select("*")
+      .eq("tipo", "receita")
+      .like("descricao", "Venda Eyemobile %")
+      .gte("data", filters.startDate)
+      .lte("data", filters.endDate)
+      .order("data", { ascending: false });
+
+    if (workspaceId) {
+      query = query.eq("workspace_id", workspaceId);
+    }
+
+    const { data: chunk, error: queryError } = await query.range(from, from + PAGE_SIZE - 1);
+    if (queryError) {
+      console.warn("Erro ao buscar transações no fallback local:", queryError.message);
+      break;
+    }
+
+    if (!chunk || chunk.length === 0) {
+      break;
+    }
+
+    allTransacoes.push(...chunk);
+    if (chunk.length < PAGE_SIZE || allTransacoes.length >= 20000) {
+      hasMore = false;
+    } else {
+      from += PAGE_SIZE;
+    }
   }
 
-  const { data: transacoes, error: queryError } = await query;
+  // Deduplicação estrita por ID de venda para blindar contra duplicidades históricas
+  const seenSaleIds = new Set<string>();
+  const transacoes = allTransacoes.filter((t) => {
+    const match = t.descricao?.match(/#(\d+)/) || t.observacoes?.match(/#(\d+)/);
+    const saleId = match ? match[1] : t.id;
+    if (seenSaleIds.has(saleId)) return false;
+    seenSaleIds.add(saleId);
+    return true;
+  });
 
-  if (queryError || !transacoes?.length) {
+  const isConfigured = await checkEyemobileConfigured(workspaceId);
+
+  if (!transacoes.length) {
     return {
-      configured: false,
+      configured: isConfigured,
       stores: [],
       isLocalFallback: true,
       ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
@@ -119,7 +170,7 @@ async function buildLocalFallbackDashboard(
   });
 
   return {
-    configured: true,
+    configured: isConfigured,
     stores: [],
     isLocalFallback: true,
     ...dashboard,
@@ -159,18 +210,21 @@ export async function fetchLiveDashboard(
     invokeError = err instanceof Error ? err : new Error(String(err));
   }
 
+  // Se a Edge Function teve erro (rede, timeout, 500) ou retornou success === false
   if (invokeError || data?.success === false) {
     console.warn("Edge Function indisponivel, usando fallback local...", invokeError || data?.error);
-    if (data?.configured || !data) {
-      return buildLocalFallbackDashboard(
-        { ...filters, startDate: isoStartDate, endDate: isoEndDate },
-        workspaceId,
-      );
-    }
+    return buildLocalFallbackDashboard(
+      { ...filters, startDate: isoStartDate, endDate: isoEndDate },
+      workspaceId,
+    );
+  }
+
+  // Se a Edge Function confirmou explicitamente que as credenciais NÃO estão configuradas
+  if (data?.configured === false) {
     return {
       configured: false,
       stores: [],
-      isLocalFallback: true,
+      isLocalFallback: false,
       ...buildEyemobileDashboard({ sales: [], products: [], stores: [] }),
     };
   }
@@ -183,7 +237,7 @@ export async function fetchLiveDashboard(
     endDate: isoEndDate,
     hasMore: data?.hasMore,
   });
-  return { configured: data?.configured !== false, stores: normalizeStores(data?.stores), ...dashboard };
+  return { configured: true, stores: normalizeStores(data?.stores), ...dashboard };
 }
 
 export function useEyemobileDashboard(filters: DashboardFilters) {
