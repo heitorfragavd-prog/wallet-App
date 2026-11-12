@@ -36,6 +36,7 @@ import type {
   OperationalReminderRecord,
 } from "./query-tools.ts";
 import type { CanonicalFinancialRecord } from "./financial-types.ts";
+import { buildFinancialSummary } from "./financial-core.ts";
 import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
 export interface SpecialistRoutingPlan {
@@ -3354,38 +3355,48 @@ async function collectSingleSpecialistContribution(
           summary: "Dados financeiros restritos ao proprietário.",
         };
       }
-      const [summary, expenses] = await Promise.all([
-        repository.getFinancialSummary(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+      const [revenues, expenses, balances] = await Promise.all([
+        repository.listRevenues(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
         repository.listExpenses(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+        repository.listBalances(context),
       ]);
-      const overdue = expenses.filter((e) => !e.paid && e.dueDate && e.dueDate < dates.todayStr);
-      const pending = expenses.filter((e) => !e.paid && (!e.dueDate || e.dueDate >= dates.todayStr));
+      const summary = buildFinancialSummary([...revenues, ...expenses], balances, {
+        workspaceId: context.workspaceId,
+        period: { start: dates.startOfMonthStr, end: dates.todayStr },
+      });
+      const overdue = expenses.filter((e) => e.kind === "expense" && !e.paid && e.dueOn && e.dueOn < dates.todayStr);
+      const pending = expenses.filter((e) => e.kind === "expense" && !e.paid && (!e.dueOn || e.dueOn >= dates.todayStr));
       const overdueSum = overdue.reduce((acc, e) => acc + Number(e.amount ?? 0), 0);
       const pendingSum = pending.reduce((acc, e) => acc + Number(e.amount ?? 0), 0);
-      const revStr = formatMoneyOrUnavailable(summary.totalRevenue);
-      const expStr = formatMoneyOrUnavailable(summary.totalExpenses);
-      const netStr = formatMoneyOrUnavailable(summary.netResult);
+      const revStr = formatMoneyOrUnavailable(summary.operationalIncome);
+      const expStr = formatMoneyOrUnavailable(summary.operationalExpenses);
+      const netStr = formatMoneyOrUnavailable(summary.netOperationalResult);
       return {
         specialist: specialistId,
         name,
         status: "ok",
         durationMs: Date.now() - startedAt,
-        summary: `Mês (${dates.startOfMonthStr} a ${dates.todayStr}): Receita ${revStr} | Despesas ${expStr} | Resultado líquido ${netStr} | Vencidas: ${overdue.length} (${formatMoneyOrUnavailable(overdueSum)}) | A vencer: ${pending.length} (${formatMoneyOrUnavailable(pendingSum)}).`,
+        summary: `Mês (${dates.startOfMonthStr} a ${dates.todayStr}): Receita operacional ${revStr} | Despesas operacionais ${expStr} | Resultado líquido ${netStr} | Vencidas: ${overdue.length} (${formatMoneyOrUnavailable(overdueSum)}) | A vencer: ${pending.length} (${formatMoneyOrUnavailable(pendingSum)}).`,
       };
     }
 
     if (specialistId === "vendas_pdv") {
-      const [todayOverview, monthOverview] = await Promise.all([
-        repository.getSalesOverview(context, { start: dates.todayStr, end: dates.todayStr }),
-        repository.getSalesOverview(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+      const [todaySales, monthSales] = await Promise.all([
+        repository.listSalesPDV(context, { start: dates.todayStr, end: dates.todayStr }),
+        repository.listSalesPDV(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
       ]);
+      const validToday = todaySales.filter((s) => s.kind === "income");
+      const validMonth = monthSales.filter((s) => s.kind === "income");
+      const sumToday = validToday.reduce((acc, s) => acc + Number(s.amount ?? 0), 0);
+      const sumMonth = validMonth.reduce((acc, s) => acc + Number(s.amount ?? 0), 0);
+
       if (!canSeeFinancial) {
         return {
           specialist: specialistId,
           name,
           status: "ok",
           durationMs: Date.now() - startedAt,
-          summary: `Hoje (${dates.todayStr}): ${todayOverview.totalCount} venda(s) válidas | Mês: ${monthOverview.totalCount} venda(s) válidas (totais financeiros ocultos para perfil ${context.role}).`,
+          summary: `Hoje (${dates.todayStr}): ${validToday.length} venda(s) PDV válidas | Mês: ${validMonth.length} venda(s) PDV válidas (totais financeiros ocultos para perfil ${context.role}).`,
         };
       }
       return {
@@ -3393,29 +3404,42 @@ async function collectSingleSpecialistContribution(
         name,
         status: "ok",
         durationMs: Date.now() - startedAt,
-        summary: `Hoje (${dates.todayStr}): ${todayOverview.totalCount} venda(s), ${formatMoneyOrUnavailable(todayOverview.totalAmount)} | Mês: ${monthOverview.totalCount} venda(s), ${formatMoneyOrUnavailable(monthOverview.totalAmount)}.`,
+        summary: `Hoje (${dates.todayStr}): ${validToday.length} venda(s) PDV, ${formatMoneyOrUnavailable(sumToday)} | Mês: ${validMonth.length} venda(s) PDV, ${formatMoneyOrUnavailable(sumMonth)}.`,
       };
     }
 
     if (specialistId === "estoque") {
-      const [alerts, margins] = await Promise.all([
-        repository.listInventoryAlerts ? repository.listInventoryAlerts(context) : Promise.resolve([]),
-        repository.listProductMargins ? repository.listProductMargins(context, 5) : Promise.resolve([]),
+      const [items, recipes] = await Promise.all([
+        repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+        repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
       ]);
-      const ruptured = alerts.filter((a) => Number(a.currentQuantity ?? 0) <= 0);
-      const belowMin = alerts.filter((a) => Number(a.currentQuantity ?? 0) > 0);
-      const lowestMargin = margins
-        .filter((m) => typeof m.marginPercent === "number" && Number.isFinite(m.marginPercent))
-        .sort((a, b) => Number(a.marginPercent) - Number(b.marginPercent))[0];
+      const alerts = items.filter((it) => {
+        if (!it.estoqueInformado) return false;
+        return Number(it.estoqueAtual ?? 0) <= Number(it.estoqueMinimo ?? 0);
+      });
+      const ruptured = alerts.filter((a) => Number(a.estoqueAtual ?? 0) <= 0);
+      const belowMin = alerts.filter((a) => Number(a.estoqueAtual ?? 0) > 0);
+
+      const itemsWithCostAndPrice = items.filter(
+        (it) => it.custoInformado && Number(it.precoVenda ?? 0) > 0 && Number(it.custoAtual ?? 0) > 0
+      );
+      const lowestMargin = itemsWithCostAndPrice
+        .map((it) => ({
+          name: it.descricao,
+          margin: ((Number(it.precoVenda) - Number(it.custoAtual)) / Number(it.precoVenda)) * 100,
+        }))
+        .sort((a, b) => a.margin - b.margin)[0];
+
       const marginNote = lowestMargin
-        ? `menor margem real: ${lowestMargin.productName} (${Number(lowestMargin.marginPercent).toFixed(1)}%)`
-        : "margens reais: não há fichas técnicas com margem calculada";
+        ? `menor margem real cadastrada: ${lowestMargin.name} (${lowestMargin.margin.toFixed(1)}%)`
+        : `fichas técnicas cadastradas: ${recipes.length}`;
+
       return {
         specialist: specialistId,
         name,
         status: "ok",
         durationMs: Date.now() - startedAt,
-        summary: `Alertas de estoque: ${alerts.length} item(ns) (${ruptured.length} em ruptura/zerado, ${belowMin.length} abaixo do mínimo); ${marginNote}.`,
+        summary: `Alertas de estoque: ${alerts.length} item(ns) (${ruptured.length} zerado/ruptura, ${belowMin.length} abaixo do mínimo); ${marginNote}.`,
       };
     }
 
