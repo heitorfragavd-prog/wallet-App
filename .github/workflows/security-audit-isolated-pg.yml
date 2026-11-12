@@ -138,6 +138,7 @@ jobs:
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/divipay-webhook/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/validar-senha/index.ts
           deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/_shared/ai/visual-classifier.ts
+          deno check --node-modules-dir=auto --config supabase/functions/deno.json supabase/functions/wallet-ai-orchestrator/index.ts
 
   e2e-browser-homologation:
     name: Full E2E Browser & Real Supabase Stack Homologation
@@ -186,9 +187,11 @@ jobs:
           echo "SERVICE_ROLE_KEY=$SERVICE_KEY" > .env.functions.test
           echo "OPENAI_BASE_URL=http://${DOCKER_GW}:18080/v1" >> .env.functions.test
           echo "OPENAI_API_KEY=mock-openai-key-for-test" >> .env.functions.test
+          echo "API_URL=http://127.0.0.1:54321" >> .env.functions.test
+          echo "SECRET_KEY=$SERVICE_KEY" >> .env.functions.test
 
           # Inicia Edge Functions no runtime compatível local
-          supabase functions serve --env-file .env.functions.test --no-verify-jwt &
+          supabase functions serve --env-file .env.functions.test --no-verify-jwt > /tmp/functions.log 2>&1 &
           sleep 5
 
 
@@ -247,3 +250,12 @@ jobs:
           export INBUCKET_URL=http://127.0.0.1:54324
           export MOCK_PROVIDER_URL=http://127.0.0.1:18080
           npx playwright test tests/security-homologation.spec.ts
+
+      - name: Dump Edge Functions Log on Failure
+        if: always()
+        run: |
+          echo "=== DUMP EDGE FUNCTIONS LOG ==="
+          cat /tmp/functions.log 2>/dev/null || true
+          echo "=== DOCKER LOGS SUPABASE EDGE RUNTIME ==="
+          docker ps -a
+          docker logs $(docker ps -a -q --filter ancestor=supabase/edge-runtime | head -n 1) 2>/dev/null || true
