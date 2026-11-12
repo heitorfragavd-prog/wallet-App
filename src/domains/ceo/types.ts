@@ -67,6 +67,50 @@ export type OpportunityNature =
   | 'impacto_calculado'
   | 'impacto_nao_estimado';
 
+export type BaselineMeasurementType = 'automatica' | 'manual' | 'estimada';
+export type BaselineReliability = 'alta' | 'media' | 'baixa';
+export type EvaluationClassification = 'favoravel' | 'desfavoravel' | 'inconcluso' | 'dados_indisponiveis';
+
+export interface StructuredBaseline {
+  indicator: string;
+  reference_period: string;
+  initial_value: number;
+  formatted_value: string;
+  unit: string;
+  source: string;
+  sample_size: number;
+  reliability: BaselineReliability;
+  measurement_type: BaselineMeasurementType;
+  notes?: string;
+}
+
+export interface AutomatedExperimentMeasurement {
+  experimentId: string;
+  baseline: {
+    indicator: string;
+    value: number;
+    sampleSize: number;
+    period: string;
+  };
+  measurement: {
+    currentValue: number;
+    sampleSize: number;
+    period: string;
+    totalRevenue: number;
+    orderCount: number;
+    averageTicket: number;
+  };
+  delta: {
+    absolute: number;
+    percent: number | null;
+  };
+  financialImpact: number;
+  classification: EvaluationClassification;
+  measurementType: BaselineMeasurementType;
+  isStatisticallySufficient: boolean;
+  notes: string;
+}
+
 export interface GrowthOpportunity {
   id: string;
   workspace_id: string;
@@ -115,6 +159,8 @@ export interface CommercialExperiment {
   responsible_person?: string;
   target_kpi?: string;
   baseline_value?: string | number;
+  baseline_details?: StructuredBaseline;
+  measurement_type?: BaselineMeasurementType;
   current_value?: string | number;
   target_value?: string | number;
   target_metrics?: {

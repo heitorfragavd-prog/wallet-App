@@ -69,7 +69,7 @@ describe('ETAPA 08 — PR B: Avaliação Científica de Progresso de Experimento
     expect(res.conclusaoRecomendada).toBe('manter');
   });
 
-  it('trata com segurança baseline ausente (undefined ou null) sem lançar exceção', () => {
+  it('trata com segurança baseline ausente (undefined ou null) sem gerar ganho falso de 100%', () => {
     const exp: CommercialExperiment = {
       ...baseExperiment,
       baseline_value: undefined,
@@ -78,8 +78,9 @@ describe('ETAPA 08 — PR B: Avaliação Científica de Progresso de Experimento
 
     const res = CeoIntelligenceEngine.evaluateExperimentProgress(exp, 15.0);
 
-    expect(res.evolucaoPercent).toBe(100);
-    expect(res.conclusaoRecomendada).toBe('ajustar');
-    expect(res.resultadoObservado).toContain('Baseline: Não informado');
+    expect(res.evolucaoPercent).toBeNull();
+    expect(res.classificacao).toBe('dados_indisponiveis');
+    expect(res.baselineComprovado).toBe(false);
+    expect(res.resultadoObservado).toContain('Baseline: Não informado ou não comprovado');
   });
 });
