@@ -975,6 +975,77 @@ export async function handleOrchestratorHttpRequest(
       );
     }
 
+    if (body.action === "test_telegram_group") {
+      const targetChatId = body.chat_id;
+      const groupName = body.nome_grupo || "Grupo Operacional";
+      if (!targetChatId) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_chat_id",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      if (!dependencies.telegramBotToken) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "telegram_bot_token_not_configured",
+            code: "WALLET_AI_CONFIGURATION_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      try {
+        const testText = `🤖 *Teste de Integração — Wallet App*\n\n✅ Conexão bem-sucedida com o grupo *${groupName}*.\nEste grupo está pronto para receber relatórios, comprovantes e fechamentos de caixa.`;
+        const tgRes = await fetch(`https://api.telegram.org/bot${dependencies.telegramBotToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: targetChatId,
+            text: testText,
+            parse_mode: "Markdown",
+          }),
+        });
+
+        const tgData = await tgRes.json();
+        if (!tgRes.ok || !tgData.ok) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: tgData.description || "telegram_api_error",
+              correlation_id: correlationId,
+            }),
+            { status: 400, headers: responseHeaders },
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: `Mensagem de teste enviada com sucesso ao grupo "${groupName}" no Telegram!`,
+            correlation_id: correlationId,
+          }),
+          { status: 200, headers: responseHeaders },
+        );
+      } catch (err: unknown) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+    }
+
     if (messages.length === 0) {
       return new Response(
         JSON.stringify({
