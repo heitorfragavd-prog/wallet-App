@@ -255,6 +255,61 @@ export class CeoRepository {
   }
 
   /**
+   * Valida as transições de ciclo de vida de experimentos comerciais
+   * Fluxo canônico: Planejado -> Aprovado -> Em andamento -> Concluído (ou Cancelado)
+   */
+  static validateTransition(
+    currentStatus: CommercialExperiment['status'],
+    newStatus: CommercialExperiment['status']
+  ): { valid: boolean; reason?: string } {
+    const normalize = (s: string) => {
+      const lower = (s || '').toLowerCase();
+      if (lower === 'planned') return 'planejado';
+      if (lower === 'approved') return 'aprovado';
+      if (lower === 'active') return 'em_andamento';
+      if (lower === 'completed') return 'concluido';
+      if (lower === 'cancelled') return 'cancelado';
+      return lower;
+    };
+
+    const from = normalize(currentStatus);
+    const to = normalize(newStatus);
+
+    if (from === to) return { valid: true };
+
+    if (from === 'concluido' || from === 'cancelado') {
+      return { valid: false, reason: 'Experimentos concluídos ou cancelados são históricos e não podem ser reabertos.' };
+    }
+
+    if (to === 'aprovado') {
+      if (from !== 'planejado') {
+        return { valid: false, reason: 'Apenas experimentos planejados podem ser aprovados pelo proprietário.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'em_andamento') {
+      if (from !== 'aprovado') {
+        return { valid: false, reason: 'O experimento precisa ser aprovado formalmente pelo proprietário antes de ser iniciado.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'concluido') {
+      if (from !== 'em_andamento') {
+        return { valid: false, reason: 'Apenas experimentos em andamento podem ser concluídos.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'cancelado') {
+      return { valid: true };
+    }
+
+    return { valid: false, reason: `Transição inválida de "${from}" para "${to}".` };
+  }
+
+  /**
    * Atualiza status de um experimento ou encerra com decisão executiva
    */
   static async updateExperiment(
@@ -269,9 +324,18 @@ export class CeoRepository {
       start_date?: string;
       end_date?: string | null;
       measured_financial_impact?: number;
+      currentStatus?: CommercialExperiment['status'];
     }
   ): Promise<CeoMutationResult<void>> {
     try {
+      if (updates.status && updates.currentStatus) {
+        const validation = this.validateTransition(updates.currentStatus, updates.status);
+        if (!validation.valid) {
+          return { success: false, error: validation.reason };
+        }
+      }
+
+      // Payload estrito: nunca permite alteração de workspace_id no payload
       const payload: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
       };
@@ -313,6 +377,7 @@ export class CeoRepository {
       current_value?: string | number | null;
       measured_financial_impact?: number;
       end_date?: string | null;
+      currentStatus?: CommercialExperiment['status'];
     }
   ): Promise<CeoMutationResult<void>> {
     return this.updateExperiment(experimentId, {
@@ -323,6 +388,7 @@ export class CeoRepository {
       current_value: options?.current_value,
       measured_financial_impact: options?.measured_financial_impact,
       end_date: options?.end_date,
+      currentStatus: options?.currentStatus,
     });
   }
 }

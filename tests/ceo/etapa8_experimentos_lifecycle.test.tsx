@@ -9,6 +9,21 @@ vi.mock('@/shared/hooks/use-toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
+vi.mock('@/domains/auth/hooks/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'user-owner-123' }, loading: false }),
+}));
+
+vi.mock('@/domains/auth/hooks/useProfile', () => ({
+  useProfile: () => ({ profile: { role: 'owner' }, loading: false }),
+}));
+
+vi.mock('@/contexts/WorkspaceContext', () => ({
+  useWorkspace: () => ({
+    activeWorkspace: { id: 'ws-rodo-point-test', owner_id: 'user-owner-123' },
+    activeWorkspaceRole: 'owner',
+  }),
+}));
+
 describe('ETAPA 08 — PR A: Ciclo de Vida dos Experimentos Comerciais e Correção do Baseline', () => {
   const mockWorkspaceId = 'ws-rodo-point-test';
 
@@ -247,9 +262,10 @@ describe('ETAPA 08 — PR A: Ciclo de Vida dos Experimentos Comerciais e Correç
       const expTabBtn = screen.getByRole('button', { name: /Experimentos/i });
       fireEvent.click(expTabBtn);
 
-      // Clica em "Iniciar Execução" no experimento aprovado
+      // Clica em "Iniciar Execução" no experimento aprovado (apenas o aprovado exibe este botão)
       const iniciarBtns = screen.getAllByRole('button', { name: /iniciar execução/i });
-      fireEvent.click(iniciarBtns[1]); // exp-aprovado-1
+      expect(iniciarBtns).toHaveLength(1);
+      fireEvent.click(iniciarBtns[0]); // exp-aprovado-1
 
       // Modal de confirmação de início deve abrir
       expect(screen.getByText('Iniciar Execução do Experimento')).toBeInTheDocument();
