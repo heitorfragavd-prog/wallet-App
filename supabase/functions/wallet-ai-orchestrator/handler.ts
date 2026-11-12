@@ -58,6 +58,8 @@ import {
   fetchAndExecuteFinancialSpecialist,
   fetchAndExecuteSpecialistTurn,
   buildFinancialSpecialistDeterministicResponse,
+  fetchAndExecuteCoordinatedCeoSnapshot,
+  type CoordinatedCeoSnapshot,
 } from "../_shared/ai/specialist-router.ts";
 
 export interface AuditEventLogger {
@@ -769,6 +771,7 @@ export async function handleOrchestratorHttpRequest(
                 specialist_agent_id: detResult.specialist,
                 deterministic: true,
                 coordinating_ceo: false,
+                contributing_specialists: routingPlan.contributingSpecialists,
               },
             });
           } catch (telErr) {
@@ -830,6 +833,8 @@ export async function handleOrchestratorHttpRequest(
             },
             specialist: detResult.specialist,
             department: detResult.department,
+            coordinating_ceo: false,
+            contributing_specialists: routingPlan.contributingSpecialists,
             model: "deterministic",
             usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
             estimatedCostUsd: 0,
@@ -930,6 +935,16 @@ export async function handleOrchestratorHttpRequest(
     }
 
     const repository = dependencies.repoFactory(context);
+    let coordinatedSnapshot: CoordinatedCeoSnapshot | null = null;
+    if (routingPlan.coordinatingCeo) {
+      coordinatedSnapshot = await fetchAndExecuteCoordinatedCeoSnapshot(
+        userPromptText,
+        context,
+        repository,
+        routingPlan,
+      );
+      chosenSystemPrompt += `\n\n${coordinatedSnapshot.contextBrief}`;
+    }
     const eyemobileClient = dependencies.eyemobileLiveClientFactory?.(context);
     let catalog = createQueryToolCatalog(repository, { extended: true, eyemobileClient });
 
@@ -1007,9 +1022,96 @@ export async function handleOrchestratorHttpRequest(
     }
 
     // Execução do loop de orquestração (teto de 5 iterações garantido por padrão)
-    const turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner, {
-      systemPromptOverride: chosenSystemPrompt,
-    });
+    let turnResult: Awaited<ReturnType<typeof runOrchestratorTurn>>;
+    try {
+      turnResult = await runOrchestratorTurn(turnInputMessages, context, catalog, runner, {
+        systemPromptOverride: chosenSystemPrompt,
+      });
+    } catch (turnErr) {
+      if (coordinatedSnapshot) {
+        console.warn("[handler] Falha no provedor de IA durante coordenação executiva; acionando contingência determinística:", turnErr);
+        const durationMs = Date.now() - startTime;
+        const fallbackAnswer = coordinatedSnapshot.deterministicFallbackAnswer;
+        const requestChannel = typeof body.channel === "string" && body.channel.trim() ? body.channel.trim() : "web";
+
+        if (dependencies.telemetryLogger) {
+          try {
+            await dependencies.telemetryLogger.logTelemetry({
+              workspaceId: context.workspaceId,
+              userId: context.userId,
+              conversationId,
+              channel: requestChannel,
+              model: "deterministic",
+              agentBrain: requestedAgentType,
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+              estimatedCostUsd: 0,
+              durationMs,
+              complexityLevel: routingPlan.complexityLevel,
+              department: primarySpecialistContract?.department || detectedDepartment,
+              status: "fallback",
+              metadata: {
+                specialist_agent_id: routingPlan.primarySpecialist,
+                coordinating_ceo: true,
+                contributing_specialists: routingPlan.contributingSpecialists,
+                fallback: true,
+                fallbackReason: turnErr instanceof Error ? turnErr.message : String(turnErr),
+              },
+            });
+          } catch (telErr) {
+            console.warn("[handler] Falha ao registrar telemetria de fallback da coordenação:", telErr);
+          }
+        }
+
+        if (dependencies.auditLogger) {
+          await dependencies.auditLogger.logEvent({
+            userId: context.userId,
+            workspaceId: context.workspaceId,
+            toolName: "coordinating_ceo_contingency_fallback",
+            durationMs,
+            status: "success",
+            recordsCount: coordinatedSnapshot.traces.length,
+            metadata: {
+              correlationId,
+              conversationId,
+              specialist: routingPlan.primarySpecialist,
+              coordinating_ceo: true,
+              contributing_specialists: routingPlan.contributingSpecialists,
+              model: "deterministic",
+              error: turnErr instanceof Error ? turnErr.message : String(turnErr),
+            },
+          });
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            text: fallbackAnswer,
+            message: {
+              role: "assistant",
+              content: fallbackAnswer,
+            },
+            specialist: routingPlan.primarySpecialist,
+            department: primarySpecialistContract?.department || detectedDepartment,
+            coordinating_ceo: true,
+            contributing_specialists: routingPlan.contributingSpecialists,
+            model: "deterministic",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            estimatedCostUsd: 0,
+            toolCalls: [],
+            action_proposals: [],
+            iterations: 0,
+            conversation_id: conversationId,
+            correlation_id: correlationId,
+            fallback: true,
+            fallbackReason: turnErr instanceof Error ? turnErr.message : String(turnErr),
+          }),
+          { status: 200, headers: responseHeaders },
+        );
+      }
+      throw turnErr;
+    }
     const durationMs = Date.now() - startTime;
 
     const estimatedCostUsd = calculateEstimatedCost(selectedModel, turnResult.usage);
@@ -1143,6 +1245,7 @@ export async function handleOrchestratorHttpRequest(
             correlationId,
             specialist_agent_id: routingPlan.primarySpecialist,
             coordinating_ceo: routingPlan.coordinatingCeo,
+            contributing_specialists: routingPlan.contributingSpecialists,
             iterations: turnResult.iterations,
             toolCallsCount: turnResult.toolCallsExecuted.length,
             provider: turnResult.provider ?? "openai",
@@ -1191,6 +1294,7 @@ export async function handleOrchestratorHttpRequest(
         specialist: routingPlan.primarySpecialist,
         department: primarySpecialistContract?.department || detectedDepartment,
         coordinating_ceo: routingPlan.coordinatingCeo,
+        contributing_specialists: routingPlan.contributingSpecialists,
         toolCalls: turnResult.toolCallsExecuted,
         action_proposals: turnResult.actionProposals ?? [],
         iterations: turnResult.iterations,
