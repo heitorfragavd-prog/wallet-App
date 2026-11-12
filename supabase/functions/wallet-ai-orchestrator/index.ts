@@ -28,6 +28,7 @@ const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
 const openAiBaseUrl = Deno.env.get("OPENAI_BASE_URL");
 const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
+const telegramBotToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
 if (!supabaseUrl || !serviceRoleKey || !openAiApiKey) {
   throw new Error("wallet_ai_orchestrator_configuration_missing");
@@ -319,6 +320,8 @@ Deno.serve(async (req: Request) => {
     saveProposalFn,
     eyemobileLiveClientFactory,
     telemetryLogger,
+    adminSupabase: rawSupabaseClient,
+    telegramBotToken,
   });
 });
 

@@ -530,23 +530,40 @@ export class SupabaseConversationRepository implements ConversationRepository {
     tokensCount?: number;
     channel?: "web" | "telegram";
     externalMessageId?: string;
+    senderName?: string | null;
+    senderRole?: string | null;
+    attachmentUrl?: string | null;
+    attachmentPath?: string | null;
+    attachmentMime?: string | null;
+    attachmentName?: string | null;
+    metadata?: Record<string, unknown> | null;
   }): Promise<MessageRecord> {
     const channel = data.channel ?? "web";
+    const insertRow: Record<string, unknown> = {
+      conversation_id: data.conversationId,
+      workspace_id: data.workspaceId,
+      user_id: data.userId,
+      role: data.role,
+      content: data.content,
+      tool_calls: data.toolCalls ?? null,
+      tool_results: data.toolResults ?? null,
+      sources: data.sources ?? null,
+      tokens_count: data.tokensCount ?? 0,
+      channel,
+      external_message_id: data.externalMessageId ?? null,
+    };
+
+    if (data.senderName !== undefined) insertRow.sender_name = data.senderName;
+    if (data.senderRole !== undefined) insertRow.sender_role = data.senderRole;
+    if (data.attachmentUrl !== undefined) insertRow.attachment_url = data.attachmentUrl;
+    if (data.attachmentPath !== undefined) insertRow.attachment_path = data.attachmentPath;
+    if (data.attachmentMime !== undefined) insertRow.attachment_mime = data.attachmentMime;
+    if (data.attachmentName !== undefined) insertRow.attachment_name = data.attachmentName;
+    if (data.metadata !== undefined) insertRow.metadata = data.metadata;
+
     const { data: inserted, error } = await this.client
       .from("wallet_ai_messages")
-      .insert({
-        conversation_id: data.conversationId,
-        workspace_id: data.workspaceId,
-        user_id: data.userId,
-        role: data.role,
-        content: data.content,
-        tool_calls: data.toolCalls ?? null,
-        tool_results: data.toolResults ?? null,
-        sources: data.sources ?? null,
-        tokens_count: data.tokensCount ?? 0,
-        channel,
-        external_message_id: data.externalMessageId ?? null,
-      })
+      .insert(insertRow)
       .select()
       .single();
 
@@ -565,6 +582,89 @@ export class SupabaseConversationRepository implements ConversationRepository {
       .eq("workspace_id", data.workspaceId);
 
     return inserted as MessageRecord;
+  }
+
+  async getOrCreateGroupConversation(params: {
+    workspaceId: string;
+    grupoId: string;
+    userId: string;
+    title: string;
+    channel?: "web" | "telegram";
+    externalChatId?: string | null;
+  }): Promise<ConversationRecord> {
+    const channel = params.channel ?? "telegram";
+    const { data: existing, error: findErr } = await this.client
+      .from("wallet_ai_conversations")
+      .select("*")
+      .eq("workspace_id", params.workspaceId)
+      .eq("grupo_id", params.grupoId)
+      .eq("is_group", true)
+      .eq("is_archived", false)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!findErr && existing) {
+      return existing as ConversationRecord;
+    }
+
+    const { data: created, error: createErr } = await this.client
+      .from("wallet_ai_conversations")
+      .insert({
+        workspace_id: params.workspaceId,
+        user_id: params.userId,
+        grupo_id: params.grupoId,
+        title: params.title,
+        agent_type: "operational",
+        is_shared: true,
+        is_group: true,
+        channel,
+        last_channel: channel,
+        external_chat_id: params.externalChatId ?? null,
+        processing_status: "idle",
+      })
+      .select()
+      .single();
+
+    if (createErr || !created) {
+      throw new Error(`Erro ao criar conversa de grupo: ${createErr?.message || "falha desconhecida"}`);
+    }
+
+    return created as ConversationRecord;
+  }
+
+  async getGroupConversationById(
+    conversationId: string,
+    workspaceId: string,
+  ): Promise<ConversationRecord | null> {
+    const { data, error } = await this.client
+      .from("wallet_ai_conversations")
+      .select("*")
+      .eq("id", conversationId)
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as ConversationRecord;
+  }
+
+  async setProcessingStatus(
+    conversationId: string,
+    workspaceId: string,
+    processingStatus: "idle" | "processing" | "awaiting_confirmation" | "error",
+  ): Promise<void> {
+    try {
+      await this.client
+        .from("wallet_ai_conversations")
+        .update({
+          processing_status: processingStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", conversationId)
+        .eq("workspace_id", workspaceId);
+    } catch {
+      // Defensivo para ambientes sem coluna ou mockado
+    }
   }
 
   async updateSummary(

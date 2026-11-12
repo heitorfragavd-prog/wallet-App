@@ -40,6 +40,18 @@ import {
   type SummarizerRunner,
   SUMMARIZATION_THRESHOLD_MESSAGES,
 } from "./memory-core.ts";
+import {
+  type OperationalGroupType,
+  type GroupPermissions,
+  normalizeOperationalGroupType,
+  normalizeGroupPermissions,
+  filterCatalogForGroup,
+  buildGroupSystemPrompt,
+  decodeBase64ToUint8Array,
+  uploadGroupOrPrivateAttachment,
+  recordAttachmentMetadata,
+  processFechamentoGrupoTurn,
+} from "./group-governance.ts";
 import { DEFAULT_SUMMARY_MODEL } from "./model-policy.ts";
 import { FINANCIAL_AGENT_SYSTEM_PROMPT, type LlmMessage } from "./orchestrator-core.ts";
 
@@ -113,14 +125,35 @@ export interface TelegramInlineButton {
   callback_data: string;
 }
 
+export interface ResolvedGroupContext {
+  id: string;
+  nomeGrupo?: string;
+  tipoGrupo: OperationalGroupType;
+  ativo: boolean;
+  ferramentasPermitidas: string[];
+  acoesPermitidas: string[];
+  funcionalidadesAutorizadas: string[];
+  roleNoGrupo?: "admin_grupo" | "operador" | "leitor";
+  permissoes: GroupPermissions;
+}
+
 export interface ResolvedTelegramIdentity {
   authorized: boolean;
   userId?: string;
   workspaceId?: string;
   userRole?: string; // 'owner' | 'admin' | 'member' | 'viewer'
   userName?: string;
+  grupo?: ResolvedGroupContext;
   error?: string;
-  errorCode?: "UNAUTHORIZED" | "NOT_LINKED" | "GROUP_NOT_CONFIGURED" | "NO_WORKSPACE" | "FORBIDDEN" | "NEED_WORKSPACE_SELECTION";
+  errorCode?:
+    | "UNAUTHORIZED"
+    | "NOT_LINKED"
+    | "GROUP_NOT_CONFIGURED"
+    | "GROUP_INACTIVE"
+    | "GROUP_FORBIDDEN"
+    | "NO_WORKSPACE"
+    | "FORBIDDEN"
+    | "NEED_WORKSPACE_SELECTION";
 }
 
 // ─── CACHE DE IDEMPOTÊNCIA DE UPDATE_ID (TELEGRAM REPLAY PROTECTION) ──────────
@@ -702,7 +735,9 @@ export async function resolveTelegramIdentity(
 
     const { data: grupoConfig } = await supabase
       .from("telegram_grupos_config")
-      .select("workspace_id, chat_id")
+      .select(
+        "id, workspace_id, chat_id, nome_grupo, tipo_grupo, ativo, ferramentas_permitidas, dados_permitidos, acoes_permitidas, funcionalidades_autorizadas",
+      )
       .eq("chat_id", String(telegramChatId))
       .maybeSingle();
 
@@ -712,6 +747,14 @@ export async function resolveTelegramIdentity(
         errorCode: "GROUP_NOT_CONFIGURED",
         error:
           "Este grupo do Telegram ainda não está configurado na Wallet. Solicite ao administrador vincular o grupo.",
+      };
+    }
+
+    if (grupoConfig.ativo === false) {
+      return {
+        authorized: false,
+        errorCode: "GROUP_INACTIVE",
+        error: "Este grupo está desativado nas configurações da Wallet.",
       };
     }
 
@@ -742,12 +785,85 @@ export async function resolveTelegramIdentity(
     }
 
     const role = wsOwner ? "owner" : (member?.role || "member");
+    const isWorkspaceOwner = Boolean(wsOwner);
+    const tipoGrupo = normalizeOperationalGroupType(grupoConfig.tipo_grupo || grupoConfig.nome_grupo);
+    let resolvedGroupContext: ResolvedGroupContext | undefined;
+
+    if (grupoConfig.id) {
+      let gpRow: Record<string, unknown> | null = null;
+      try {
+        const { data: gpData } = await supabase
+          .from("grupo_participantes")
+          .select("role_no_grupo, permissoes, ativo")
+          .eq("grupo_id", grupoConfig.id)
+          .eq("user_id", matchedUserId)
+          .maybeSingle();
+        gpRow = gpData || null;
+      } catch {
+        gpRow = null;
+      }
+
+      if (!isWorkspaceOwner) {
+        if (!gpRow || gpRow.ativo !== true) {
+          return {
+            authorized: false,
+            errorCode: "GROUP_FORBIDDEN",
+            error: "Você não está autorizado como participante deste grupo na Wallet.",
+          };
+        }
+        const normalizedMemberRole = String(role).toLowerCase();
+        if (
+          tipoGrupo === "contas_empresa" &&
+          normalizedMemberRole !== "admin" &&
+          normalizedMemberRole !== "administrador" &&
+          normalizedMemberRole !== "owner" &&
+          normalizedMemberRole !== "proprietario"
+        ) {
+          return {
+            authorized: false,
+            errorCode: "GROUP_FORBIDDEN",
+            error:
+              "O grupo Contas da Empresa é restrito ao proprietário e administradores explicitamente autorizados.",
+          };
+        }
+      }
+
+      resolvedGroupContext = {
+        id: String(grupoConfig.id),
+        nomeGrupo: grupoConfig.nome_grupo ? String(grupoConfig.nome_grupo) : undefined,
+        tipoGrupo,
+        ativo: grupoConfig.ativo !== false,
+        ferramentasPermitidas: Array.isArray(grupoConfig.ferramentas_permitidas)
+          ? grupoConfig.ferramentas_permitidas.map(String)
+          : [],
+        acoesPermitidas: Array.isArray(grupoConfig.acoes_permitidas)
+          ? grupoConfig.acoes_permitidas.map(String)
+          : [],
+        funcionalidadesAutorizadas: Array.isArray(grupoConfig.funcionalidades_autorizadas)
+          ? grupoConfig.funcionalidades_autorizadas.map(String)
+          : [],
+        roleNoGrupo:
+          (gpRow?.role_no_grupo as "admin_grupo" | "operador" | "leitor" | undefined) ??
+          (isWorkspaceOwner ? "admin_grupo" : "operador"),
+        permissoes: isWorkspaceOwner
+          ? {
+              ler: true,
+              enviar_mensagens: true,
+              enviar_documentos: true,
+              confirmar_operacoes: true,
+              gerenciar_grupo: true,
+            }
+          : normalizeGroupPermissions((gpRow?.permissoes as Record<string, unknown> | undefined) ?? null),
+      };
+    }
+
     return {
       authorized: true,
       userId: matchedUserId,
       workspaceId: matchedWorkspaceId,
       userRole: role,
       userName: userName || undefined,
+      grupo: resolvedGroupContext,
     };
   }
 
@@ -1221,6 +1337,7 @@ export async function handleTelegramTextMessage(
     chatId: string | number;
     correlationId?: string;
     isGroup?: boolean;
+    messageId?: number | string;
   },
   deps: TelegramAdapterDependencies,
 ): Promise<{
@@ -1233,6 +1350,12 @@ export async function handleTelegramTextMessage(
   if (!identity.authorized || !identity.userId || !identity.workspaceId) {
     return {
       text: identity.error || "Usuário ou chat não autorizado.",
+    };
+  }
+
+  if (identity.grupo && (!identity.grupo.permissoes.ler || !identity.grupo.permissoes.enviar_mensagens)) {
+    return {
+      text: "🔒 Você possui apenas permissão de leitura ou não está autorizado a enviar mensagens neste grupo.",
     };
   }
 
@@ -1522,7 +1645,10 @@ export async function handleTelegramTextMessage(
           repository: createSupabaseOperationsRepository(deps.supabase),
           auditSink: deps.auditSink,
         }));
-  const catalog = createQueryToolCatalog(repo, { extended: true, operationsAgent });
+  const fullCatalog = createQueryToolCatalog(repo, { extended: true, operationsAgent });
+  const catalog = identity.grupo
+    ? filterCatalogForGroup(fullCatalog, identity.grupo.tipoGrupo, identity.grupo.ferramentasPermitidas)
+    : fullCatalog;
   const runner = deps.runnerFactory();
 
   const isGroup = params.isGroup ?? (params.chatId ? Number(params.chatId) < 0 : false);
@@ -1530,7 +1656,7 @@ export async function handleTelegramTextMessage(
   let conversationId: string | undefined;
   let normalizedPrompt = text.trim();
   if (normalizedPrompt.toLowerCase() === "/ceo" || normalizedPrompt.toLowerCase().startsWith("/ceo ")) {
-    if (isGroup) {
+    if (isGroup || identity.grupo) {
       return {
         text: "🔒 <b>Acesso Restrito:</b> O Cérebro Executivo (Wallet CEO) é de uso estritamente privado e individual. Por diretrizes de segurança da empresa, resumos estratégicos e DREs confidenciais não estão disponíveis em grupos corporativos.",
       };
@@ -1541,32 +1667,127 @@ export async function handleTelegramTextMessage(
       normalizedPrompt = normalizedPrompt.slice(5).trim();
     }
   }
+
+  const effectiveSystemPrompt = identity.grupo
+    ? buildGroupSystemPrompt(FINANCIAL_AGENT_SYSTEM_PROMPT, identity.grupo.tipoGrupo, identity.grupo.nomeGrupo)
+    : FINANCIAL_AGENT_SYSTEM_PROMPT;
   let turnMessages: LlmMessage[] = [{ role: "user", content: normalizedPrompt }];
 
   if (deps.conversationRepo) {
     try {
-      const conv = deps.conversationRepo.getOrCreateActiveConversation
-        ? await deps.conversationRepo.getOrCreateActiveConversation({
-            workspaceId: identity.workspaceId,
-            userId: identity.userId,
-            channel: "telegram",
-            agentType: "operational",
-            externalChatId: String(params.chatId),
-            isGroup,
-            maxInactiveHours: 4,
-            title: isGroup ? `Grupo Telegram ${params.chatId}` : `Telegram Chat ${params.chatId}`,
-          })
-        : await deps.conversationRepo.createConversation({
-            workspaceId: identity.workspaceId,
-            userId: identity.userId,
-            title: isGroup ? `Grupo Telegram ${params.chatId}` : `Telegram Chat ${params.chatId}`,
-            channel: "telegram",
-            agentType: "operational",
-            externalChatId: String(params.chatId),
-            isGroup,
-            isShared: isGroup,
-          });
+      const convRepoAny = deps.conversationRepo as ConversationRepository & {
+        getOrCreateGroupConversation?: (p: {
+          workspaceId: string;
+          grupoId: string;
+          userId: string;
+          title: string;
+          channel?: "web" | "telegram";
+          externalChatId?: string | null;
+        }) => Promise<{ id: string; summary?: string | null }>;
+        setProcessingStatus?: (
+          cid: string,
+          wsId: string,
+          status: "idle" | "processing" | "awaiting_confirmation" | "error",
+        ) => Promise<void>;
+      };
+
+      const conv =
+        identity.grupo?.id && typeof convRepoAny.getOrCreateGroupConversation === "function"
+          ? await convRepoAny.getOrCreateGroupConversation({
+              workspaceId: identity.workspaceId,
+              grupoId: identity.grupo.id,
+              userId: identity.userId,
+              title: identity.grupo.nomeGrupo || `Grupo Telegram ${params.chatId}`,
+              channel: "telegram",
+              externalChatId: String(params.chatId),
+            })
+          : deps.conversationRepo.getOrCreateActiveConversation
+          ? await deps.conversationRepo.getOrCreateActiveConversation({
+              workspaceId: identity.workspaceId,
+              userId: identity.userId,
+              channel: "telegram",
+              agentType: "operational",
+              externalChatId: String(params.chatId),
+              isGroup,
+              maxInactiveHours: 4,
+              title: isGroup
+                ? identity.grupo?.nomeGrupo || `Grupo Telegram ${params.chatId}`
+                : `Telegram Chat ${params.chatId}`,
+            })
+          : await deps.conversationRepo.createConversation({
+              workspaceId: identity.workspaceId,
+              userId: identity.userId,
+              title: isGroup
+                ? identity.grupo?.nomeGrupo || `Grupo Telegram ${params.chatId}`
+                : `Telegram Chat ${params.chatId}`,
+              channel: "telegram",
+              agentType: "operational",
+              externalChatId: String(params.chatId),
+              isGroup,
+              isShared: isGroup,
+            });
       conversationId = conv.id;
+
+      // Fluxo determinístico prioritário para o Grupo Fechamento da Loja ao enviar valores em texto
+      if (identity.grupo?.tipoGrupo === "fechamento" && deps.supabase) {
+        const closingRes = await processFechamentoGrupoTurn({
+          supabase: deps.supabase,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          userRole: identity.userRole || "member",
+          grupoId: identity.grupo.id,
+          conversationId,
+          chatId: params.chatId,
+          text,
+          proposalRepo: deps.proposalRepo,
+        });
+        if (closingRes.handled) {
+          await deps.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            role: "user",
+            content: text,
+            channel: "telegram",
+            externalMessageId: params.messageId ? String(params.messageId) : undefined,
+            senderName: identity.userName,
+            senderRole: identity.grupo.roleNoGrupo ?? identity.userRole,
+          });
+          await deps.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            role: "assistant",
+            content: closingRes.responseText,
+            channel: "telegram",
+          });
+          if (typeof convRepoAny.setProcessingStatus === "function") {
+            await convRepoAny.setProcessingStatus(
+              conversationId,
+              identity.workspaceId,
+              closingRes.proposal ? "awaiting_confirmation" : "idle",
+            );
+          }
+          const keyboard = closingRes.proposal
+            ? [
+                [
+                  { text: "✅ Confirmar Fechamento", callback_data: `confirm_prop:${closingRes.proposal.id}` },
+                  { text: "❌ Descartar", callback_data: `cancel_prop:${closingRes.proposal.id}` },
+                ],
+              ]
+            : undefined;
+          return {
+            text: markdownToTelegramHtml(closingRes.responseText),
+            inlineKeyboard: keyboard,
+            actionProposals: closingRes.proposal ? [closingRes.proposal] : undefined,
+          };
+        }
+      }
+
+      if (typeof convRepoAny.setProcessingStatus === "function") {
+        await convRepoAny.setProcessingStatus(conversationId, identity.workspaceId, "processing");
+      }
+
       const recent = await deps.conversationRepo.listRecentMessages(
         conversationId,
         identity.workspaceId,
@@ -1578,10 +1799,10 @@ export async function handleTelegramTextMessage(
         tool_calls: m.tool_calls as LlmMessage["tool_calls"],
       }));
       const ctxResult = buildTurnContext({
-        systemPrompt: FINANCIAL_AGENT_SYSTEM_PROMPT,
+        systemPrompt: effectiveSystemPrompt,
         summary: conv.summary,
         historyMessages: historyAsLlm,
-        currentMessage: { role: "user", content: text },
+        currentMessage: { role: "user", content: normalizedPrompt },
       });
       turnMessages = ctxResult.messages;
     } catch (err) {
@@ -1594,6 +1815,7 @@ export async function handleTelegramTextMessage(
     context,
     catalog,
     runner,
+    identity.grupo ? { systemPromptOverride: effectiveSystemPrompt } : undefined,
   );
 
   // Persistência das mensagens na memória canônica se repositório ativo
@@ -1607,6 +1829,10 @@ export async function handleTelegramTextMessage(
         content: text,
         channel: "telegram",
         externalMessageId: params.messageId ? String(params.messageId) : undefined,
+        ...(identity.userName ? { senderName: identity.userName } : {}),
+        ...(identity.grupo?.roleNoGrupo || identity.userRole
+          ? { senderRole: identity.grupo?.roleNoGrupo ?? identity.userRole }
+          : {}),
       });
       if (turnResult.finalMessage?.content) {
         await deps.conversationRepo.appendMessage({
@@ -1618,6 +1844,22 @@ export async function handleTelegramTextMessage(
           tokensCount: turnResult.usage?.totalTokens ?? 0,
           channel: "telegram",
         });
+      }
+      const convRepoWithStatus = deps.conversationRepo as ConversationRepository & {
+        setProcessingStatus?: (
+          cid: string,
+          wsId: string,
+          status: "idle" | "processing" | "awaiting_confirmation" | "error",
+        ) => Promise<void>;
+      };
+      if (typeof convRepoWithStatus.setProcessingStatus === "function") {
+        await convRepoWithStatus.setProcessingStatus(
+          conversationId,
+          identity.workspaceId,
+          turnResult.actionProposals && turnResult.actionProposals.length > 0
+            ? "awaiting_confirmation"
+            : "idle",
+        );
       }
 
       // Ciclo de Sumarização Canônica do Telegram (Threshold -> Chamada -> Scoped Update -> Fail-safe)
@@ -1689,8 +1931,14 @@ export async function handleTelegramTextMessage(
 
   // Se foram geradas Action Proposals (intenção de escrita / WRITE)
   if (turnResult.actionProposals && turnResult.actionProposals.length > 0) {
-    // Persiste todas as propostas no repositório canônico
+    // Persiste todas as propostas no repositório canônico vinculadas ao grupo/conversa
     for (const proposal of turnResult.actionProposals) {
+      if (identity.grupo?.id && !proposal.grupoId) {
+        proposal.grupoId = identity.grupo.id;
+      }
+      if (conversationId && !proposal.conversationId) {
+        proposal.conversationId = conversationId;
+      }
       await deps.proposalRepo.saveProposal(proposal);
     }
 
@@ -1893,9 +2141,15 @@ export async function handleTelegramCallback(
       };
     }
 
-    // RBAC: member só pode aprovar próprias propostas
+    // RBAC: member só pode aprovar próprias propostas (exceto participante com confirmar_operacoes no grupo)
     const isElevated = identity.userRole === "owner" || identity.userRole === "admin";
-    if (!isElevated && proposal.userId !== identity.userId) {
+    const hasGroupConfirmPermission = Boolean(
+      proposal.grupoId &&
+        identity.grupo?.id === proposal.grupoId &&
+        identity.grupo.permissoes.confirmar_operacoes &&
+        identity.grupo.roleNoGrupo !== "leitor",
+    );
+    if (!isElevated && !hasGroupConfirmPermission && proposal.userId !== identity.userId) {
       return {
         answerText: "Acesso negado: você só pode aprovar suas próprias propostas de ação.",
         removeKeyboard: false,
@@ -2032,6 +2286,7 @@ export async function handleTelegramDocument(
     fileName?: string;
     caption?: string;
     chatId?: string | number;
+    messageId?: number | string;
     identity: ResolvedTelegramIdentity;
   },
   deps: TelegramAdapterDependencies,
@@ -2040,11 +2295,17 @@ export async function handleTelegramDocument(
   inlineKeyboard?: TelegramInlineButton[][];
   pipelineResult?: ProcessDocumentPipelineResult;
 }> {
-  const { fileId, fileType = "image/jpeg", fileName, caption, identity, chatId } = params;
+  const { fileId, fileType = "image/jpeg", fileName, caption, identity, chatId, messageId } = params;
 
   if (!identity.authorized || !identity.userId || !identity.workspaceId) {
     return {
       text: identity.error || "Usuário ou chat não autorizado.",
+    };
+  }
+
+  if (identity.grupo && (!identity.grupo.permissoes.ler || !identity.grupo.permissoes.enviar_documentos)) {
+    return {
+      text: "🔒 Você não possui permissão para enviar fotografias ou documentos neste grupo.",
     };
   }
 
@@ -2057,15 +2318,115 @@ export async function handleTelegramDocument(
     };
   }
 
-  const context: AiExecutionContext = {
-    userId: identity.userId,
-    workspaceId: identity.workspaceId,
-    userRole: identity.userRole,
-    channel: "telegram",
-    correlationId: `tg_doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-  };
+  const effectiveMime = downloadResult.mimeType || fileType;
 
-  const documentRunner = deps.documentPipelineRunner ?? processDocumentPipeline;
+  // Garante conversa de grupo/privada na memória canônica e faz upload do anexo para visualização inline na Web
+  let conversationId: string | undefined;
+  let storedAttachmentPath: string | null = null;
+  let storedSignedUrl: string | null = null;
+  let storedFileName = fileName || "telegram_upload";
+
+  if (deps.conversationRepo) {
+    try {
+      const isGroup = Boolean(identity.grupo?.id) || (chatId ? Number(chatId) < 0 : false);
+      const convRepoAny = deps.conversationRepo as ConversationRepository & {
+        getOrCreateGroupConversation?: (p: {
+          workspaceId: string;
+          grupoId: string;
+          userId: string;
+          title: string;
+          channel?: "web" | "telegram";
+          externalChatId?: string | null;
+        }) => Promise<{ id: string }>;
+        setProcessingStatus?: (
+          cid: string,
+          wsId: string,
+          status: "idle" | "processing" | "awaiting_confirmation" | "error",
+        ) => Promise<void>;
+      };
+
+      const conv =
+        identity.grupo?.id && typeof convRepoAny.getOrCreateGroupConversation === "function"
+          ? await convRepoAny.getOrCreateGroupConversation({
+              workspaceId: identity.workspaceId,
+              grupoId: identity.grupo.id,
+              userId: identity.userId,
+              title: identity.grupo.nomeGrupo || `Grupo Telegram ${chatId || ""}`,
+              channel: "telegram",
+              externalChatId: chatId ? String(chatId) : null,
+            })
+          : deps.conversationRepo.getOrCreateActiveConversation
+          ? await deps.conversationRepo.getOrCreateActiveConversation({
+              workspaceId: identity.workspaceId,
+              userId: identity.userId,
+              channel: "telegram",
+              agentType: "operational",
+              externalChatId: chatId ? String(chatId) : undefined,
+              isGroup,
+              maxInactiveHours: 4,
+              title: isGroup
+                ? identity.grupo?.nomeGrupo || `Grupo Telegram ${chatId || ""}`
+                : `Telegram Chat ${chatId || ""}`,
+            })
+          : null;
+
+      if (conv?.id) {
+        conversationId = conv.id;
+        if (typeof convRepoAny.setProcessingStatus === "function") {
+          await convRepoAny.setProcessingStatus(conversationId, identity.workspaceId, "processing");
+        }
+
+        const bytes = decodeBase64ToUint8Array(downloadResult.base64);
+        const uploadRes = await uploadGroupOrPrivateAttachment({
+          supabase: deps.supabase,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          grupoId: identity.grupo?.id ?? null,
+          conversationId,
+          fileName: storedFileName,
+          mimeType: effectiveMime,
+          bytes,
+          sourceChannel: "telegram",
+        });
+
+        storedAttachmentPath = uploadRes.storagePath;
+        storedSignedUrl = uploadRes.signedUrl;
+        storedFileName = uploadRes.fileName;
+
+        const userMsgRecord = await deps.conversationRepo.appendMessage({
+          conversationId,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          role: "user",
+          content: caption?.trim() || `📎 ${storedFileName}`,
+          channel: "telegram",
+          externalMessageId: messageId ? String(messageId) : undefined,
+          senderName: identity.userName,
+          senderRole: identity.grupo?.roleNoGrupo ?? identity.userRole,
+          attachmentPath: storedAttachmentPath,
+          attachmentUrl: storedSignedUrl,
+          attachmentMime: effectiveMime,
+          attachmentName: storedFileName,
+        });
+
+        await recordAttachmentMetadata({
+          supabase: deps.supabase,
+          messageId: userMsgRecord?.id,
+          conversationId,
+          workspaceId: identity.workspaceId,
+          grupoId: identity.grupo?.id ?? null,
+          uploadedBy: identity.userId,
+          storagePath: storedAttachmentPath,
+          fileName: storedFileName,
+          mimeType: effectiveMime,
+          fileSize: bytes.length,
+          sourceChannel: "telegram",
+        });
+      }
+    } catch (syncErr) {
+      console.warn("[telegram-adapter] Erro ao registrar anexo na conversa:", syncErr);
+    }
+  }
 
   let effectiveOpenAiKey = deps.openaiApiKey;
   if ((!effectiveOpenAiKey || !effectiveOpenAiKey.startsWith("sk-")) && deps.supabase && identity.userId) {
@@ -2082,6 +2443,77 @@ export async function handleTelegramDocument(
       // Fallback defensivo silencioso
     }
   }
+
+  // Pipeline especializado para o grupo Fechamento da Loja
+  if (identity.grupo?.tipoGrupo === "fechamento" && deps.supabase && conversationId) {
+    const closingRes = await processFechamentoGrupoTurn({
+      supabase: deps.supabase,
+      workspaceId: identity.workspaceId,
+      userId: identity.userId,
+      userRole: identity.userRole || "member",
+      grupoId: identity.grupo.id,
+      conversationId,
+      chatId,
+      attachmentPath: storedAttachmentPath,
+      text: caption,
+      imageBase64: downloadResult.base64,
+      mimeType: effectiveMime,
+      openAiApiKey: effectiveOpenAiKey,
+      geminiApiKey: deps.geminiApiKey,
+      proposalRepo: deps.proposalRepo,
+    });
+
+    if (closingRes.handled) {
+      if (deps.conversationRepo) {
+        await deps.conversationRepo.appendMessage({
+          conversationId,
+          workspaceId: identity.workspaceId,
+          userId: identity.userId,
+          role: "assistant",
+          content: closingRes.responseText,
+          channel: "telegram",
+        });
+        const convRepoWithStatus = deps.conversationRepo as ConversationRepository & {
+          setProcessingStatus?: (
+            cid: string,
+            wsId: string,
+            status: "idle" | "processing" | "awaiting_confirmation" | "error",
+          ) => Promise<void>;
+        };
+        if (typeof convRepoWithStatus.setProcessingStatus === "function") {
+          await convRepoWithStatus.setProcessingStatus(
+            conversationId,
+            identity.workspaceId,
+            closingRes.proposal ? "awaiting_confirmation" : "idle",
+          );
+        }
+      }
+
+      const inlineKeyboard = closingRes.proposal
+        ? [
+            [
+              { text: "✅ Confirmar Fechamento", callback_data: `confirm_prop:${closingRes.proposal.id}` },
+              { text: "❌ Descartar", callback_data: `cancel_prop:${closingRes.proposal.id}` },
+            ],
+          ]
+        : undefined;
+
+      return {
+        text: markdownToTelegramHtml(closingRes.responseText),
+        inlineKeyboard,
+      };
+    }
+  }
+
+  const context: AiExecutionContext = {
+    userId: identity.userId,
+    workspaceId: identity.workspaceId,
+    userRole: identity.userRole,
+    channel: "telegram",
+    correlationId: `tg_doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+  };
+
+  const documentRunner = deps.documentPipelineRunner ?? processDocumentPipeline;
 
   // Monta entrada estritamente tipada com ProcessDocumentPipelineInput
   const pipelineInput: ProcessDocumentPipelineInput = {
@@ -2143,6 +2575,36 @@ export async function handleTelegramDocument(
     );
   }
 
+  const syncDocReply = async (replyText: string, awaitingConfirm = false) => {
+    if (!deps.conversationRepo || !conversationId) return;
+    try {
+      await deps.conversationRepo.appendMessage({
+        conversationId,
+        workspaceId: identity.workspaceId!,
+        userId: identity.userId!,
+        role: "assistant",
+        content: replyText.replace(/<[^>]+>/g, ""),
+        channel: "telegram",
+      });
+      const convRepoWithStatus = deps.conversationRepo as ConversationRepository & {
+        setProcessingStatus?: (
+          cid: string,
+          wsId: string,
+          status: "idle" | "processing" | "awaiting_confirmation" | "error",
+        ) => Promise<void>;
+      };
+      if (typeof convRepoWithStatus.setProcessingStatus === "function") {
+        await convRepoWithStatus.setProcessingStatus(
+          conversationId,
+          identity.workspaceId!,
+          awaitingConfirm ? "awaiting_confirmation" : "idle",
+        );
+      }
+    } catch {
+      // Silencioso em mocks sem suporte completo
+    }
+  };
+
   // 1. Duplicata detectada (FAIL-CLOSED)
   if (pipelineResult.isDuplicate || pipelineResult.status === "duplicata_detectada") {
     const ident =
@@ -2159,23 +2621,32 @@ export async function handleTelegramDocument(
       Boolean(pipelineResult.data?.linha_digitavel || (pipelineResult as any).extractedData?.linha_digitavel);
 
     const titulo = isBoleto ? "Boleto Duplicado Detectado!" : "Documento Duplicado Detectado!";
+    const dupText =
+      `⚠️ <b>${titulo}</b>\n\n` +
+      `Este documento (<code>${escapeTelegramHtml(String(ident))}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
+      `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`;
+    await syncDocReply(dupText, false);
 
     return {
-      text:
-        `⚠️ <b>${titulo}</b>\n\n` +
-        `Este documento (<code>${escapeTelegramHtml(String(ident))}</code>) já foi registrado anteriormente no seu workspace.\n\n` +
-        `<i>Para garantir a integridade financeira, nenhuma proposta em duplicidade foi gerada.</i>`,
+      text: dupText,
       pipelineResult,
     };
   }
 
   // 2. Proposta de ação gerada pronta para confirmação
   if (pipelineResult.actionProposal) {
+    if (identity.grupo?.id && !pipelineResult.actionProposal.grupoId) {
+      pipelineResult.actionProposal.grupoId = identity.grupo.id;
+    }
+    if (conversationId && !pipelineResult.actionProposal.conversationId) {
+      pipelineResult.actionProposal.conversationId = conversationId;
+    }
     // Se o pipeline já possuía saveProposalFn, já foi persistido; caso contrário salva como salvaguarda
     if (!pipelineInput.saveProposalFn) {
       await deps.proposalRepo.saveProposal(pipelineResult.actionProposal);
     }
     const formatted = formatProposalMessage(pipelineResult.actionProposal);
+    await syncDocReply(formatted.text, true);
 
     return {
       text: formatted.text,
@@ -2183,6 +2654,8 @@ export async function handleTelegramDocument(
       pipelineResult,
     };
   }
+
+  await syncDocReply(`Documento analisado: ${pipelineResult.documentType || "desconhecido"} (${pipelineResult.status || "revisao"})`, false);
 
   // 3. Tratamento de Erros, Rejeições e Revisões Específicas (Elimina retorno genérico)
   const errors: string[] = [
@@ -2487,6 +2960,7 @@ export async function processTelegramUpdate(
           fileType: "image/jpeg",
           caption: msg.caption,
           chatId: msg.chat.id,
+          messageId: msg.message_id,
           identity,
         },
         deps,
@@ -2512,6 +2986,7 @@ export async function processTelegramUpdate(
           fileName: doc.file_name,
           caption: msg.caption,
           chatId: msg.chat.id,
+          messageId: msg.message_id,
           identity,
         },
         deps,
@@ -2534,7 +3009,14 @@ export async function processTelegramUpdate(
         const transcript = await api.transcribeAudio(audio.file_id, audio.mime_type);
         if (transcript) {
           const textResult = await handleTelegramTextMessage(
-            { text: transcript, identity, chatId, isGroup, correlationId: options?.correlationId },
+            {
+              text: transcript,
+              identity,
+              chatId,
+              isGroup,
+              messageId: msg.message_id,
+              correlationId: options?.correlationId,
+            },
             deps,
           );
 
@@ -2560,7 +3042,14 @@ export async function processTelegramUpdate(
       }
 
       const textResult = await handleTelegramTextMessage(
-        { text: trimmed, identity, chatId, isGroup, correlationId: options?.correlationId },
+        {
+          text: trimmed,
+          identity,
+          chatId,
+          isGroup,
+          messageId: msg.message_id,
+          correlationId: options?.correlationId,
+        },
         deps,
       );
 

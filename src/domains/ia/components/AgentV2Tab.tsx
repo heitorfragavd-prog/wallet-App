@@ -112,6 +112,8 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
         .eq("workspace_id", activeWorkspace.id)
         .eq("user_id", currentUserId)
         .eq("agent_type", agentType)
+        .eq("is_group", false)
+        .eq("is_shared", false)
         .eq("is_archived", false)
         .order("updated_at", { ascending: false })
         .limit(1);
@@ -136,6 +138,7 @@ export const AgentV2Tab: React.FC<AgentV2TabProps> = ({ agentType = "operational
             channel: "web",
             last_channel: "web",
             is_shared: false,
+            is_group: false,
           })
           .select("id, channel")
           .single();

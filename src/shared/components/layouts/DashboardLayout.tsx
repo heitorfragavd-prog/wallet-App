@@ -37,6 +37,7 @@ import {
   Activity,
   Bike,
   Crown,
+  MessageSquare,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/shared/hooks/use-toast";
@@ -108,6 +109,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     { icon: AlertTriangle, label: "Validades", path: "/validades" },
     { icon: Target, label: "Metas", path: "/metas" },
     { icon: Wallet, label: "Patrimônio", path: "/patrimonio" },
+    { icon: MessageSquare, label: "Central de Conversas", path: "/conversas" },
     { icon: Brain, label: "Inteligência Artificial", path: "/ia" },
     { icon: Activity, label: "Métricas de IA", path: "/ia-metrics" },
     { icon: ShoppingCart, label: "Mercado", path: "/mercado" },

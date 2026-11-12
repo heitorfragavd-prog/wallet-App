@@ -67,6 +67,7 @@ const PDVPage             = lazyWithRetry(() => import("./pages/PDVPage"));
 const WalletCeoPage       = lazyWithRetry(() => import("./pages/WalletCeoPage"));
 const WalletDeliveryPage  = lazyWithRetry(() => import("./pages/WalletDeliveryPage"));
 const DeliveryKDSPage     = lazyWithRetry(() => import("./pages/DeliveryKDSPage"));
+const CentralConversasPage = lazyWithRetry(() => import("./pages/CentralConversasPage"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -149,6 +150,7 @@ function App() {
                   <Route path="/ia-metrics"    element={<ProtectedRoute><AIMetricsDashboard /></ProtectedRoute>} />
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
+                  <Route path="/conversas"     element={<ProtectedRoute><CentralConversasPage /></ProtectedRoute>} />
                   <Route path="/ceo"           element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
                   <Route path="/wallet-ceo"    element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
                   <Route path="/delivery"      element={<ProtectedRoute><WalletDeliveryPage /></ProtectedRoute>} />

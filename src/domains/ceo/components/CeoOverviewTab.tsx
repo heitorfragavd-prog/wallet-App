@@ -378,6 +378,8 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         .eq('workspace_id', workspaceId)
         .eq('user_id', user.id)
         .eq('agent_type', 'ceo')
+        .eq('is_group', false)
+        .eq('is_shared', false)
         .eq('is_archived', false)
         .order('updated_at', { ascending: false })
         .limit(20);
