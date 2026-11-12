@@ -108,11 +108,57 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   const p = userPrompt.toLowerCase().trim();
 
   // 1. Diagnóstico Executivo Multidepartamental (Coordenação pelo Wallet CEO)
+  const isGrowthWithoutMarginLoss =
+    p.includes("vender mais sem perder margem") ||
+    p.includes("vender mais mantendo margem") ||
+    p.includes("vender mais mantendo a margem") ||
+    p.includes("crescer sem perder margem") ||
+    p.includes("aumentar vendas sem perder margem");
+
+  if (isGrowthWithoutMarginLoss) {
+    return {
+      primarySpecialist: "inteligencia_competitiva",
+      coordinatingCeo: true,
+      contributingSpecialists: ["vendas_pdv", "estoque", "inteligencia_competitiva"],
+      complexityLevel: 3,
+      model: "gemini-2.5-flash",
+      isDeterministicPossible: false,
+      rationale:
+        "Consulta estratégica multidepartamental: Wallet CEO coordena Vendas/PDV (mix e volume), Estoque (custos e margens reais) e Inteligência Competitiva (oportunidades e experimentos).",
+    };
+  }
+
+  const isStoreOperationsOverview =
+    p.includes("operação da loja") ||
+    p.includes("operacao da loja") ||
+    p.includes("resumo operacional da loja") ||
+    p.includes("panorama da loja");
+
+  if (isStoreOperationsOverview) {
+    const opsContributors: SpecialistAgentId[] = ["operacoes", "vendas_pdv", "estoque"];
+    if (p.includes("equipe") || p.includes("funcionário") || p.includes("funcionario") || p.includes("rh")) {
+      opsContributors.push("rh");
+    }
+    return {
+      primarySpecialist: "operacoes",
+      coordinatingCeo: true,
+      contributingSpecialists: opsContributors,
+      complexityLevel: 3,
+      model: "gemini-2.5-flash",
+      isDeterministicPossible: false,
+      rationale:
+        "Consulta operacional multidepartamental: Wallet CEO coordena Operações (caixas, escalas e rotinas), Vendas/PDV (fluxo do dia) e Estoque (rupturas e alertas).",
+    };
+  }
+
   const isMultiDepartmentDiagnosis =
-    (p.includes("faturando mais") && (p.includes("lucro diminuiu") || p.includes("lucro caiu") || p.includes("menos lucro"))) ||
+    ((p.includes("faturando mais") || p.includes("vendendo bem") || p.includes("vendas subiram")) &&
+      (p.includes("lucro diminuiu") || p.includes("lucro caiu") || p.includes("menos lucro"))) ||
     (p.includes("por que") && (p.includes("margem") || p.includes("resultado")) && (p.includes("vendas") || p.includes("despesa"))) ||
-    (p.includes("diagnostico") || p.includes("diagnóstico")) ||
-    (p.includes("visao geral") || p.includes("visão geral"));
+    p.includes("diagnostico") ||
+    p.includes("diagnóstico") ||
+    p.includes("visao geral") ||
+    p.includes("visão geral");
 
   if (isMultiDepartmentDiagnosis) {
     return {
@@ -3241,5 +3287,283 @@ export async function fetchAndExecuteOperationsSpecialist(
   return {
     ...result,
     routingPlan,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COORDENAÇÃO EXECUTIVA PELO WALLET CEO (GATE 3 — ENTREGA D)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CoordinatedSpecialistTrace {
+  specialist: SpecialistAgentId;
+  name: string;
+  status: "ok" | "error" | "denied";
+  durationMs: number;
+  summary: string;
+  error?: string;
+}
+
+export interface CoordinatedCeoSnapshot {
+  coordinatingCeo: true;
+  primarySpecialist: SpecialistAgentId;
+  contributingSpecialists: SpecialistAgentId[];
+  traces: CoordinatedSpecialistTrace[];
+  contextBrief: string;
+  deterministicFallbackAnswer: string;
+}
+
+function formatMoneyOrUnavailable(val: number | null | undefined, labelUnavailable = "Não disponível"): string {
+  if (val === null || val === undefined || !Number.isFinite(Number(val))) {
+    return labelUnavailable;
+  }
+  return `R$ ${Number(val).toFixed(2)}`;
+}
+
+async function collectSingleSpecialistContribution(
+  specialistId: SpecialistAgentId,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  dates: ReturnType<typeof getSaoPauloDateStrings>
+): Promise<CoordinatedSpecialistTrace> {
+  const startedAt = Date.now();
+  const contract = SPECIALIST_AGENTS_REGISTRY[specialistId];
+  const name = contract?.name || specialistId;
+
+  const authCheck = authorizeSpecialistAccess(specialistId, context.role);
+  if (!authCheck.authorized) {
+    return {
+      specialist: specialistId,
+      name,
+      status: "denied",
+      durationMs: Date.now() - startedAt,
+      summary: `Acesso negado para o papel '${context.role}'.`,
+      error: authCheck.reason,
+    };
+  }
+
+  try {
+    const canSeeFinancial = canRoleAccessFinancialData(context.role);
+
+    if (specialistId === "financeiro") {
+      if (!canSeeFinancial || context.role !== "owner") {
+        return {
+          specialist: specialistId,
+          name,
+          status: "denied",
+          durationMs: Date.now() - startedAt,
+          summary: "Dados financeiros restritos ao proprietário.",
+        };
+      }
+      const [summary, expenses] = await Promise.all([
+        repository.getFinancialSummary(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+        repository.listExpenses(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+      ]);
+      const overdue = expenses.filter((e) => !e.paid && e.dueDate && e.dueDate < dates.todayStr);
+      const pending = expenses.filter((e) => !e.paid && (!e.dueDate || e.dueDate >= dates.todayStr));
+      const overdueSum = overdue.reduce((acc, e) => acc + Number(e.amount ?? 0), 0);
+      const pendingSum = pending.reduce((acc, e) => acc + Number(e.amount ?? 0), 0);
+      const revStr = formatMoneyOrUnavailable(summary.totalRevenue);
+      const expStr = formatMoneyOrUnavailable(summary.totalExpenses);
+      const netStr = formatMoneyOrUnavailable(summary.netResult);
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Mês (${dates.startOfMonthStr} a ${dates.todayStr}): Receita ${revStr} | Despesas ${expStr} | Resultado líquido ${netStr} | Vencidas: ${overdue.length} (${formatMoneyOrUnavailable(overdueSum)}) | A vencer: ${pending.length} (${formatMoneyOrUnavailable(pendingSum)}).`,
+      };
+    }
+
+    if (specialistId === "vendas_pdv") {
+      const [todayOverview, monthOverview] = await Promise.all([
+        repository.getSalesOverview(context, { start: dates.todayStr, end: dates.todayStr }),
+        repository.getSalesOverview(context, { start: dates.startOfMonthStr, end: dates.todayStr }),
+      ]);
+      if (!canSeeFinancial) {
+        return {
+          specialist: specialistId,
+          name,
+          status: "ok",
+          durationMs: Date.now() - startedAt,
+          summary: `Hoje (${dates.todayStr}): ${todayOverview.totalCount} venda(s) válidas | Mês: ${monthOverview.totalCount} venda(s) válidas (totais financeiros ocultos para perfil ${context.role}).`,
+        };
+      }
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Hoje (${dates.todayStr}): ${todayOverview.totalCount} venda(s), ${formatMoneyOrUnavailable(todayOverview.totalAmount)} | Mês: ${monthOverview.totalCount} venda(s), ${formatMoneyOrUnavailable(monthOverview.totalAmount)}.`,
+      };
+    }
+
+    if (specialistId === "estoque") {
+      const [alerts, margins] = await Promise.all([
+        repository.listInventoryAlerts ? repository.listInventoryAlerts(context) : Promise.resolve([]),
+        repository.listProductMargins ? repository.listProductMargins(context, 5) : Promise.resolve([]),
+      ]);
+      const ruptured = alerts.filter((a) => Number(a.currentQuantity ?? 0) <= 0);
+      const belowMin = alerts.filter((a) => Number(a.currentQuantity ?? 0) > 0);
+      const lowestMargin = margins
+        .filter((m) => typeof m.marginPercent === "number" && Number.isFinite(m.marginPercent))
+        .sort((a, b) => Number(a.marginPercent) - Number(b.marginPercent))[0];
+      const marginNote = lowestMargin
+        ? `menor margem real: ${lowestMargin.productName} (${Number(lowestMargin.marginPercent).toFixed(1)}%)`
+        : "margens reais: não há fichas técnicas com margem calculada";
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Alertas de estoque: ${alerts.length} item(ns) (${ruptured.length} em ruptura/zerado, ${belowMin.length} abaixo do mínimo); ${marginNote}.`,
+      };
+    }
+
+    if (specialistId === "operacoes") {
+      const [closings, todaySchedules, reminders] = await Promise.all([
+        repository.listCashClosings
+          ? repository.listCashClosings(context, { start: dates.yesterdayStr, end: dates.todayStr })
+          : Promise.resolve([]),
+        repository.listEmployeeSchedules
+          ? repository.listEmployeeSchedules(context, { start: dates.todayStr, end: dates.todayStr })
+          : Promise.resolve([]),
+        repository.listOperationalReminders
+          ? repository.listOperationalReminders(context, { start: dates.todayStr, end: dates.in7DaysStr })
+          : Promise.resolve([]),
+      ]);
+      const pendingClosings = closings.filter((c) => {
+        const s = (c.status || "").toLowerCase();
+        return s !== "closed" && s !== "fechado" && s !== "reconciled";
+      });
+      const pendingReminders = reminders.filter((r) => !r.completed && (r.status || "").toLowerCase() !== "concluido");
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Caixas recentes: ${closings.length} (${pendingClosings.length} em aberto/divergente) | Escalas hoje (${dates.todayStr}): ${todaySchedules.length} turno(s) | Lembretes/rotinas pendentes: ${pendingReminders.length}.`,
+      };
+    }
+
+    if (specialistId === "inteligencia_competitiva") {
+      const [opps, exps] = await Promise.all([
+        repository.listGrowthOpportunities ? repository.listGrowthOpportunities(context) : Promise.resolve([]),
+        repository.listCommercialExperiments ? repository.listCommercialExperiments(context) : Promise.resolve([]),
+      ]);
+      const activeExps = exps.filter((e) => {
+        const st = (e.status || "").toLowerCase();
+        return st === "active" || st === "running" || st === "em_andamento" || st === "planned" || st === "planejado";
+      });
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Oportunidades de crescimento registradas: ${opps.length} | Experimentos comerciais ativos/planejados: ${activeExps.length} (dados externos de concorrentes não monitorados no repositório).`,
+      };
+    }
+
+    if (specialistId === "fiscal") {
+      const notes = repository.listFiscalNotes
+        ? await repository.listFiscalNotes(context, { start: dates.startOfMonthStr, end: dates.todayStr })
+        : [];
+      const errors = notes.filter((n) => (n.status || "").toLowerCase().includes("erro"));
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Notas fiscais no mês: ${notes.length} (${errors.length} com erro de processamento).`,
+      };
+    }
+
+    if (specialistId === "rh") {
+      const [employees, schedules] = await Promise.all([
+        repository.listEmployees ? repository.listEmployees(context) : Promise.resolve([]),
+        repository.listEmployeeSchedules
+          ? repository.listEmployeeSchedules(context, { start: dates.todayStr, end: dates.todayStr })
+          : Promise.resolve([]),
+      ]);
+      const activeEmployees = employees.filter((e) => (e.status || "active").toLowerCase() !== "inactive");
+      return {
+        specialist: specialistId,
+        name,
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        summary: `Colaboradores ativos: ${activeEmployees.length} | Escalados hoje (${dates.todayStr}): ${schedules.length}.`,
+      };
+    }
+
+    return {
+      specialist: specialistId,
+      name,
+      status: "ok",
+      durationMs: Date.now() - startedAt,
+      summary: "Especialista sem coletor complementar adicional.",
+    };
+  } catch (err) {
+    return {
+      specialist: specialistId,
+      name,
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      summary: "Indisponível temporariamente por falha na consulta do especialista.",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Coleta seletiva de dados apenas dos especialistas designados no plano de coordenação
+ * do Wallet CEO, produzindo contexto enxuto para síntese da IA e resposta determinística de fallback.
+ */
+export async function fetchAndExecuteCoordinatedCeoSnapshot(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  routingPlan: SpecialistRoutingPlan,
+  nowOverride?: Date
+): Promise<CoordinatedCeoSnapshot> {
+  const refNow = nowOverride ?? new Date();
+  const dates = getSaoPauloDateStrings(refNow);
+
+  const uniqueSpecialists = Array.from(new Set(routingPlan.contributingSpecialists));
+  const traces = await Promise.all(
+    uniqueSpecialists.map((specId) => collectSingleSpecialistContribution(specId, context, repository, dates))
+  );
+
+  const contextLines = traces.map(
+    (t) => `- [${t.name} | ${t.specialist} | ${t.status} | ${t.durationMs}ms]: ${t.summary}`
+  );
+  const contextBrief =
+    `[COLETA SELETIVA MULTIDEPARTAMENTAL — DATA ${dates.todayStr}]\n` +
+    `Pergunta: "${userPrompt}"\n` +
+    `Especialistas acionados (${uniqueSpecialists.length}): ${uniqueSpecialists.join(", ")}\n` +
+    contextLines.join("\n") +
+    `\nRegras: Use apenas fatos acima e ferramentas autorizadas; distinga zero real de dado não informado; modo estritamente consultivo (canMutateState: false).`;
+
+  const okCount = traces.filter((t) => t.status === "ok").length;
+  const errTraces = traces.filter((t) => t.status === "error");
+
+  let fallback = `👑 **Síntese Executiva Wallet CEO (Modo Contingência Determinística)**\n`;
+  fallback += `Data de referência (Brasília): ${dates.todayStr} | Especialistas consultados (${uniqueSpecialists.length}): ${traces.map((t) => t.name).join(", ")}.\n\n`;
+  for (const t of traces) {
+    const icon = t.status === "ok" ? "•" : "⚠️";
+    fallback += `${icon} **${t.name}**: ${t.summary}\n`;
+  }
+  if (errTraces.length > 0 && okCount > 0) {
+    fallback += `\n_Observação: ${errTraces.length} especialista(s) falharam parcialmente na coleta; demais áreas foram preservadas com dados reais._\n`;
+  } else if (okCount === 0) {
+    fallback += `\n_Observação: Nenhum especialista retornou dados completos nesta tentativa; verifique as fontes operacionais antes de decidir._\n`;
+  }
+  fallback += `\n_Síntese multidepartamental gerada sem custo de IA em modo estritamente consultivo (canMutateState: false)._`;
+
+  return {
+    coordinatingCeo: true,
+    primarySpecialist: routingPlan.primarySpecialist,
+    contributingSpecialists: uniqueSpecialists,
+    traces,
+    contextBrief,
+    deterministicFallbackAnswer: fallback,
   };
 }
