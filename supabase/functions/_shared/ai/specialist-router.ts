@@ -2729,9 +2729,18 @@ export function buildCompetitiveIntelligenceDeterministicResponse(
 
   // Caso 5: Qual experimento comercial podemos testar nesta semana?
   if (p.includes("experimento")) {
-    const activeExps = (data.experimentos || []).filter(
-      (e) => e.status === "em_andamento" || e.status === "proposto" || e.status === "planejado"
-    );
+    const activeExps = (data.experimentos || []).filter((e) => {
+      const st = (e.status || "").toLowerCase();
+      return (
+        st === "em_andamento" ||
+        st === "active" ||
+        st === "proposto" ||
+        st === "planejado" ||
+        st === "planned" ||
+        st === "aprovado" ||
+        st === "approved"
+      );
+    });
     const anchor = pricedMarginItems[0];
     const directChannel = (data.canaisDelivery || []).find((c) => c.id === "direto");
 
@@ -3476,7 +3485,15 @@ async function collectSingleSpecialistContribution(
       ]);
       const activeExps = exps.filter((e) => {
         const st = (e.status || "").toLowerCase();
-        return st === "active" || st === "running" || st === "em_andamento" || st === "planned" || st === "planejado";
+        return (
+          st === "active" ||
+          st === "running" ||
+          st === "em_andamento" ||
+          st === "planned" ||
+          st === "planejado" ||
+          st === "aprovado" ||
+          st === "approved"
+        );
       });
       return {
         specialist: specialistId,
