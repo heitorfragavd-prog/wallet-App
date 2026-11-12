@@ -530,9 +530,10 @@ export class CeoIntelligenceEngine {
     resultadoObservado: string;
     conclusaoRecomendada: "manter" | "encerrar" | "ajustar";
   } {
-    const parsePtBrNumber = (val: string): number => {
-      if (!val) return 0;
-      const clean = val.replace(/[^0-9,-]/g, "").replace(",", ".");
+    const parsePtBrNumber = (val: string | number | undefined | null): number => {
+      if (val == null) return 0;
+      if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+      const clean = String(val).replace(/[^0-9,-]/g, "").replace(",", ".");
       return parseFloat(clean) || 0;
     };
 
@@ -549,9 +550,9 @@ export class CeoIntelligenceEngine {
     const atingiuMeta = target > baseline ? currentKpiValue >= target : currentKpiValue <= target;
     const conclusaoRecomendada = atingiuMeta ? "manter" : evolucaoPercent > 0 ? "ajustar" : "encerrar";
 
-    const resultadoObservado = `Baseline: ${experiment.baseline_value} -> Atual: ${currentKpiValue.toFixed(2)} (${
+    const resultadoObservado = `Baseline: ${experiment.baseline_value || "Não informado"} -> Atual: ${currentKpiValue.toFixed(2)} (${
       evolucaoPercent >= 0 ? "+" : ""
-    }${evolucaoPercent}%). Meta: ${experiment.target_value}.`;
+    }${evolucaoPercent}%). Meta: ${experiment.target_value || "A definir"}.`;
 
     return {
       status: experiment.status,
