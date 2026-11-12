@@ -1517,7 +1517,7 @@ export async function handleOrchestratorHttpRequest(
 
     const repository = dependencies.repoFactory(context);
     let coordinatedSnapshot: CoordinatedCeoSnapshot | null = null;
-    if (routingPlan.coordinatingCeo) {
+    if (routingPlan.coordinatingCeo && !resolvedGroupContext) {
       coordinatedSnapshot = await fetchAndExecuteCoordinatedCeoSnapshot(
         userPromptText,
         context,
@@ -1645,6 +1645,7 @@ export async function handleOrchestratorHttpRequest(
                 coordinating_ceo: true,
                 contributing_specialists: routingPlan.contributingSpecialists,
                 fallback: true,
+                fallback_cost_status: "unknown_provider_usage_zeroed",
                 fallbackReason: turnErr instanceof Error ? turnErr.message : String(turnErr),
               },
             });
@@ -1673,6 +1674,33 @@ export async function handleOrchestratorHttpRequest(
           });
         }
 
+        if (dependencies.conversationRepo && conversationId) {
+          try {
+            const lastUserMsg = messages.filter((m) => m.role === "user").pop();
+            if (lastUserMsg) {
+              await dependencies.conversationRepo.appendMessage({
+                conversationId,
+                workspaceId: context.workspaceId,
+                userId: context.userId,
+                role: "user",
+                content: lastUserMsg.content,
+                channel: requestChannel,
+              });
+            }
+            await dependencies.conversationRepo.appendMessage({
+              conversationId,
+              workspaceId: context.workspaceId,
+              userId: context.userId,
+              role: "assistant",
+              content: fallbackAnswer,
+              tokensCount: 0,
+              channel: requestChannel,
+            });
+          } catch (mErr) {
+            console.warn("[handler] Falha ao persistir mensagem determinística de contingência na memória:", mErr);
+          }
+        }
+
         return new Response(
           JSON.stringify({
             success: true,
@@ -1694,6 +1722,7 @@ export async function handleOrchestratorHttpRequest(
             conversation_id: conversationId,
             correlation_id: correlationId,
             fallback: true,
+            fallback_cost_status: "unknown_provider_usage_zeroed",
             fallbackReason: turnErr instanceof Error ? turnErr.message : String(turnErr),
           }),
           { status: 200, headers: responseHeaders },

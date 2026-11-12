@@ -42,23 +42,20 @@ const createMockAuthDeps = (role: "owner" | "admin" | "member" = "owner"): Autho
 
 function createMockRepository(overrides: Partial<FinancialQueryRepository> = {}): FinancialQueryRepository {
   return {
-    getFinancialSummary: vi.fn().mockResolvedValue({
-      totalRevenue: 50000,
-      totalExpenses: 32000,
-      netResult: 18000,
-      period: { start: "2026-11-01", end: "2026-11-11" },
-    }),
-    getSalesOverview: vi.fn().mockResolvedValue({
-      totalAmount: 12500,
-      totalCount: 140,
-      period: { start: "2026-11-11", end: "2026-11-11" },
-    }),
-    listExpenses: vi.fn().mockResolvedValue([
-      { id: "exp-1", description: "Aluguel", amount: 4000, paid: false, dueDate: "2026-11-05" },
-      { id: "exp-2", description: "Energia", amount: 800, paid: false, dueDate: "2026-11-20" },
+    listRevenues: vi.fn().mockResolvedValue([
+      { id: "rev-1", description: "Venda Balcão", amount: 12500, kind: "income", date: "2026-11-11", paid: true },
     ]),
-    listBankAccounts: vi.fn().mockResolvedValue([
-      { id: "acc-1", name: "Conta Principal", balance: 15400 },
+    listExpenses: vi.fn().mockResolvedValue([
+      { id: "exp-1", description: "Aluguel", amount: 4000, kind: "expense", paid: false, dueOn: "2026-11-05" },
+      { id: "exp-2", description: "Energia", amount: 800, kind: "expense", paid: false, dueOn: "2026-11-20" },
+    ]),
+    listTransactions: vi.fn().mockResolvedValue([]),
+    listBalances: vi.fn().mockResolvedValue([
+      { accountId: "acc-1", accountName: "Conta Principal", amount: 15400, type: "checking" },
+    ]),
+    listDebts: vi.fn().mockResolvedValue([]),
+    listSalesPDV: vi.fn().mockResolvedValue([
+      { id: "spdv-1", description: "Venda Eyemobile #101", amount: 12500, kind: "income", date: "2026-11-11" },
     ]),
     listFiscalNotes: vi.fn().mockResolvedValue([
       { id: "fn-1", number: "1001", supplierName: "Distribuidora Real Alimentos", amount: 3500, status: "processada" },
@@ -68,13 +65,40 @@ function createMockRepository(overrides: Partial<FinancialQueryRepository> = {})
       { id: "sale-1", amount: 50, status: "paga", paymentMethod: "pix", createdAt: "2026-11-11T14:00:00Z" },
       { id: "sale-2", amount: 80, status: "cancelada", paymentMethod: "cartao_credito", createdAt: "2026-11-11T15:00:00Z" },
     ]),
-    listInventoryAlerts: vi.fn().mockResolvedValue([
-      { itemId: "item-1", productName: "Queijo Mussarela", currentQuantity: 0, minQuantity: 10, unit: "kg" },
-      { itemId: "item-2", productName: "Molho de Tomate", currentQuantity: 3, minQuantity: 8, unit: "un" },
+    listInventoryItems: vi.fn().mockResolvedValue([
+      {
+        id: "item-1",
+        workspaceId: validWorkspaceId,
+        codigo: "QUE-1",
+        descricao: "Queijo Mussarela",
+        categoria: "Laticínios",
+        precoVenda: 65,
+        custoAtual: 22,
+        estoqueAtual: 0,
+        estoqueMinimo: 10,
+        unidadeMedida: "kg",
+        ativo: true,
+        estoqueInformado: true,
+        custoInformado: true,
+      },
+      {
+        id: "item-2",
+        workspaceId: validWorkspaceId,
+        codigo: "MOL-1",
+        descricao: "Molho de Tomate",
+        categoria: "Molhos",
+        precoVenda: 45,
+        custoAtual: 28,
+        estoqueAtual: 3,
+        estoqueMinimo: 8,
+        unidadeMedida: "un",
+        ativo: true,
+        estoqueInformado: true,
+        custoInformado: true,
+      },
     ]),
-    listProductMargins: vi.fn().mockResolvedValue([
-      { productId: "prod-1", productName: "Pizza Calabresa", salePrice: 65, calculatedCost: 22, marginPercent: 66.1 },
-      { productId: "prod-2", productName: "Lasanha Bolonhesa", salePrice: 45, calculatedCost: 28, marginPercent: 37.7 },
+    listRecipeCards: vi.fn().mockResolvedValue([
+      { id: "rec-1", name: "Pizza Calabresa", productId: "prod-1", totalCost: 22 },
     ]),
     listEmployees: vi.fn().mockResolvedValue([
       { id: "emp-1", name: "Carlos Ferreira", role: "Pizzaiolo", status: "active" },
@@ -190,12 +214,14 @@ describe("GATE 3: COORDENAÇÃO EXECUTIVA PELO WALLET CEO", () => {
     expect(snapshot.contributingSpecialists).toEqual(["vendas_pdv", "estoque", "financeiro"]);
     expect(snapshot.traces).toHaveLength(3);
 
-    // Vendas consultou overview
-    expect(repo.getSalesOverview).toHaveBeenCalled();
-    // Financeiro consultou summary
-    expect(repo.getFinancialSummary).toHaveBeenCalled();
-    // Estoque consultou alertas e margens
-    expect(repo.listInventoryAlerts).toHaveBeenCalled();
+    // Vendas consultou listSalesPDV oficial
+    expect(repo.listSalesPDV).toHaveBeenCalled();
+    // Financeiro consultou receitas, despesas e saldos reais
+    expect(repo.listRevenues).toHaveBeenCalled();
+    expect(repo.listExpenses).toHaveBeenCalled();
+    expect(repo.listBalances).toHaveBeenCalled();
+    // Estoque consultou itens cadastrados
+    expect(repo.listInventoryItems).toHaveBeenCalled();
     // NÃO deve consultar notas fiscais nem RH nesta rota
     expect(repo.listFiscalNotes).not.toHaveBeenCalled();
     expect(repo.listEmployees).not.toHaveBeenCalled();
@@ -337,13 +363,18 @@ describe("GATE 4: MATRIZ DE AUTORIZAÇÃO E SEGURANÇA RBAC", () => {
 describe("GATE 5: NÃO FABRICAÇÃO E INTEGRIDADE DE DADOS", () => {
   it("não inventa dados quando o repositório retorna listas vazias", async () => {
     const emptyRepo = createMockRepository({
-      listInventoryAlerts: vi.fn().mockResolvedValue([]),
-      listProductMargins: vi.fn().mockResolvedValue([]),
+      listInventoryItems: vi.fn().mockResolvedValue([]),
+      listRecipeCards: vi.fn().mockResolvedValue([]),
+      listSalesPDV: vi.fn().mockResolvedValue([]),
+      listRevenues: vi.fn().mockResolvedValue([]),
+      listExpenses: vi.fn().mockResolvedValue([]),
+      listBalances: vi.fn().mockResolvedValue([]),
       listFiscalNotes: vi.fn().mockResolvedValue([]),
       listGrowthOpportunities: vi.fn().mockResolvedValue([]),
       listCommercialExperiments: vi.fn().mockResolvedValue([]),
       listCashClosings: vi.fn().mockResolvedValue([]),
       listOperationalReminders: vi.fn().mockResolvedValue([]),
+      listEmployeeSchedules: vi.fn().mockResolvedValue([]),
     });
 
     const ownerContext: AiExecutionContext = {
