@@ -269,8 +269,7 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
   confirmar_fechamento_caixa: {
     actionType: "confirmar_fechamento_caixa",
     riskLevel: "LOW",
-    executionPolicy: "executable",
-    requiredPermission: "operations:closing:write",
+    executionPolicy: "proposal_only",
     requiresConfirmation: true,
     reversible: true,
     auditCategory: "cash_closing_reconciliation",
