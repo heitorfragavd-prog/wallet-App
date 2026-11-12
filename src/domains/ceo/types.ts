@@ -4,7 +4,9 @@
 
 export type CeoDepartment =
   | 'commercial_growth'
+  | 'comercial' // alias pt-BR
   | 'operations_loss'
+  | 'operacoes' // alias pt-BR
   | 'loss_waste' // alias
   | 'profitability'
   | 'cmv_pricing' // alias
@@ -20,6 +22,7 @@ export type CeoDepartment =
 export type OpportunityStatus =
   | 'identificada'
   | 'detected'
+  | 'planejada'
   | 'em_experimento'
   | 'implantada'
   | 'descartada';
@@ -35,6 +38,8 @@ export type OpportunityType =
 export type ExperimentStatus =
   | 'planejado'
   | 'planned'
+  | 'aprovado'
+  | 'approved'
   | 'em_andamento'
   | 'active'
   | 'concluido'
@@ -47,7 +52,13 @@ export type ExperimentDecision =
   | 'ampliar'
   | 'ajustar'
   | 'interromper'
-  | 'pendente';
+  | 'pendente'
+  | 'aprovado'
+  | 'rejeitado'
+  | 'approved'
+  | 'rejected'
+  | 'inconclusive'
+  | 'extended';
 
 export type OpportunityNature =
   | 'fato_observado'
@@ -70,6 +81,7 @@ export interface GrowthOpportunity {
   confidence_score: number; // 0.00 a 1.00
   type?: OpportunityType;
   impact_level?: 'high' | 'medium' | 'low';
+  priority?: 'high' | 'medium' | 'low'; // alias para impact_level
   effort_level?: 'easy' | 'moderate' | 'complex';
   status: OpportunityStatus;
   nature?: OpportunityNature;
@@ -84,6 +96,7 @@ export interface GrowthOpportunity {
     has_sufficient_data: boolean;
     [key: string]: unknown;
   };
+  actions?: string[];
   limitations_notes?: string;
   created_at?: string;
   updated_at?: string;
@@ -119,6 +132,8 @@ export interface CommercialExperiment {
   decision?: ExperimentDecision;
   decision_rationale?: string;
   status: ExperimentStatus;
+  actions?: string[];
+  opportunity_title?: string;
   created_at: string;
   updated_at: string;
 }

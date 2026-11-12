@@ -140,6 +140,13 @@ export class CeoRepository {
         const targetMetrics = d.target_metrics as Record<string, unknown> | undefined;
         const observedResults = d.observed_results as Record<string, unknown> | undefined;
 
+        const resolvedBaseline =
+          d.baseline_value !== null && d.baseline_value !== undefined
+            ? String(d.baseline_value)
+            : targetMetrics?.baseline_value !== undefined && targetMetrics?.baseline_value !== null
+            ? String(targetMetrics.baseline_value)
+            : undefined;
+
         return {
           id: String(d.id),
           workspace_id: String(d.workspace_id),
@@ -149,10 +156,10 @@ export class CeoRepository {
           hypothesis: String(d.hypothesis || ''),
           department: (d.department as CommercialExperiment['department']) || 'commercial_growth',
           target_kpi: String(d.target_kpi || targetMetrics?.target_metric_name || 'Faturamento Incremental'),
-          baseline_value: String(d.baseline_value || targetMetrics?.baseline_value || '0'),
-          current_value: String(d.current_value || observedResults?.current_value || 'Em medição'),
-          target_value: String(d.target_value || targetMetrics?.expected_value || 'Meta'),
-          start_date: String(d.start_date || new Date().toISOString()),
+          baseline_value: resolvedBaseline,
+          current_value: d.current_value != null ? String(d.current_value) : (observedResults?.current_value != null ? String(observedResults.current_value) : undefined),
+          target_value: d.target_value != null ? String(d.target_value) : (targetMetrics?.expected_value != null ? String(targetMetrics.expected_value) : undefined),
+          start_date: String(d.start_date || new Date().toISOString().slice(0, 10)),
           end_date: d.end_date ? String(d.end_date) : undefined,
           responsible_person: String(d.responsible_person || 'Gestão Rodo Point'),
           target_metrics: d.target_metrics as CommercialExperiment['target_metrics'],
@@ -187,9 +194,9 @@ export class CeoRepository {
         hypothesis: exp.hypothesis,
         department: exp.department || 'commercial_growth',
         target_kpi: exp.target_kpi || 'Faturamento Incremental',
-        baseline_value: String(exp.baseline_value || '0'),
-        current_value: String(exp.current_value || 'Em medição'),
-        target_value: String(exp.target_value || 'Meta'),
+        baseline_value: exp.baseline_value !== undefined && exp.baseline_value !== null ? String(exp.baseline_value) : null,
+        current_value: exp.current_value !== undefined && exp.current_value !== null ? String(exp.current_value) : null,
+        target_value: exp.target_value !== undefined && exp.target_value !== null ? String(exp.target_value) : null,
         start_date: exp.start_date || new Date().toISOString().slice(0, 10),
         end_date: exp.end_date || null,
         responsible_person: exp.responsible_person || 'Gestão Rodo Point',
@@ -219,9 +226,9 @@ export class CeoRepository {
           hypothesis: data.hypothesis,
           department: data.department,
           target_kpi: data.target_kpi,
-          baseline_value: data.baseline_value,
-          current_value: data.current_value,
-          target_value: data.target_value,
+          baseline_value: data.baseline_value != null ? String(data.baseline_value) : undefined,
+          current_value: data.current_value != null ? String(data.current_value) : undefined,
+          target_value: data.target_value != null ? String(data.target_value) : undefined,
           start_date: data.start_date,
           end_date: data.end_date,
           responsible_person: data.responsible_person,
@@ -256,7 +263,11 @@ export class CeoRepository {
       status?: CommercialExperiment['status'];
       decision?: ExperimentDecision;
       decision_rationale?: string;
-      current_value?: string | number;
+      baseline_value?: string | number | null;
+      current_value?: string | number | null;
+      target_value?: string | number | null;
+      start_date?: string;
+      end_date?: string | null;
       measured_financial_impact?: number;
     }
   ): Promise<CeoMutationResult<void>> {
@@ -266,8 +277,12 @@ export class CeoRepository {
       };
       if (updates.status) payload.status = updates.status;
       if (updates.decision) payload.decision = updates.decision;
-      if (updates.decision_rationale) payload.decision_rationale = updates.decision_rationale;
-      if (updates.current_value !== undefined) payload.current_value = String(updates.current_value);
+      if (updates.decision_rationale !== undefined) payload.decision_rationale = updates.decision_rationale;
+      if (updates.baseline_value !== undefined) payload.baseline_value = updates.baseline_value !== null ? String(updates.baseline_value) : null;
+      if (updates.current_value !== undefined) payload.current_value = updates.current_value !== null ? String(updates.current_value) : null;
+      if (updates.target_value !== undefined) payload.target_value = updates.target_value !== null ? String(updates.target_value) : null;
+      if (updates.start_date) payload.start_date = updates.start_date;
+      if (updates.end_date !== undefined) payload.end_date = updates.end_date;
       if (updates.measured_financial_impact !== undefined) payload.measured_financial_impact = updates.measured_financial_impact;
 
       const { error } = await supabase
@@ -291,16 +306,23 @@ export class CeoRepository {
   static async updateExperimentStatus(
     experimentId: string,
     status: CommercialExperiment['status'],
-    decision?: {
-      decision?: 'approved' | 'rejected' | 'inconclusive' | 'extended';
-      decision_date?: string;
+    options?: {
+      decision?: ExperimentDecision;
       rationale?: string;
+      baseline_value?: string | number | null;
+      current_value?: string | number | null;
+      measured_financial_impact?: number;
+      end_date?: string | null;
     }
   ): Promise<CeoMutationResult<void>> {
     return this.updateExperiment(experimentId, {
       status,
-      decision: decision?.decision as ExperimentDecision,
-      decision_rationale: decision?.rationale,
+      decision: options?.decision,
+      decision_rationale: options?.rationale,
+      baseline_value: options?.baseline_value,
+      current_value: options?.current_value,
+      measured_financial_impact: options?.measured_financial_impact,
+      end_date: options?.end_date,
     });
   }
 }
