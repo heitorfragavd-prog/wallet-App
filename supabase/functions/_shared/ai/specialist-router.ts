@@ -32,7 +32,10 @@ import type {
   EmployeePaymentRecord,
   GrowthOpportunityRecord,
   CommercialExperimentRecord,
+  CashClosingRecord,
+  OperationalReminderRecord,
 } from "./query-tools.ts";
+import type { CanonicalFinancialRecord } from "./financial-types.ts";
 import { canRoleAccessFinancialData, type AiExecutionContext } from "./auth.ts";
 
 export interface SpecialistRoutingPlan {
@@ -445,17 +448,50 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     };
   }
 
-  // 8. Especialista de Operações e Processos (Rotinas, Fechamento de Caixa, Perguntas Gerais)
+  // 8. Especialista de Operações e Processos (Rotinas, Fechamento de Caixa, Turnos, Cancelamentos/Sangrias, Perguntas Gerais)
   // Gate 0.2: Usuários colaboradores (member) que enviam saudações ("Bom dia"), pedidos de ajuda
   // ou dúvidas sobre ferramentas caem no agente de Operações com role 'member', evitando 403 Forbidden.
+  const isOperationsDeterministic =
+    p.includes("fechamento de caixa") ||
+    p.includes("fechamento do caixa") ||
+    p.includes("fechamentos de caixa") ||
+    p.includes("diferença no caixa") ||
+    p.includes("diferenca no caixa") ||
+    p.includes("furo de caixa") ||
+    p.includes("furo no caixa") ||
+    p.includes("sobra de caixa") ||
+    p.includes("sobra no caixa") ||
+    p.includes("divergência de caixa") ||
+    p.includes("divergencia de caixa") ||
+    p.includes("quem está de turno") ||
+    p.includes("quem esta de turno") ||
+    p.includes("turno hoje") ||
+    p.includes("turno de hoje") ||
+    p.includes("turnos de hoje") ||
+    p.includes("turnos hoje") ||
+    p.includes("cancelamento") ||
+    p.includes("cancelamentos") ||
+    p.includes("sangria") ||
+    p.includes("sangrias") ||
+    p.includes("rotina") ||
+    p.includes("rotinas") ||
+    p.includes("lembrete") ||
+    p.includes("lembretes") ||
+    p.includes("checklist") ||
+    p.includes("pendência operacional") ||
+    p.includes("pendencias operacionais") ||
+    p.includes("pendências operacionais");
+
   return {
     primarySpecialist: "operacoes",
     coordinatingCeo: false,
     contributingSpecialists: ["operacoes"],
     complexityLevel: 1,
     model: "gemini-2.5-flash",
-    isDeterministicPossible: false,
-    rationale: "Consulta geral ou operacional direcionada ao Especialista de Operações.",
+    isDeterministicPossible: isOperationsDeterministic,
+    rationale: isOperationsDeterministic
+      ? "Consulta operacional direcionada ao Especialista de Operações e Processos."
+      : "Consulta geral ou operacional direcionada ao Especialista de Operações.",
   };
 }
 
@@ -2875,10 +2911,335 @@ export async function fetchAndExecuteSpecialistTurn(
     };
   }
 
+  if (routingPlan.primarySpecialist === "operacoes") {
+    const res = await fetchAndExecuteOperationsSpecialist(userPrompt, context, repository, nowOverride);
+    return {
+      handled: res.handled,
+      answer: res.answer,
+      specialist: "operacoes",
+      department: SPECIALIST_AGENTS_REGISTRY.operacoes.department,
+      routingPlan: res.routingPlan,
+    };
+  }
+
   return {
     handled: false,
     specialist: routingPlan.primarySpecialist,
     department: SPECIALIST_AGENTS_REGISTRY[routingPlan.primarySpecialist]?.department ?? "Operações",
+    routingPlan,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGENTE DE OPERAÇÕES E PROCESSOS — RESPOSTAS DETERMINÍSTICAS (Entrega D — Gate 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OperationsDeterministicData {
+  fechamentos?: CashClosingRecord[];
+  escalasHoje?: EmployeeScheduleRecord[];
+  colaboradores?: EmployeeRecord[];
+  vendasCanceladas?: SalesPdvDetailRecord[];
+  sangrias?: CanonicalFinancialRecord[];
+  rotinas?: OperationalReminderRecord[];
+  todayStr?: string;
+  yesterdayStr?: string;
+  isMemberRole?: boolean;
+}
+
+const sumPaymentMap = (m: Record<string, number> | undefined): number => {
+  if (!m) return 0;
+  return Object.values(m).reduce((acc, v) => acc + (Number.isFinite(v) ? v : 0), 0);
+};
+
+export function buildOperationsSpecialistDeterministicResponse(
+  userPrompt: string,
+  data: OperationsDeterministicData
+): { handled: boolean; answer?: string; specialist: string } {
+  const p = userPrompt.toLowerCase().trim();
+  const isMember = data.isMemberRole === true;
+
+  // Caso 1: Fechamento de caixa / Diferença / Furo / Sobra
+  if (
+    p.includes("fechamento de caixa") ||
+    p.includes("fechamento do caixa") ||
+    p.includes("fechamentos de caixa") ||
+    p.includes("diferença no caixa") ||
+    p.includes("diferenca no caixa") ||
+    p.includes("furo de caixa") ||
+    p.includes("furo no caixa") ||
+    p.includes("sobra de caixa") ||
+    p.includes("sobra no caixa") ||
+    p.includes("divergência de caixa") ||
+    p.includes("divergencia de caixa")
+  ) {
+    const closings = data.fechamentos || [];
+    if (closings.length === 0) {
+      return {
+        handled: true,
+        answer:
+          `⚙️ *Agente de Operações e Processos — Fechamento e Conferência de Caixa:*\n\n` +
+          `Nenhum registro de fechamento de caixa foi encontrado para o período consultado no workspace.\n\n` +
+          `_Certifique-se de que o fechamento de turno foi lançado no módulo de caixa antes da conferência. (canMutateState: false)_`,
+        specialist: "operacoes",
+      };
+    }
+
+    const latest = closings[0];
+    const informadoTotal = sumPaymentMap(latest.envelopeTotal) || sumPaymentMap(latest.totalInformado);
+    const sistemaTotal = sumPaymentMap(latest.eyemobileTotal);
+    const difGeral = informadoTotal - sistemaTotal;
+
+    let msg = `⚙️ *Agente de Operações e Processos — Conferência de Fechamento de Caixa:*\n\n`;
+    msg += `• *Data do Fechamento:* ${latest.dataFechamento || latest.createdAt.slice(0, 10)}\n`;
+    msg += `• *Status do Registro:* ${latest.status}\n`;
+
+    if (!isMember) {
+      msg += `• *Total Informado / Envelope:* R$ ${informadoTotal.toFixed(2)}\n`;
+      msg += `• *Total Sistema (PDV Eyemobile):* R$ ${sistemaTotal.toFixed(2)}\n`;
+      msg += `• *Diferença Consolidada:* ${difGeral >= 0 ? "+" : "-"}R$ ${Math.abs(difGeral).toFixed(2)}\n`;
+      if (latest.sobra !== null && latest.sobra !== undefined) {
+        msg += `• *Sobra / Diferença Registrada:* R$ ${latest.sobra.toFixed(2)}\n`;
+      }
+
+      const methods = ["dinheiro", "pix", "debito", "credito", "voucher"];
+      const methodLines: string[] = [];
+      methods.forEach((m) => {
+        const inf = latest.envelopeTotal?.[m] ?? latest.totalInformado?.[m] ?? 0;
+        const sys = latest.eyemobileTotal?.[m] ?? 0;
+        if (inf > 0 || sys > 0) {
+          const diff = inf - sys;
+          const label = diff === 0 ? "exato" : `diferença de ${diff > 0 ? "+" : "-"}R$ ${Math.abs(diff).toFixed(2)}`;
+          methodLines.push(`  - ${m}: Informado R$ ${inf.toFixed(2)} vs Sistema R$ ${sys.toFixed(2)} (${label})`);
+        }
+      });
+      if (methodLines.length > 0) {
+        msg += `\n📊 *Detalhamento por Forma de Pagamento:*\n${methodLines.join("\n")}\n`;
+      }
+    } else {
+      const divergedMethods = ["dinheiro", "pix", "debito", "credito", "voucher"].filter((m) => {
+        const inf = latest.envelopeTotal?.[m] ?? latest.totalInformado?.[m] ?? 0;
+        const sys = latest.eyemobileTotal?.[m] ?? 0;
+        return Math.abs(inf - sys) > 0.01;
+      });
+      msg +=
+        divergedMethods.length > 0
+          ? `• *Conferência Operacional:* Há diferença para conferência nos meios: ${divergedMethods.join(", ")}. Verifique comprovantes e recibos do turno junto à gestão.\n`
+          : `• *Conferência Operacional:* Sem divergência pendente entre meios de pagamento neste fechamento.\n`;
+    }
+
+    if (closings.length > 1) {
+      const divergentesCount = closings.filter((c) => c.status.toLowerCase().includes("divergen")).length;
+      msg += `\nℹ️ _Foram analisados ${closings.length} fechamento(s) recente(s); ${divergentesCount} sinalizado(s) com status de divergência para conferência de comprovantes._`;
+    }
+    msg += `\n\n⚠️ *Postura Consultiva (canMutateState: false):* Qualquer diferença exige conferência objetiva de envelopes, taxas e recibos — nenhum lançamento foi modificado.`;
+
+    return { handled: true, answer: msg, specialist: "operacoes" };
+  }
+
+  // Caso 2: Quem está de turno hoje?
+  if (
+    p.includes("quem está de turno") ||
+    p.includes("quem esta de turno") ||
+    p.includes("turno hoje") ||
+    p.includes("turno de hoje") ||
+    p.includes("turnos de hoje") ||
+    p.includes("turnos hoje")
+  ) {
+    const activeSchedules = (data.escalasHoje || []).filter((e) => (e.status || "").toLowerCase() !== "cancelada");
+    if (activeSchedules.length === 0) {
+      return {
+        handled: true,
+        answer:
+          `⚙️ *Agente de Operações e Processos — Turno de Hoje (${data.todayStr || "hoje"}):*\n\n` +
+          `Nenhuma escala ativa foi encontrada cadastrada para hoje em \`colaborador_escalas\`.`,
+        specialist: "operacoes",
+      };
+    }
+
+    const colabMap = new Map((data.colaboradores || []).map((c) => [c.id, c]));
+    let msg = `⚙️ *Agente de Operações e Processos — Equipe Escalada no Turno de Hoje (${activeSchedules.length}):*\n\n`;
+    activeSchedules.forEach((esc, idx) => {
+      const colab = colabMap.get(esc.colaboradorId);
+      const nome = colab?.nome || "Colaborador";
+      const cargo = colab?.cargo ? ` (${colab.cargo})` : "";
+      const turnoStr = esc.turno ? ` | Turno: ${esc.turno}` : "";
+      const obsStr = esc.observacao ? ` — ${esc.observacao}` : "";
+      // Segurança estrita: nunca expor valores salariais/diárias a perfil member
+      const diariaStr = !isMember && esc.valorDiaria > 0 ? ` [Diária: R$ ${esc.valorDiaria.toFixed(2)}]` : "";
+      msg += `${idx + 1}. *${nome}*${cargo}${turnoStr}${diariaStr}${obsStr}\n`;
+    });
+    if (isMember) {
+      msg += `\n_Nota: Valores de remuneração e diárias individuais são mantidos em sigilo para perfis operacionais._`;
+    }
+    msg += `\n_Consulta operacional somente leitura (canMutateState: false)._`;
+
+    return { handled: true, answer: msg, specialist: "operacoes" };
+  }
+
+  // Caso 3: Cancelamentos ou sangrias relevantes
+  if (p.includes("cancelamento") || p.includes("cancelamentos") || p.includes("sangria") || p.includes("sangrias")) {
+    const canceledSales = data.vendasCanceladas || [];
+    const sangrias = data.sangrias || [];
+
+    const totalCancelado = canceledSales.reduce((acc, s) => acc + s.amount, 0);
+    const totalSangrias = sangrias.reduce((acc, sg) => acc + sg.amount, 0);
+
+    let msg = `⚙️ *Agente de Operações e Processos — Auditoria de Cancelamentos e Sangrias:*\n\n`;
+    msg += `• *Vendas/Pedidos Cancelados no Período:* ${canceledSales.length}`;
+    msg += !isMember ? ` (Valor cancelado: R$ ${totalCancelado.toFixed(2)})\n` : `\n`;
+    if (canceledSales.length > 0) {
+      canceledSales.slice(0, 5).forEach((s) => {
+        const valNote = !isMember ? ` — R$ ${s.amount.toFixed(2)}` : "";
+        msg += `  - ${s.date}: *${s.description}*${valNote} [Status: ${s.status || "cancelada"}]\n`;
+      });
+    } else {
+      msg += `  - Nenhum cancelamento registrado no PDV no período.\n`;
+    }
+
+    msg += `• *Registros de Sangria / Retirada de Numerário:* ${sangrias.length}`;
+    msg += !isMember ? ` (Total: R$ ${totalSangrias.toFixed(2)})\n` : `\n`;
+    if (sangrias.length > 0) {
+      sangrias.slice(0, 5).forEach((sg) => {
+        const valNote = !isMember ? ` — R$ ${sg.amount.toFixed(2)}` : "";
+        msg += `  - ${sg.occurredOn}: *${sg.description}*${valNote}\n`;
+      });
+    } else {
+      msg += `  - Nenhuma sangria registrada nas movimentações do período.\n`;
+    }
+
+    msg += `\n⚠️ *Observação Neutra (canMutateState: false):* Os registros acima servem apenas para conferência de rotina operacional e recibos de caixa.`;
+    return { handled: true, answer: msg, specialist: "operacoes" };
+  }
+
+  // Caso 4: Rotinas, lembretes ou pendências operacionais
+  if (
+    p.includes("rotina") ||
+    p.includes("rotinas") ||
+    p.includes("lembrete") ||
+    p.includes("lembretes") ||
+    p.includes("checklist") ||
+    p.includes("pendência operacional") ||
+    p.includes("pendencias operacionais") ||
+    p.includes("pendências operacionais")
+  ) {
+    const pending = (data.rotinas || []).filter((r) => {
+      const st = (r.status || "").toLowerCase();
+      return st !== "concluido" && st !== "concluído" && st !== "cancelado" && st !== "done";
+    });
+
+    if (pending.length === 0) {
+      return {
+        handled: true,
+        answer:
+          `⚙️ *Agente de Operações e Processos — Rotinas e Pendências Operacionais:*\n\n` +
+          `✅ Não há lembretes ou compromissos operacionais pendentes cadastrados no período consultado.`,
+        specialist: "operacoes",
+      };
+    }
+
+    const todayStr = data.todayStr || "";
+    const overdue = pending.filter((r) => r.data && todayStr && r.data < todayStr);
+    const dueToday = pending.filter((r) => r.data && todayStr && r.data === todayStr);
+    const others = pending.filter((r) => !r.data || !todayStr || r.data > todayStr);
+
+    let msg = `⚙️ *Agente de Operações e Processos — Rotinas e Pendências Operacionais (${pending.length}):*\n\n`;
+    if (overdue.length > 0) {
+      msg += `⏰ *Em Atraso (${overdue.length}):*\n`;
+      overdue.slice(0, 5).forEach((r) => {
+        msg += `• [${r.sourceTable}] *${r.titulo}* — Data: ${r.data}${r.hora ? ` às ${r.hora}` : ""}\n`;
+      });
+      msg += `\n`;
+    }
+    if (dueToday.length > 0) {
+      msg += `📅 *Programadas para Hoje (${dueToday.length}):*\n`;
+      dueToday.slice(0, 5).forEach((r) => {
+        msg += `• [${r.sourceTable}] *${r.titulo}*${r.hora ? ` às ${r.hora}` : ""}${r.local ? ` (${r.local})` : ""}\n`;
+      });
+      msg += `\n`;
+    }
+    if (others.length > 0) {
+      msg += `📝 *Próximas / Em Aberto (${others.length}):*\n`;
+      others.slice(0, 5).forEach((r) => {
+        msg += `• [${r.sourceTable}] *${r.titulo}*${r.data ? ` — ${r.data}` : ""}\n`;
+      });
+      msg += `\n`;
+    }
+    msg += `_Consulta somente leitura (canMutateState: false)._`;
+
+    return { handled: true, answer: msg, specialist: "operacoes" };
+  }
+
+  return { handled: false, specialist: "operacoes" };
+}
+
+export async function fetchAndExecuteOperationsSpecialist(
+  userPrompt: string,
+  context: AiExecutionContext,
+  repository: FinancialQueryRepository,
+  nowOverride?: Date
+): Promise<{
+  handled: boolean;
+  answer?: string;
+  specialist: string;
+  routingPlan: SpecialistRoutingPlan;
+}> {
+  const routingPlan = routeUserQueryToSpecialists(userPrompt);
+
+  if (!routingPlan.isDeterministicPossible || routingPlan.primarySpecialist !== "operacoes") {
+    return {
+      handled: false,
+      specialist: "operacoes",
+      routingPlan,
+    };
+  }
+
+  const refNow = nowOverride ?? new Date();
+  const { todayStr, yesterdayStr, startOfWeekStr, in7DaysStr } = getSaoPauloDateStrings(refNow);
+  const collectedData: OperationsDeterministicData = {
+    todayStr,
+    yesterdayStr,
+    isMemberRole: context.role === "member",
+  };
+
+  try {
+    const [closings, todaySchedules, employees, recentSales, monthExpenses, reminders] = await Promise.all([
+      repository.listCashClosings
+        ? repository.listCashClosings(context, { start: startOfWeekStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listEmployeeSchedules
+        ? repository.listEmployeeSchedules(context, { start: todayStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listEmployees ? repository.listEmployees(context) : Promise.resolve([]),
+      repository.listSalesPdvDetails
+        ? repository.listSalesPdvDetails(context, { start: yesterdayStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listExpenses
+        ? repository.listExpenses(context, { start: yesterdayStr, end: todayStr })
+        : Promise.resolve([]),
+      repository.listOperationalReminders
+        ? repository.listOperationalReminders(context, { start: startOfWeekStr, end: in7DaysStr })
+        : Promise.resolve([]),
+    ]);
+
+    collectedData.fechamentos = closings;
+    collectedData.escalasHoje = todaySchedules;
+    collectedData.colaboradores = employees;
+    collectedData.vendasCanceladas = recentSales.filter((s) => {
+      const st = (s.status || "").toLowerCase();
+      return st === "cancelada" || st === "cancelled" || st === "estornada";
+    });
+    collectedData.sangrias = monthExpenses.filter((e) => {
+      const d = (e.description || "").toLowerCase();
+      return d.includes("sangria") || d.includes("retirada de caixa");
+    });
+    collectedData.rotinas = reminders;
+  } catch (err) {
+    console.warn("[specialist-router] Erro ao consultar repositório de Operações:", err);
+  }
+
+  const result = buildOperationsSpecialistDeterministicResponse(userPrompt, collectedData);
+  return {
+    ...result,
     routingPlan,
   };
 }
